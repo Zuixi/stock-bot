@@ -1,0 +1,62 @@
+# SSE (Shanghai Stock Exchange) fetcher configuration
+# Copy this file to sse.yaml and fill in your actual cookie values.
+# NEVER commit sse.yaml to version control.
+
+# API endpoint
+endpoint: "https://query.sse.com.cn/sseQuery/commonQuery.do"
+
+# Query parameters (fixed for stock list)
+query:
+  sqlId: "COMMON_SSE_CP_GPJCTPZ_GPLB_GP_L"
+  type: "inParams"
+  isPagination: "true"
+
+# Stock type filter (1 = 主板A股)
+# Available values: 1 (主板A股), 2 (主板B股), 8 (科创板), etc.
+filters:
+  STOCK_TYPE: "1"
+  REG_PROVINCE: ""
+  CSRC_CODE: ""
+  STOCK_CODE: ""
+  COMPANY_STATUS: "2,4,5,7,8"
+
+# Pagination settings
+pagination:
+  page_size: 25
+  # beginPage/endPage/cacheSize are for UI pagination control, usually same as pageNo
+  cache_size: 1
+
+# JSONP callback parameter name (SSE uses "jsonCallBack")
+jsonp:
+  param_name: "jsonCallBack"
+  callback_prefix: "jsonpCallback"
+
+# Request headers
+headers:
+  Referer: "https://www.sse.com.cn/"
+  User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  Accept: "*/*"
+  Accept-Language: "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7"
+
+# Cookies (key-value pairs, will be joined as "key1=value1; key2=value2")
+# Get these from browser DevTools > Application > Cookies or Network > Request Headers
+cookies:
+  gdp_user_id: "your_gdp_user_id_here"
+  # Add other cookie keys as needed
+  # ba17301551dcbaf9_gdp_session_id: "your_session_id_here"
+
+# Rate limiting & retry
+rate_limit:
+  requests_per_second: 2.0
+  # Delay between pages (seconds)
+  page_delay: 0.5
+
+retry:
+  max_attempts: 3
+  # Exponential backoff multiplier
+  backoff_multiplier: 2.0
+  # Initial delay (seconds)
+  initial_delay: 1.0
+
+# Request timeout (seconds)
+timeout: 30

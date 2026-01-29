@@ -1,0 +1,40 @@
+# IDE / Editor
+.vscode/**
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Node (if any frontend tooling)
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+.uv/
+*.egg-info/
+*.egg
+
+# Environment & secrets
+.env
+.env.*
+
+# Config (keep samples, ignore real secrets)
+src/config/*.yaml
+src/config/*.yml
+!src/config/*.sample.yaml
+!src/config/*.sample.yml
+
+# Data output (local only)
+data/
