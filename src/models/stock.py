@@ -70,3 +70,48 @@ class RawSseRecord(BaseModel):
 
     class Config:
         extra = "allow"  # Allow additional fields not explicitly defined
+
+
+class RawBseRecord(BaseModel):
+    """Raw record from BSE nqxxController/nqxxCnzq.do API.
+
+    Field names match BSE API response exactly.
+    Based on browser network capture of https://www.bse.cn/nq/listedcompany.html
+    """
+
+    # Stock identification
+    xxzqdm: str | None = Field(default=None, description="股票代码")
+    xxzqjc: str | None = Field(default=None, description="股票简称")
+    xxzqjb: str | None = Field(default=None, description="股票级别/类型")
+
+    # Location info
+    xxssdq: str | None = Field(default=None, description="所属地区")
+
+    # Listing info
+    fxssrq: str | None = Field(default=None, description="发行上市日期")
+
+    # Industry
+    xxhyzl: str | None = Field(default=None, description="行业种类")
+
+    # Other fields - use str | int | float to handle API response types
+    xxcqcx: str | None = Field(default=None, description="是否常续询价")
+    xxcfgbz: str | None = Field(default=None, description="是否采用特殊标准")
+    xxfcbj: str | None = Field(default=None, description="发行定价方式")
+    xxgprq: str | None = Field(default=None, description="改革日期")
+    xxgxsj: str | None = Field(default=None, description="更新日期")
+    xxhbzl: str | None = Field(default=None, description="货币种类")
+    xxisin: str | None = Field(default=None, description="ISIN码")
+    xxjsfl: str | float | None = Field(default=None, description="计算费率")
+    xxjsrq: str | None = Field(default=None, description="计算日期")
+    xxmbxl: str | int | None = Field(default=None, description="每股面值")
+    xxmgmz: str | int | None = Field(default=None, description="每股面值单位")
+    xxqtyw: str | None = Field(default=None, description="其他业务类型")
+    xxzgb: str | int | None = Field(default=None, description="总股本")
+    xxzhbl: str | int | None = Field(default=None, description="占流通比例")
+    xxzrdw: str | int | None = Field(default=None, description="转让单位")
+    xxzrlx: str | None = Field(default=None, description="转让类型")
+    xxzrzt: str | None = Field(default=None, description="转让状态")
+    xxzsssl: str | int | None = Field(default=None, description="转让市值")
+
+    class Config:
+        extra = "allow"  # Allow additional fields not explicitly defined

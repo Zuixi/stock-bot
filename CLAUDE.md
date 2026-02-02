@@ -30,14 +30,18 @@ pytest tests/path/to/test_file.py
 
 ### CLI Usage
 ```bash
-# Fetch stock universe (SSE only in M0)
+# Fetch stock universe from SSE
 stock-bot universe fetch --exchange sse --stock-type 1
+
+# Fetch stock universe from BSE (Beijing Stock Exchange)
+stock-bot universe fetch --exchange bse
 
 # List available snapshots
 stock-bot universe list
 
 # For development with local module
 python -m src.cli.universe fetch --exchange sse
+python -m src.cli.universe fetch --exchange bse
 ```
 
 ## Architecture Overview
@@ -103,14 +107,14 @@ This is used for directory names and filtering. Do not change without updating s
 
 ## Product Roadmap Context
 
-Current state: **M0** - Stock universe fetching for SSE only.
+Current state: **M0** - Stock universe fetching for SSE and BSE.
 
 Planned milestones:
-- M0: Single exchange universe fetch + normalize + persist (current)
+- M0: Multi-exchange universe fetch + normalize + persist (SSE + BSE complete)
 - M1: Daily trading data fetch + incremental updates
 - M2: Feature engineering + clustering
 - M3: LLM cluster interpretation
-- M4: All three exchanges + scheduled tasks
+- M4: SZSE support + scheduled tasks
 
 See [product.md](product.md) for full requirements.
 

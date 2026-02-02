@@ -38,3 +38,7 @@ src/config/*.yml
 
 # Data output (local only)
 data/
+
+
+## claude code
+.claude/**

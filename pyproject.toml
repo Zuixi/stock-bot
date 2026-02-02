@@ -16,6 +16,8 @@ dependencies = [
     "rich>=13.7.0",
     "orjson>=3.9.0",
     "tenacity>=8.2.0",
+    "pytest>=9.0.2",
+    "ruff>=0.14.14",
 ]
 
 [project.optional-dependencies]
