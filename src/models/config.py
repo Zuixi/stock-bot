@@ -97,3 +97,38 @@ class SseConfig(BaseModel):
     def get_safe_headers(self) -> dict[str, str]:
         """Get headers dict safe for logging/manifest (no cookies)."""
         return {k: v for k, v in self.headers.items() if k.lower() != "cookie"}
+
+
+class BseConfig(BaseModel):
+    """BSE fetcher configuration."""
+
+    endpoint: str = Field(default="https://www.bse.cn/nqxxController/nqxxCnzq.do")
+    headers: dict[str, str] = Field(default_factory=dict)
+    cookies: dict[str, str] = Field(default_factory=dict)
+    rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
+    retry: RetryConfig = Field(default_factory=RetryConfig)
+    timeout: float = Field(default=15.0, ge=1.0)
+
+    @classmethod
+    def from_yaml(cls, data: dict[str, Any]) -> "BseConfig":
+        """Create config from parsed YAML data."""
+        config_data = {
+            "endpoint": data.get("endpoint"),
+            "headers": data.get("headers", {}),
+            "cookies": data.get("cookies", {}),
+            "timeout": data.get("timeout", 15.0),
+        }
+
+        if "rate_limit" in data:
+            config_data["rate_limit"] = RateLimitConfig(**data["rate_limit"])
+        if "retry" in data:
+            config_data["retry"] = RetryConfig(**data["retry"])
+
+        config_data = {k: v for k, v in config_data.items() if v is not None}
+        return cls(**config_data)
+
+    def build_cookie_header(self) -> str:
+        """Build Cookie header string from key-value pairs."""
+        if not self.cookies:
+            return ""
+        return "; ".join(f"{k}={v}" for k, v in self.cookies.items())

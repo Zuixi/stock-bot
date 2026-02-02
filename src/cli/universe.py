@@ -14,8 +14,10 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 
 from src.config import load_config
 from src.fetchers.sse import SseFetcher
-from src.models.config import SseConfig
+from src.fetchers.bse import BseFetcher
+from src.models.config import SseConfig, BseConfig
 from src.normalizers.sse import normalize_sse_record
+from src.normalizers.bse import normalize_bse_record
 from src.storage import UniverseStorage
 
 
@@ -76,22 +78,30 @@ def fetch_universe(
         console.print("Supported exchanges: sse, sze, bse")
         raise typer.Exit(1)
 
-    if exchange_lower != "sse":
-        console.print(f"[yellow]Warning:[/yellow] Exchange '{exchange}' not yet implemented")
-        console.print("Currently only SSE is supported in M0")
-        raise typer.Exit(1)
+    # Exchange-specific configuration
+    exchange_names = {
+        "sse": ("sse", "Shanghai_Stocks"),
+        "sze": ("sze", "Shenzen_Stocks"),
+        "bse": ("bse", "Beijing_Stocks"),
+    }
+    config_name, exchange_dir = exchange_names[exchange_lower]
 
     # Load config
     try:
-        config_data = load_config("sse")
-        config = SseConfig.from_yaml(config_data)
+        config_data = load_config(config_name)
+        if exchange_lower == "sse":
+            config = SseConfig.from_yaml(config_data)
+            # Override config from CLI args
+            config.filters["STOCK_TYPE"] = stock_type
+            config.pagination.page_size = page_size
+        elif exchange_lower == "bse":
+            config = BseConfig.from_yaml(config_data)
+        else:
+            console.print(f"[yellow]Exchange '{exchange}' not yet implemented[/yellow]")
+            raise typer.Exit(1)
     except FileNotFoundError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
-
-    # Override config from CLI args
-    config.filters["STOCK_TYPE"] = stock_type
-    config.pagination.page_size = page_size
 
     # Setup storage
     output_dir = output or Path("data/universe")
@@ -112,54 +122,103 @@ def fetch_universe(
     errors: list[dict] = []
 
     try:
-        with SseFetcher(config) as fetcher:
-            with storage.open_writer(asof, "Shanghai_Stocks") as writer:
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    BarColumn(),
-                    TaskProgressColumn(),
-                    console=console,
-                ) as progress:
-                    task = progress.add_task("Fetching...", total=None)
+        if exchange_lower == "sse":
+            with SseFetcher(config) as fetcher:
+                with storage.open_writer(asof, "Shanghai_Stocks") as writer:
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        BarColumn(),
+                        TaskProgressColumn(),
+                        console=console,
+                    ) as progress:
+                        task = progress.add_task("Fetching...", total=None)
 
-                    for raw_record, source_url, record_asof in fetcher.iter_raw_records(asof):
-                        try:
-                            normalized = normalize_sse_record(
-                                raw_record,
-                                source_url,
-                                record_asof,
-                                stock_type=stock_type,
-                                include_raw=include_raw,
-                            )
-                            writer.write_record(normalized)
-                            total_records += 1
+                        for raw_record, source_url, record_asof in fetcher.iter_raw_records(asof):
+                            try:
+                                normalized = normalize_sse_record(
+                                    raw_record,
+                                    source_url,
+                                    record_asof,
+                                    stock_type=stock_type,
+                                    include_raw=include_raw,
+                                )
+                                writer.write_record(normalized)
+                                total_records += 1
 
-                            progress.update(
-                                task,
-                                description=f"Fetching... {total_records} records"
-                            )
-                        except Exception as e:
-                            logger.warning(f"Failed to normalize record: {e}")
-                            if len(errors) < 10:
-                                errors.append({
-                                    "type": "normalize_error",
-                                    "error": str(e),
-                                })
+                                progress.update(
+                                    task,
+                                    description=f"Fetching... {total_records} records"
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to normalize record: {e}")
+                                if len(errors) < 10:
+                                    errors.append({
+                                        "type": "normalize_error",
+                                        "error": str(e),
+                                    })
 
-                # Build and write manifest
-                duration = time.time() - start_time
-                manifest = storage.build_manifest(
-                    exchange="Shanghai_Stocks",
-                    asof=asof,
-                    config=config,
-                    writer=writer,
-                    duration_seconds=duration,
-                    failed_pages=failed_pages,
-                    errors=errors,
-                )
-                manifest.stats.total_pages = fetcher.client._last_request_time > 0 and 1 or 0
-                storage.write_manifest(asof, manifest)
+                    # Build and write manifest
+                    duration = time.time() - start_time
+                    manifest = storage.build_manifest(
+                        exchange="Shanghai_Stocks",
+                        asof=asof,
+                        config=config,
+                        writer=writer,
+                        duration_seconds=duration,
+                        failed_pages=failed_pages,
+                        errors=errors,
+                    )
+                    manifest.stats.total_pages = fetcher.client._last_request_time > 0 and 1 or 0
+                    storage.write_manifest(asof, manifest)
+
+        elif exchange_lower == "bse":
+            with BseFetcher(config) as fetcher:
+                with storage.open_writer(asof, "Beijing_Stocks") as writer:
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        BarColumn(),
+                        TaskProgressColumn(),
+                        console=console,
+                    ) as progress:
+                        task = progress.add_task("Fetching...", total=None)
+
+                        for raw_record, source_url, record_asof in fetcher.iter_raw_records(asof):
+                            try:
+                                normalized = normalize_bse_record(
+                                    raw_record,
+                                    source_url,
+                                    record_asof,
+                                    include_raw=include_raw,
+                                )
+                                writer.write_record(normalized)
+                                total_records += 1
+
+                                progress.update(
+                                    task,
+                                    description=f"Fetching... {total_records} records"
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to normalize record: {e}")
+                                if len(errors) < 10:
+                                    errors.append({
+                                        "type": "normalize_error",
+                                        "error": str(e),
+                                    })
+
+                    # Build and write manifest
+                    duration = time.time() - start_time
+                    manifest = storage.build_manifest(
+                        exchange="Beijing_Stocks",
+                        asof=asof,
+                        config=config,
+                        writer=writer,
+                        duration_seconds=duration,
+                        failed_pages=failed_pages,
+                        errors=errors,
+                    )
+                    storage.write_manifest(asof, manifest)
 
         # Print summary
         duration = time.time() - start_time
