@@ -17,6 +17,8 @@ class RateLimitConfig(BaseModel):
 
     requests_per_second: float = Field(default=2.0, ge=0.1, le=10.0)
     page_delay: float = Field(default=0.5, ge=0.0)
+    page_delay_min: float | None = Field(default=None, ge=0.0)
+    page_delay_max: float | None = Field(default=None, ge=0.0)
 
 
 class RetryConfig(BaseModel):
@@ -73,7 +75,7 @@ class SseConfig(BaseModel):
             "cookies": data.get("cookies", {}),
             "timeout": data.get("timeout", 30.0),
         }
-        
+
         if "pagination" in data:
             config_data["pagination"] = PaginationConfig(**data["pagination"])
         if "jsonp" in data:
@@ -82,10 +84,10 @@ class SseConfig(BaseModel):
             config_data["rate_limit"] = RateLimitConfig(**data["rate_limit"])
         if "retry" in data:
             config_data["retry"] = RetryConfig(**data["retry"])
-        
+
         # Filter out None values
         config_data = {k: v for k, v in config_data.items() if v is not None}
-        
+
         return cls(**config_data)
 
     def build_cookie_header(self) -> str:
@@ -111,6 +113,40 @@ class BseConfig(BaseModel):
 
     @classmethod
     def from_yaml(cls, data: dict[str, Any]) -> "BseConfig":
+        """Create config from parsed YAML data."""
+        config_data = {
+            "endpoint": data.get("endpoint"),
+            "headers": data.get("headers", {}),
+            "cookies": data.get("cookies", {}),
+            "timeout": data.get("timeout", 15.0),
+        }
+
+        if "rate_limit" in data:
+            config_data["rate_limit"] = RateLimitConfig(**data["rate_limit"])
+        if "retry" in data:
+            config_data["retry"] = RetryConfig(**data["retry"])
+
+        config_data = {k: v for k, v in config_data.items() if v is not None}
+        return cls(**config_data)
+
+    def build_cookie_header(self) -> str:
+        """Build Cookie header string from key-value pairs."""
+        if not self.cookies:
+            return ""
+        return "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+
+class SzseConfig(BaseModel):
+    """SZSE fetcher configuration."""
+
+    endpoint: str = Field(default="https://www.szse.cn/api/report/ShowReport/data")
+    headers: dict[str, str] = Field(default_factory=dict)
+    cookies: dict[str, str] = Field(default_factory=dict)
+    rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
+    retry: RetryConfig = Field(default_factory=RetryConfig)
+    timeout: float = Field(default=15.0, ge=1.0)
+
+    @classmethod
+    def from_yaml(cls, data: dict[str, Any]) -> "SzseConfig":
         """Create config from parsed YAML data."""
         config_data = {
             "endpoint": data.get("endpoint"),

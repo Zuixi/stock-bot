@@ -15,9 +15,11 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 from src.config import load_config
 from src.fetchers.sse import SseFetcher
 from src.fetchers.bse import BseFetcher
-from src.models.config import SseConfig, BseConfig
+from src.fetchers.szse import SzseFetcher
+from src.models.config import SseConfig, BseConfig, SzseConfig
 from src.normalizers.sse import normalize_sse_record
 from src.normalizers.bse import normalize_bse_record
+from src.normalizers.szse import normalize_szse_record
 from src.storage import UniverseStorage
 
 
@@ -97,8 +99,7 @@ def fetch_universe(
         elif exchange_lower == "bse":
             config = BseConfig.from_yaml(config_data)
         else:
-            console.print(f"[yellow]Exchange '{exchange}' not yet implemented[/yellow]")
-            raise typer.Exit(1)
+            config = SzseConfig.from_yaml(config_data)
     except FileNotFoundError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
@@ -110,8 +111,9 @@ def fetch_universe(
     asof = datetime.now(timezone.utc)
     console.print(f"\n[bold]Stock Universe Fetch[/bold]")
     console.print(f"  Exchange: {exchange.upper()}")
-    console.print(f"  Stock Type: {stock_type}")
-    console.print(f"  Page Size: {page_size}")
+    if exchange_lower == "sse":
+        console.print(f"  Stock Type: {stock_type}")
+        console.print(f"  Page Size: {page_size}")
     console.print(f"  Output: {output_dir}")
     console.print(f"  Timestamp: {asof.isoformat()}")
     console.print()
@@ -211,6 +213,54 @@ def fetch_universe(
                     duration = time.time() - start_time
                     manifest = storage.build_manifest(
                         exchange="Beijing_Stocks",
+                        asof=asof,
+                        config=config,
+                        writer=writer,
+                        duration_seconds=duration,
+                        failed_pages=failed_pages,
+                        errors=errors,
+                    )
+                    storage.write_manifest(asof, manifest)
+
+        elif exchange_lower == "sze":
+            with SzseFetcher(config) as fetcher:
+                with storage.open_writer(asof, "Shenzen_Stocks") as writer:
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        BarColumn(),
+                        TaskProgressColumn(),
+                        console=console,
+                    ) as progress:
+                        task = progress.add_task("Fetching...", total=None)
+
+                        for raw_record, source_url, record_asof in fetcher.iter_raw_records(asof):
+                            try:
+                                normalized = normalize_szse_record(
+                                    raw_record,
+                                    source_url,
+                                    record_asof,
+                                    include_raw=include_raw,
+                                )
+                                writer.write_record(normalized)
+                                total_records += 1
+
+                                progress.update(
+                                    task,
+                                    description=f"Fetching... {total_records} records"
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to normalize record: {e}")
+                                if len(errors) < 10:
+                                    errors.append({
+                                        "type": "normalize_error",
+                                        "error": str(e),
+                                    })
+
+                    # Build and write manifest
+                    duration = time.time() - start_time
+                    manifest = storage.build_manifest(
+                        exchange="Shenzen_Stocks",
                         asof=asof,
                         config=config,
                         writer=writer,

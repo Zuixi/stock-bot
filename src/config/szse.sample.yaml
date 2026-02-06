@@ -1,0 +1,42 @@
+# SZSE (Shenzhen Stock Exchange) fetcher configuration
+# Copy this file to szse.yaml and fill in your actual cookie values.
+# NEVER commit szse.yaml to version control.
+
+# https://www.szse.cn/market/product/stock/list/
+
+# API endpoint for stock list
+# Note: SZSE API requires cookies. Get them from browser DevTools:
+# 1. Open browser DevTools (F12)
+# 2. Go to Network tab
+# 3. Visit https://www.szse.cn/market/product/stock/list/
+# 4. Copy cookies from Request Headers
+endpoint: "https://www.szse.cn/api/report/ShowReport/data"
+
+# Request headers (match browser)
+headers:
+  Accept: "text/javascript, application/javascript, application/ecmascript, application/x-ecmascript, */*; q=0.01"
+  Accept-Encoding: "gzip, deflate, br, zstd"
+  Accept-Language: "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7,de-DE;q=0.6,de;q=0.5"
+  Origin: "https://www.szse.cn"
+  Referer: "https://www.szse.cn/market/product/stock/list/index.html"
+  User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0"
+  X-Requested-With: "XMLHttpRequest"
+
+# Cookies (key-value pairs, will be joined as "key1=value1; key2=value2")
+# Get these from browser DevTools > Application > Cookies or Network > Request Headers
+cookies:
+
+# Rate limiting & retry
+rate_limit:
+  requests_per_second: 2.0
+  page_delay: 0.5
+  page_delay_min: 20
+  page_delay_max: 40
+
+retry:
+  max_attempts: 3
+  backoff_multiplier: 2.0
+  initial_delay: 1.0
+
+# Request timeout (seconds)
+timeout: 15
