@@ -39,7 +39,62 @@ stock-bot
     ├───normalizers ################################### 数据规范化模块, 负责清洗和标准化抓取的数据
     ├───providers   ################################### 行情数据接口模块
     └───storage     ################################### 数据存储模块
+### 环境要求
+- Python 3.11+
+
+### 安装
+
+```bash
+pip install -e .
 ```
+
+### 配置说明
+
+配置文件位于 src/config/：
+- sse.sample.yaml → 复制为 sse.yaml
+- szse.sample.yaml → 复制为 szse.yaml
+- bse.sample.yaml → 复制为 bse.yaml（如需要）
+
+SSE 与 SZSE 需要 Cookie。请在浏览器 DevTools 中复制 Cookie，并填入配置文件的 cookies 字段。注意不要提交真实 Cookie。
+
+### CLI 使用
+
+```bash
+# SSE（上海）股票池
+stock-bot universe fetch --exchange sse --stock-type 1
+
+# BSE（北京）股票池
+stock-bot universe fetch --exchange bse
+
+# SZSE（深圳）股票池
+stock-bot universe fetch --exchange sze
+
+# 列出快照
+stock-bot universe list
+
+# 开发模式（模块执行）
+python -m src.cli.universe fetch --exchange sse
+python -m src.cli.universe fetch --exchange bse
+python -m src.cli.universe fetch --exchange sze
+```
+
+## 数据输出
+
+快照输出到 data/universe/：
+
+```text
+data/universe/
+  snapshot=YYYY-MM-DDTHH-MM-SSZ/
+    manifest.json
+    Shanghai_Stocks/
+      class=STOCK_TYPE_1_主板A股.jsonl
+    Shenzen_Stocks/
+      class=Shenzen_Stocks_主板.jsonl
+    Beijing_Stocks/
+      class=Beijing_Stocks_T.jsonl
+```
+
+每行 JSONL 对应一个标准化的 StockRecord。
 
 **storage module**：
 

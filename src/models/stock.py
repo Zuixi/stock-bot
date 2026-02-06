@@ -115,3 +115,33 @@ class RawBseRecord(BaseModel):
 
     class Config:
         extra = "allow"  # Allow additional fields not explicitly defined
+
+
+class RawSzseRecord(BaseModel):
+    """Raw record from SZSE ShowReport/data API.
+
+    Field names match SZSE API response (lowercase keys).
+    """
+
+    # Common fields for A-share/CDR/AB list
+    bk: str | None = Field(default=None, description="板块")
+    agdm: str | None = Field(default=None, description="A股/证券代码")
+    agjc: str | None = Field(default=None, description="A股/证券简称")
+    agssrq: str | None = Field(default=None, description="上市日期")
+    agzgb: str | None = Field(default=None, description="总股本/总份数")
+    agltgb: str | None = Field(default=None, description="流通股本/流通份数")
+    zhbl: str | None = Field(default=None, description="CDR对应比例")
+    sshymc: str | None = Field(default=None, description="所属行业")
+    ylbz: str | None = Field(default=None, description="未盈利")
+    sfjybjqcy: str | None = Field(default=None, description="具有表决权差异安排")
+    gskzjglx: str | None = Field(default=None, description="具有协议控制架构")
+
+    # B-share fields (if present)
+    bgdm: str | None = Field(default=None, description="B股代码")
+    bgjc: str | None = Field(default=None, description="B股简称")
+    bgssrq: str | None = Field(default=None, description="B股上市日期")
+    bgzgb: str | None = Field(default=None, description="B股总股本")
+    bgltgb: str | None = Field(default=None, description="B股流通股本")
+
+    class Config:
+        extra = "allow"  # Allow additional fields not explicitly defined

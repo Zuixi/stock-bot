@@ -36,12 +36,16 @@ stock-bot universe fetch --exchange sse --stock-type 1
 # Fetch stock universe from BSE (Beijing Stock Exchange)
 stock-bot universe fetch --exchange bse
 
+# Fetch stock universe from SZSE (Shenzhen Stock Exchange)
+stock-bot universe fetch --exchange sze
+
 # List available snapshots
 stock-bot universe list
 
 # For development with local module
 python -m src.cli.universe fetch --exchange sse
 python -m src.cli.universe fetch --exchange bse
+python -m src.cli.universe fetch --exchange sze
 ```
 
 ## Architecture Overview
