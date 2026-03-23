@@ -2,7 +2,6 @@ services:
   api:
     build:
       context: .
-      network: host
     ports:
       - "8000:8000"
     env_file: .env
@@ -20,7 +19,6 @@ services:
   worker:
     build:
       context: .
-      network: host
     env_file: .env
     depends_on:
       postgres:
@@ -34,15 +32,15 @@ services:
   postgres:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/quay.io/sclorg/postgresql-15-c9s:latest
     environment:
-      POSTGRES_USER: stock_user
-      POSTGRES_PASSWORD: stock_pass
-      POSTGRES_DB: stock_bot
+      POSTGRESQL_USER: stock_user
+      POSTGRESQL_PASSWORD: stock_pass
+      POSTGRESQL_DATABASE: stock_bot
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U stock_user -d stock_bot"]
+      test: ["CMD-SHELL", "pg_isready -p 5432"]
       interval: 5s
       timeout: 5s
       retries: 5

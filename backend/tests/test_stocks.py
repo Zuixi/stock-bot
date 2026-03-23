@@ -6,7 +6,7 @@ from httpx import AsyncClient
 
 @pytest.mark.asyncio
 async def test_list_stocks_empty(client: AsyncClient) -> None:
-    response = await client.get("/api/v1/stocks")
+    response = await client.get("/api/v1/exchanges/Shanghai_Stocks/stocks")
     assert response.status_code == 200
     data = response.json()
     assert "items" in data
@@ -16,7 +16,7 @@ async def test_list_stocks_empty(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_list_exchanges(client: AsyncClient) -> None:
-    response = await client.get("/api/v1/stocks/exchanges")
+    response = await client.get("/api/v1/exchanges")
     assert response.status_code == 200
     exchanges = response.json()
     codes = {e["code"] for e in exchanges}
@@ -27,5 +27,5 @@ async def test_list_exchanges(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_get_stock_not_found(client: AsyncClient) -> None:
-    response = await client.get("/api/v1/stocks/999999")
+    response = await client.get("/api/v1/exchanges/Shanghai_Stocks/stocks/999999")
     assert response.status_code == 404

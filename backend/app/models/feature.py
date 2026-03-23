@@ -19,7 +19,7 @@ class StockFeature(Base):
         ),
         Index("idx_stock_features_stock_date", "stock_id", "asof_date"),
         Index("idx_stock_features_window", "asof_date", "window_days"),
-        {"postgresql_partition_by": "RANGE (asof_date)"},
+        # Partitioning is managed externally. Do NOT put postgresql_partition_by here.
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

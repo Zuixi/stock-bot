@@ -38,8 +38,18 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup() -> None:
-        await get_redis_pool()
-        await get_mq_channel()
+        try:
+            await get_redis_pool()
+            logger.info("Redis connected")
+        except Exception as e:
+            logger.warning("Redis unavailable — caching disabled: %s", e)
+
+        try:
+            await get_mq_channel()
+            logger.info("RabbitMQ connected")
+        except Exception as e:
+            logger.warning("RabbitMQ unavailable — async tasks will queue locally: %s", e)
+
         logger.info("Stock Bot API started (env=%s)", settings.app_env)
 
     @app.on_event("shutdown")

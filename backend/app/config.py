@@ -31,15 +31,21 @@ class Settings(BaseSettings):
     rabbitmq_url: str = "amqp://guest:guest@localhost:5672/"
     rabbitmq_exchange: str = "stock_bot.topic"
 
-    # CORS
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    # CORS — accepts comma-separated string or JSON array string
+    cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins", mode="after")
     @classmethod
-    def parse_cors_origins(cls, v: str | list[str]) -> list[str]:
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",")]
-        return v
+    def parse_cors_origins(cls, v: str) -> list[str]:
+        if not v:
+            return []
+        try:
+            # Try JSON array first
+            import json
+            return json.loads(v)
+        except (json.JSONDecodeError, TypeError):
+            # Fall back to comma-separated
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
 
     @property
     def is_development(self) -> bool:

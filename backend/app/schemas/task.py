@@ -21,6 +21,11 @@ class TaskOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TaskListParams(BaseModel):
+    type: str | None = None
+    status: str | None = None
+
+
 class FetchUniverseRequest(BaseModel):
     exchange: str
     stock_type: str | None = None

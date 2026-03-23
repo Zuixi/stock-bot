@@ -1,4 +1,4 @@
-"""Stock repository: CRUD + filtering."""
+"""Stock repository: CRUD + filtering — all symbol lookups require exchange."""
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,8 +33,13 @@ async def list_stocks(
     return list(rows), total
 
 
-async def get_stock_by_symbol(db: AsyncSession, symbol: str) -> Stock | None:
-    result = await db.execute(select(Stock).where(Stock.symbol == symbol))
+async def get_stock_by_symbol(
+    db: AsyncSession, exchange: str, symbol: str
+) -> Stock | None:
+    """Fetch a stock by (exchange, symbol) — both are required for correctness."""
+    result = await db.execute(
+        select(Stock).where(Stock.exchange == exchange, Stock.symbol == symbol)
+    )
     return result.scalar_one_or_none()
 
 

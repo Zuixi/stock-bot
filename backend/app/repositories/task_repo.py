@@ -52,12 +52,26 @@ async def list_tasks(
     db: AsyncSession,
     task_type: str | None = None,
     status: str | None = None,
+    offset: int = 0,
     limit: int = 20,
 ) -> list[Task]:
-    stmt = select(Task).order_by(Task.created_at.desc()).limit(limit)
+    stmt = select(Task).order_by(Task.created_at.desc()).offset(offset).limit(limit)
     if task_type:
         stmt = stmt.where(Task.type == task_type)
     if status:
         stmt = stmt.where(Task.status == status)
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+async def count_tasks(
+    db: AsyncSession,
+    task_type: str | None = None,
+    status: str | None = None,
+) -> int:
+    stmt = select(func.count()).select_from(Task)
+    if task_type:
+        stmt = stmt.where(Task.type == task_type)
+    if status:
+        stmt = stmt.where(Task.status == status)
+    return (await db.execute(stmt)).scalar_one()

@@ -45,14 +45,14 @@ async def list_stocks(
 
 
 async def get_stock(
-    db: AsyncSession, cache: CacheClient, symbol: str
+    db: AsyncSession, cache: CacheClient, exchange: str, symbol: str
 ) -> StockOut | None:
-    cache_key = f"stock:detail:{symbol}"
+    cache_key = f"stock:detail:{exchange}:{symbol}"
     cached = await cache.get(cache_key)
     if cached:
         return StockOut(**cached)
 
-    stock = await stock_repo.get_stock_by_symbol(db, symbol)
+    stock = await stock_repo.get_stock_by_symbol(db, exchange, symbol)
     if stock is None:
         return None
     out = StockOut.model_validate(stock)
@@ -60,7 +60,7 @@ async def get_stock(
     return out
 
 
-async def list_exchanges() -> list[ExchangeOut]:
+def list_exchanges() -> list[ExchangeOut]:
     return _EXCHANGES
 
 
