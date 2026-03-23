@@ -34,6 +34,7 @@ class RadarAxis(BaseModel):
 class RadarChartData(BaseModel):
     symbol: str
     name: str
+    exchange: str
     asof_date: date
     window_days: int
     axes: list[RadarAxis]

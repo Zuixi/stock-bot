@@ -1,4 +1,4 @@
-"""Task service: create tasks and dispatch messages to RabbitMQ."""
+"""Task service: create, list, cancel tasks and dispatch messages to RabbitMQ."""
 
 import logging
 import uuid
@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.mq import publish_message
 from app.core.redis import CacheClient
 from app.repositories import task_repo
+from app.schemas.common import PageParams
 from app.schemas.task import (
     FetchQuotesRequest,
     FetchUniverseRequest,
@@ -74,3 +75,38 @@ async def get_task(
     ttl = 3600 if out.status in ("completed", "failed", "cancelled") else 10
     await cache.set(cache_key, out.model_dump(mode="json"), ttl=ttl)
     return out
+
+
+async def list_tasks(
+    db: AsyncSession,
+    cache: CacheClient,
+    type: str | None = None,
+    status: str | None = None,
+    page_params: PageParams | None = None,
+) -> tuple[list[TaskOut], int]:
+    if page_params is None:
+        page_params = PageParams()
+    tasks = await task_repo.list_tasks(
+        db,
+        task_type=type,
+        status=status,
+        offset=page_params.offset,
+        limit=page_params.page_size,
+    )
+    total = await task_repo.count_tasks(db, task_type=type, status=status)
+    return [TaskOut.model_validate(t) for t in tasks], total
+
+
+async def cancel_task(
+    db: AsyncSession, cache: CacheClient, task_id: uuid.UUID
+) -> bool:
+    """Cancel a task if it is still pending or running. Returns True on success."""
+    task = await task_repo.get_task(db, task_id)
+    if task is None:
+        return False
+    if task.status not in ("pending", "running"):
+        return False
+    await task_repo.update_task_status(db, task_id, "cancelled")
+    await cache.delete(f"task:status:{task_id}")
+    logger.info("Cancelled task %s", task_id)
+    return True

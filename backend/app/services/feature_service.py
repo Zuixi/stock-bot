@@ -23,14 +23,15 @@ _RADAR_AXES = [
 async def get_radar_data(
     db: AsyncSession,
     cache: CacheClient,
+    exchange: str,
     symbol: str,
     window_days: int = 60,
 ) -> RadarChartData | None:
-    stock = await stock_repo.get_stock_by_symbol(db, symbol)
+    stock = await stock_repo.get_stock_by_symbol(db, exchange, symbol)
     if stock is None:
         return None
 
-    cache_key = f"feature:radar:{symbol}:{window_days}"
+    cache_key = f"feature:radar:{exchange}:{symbol}:{window_days}"
     cached = await cache.get(cache_key)
     if cached:
         return RadarChartData(**cached)
@@ -46,6 +47,7 @@ async def get_radar_data(
     out = RadarChartData(
         symbol=symbol,
         name=stock.name,
+        exchange=exchange,
         asof_date=feature.asof_date,
         window_days=window_days,
         axes=axes,
@@ -57,12 +59,13 @@ async def get_radar_data(
 async def get_feature_history(
     db: AsyncSession,
     cache: CacheClient,
+    exchange: str,
     symbol: str,
     window_days: int = 60,
     start_date: date | None = None,
     end_date: date | None = None,
 ) -> list[StockFeatureOut] | None:
-    stock = await stock_repo.get_stock_by_symbol(db, symbol)
+    stock = await stock_repo.get_stock_by_symbol(db, exchange, symbol)
     if stock is None:
         return None
 

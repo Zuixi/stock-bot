@@ -17,7 +17,10 @@ class DailyQuote(Base):
         CheckConstraint("high >= low AND open >= 0 AND close >= 0", name="chk_ohlc"),
         Index("idx_daily_quotes_stock_date", "stock_id", "trade_date"),
         Index("idx_daily_quotes_date", "trade_date"),
-        {"postgresql_partition_by": "RANGE (trade_date)"},
+        # Partitioning is managed externally via ALTER TABLE partitioned by.
+        # Do NOT put postgresql_partition_by here — it conflicts with
+        # the auto-generated PrimaryKeyConstraint(id) and causes:
+        # "unique constraint on partitioned table must include all partitioning columns"
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
