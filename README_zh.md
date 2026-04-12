@@ -135,3 +135,7 @@ data/
 
 
 ## 安装与使用
+
+
+IMPORTANT:
+- Update this file When meet something new and important with one sentences.

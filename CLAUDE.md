@@ -2,132 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Development Commands
+stock bot 是一个记录跟踪股票数据的分析工具，支持三大交易所的股票数据获取，并且按照申万分类进行统计显示。
+stock bot 能够查看当前市场行情，股票类别，每个分类的具体股票信息和个股详情展示。
 
-### Linting and Formatting
-```bash
-# Run linter (configured in pyproject.toml: line-length=100)
-ruff check src/
+## 项目结构
+- backend 数据服务后端，提供前端数据
+  - FastAPI + Postgre SQL + Redits + RabbitMQ
+- frontend 服务前端，数据可视化
+  - React + Tailwind CSS v4 + shadcn/ui + Vite
+  - Echarts for charting
 
-# Auto-fix lint issues
-ruff check --fix src/
+前后端都需要使用Docker Compose 进行部署。
 
-# Type checking
-mypy src/
-```
+项目组件具体信息可以参考组件的AGENTS.md文件。
 
-### Testing
-```bash
-# Run all tests
-pytest
-
-# Run with verbose output
-pytest -v
-
-# Run specific test file
-pytest tests/path/to/test_file.py
-```
-
-### CLI Usage
-```bash
-# Fetch stock universe from SSE
-stock-bot universe fetch --exchange sse --stock-type 1
-
-# Fetch stock universe from BSE (Beijing Stock Exchange)
-stock-bot universe fetch --exchange bse
-
-# Fetch stock universe from SZSE (Shenzhen Stock Exchange)
-stock-bot universe fetch --exchange sze
-
-# List available snapshots
-stock-bot universe list
-
-# For development with local module
-python -m src.cli.universe fetch --exchange sse
-python -m src.cli.universe fetch --exchange bse
-python -m src.cli.universe fetch --exchange sze
-```
-
-## Architecture Overview
-
-### Module Structure
-```
-src/
-├── cli/          # CLI entry point (typer-based commands)
-├── config/       # YAML configuration loader
-├── fetchers/     # Exchange-specific API clients (sse, sze, bse)
-├── models/       # Pydantic models (config, stock, manifest)
-├── normalizers/  # Convert raw records to unified StockRecord schema
-└── storage/      # Snapshot-based JSONL storage with manifests
-```
-
-### Data Flow
-1. **CLI** ([cli/universe.py](src/cli/universe.py)) - User-facing commands using typer
-2. **Fetcher** ([fetchers/sse/](src/fetchers/sse/)) - Exchange API client with pagination, rate limiting, retries
-3. **Normalizer** ([normalizers/sse.py](src/normalizers/sse.py)) - Converts raw exchange records to unified `StockRecord`
-4. **Storage** ([storage/universe.py](src/storage/universe.py)) - Writes JSONL files with manifest metadata
-
-### Key Abstractions
-
-**Fetcher Pattern**: Each exchange implements a fetcher with:
-- `client` - HTTP client with JSONP parsing (SSE uses JSONP)
-- `iter_raw_records(asof)` - Generator yielding `(raw_record, source_url, asof_timestamp)`
-- Config-driven rate limiting, retries, pagination
-
-**Normalizer Pattern**: Converts exchange-specific raw records to unified `StockRecord` schema. The normalizer must map:
-- `exchange` - Must be exactly "Shanghai_Stocks", "Shenzen_Stocks", or "Beijing_Stocks"
-- `symbol` - Stock code (e.g., "600105")
-- `category` - Exchange's official classification (preserve original, don't normalize cross-exchange yet)
-
-**Storage Structure**:
-```
-data/universe/
-  snapshot=2026-01-30T12-00-00Z/
-    manifest.json                    # Fetch metadata, stats, config (sanitized)
-    Shanghai_Stocks/
-      class=STOCK_TYPE_1_主板A股.jsonl
-```
-
-Each JSONL file contains one `StockRecord` per line. Files are grouped by exchange/category for efficient partitioning.
-
-### Configuration System
-
-Exchange-specific YAML configs in [src/config/](src/config/):
-- `sse.yaml` - SSE fetcher config (requires cookies, never commit)
-- `sse.sample.yaml` - Template with documented fields
-
-Config loading: `load_config("sse")` returns dict, then `SseConfig.from_yaml(data)` creates Pydantic model.
-
-**Security**: Configs may contain cookies/secrets. Never log or commit `sse.yaml`. Use `config.get_safe_headers()` for manifests.
-
-### Exchange Naming Convention
-
-**Critical**: Use these exact strings for `exchange` field (defined in [models/stock.py](src/models/stock.py)):
-- `Shanghai_Stocks` (SSE)
-- `Shenzen_Stocks` (SZSE) - note: "Shenzen" not "Shenzhen"
-- `Beijing_Stocks` (BSE)
-
-This is used for directory names and filtering. Do not change without updating storage layer.
-
-## Product Roadmap Context
-
-Current state: **M0** - Stock universe fetching for SSE and BSE.
-
-Planned milestones:
-- M0: Multi-exchange universe fetch + normalize + persist (SSE + BSE complete)
-- M1: Daily trading data fetch + incremental updates
-- M2: Feature engineering + clustering
-- M3: LLM cluster interpretation
-- M4: SZSE support + scheduled tasks
+IMPORTANT:
+- 每次完成任务时，结合业内最佳实践，总结经验教训，用一句话沉淀到 [this document](./docs/references/best-practices.md)
 
 See [product.md](product.md) for full requirements.
-
-## Adding a New Exchange
-
-1. Create `src/fetchers/{exchange}/` with `client.py` and `fetcher.py`
-2. Create `Raw{Exchange}Record` model in `models/stock.py`
-3. Create `normalize_{exchange}_record()` in `normalizers/{exchange}.py`
-4. Add YAML config in `src/config/{exchange}.sample.yaml`
-5. Update CLI in `cli/universe.py` to support new exchange
-
-Follow the SSE implementation as reference. The storage layer expects the same `iter_raw_records()` generator pattern.

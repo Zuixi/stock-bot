@@ -5,6 +5,7 @@ import {
   SectorHeatmap,
   CapitalFlowChart,
   HotSectors,
+  IndustryClassification,
 } from "@/features/market/components";
 
 export default function MarketPage() {
@@ -33,6 +34,10 @@ export default function MarketPage() {
           <HotSectors />
         </Col>
       </Row>
+
+      <Divider style={{ margin: "16px 0" }} />
+
+      <IndustryClassification />
     </div>
   );
 }
