@@ -17,4 +17,3 @@ backend service used to provide unified restful api for the frontend service, an
 - Using SQLModel to build the database models.
 - Using Redis to cache the data.
 - Using RabbitMQ to manage the data flow.
-- Using Docker and docker-compose to manage the service.

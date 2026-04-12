@@ -4,7 +4,7 @@
 
 - framework:
   - FastAPI
-  - PostgresSQL
+  - Postgres SQL
   - Redis
   - RabbitMQ
   - Docker

@@ -1,6 +1,8 @@
 # IDE / Editor
 .vscode/**
 .idea/
+.cursor/**
+# _bmad/**
 
 # OS
 .DS_Store
