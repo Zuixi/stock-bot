@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -52,29 +52,39 @@ async def migrate_snapshot(snapshot: Path, dry_run: bool) -> int:
     from app.core.database import async_session_factory
     from app.models.stock import Stock, StockHistory
     from app.repositories import stock_repo
+    from app.services.universe_ingest import parse_listing_date
 
-    records = list(iter_records(snapshot))
-    logger.info("Found %d records in %s", len(records), snapshot.name)
-
+    total_records = 0
     if dry_run:
-        logger.info("[DRY RUN] Would insert %d records", len(records))
-        return len(records)
+        for _ in iter_records(snapshot):
+            total_records += 1
+        logger.info("[DRY RUN] Would insert %d records from %s", total_records, snapshot.name)
+        return total_records
 
     count = 0
+    skipped = 0
+    batch_size = 250
     async with async_session_factory() as db:
-        for rec in records:
+        for rec in iter_records(snapshot):
+            total_records += 1
+            if not all(
+                key in rec and str(rec.get(key, "")).strip()
+                for key in ("exchange", "symbol", "name", "category")
+            ):
+                skipped += 1
+                logger.warning("Skipping invalid record: %s", rec)
+                continue
             asof_raw = rec.get("asof")
-            asof = datetime.fromisoformat(asof_raw) if asof_raw else datetime.utcnow()
-
-            list_date_raw = rec.get("list_date")
-            list_date = None
-            if list_date_raw and len(list_date_raw) == 8:
-                from datetime import date
-                list_date = date(
-                    int(list_date_raw[:4]),
-                    int(list_date_raw[4:6]),
-                    int(list_date_raw[6:8]),
-                )
+            try:
+                if asof_raw:
+                    asof = datetime.fromisoformat(str(asof_raw).replace("Z", "+00:00"))
+                else:
+                    asof = datetime.now(UTC)
+            except ValueError:
+                skipped += 1
+                logger.warning("Skipping invalid asof value for %s/%s", rec.get("exchange"), rec.get("symbol"))
+                continue
+            list_date = parse_listing_date(rec.get("list_date"))
 
             stock = Stock(
                 exchange=rec["exchange"],
@@ -87,6 +97,7 @@ async def migrate_snapshot(snapshot: Path, dry_run: bool) -> int:
                 csrc_desc=rec.get("csrc_desc"),
                 province=rec.get("province"),
                 status=rec.get("status"),
+                detail=rec.get("detail"),
                 asof=asof,
             )
             history = StockHistory(
@@ -100,6 +111,7 @@ async def migrate_snapshot(snapshot: Path, dry_run: bool) -> int:
                 csrc_desc=stock.csrc_desc,
                 province=stock.province,
                 status=stock.status,
+                detail=rec.get("detail"),
                 source_url=rec.get("source_url"),
                 asof=asof,
                 raw=rec.get("raw"),
@@ -107,10 +119,18 @@ async def migrate_snapshot(snapshot: Path, dry_run: bool) -> int:
             await stock_repo.upsert_stock(db, stock)
             await stock_repo.insert_stock_history(db, history)
             count += 1
+            if count % batch_size == 0:
+                await db.commit()
 
         await db.commit()
 
-    logger.info("Migrated %d records from %s", count, snapshot.name)
+    logger.info(
+        "Migrated %d/%d records from %s (skipped=%d)",
+        count,
+        total_records,
+        snapshot.name,
+        skipped,
+    )
     return count
 
 

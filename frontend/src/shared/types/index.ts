@@ -5,11 +5,10 @@ export interface ApiResponse<T> {
 }
 
 export interface PaginatedResponse<T> {
-  data: T[];
+  items: T[];
   total: number;
   page: number;
   page_size: number;
-  asof: string;
 }
 
 export interface ListParams {
@@ -44,18 +43,19 @@ export interface StockRecord {
   exchange: Exchange;
   category: string;
   industry?: string;
-  latestPrice: number;
-  change: number;
-  changePercent: number;
-  volume: number;
-  turnover: number;
-  marketCap: number;
+  latestPrice?: number;
+  change?: number;
+  changePercent?: number;
+  volume?: number;
+  turnover?: number;
+  marketCap?: number;
   circulatingCap?: number;
   pe?: number;
   pb?: number;
   roe?: number;
   revenueGrowth?: number;
   profitGrowth?: number;
+  detail?: Record<string, unknown>;
   asof: string;
 }
 

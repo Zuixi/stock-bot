@@ -1,9 +1,15 @@
 import ReactECharts from "echarts-for-react";
 import { Card } from "antd";
-import { MOCK_DISTRIBUTION } from "@/shared/mocks/market";
+import { useQuery } from "@tanstack/react-query";
+import { fetchDistribution } from "@/shared/api/market";
 import { COLORS } from "@/app/theme";
 
 export function DistributionChart() {
+  const { data = [] } = useQuery({
+    queryKey: ["market-distribution"],
+    queryFn: fetchDistribution,
+  });
+
   const option = {
     tooltip: {
       trigger: "axis" as const,
@@ -15,20 +21,22 @@ export function DistributionChart() {
     grid: { left: 40, right: 16, top: 24, bottom: 32 },
     xAxis: {
       type: "category" as const,
-      data: MOCK_DISTRIBUTION.map((d) => d.range),
+      data: data.map((d) => d.range),
       axisLabel: { fontSize: 10, rotate: 30 },
     },
     yAxis: { type: "value" as const, splitLine: { lineStyle: { type: "dashed" as const } } },
     series: [
       {
         type: "bar" as const,
-        data: MOCK_DISTRIBUTION.map((d) => ({
+        data: data.map((d) => ({
           value: d.count,
           itemStyle: {
             color: d.range.includes("跌") || d.range.startsWith(">-") || d.range.startsWith("-")
               ? COLORS.down
               : d.range.includes("涨") || d.range.startsWith(">5") || d.range.startsWith("1") || d.range.startsWith("3")
                 ? COLORS.up
+                : d.range.startsWith("0~1")
+                  ? "#f97316"
                 : "#94a3b8",
           },
         })),

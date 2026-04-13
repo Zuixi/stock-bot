@@ -1,11 +1,16 @@
 import ReactECharts from "echarts-for-react";
 import { Card } from "antd";
-import { MOCK_CAPITAL_FLOW } from "@/shared/mocks/market";
+import { useQuery } from "@tanstack/react-query";
+import { fetchCapitalFlow } from "@/shared/api/market";
 
 export function CapitalFlowChart() {
-  const names = MOCK_CAPITAL_FLOW.map((d) => d.name);
-  const inflows = MOCK_CAPITAL_FLOW.map((d) => d.inflow);
-  const outflows = MOCK_CAPITAL_FLOW.map((d) => d.outflow);
+  const { data = [] } = useQuery({
+    queryKey: ["market-capital-flow"],
+    queryFn: fetchCapitalFlow,
+  });
+  const names = data.map((d) => d.name);
+  const inflows = data.map((d) => d.inflow);
+  const outflows = data.map((d) => d.outflow);
 
   const option = {
     tooltip: {

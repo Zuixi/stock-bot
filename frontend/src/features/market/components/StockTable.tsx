@@ -51,7 +51,7 @@ export function StockTable({ data, loading, onChange }: Props) {
       width: 90,
       sorter: true,
       align: "right" as const,
-      render: (v: number) => <NumberText value={v} />,
+      render: (v: number | undefined) => <NumberText value={v} />,
     },
     {
       title: "涨跌幅",
@@ -59,7 +59,7 @@ export function StockTable({ data, loading, onChange }: Props) {
       width: 90,
       sorter: true,
       align: "right" as const,
-      render: (v: number) => <ChangeText value={v} />,
+      render: (v: number | undefined) => <ChangeText value={v} />,
     },
     {
       title: "成交额",
@@ -67,16 +67,15 @@ export function StockTable({ data, loading, onChange }: Props) {
       width: 100,
       sorter: true,
       align: "right" as const,
-      render: (v: number) => <NumberText value={v} unit="cap" />,
+      render: (v: number | undefined) => <NumberText value={v} />,
     },
     {
       title: "总市值",
       dataIndex: "marketCap",
       width: 100,
       sorter: true,
-      defaultSortOrder: "descend" as const,
       align: "right" as const,
-      render: (v: number) => <NumberText value={v} unit="cap" />,
+      render: (v: number | undefined) => <NumberText value={v} unit="cap" />,
     },
     {
       title: "PE(TTM)",

@@ -1,12 +1,18 @@
+import { useQuery } from "@tanstack/react-query";
 import { Space } from "antd";
 import { IndexCard } from "./IndexCard";
-import { MOCK_INDICES } from "@/shared/mocks/market";
+import { fetchMarketIndices } from "@/shared/api/market";
 
 export function MarketOverview() {
+  const { data = [] } = useQuery({
+    queryKey: ["market-indices"],
+    queryFn: fetchMarketIndices,
+  });
+
   return (
     <div style={{ overflowX: "auto", paddingBottom: 4 }}>
       <Space size={12} style={{ display: "flex", flexWrap: "nowrap" }}>
-        {MOCK_INDICES.map((idx) => (
+        {data.map((idx) => (
           <IndexCard key={idx.code} index={idx} />
         ))}
       </Space>

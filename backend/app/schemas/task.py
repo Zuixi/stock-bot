@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class TaskOut(BaseModel):
@@ -29,6 +29,18 @@ class TaskListParams(BaseModel):
 class FetchUniverseRequest(BaseModel):
     exchange: str
     stock_type: str | None = None
+    source: str = Field(default="auto", pattern="^(auto|crawler|akshare)$")
+    include_details: bool = True
+    detail_source: str = Field(default="auto", pattern="^(auto|akshare|yfinance)$")
+    detail_retry: int = Field(default=3, ge=1, le=8)
+    detail_sleep_min: float = Field(default=0.08, ge=0)
+    detail_sleep_max: float = Field(default=0.25, ge=0)
+
+    @model_validator(mode="after")
+    def validate_sleep_range(self) -> "FetchUniverseRequest":
+        if self.detail_sleep_min > self.detail_sleep_max:
+            raise ValueError("detail_sleep_min must be <= detail_sleep_max")
+        return self
 
 
 class FetchQuotesRequest(BaseModel):

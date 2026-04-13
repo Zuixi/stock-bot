@@ -1,20 +1,30 @@
 import { useMemo, useState } from "react";
 import { Card, List, Segmented, Space, Tag, Typography } from "antd";
+import { useQuery } from "@tanstack/react-query";
 import { ChangeText } from "@/shared/ui";
 import { useNavigate } from "react-router-dom";
-import {
-  HOT_BOARD_CATEGORIES,
-  HOT_BOARD_DATA,
-  type HotBoardCategory,
-  getHotBoardCategoryLabel,
-} from "@/shared/mocks/hotBoards";
+import { fetchHotBoards, type HotBoardCategory } from "@/shared/api/market";
+
+const HOT_BOARD_CATEGORIES: { key: HotBoardCategory; label: string }[] = [
+  { key: "industry", label: "行业板块" },
+  { key: "concept", label: "概念板块" },
+  { key: "region", label: "地域板块" },
+];
+
+function getHotBoardCategoryLabel(category: HotBoardCategory): string {
+  return HOT_BOARD_CATEGORIES.find((item) => item.key === category)?.label ?? "热门板块";
+}
 
 export function HotSectors() {
   const navigate = useNavigate();
   const [category, setCategory] = useState<HotBoardCategory>("industry");
+  const { data: boardRows = [] } = useQuery({
+    queryKey: ["hot-boards", category],
+    queryFn: () => fetchHotBoards(category),
+  });
   const rows = useMemo(
-    () => [...HOT_BOARD_DATA[category]].sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent)).slice(0, 6),
-    [category]
+    () => [...boardRows].sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent)).slice(0, 6),
+    [boardRows]
   );
 
   return (
@@ -50,7 +60,7 @@ export function HotSectors() {
                 上涨 {item.upCount} | 平盘 {item.flatCount} | 下跌 {item.downCount}
               </Typography.Text>
               <div style={{ display: "flex", gap: 4 }}>
-                {item.leaders.slice(0, 2).map((s) => (
+                {(item.leaders ?? []).slice(0, 2).map((s) => (
                   <Tag key={s.symbol} color={s.changePercent > 0 ? "red" : "green"} style={{ margin: 0, fontSize: 11 }}>
                     {s.name} {s.changePercent > 0 ? "+" : ""}{s.changePercent.toFixed(2)}%
                   </Tag>

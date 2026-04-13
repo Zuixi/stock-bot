@@ -41,6 +41,7 @@ class Stock(Base):
     csrc_desc: Mapped[str | None]
     province: Mapped[str | None]
     status: Mapped[str | None]
+    detail: Mapped[dict | None] = mapped_column(JSONB)
     asof: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -70,6 +71,7 @@ class StockHistory(Base):
     csrc_desc: Mapped[str | None]
     province: Mapped[str | None]
     status: Mapped[str | None]
+    detail: Mapped[dict | None] = mapped_column(JSONB)
     source_url: Mapped[str | None] = mapped_column(Text)
     asof: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     raw: Mapped[dict | None] = mapped_column(JSONB)

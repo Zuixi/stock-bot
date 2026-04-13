@@ -1,13 +1,26 @@
 import { useParams, useNavigate } from "react-router-dom";
-import { Typography, Result, Button, Divider, Row, Col } from "antd";
+import { Typography, Result, Button, Divider, Row, Col, Spin } from "antd";
+import { useQuery } from "@tanstack/react-query";
 import { StockHeader, KLineChart, FundamentalCards } from "@/features/stock-detail/components";
-import { getStockBySymbol } from "@/shared/mocks/stocks";
+import { fetchStockBySymbol } from "@/shared/api/stocks";
 
 export default function StockDetailPage() {
   const { symbol } = useParams<{ symbol: string }>();
   const navigate = useNavigate();
 
-  const stock = symbol ? getStockBySymbol(symbol) : undefined;
+  const { data: stock, isLoading } = useQuery({
+    queryKey: ["stock-detail", symbol],
+    queryFn: async () => (symbol ? fetchStockBySymbol(symbol) : null),
+    enabled: Boolean(symbol),
+  });
+
+  if (isLoading) {
+    return (
+      <div style={{ display: "flex", justifyContent: "center", padding: "64px 0" }}>
+        <Spin size="large" />
+      </div>
+    );
+  }
 
   if (!stock) {
     return (
