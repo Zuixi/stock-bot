@@ -2,9 +2,10 @@ import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Breadcrumb, Card, Empty, Space, Tag, Typography } from "antd";
 import type { TableProps } from "antd";
+import { useQuery } from "@tanstack/react-query";
 import { StockTable } from "@/features/market/components/StockTable";
 import type { StockRecord } from "@/shared/types";
-import { getLevel1Node, getLevel2Node, getLevel2Stocks, getLevel3Stocks } from "@/shared/mocks/swIndustry";
+import { fetchSwIndustryTree, fetchSwLevel2Stocks, fetchSwLevel3Stocks } from "@/shared/api/swIndustry";
 
 type SortState = {
   sortBy?: keyof StockRecord;
@@ -27,16 +28,28 @@ export default function IndustryLevel3Page() {
   const navigate = useNavigate();
   const { level1Code = "", level2Code = "" } = useParams();
   const [selectedLevel3Code, setSelectedLevel3Code] = useState<string | undefined>();
-  const [sort, setSort] = useState<SortState>({ sortBy: "marketCap", sortOrder: "desc" });
+  const [sort, setSort] = useState<SortState>({ sortBy: "symbol", sortOrder: "asc" });
 
-  const level1 = useMemo(() => getLevel1Node(level1Code), [level1Code]);
-  const level2 = useMemo(() => getLevel2Node(level1Code, level2Code), [level1Code, level2Code]);
+  const { data: tree = [], isLoading: treeLoading } = useQuery({
+    queryKey: ["sw-industry-tree"],
+    queryFn: fetchSwIndustryTree,
+  });
+  const level1 = useMemo(() => tree.find((node) => node.code === level1Code), [tree, level1Code]);
+  const level2 = useMemo(
+    () => level1?.children.find((node) => node.code === level2Code),
+    [level1, level2Code]
+  );
 
-  const baseLevel2Stocks = useMemo(() => getLevel2Stocks(level1Code, level2Code), [level1Code, level2Code]);
-  const baseLevel3Stocks = useMemo(() => {
-    if (!selectedLevel3Code) return [];
-    return getLevel3Stocks(level1Code, level2Code, selectedLevel3Code);
-  }, [level1Code, level2Code, selectedLevel3Code]);
+  const { data: baseLevel2Stocks = [], isLoading: level2Loading } = useQuery({
+    queryKey: ["sw-level2-stocks", level1Code, level2Code],
+    queryFn: () => fetchSwLevel2Stocks(level1Code, level2Code),
+    enabled: Boolean(level1Code && level2Code),
+  });
+  const { data: baseLevel3Stocks = [], isLoading: level3Loading } = useQuery({
+    queryKey: ["sw-level3-stocks", level1Code, level2Code, selectedLevel3Code],
+    queryFn: () => fetchSwLevel3Stocks(level1Code, level2Code, selectedLevel3Code ?? ""),
+    enabled: Boolean(level1Code && level2Code && selectedLevel3Code),
+  });
 
   const stocks = useMemo(() => {
     const source = selectedLevel3Code ? baseLevel3Stocks : baseLevel2Stocks;
@@ -55,7 +68,7 @@ export default function IndustryLevel3Page() {
   if (!level1 || !level2) {
     return (
       <Card>
-        <Empty description="未找到对应的行业层级" />
+        {treeLoading ? <Typography.Text type="secondary">行业数据加载中...</Typography.Text> : <Empty description="未找到对应的行业层级" />}
       </Card>
     );
   }
@@ -92,7 +105,7 @@ export default function IndustryLevel3Page() {
                 if (checked) setSelectedLevel3Code(level3.code);
               }}
             >
-              {level3.name} ({getLevel3Stocks(level1.code, level2.code, level3.code).length})
+              {level3.name} ({level3.symbols.length})
             </Tag.CheckableTag>
           ))}
         </Space>
@@ -103,7 +116,11 @@ export default function IndustryLevel3Page() {
         size="small"
         extra={<Tag color={selectedLevel3Code ? "purple" : "blue"}>{selectedLevel3Code ? "三级" : "二级"}</Tag>}
       >
-        {stocks.length > 0 ? <StockTable data={stocks} onChange={onTableChange} /> : <Empty description="暂无个股数据" />}
+        {stocks.length > 0 ? (
+          <StockTable data={stocks} onChange={onTableChange} loading={selectedLevel3Code ? level3Loading : level2Loading} />
+        ) : (
+          <Empty description="暂无个股数据" />
+        )}
       </Card>
     </Space>
   );

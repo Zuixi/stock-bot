@@ -1,18 +1,31 @@
 import { AutoComplete, Input } from "antd";
 import { SearchOutlined } from "@ant-design/icons";
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { MOCK_STOCKS } from "@/shared/mocks/stocks";
+import { fetchStocksMerged } from "@/shared/api/stocks";
 
 export function SearchBar() {
   const [keyword, setKeyword] = useState("");
+  const [debouncedKeyword, setDebouncedKeyword] = useState("");
   const navigate = useNavigate();
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedKeyword(keyword.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [keyword]);
+
+  const { data: candidates = [] } = useQuery({
+    queryKey: ["search-stocks", debouncedKeyword],
+    queryFn: () => fetchStocksMerged({ keyword: debouncedKeyword, page_size: 30 }),
+    enabled: debouncedKeyword.length > 0,
+  });
+
   const options = useMemo(() => {
-    if (!keyword.trim()) return [];
-    const kw = keyword.trim().toLowerCase();
-    return MOCK_STOCKS
-      .filter((s) => s.symbol.includes(kw) || s.name.toLowerCase().includes(kw))
+    if (!debouncedKeyword) return [];
+    const kw = debouncedKeyword.toLowerCase();
+    return candidates
+      .filter((s) => s.symbol.toLowerCase().includes(kw) || s.name.toLowerCase().includes(kw))
       .slice(0, 8)
       .map((s) => ({
         value: s.symbol,
@@ -23,7 +36,7 @@ export function SearchBar() {
           </div>
         ),
       }));
-  }, [keyword]);
+  }, [debouncedKeyword, candidates]);
 
   return (
     <AutoComplete

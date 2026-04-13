@@ -1,9 +1,9 @@
 import ReactECharts from "echarts-for-react";
-import { Card, Segmented } from "antd";
+import { Card, Empty, Segmented, Spin } from "antd";
 import { useState, useMemo } from "react";
-import { generateKLine } from "@/shared/mocks/stocks";
+import { useQuery } from "@tanstack/react-query";
 import { COLORS } from "@/app/theme";
-import type { KLinePoint } from "@/shared/types";
+import { fetchKlineBySymbol } from "@/shared/api/quotes";
 
 const RANGES = [
   { label: "1月", value: 30 },
@@ -18,14 +18,22 @@ interface Props {
 
 export function KLineChart({ symbol }: Props) {
   const [range, setRange] = useState<number>(90);
-  const data = useMemo(() => generateKLine(range), [symbol, range]);
+  const { data = [], isLoading } = useQuery({
+    queryKey: ["kline", symbol, range],
+    queryFn: () => fetchKlineBySymbol(symbol, range),
+    enabled: Boolean(symbol),
+  });
 
-  const dates = data.map((d) => d.date);
-  const ohlc = data.map((d) => [d.open, d.close, d.low, d.high]);
-  const volumes = data.map((d) => ({
-    value: d.volume,
-    itemStyle: { color: d.close >= d.open ? COLORS.up : COLORS.down },
-  }));
+  const dates = useMemo(() => data.map((d) => d.date), [data]);
+  const ohlc = useMemo(() => data.map((d) => [d.open, d.close, d.low, d.high]), [data]);
+  const volumes = useMemo(
+    () =>
+      data.map((d) => ({
+        value: d.volume,
+        itemStyle: { color: d.close >= d.open ? COLORS.up : COLORS.down },
+      })),
+    [data]
+  );
 
   const option = {
     tooltip: {
@@ -83,7 +91,17 @@ export function KLineChart({ symbol }: Props) {
         />
       }
     >
-      <ReactECharts option={option} style={{ height: 380 }} />
+      {isLoading ? (
+        <div style={{ height: 380, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <Spin />
+        </div>
+      ) : data.length > 0 ? (
+        <ReactECharts option={option} style={{ height: 380 }} />
+      ) : (
+        <div style={{ height: 380, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <Empty description="暂无K线数据" />
+        </div>
+      )}
     </Card>
   );
 }

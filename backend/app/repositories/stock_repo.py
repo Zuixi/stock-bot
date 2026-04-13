@@ -81,6 +81,7 @@ async def upsert_stock(db: AsyncSession, stock: Stock) -> Stock:
         "csrc_desc": stock.csrc_desc,
         "province": stock.province,
         "status": stock.status,
+        "detail": stock.detail,
         "asof": stock.asof,
     }
     stmt = (

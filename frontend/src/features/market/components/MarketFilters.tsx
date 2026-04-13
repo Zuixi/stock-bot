@@ -1,15 +1,15 @@
 import { Select, Space } from "antd";
 import { EXCHANGE_LABELS } from "@/shared/types";
 import type { Exchange } from "@/shared/types";
-import { MOCK_SECTORS } from "@/shared/mocks/market";
 
 interface FilterValues {
   exchange?: Exchange;
-  industry?: string;
+  category?: string;
 }
 
 interface Props {
   value: FilterValues;
+  categories: string[];
   onChange: (v: FilterValues) => void;
 }
 
@@ -18,12 +18,12 @@ const EXCHANGE_OPTIONS = [
   ...Object.entries(EXCHANGE_LABELS).map(([k, v]) => ({ label: v, value: k })),
 ];
 
-const INDUSTRY_OPTIONS = [
-  { label: "全部行业", value: "" },
-  ...MOCK_SECTORS.map((s) => ({ label: s.name, value: s.name })),
-];
+export function MarketFilters({ value, categories, onChange }: Props) {
+  const categoryOptions = [
+    { label: "全部分类", value: "" },
+    ...categories.map((category) => ({ label: category, value: category })),
+  ];
 
-export function MarketFilters({ value, onChange }: Props) {
   return (
     <Space wrap>
       <Select
@@ -34,9 +34,9 @@ export function MarketFilters({ value, onChange }: Props) {
       />
       <Select
         style={{ width: 140 }}
-        value={value.industry ?? ""}
-        options={INDUSTRY_OPTIONS}
-        onChange={(v) => onChange({ ...value, industry: v || undefined })}
+        value={value.category ?? ""}
+        options={categoryOptions}
+        onChange={(v) => onChange({ ...value, category: v || undefined })}
       />
     </Space>
   );

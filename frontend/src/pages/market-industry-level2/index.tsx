@@ -2,9 +2,10 @@ import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Breadcrumb, Card, Col, Empty, Row, Space, Tag, Typography } from "antd";
 import type { TableProps } from "antd";
+import { useQuery } from "@tanstack/react-query";
 import { StockTable } from "@/features/market/components/StockTable";
 import type { StockRecord } from "@/shared/types";
-import { getLevel1Node, getLevel1Stocks, getLevel2Stocks } from "@/shared/mocks/swIndustry";
+import { fetchSwIndustryTree, fetchSwLevel1Stocks } from "@/shared/api/swIndustry";
 
 type SortState = {
   sortBy?: keyof StockRecord;
@@ -26,10 +27,19 @@ function applySort(stocks: StockRecord[], sort: SortState): StockRecord[] {
 export default function IndustryLevel2Page() {
   const navigate = useNavigate();
   const { level1Code = "" } = useParams();
-  const [sort, setSort] = useState<SortState>({ sortBy: "marketCap", sortOrder: "desc" });
+  const [sort, setSort] = useState<SortState>({ sortBy: "symbol", sortOrder: "asc" });
 
-  const level1 = useMemo(() => getLevel1Node(level1Code), [level1Code]);
-  const stocks = useMemo(() => applySort(getLevel1Stocks(level1Code), sort), [level1Code, sort]);
+  const { data: tree = [], isLoading: treeLoading } = useQuery({
+    queryKey: ["sw-industry-tree"],
+    queryFn: fetchSwIndustryTree,
+  });
+  const { data: level1Stocks = [], isLoading: stocksLoading } = useQuery({
+    queryKey: ["sw-level1-stocks", level1Code],
+    queryFn: () => fetchSwLevel1Stocks(level1Code),
+    enabled: Boolean(level1Code),
+  });
+  const level1 = useMemo(() => tree.find((node) => node.code === level1Code), [tree, level1Code]);
+  const stocks = useMemo(() => applySort(level1Stocks, sort), [level1Stocks, sort]);
 
   const onTableChange: TableProps<StockRecord>["onChange"] = (_pagination, _filters, sorter) => {
     if (!Array.isArray(sorter) && sorter.field) {
@@ -43,7 +53,7 @@ export default function IndustryLevel2Page() {
   if (!level1) {
     return (
       <Card>
-        <Empty description="未找到对应的一级行业" />
+        {treeLoading ? <Typography.Text type="secondary">行业数据加载中...</Typography.Text> : <Empty description="未找到对应的一级行业" />}
       </Card>
     );
   }
@@ -65,9 +75,10 @@ export default function IndustryLevel2Page() {
       >
         <Row gutter={[12, 12]}>
           {level1.children.map((level2) => {
-            const level2Stocks = getLevel2Stocks(level1.code, level2.code);
+            const level2Symbols = level2.children.flatMap((level3) => level3.symbols);
+            const level2Stocks = level1Stocks.filter((stock) => level2Symbols.includes(stock.symbol));
             const topMoveStocks = [...level2Stocks]
-              .sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent))
+              .sort((a, b) => Math.abs(b.changePercent ?? 0) - Math.abs(a.changePercent ?? 0))
               .slice(0, 3);
             return (
               <Col key={level2.code} xs={24} sm={12} lg={8}>
@@ -78,9 +89,9 @@ export default function IndustryLevel2Page() {
                     <Space wrap>
                       {topMoveStocks.length > 0 ? (
                         topMoveStocks.map((stock) => (
-                          <Tag key={stock.symbol} color={stock.changePercent >= 0 ? "red" : "green"}>
-                            {stock.name} {stock.changePercent > 0 ? "+" : ""}
-                            {stock.changePercent.toFixed(2)}%
+                          <Tag key={stock.symbol} color={(stock.changePercent ?? 0) >= 0 ? "red" : "green"}>
+                            {stock.name} {(stock.changePercent ?? 0) > 0 ? "+" : ""}
+                            {(stock.changePercent ?? 0).toFixed(2)}%
                           </Tag>
                         ))
                       ) : (
@@ -100,7 +111,7 @@ export default function IndustryLevel2Page() {
         size="small"
         extra={<Tag color="blue">一级</Tag>}
       >
-        <StockTable data={stocks} onChange={onTableChange} />
+        <StockTable data={stocks} onChange={onTableChange} loading={stocksLoading} />
       </Card>
     </Space>
   );

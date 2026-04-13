@@ -17,6 +17,7 @@ class StockOut(BaseModel):
     csrc_desc: str | None
     province: str | None
     status: str | None
+    detail: dict | None = None
     asof: datetime
 
     model_config = {"from_attributes": True}

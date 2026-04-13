@@ -1,9 +1,10 @@
 import { Table, Button, Empty, Tooltip } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { ChangeText, NumberText } from "@/shared/ui";
 import { useWatchlistStore } from "../store";
-import { MOCK_STOCKS } from "@/shared/mocks/stocks";
+import { fetchStockBySymbol } from "@/shared/api/stocks";
 import { EXCHANGE_LABELS } from "@/shared/types";
 import type { StockRecord } from "@/shared/types";
 import type { ColumnsType } from "antd/es/table";
@@ -12,11 +13,16 @@ export function WatchlistTable() {
   const navigate = useNavigate();
   const { items, remove } = useWatchlistStore();
 
-  const data = items
-    .map((sym) => MOCK_STOCKS.find((s) => s.symbol === sym))
-    .filter(Boolean) as StockRecord[];
+  const { data = [], isLoading } = useQuery({
+    queryKey: ["watchlist-stocks", items],
+    queryFn: async () => {
+      const rows = await Promise.all(items.map((symbol) => fetchStockBySymbol(symbol)));
+      return rows.filter((stock): stock is StockRecord => Boolean(stock));
+    },
+    enabled: items.length > 0,
+  });
 
-  if (data.length === 0) {
+  if (!isLoading && items.length === 0) {
     return (
       <Empty description="暂未添加自选股">
         <Button type="primary" onClick={() => navigate("/market")}>
@@ -49,25 +55,25 @@ export function WatchlistTable() {
       title: "最新价",
       dataIndex: "latestPrice",
       width: 90,
-      sorter: (a: StockRecord, b: StockRecord) => a.latestPrice - b.latestPrice,
+      sorter: (a: StockRecord, b: StockRecord) => (a.latestPrice ?? 0) - (b.latestPrice ?? 0),
       align: "right" as const,
-      render: (v: number) => <NumberText value={v} />,
+      render: (v: number | undefined) => <NumberText value={v} />,
     },
     {
       title: "涨跌幅",
       dataIndex: "changePercent",
       width: 90,
-      sorter: (a: StockRecord, b: StockRecord) => a.changePercent - b.changePercent,
+      sorter: (a: StockRecord, b: StockRecord) => (a.changePercent ?? 0) - (b.changePercent ?? 0),
       align: "right" as const,
-      render: (v: number) => <ChangeText value={v} />,
+      render: (v: number | undefined) => <ChangeText value={v} />,
     },
     {
       title: "总市值",
       dataIndex: "marketCap",
       width: 100,
-      sorter: (a: StockRecord, b: StockRecord) => a.marketCap - b.marketCap,
+      sorter: (a: StockRecord, b: StockRecord) => (a.marketCap ?? 0) - (b.marketCap ?? 0),
       align: "right" as const,
-      render: (v: number) => <NumberText value={v} unit="cap" />,
+      render: (v: number | undefined) => <NumberText value={v} unit="cap" />,
     },
     {
       title: "",
@@ -94,6 +100,7 @@ export function WatchlistTable() {
     <Table<StockRecord>
       columns={columns}
       dataSource={data}
+      loading={isLoading}
       rowKey="symbol"
       size="small"
       pagination={false}

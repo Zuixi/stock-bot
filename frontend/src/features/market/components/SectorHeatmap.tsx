@@ -1,9 +1,14 @@
 import ReactECharts from "echarts-for-react";
 import { Card } from "antd";
-import { MOCK_SECTORS } from "@/shared/mocks/market";
-import { COLORS } from "@/app/theme";
+import { useQuery } from "@tanstack/react-query";
+import { fetchSectors } from "@/shared/api/market";
 
 export function SectorHeatmap() {
+  const { data = [] } = useQuery({
+    queryKey: ["market-sectors"],
+    queryFn: fetchSectors,
+  });
+
   const option = {
     tooltip: {
       formatter: (params: any) => {
@@ -28,7 +33,7 @@ export function SectorHeatmap() {
             val: { fontSize: 11, color: "rgba(255,255,255,0.85)", lineHeight: 18 },
           },
         },
-        data: MOCK_SECTORS.map((s) => ({
+        data: data.map((s) => ({
           name: s.name,
           value: s.totalMarketCap,
           changePercent: s.changePercent,

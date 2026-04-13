@@ -1,15 +1,24 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Breadcrumb, Card, Segmented, Space, Table, Tag, Typography } from "antd";
+import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType, TableProps } from "antd/es/table";
 import { ChangeText } from "@/shared/ui";
 import {
-  HOT_BOARD_CATEGORIES,
-  HOT_BOARD_DATA,
-  getHotBoardCategoryLabel,
+  fetchHotBoards,
   type HotBoardCategory,
   type HotBoardItem,
-} from "@/shared/mocks/hotBoards";
+} from "@/shared/api/market";
+
+const HOT_BOARD_CATEGORIES: { key: HotBoardCategory; label: string }[] = [
+  { key: "industry", label: "行业板块" },
+  { key: "concept", label: "概念板块" },
+  { key: "region", label: "地域板块" },
+];
+
+function getHotBoardCategoryLabel(category: HotBoardCategory): string {
+  return HOT_BOARD_CATEGORIES.find((item) => item.key === category)?.label ?? "热门板块";
+}
 
 type SortState = {
   sortBy?: keyof HotBoardItem;
@@ -39,7 +48,11 @@ export default function MarketHotSectorsPage() {
   const activeCategory: HotBoardCategory = isValidCategory(category) ? category : "industry";
   const [sort, setSort] = useState<SortState>({ sortBy: "changePercent", sortOrder: "desc" });
 
-  const rows = useMemo(() => sortRows(HOT_BOARD_DATA[activeCategory], sort), [activeCategory, sort]);
+  const { data: boardRows = [] } = useQuery({
+    queryKey: ["hot-boards-page", activeCategory],
+    queryFn: () => fetchHotBoards(activeCategory),
+  });
+  const rows = useMemo(() => sortRows(boardRows, sort), [boardRows, sort]);
   const selectedBoardCode = searchParams.get("board");
 
   const columns: ColumnsType<HotBoardItem> = [
@@ -86,7 +99,7 @@ export default function MarketHotSectorsPage() {
       key: "leaders",
       render: (_value, record) => (
         <Space wrap>
-          {record.leaders.map((stock) => (
+          {(record.leaders ?? []).map((stock) => (
             <Tag key={stock.symbol} color={stock.changePercent >= 0 ? "red" : "green"}>
               {stock.name} {stock.changePercent > 0 ? "+" : ""}
               {stock.changePercent.toFixed(2)}%

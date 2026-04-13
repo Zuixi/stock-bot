@@ -9,13 +9,9 @@ ENV http_proxy=""
 ENV https_proxy=""
 ENV no_proxy="*"
 
-# Use Aliyun pypi mirror
-ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
-ENV UV_TRUSTED_HOST=mirrors.aliyun.com
-
 COPY pyproject.toml .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system --no-cache -e ".[dev]"
+    uv pip install --system --no-cache -e .
 
 COPY . .
 
