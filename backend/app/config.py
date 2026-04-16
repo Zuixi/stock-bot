@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     rabbitmq_url: str = "amqp://guest:guest@localhost:5672/"
     rabbitmq_exchange: str = "stock_bot.topic"
 
+    # TuShare
+    tushare_token: str = ""
+
     # CORS — accepts comma-separated string or JSON array string
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 

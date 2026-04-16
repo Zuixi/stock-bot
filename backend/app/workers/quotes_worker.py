@@ -1,19 +1,20 @@
-"""Quotes worker: fetches daily OHLCV data via CNINFO p_sysapi1015 and persists to PostgreSQL.
+"""Quotes worker: fetches daily OHLCV data via TuShare and persists to PostgreSQL.
 
-Data source: CNINFO WebAPI ``p_sysapi1015`` (free, mcode auth).
-See: backend/docs/cninfo_api.md
+Data source: TuShare Pro ``daily`` API.
+Best practice: fetch by ``trade_date`` (entire market per call) rather than
+looping over individual ``ts_code`` values.
+
+See: docs/references/tushare/A股历史日线.md, docs/references/tushare/reference.md
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from app.core.database import async_session_factory
-from app.core.providers.cninfo_client import get_cninfo_client
-from app.models.quote import DailyQuote
-from app.repositories import quote_repo, stock_repo
+from app.services.tushare_ingest import TuShareIngestService
 from app.workers.base_worker import BaseWorker
 
 logger = logging.getLogger(__name__)
@@ -37,8 +38,6 @@ def _parse_date(value: str | None) -> date | None:
         return None
     for fmt in ("%Y-%m-%d", "%Y%m%d"):
         try:
-            from datetime import datetime
-
             return datetime.strptime(value, fmt).date()
         except ValueError:
             continue
@@ -46,14 +45,15 @@ def _parse_date(value: str | None) -> date | None:
 
 
 class QuotesWorker(BaseWorker):
-    """Fetches daily OHLCV quotes from CNINFO and persists them to ``daily_quotes``.
+    """Fetches daily OHLCV quotes from TuShare and persists them to ``daily_quotes``.
 
     Expected payload keys
     ---------------------
     exchange : str
         Exchange canonical name or alias (e.g. ``"Shanghai_Stocks"`` or ``"sse"``).
+        Currently unused for TuShare ``daily(trade_date=...)`` which returns all markets.
     symbols : list[str]
-        One or more stock codes to fetch (e.g. ``["600519", "000001"]``).
+        Optional. If empty, fetches entire market for each trade date.
     start_date : str
         ISO date string ``YYYY-MM-DD`` for the start of the range.
     end_date : str
@@ -64,14 +64,11 @@ class QuotesWorker(BaseWorker):
 
     async def process(self, task_id: uuid.UUID, payload: dict) -> dict:
         exchange_raw: str = payload.get("exchange") or ""
-        symbols: list[str] = payload.get("symbols") or []
         start_date = _parse_date(payload.get("start_date"))
         end_date = _parse_date(payload.get("end_date"))
 
         if not exchange_raw:
             raise ValueError("'exchange' is required in payload")
-        if not symbols:
-            raise ValueError("'symbols' must be a non-empty list")
         if start_date is None or end_date is None:
             raise ValueError("'start_date' and 'end_date' are required (YYYY-MM-DD)")
         if start_date > end_date:
@@ -80,75 +77,65 @@ class QuotesWorker(BaseWorker):
         exchange = _normalise_exchange(exchange_raw)
 
         logger.info(
-            "QuotesWorker task=%s exchange=%s symbols=%s start=%s end=%s",
-            task_id, exchange, symbols, start_date, end_date,
+            "QuotesWorker task=%s exchange=%s start=%s end=%s",
+            task_id, exchange, start_date, end_date,
         )
 
-        client = get_cninfo_client()
+        service = TuShareIngestService()
+        trade_dates = await self._get_trade_dates(service, start_date, end_date)
+
         total_upserted = 0
-        failed_symbols: list[str] = []
+        total_saved = 0
+        failed_dates: list[str] = []
 
         async with async_session_factory() as db:
-            for symbol in symbols:
-                stock = await stock_repo.get_stock_by_symbol(db, exchange, symbol)
-                if stock is None:
-                    logger.warning(
-                        "QuotesWorker: stock not found exchange=%s symbol=%s, skipping",
-                        exchange, symbol,
-                    )
-                    failed_symbols.append(symbol)
-                    continue
-
+            for td in trade_dates:
                 try:
-                    raw_quotes = await client.get_daily_quotes_range(
-                        symbol, start_date, end_date
-                    )
+                    result = await service.ingest_daily_quotes(db, td)
+                    total_upserted += result.get("upserted", 0)
+                    total_saved += result.get("saved", 0)
                 except Exception as exc:
                     logger.warning(
-                        "QuotesWorker: CNINFO fetch failed symbol=%s: %s", symbol, exc
+                        "QuotesWorker: failed for trade_date=%s: %s", td, exc
                     )
-                    failed_symbols.append(symbol)
-                    continue
+                    failed_dates.append(td)
 
-                if not raw_quotes:
-                    logger.info(
-                        "QuotesWorker: no data returned for symbol=%s range=%s..%s",
-                        symbol, start_date, end_date,
-                    )
-                    continue
-
-                orm_quotes = [
-                    DailyQuote(
-                        stock_id=stock.id,
-                        trade_date=q["trade_date"],
-                        open=q.get("open"),
-                        high=q.get("high"),
-                        low=q.get("low"),
-                        close=q["close"],
-                        volume=q.get("volume"),
-                        amount=q.get("amount"),
-                        adj_factor=None,
-                        source=q.get("source", "cninfo:p_sysapi1015"),
-                    )
-                    for q in raw_quotes
-                    if q.get("close") is not None
-                ]
-
-                upserted = await quote_repo.upsert_quotes(db, orm_quotes)
-                await db.commit()
-                total_upserted += upserted
-                logger.info(
-                    "QuotesWorker: upserted %d records for symbol=%s", upserted, symbol
-                )
-
-        result: dict = {
+        summary: dict = {
             "status": "completed",
             "exchange": exchange,
-            "symbols_requested": len(symbols),
-            "symbols_failed": len(failed_symbols),
+            "trade_dates_processed": len(trade_dates),
+            "trade_dates_failed": len(failed_dates),
             "total_upserted": total_upserted,
+            "total_saved": total_saved,
         }
-        if failed_symbols:
-            result["failed_symbols"] = failed_symbols
+        if failed_dates:
+            summary["failed_dates"] = failed_dates
 
-        return result
+        return summary
+
+    async def _get_trade_dates(
+        self,
+        service: TuShareIngestService,
+        start: date,
+        end: date,
+    ) -> list[str]:
+        """Return list of YYYYMMDD trade dates in [start, end] using TuShare trade_cal."""
+        try:
+            df = await service.client.fetch_trade_cal(
+                exchange="SSE",
+                start_date=start.strftime("%Y%m%d"),
+                end_date=end.strftime("%Y%m%d"),
+                is_open="1",
+            )
+            if not df.empty:
+                return sorted(df["cal_date"].astype(str).tolist())
+        except Exception as exc:
+            logger.warning("QuotesWorker: trade_cal failed, using date range: %s", exc)
+
+        dates: list[str] = []
+        current = start
+        while current <= end:
+            if current.weekday() < 5:
+                dates.append(current.strftime("%Y%m%d"))
+            current += timedelta(days=1)
+        return dates

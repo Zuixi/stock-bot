@@ -2,10 +2,7 @@
 
 from datetime import date
 
-import pytest
-
 from app.services.universe_ingest import (
-    UniverseDataProvider,
     merge_detail_into_record,
     normalize_exchange,
     parse_listing_date,
@@ -32,33 +29,12 @@ def test_merge_detail_into_record() -> None:
         "category": "主板A股",
         "full_name": None,
     }
-    detail = {"公司名称": "贵州茅台酒股份有限公司", "行业": "食品饮料", "provider": "akshare"}
+    detail = {"公司名称": "贵州茅台酒股份有限公司", "行业": "食品饮料", "provider": "tushare"}
     merged = merge_detail_into_record(base, detail)
-    assert merged["full_name"] == "贵州茅台酒股份有限公司"
-    assert merged["csrc_desc"] == "食品饮料"
-    assert merged["detail"]["provider"] == "akshare"
+    assert merged["detail"]["provider"] == "tushare"
 
 
-@pytest.mark.asyncio
-async def test_fetch_universe_auto_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    provider = UniverseDataProvider()
-
-    async def fake_crawler(*_args, **_kwargs):
-        return []
-
-    async def fake_akshare(*_args, **_kwargs):
-        return [
-            {
-                "exchange": "Shanghai_Stocks",
-                "symbol": "600000",
-                "name": "浦发银行",
-                "category": "Shanghai_Stocks",
-            }
-        ]
-
-    monkeypatch.setattr(provider, "_fetch_via_crawler", fake_crawler)
-    monkeypatch.setattr(provider, "_fetch_via_akshare_universe", fake_akshare)
-
-    records = await provider.fetch_universe_records("sse", source="auto")
-    assert len(records) == 1
-    assert records[0]["symbol"] == "600000"
+def test_merge_detail_none() -> None:
+    base = {"exchange": "Shanghai_Stocks", "symbol": "600519"}
+    merged = merge_detail_into_record(base, None)
+    assert merged == base

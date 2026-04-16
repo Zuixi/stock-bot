@@ -50,6 +50,15 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.warning("RabbitMQ unavailable — async tasks will queue locally: %s", e)
 
+        from app.services.data_init import maybe_seed_on_startup  # noqa: PLC0415
+        await maybe_seed_on_startup()
+
+        from app.services.market_service import refresh_sw_industry_tree  # noqa: PLC0415
+        try:
+            await refresh_sw_industry_tree()
+        except Exception:
+            logger.warning("SW industry tree load deferred — will retry on next access")
+
         logger.info("Stock Bot API started (env=%s)", settings.app_env)
 
     @app.on_event("shutdown")
