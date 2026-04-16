@@ -1,0 +1,120 @@
+services:
+  # ---- infrastructure ----
+  postgres:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/quay.io/sclorg/postgresql-15-c9s:latest
+    environment:
+      POSTGRESQL_USER: stock_user
+      POSTGRESQL_PASSWORD: stock_pass
+      POSTGRESQL_DATABASE: stock_bot
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/pgsql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -p 5432"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/quay.io/opstree/redis:v7.0.5
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/rabbitmq:4.2.2-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---- one-shot migration ----
+  migrate:
+    build:
+      context: ./backend
+    env_file: ./backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  # ---- backend api ----
+  api:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    env_file: ./backend/.env
+    dns:
+      - 8.8.8.8
+      - 223.5.5.5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ---- backend worker ----
+  worker:
+    build:
+      context: ./backend
+    env_file: ./backend/.env
+    dns:
+      - 8.8.8.8
+      - 223.5.5.5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ./data:/app/data
+    command: ["python", "-m", "app.workers.runner"]
+
+  # ---- frontend ----
+  frontend:
+    build:
+      context: ./frontend
+      target: runtime
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:

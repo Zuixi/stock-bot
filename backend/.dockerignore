@@ -1,0 +1,13 @@
+__pycache__
+*.pyc
+.venv
+venv
+.env
+.coverage
+*.egg-info
+.git
+*.md
+data/
+tests/
+scripts/
+docs/

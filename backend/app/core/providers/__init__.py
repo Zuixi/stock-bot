@@ -1,1 +1,1 @@
-"""Data provider clients (CNINFO, AKShare wrappers, etc.)."""
+"""Data provider clients (CNINFO, AKShare, TuShare wrappers, etc.)."""

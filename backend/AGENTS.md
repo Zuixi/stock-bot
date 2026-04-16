@@ -17,3 +17,15 @@ backend service used to provide unified restful api for the frontend service, an
 - Using SQLModel to build the database models.
 - Using Redis to cache the data.
 - Using RabbitMQ to manage the data flow.
+- Using TuShare Pro API as primary data source for stock universe and quotes.
+
+## Data Sources
+- Primary: TuShare Pro API (stock_basic, stock_company, daily, trade_cal)
+  - Client: `app/core/providers/tushare_client.py`
+  - Ingest: `app/services/tushare_ingest.py`
+  - Raw backup: `data/` directory (JSONL)
+- Fallback: Exchange crawlers + AKShare + yfinance (`app/services/universe_ingest.py`)
+- Index: CNINFO WebAPI (`app/core/providers/cninfo_client.py`)
+
+Tushare API Reference: [Tushare API Reference](../docs/references/tushare/index.md)
+database use "quay.io/sclorg/postgresql-15-c9s:latest" as base image.

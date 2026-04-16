@@ -1,4 +1,4 @@
-const BASE_URL = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
+const BASE_URL = import.meta.env.VITE_API_BASE ?? "";
 
 export class ApiError extends Error {
   constructor(

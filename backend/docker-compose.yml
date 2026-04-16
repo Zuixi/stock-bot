@@ -27,6 +27,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+    volumes:
+      - ./data:/app/data
     command: python -m app.workers.runner
 
   postgres:
