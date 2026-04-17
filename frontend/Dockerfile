@@ -1,5 +1,5 @@
 # ---- Stage 1: build (requires network access) ----
-FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:22-alpine AS builder
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:22 AS builder
 
 WORKDIR /app
 
@@ -10,7 +10,8 @@ ENV HTTP_PROXY="" \
     no_proxy="*"
 
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --include=optional \
+    && npm i @rollup/rollup-linux-x64-gnu --no-save
 
 COPY . .
 
@@ -22,8 +23,8 @@ FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/nginx:alpine AS 
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# If pre-built dist/ exists in context, use it; otherwise use builder output
-COPY dist/ /usr/share/nginx/html/
+# Always copy build artifacts from builder stage
+COPY --from=builder /app/dist/ /usr/share/nginx/html/
 
 EXPOSE 80
 
