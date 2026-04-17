@@ -43,6 +43,7 @@ class TuShareClient:
         import tushare as ts
 
         if not token:
+            logger.error("[TOKEN ERROR]: NEED VALID TOKEN.")
             raise ValueError("TuShare token is required. Set TUSHARE_TOKEN in .env")
         self._pro = ts.pro_api(token)
         self._max_retries = max(1, max_retries)

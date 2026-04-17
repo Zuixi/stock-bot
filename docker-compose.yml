@@ -19,8 +19,11 @@ services:
 
   redis:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/quay.io/opstree/redis:v7.0.5
+    depends_on:
+      redis-init:
+        condition: service_completed_successfully
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -28,6 +31,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  redis-init:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/alpine:3.20
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 1000:1000 /data"]
+    volumes:
+      - redis_data:/data
+    restart: "no"
 
   rabbitmq:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/rabbitmq:4.2.2-management-alpine
@@ -50,6 +61,10 @@ services:
     build:
       context: ./backend
     env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@postgres:5432/stock_bot
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,6 +78,10 @@ services:
     ports:
       - "8000:8000"
     env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@postgres:5432/stock_bot
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     dns:
       - 8.8.8.8
       - 223.5.5.5
@@ -87,6 +106,10 @@ services:
     build:
       context: ./backend
     env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@postgres:5432/stock_bot
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     dns:
       - 8.8.8.8
       - 223.5.5.5
