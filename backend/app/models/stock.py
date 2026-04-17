@@ -33,10 +33,22 @@ class Stock(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     exchange: Mapped[str] = mapped_column(nullable=False)
     symbol: Mapped[str] = mapped_column(nullable=False)
-    name: Mapped[str] = mapped_column(nullable=False)
-    full_name: Mapped[str | None] = mapped_column(Text)
+    name: Mapped[str] = mapped_column(nullable=False)          # 股票名称
+    area: Mapped[str | None]                                   # 地域
+    industry: Mapped[str | None]                               # 所属行业
+    full_name: Mapped[str | None] = mapped_column(Text)        # 股票全称
+    enname: Mapped[str | None]                                 # 英文全称
+    cnspell: Mapped[str | None]                                # 拼音缩写
+    market: Mapped[str | None]                                 # 市场类型（主板/创业板/科创板/CDR）
+    curr_type: Mapped[str | None]                              # 交易货币
+    list_status: Mapped[str | None]                            # 上市状态原始值 L/D/P/G
+    list_date: Mapped[date | None]                             # 上市日期
+    delist_date: Mapped[date | None]                           # 退市日期
+    is_hs: Mapped[str | None]                                  # 是否沪深港通标的 N/H/S
+    act_name: Mapped[str | None]                               # 实控人名称
+    act_ent_type: Mapped[str | None]                           # 实控人企业性质
+    # Legacy fields kept for backward compatibility
     category: Mapped[str] = mapped_column(nullable=False)
-    list_date: Mapped[date | None]
     csrc_code: Mapped[str | None]
     csrc_desc: Mapped[str | None]
     province: Mapped[str | None]
@@ -64,9 +76,21 @@ class StockHistory(Base):
     exchange: Mapped[str] = mapped_column(nullable=False)
     symbol: Mapped[str] = mapped_column(nullable=False)
     name: Mapped[str] = mapped_column(nullable=False)
+    area: Mapped[str | None]
+    industry: Mapped[str | None]
     full_name: Mapped[str | None] = mapped_column(Text)
-    category: Mapped[str] = mapped_column(nullable=False)
+    enname: Mapped[str | None]
+    cnspell: Mapped[str | None]
+    market: Mapped[str | None]
+    curr_type: Mapped[str | None]
+    list_status: Mapped[str | None]
     list_date: Mapped[date | None]
+    delist_date: Mapped[date | None]
+    is_hs: Mapped[str | None]
+    act_name: Mapped[str | None]
+    act_ent_type: Mapped[str | None]
+    # Legacy fields kept for backward compatibility
+    category: Mapped[str] = mapped_column(nullable=False)
     csrc_code: Mapped[str | None]
     csrc_desc: Mapped[str | None]
     province: Mapped[str | None]

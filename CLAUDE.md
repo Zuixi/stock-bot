@@ -19,4 +19,3 @@ stock bot 能够查看当前市场行情，股票类别，每个分类的具体�
 IMPORTANT:
 - 每次完成任务时，结合业内最佳实践，总结经验教训，用一句话沉淀到 [this document](./docs/references/best-practices.md)
 
-See [product.md](product.md) for full requirements.

@@ -29,3 +29,7 @@ backend service used to provide unified restful api for the frontend service, an
 
 Tushare API Reference: [Tushare API Reference](../docs/references/tushare/index.md)
 database use "quay.io/sclorg/postgresql-15-c9s:latest" as base image.
+
+IMPORTANT:
+- UPDATE THIS FILE WHEN YOU MEET SOMETHING IMPORTANT AND USEFUL
+- AFTER EACH TASK COMPLETION, SUMMARIZE USEFUL EXPERIENCES AND ADD TO [THIS DOCUMENT](../docs/references/best-practice.md)

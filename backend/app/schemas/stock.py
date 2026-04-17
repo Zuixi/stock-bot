@@ -10,13 +10,25 @@ class StockOut(BaseModel):
     exchange: str
     symbol: str
     name: str
-    full_name: str | None
+    area: str | None = None
+    industry: str | None = None
+    full_name: str | None = None
+    enname: str | None = None
+    cnspell: str | None = None
+    market: str | None = None
+    curr_type: str | None = None
+    list_status: str | None = None
+    list_date: date | None = None
+    delist_date: date | None = None
+    is_hs: str | None = None
+    act_name: str | None = None
+    act_ent_type: str | None = None
+    # Legacy fields
     category: str
-    list_date: date | None
-    csrc_code: str | None
-    csrc_desc: str | None
-    province: str | None
-    status: str | None
+    csrc_code: str | None = None
+    csrc_desc: str | None = None
+    province: str | None = None
+    status: str | None = None
     detail: dict | None = None
     asof: datetime
 

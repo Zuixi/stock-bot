@@ -148,10 +148,15 @@ class TuShareIngestService:
 
             row_exchange = _ts_code_to_exchange(ts_code) or exchange
 
+            _tushare_direct_fields = {
+                "ts_code", "symbol", "name", "area", "industry", "fullname",
+                "enname", "cnspell", "market", "exchange", "curr_type",
+                "list_status", "list_date", "delist_date", "is_hs",
+                "act_name", "act_ent_type",
+            }
             detail: dict[str, Any] = {
                 k: _to_builtin(v) for k, v in row.items()
-                if k not in ("ts_code", "symbol", "name", "area", "industry",
-                             "fullname", "list_date", "list_status")
+                if k not in _tushare_direct_fields
             }
             detail["ts_code"] = ts_code
             detail["source"] = "tushare::stock_basic"
@@ -162,19 +167,30 @@ class TuShareIngestService:
                     k: _to_builtin(v) for k, v in company_info.items()
                 }
 
+            raw_list_status = _to_builtin(row.get("list_status")) or None
             stock = Stock(
                 exchange=row_exchange,
                 symbol=symbol,
                 name=name,
+                area=_to_builtin(row.get("area")) or None,
+                industry=_to_builtin(row.get("industry")) or None,
                 full_name=_to_builtin(row.get("fullname")) or None,
-                category=row_exchange,
+                enname=_to_builtin(row.get("enname")) or None,
+                cnspell=_to_builtin(row.get("cnspell")) or None,
+                market=_to_builtin(row.get("market")) or None,
+                curr_type=_to_builtin(row.get("curr_type")) or None,
+                list_status=raw_list_status,
                 list_date=_parse_list_date(row.get("list_date")),
+                delist_date=_parse_list_date(row.get("delist_date")),
+                is_hs=_to_builtin(row.get("is_hs")) or None,
+                act_name=_to_builtin(row.get("act_name")) or None,
+                act_ent_type=_to_builtin(row.get("act_ent_type")) or None,
+                # Legacy fields for backward compatibility
+                category=row_exchange,
                 csrc_code=None,
                 csrc_desc=_to_builtin(row.get("industry")) or None,
                 province=_to_builtin(row.get("area")) or None,
-                status=_STATUS_MAP.get(
-                    str(row.get("list_status", "")).strip(), None
-                ),
+                status=_STATUS_MAP.get(str(raw_list_status or "").strip(), None),
                 detail=detail if detail else None,
                 asof=now,
             )
@@ -189,9 +205,20 @@ class TuShareIngestService:
                 exchange=stock.exchange,
                 symbol=stock.symbol,
                 name=stock.name,
+                area=stock.area,
+                industry=stock.industry,
                 full_name=stock.full_name,
-                category=stock.category,
+                enname=stock.enname,
+                cnspell=stock.cnspell,
+                market=stock.market,
+                curr_type=stock.curr_type,
+                list_status=stock.list_status,
                 list_date=stock.list_date,
+                delist_date=stock.delist_date,
+                is_hs=stock.is_hs,
+                act_name=stock.act_name,
+                act_ent_type=stock.act_ent_type,
+                category=stock.category,
                 csrc_code=stock.csrc_code,
                 csrc_desc=stock.csrc_desc,
                 province=stock.province,
