@@ -5,18 +5,21 @@ import type { StockRecord } from "@/shared/types";
 export interface SwIndustryLevel3 {
   code: string;
   name: string;
+  stockCount: number;
   symbols: string[];
 }
 
 export interface SwIndustryLevel2 {
   code: string;
   name: string;
+  stockCount: number;
   children: SwIndustryLevel3[];
 }
 
 export interface SwIndustryLevel1 {
   code: string;
   name: string;
+  stockCount: number;
   children: SwIndustryLevel2[];
 }
 
