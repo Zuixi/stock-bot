@@ -8,6 +8,7 @@ const CategoryPage = lazy(() => import("@/pages/market-category"));
 const IndustryLevel2Page = lazy(() => import("@/pages/market-industry-level2"));
 const IndustryLevel3Page = lazy(() => import("@/pages/market-industry-level3"));
 const MarketHotSectorsPage = lazy(() => import("@/pages/market-hot-sectors"));
+const IndexDetailPage = lazy(() => import("@/pages/index-detail"));
 const StockDetailPage = lazy(() => import("@/pages/stock-detail"));
 const WatchlistPage = lazy(() => import("@/pages/watchlist"));
 
@@ -61,6 +62,14 @@ export function AppRouter() {
           element={
             <Suspense fallback={<PageLoading />}>
               <MarketHotSectorsPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/index/:tsCode"
+          element={
+            <Suspense fallback={<PageLoading />}>
+              <IndexDetailPage />
             </Suspense>
           }
         />

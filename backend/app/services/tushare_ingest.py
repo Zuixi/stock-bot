@@ -334,6 +334,74 @@ class TuShareIngestService:
             "trade_date": trade_date,
         }
 
+    # ------------------------------------------------------------------
+    # Index daily
+    # ------------------------------------------------------------------
+
+    async def ingest_index_daily(
+        self,
+        db: AsyncSession,
+        ts_code: str,
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict[str, int]:
+        """Fetch index daily OHLCV for one ts_code and persist to DB.
+
+        Uses TuShare ``index_daily`` API; upserts into ``index_dailies``.
+        """
+        from app.models.index_daily import IndexDaily  # noqa: PLC0415
+        from app.repositories import index_repo  # noqa: PLC0415
+
+        df = await self.client.fetch_index_daily(
+            ts_code=ts_code,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if df.empty:
+            logger.info("No index_daily data for ts_code=%s", ts_code)
+            return {"ts_code": ts_code, "upserted": 0}
+
+        await self.saver.save_dataframe(
+            "index_daily", df,
+            {"ts_code": ts_code, "start_date": start_date, "end_date": end_date},
+            exchange=ts_code.replace(".", "_"),
+        )
+
+        rows: list[IndexDaily] = []
+        for rec in df.to_dict("records"):
+            close_val = _to_builtin(rec.get("close"))
+            if close_val is None:
+                continue
+            td_str = str(rec.get("trade_date", "")).strip()
+            if len(td_str) != 8:
+                continue
+            from datetime import datetime as _dt  # noqa: PLC0415
+            parsed_date = _dt.strptime(td_str, "%Y%m%d").date()
+            rows.append(IndexDaily(
+                ts_code=ts_code,
+                trade_date=parsed_date,
+                open=_to_builtin(rec.get("open")),
+                high=_to_builtin(rec.get("high")),
+                low=_to_builtin(rec.get("low")),
+                close=close_val,
+                pre_close=_to_builtin(rec.get("pre_close")),
+                volume=_to_builtin(rec.get("vol")),
+                amount=_to_builtin(rec.get("amount")),
+            ))
+
+        upserted = 0
+        batch_size = 500
+        for i in range(0, len(rows), batch_size):
+            batch = rows[i : i + batch_size]
+            upserted += await index_repo.upsert_index_dailies(db, batch)
+            await db.commit()
+
+        logger.info(
+            "Index daily ingest done: ts_code=%s fetched=%d upserted=%d",
+            ts_code, len(df), upserted,
+        )
+        return {"ts_code": ts_code, "fetched": len(df), "upserted": upserted}
+
     async def _build_stock_id_map(self, db: AsyncSession) -> dict[str, int]:
         """Build a mapping from TuShare ts_code (e.g. '000001.SZ') to DB stock_id."""
         from sqlalchemy import select  # noqa: PLC0415

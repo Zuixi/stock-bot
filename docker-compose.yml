@@ -6,6 +6,8 @@ services:
       POSTGRESQL_USER: stock_user
       POSTGRESQL_PASSWORD: stock_pass
       POSTGRESQL_DATABASE: stock_bot
+    container_name: postgres
+    restart: unless-stopped
     ports:
       - "5433:5432"
     volumes:
@@ -22,6 +24,8 @@ services:
     depends_on:
       redis-init:
         condition: service_completed_successfully
+    container_name: redis
+    restart: unless-stopped
     ports:
       - "6380:6379"
     volumes:
@@ -35,6 +39,7 @@ services:
   redis-init:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/alpine:3.20
     user: "0:0"
+    container_name: init_redis
     command: ["sh", "-c", "chown -R 1000:1000 /data"]
     volumes:
       - redis_data:/data
@@ -48,6 +53,8 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
+    container_name: rabbitmq
+    restart: unless-stopped
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -65,6 +72,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@postgres:5432/stock_bot
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    container_name: migrate
     depends_on:
       postgres:
         condition: service_healthy
@@ -85,6 +93,8 @@ services:
     dns:
       - 8.8.8.8
       - 223.5.5.5
+    container_name: backend_api
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,6 +116,8 @@ services:
     build:
       context: ./backend
     env_file: ./backend/.env
+    container_name: worker
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@postgres:5432/stock_bot
       REDIS_URL: redis://redis:6379/0
@@ -131,6 +143,8 @@ services:
     build:
       context: ./frontend
       target: runtime
+    container_name: frontend
+    restart: unless-stopped
     ports:
       - "3000:80"
     depends_on:

@@ -1,5 +1,5 @@
 import { apiGet } from "./client";
-import type { MarketIndex, SectorSummary } from "@/shared/types";
+import type { KLinePoint, MarketIndex, SectorSummary } from "@/shared/types";
 
 export interface DistributionItem {
   range: string;
@@ -31,6 +31,19 @@ export interface HotBoardItem {
 
 export type HotBoardCategory = "industry" | "concept" | "region";
 
+interface IndexKlineResponse {
+  ts_code: string;
+  name: string;
+  data: {
+    trade_date: string;
+    open: number | null;
+    high: number | null;
+    low: number | null;
+    close: number;
+    volume: number | null;
+  }[];
+}
+
 export function fetchMarketIndices(): Promise<MarketIndex[]> {
   return apiGet<MarketIndex[]>("/api/v1/market/indices");
 }
@@ -49,4 +62,31 @@ export function fetchCapitalFlow(): Promise<CapitalFlowItem[]> {
 
 export function fetchHotBoards(category: HotBoardCategory): Promise<HotBoardItem[]> {
   return apiGet<HotBoardItem[]>("/api/v1/market/hot-boards", { category });
+}
+
+export async function fetchIndexKline(tsCode: string, days: number): Promise<KLinePoint[]> {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(end.getDate() - days);
+  const startDate = start.toISOString().slice(0, 10);
+  const endDate = end.toISOString().slice(0, 10);
+
+  const resp = await apiGet<IndexKlineResponse>(
+    `/api/v1/market/indices/${tsCode}/kline`,
+    { start: startDate, end: endDate },
+  );
+
+  return resp.data.map((item) => {
+    const open = item.open ?? item.close;
+    const high = item.high ?? Math.max(open, item.close);
+    const low = item.low ?? Math.min(open, item.close);
+    return {
+      date: item.trade_date,
+      open,
+      close: item.close,
+      high,
+      low,
+      volume: item.volume ?? 0,
+    };
+  });
 }
