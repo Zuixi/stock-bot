@@ -18,3 +18,7 @@
 ## 2026-04-21 - 分类市场分页修复
 - 修复分类市场表格切换“条/页”后因固定 pageSize 被重渲染覆盖导致显示条数不变化的问题，并将分页状态改为受控持久化。
 - 涉及模块：frontend/features/market、docs
+
+## 2026-04-21 - 分类市场总数口径修复
+- 修复分类市场“总条数固定 300”的问题：新增跨交易所分页接口并改为服务端分页，前端分页总数改用后端 `total`，确保 20/50/100 条切换与页码显示一致。
+- 涉及模块：backend/api、frontend/shared/api、frontend/pages/market-category、frontend/features/market、docs

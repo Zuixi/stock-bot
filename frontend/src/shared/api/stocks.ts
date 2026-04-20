@@ -82,32 +82,24 @@ export async function fetchStocksMerged(params: {
   exchange?: Exchange;
   category?: string;
   keyword?: string;
+  page?: number;
   page_size?: number;
-}): Promise<StockRecord[]> {
+}): Promise<BackendPagedResponse<StockRecord>> {
   const pageSize = params.page_size ?? 100;
-  if (params.exchange) {
-    const response = await fetchStocksByExchange({
+  const response = await apiGet<BackendPagedResponse<BackendStock>>(
+    "/api/v1/exchanges/stocks",
+    {
       exchange: params.exchange,
       category: params.category,
       keyword: params.keyword,
-      page: 1,
+      page: params.page ?? 1,
       page_size: pageSize,
-    });
-    return response.items;
-  }
-
-  const all = await Promise.all(
-    EXCHANGES.map((exchange) =>
-      fetchStocksByExchange({
-        exchange,
-        category: params.category,
-        keyword: params.keyword,
-        page: 1,
-        page_size: pageSize,
-      })
-    )
+    }
   );
-  return all.flatMap((bucket) => bucket.items);
+  return {
+    ...response,
+    items: response.items.map(mapBackendStock),
+  };
 }
 
 export async function fetchStockBySymbol(symbol: string): Promise<StockRecord | null> {

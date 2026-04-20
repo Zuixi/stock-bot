@@ -11,7 +11,7 @@ stock bot 能够查看当前市场行情，股票类别，每个分类的具体�
   - Echarts for charting
 
 前后端都需要使用Docker Compose 进行部署。
-
+整体服务通过 docker compose build 和 docker compose up -d 进行构建和启动。
 项目组件具体信息可以参考组件的AGENTS.md文件。
 
 IMPORTANT:
