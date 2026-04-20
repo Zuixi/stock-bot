@@ -105,7 +105,7 @@ export default function IndustryLevel3Page() {
                 if (checked) setSelectedLevel3Code(level3.code);
               }}
             >
-              {level3.name} ({level3.symbols.length})
+              {level3.name} ({level3.stockCount})
             </Tag.CheckableTag>
           ))}
         </Space>

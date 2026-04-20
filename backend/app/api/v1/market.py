@@ -64,23 +64,23 @@ async def get_index_kline(
 
 
 @router.get("/sw-industry/tree", response_model=list[dict])
-async def get_sw_industry_tree() -> list[dict]:
-    return market_service.get_sw_industry_tree()
+async def get_sw_industry_tree(cache: CacheDep) -> list[dict]:
+    return await market_service.get_sw_industry_tree(cache=cache)
 
 
 @router.get("/sw-industry/{level1_code}/stocks", response_model=list[StockOut])
 async def get_sw_level1_stocks(level1_code: str, db: DbDep) -> list[StockOut]:
-    if market_service.get_sw_level1(level1_code) is None:
+    if await market_service.get_sw_level1(level1_code) is None:
         raise not_found_response("SW level1", level1_code)
-    symbols = market_service.list_symbols_by_level1(level1_code)
+    symbols = await market_service.list_symbols_by_level1(level1_code)
     return await market_service.list_stocks_by_symbols(db, symbols)
 
 
 @router.get("/sw-industry/{level1_code}/{level2_code}/stocks", response_model=list[StockOut])
 async def get_sw_level2_stocks(level1_code: str, level2_code: str, db: DbDep) -> list[StockOut]:
-    if market_service.get_sw_level2(level1_code, level2_code) is None:
+    if await market_service.get_sw_level2(level1_code, level2_code) is None:
         raise not_found_response("SW level2", f"{level1_code}/{level2_code}")
-    symbols = market_service.list_symbols_by_level2(level1_code, level2_code)
+    symbols = await market_service.list_symbols_by_level2(level1_code, level2_code)
     return await market_service.list_stocks_by_symbols(db, symbols)
 
 
@@ -91,7 +91,7 @@ async def get_sw_level2_stocks(level1_code: str, level2_code: str, db: DbDep) ->
 async def get_sw_level3_stocks(
     level1_code: str, level2_code: str, level3_code: str, db: DbDep
 ) -> list[StockOut]:
-    if market_service.get_sw_level3(level1_code, level2_code, level3_code) is None:
+    if await market_service.get_sw_level3(level1_code, level2_code, level3_code) is None:
         raise not_found_response("SW level3", f"{level1_code}/{level2_code}/{level3_code}")
-    symbols = market_service.list_symbols_by_level3(level1_code, level2_code, level3_code)
+    symbols = await market_service.list_symbols_by_level3(level1_code, level2_code, level3_code)
     return await market_service.list_stocks_by_symbols(db, symbols)

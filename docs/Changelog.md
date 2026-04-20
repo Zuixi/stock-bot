@@ -6,3 +6,11 @@
 - 涉及模块有哪些，不需要列出具体文件，只需要列出模块名
 
 ## ChangeLog List
+
+## 2026-04-20 - 申万行业分类
+- 基于本地 XLS/XLSX 文件实现申万三级行业分类与成分股联动，替代原 TuShare API 内存缓存方案
+- 涉及模块：backend/models、backend/services、backend/api、frontend/features/market、frontend/pages/market-industry-*
+
+## 2026-04-20 - 申万导入链路优化
+- 新增“SQL 种子优先、XLS 解析兜底”的双路径导入机制：首次解析后自动导出 `sw_seed.sql`，后续部署可直接导入 SQL，显著降低启动导入耗时
+- 涉及模块：backend/services、backend/config、docker-compose、backend/.dockerignore、backend/data

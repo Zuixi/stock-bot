@@ -74,35 +74,21 @@ export default function IndustryLevel2Page() {
         extra={<Typography.Text type="secondary">点击二级行业进入三级页面</Typography.Text>}
       >
         <Row gutter={[12, 12]}>
-          {level1.children.map((level2) => {
-            const level2Symbols = level2.children.flatMap((level3) => level3.symbols);
-            const level2Stocks = level1Stocks.filter((stock) => level2Symbols.includes(stock.symbol));
-            const topMoveStocks = [...level2Stocks]
-              .sort((a, b) => Math.abs(b.changePercent ?? 0) - Math.abs(a.changePercent ?? 0))
-              .slice(0, 3);
-            return (
-              <Col key={level2.code} xs={24} sm={12} lg={8}>
-                <Card hoverable size="small" onClick={() => navigate(`/market/industry/${level1.code}/${level2.code}`)}>
-                  <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                    <Typography.Text strong>{level2.name}</Typography.Text>
-                    <Typography.Text type="secondary">{level2Stocks.length} 只个股</Typography.Text>
-                    <Space wrap>
-                      {topMoveStocks.length > 0 ? (
-                        topMoveStocks.map((stock) => (
-                          <Tag key={stock.symbol} color={(stock.changePercent ?? 0) >= 0 ? "red" : "green"}>
-                            {stock.name} {(stock.changePercent ?? 0) > 0 ? "+" : ""}
-                            {(stock.changePercent ?? 0).toFixed(2)}%
-                          </Tag>
-                        ))
-                      ) : (
-                        <Tag>暂无样本</Tag>
-                      )}
-                    </Space>
+          {level1.children.map((level2) => (
+            <Col key={level2.code} xs={24} sm={12} lg={8}>
+              <Card hoverable size="small" onClick={() => navigate(`/market/industry/${level1.code}/${level2.code}`)}>
+                <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                  <Typography.Text strong>{level2.name}</Typography.Text>
+                  <Space size={8}>
+                    <Tag color="blue">{level2.stockCount} 只个股</Tag>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {level2.children.length} 个三级行业
+                    </Typography.Text>
                   </Space>
-                </Card>
-              </Col>
-            );
-          })}
+                </Space>
+              </Card>
+            </Col>
+          ))}
         </Row>
       </Card>
 

@@ -26,7 +26,11 @@ _init_task: asyncio.Task | None = None
 
 
 async def maybe_seed_on_startup() -> None:
-    """Check DB; if empty, kick off a background seed task."""
+    """Check DB; if empty, kick off a background seed task.
+
+    Also ensures SW industry data is imported from local XLS files
+    even if stock data already exists.
+    """
     global _init_task
 
     try:
@@ -35,6 +39,20 @@ async def maybe_seed_on_startup() -> None:
     except Exception:
         logger.warning("data_init: cannot query stocks table — skipping seed check", exc_info=True)
         return
+
+    # Always check if SW industry data needs importing
+    try:
+        from app.services.sw_industry_service import import_all as import_sw_all  # noqa: PLC0415
+        from app.services.sw_industry_service import is_sw_data_loaded  # noqa: PLC0415
+
+        if not await is_sw_data_loaded():
+            logger.info("data_init: SW industry data missing — importing")
+            result = await import_sw_all()
+            logger.info("data_init: SW industry import -> %s", result)
+        else:
+            logger.info("data_init: SW industry data already loaded")
+    except Exception:
+        logger.warning("data_init: SW industry check/import failed", exc_info=True)
 
     if count > 0:
         logger.info("data_init: %d stocks already in DB — skipping seed", count)
@@ -47,7 +65,6 @@ async def maybe_seed_on_startup() -> None:
 async def _seed_database() -> None:
     """Pull stock universe + recent daily quotes from TuShare."""
     from app.core.providers.tushare_client import get_tushare_client  # noqa: PLC0415
-    from app.services.market_service import refresh_sw_industry_tree  # noqa: PLC0415
     from app.services.tushare_ingest import TuShareIngestService  # noqa: PLC0415
 
     try:
@@ -116,11 +133,5 @@ async def _seed_database() -> None:
                 logger.info("data_init: index %s -> upserted=%s", idx["ts_code"], result.get("upserted", 0))
         except Exception:
             logger.error("data_init: index ingest failed for %s", idx["ts_code"], exc_info=True)
-
-    # Step 5: Load Shenwan industry tree
-    try:
-        await refresh_sw_industry_tree()
-    except Exception:
-        logger.warning("data_init: SW tree load failed", exc_info=True)
 
     logger.info("data_init: seed complete")

@@ -1,4 +1,8 @@
+x-backend-build: &backend-build
+  context: ./backend
+
 services:
+
   # ---- infrastructure ----
   postgres:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/quay.io/sclorg/postgresql-15-c9s:latest
@@ -65,8 +69,9 @@ services:
 
   # ---- one-shot migration ----
   migrate:
+    image: stock-bot-backend:local
     build:
-      context: ./backend
+      <<: *backend-build
     env_file: ./backend/.env
     environment:
       DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@postgres:5432/stock_bot
@@ -81,8 +86,9 @@ services:
 
   # ---- backend api ----
   api:
+    image: stock-bot-backend:local
     build:
-      context: ./backend
+      <<: *backend-build
     ports:
       - "8000:8000"
     env_file: ./backend/.env
@@ -90,6 +96,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@postgres:5432/stock_bot
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      SW_DATA_DIR: /app/data/sw
     dns:
       - 8.8.8.8
       - 223.5.5.5
@@ -104,6 +111,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    volumes:
+      - ./docs/references/sw/SwClass:/app/data/sw:ro
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 10s
@@ -113,8 +122,9 @@ services:
 
   # ---- backend worker ----
   worker:
+    image: stock-bot-backend:local
     build:
-      context: ./backend
+      <<: *backend-build
     env_file: ./backend/.env
     container_name: worker
     restart: unless-stopped
