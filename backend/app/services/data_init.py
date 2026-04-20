@@ -100,7 +100,24 @@ async def _seed_database() -> None:
         except Exception:
             logger.error("data_init: daily ingest failed for %s", td, exc_info=True)
 
-    # Step 4: Load Shenwan industry tree
+    # Step 4: Ingest index daily data (past year for dashboard indices)
+    from app.services.market_service import _TARGET_INDICES  # noqa: PLC0415
+
+    logger.info("data_init: seeding index daily data for %d indices", len(_TARGET_INDICES))
+    for idx in _TARGET_INDICES:
+        try:
+            async with async_session_factory() as db:
+                result = await service.ingest_index_daily(
+                    db,
+                    ts_code=idx["ts_code"],
+                    start_date=trade_dates[0] if trade_dates else "",
+                    end_date=trade_dates[-1] if trade_dates else "",
+                )
+                logger.info("data_init: index %s -> upserted=%s", idx["ts_code"], result.get("upserted", 0))
+        except Exception:
+            logger.error("data_init: index ingest failed for %s", idx["ts_code"], exc_info=True)
+
+    # Step 5: Load Shenwan industry tree
     try:
         await refresh_sw_industry_tree()
     except Exception:

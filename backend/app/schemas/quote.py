@@ -45,3 +45,22 @@ class BatchQuotesRequest(BaseModel):
 class BatchQuotesResponse(BaseModel):
     task_id: str
     status: str = "pending"
+
+
+class IndexDailyOut(BaseModel):
+    trade_date: date
+    open: float | None
+    high: float | None
+    low: float | None
+    close: float
+    pre_close: float | None
+    volume: float | None
+    amount: float | None
+
+    model_config = {"from_attributes": True}
+
+
+class IndexKlineResponse(BaseModel):
+    ts_code: str
+    name: str
+    data: list[IndexDailyOut]
