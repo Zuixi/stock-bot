@@ -22,3 +22,11 @@
 ## 2026-04-21 - 分类市场总数口径修复
 - 修复分类市场“总条数固定 300”的问题：新增跨交易所分页接口并改为服务端分页，前端分页总数改用后端 `total`，确保 20/50/100 条切换与页码显示一致。
 - 涉及模块：backend/api、frontend/shared/api、frontend/pages/market-category、frontend/features/market、docs
+
+## 2026-04-21 - 申万分类缺失兜底修复
+- 修复申万行业树总数与股票总数不一致问题：行业树计数统一按 `stocks` 口径统计，并新增 `OTHER(其他)` 一级分类承接未映射到有效三级行业的股票。
+- 涉及模块：backend/services/market、frontend/pages/market-industry-*、docs
+
+## 2026-04-21 - 前端代理 502 修复
+- 修复 frontend 经 Nginx 代理后端接口偶发全量 502 的问题：启用 Docker DNS 动态解析，避免 backend 容器重建后 frontend 继续使用过期 upstream IP。
+- 涉及模块：frontend/nginx、docker-compose、docs
