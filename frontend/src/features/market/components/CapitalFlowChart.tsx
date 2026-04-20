@@ -1,12 +1,15 @@
 import ReactECharts from "echarts-for-react";
-import { Card } from "antd";
+import { Card, Spin } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchCapitalFlow } from "@/shared/api/market";
 
+const STALE_TIME = 5 * 60 * 1000;
+
 export function CapitalFlowChart() {
-  const { data = [] } = useQuery({
+  const { data = [], isLoading } = useQuery({
     queryKey: ["market-capital-flow"],
     queryFn: fetchCapitalFlow,
+    staleTime: STALE_TIME,
   });
   const names = data.map((d) => d.name);
   const inflows = data.map((d) => d.inflow);
@@ -37,7 +40,9 @@ export function CapitalFlowChart() {
 
   return (
     <Card title="A股主力净流入" size="small">
-      <ReactECharts option={option} style={{ height: 260 }} />
+      <Spin spinning={isLoading}>
+        <ReactECharts option={option} style={{ height: 260 }} />
+      </Spin>
     </Card>
   );
 }

@@ -1,13 +1,16 @@
 import ReactECharts from "echarts-for-react";
-import { Card } from "antd";
+import { Card, Spin } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchDistribution } from "@/shared/api/market";
 import { COLORS } from "@/app/theme";
 
+const STALE_TIME = 5 * 60 * 1000;
+
 export function DistributionChart() {
-  const { data = [] } = useQuery({
+  const { data = [], isLoading } = useQuery({
     queryKey: ["market-distribution"],
     queryFn: fetchDistribution,
+    staleTime: STALE_TIME,
   });
 
   const option = {
@@ -47,7 +50,9 @@ export function DistributionChart() {
 
   return (
     <Card title="A股涨跌分布" size="small">
-      <ReactECharts option={option} style={{ height: 260 }} />
+      <Spin spinning={isLoading}>
+        <ReactECharts option={option} style={{ height: 260 }} />
+      </Spin>
     </Card>
   );
 }

@@ -1,12 +1,15 @@
 import ReactECharts from "echarts-for-react";
-import { Card } from "antd";
+import { Card, Spin } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchSectors } from "@/shared/api/market";
 
+const STALE_TIME = 5 * 60 * 1000;
+
 export function SectorHeatmap() {
-  const { data = [] } = useQuery({
+  const { data = [], isLoading } = useQuery({
     queryKey: ["market-sectors"],
     queryFn: fetchSectors,
+    staleTime: STALE_TIME,
   });
 
   const option = {
@@ -55,7 +58,9 @@ export function SectorHeatmap() {
 
   return (
     <Card title="板块热力图" size="small">
-      <ReactECharts option={option} style={{ height: 300 }} />
+      <Spin spinning={isLoading}>
+        <ReactECharts option={option} style={{ height: 300 }} />
+      </Spin>
     </Card>
   );
 }

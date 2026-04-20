@@ -2,9 +2,11 @@
 
 Data sources
 ------------
-- **TuShare Pro** (via ``TuShareClient``): index daily, daily quotes.
-- **PostgreSQL**: aggregated from ``stocks`` + ``daily_quotes`` tables.
-- **Static fallback**: last-resort data when both TuShare and DB return empty.
+- **PostgreSQL**: ``index_dailies`` for main indices, ``stocks`` + ``daily_quotes``
+  for aggregated stats.
+- **Redis**: short-lived cache (300s) for all dashboard endpoints.
+- **TuShare Pro** (via ``TuShareClient``): fallback for indices when DB is empty.
+- **Static fallback**: last-resort data when both sources return empty.
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
+from app.core.redis import CacheClient
+from app.models.index_daily import IndexDaily
 from app.models.quote import DailyQuote
 from app.models.stock import Stock
 from app.schemas.stock import StockOut
@@ -24,6 +28,8 @@ from app.schemas.stock import StockOut
 logger = logging.getLogger(__name__)
 
 HotBoardCategory = Literal["industry", "concept", "region"]
+
+_MARKET_CACHE_TTL = 300  # 5 minutes
 
 # ---------------------------------------------------------------------------
 # Target index codes for the main dashboard
@@ -38,8 +44,11 @@ _TARGET_INDICES: list[dict[str, str]] = [
     {"ts_code": "000300.SH", "name": "沪深300", "exchange": "Shanghai_Stocks"},
 ]
 
+INDEX_NAME_MAP: dict[str, str] = {idx["ts_code"]: idx["name"] for idx in _TARGET_INDICES}
+INDEX_EXCHANGE_MAP: dict[str, str] = {idx["ts_code"]: idx["exchange"] for idx in _TARGET_INDICES}
+
 # ---------------------------------------------------------------------------
-# Static fallback data — returned only when TuShare AND DB are both empty
+# Static fallback data — returned only when both DB and TuShare are empty
 # ---------------------------------------------------------------------------
 
 _FALLBACK_DISTRIBUTION = [
@@ -59,6 +68,7 @@ _FALLBACK_DISTRIBUTION = [
 # ---------------------------------------------------------------------------
 # Helper: get the latest trade date from DB
 # ---------------------------------------------------------------------------
+
 
 async def _latest_trade_date(db: AsyncSession):
     """Return the most recent trade_date in daily_quotes, or None."""
@@ -82,8 +92,55 @@ async def _latest_trade_date_str() -> str:
 # ---------------------------------------------------------------------------
 
 
-async def list_market_indices() -> list[dict[str, Any]]:
-    """Return main market index snapshots via TuShare index_daily."""
+async def list_market_indices(cache: CacheClient | None = None) -> list[dict[str, Any]]:
+    """Return main market index snapshots from DB (index_dailies).
+
+    Falls back to TuShare if DB has no data.
+    """
+    cache_key = "market:indices"
+    if cache:
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+    from app.repositories import index_repo  # noqa: PLC0415
+
+    ts_codes = [idx["ts_code"] for idx in _TARGET_INDICES]
+    async with async_session_factory() as db:
+        rows = await index_repo.get_latest(db, ts_codes)
+
+    results: list[dict[str, Any]] = []
+    if rows:
+        for row in rows:
+            close = float(row.close)
+            pre_close = float(row.pre_close) if row.pre_close else 0
+            change = round(close - pre_close, 2) if pre_close else 0
+            change_pct = round(change / pre_close * 100, 2) if pre_close else 0
+            td = row.trade_date
+            asof = f"{td.year:04d}-{td.month:02d}-{td.day:02d}T15:00:00Z"
+            results.append({
+                "code": row.ts_code.split(".")[0],
+                "tsCode": row.ts_code,
+                "name": INDEX_NAME_MAP.get(row.ts_code, row.ts_code),
+                "value": round(close, 2),
+                "change": change,
+                "changePercent": change_pct,
+                "exchange": INDEX_EXCHANGE_MAP.get(row.ts_code, ""),
+                "asof": asof,
+            })
+        # Preserve the order defined in _TARGET_INDICES
+        order = {idx["ts_code"]: i for i, idx in enumerate(_TARGET_INDICES)}
+        results.sort(key=lambda r: order.get(r["tsCode"], 999))
+    else:
+        results = await _fetch_indices_from_tushare()
+
+    if cache and results:
+        await cache.set(cache_key, results, _MARKET_CACHE_TTL)
+    return results
+
+
+async def _fetch_indices_from_tushare() -> list[dict[str, Any]]:
+    """Fallback: fetch index snapshots directly from TuShare API."""
     from app.core.providers.tushare_client import get_tushare_client  # noqa: PLC0415
 
     try:
@@ -114,6 +171,7 @@ async def list_market_indices() -> list[dict[str, Any]]:
             )
             results.append({
                 "code": idx["ts_code"].split(".")[0],
+                "tsCode": idx["ts_code"],
                 "name": idx["name"],
                 "value": round(close, 2),
                 "change": change,
@@ -122,16 +180,19 @@ async def list_market_indices() -> list[dict[str, Any]]:
                 "asof": asof,
             })
         except Exception:
-            logger.warning("list_market_indices: failed for %s", idx["ts_code"], exc_info=True)
+            logger.warning("_fetch_indices_from_tushare: failed for %s", idx["ts_code"], exc_info=True)
 
     return results
 
 
-async def get_distribution() -> list[dict[str, Any]]:
-    """Return market-wide up/down distribution from DB daily_quotes.
+async def get_distribution(cache: CacheClient | None = None) -> list[dict[str, Any]]:
+    """Return market-wide up/down distribution from DB daily_quotes."""
+    cache_key = "market:distribution"
+    if cache:
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return cached
 
-    Buckets stocks by pct_chg into standard ranges.
-    """
     async with async_session_factory() as db:
         latest = await _latest_trade_date(db)
         if not latest:
@@ -181,15 +242,20 @@ async def get_distribution() -> list[dict[str, Any]]:
         "跌停", ">-7%", "-5~-7%", "-3~-5%", "-1~-3%",
         "0~-1%", "0~1%", "1~3%", "3~5%", ">5%", "涨停",
     ]
-    return [{"range": r, "count": db_rows.get(r, 0)} for r in ordered_ranges]
+    data = [{"range": r, "count": db_rows.get(r, 0)} for r in ordered_ranges]
+    if cache:
+        await cache.set(cache_key, data, _MARKET_CACHE_TTL)
+    return data
 
 
-async def get_sectors() -> list[dict[str, Any]]:
-    """Return industry sector performance from DB.
+async def get_sectors(cache: CacheClient | None = None) -> list[dict[str, Any]]:
+    """Return industry sector performance from DB."""
+    cache_key = "market:sectors"
+    if cache:
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return cached
 
-    Groups stocks by ``csrc_desc`` (industry from stock_basic), then
-    aggregates latest daily_quotes to compute sector-level change %.
-    """
     async with async_session_factory() as db:
         latest = await _latest_trade_date(db)
         if not latest:
@@ -235,14 +301,19 @@ async def get_sectors() -> list[dict[str, Any]]:
             "stockCount": int(row.stock_count),
             "topStocks": [],
         })
+    if cache and sectors:
+        await cache.set(cache_key, sectors, _MARKET_CACHE_TTL)
     return sectors
 
 
-async def get_capital_flow() -> list[dict[str, Any]]:
-    """Return sector-level turnover distribution from DB.
+async def get_capital_flow(cache: CacheClient | None = None) -> list[dict[str, Any]]:
+    """Return sector-level turnover distribution from DB."""
+    cache_key = "market:capital-flow"
+    if cache:
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return cached
 
-    Uses total amount traded per industry as a proxy for capital flow.
-    """
     async with async_session_factory() as db:
         latest = await _latest_trade_date(db)
         if not latest:
@@ -281,18 +352,24 @@ async def get_capital_flow() -> list[dict[str, Any]]:
             "inflow": round(inflow, 2),
             "outflow": round(-outflow, 2),
         })
+    if cache and flows:
+        await cache.set(cache_key, flows, _MARKET_CACHE_TTL)
     return flows
 
 
-async def get_hot_boards(category: HotBoardCategory) -> list[dict[str, Any]]:
-    """Return hot boards for the given category from DB.
-
-    - industry: groups by ``csrc_desc``
-    - region:   groups by ``province``
-    - concept:  not available from stock_basic; returns empty
-    """
+async def get_hot_boards(
+    category: HotBoardCategory,
+    cache: CacheClient | None = None,
+) -> list[dict[str, Any]]:
+    """Return hot boards for the given category from DB."""
     if category == "concept":
         return []
+
+    cache_key = f"market:hot-boards:{category}"
+    if cache:
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return cached
 
     group_col = "csrc_desc" if category == "industry" else "province"
 
@@ -346,7 +423,52 @@ async def get_hot_boards(category: HotBoardCategory) -> list[dict[str, Any]]:
             "downCount": int(row.down_count or 0),
             "leaders": [],
         })
+    if cache and boards:
+        await cache.set(cache_key, boards, _MARKET_CACHE_TTL)
     return boards
+
+
+# ---------------------------------------------------------------------------
+# Index K-line from DB
+# ---------------------------------------------------------------------------
+
+
+async def get_index_kline(
+    ts_code: str,
+    start_date=None,
+    end_date=None,
+    cache: CacheClient | None = None,
+) -> list[dict[str, Any]]:
+    """Return index daily K-line data from index_dailies table."""
+    start_str = str(start_date) if start_date else "all"
+    end_str = str(end_date) if end_date else "all"
+    cache_key = f"market:index-kline:{ts_code}:{start_str}:{end_str}"
+    if cache:
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+    from app.repositories import index_repo  # noqa: PLC0415
+
+    async with async_session_factory() as db:
+        rows = await index_repo.get_kline(db, ts_code, start_date, end_date)
+
+    data = [
+        {
+            "trade_date": str(r.trade_date),
+            "open": float(r.open) if r.open is not None else None,
+            "high": float(r.high) if r.high is not None else None,
+            "low": float(r.low) if r.low is not None else None,
+            "close": float(r.close),
+            "pre_close": float(r.pre_close) if r.pre_close is not None else None,
+            "volume": float(r.volume) if r.volume is not None else None,
+            "amount": float(r.amount) if r.amount is not None else None,
+        }
+        for r in rows
+    ]
+    if cache and data:
+        await cache.set(cache_key, data, _MARKET_CACHE_TTL)
+    return data
 
 
 # ---------------------------------------------------------------------------

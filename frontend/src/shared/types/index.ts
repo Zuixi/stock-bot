@@ -29,6 +29,7 @@ export const EXCHANGE_LABELS: Record<Exchange, string> = {
 
 export interface MarketIndex {
   code: string;
+  tsCode: string;
   name: string;
   value: number;
   change: number;
