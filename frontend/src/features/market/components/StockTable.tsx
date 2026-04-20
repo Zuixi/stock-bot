@@ -10,24 +10,62 @@ import type { ColumnsType, TableProps } from "antd/es/table";
 
 interface Props {
   data: StockRecord[];
+  total?: number;
+  current?: number;
+  pageSize?: number;
   loading?: boolean;
   onChange?: TableProps<StockRecord>["onChange"];
 }
 
-export function StockTable({ data, loading, onChange }: Props) {
+export function StockTable({ data, total, current, pageSize, loading, onChange }: Props) {
   const navigate = useNavigate();
   const { items, toggle } = useWatchlistStore();
   const [paginationState, setPaginationState] = useState<{ current: number; pageSize: number }>({
-    current: 1,
-    pageSize: 20,
+    current: current ?? 1,
+    pageSize: pageSize ?? 20,
   });
+
   useEffect(() => {
+    if (current === undefined && pageSize === undefined) return;
+    setPaginationState((prev) => ({
+      current: current ?? prev.current,
+      pageSize: pageSize ?? prev.pageSize,
+    }));
+  }, [current, pageSize]);
+
+  const totalCount = total ?? data.length;
+  const isControlled = current !== undefined || pageSize !== undefined;
+
+  useEffect(() => {
+    if (isControlled) return;
     const safePageSize = Math.max(1, paginationState.pageSize);
-    const maxPage = Math.max(1, Math.ceil(data.length / safePageSize));
+    const maxPage = Math.max(1, Math.ceil(totalCount / safePageSize));
     if (paginationState.current > maxPage) {
       setPaginationState((prev) => ({ ...prev, current: maxPage }));
     }
-  }, [data.length, paginationState.current, paginationState.pageSize]);
+  }, [isControlled, paginationState.current, paginationState.pageSize, totalCount]);
+
+  const currentPage = current ?? paginationState.current;
+  const currentPageSize = pageSize ?? paginationState.pageSize;
+
+  const handleTableChange: TableProps<StockRecord>["onChange"] = (
+    pagination,
+    filters,
+    sorter,
+    extra
+  ) => {
+    const nextPageSize = Math.max(1, pagination.pageSize ?? currentPageSize);
+    const nextCurrent = nextPageSize !== currentPageSize ? 1 : (pagination.current ?? currentPage);
+    if (!isControlled) {
+      setPaginationState({ current: nextCurrent, pageSize: nextPageSize });
+    }
+    onChange?.(
+      { ...pagination, current: nextCurrent, pageSize: nextPageSize, total: totalCount },
+      filters,
+      sorter,
+      extra
+    );
+  };
 
   const columns: ColumnsType<StockRecord> = [
     {
@@ -121,19 +159,6 @@ export function StockTable({ data, loading, onChange }: Props) {
     },
   ];
 
-  const handleTableChange: TableProps<StockRecord>["onChange"] = (
-    pagination,
-    filters,
-    sorter,
-    extra
-  ) => {
-    const nextPageSize = Math.max(1, pagination.pageSize ?? paginationState.pageSize);
-    const current =
-      nextPageSize !== paginationState.pageSize ? 1 : (pagination.current ?? paginationState.current);
-    setPaginationState({ current, pageSize: nextPageSize });
-    onChange?.({ ...pagination, current, pageSize: nextPageSize }, filters, sorter, extra);
-  };
-
   return (
     <Table<StockRecord>
       columns={columns}
@@ -143,8 +168,9 @@ export function StockTable({ data, loading, onChange }: Props) {
       loading={loading}
       scroll={{ x: 900 }}
       pagination={{
-        current: paginationState.current,
-        pageSize: paginationState.pageSize,
+        current: currentPage,
+        pageSize: currentPageSize,
+        total: totalCount,
         showSizeChanger: true,
         showTotal: (t) => `共 ${t} 条`,
       }}

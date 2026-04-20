@@ -2,6 +2,7 @@ import { Typography, Card, Alert } from "antd";
 import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
+import type { TableProps } from "antd";
 import { MarketFilters } from "@/features/market/components/MarketFilters";
 import { StockTable } from "@/features/market/components/StockTable";
 import { fetchCategories, fetchStocksMerged } from "@/shared/api/stocks";
@@ -25,13 +26,23 @@ export default function CategoryPage() {
     sortBy: "symbol",
     sortOrder: "asc",
   });
+  const [pagination, setPagination] = useState<{ page: number; pageSize: number }>({
+    page: 1,
+    pageSize: 20,
+  });
 
-  const { data: remoteStocks = [], isLoading, error } = useQuery({
-    queryKey: ["market-category-stocks", filters.exchange, filters.category],
+  useEffect(() => {
+    setPagination({ page: 1, pageSize: 20 });
+  }, [filters.exchange, filters.category]);
+
+  const { data: remoteStocks, isLoading, error } = useQuery({
+    queryKey: ["market-category-stocks", filters.exchange, filters.category, pagination.page, pagination.pageSize],
     queryFn: () =>
       fetchStocksMerged({
         exchange: filters.exchange,
         category: filters.category,
+        page: pagination.page,
+        page_size: pagination.pageSize,
       }),
   });
 
@@ -54,7 +65,8 @@ export default function CategoryPage() {
 
   const data = useMemo(
     () => {
-      const list = [...remoteStocks];
+      const listSource = remoteStocks?.items ?? [];
+      const list = [...listSource];
       if (!sort.sortBy) return list;
       const direction = sort.sortOrder === "asc" ? 1 : -1;
       list.sort((a, b) => {
@@ -64,8 +76,25 @@ export default function CategoryPage() {
       });
       return list;
     },
-    [remoteStocks, sort]
+    [remoteStocks?.items, sort]
   );
+  const total = remoteStocks?.total ?? 0;
+
+  const handleTableChange: TableProps<StockRecord>["onChange"] = (tablePagination, _filters, sorter) => {
+    const nextPage = tablePagination.current ?? pagination.page;
+    const nextPageSize = tablePagination.pageSize ?? pagination.pageSize;
+    setPagination((prev) =>
+      prev.page === nextPage && prev.pageSize === nextPageSize
+        ? prev
+        : { page: nextPage, pageSize: nextPageSize }
+    );
+    if (!Array.isArray(sorter) && sorter.field) {
+      setSort({
+        sortBy: sorter.field as keyof StockRecord,
+        sortOrder: sorter.order === "ascend" ? "asc" : "desc",
+      });
+    }
+  };
 
   return (
     <div>
@@ -87,15 +116,11 @@ export default function CategoryPage() {
 
       <StockTable
         data={data}
+        total={total}
+        current={pagination.page}
+        pageSize={pagination.pageSize}
         loading={isLoading}
-        onChange={(_pagination, _filters, sorter) => {
-          if (!Array.isArray(sorter) && sorter.field) {
-            setSort({
-              sortBy: sorter.field as keyof StockRecord,
-              sortOrder: sorter.order === "ascend" ? "asc" : "desc",
-            });
-          }
-        }}
+        onChange={handleTableChange}
       />
     </div>
   );
