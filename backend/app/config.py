@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     # TuShare
     tushare_token: str = ""
 
+    # Shenwan industry classification XLS data directory
+    sw_data_dir: str = ""
+
     # CORS — accepts comma-separated string or JSON array string
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 

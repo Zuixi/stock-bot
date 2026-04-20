@@ -43,6 +43,7 @@ data/*
 !data/.gitkeep
 **/data/*
 !**/data/.gitkeep
+!**/data/sw_seed.sql
 
 
 ## claude code

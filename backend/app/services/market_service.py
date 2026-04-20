@@ -472,125 +472,247 @@ async def get_index_kline(
 
 
 # ---------------------------------------------------------------------------
-# SW Industry tree — cached in memory, loaded from TuShare on first access
+# SW Industry tree — DB-backed, built from local XLS imports
 # ---------------------------------------------------------------------------
 
-_sw_tree_cache: list[dict] | None = None
 
+async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
+    """Build the three-level SW industry tree from DB with stock counts.
 
-async def _load_sw_tree_from_tushare() -> list[dict]:
-    """Fetch Shenwan L1/L2/L3 classification from TuShare and build a tree."""
-    from app.core.providers.tushare_client import get_tushare_client  # noqa: PLC0415
+    Returns a nested structure:
+    [{ code, name, stockCount, children: [{ code, name, stockCount, children: [{ code, name, stockCount, symbols }] }] }]
+    """
+    cache_key = "market:sw-tree"
+    if cache:
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return cached
 
-    client = get_tushare_client()
-    levels: dict[str, list[dict]] = {}
-    for lvl in ("L1", "L2", "L3"):
-        df = await client.fetch_index_classify(level=lvl, src="SW")
-        if not df.empty:
-            levels[lvl] = df.to_dict("records")
-        else:
-            levels[lvl] = []
+    from app.models.sw_industry import SwIndustryClass, SwIndustryMember  # noqa: PLC0415
 
+    async with async_session_factory() as db:
+        # Fetch all classification nodes
+        classes_result = await db.execute(
+            select(SwIndustryClass).order_by(SwIndustryClass.industry_code)
+        )
+        all_classes = classes_result.scalars().all()
+
+        # Count members per L3 industry code
+        member_counts_result = await db.execute(
+            select(
+                SwIndustryMember.industry_code,
+                func.count().label("cnt"),
+            ).group_by(SwIndustryMember.industry_code)
+        )
+        member_counts = {row.industry_code: row.cnt for row in member_counts_result}
+
+        # Collect L3 symbols per industry code
+        symbols_result = await db.execute(
+            select(SwIndustryMember.industry_code, SwIndustryMember.symbol)
+        )
+        symbols_by_code: dict[str, list[str]] = {}
+        for row in symbols_result:
+            symbols_by_code.setdefault(row.industry_code, []).append(row.symbol)
+
+    # Build tree from flat list
     l1_nodes: dict[str, dict] = {}
-    for rec in levels.get("L1", []):
-        code = str(rec.get("index_code", "")).strip()
-        name = str(rec.get("industry_name", "")).strip()
-        if code and name:
-            l1_nodes[code] = {"code": code, "name": name, "children": []}
-
     l2_nodes: dict[str, dict] = {}
-    for rec in levels.get("L2", []):
-        code = str(rec.get("index_code", "")).strip()
-        name = str(rec.get("industry_name", "")).strip()
-        parent = str(rec.get("parent_code", "")).strip()
-        if code and name:
-            node = {"code": code, "name": name, "children": []}
-            l2_nodes[code] = node
-            if parent in l1_nodes:
-                l1_nodes[parent]["children"].append(node)
+    l3_nodes: dict[str, dict] = {}
 
-    for rec in levels.get("L3", []):
-        code = str(rec.get("index_code", "")).strip()
-        name = str(rec.get("industry_name", "")).strip()
-        parent = str(rec.get("parent_code", "")).strip()
-        if code and name:
-            node = {"code": code, "name": name, "symbols": []}
-            if parent in l2_nodes:
-                l2_nodes[parent]["children"].append(node)
+    for cls in all_classes:
+        if cls.level == 1:
+            l1_nodes[cls.industry_code] = {
+                "code": cls.industry_code,
+                "name": cls.industry_name,
+                "stockCount": 0,
+                "children": [],
+            }
+        elif cls.level == 2:
+            l2_nodes[cls.industry_code] = {
+                "code": cls.industry_code,
+                "name": cls.industry_name,
+                "stockCount": 0,
+                "parent_code": cls.parent_code,
+                "children": [],
+            }
+        elif cls.level == 3:
+            count = member_counts.get(cls.industry_code, 0)
+            l3_nodes[cls.industry_code] = {
+                "code": cls.industry_code,
+                "name": cls.industry_name,
+                "stockCount": count,
+                "parent_code": cls.parent_code,
+                "symbols": symbols_by_code.get(cls.industry_code, []),
+            }
 
-    return list(l1_nodes.values())
+    # Attach L3 to L2
+    for l3 in l3_nodes.values():
+        parent = l3.get("parent_code")
+        if parent and parent in l2_nodes:
+            l2_nodes[parent]["children"].append(l3)
+            l2_nodes[parent]["stockCount"] += l3["stockCount"]
 
+    # Attach L2 to L1
+    for l2 in l2_nodes.values():
+        parent = l2.get("parent_code")
+        if parent and parent in l1_nodes:
+            l1_node = l1_nodes[parent]
+            # Remove parent_code from output
+            l2_out = {k: v for k, v in l2.items() if k != "parent_code"}
+            l1_node["children"].append(l2_out)
+            l1_node["stockCount"] += l2["stockCount"]
 
-def get_sw_industry_tree() -> list[dict]:
-    global _sw_tree_cache
-    if _sw_tree_cache is not None:
-        return _sw_tree_cache
-    return []
+    # Clean parent_code from L3 output
+    for l2 in l2_nodes.values():
+        for child in l2["children"]:
+            child.pop("parent_code", None)
 
+    tree = list(l1_nodes.values())
 
-async def refresh_sw_industry_tree() -> list[dict]:
-    """Load (or reload) the SW tree from TuShare and cache it."""
-    global _sw_tree_cache
-    try:
-        _sw_tree_cache = await _load_sw_tree_from_tushare()
-        logger.info("SW industry tree loaded: %d L1 nodes", len(_sw_tree_cache))
-    except Exception:
-        logger.warning("Failed to load SW industry tree from TuShare", exc_info=True)
-        if _sw_tree_cache is None:
-            _sw_tree_cache = []
-    return _sw_tree_cache
+    if cache and tree:
+        await cache.set(cache_key, tree, _MARKET_CACHE_TTL)
+    return tree
 
 
 # ---------------------------------------------------------------------------
-# SW tree navigation helpers
+# SW tree navigation helpers — DB-backed
 # ---------------------------------------------------------------------------
 
 
-def get_sw_level1(level1_code: str) -> dict | None:
-    tree = get_sw_industry_tree()
-    return next((node for node in tree if node["code"] == level1_code), None)
+async def get_sw_level1(level1_code: str) -> dict | None:
+    """Check if a level-1 industry code exists."""
+    from app.models.sw_industry import SwIndustryClass  # noqa: PLC0415
 
-
-def get_sw_level2(level1_code: str, level2_code: str) -> dict | None:
-    level1 = get_sw_level1(level1_code)
-    if level1 is None:
+    async with async_session_factory() as db:
+        row = (
+            await db.execute(
+                select(SwIndustryClass).where(
+                    SwIndustryClass.industry_code == level1_code,
+                    SwIndustryClass.level == 1,
+                )
+            )
+        ).scalar_one_or_none()
+    if row is None:
         return None
-    return next((node for node in level1["children"] if node["code"] == level2_code), None)
+    return {"code": row.industry_code, "name": row.industry_name}
 
 
-def get_sw_level3(level1_code: str, level2_code: str, level3_code: str) -> dict | None:
-    level2 = get_sw_level2(level1_code, level2_code)
-    if level2 is None:
+async def get_sw_level2(level1_code: str, level2_code: str) -> dict | None:
+    """Check if a level-2 industry code exists under the given level-1."""
+    from app.models.sw_industry import SwIndustryClass  # noqa: PLC0415
+
+    async with async_session_factory() as db:
+        row = (
+            await db.execute(
+                select(SwIndustryClass).where(
+                    SwIndustryClass.industry_code == level2_code,
+                    SwIndustryClass.level == 2,
+                    SwIndustryClass.parent_code == level1_code,
+                )
+            )
+        ).scalar_one_or_none()
+    if row is None:
         return None
-    return next((node for node in level2["children"] if node["code"] == level3_code), None)
+    return {"code": row.industry_code, "name": row.industry_name}
 
 
-def list_symbols_by_level1(level1_code: str) -> list[str]:
-    level1 = get_sw_level1(level1_code)
-    if level1 is None:
-        return []
-    symbols: list[str] = []
-    for level2 in level1["children"]:
-        for level3 in level2["children"]:
-            symbols.extend(level3.get("symbols", []))
-    return symbols
+async def get_sw_level3(
+    level1_code: str, level2_code: str, level3_code: str
+) -> dict | None:
+    """Check if a level-3 industry code exists under the given level-2."""
+    from app.models.sw_industry import SwIndustryClass  # noqa: PLC0415
+
+    async with async_session_factory() as db:
+        row = (
+            await db.execute(
+                select(SwIndustryClass).where(
+                    SwIndustryClass.industry_code == level3_code,
+                    SwIndustryClass.level == 3,
+                    SwIndustryClass.parent_code == level2_code,
+                )
+            )
+        ).scalar_one_or_none()
+    if row is None:
+        return None
+    return {"code": row.industry_code, "name": row.industry_name}
 
 
-def list_symbols_by_level2(level1_code: str, level2_code: str) -> list[str]:
-    level2 = get_sw_level2(level1_code, level2_code)
-    if level2 is None:
-        return []
-    symbols: list[str] = []
-    for level3 in level2["children"]:
-        symbols.extend(level3.get("symbols", []))
-    return symbols
+async def list_symbols_by_level1(level1_code: str) -> list[str]:
+    """Get all member symbols under a level-1 industry."""
+    from app.models.sw_industry import SwIndustryClass, SwIndustryMember  # noqa: PLC0415
+
+    async with async_session_factory() as db:
+        # L1 -> L2 codes -> L3 codes -> members
+        l2_codes = (
+            await db.execute(
+                select(SwIndustryClass.industry_code).where(
+                    SwIndustryClass.parent_code == level1_code,
+                    SwIndustryClass.level == 2,
+                )
+            )
+        ).scalars().all()
+        if not l2_codes:
+            return []
+        l3_codes = (
+            await db.execute(
+                select(SwIndustryClass.industry_code).where(
+                    SwIndustryClass.parent_code.in_(l2_codes),
+                    SwIndustryClass.level == 3,
+                )
+            )
+        ).scalars().all()
+        if not l3_codes:
+            return []
+        symbols = (
+            await db.execute(
+                select(SwIndustryMember.symbol).where(
+                    SwIndustryMember.industry_code.in_(l3_codes)
+                )
+            )
+        ).scalars().all()
+    return list(symbols)
 
 
-def list_symbols_by_level3(level1_code: str, level2_code: str, level3_code: str) -> list[str]:
-    level3 = get_sw_level3(level1_code, level2_code, level3_code)
-    if level3 is None:
-        return []
-    return list(level3.get("symbols", []))
+async def list_symbols_by_level2(level1_code: str, level2_code: str) -> list[str]:
+    """Get all member symbols under a level-2 industry."""
+    from app.models.sw_industry import SwIndustryClass, SwIndustryMember  # noqa: PLC0415
+
+    async with async_session_factory() as db:
+        l3_codes = (
+            await db.execute(
+                select(SwIndustryClass.industry_code).where(
+                    SwIndustryClass.parent_code == level2_code,
+                    SwIndustryClass.level == 3,
+                )
+            )
+        ).scalars().all()
+        if not l3_codes:
+            return []
+        symbols = (
+            await db.execute(
+                select(SwIndustryMember.symbol).where(
+                    SwIndustryMember.industry_code.in_(l3_codes)
+                )
+            )
+        ).scalars().all()
+    return list(symbols)
+
+
+async def list_symbols_by_level3(
+    level1_code: str, level2_code: str, level3_code: str
+) -> list[str]:
+    """Get all member symbols under a level-3 industry."""
+    from app.models.sw_industry import SwIndustryMember  # noqa: PLC0415
+
+    async with async_session_factory() as db:
+        symbols = (
+            await db.execute(
+                select(SwIndustryMember.symbol).where(
+                    SwIndustryMember.industry_code == level3_code
+                )
+            )
+        ).scalars().all()
+    return list(symbols)
 
 
 async def list_stocks_by_symbols(db: AsyncSession, symbols: list[str]) -> list[StockOut]:

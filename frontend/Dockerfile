@@ -10,7 +10,8 @@ ENV HTTP_PROXY="" \
     no_proxy="*"
 
 COPY package.json package-lock.json ./
-RUN npm ci --include=optional \
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --include=optional \
     && npm i @rollup/rollup-linux-x64-gnu --no-save
 
 COPY . .
