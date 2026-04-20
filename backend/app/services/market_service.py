@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 HotBoardCategory = Literal["industry", "concept", "region"]
 
 _MARKET_CACHE_TTL = 300  # 5 minutes
+_SW_OTHER_LEVEL1_CODE = "OTHER"
+_SW_OTHER_LEVEL1_NAME = "其他"
 
 # ---------------------------------------------------------------------------
 # Target index codes for the main dashboard
@@ -497,22 +499,47 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
         )
         all_classes = classes_result.scalars().all()
 
-        # Count members per L3 industry code
+        # Count members per L3 industry code (only symbols existing in stocks)
         member_counts_result = await db.execute(
             select(
-                SwIndustryMember.industry_code,
+                SwIndustryMember.industry_code.label("industry_code"),
                 func.count().label("cnt"),
-            ).group_by(SwIndustryMember.industry_code)
+            )
+            .join(Stock, Stock.symbol == SwIndustryMember.symbol)
+            .group_by(SwIndustryMember.industry_code)
         )
         member_counts = {row.industry_code: row.cnt for row in member_counts_result}
 
-        # Collect L3 symbols per industry code
+        # Collect L3 symbols per industry code (only symbols existing in stocks)
         symbols_result = await db.execute(
             select(SwIndustryMember.industry_code, SwIndustryMember.symbol)
+            .join(Stock, Stock.symbol == SwIndustryMember.symbol)
         )
         symbols_by_code: dict[str, list[str]] = {}
         for row in symbols_result:
             symbols_by_code.setdefault(row.industry_code, []).append(row.symbol)
+
+        # Symbols that do not map to any valid L3 industry should go to "其他"
+        categorized_symbols_subq = (
+            select(SwIndustryMember.symbol)
+            .join(
+                SwIndustryClass,
+                SwIndustryClass.industry_code == SwIndustryMember.industry_code,
+            )
+            .where(SwIndustryClass.level == 3)
+            .distinct()
+            .subquery()
+        )
+        uncategorized_result = await db.execute(
+            select(Stock.symbol)
+            .outerjoin(
+                categorized_symbols_subq,
+                categorized_symbols_subq.c.symbol == Stock.symbol,
+            )
+            .where(categorized_symbols_subq.c.symbol.is_(None))
+            .order_by(Stock.exchange, Stock.symbol)
+        )
+        uncategorized_symbols = list(uncategorized_result.scalars().all())
 
     # Build tree from flat list
     l1_nodes: dict[str, dict] = {}
@@ -568,6 +595,15 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
             child.pop("parent_code", None)
 
     tree = list(l1_nodes.values())
+    if uncategorized_symbols:
+        tree.append(
+            {
+                "code": _SW_OTHER_LEVEL1_CODE,
+                "name": _SW_OTHER_LEVEL1_NAME,
+                "stockCount": len(uncategorized_symbols),
+                "children": [],
+            }
+        )
 
     if cache and tree:
         await cache.set(cache_key, tree, _MARKET_CACHE_TTL)
@@ -582,6 +618,9 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
 async def get_sw_level1(level1_code: str) -> dict | None:
     """Check if a level-1 industry code exists."""
     from app.models.sw_industry import SwIndustryClass  # noqa: PLC0415
+
+    if level1_code == _SW_OTHER_LEVEL1_CODE:
+        return {"code": _SW_OTHER_LEVEL1_CODE, "name": _SW_OTHER_LEVEL1_NAME}
 
     async with async_session_factory() as db:
         row = (
@@ -642,6 +681,30 @@ async def list_symbols_by_level1(level1_code: str) -> list[str]:
     from app.models.sw_industry import SwIndustryClass, SwIndustryMember  # noqa: PLC0415
 
     async with async_session_factory() as db:
+        if level1_code == _SW_OTHER_LEVEL1_CODE:
+            categorized_symbols_subq = (
+                select(SwIndustryMember.symbol)
+                .join(
+                    SwIndustryClass,
+                    SwIndustryClass.industry_code == SwIndustryMember.industry_code,
+                )
+                .where(SwIndustryClass.level == 3)
+                .distinct()
+                .subquery()
+            )
+            uncategorized = (
+                await db.execute(
+                    select(Stock.symbol)
+                    .outerjoin(
+                        categorized_symbols_subq,
+                        categorized_symbols_subq.c.symbol == Stock.symbol,
+                    )
+                    .where(categorized_symbols_subq.c.symbol.is_(None))
+                    .order_by(Stock.exchange, Stock.symbol)
+                )
+            ).scalars().all()
+            return list(uncategorized)
+
         # L1 -> L2 codes -> L3 codes -> members
         l2_codes = (
             await db.execute(
@@ -665,7 +728,9 @@ async def list_symbols_by_level1(level1_code: str) -> list[str]:
             return []
         symbols = (
             await db.execute(
-                select(SwIndustryMember.symbol).where(
+                select(SwIndustryMember.symbol)
+                .join(Stock, Stock.symbol == SwIndustryMember.symbol)
+                .where(
                     SwIndustryMember.industry_code.in_(l3_codes)
                 )
             )
@@ -690,7 +755,9 @@ async def list_symbols_by_level2(level1_code: str, level2_code: str) -> list[str
             return []
         symbols = (
             await db.execute(
-                select(SwIndustryMember.symbol).where(
+                select(SwIndustryMember.symbol)
+                .join(Stock, Stock.symbol == SwIndustryMember.symbol)
+                .where(
                     SwIndustryMember.industry_code.in_(l3_codes)
                 )
             )
@@ -707,7 +774,9 @@ async def list_symbols_by_level3(
     async with async_session_factory() as db:
         symbols = (
             await db.execute(
-                select(SwIndustryMember.symbol).where(
+                select(SwIndustryMember.symbol)
+                .join(Stock, Stock.symbol == SwIndustryMember.symbol)
+                .where(
                     SwIndustryMember.industry_code == level3_code
                 )
             )
