@@ -15,11 +15,12 @@ export function SearchBar() {
     return () => window.clearTimeout(timer);
   }, [keyword]);
 
-  const { data: candidates = [] } = useQuery({
+  const { data: candidatesResponse } = useQuery({
     queryKey: ["search-stocks", debouncedKeyword],
     queryFn: () => fetchStocksMerged({ keyword: debouncedKeyword, page_size: 30 }),
     enabled: debouncedKeyword.length > 0,
   });
+  const candidates = candidatesResponse?.items ?? [];
 
   const options = useMemo(() => {
     if (!debouncedKeyword) return [];

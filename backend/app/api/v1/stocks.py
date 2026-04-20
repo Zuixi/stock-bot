@@ -1,6 +1,8 @@
 """Stock + quotes + features endpoints.
 
-All paths are under /api/v1/exchanges/{exchange}/stocks.
+Routes include exchange metadata under ``/api/v1/exchanges``,
+cross-exchange stock listing under ``/api/v1/exchanges/stocks``,
+and per-exchange stock resources under ``/api/v1/exchanges/{exchange}/stocks``.
 """
 
 from datetime import date
@@ -38,6 +40,25 @@ async def list_categories(
     """List stock categories, optionally filtered by exchange."""
     rows = await stock_service.list_categories(db, cache, exchange)
     return [r.model_dump() for r in rows]
+
+
+@router.get("/stocks", response_model=PagedResponse[StockOut])
+async def list_stocks_all_exchanges(
+    db: DbDep,
+    cache: CacheDep,
+    exchange: str | None = None,
+    category: str | None = None,
+    keyword: str | None = None,
+    page: int = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 20,
+) -> PagedResponse[StockOut]:
+    """List stocks across all exchanges (optionally filtered by exchange)."""
+    params = StockListParams(
+        exchange=exchange, category=category, keyword=keyword
+    )
+    page_params = PageParams(page=page, page_size=page_size)
+    items, total = await stock_service.list_stocks(db, cache, params, page_params)
+    return PagedResponse.build(items=items, total=total, params=page_params)
 
 
 # ── /api/v1/exchanges/{exchange}/stocks ──────────────────────────────────────
