@@ -3,7 +3,8 @@ FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/ghcr.io/astral-sh/uv:python3.13-al
 
 WORKDIR /app
 
-ENV UV_DEFAULT_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple" \
+ARG UV_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"
+ENV UV_DEFAULT_INDEX="${UV_INDEX}" \
     UV_HTTP_TIMEOUT="120" \
     UV_LINK_MODE="copy"
 

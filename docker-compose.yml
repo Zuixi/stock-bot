@@ -148,6 +148,27 @@ services:
       - ./data:/app/data
     command: ["python", "-m", "app.workers.runner"]
 
+  # ---- scheduler (SSE index snapshot collection) ----
+  scheduler:
+    image: stock-bot-backend:local
+    build:
+      <<: *backend-build
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@postgres:5432/stock_bot
+      REDIS_URL: redis://redis:6379/0
+    dns:
+      - 8.8.8.8
+      - 223.5.5.5
+    container_name: scheduler
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "app.scheduler.runner"]
+
   # ---- frontend ----
   frontend:
     build:

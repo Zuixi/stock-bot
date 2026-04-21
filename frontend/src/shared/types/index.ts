@@ -76,3 +76,29 @@ export interface SectorSummary {
   stockCount: number;
   topStocks: Pick<StockRecord, "symbol" | "name" | "changePercent">[];
 }
+
+export interface SseSnapshot {
+  code: string;
+  name: string;
+  last: number;
+  prev_close: number | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  chg_rate: number | null;
+  collect_time: string;
+  trade_date: string;
+}
+
+export interface SseIntradayPoint {
+  time: string;
+  last: number;
+  chg_rate: number | null;
+}
+
+export interface SseIntradayResponse {
+  code: string;
+  name: string;
+  trade_date: string;
+  data: SseIntradayPoint[];
+}
