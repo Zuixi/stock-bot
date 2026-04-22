@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from typing import Any
 
@@ -48,6 +49,7 @@ class TuShareClient:
         self._pro = ts.pro_api(token)
         self._max_retries = max(1, max_retries)
         self._last_request_time: float = 0.0
+        self._query_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Low-level query with retry + rate-limiting
@@ -56,15 +58,18 @@ class TuShareClient:
     def _query_sync(self, api_name: str, fields: str = "", **kwargs: Any) -> pd.DataFrame:
         """Call a TuShare Pro API with retry and inter-request throttling."""
         for attempt in range(1, self._max_retries + 1):
-            elapsed = time.monotonic() - self._last_request_time
-            if elapsed < _REQUEST_INTERVAL:
-                time.sleep(_REQUEST_INTERVAL - elapsed)
             try:
-                self._last_request_time = time.monotonic()
-                if fields:
-                    df = self._pro.query(api_name, fields=fields, **kwargs)
-                else:
-                    df = self._pro.query(api_name, **kwargs)
+                # Keep throttle + query in one critical section to avoid
+                # concurrent threads bypassing the global request interval.
+                with self._query_lock:
+                    elapsed = time.monotonic() - self._last_request_time
+                    if elapsed < _REQUEST_INTERVAL:
+                        time.sleep(_REQUEST_INTERVAL - elapsed)
+                    self._last_request_time = time.monotonic()
+                    if fields:
+                        df = self._pro.query(api_name, fields=fields, **kwargs)
+                    else:
+                        df = self._pro.query(api_name, **kwargs)
                 if df is not None:
                     return df
                 return pd.DataFrame()
