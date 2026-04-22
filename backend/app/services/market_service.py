@@ -32,6 +32,7 @@ HotBoardCategory = Literal["industry", "concept", "region"]
 _MARKET_CACHE_TTL = 300  # 5 minutes
 _SW_OTHER_LEVEL1_CODE = "OTHER"
 _SW_OTHER_LEVEL1_NAME = "其他"
+_SW_OTHER_UNKNOWN_INDUSTRY = "未知行业"
 
 # ---------------------------------------------------------------------------
 # Target index codes for the main dashboard
@@ -530,8 +531,9 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
             .distinct()
             .subquery()
         )
+        effective_industry = func.coalesce(Stock.industry, Stock.csrc_desc)
         uncategorized_result = await db.execute(
-            select(Stock.symbol)
+            select(Stock.symbol, effective_industry.label("eff_industry"))
             .outerjoin(
                 categorized_symbols_subq,
                 categorized_symbols_subq.c.symbol == Stock.symbol,
@@ -539,7 +541,14 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
             .where(categorized_symbols_subq.c.symbol.is_(None))
             .order_by(Stock.exchange, Stock.symbol)
         )
-        uncategorized_symbols = list(uncategorized_result.scalars().all())
+        uncategorized_rows = list(uncategorized_result.all())
+        uncategorized_symbols = [r.symbol for r in uncategorized_rows]
+
+        # Group uncategorized symbols by effective industry (industry or csrc_desc)
+        industry_groups: dict[str, list[str]] = {}
+        for row in uncategorized_rows:
+            key = row.eff_industry or _SW_OTHER_UNKNOWN_INDUSTRY
+            industry_groups.setdefault(key, []).append(row.symbol)
 
     # Build tree from flat list
     l1_nodes: dict[str, dict] = {}
@@ -596,12 +605,21 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
 
     tree = list(l1_nodes.values())
     if uncategorized_symbols:
+        other_children = [
+            {
+                "code": f"OTHER_{name}",
+                "name": name,
+                "stockCount": len(syms),
+                "children": [],
+            }
+            for name, syms in sorted(industry_groups.items())
+        ]
         tree.append(
             {
                 "code": _SW_OTHER_LEVEL1_CODE,
                 "name": _SW_OTHER_LEVEL1_NAME,
                 "stockCount": len(uncategorized_symbols),
-                "children": [],
+                "children": other_children,
             }
         )
 
@@ -781,6 +799,69 @@ async def list_symbols_by_level3(
                 )
             )
         ).scalars().all()
+    return list(symbols)
+
+
+def _uncategorized_symbols_subquery():
+    """Shared subquery for uncategorized (OTHER) symbols."""
+    from app.models.sw_industry import SwIndustryClass, SwIndustryMember  # noqa: PLC0415
+
+    return (
+        select(SwIndustryMember.symbol)
+        .join(
+            SwIndustryClass,
+            SwIndustryClass.industry_code == SwIndustryMember.industry_code,
+        )
+        .where(SwIndustryClass.level == 3)
+        .distinct()
+        .subquery()
+    )
+
+
+def _effective_industry():
+    """COALESCE(industry, csrc_desc) — the best available industry value."""
+    return func.coalesce(Stock.industry, Stock.csrc_desc)
+
+
+async def get_sw_other_level2(industry_name: str) -> dict | None:
+    """Check if an OTHER sub-group exists by industry name."""
+    categorized_subq = _uncategorized_symbols_subquery()
+    eff = _effective_industry()
+    async with async_session_factory() as db:
+        stmt = (
+            select(func.count())
+            .select_from(Stock)
+            .outerjoin(categorized_subq, categorized_subq.c.symbol == Stock.symbol)
+            .where(categorized_subq.c.symbol.is_(None))
+        )
+        if industry_name == _SW_OTHER_UNKNOWN_INDUSTRY:
+            stmt = stmt.where(eff.is_(None))
+        else:
+            stmt = stmt.where(eff == industry_name)
+
+        cnt = (await db.execute(stmt)).scalar_one()
+    if cnt == 0:
+        return None
+    return {"code": f"OTHER_{industry_name}", "name": industry_name}
+
+
+async def list_symbols_by_other_level2(industry_name: str) -> list[str]:
+    """Get symbols in the OTHER L1 filtered by effective industry."""
+    categorized_subq = _uncategorized_symbols_subquery()
+    eff = _effective_industry()
+
+    async with async_session_factory() as db:
+        stmt = (
+            select(Stock.symbol)
+            .outerjoin(categorized_subq, categorized_subq.c.symbol == Stock.symbol)
+            .where(categorized_subq.c.symbol.is_(None))
+        )
+        if industry_name == _SW_OTHER_UNKNOWN_INDUSTRY:
+            stmt = stmt.where(eff.is_(None))
+        else:
+            stmt = stmt.where(eff == industry_name)
+
+        symbols = (await db.execute(stmt.order_by(Stock.symbol))).scalars().all()
     return list(symbols)
 
 

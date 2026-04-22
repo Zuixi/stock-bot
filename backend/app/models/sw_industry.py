@@ -7,6 +7,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 
+# ---------------------------------------------------------------------------
+# Official SW classification
+# ---------------------------------------------------------------------------
+
 
 class SwIndustryClass(Base):
     """Three-level Shenwan industry classification tree node."""
@@ -45,4 +49,27 @@ class SwIndustryMember(Base):
     stock_name: Mapped[str | None] = mapped_column(String(64))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+# ---------------------------------------------------------------------------
+# User-defined custom SW tags per stock
+# ---------------------------------------------------------------------------
+
+
+class StockCustomSwTag(Base):
+    """User-assigned SW L2/L3 industry tags for a stock (many-to-many)."""
+
+    __tablename__ = "stock_custom_sw_tags"
+    __table_args__ = (
+        UniqueConstraint("symbol", "industry_code", name="uq_custom_sw_tag"),
+        Index("idx_custom_sw_tag_symbol", "symbol"),
+        Index("idx_custom_sw_tag_code", "industry_code"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False)
+    industry_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )

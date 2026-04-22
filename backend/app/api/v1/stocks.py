@@ -8,7 +8,7 @@ and per-exchange stock resources under ``/api/v1/exchanges/{exchange}/stocks``.
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.deps import CacheDep, DbDep
 from app.core.exceptions import not_found_response
@@ -16,7 +16,7 @@ from app.schemas.common import PageParams, PagedResponse
 from app.schemas.feature import RadarChartData, StockFeatureOut
 from app.schemas.quote import KlineResponse, LatestQuoteOut
 from app.schemas.stock import StockOut, StockListParams
-from app.services import feature_service, quote_service, stock_service
+from app.services import feature_service, quote_service, stock_service, stock_tag_service
 
 router = APIRouter()
 stocks_router = APIRouter()
@@ -157,4 +157,28 @@ async def get_radar(
     )
     if result is None:
         raise not_found_response("Feature", f"{exchange}/{symbol}")
+    return result
+
+
+# ── /api/v1/exchanges/{exchange}/stocks/{symbol}/sw-tags ─────────────────────
+
+@stocks_router.get("/{symbol}/sw-tags", response_model=list[dict])
+async def get_sw_tags(exchange: str, symbol: str, db: DbDep) -> list[dict]:
+    """Get user-defined SW industry tags for a stock."""
+    return await stock_tag_service.get_custom_sw_tags(db, symbol)
+
+
+@stocks_router.put("/{symbol}/sw-tags", response_model=list[dict])
+async def set_sw_tags(
+    exchange: str,
+    symbol: str,
+    db: DbDep,
+    industry_codes: Annotated[list[str], Body(embed=True)],
+) -> list[dict]:
+    """Replace all custom SW industry tags for a stock."""
+    try:
+        result = await stock_tag_service.set_custom_sw_tags(db, symbol, industry_codes)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await db.commit()
     return result

@@ -6,7 +6,7 @@ from app.models.index_daily import IndexDaily
 from app.models.quote import DailyQuote
 from app.models.sse_index_snapshot import SseIndexSnapshot
 from app.models.stock import Stock, StockHistory
-from app.models.sw_industry import SwIndustryClass, SwIndustryMember
+from app.models.sw_industry import StockCustomSwTag, SwIndustryClass, SwIndustryMember
 from app.models.task import Task
 
 __all__ = [
@@ -21,5 +21,6 @@ __all__ = [
     "ClusterExplanation",
     "SwIndustryClass",
     "SwIndustryMember",
+    "StockCustomSwTag",
     "Task",
 ]

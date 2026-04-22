@@ -102,3 +102,19 @@ export interface SseIntradayResponse {
   trade_date: string;
   data: SseIntradayPoint[];
 }
+
+// ---------------------------------------------------------------------------
+// SW custom tags
+// ---------------------------------------------------------------------------
+
+export interface SwTagOption {
+  code: string;
+  name: string;
+  parentCode?: string;
+}
+
+export interface StockSwTag {
+  industryCode: string;
+  industryName: string;
+  level: number;
+}
