@@ -16,7 +16,7 @@ from app.schemas.sse_index import (
     SseSnapshotOut,
 )
 from app.schemas.stock import StockOut
-from app.services import market_service
+from app.services import market_service, stock_tag_service
 
 router = APIRouter()
 
@@ -75,6 +75,15 @@ async def get_sw_industry_tree(cache: CacheDep) -> list[dict]:
     return await market_service.get_sw_industry_tree(cache=cache)
 
 
+@router.get("/sw-industry/options", response_model=list[dict])
+async def get_sw_industry_options(
+    db: DbDep,
+    level: int = Query(ge=2, le=3, description="SW industry level (2 or 3)"),
+) -> list[dict]:
+    """Return SW industry nodes at the given level for dropdown selection."""
+    return await stock_tag_service.list_sw_options(db, level)
+
+
 @router.get("/sw-industry/{level1_code}/stocks", response_model=list[StockOut])
 async def get_sw_level1_stocks(level1_code: str, db: DbDep) -> list[StockOut]:
     if await market_service.get_sw_level1(level1_code) is None:
@@ -85,6 +94,14 @@ async def get_sw_level1_stocks(level1_code: str, db: DbDep) -> list[StockOut]:
 
 @router.get("/sw-industry/{level1_code}/{level2_code}/stocks", response_model=list[StockOut])
 async def get_sw_level2_stocks(level1_code: str, level2_code: str, db: DbDep) -> list[StockOut]:
+    if level1_code == "OTHER" and level2_code.startswith("OTHER_"):
+        industry_name = level2_code[len("OTHER_"):]
+        info = await market_service.get_sw_other_level2(industry_name)
+        if info is None:
+            raise not_found_response("SW OTHER level2", level2_code)
+        symbols = await market_service.list_symbols_by_other_level2(industry_name)
+        return await market_service.list_stocks_by_symbols(db, symbols)
+
     if await market_service.get_sw_level2(level1_code, level2_code) is None:
         raise not_found_response("SW level2", f"{level1_code}/{level2_code}")
     symbols = await market_service.list_symbols_by_level2(level1_code, level2_code)

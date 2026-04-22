@@ -1,6 +1,6 @@
-import { apiGet } from "./client";
+import { apiGet, apiPut } from "./client";
 import { mapBackendStock, type BackendStock } from "./stocks";
-import type { StockRecord } from "@/shared/types";
+import type { StockRecord, SwTagOption, StockSwTag } from "@/shared/types";
 
 export interface SwIndustryLevel3 {
   code: string;
@@ -48,4 +48,27 @@ export async function fetchSwLevel3Stocks(
     `/api/v1/market/sw-industry/${level1Code}/${level2Code}/${level3Code}/stocks`
   );
   return rows.map(mapBackendStock);
+}
+
+// ---------------------------------------------------------------------------
+// SW industry options & custom tags
+// ---------------------------------------------------------------------------
+
+export function fetchSwOptions(level: 2 | 3): Promise<SwTagOption[]> {
+  return apiGet<SwTagOption[]>("/api/v1/market/sw-industry/options", { level });
+}
+
+export function fetchStockSwTags(exchange: string, symbol: string): Promise<StockSwTag[]> {
+  return apiGet<StockSwTag[]>(`/api/v1/exchanges/${exchange}/stocks/${symbol}/sw-tags`);
+}
+
+export function updateStockSwTags(
+  exchange: string,
+  symbol: string,
+  industryCodes: string[]
+): Promise<StockSwTag[]> {
+  return apiPut<StockSwTag[]>(
+    `/api/v1/exchanges/${exchange}/stocks/${symbol}/sw-tags`,
+    { industry_codes: industryCodes }
+  );
 }
