@@ -10,15 +10,13 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.providers.tushare_client import (
     EXCHANGE_TO_TUSHARE,
-    TUSHARE_TO_EXCHANGE,
     TuShareClient,
     get_tushare_client,
 )
@@ -70,6 +68,15 @@ def _ts_code_to_exchange(ts_code: str) -> str:
 def _ts_code_to_symbol(ts_code: str) -> str:
     """Extract numeric symbol from ts_code like '000001.SZ' -> '000001'."""
     return ts_code.split(".")[0] if "." in ts_code else ts_code
+
+
+def _stock_to_ts_code(exchange: str, symbol: str) -> str:
+    suffix_map = {
+        "Shanghai_Stocks": ".SH",
+        "Shenzen_Stocks": ".SZ",
+        "Beijing_Stocks": ".BJ",
+    }
+    return f"{symbol}{suffix_map.get(exchange, '')}"
 
 
 class TuShareIngestService:
@@ -332,6 +339,148 @@ class TuShareIngestService:
             "upserted": upserted,
             "skipped": skipped,
             "trade_date": trade_date,
+        }
+
+    async def list_stocks_missing_daily_coverage(
+        self,
+        db: AsyncSession,
+        *,
+        years: int = 3,
+        asof_date: date | None = None,
+        tolerance_days: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Return stocks that do not cover the target trailing window."""
+        from app.repositories import quote_repo  # noqa: PLC0415
+
+        if asof_date is None:
+            asof_date = date.today()
+        window_start = asof_date - timedelta(days=365 * years)
+
+        stocks = await stock_repo.list_all_stocks(db)
+        if not stocks:
+            return []
+
+        stock_ids = [s.id for s in stocks]
+        bounds_map = await quote_repo.get_trade_date_bounds_for_stocks(
+            db,
+            stock_ids=stock_ids,
+            start_date=window_start,
+            end_date=asof_date,
+        )
+
+        missing: list[dict[str, Any]] = []
+        for stock in stocks:
+            expected_start = max(stock.list_date or window_start, window_start)
+            if expected_start > asof_date:
+                continue
+
+            bounds = bounds_map.get(stock.id)
+            if bounds is None:
+                missing.append(
+                    {
+                        "stock_id": stock.id,
+                        "exchange": stock.exchange,
+                        "symbol": stock.symbol,
+                        "expected_start": expected_start,
+                        "asof_date": asof_date,
+                        "reason": "no_data",
+                    }
+                )
+                continue
+
+            min_date, max_date, row_count = bounds
+            start_gap = (min_date - expected_start).days
+            end_gap = (asof_date - max_date).days
+            if start_gap > tolerance_days or end_gap > tolerance_days or row_count <= 0:
+                missing.append(
+                    {
+                        "stock_id": stock.id,
+                        "exchange": stock.exchange,
+                        "symbol": stock.symbol,
+                        "expected_start": expected_start,
+                        "asof_date": asof_date,
+                        "reason": "gap",
+                        "current_min": min_date,
+                        "current_max": max_date,
+                        "row_count": row_count,
+                    }
+                )
+        return missing
+
+    async def ingest_daily_quotes_for_stock(
+        self,
+        db: AsyncSession,
+        *,
+        stock_id: int,
+        exchange: str,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+        save_raw: bool = False,
+    ) -> dict[str, Any]:
+        """Fetch one stock's daily data for a date range and upsert."""
+        from app.models.quote import DailyQuote  # noqa: PLC0415
+        from app.repositories import quote_repo  # noqa: PLC0415
+
+        ts_code = _stock_to_ts_code(exchange, symbol)
+        if not ts_code.endswith((".SH", ".SZ", ".BJ")):
+            return {"stock_id": stock_id, "symbol": symbol, "upserted": 0, "saved": 0}
+
+        start_str = start_date.strftime("%Y%m%d")
+        end_str = end_date.strftime("%Y%m%d")
+        df = await self.client.fetch_daily(ts_code=ts_code, start_date=start_str, end_date=end_str)
+
+        if df.empty:
+            return {"stock_id": stock_id, "symbol": symbol, "upserted": 0, "saved": 0}
+
+        if save_raw:
+            await self.saver.save_dataframe(
+                "daily",
+                df,
+                {"ts_code": ts_code, "start_date": start_str, "end_date": end_str},
+                exchange=ts_code.replace(".", "_"),
+            )
+
+        quotes: list[DailyQuote] = []
+        skipped = 0
+        for row in df.to_dict("records"):
+            td_str = str(row.get("trade_date", "")).strip()
+            if len(td_str) != 8:
+                skipped += 1
+                continue
+            parsed_date = datetime.strptime(td_str, "%Y%m%d").date()
+            close_val = _to_builtin(row.get("close"))
+            if close_val is None:
+                skipped += 1
+                continue
+
+            quotes.append(
+                DailyQuote(
+                    stock_id=stock_id,
+                    trade_date=parsed_date,
+                    open=_to_builtin(row.get("open")),
+                    high=_to_builtin(row.get("high")),
+                    low=_to_builtin(row.get("low")),
+                    close=close_val,
+                    volume=_to_builtin(row.get("vol")),
+                    amount=_to_builtin(row.get("amount")),
+                    adj_factor=None,
+                    source="tushare:daily",
+                )
+            )
+
+        upserted = 0
+        batch_size = 500
+        for i in range(0, len(quotes), batch_size):
+            upserted += await quote_repo.upsert_quotes(db, quotes[i : i + batch_size])
+
+        return {
+            "stock_id": stock_id,
+            "symbol": symbol,
+            "ts_code": ts_code,
+            "saved": len(df),
+            "skipped": skipped,
+            "upserted": upserted,
         }
 
     # ------------------------------------------------------------------

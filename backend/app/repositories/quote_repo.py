@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.quote import DailyQuote
@@ -36,6 +36,41 @@ async def get_latest_quote(db: AsyncSession, stock_id: int) -> DailyQuote | None
     )
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def get_trade_date_bounds_for_stocks(
+    db: AsyncSession,
+    stock_ids: list[int],
+    start_date: date,
+    end_date: date,
+) -> dict[int, tuple[date, date, int]]:
+    """Return min/max trade_date and row count for each stock_id in date range."""
+    if not stock_ids:
+        return {}
+
+    stmt = (
+        select(
+            DailyQuote.stock_id,
+            func.min(DailyQuote.trade_date).label("min_date"),
+            func.max(DailyQuote.trade_date).label("max_date"),
+            func.count().label("row_count"),
+        )
+        .where(
+            DailyQuote.stock_id.in_(stock_ids),
+            DailyQuote.trade_date >= start_date,
+            DailyQuote.trade_date <= end_date,
+        )
+        .group_by(DailyQuote.stock_id)
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    data: dict[int, tuple[date, date, int]] = {}
+    for row in rows:
+        if row.min_date is None or row.max_date is None:
+            continue
+        data[row.stock_id] = (row.min_date, row.max_date, int(row.row_count))
+    return data
 
 
 async def upsert_quotes(db: AsyncSession, quotes: list[DailyQuote]) -> int:

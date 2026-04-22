@@ -52,6 +52,12 @@ async def list_exchanges(db: AsyncSession) -> list[str]:
     return list(result.scalars().all())
 
 
+async def list_all_stocks(db: AsyncSession) -> list[Stock]:
+    """Return all stocks for background backfill checks."""
+    result = await db.execute(select(Stock).order_by(Stock.id))
+    return list(result.scalars().all())
+
+
 async def list_categories(
     db: AsyncSession, exchange: str | None = None
 ) -> list[tuple[str, str, int]]:
