@@ -173,6 +173,7 @@ async def set_sw_tags(
     exchange: str,
     symbol: str,
     db: DbDep,
+    cache: CacheDep,
     industry_codes: Annotated[list[str], Body(embed=True)],
 ) -> list[dict]:
     """Replace all custom SW industry tags for a stock."""
@@ -181,4 +182,5 @@ async def set_sw_tags(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await db.commit()
+    await cache.delete("market:sw-tree")
     return result
