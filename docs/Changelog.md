@@ -1,5 +1,5 @@
 # Project Changelog
-项目所有重大更新必须记录在这里，采用如下形式：
+项目所有重大更新必须记录在这里，补充在文档最后面，采用如下形式：
 ```markdown
 ## {{日期}} - {{更新模块}}
 - 一句话总结更新的内容
@@ -42,3 +42,15 @@
 ## 2026-04-22 - 股票自定义申万分类标签
 - 新增 stock_custom_sw_tags 表支持每只股票自定义多个 SW 二级/三级行业标签；"其他"一级行业按股票自带 industry 字段自动分组为二级子分类；股票详情页新增分类标签展示与编辑功能。
 - 涉及模块：backend/models、backend/services、backend/api、backend/migrations、frontend/shared/api、frontend/shared/types、frontend/features/stock-detail、frontend/pages/market-industry-level2、frontend/pages/stock-detail
+
+## 2026-04-23 - 申万“其他”二级下钻交互统一
+- 修复申万“其他”一级分类下二级卡片点击行为与其余分类不一致的问题，统一为路由下钻到独立详情页，避免在一级页内混合展示子分组个股。
+- 涉及模块：frontend/pages/market-industry-level2、docs
+
+## 2026-04-23 - 自定义申万三级联动修正
+- 修正股票详情“编辑自定义申万分类”弹窗联动失效问题：三级下拉严格按已选二级实时过滤，未选二级时禁用三级下拉并提示“请先选择二级行业”。
+- 涉及模块：frontend/features/stock-detail、docs
+
+## 2026-04-23 - 自定义申万标签与行业详情联动修复
+- 修复行业详情页未包含股票自定义申万二/三级标签的问题：行业树统计、层级个股列表与 OTHER 兜底口径统一合并官方成分与自定义标签。
+- 涉及模块：backend/services/market、docs

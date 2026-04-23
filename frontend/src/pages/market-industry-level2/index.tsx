@@ -5,11 +5,7 @@ import type { TableProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { StockTable } from "@/features/market/components/StockTable";
 import type { StockRecord } from "@/shared/types";
-import {
-  fetchSwIndustryTree,
-  fetchSwLevel1Stocks,
-  fetchSwLevel2Stocks,
-} from "@/shared/api/swIndustry";
+import { fetchSwIndustryTree, fetchSwLevel1Stocks } from "@/shared/api/swIndustry";
 
 type SortState = {
   sortBy?: keyof StockRecord;
@@ -31,9 +27,7 @@ function applySort(stocks: StockRecord[], sort: SortState): StockRecord[] {
 export default function IndustryLevel2Page() {
   const navigate = useNavigate();
   const { level1Code = "" } = useParams();
-  const isOther = level1Code === "OTHER";
   const [sort, setSort] = useState<SortState>({ sortBy: "symbol", sortOrder: "asc" });
-  const [selectedOtherL2, setSelectedOtherL2] = useState<string | undefined>();
 
   const { data: tree = [], isLoading: treeLoading } = useQuery({
     queryKey: ["sw-industry-tree"],
@@ -45,18 +39,9 @@ export default function IndustryLevel2Page() {
     enabled: Boolean(level1Code),
   });
 
-  const { data: otherL2Stocks = [], isLoading: otherL2Loading } = useQuery({
-    queryKey: ["sw-level2-stocks", level1Code, selectedOtherL2],
-    queryFn: () => fetchSwLevel2Stocks(level1Code, selectedOtherL2!),
-    enabled: isOther && Boolean(selectedOtherL2),
-  });
-
   const level1 = useMemo(() => tree.find((node) => node.code === level1Code), [tree, level1Code]);
 
-  const displayStocks = useMemo(() => {
-    const source = isOther && selectedOtherL2 ? otherL2Stocks : level1Stocks;
-    return applySort(source, sort);
-  }, [isOther, selectedOtherL2, otherL2Stocks, level1Stocks, sort]);
+  const displayStocks = useMemo(() => applySort(level1Stocks, sort), [level1Stocks, sort]);
 
   const onTableChange: TableProps<StockRecord>["onChange"] = (_pagination, _filters, sorter) => {
     if (!Array.isArray(sorter) && sorter.field) {
@@ -76,11 +61,7 @@ export default function IndustryLevel2Page() {
   }
 
   const handleL2Click = (l2Code: string) => {
-    if (isOther) {
-      setSelectedOtherL2((prev) => (prev === l2Code ? undefined : l2Code));
-    } else {
-      navigate(`/market/industry/${level1.code}/${l2Code}`);
-    }
+    navigate(`/market/industry/${level1.code}/${l2Code}`);
   };
 
   return (
@@ -94,11 +75,11 @@ export default function IndustryLevel2Page() {
       />
 
       <Card
-        title={`${level1.name} · ${isOther ? "行业子分组（按股票自带行业）" : "二级行业"}`}
+        title={`${level1.name} · 二级行业`}
         size="small"
         extra={
           <Typography.Text type="secondary">
-            {isOther ? "点击子分组查看该分组个股" : "点击二级行业进入三级页面"}
+            点击二级行业进入详情页面
           </Typography.Text>
         }
       >
@@ -112,23 +93,14 @@ export default function IndustryLevel2Page() {
                   hoverable
                   size="small"
                   onClick={() => handleL2Click(level2.code)}
-                  style={
-                    isOther && selectedOtherL2 === level2.code
-                      ? { borderColor: "#1677ff" }
-                      : undefined
-                  }
                 >
                   <Space direction="vertical" size={4} style={{ width: "100%" }}>
                     <Typography.Text strong>{level2.name}</Typography.Text>
                     <Space size={8}>
-                      <Tag color={isOther ? "orange" : "blue"}>
-                        {level2.stockCount} 只个股
-                      </Tag>
-                      {!isOther && (
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          {level2.children.length} 个三级行业
-                        </Typography.Text>
-                      )}
+                      <Tag color="blue">{level2.stockCount} 只个股</Tag>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {level2.children.length} 个三级行业
+                      </Typography.Text>
                     </Space>
                   </Space>
                 </Card>
@@ -139,23 +111,11 @@ export default function IndustryLevel2Page() {
       </Card>
 
       <Card
-        title={
-          isOther && selectedOtherL2
-            ? `${level1.children.find((c) => c.code === selectedOtherL2)?.name ?? "子分组"} · 个股最新信息`
-            : `${level1.name} · 个股最新信息`
-        }
+        title={`${level1.name} · 个股最新信息`}
         size="small"
-        extra={
-          <Tag color={isOther && selectedOtherL2 ? "orange" : "blue"}>
-            {isOther && selectedOtherL2 ? "子分组" : "一级"}
-          </Tag>
-        }
+        extra={<Tag color="blue">一级</Tag>}
       >
-        <StockTable
-          data={displayStocks}
-          onChange={onTableChange}
-          loading={isOther && selectedOtherL2 ? otherL2Loading : stocksLoading}
-        />
+        <StockTable data={displayStocks} onChange={onTableChange} loading={stocksLoading} />
       </Card>
     </Space>
   );
