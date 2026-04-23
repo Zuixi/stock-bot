@@ -15,7 +15,7 @@ import logging
 from datetime import datetime
 from typing import Any, Literal
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
@@ -491,7 +491,11 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
         if cached is not None:
             return cached
 
-    from app.models.sw_industry import SwIndustryClass, SwIndustryMember  # noqa: PLC0415
+    from app.models.sw_industry import (  # noqa: PLC0415
+        StockCustomSwTag,
+        SwIndustryClass,
+        SwIndustryMember,
+    )
 
     async with async_session_factory() as db:
         # Fetch all classification nodes
@@ -500,36 +504,57 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
         )
         all_classes = classes_result.scalars().all()
 
-        # Count members per L3 industry code (only symbols existing in stocks)
-        member_counts_result = await db.execute(
-            select(
-                SwIndustryMember.industry_code.label("industry_code"),
-                func.count().label("cnt"),
-            )
-            .join(Stock, Stock.symbol == SwIndustryMember.symbol)
-            .group_by(SwIndustryMember.industry_code)
-        )
-        member_counts = {row.industry_code: row.cnt for row in member_counts_result}
-
-        # Collect L3 symbols per industry code (only symbols existing in stocks)
-        symbols_result = await db.execute(
+        # Collect L3 symbols from both official members and custom L3 tags
+        symbols_by_code: dict[str, set[str]] = {}
+        official_l3_symbols = await db.execute(
             select(SwIndustryMember.industry_code, SwIndustryMember.symbol)
             .join(Stock, Stock.symbol == SwIndustryMember.symbol)
         )
-        symbols_by_code: dict[str, list[str]] = {}
-        for row in symbols_result:
-            symbols_by_code.setdefault(row.industry_code, []).append(row.symbol)
+        for row in official_l3_symbols:
+            symbols_by_code.setdefault(row.industry_code, set()).add(row.symbol)
+
+        custom_l3_symbols = await db.execute(
+            select(StockCustomSwTag.industry_code, StockCustomSwTag.symbol)
+            .join(
+                SwIndustryClass,
+                SwIndustryClass.industry_code == StockCustomSwTag.industry_code,
+            )
+            .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
+            .where(SwIndustryClass.level == 3)
+        )
+        for row in custom_l3_symbols:
+            symbols_by_code.setdefault(row.industry_code, set()).add(row.symbol)
+
+        # Keep L2 custom symbols separately: they contribute to L2/L1 totals
+        custom_l2_symbols_by_code: dict[str, set[str]] = {}
+        custom_l2_symbols = await db.execute(
+            select(StockCustomSwTag.industry_code, StockCustomSwTag.symbol)
+            .join(
+                SwIndustryClass,
+                SwIndustryClass.industry_code == StockCustomSwTag.industry_code,
+            )
+            .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
+            .where(SwIndustryClass.level == 2)
+        )
+        for row in custom_l2_symbols:
+            custom_l2_symbols_by_code.setdefault(row.industry_code, set()).add(row.symbol)
 
         # Symbols that do not map to any valid L3 industry should go to "其他"
         categorized_symbols_subq = (
-            select(SwIndustryMember.symbol)
-            .join(
-                SwIndustryClass,
-                SwIndustryClass.industry_code == SwIndustryMember.industry_code,
-            )
-            .where(SwIndustryClass.level == 3)
-            .distinct()
-            .subquery()
+            union(
+                select(SwIndustryMember.symbol)
+                .join(
+                    SwIndustryClass,
+                    SwIndustryClass.industry_code == SwIndustryMember.industry_code,
+                )
+                .where(SwIndustryClass.level == 3),
+                select(StockCustomSwTag.symbol)
+                .join(
+                    SwIndustryClass,
+                    SwIndustryClass.industry_code == StockCustomSwTag.industry_code,
+                )
+                .where(SwIndustryClass.level.in_([2, 3])),
+            ).subquery()
         )
         effective_industry = func.coalesce(Stock.industry, Stock.csrc_desc)
         uncategorized_result = await db.execute(
@@ -555,6 +580,9 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
     l2_nodes: dict[str, dict] = {}
     l3_nodes: dict[str, dict] = {}
 
+    l2_symbol_sets: dict[str, set[str]] = {}
+    l1_symbol_sets: dict[str, set[str]] = {}
+
     for cls in all_classes:
         if cls.level == 1:
             l1_nodes[cls.industry_code] = {
@@ -563,6 +591,7 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
                 "stockCount": 0,
                 "children": [],
             }
+            l1_symbol_sets[cls.industry_code] = set()
         elif cls.level == 2:
             l2_nodes[cls.industry_code] = {
                 "code": cls.industry_code,
@@ -571,14 +600,15 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
                 "parent_code": cls.parent_code,
                 "children": [],
             }
+            l2_symbol_sets[cls.industry_code] = set(custom_l2_symbols_by_code.get(cls.industry_code, set()))
         elif cls.level == 3:
-            count = member_counts.get(cls.industry_code, 0)
+            l3_symbols = sorted(symbols_by_code.get(cls.industry_code, set()))
             l3_nodes[cls.industry_code] = {
                 "code": cls.industry_code,
                 "name": cls.industry_name,
-                "stockCount": count,
+                "stockCount": len(l3_symbols),
                 "parent_code": cls.parent_code,
-                "symbols": symbols_by_code.get(cls.industry_code, []),
+                "symbols": l3_symbols,
             }
 
     # Attach L3 to L2
@@ -586,22 +616,26 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
         parent = l3.get("parent_code")
         if parent and parent in l2_nodes:
             l2_nodes[parent]["children"].append(l3)
-            l2_nodes[parent]["stockCount"] += l3["stockCount"]
+            l2_symbol_sets[parent].update(l3["symbols"])
 
     # Attach L2 to L1
     for l2 in l2_nodes.values():
         parent = l2.get("parent_code")
         if parent and parent in l1_nodes:
             l1_node = l1_nodes[parent]
+            l2["stockCount"] = len(l2_symbol_sets.get(l2["code"], set()))
             # Remove parent_code from output
             l2_out = {k: v for k, v in l2.items() if k != "parent_code"}
             l1_node["children"].append(l2_out)
-            l1_node["stockCount"] += l2["stockCount"]
+            l1_symbol_sets[parent].update(l2_symbol_sets.get(l2["code"], set()))
 
     # Clean parent_code from L3 output
     for l2 in l2_nodes.values():
         for child in l2["children"]:
             child.pop("parent_code", None)
+
+    for l1_code, l1_node in l1_nodes.items():
+        l1_node["stockCount"] = len(l1_symbol_sets.get(l1_code, set()))
 
     tree = list(l1_nodes.values())
     if uncategorized_symbols:
@@ -696,7 +730,11 @@ async def get_sw_level3(
 
 async def list_symbols_by_level1(level1_code: str) -> list[str]:
     """Get all member symbols under a level-1 industry."""
-    from app.models.sw_industry import SwIndustryClass, SwIndustryMember  # noqa: PLC0415
+    from app.models.sw_industry import (  # noqa: PLC0415
+        StockCustomSwTag,
+        SwIndustryClass,
+        SwIndustryMember,
+    )
 
     async with async_session_factory() as db:
         if level1_code == _SW_OTHER_LEVEL1_CODE:
@@ -744,7 +782,7 @@ async def list_symbols_by_level1(level1_code: str) -> list[str]:
         ).scalars().all()
         if not l3_codes:
             return []
-        symbols = (
+        official_symbols = (
             await db.execute(
                 select(SwIndustryMember.symbol)
                 .join(Stock, Stock.symbol == SwIndustryMember.symbol)
@@ -753,12 +791,38 @@ async def list_symbols_by_level1(level1_code: str) -> list[str]:
                 )
             )
         ).scalars().all()
-    return list(symbols)
+        custom_l2_symbols = (
+            await db.execute(
+                select(StockCustomSwTag.symbol)
+                .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
+                .where(StockCustomSwTag.industry_code.in_(l2_codes))
+            )
+        ).scalars().all()
+        custom_l3_symbols = (
+            await db.execute(
+                select(StockCustomSwTag.symbol)
+                .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
+                .where(StockCustomSwTag.industry_code.in_(l3_codes))
+            )
+        ).scalars().all()
+        symbol_set = set(official_symbols) | set(custom_l2_symbols) | set(custom_l3_symbols)
+        ordered = (
+            await db.execute(
+                select(Stock.symbol)
+                .where(Stock.symbol.in_(symbol_set))
+                .order_by(Stock.exchange, Stock.symbol)
+            )
+        ).scalars().all()
+    return list(ordered)
 
 
 async def list_symbols_by_level2(level1_code: str, level2_code: str) -> list[str]:
     """Get all member symbols under a level-2 industry."""
-    from app.models.sw_industry import SwIndustryClass, SwIndustryMember  # noqa: PLC0415
+    from app.models.sw_industry import (  # noqa: PLC0415
+        StockCustomSwTag,
+        SwIndustryClass,
+        SwIndustryMember,
+    )
 
     async with async_session_factory() as db:
         l3_codes = (
@@ -771,7 +835,7 @@ async def list_symbols_by_level2(level1_code: str, level2_code: str) -> list[str
         ).scalars().all()
         if not l3_codes:
             return []
-        symbols = (
+        official_symbols = (
             await db.execute(
                 select(SwIndustryMember.symbol)
                 .join(Stock, Stock.symbol == SwIndustryMember.symbol)
@@ -780,17 +844,39 @@ async def list_symbols_by_level2(level1_code: str, level2_code: str) -> list[str
                 )
             )
         ).scalars().all()
-    return list(symbols)
+        custom_l2_symbols = (
+            await db.execute(
+                select(StockCustomSwTag.symbol)
+                .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
+                .where(StockCustomSwTag.industry_code == level2_code)
+            )
+        ).scalars().all()
+        custom_l3_symbols = (
+            await db.execute(
+                select(StockCustomSwTag.symbol)
+                .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
+                .where(StockCustomSwTag.industry_code.in_(l3_codes))
+            )
+        ).scalars().all()
+        symbol_set = set(official_symbols) | set(custom_l2_symbols) | set(custom_l3_symbols)
+        ordered = (
+            await db.execute(
+                select(Stock.symbol)
+                .where(Stock.symbol.in_(symbol_set))
+                .order_by(Stock.exchange, Stock.symbol)
+            )
+        ).scalars().all()
+    return list(ordered)
 
 
 async def list_symbols_by_level3(
     level1_code: str, level2_code: str, level3_code: str
 ) -> list[str]:
     """Get all member symbols under a level-3 industry."""
-    from app.models.sw_industry import SwIndustryMember  # noqa: PLC0415
+    from app.models.sw_industry import StockCustomSwTag, SwIndustryMember  # noqa: PLC0415
 
     async with async_session_factory() as db:
-        symbols = (
+        official_symbols = (
             await db.execute(
                 select(SwIndustryMember.symbol)
                 .join(Stock, Stock.symbol == SwIndustryMember.symbol)
@@ -799,23 +885,46 @@ async def list_symbols_by_level3(
                 )
             )
         ).scalars().all()
-    return list(symbols)
+        custom_symbols = (
+            await db.execute(
+                select(StockCustomSwTag.symbol)
+                .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
+                .where(StockCustomSwTag.industry_code == level3_code)
+            )
+        ).scalars().all()
+        symbol_set = set(official_symbols) | set(custom_symbols)
+        ordered = (
+            await db.execute(
+                select(Stock.symbol)
+                .where(Stock.symbol.in_(symbol_set))
+                .order_by(Stock.exchange, Stock.symbol)
+            )
+        ).scalars().all()
+    return list(ordered)
 
 
 def _uncategorized_symbols_subquery():
     """Shared subquery for uncategorized (OTHER) symbols."""
-    from app.models.sw_industry import SwIndustryClass, SwIndustryMember  # noqa: PLC0415
+    from app.models.sw_industry import (  # noqa: PLC0415
+        StockCustomSwTag,
+        SwIndustryClass,
+        SwIndustryMember,
+    )
 
-    return (
+    return union(
         select(SwIndustryMember.symbol)
         .join(
             SwIndustryClass,
             SwIndustryClass.industry_code == SwIndustryMember.industry_code,
         )
-        .where(SwIndustryClass.level == 3)
-        .distinct()
-        .subquery()
-    )
+        .where(SwIndustryClass.level == 3),
+        select(StockCustomSwTag.symbol)
+        .join(
+            SwIndustryClass,
+            SwIndustryClass.industry_code == StockCustomSwTag.industry_code,
+        )
+        .where(SwIndustryClass.level.in_([2, 3])),
+    ).subquery()
 
 
 def _effective_industry():

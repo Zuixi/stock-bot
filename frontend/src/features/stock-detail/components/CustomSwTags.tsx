@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button, Modal, Select, Space, Spin, Tag, Typography, message } from "antd";
 import { EditOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -60,10 +60,28 @@ export function CustomSwTags({ exchange, symbol }: Props) {
   };
 
   const l2Values = selectedCodes.filter((c) => l2Options.some((o) => o.code === c));
-  const l3Values = selectedCodes.filter((c) => l3Options.some((o) => o.code === c));
+  const selectedL2CodeSet = useMemo(() => new Set(l2Values), [l2Values]);
+  const filteredL3Options = useMemo(
+    () => l3Options.filter((o) => o.parentCode && selectedL2CodeSet.has(o.parentCode)),
+    [l3Options, selectedL2CodeSet]
+  );
+  const filteredL3CodeSet = useMemo(
+    () => new Set(filteredL3Options.map((o) => o.code)),
+    [filteredL3Options]
+  );
+
+  const l3Values = selectedCodes.filter((c) => filteredL3CodeSet.has(c));
 
   const handleL2Change = (codes: string[]) => {
-    setSelectedCodes([...codes, ...l3Values]);
+    const nextL2Set = new Set(codes);
+    const allowedL3CodeSet = new Set(
+      l3Options
+        .filter((o) => o.parentCode && nextL2Set.has(o.parentCode))
+        .map((o) => o.code)
+    );
+    const nextL3 = selectedCodes.filter((code) => allowedL3CodeSet.has(code));
+
+    setSelectedCodes([...codes, ...nextL3]);
   };
 
   const handleL3Change = (codes: string[]) => {
@@ -124,15 +142,16 @@ export function CustomSwTags({ exchange, symbol }: Props) {
             <Select
               mode="multiple"
               allowClear
-              placeholder="选择三级行业（可多选）"
+              placeholder={l2Values.length === 0 ? "请先选择二级行业" : "选择三级行业（可多选）"}
               style={{ width: "100%", marginTop: 8 }}
               value={l3Values}
               onChange={handleL3Change}
-              options={l3Options.map((o) => ({ label: o.name, value: o.code }))}
+              options={filteredL3Options.map((o) => ({ label: o.name, value: o.code }))}
               filterOption={(input, option) =>
                 (option?.label as string)?.toLowerCase().includes(input.toLowerCase()) ?? false
               }
               showSearch
+              disabled={l2Values.length === 0}
             />
           </div>
         </Space>
