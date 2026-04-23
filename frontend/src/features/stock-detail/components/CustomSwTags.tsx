@@ -40,8 +40,14 @@ export function CustomSwTags({ exchange, symbol }: Props) {
 
   const mutation = useMutation({
     mutationFn: (codes: string[]) => updateStockSwTags(exchange, symbol, codes),
-    onSuccess: (newTags) => {
+    onSuccess: async (newTags) => {
       queryClient.setQueryData(["stock-sw-tags", exchange, symbol], newTags);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["sw-industry-tree"] }),
+        queryClient.invalidateQueries({ queryKey: ["sw-level1-stocks"] }),
+        queryClient.invalidateQueries({ queryKey: ["sw-level2-stocks"] }),
+        queryClient.invalidateQueries({ queryKey: ["sw-level3-stocks"] }),
+      ]);
       message.success("分类标签已更新");
       setOpen(false);
     },
