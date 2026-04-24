@@ -11,6 +11,24 @@ from app.core.database import Base
 
 ExchangeName = Literal["Shanghai_Stocks", "Shenzen_Stocks", "Beijing_Stocks"]
 
+
+class StockUserTag(Base):
+    """User-defined custom tags for stocks (many-to-many, free-form text)."""
+
+    __tablename__ = "stock_user_tags"
+    __table_args__ = (
+        UniqueConstraint("symbol", "tag_name", name="uq_stock_user_tag"),
+        Index("idx_user_tag_symbol", "symbol"),
+        Index("idx_user_tag_name", "tag_name"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(nullable=False)
+    tag_name: Mapped[str] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
 EXCHANGE_CHECK = CheckConstraint(
     "exchange IN ('Shanghai_Stocks', 'Shenzen_Stocks', 'Beijing_Stocks')",
     name="chk_exchange",

@@ -50,3 +50,19 @@ class CategoryOut(BaseModel):
     exchange: str
     category: str
     count: int
+
+
+class UserTagOut(BaseModel):
+    """Single user-defined tag attached to a stock."""
+
+    tag_name: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class TagSummary(BaseModel):
+    """Aggregated summary of a tag across all stocks."""
+
+    tag_name: str
+    stock_count: int

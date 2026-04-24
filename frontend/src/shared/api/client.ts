@@ -39,3 +39,29 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
   }
   return res.json();
 }
+
+export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const url = new URL(`${BASE_URL}${path}`, window.location.origin);
+  const res = await fetch(url.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, data.message ?? res.statusText, data.details);
+  }
+  return res.json();
+}
+
+export async function apiDelete<T>(path: string): Promise<T> {
+  const url = new URL(`${BASE_URL}${path}`, window.location.origin);
+  const res = await fetch(url.toString(), {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, data.message ?? res.statusText, data.details);
+  }
+  return res.json();
+}

@@ -1,8 +1,9 @@
-import { Layout, Menu, Input, Typography } from "antd";
+import { Layout, Menu, Typography } from "antd";
 import {
   BarChartOutlined,
   StarOutlined,
   AppstoreOutlined,
+  TagsOutlined,
 } from "@ant-design/icons";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { SearchBar } from "@/features/search/components/SearchBar";
@@ -12,6 +13,7 @@ const { Header, Content, Footer } = Layout;
 const NAV_ITEMS = [
   { key: "/market", icon: <BarChartOutlined />, label: "市场" },
   { key: "/market/category", icon: <AppstoreOutlined />, label: "分类" },
+  { key: "/tags", icon: <TagsOutlined />, label: "标签" },
   { key: "/watchlist", icon: <StarOutlined />, label: "自选" },
 ];
 

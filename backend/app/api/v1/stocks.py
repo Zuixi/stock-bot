@@ -16,7 +16,7 @@ from app.schemas.common import PageParams, PagedResponse
 from app.schemas.feature import RadarChartData, StockFeatureOut
 from app.schemas.quote import KlineResponse, LatestQuoteOut
 from app.schemas.stock import StockOut, StockListParams
-from app.services import feature_service, quote_service, stock_service, stock_tag_service
+from app.services import feature_service, quote_service, stock_service, stock_tag_service, user_tag_service
 
 router = APIRouter()
 stocks_router = APIRouter()
@@ -184,3 +184,47 @@ async def set_sw_tags(
     await db.commit()
     await cache.delete("market:sw-tree")
     return result
+
+
+# ── /api/v1/exchanges/{exchange}/stocks/{symbol}/user-tags ─────────────────────
+
+@stocks_router.get("/{symbol}/user-tags", response_model=list[dict])
+async def get_user_tags(exchange: str, symbol: str, db: DbDep) -> list[dict]:
+    """Get user-defined custom tags for a stock."""
+    tags = await user_tag_service.get_stock_tags(db, symbol)
+    return [t.model_dump(mode="json") for t in tags]
+
+
+@stocks_router.post("/{symbol}/user-tags", response_model=dict)
+async def add_user_tag(
+    exchange: str,
+    symbol: str,
+    db: DbDep,
+    cache: CacheDep,
+    tag_name: Annotated[str, Body(embed=True)],
+) -> dict:
+    """Add a user-defined tag to a stock."""
+    try:
+        tag = await user_tag_service.add_stock_tag(db, symbol, tag_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await db.commit()
+    await cache.delete("tags:all")
+    return tag.model_dump(mode="json")
+
+
+@stocks_router.delete("/{symbol}/user-tags/{tag_name}")
+async def remove_user_tag(
+    exchange: str,
+    symbol: str,
+    tag_name: str,
+    db: DbDep,
+    cache: CacheDep,
+) -> dict:
+    """Remove a user-defined tag from a stock."""
+    deleted = await user_tag_service.remove_stock_tag(db, symbol, tag_name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Tag not found")
+    await db.commit()
+    await cache.delete("tags:all")
+    return {"deleted": True}
