@@ -17,7 +17,7 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import clusters, market, stocks, tasks
+from app.api.v1 import clusters, market, stocks, tags, tasks
 
 router = APIRouter(prefix="/api/v1")
 
@@ -39,3 +39,6 @@ router.include_router(market.router, prefix="/market", tags=["market"])
 
 # Background tasks
 router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
+
+# User-defined tags
+router.include_router(tags.router, prefix="/tags", tags=["tags"])

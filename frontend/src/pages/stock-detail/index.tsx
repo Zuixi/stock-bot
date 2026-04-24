@@ -1,7 +1,7 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { Typography, Result, Button, Divider, Row, Col, Spin } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { StockHeader, KLineChart, FundamentalCards, CustomSwTags } from "@/features/stock-detail/components";
+import { StockHeader, KLineChart, FundamentalCards, CustomSwTags, UserTags } from "@/features/stock-detail/components";
 import { fetchStockBySymbol } from "@/shared/api/stocks";
 
 export default function StockDetailPage() {
@@ -42,6 +42,9 @@ export default function StockDetailPage() {
       <StockHeader stock={stock} />
       <div style={{ marginTop: 8 }}>
         <CustomSwTags exchange={stock.exchange} symbol={stock.symbol} />
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <UserTags exchange={stock.exchange} symbol={stock.symbol} />
       </div>
 
       <Divider style={{ margin: "16px 0" }} />

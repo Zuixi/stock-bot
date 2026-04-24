@@ -11,6 +11,8 @@ const MarketHotSectorsPage = lazy(() => import("@/pages/market-hot-sectors"));
 const IndexDetailPage = lazy(() => import("@/pages/index-detail"));
 const StockDetailPage = lazy(() => import("@/pages/stock-detail"));
 const WatchlistPage = lazy(() => import("@/pages/watchlist"));
+const TagsPage = lazy(() => import("@/pages/tags"));
+const TagsDetailPage = lazy(() => import("@/pages/tags-detail"));
 
 function PageLoading() {
   return (
@@ -86,6 +88,22 @@ export function AppRouter() {
           element={
             <Suspense fallback={<PageLoading />}>
               <WatchlistPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/tags"
+          element={
+            <Suspense fallback={<PageLoading />}>
+              <TagsPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/tags/:tagName"
+          element={
+            <Suspense fallback={<PageLoading />}>
+              <TagsDetailPage />
             </Suspense>
           }
         />

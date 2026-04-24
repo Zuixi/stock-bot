@@ -118,3 +118,17 @@ export interface StockSwTag {
   industryName: string;
   level: number;
 }
+
+// ---------------------------------------------------------------------------
+// User-defined custom tags
+// ---------------------------------------------------------------------------
+
+export interface UserTag {
+  tag_name: string;
+  created_at: string;
+}
+
+export interface TagSummary {
+  tag_name: string;
+  stock_count: number;
+}
