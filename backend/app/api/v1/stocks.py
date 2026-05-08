@@ -16,7 +16,7 @@ from app.schemas.common import PageParams, PagedResponse
 from app.schemas.daily_basic import DailyBasicLatestOut, DailyBasicListResponse
 from app.schemas.feature import RadarChartData, StockFeatureOut
 from app.schemas.quote import KlineResponse, LatestQuoteOut
-from app.schemas.stock import StockOut, StockListParams
+from app.schemas.stock import StockEnrichedOut, StockOut, StockListParams
 from app.services import (
     daily_basic_service,
     feature_service,
@@ -66,6 +66,26 @@ async def list_stocks_all_exchanges(
     )
     page_params = PageParams(page=page, page_size=page_size)
     items, total = await stock_service.list_stocks(db, cache, params, page_params)
+    return PagedResponse.build(items=items, total=total, params=page_params)
+
+
+@router.get("/stocks/enriched", response_model=PagedResponse[StockEnrichedOut])
+async def list_stocks_all_exchanges_enriched(
+    db: DbDep,
+    exchange: str | None = None,
+    category: str | None = None,
+    keyword: str | None = None,
+    page: int = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 20,
+) -> PagedResponse[StockEnrichedOut]:
+    """List stocks across all exchanges with latest quote + daily_basic enriched."""
+    params = StockListParams(
+        exchange=exchange, category=category, keyword=keyword
+    )
+    page_params = PageParams(page=page, page_size=page_size)
+    items, total = await stock_service.list_stocks_enriched(
+        db, None, params, page_params,
+    )
     return PagedResponse.build(items=items, total=total, params=page_params)
 
 

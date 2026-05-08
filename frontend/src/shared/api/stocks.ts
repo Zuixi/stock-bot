@@ -102,6 +102,66 @@ export async function fetchStocksMerged(params: {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Enriched stock — includes latest quote + daily_basic fields
+// ---------------------------------------------------------------------------
+
+export interface BackendStockEnriched extends BackendStock {
+    // Quote fields
+    latest_price?: number | null;
+    prev_close?: number | null;
+    change?: number | null;
+    change_percent?: number | null;
+    volume?: number | null;
+    amount?: number | null;
+    // Daily basic fields
+    pe_ttm?: number | null;
+    pb?: number | null;
+    total_mv?: number | null;
+    circ_mv?: number | null;
+    turnover_rate?: number | null;
+}
+
+export function mapBackendStockEnriched(item: BackendStockEnriched): StockRecord {
+    const base = mapBackendStock(item as BackendStock);
+    return {
+        ...base,
+        latestPrice: item.latest_price ?? undefined,
+        change: item.change ?? undefined,
+        changePercent: item.change_percent ?? undefined,
+        volume: item.volume ?? undefined,
+        turnover: item.amount ?? undefined,
+        marketCap: item.total_mv ?? undefined,
+        circulatingCap: item.circ_mv ?? undefined,
+        pe: item.pe_ttm ?? undefined,
+        pb: item.pb ?? undefined,
+    };
+}
+
+export async function fetchStocksMergedEnriched(params: {
+  exchange?: Exchange;
+  category?: string;
+  keyword?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<BackendPagedResponse<StockRecord>> {
+  const pageSize = params.page_size ?? 100;
+  const response = await apiGet<BackendPagedResponse<BackendStockEnriched>>(
+    "/api/v1/exchanges/stocks/enriched",
+    {
+      exchange: params.exchange,
+      category: params.category,
+      keyword: params.keyword,
+      page: params.page ?? 1,
+      page_size: pageSize,
+    }
+  );
+  return {
+    ...response,
+    items: response.items.map(mapBackendStockEnriched),
+  };
+}
+
 export async function fetchStockBySymbol(symbol: string): Promise<StockRecord | null> {
   for (const exchange of EXCHANGES) {
     try {
