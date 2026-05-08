@@ -986,3 +986,80 @@ async def list_stocks_by_symbols(db: AsyncSession, symbols: list[str]) -> list[S
     for row in rows:
         stock_by_symbol.setdefault(row.symbol, StockOut.model_validate(row))
     return [stock_by_symbol[symbol] for symbol in symbols if symbol in stock_by_symbol]
+
+
+# ---------------------------------------------------------------------------
+# Enriched stock listing — joins latest quote + daily_basic in one round trip
+# ---------------------------------------------------------------------------
+
+from app.schemas.stock import StockEnrichedOut  # noqa: E402
+
+_GET_ENRICHED_SQL = """
+SELECT
+    s.id, s.exchange, s.symbol, s.name, s.area, s.industry,
+    s.full_name, s.enname, s.cnspell, s.market, s.curr_type,
+    s.list_status, s.list_date, s.delist_date, s.is_hs,
+    s.act_name, s.act_ent_type, s.category, s.csrc_code, s.csrc_desc,
+    s.province, s.status, s.detail, s.asof,
+    q.close     AS latest_price,
+    q.volume    AS volume,
+    q.amount    AS amount,
+    q2.close    AS prev_close,
+    d.pe_ttm    AS pe_ttm,
+    d.pb        AS pb,
+    d.total_mv  AS total_mv,
+    d.circ_mv   AS circ_mv,
+    d.turnover_rate AS turnover_rate
+FROM stocks s
+LEFT JOIN (
+    SELECT DISTINCT ON (stock_id)
+           stock_id, close, volume, amount, trade_date
+    FROM daily_quotes
+    ORDER BY stock_id, trade_date DESC
+) q ON q.stock_id = s.id
+LEFT JOIN daily_quotes q2 ON q2.stock_id = s.id
+    AND q2.trade_date = (
+        SELECT MAX(dq.trade_date)
+        FROM daily_quotes dq
+        WHERE dq.stock_id = s.id AND dq.trade_date < q.trade_date
+    )
+LEFT JOIN (
+    SELECT DISTINCT ON (stock_id)
+           stock_id, pe_ttm, pb, total_mv, circ_mv, turnover_rate
+    FROM daily_basic_indicators
+    ORDER BY stock_id, trade_date DESC
+) d ON d.stock_id = s.id
+WHERE s.symbol = ANY(:symbols)
+ORDER BY s.symbol
+"""
+
+
+async def get_stocks_enriched_by_symbols(
+    db: AsyncSession, symbols: list[str],
+) -> list[StockEnrichedOut]:
+    """Return StockEnrichedOut for each symbol, joining latest price + fundamentals."""
+    if not symbols:
+        return []
+
+    from sqlalchemy import text  # noqa: PLC0415
+
+    result = await db.execute(text(_GET_ENRICHED_SQL), {"symbols": symbols})
+    rows = result.mappings().all()
+    if not rows:
+        return []
+
+    stock_by_symbol: dict[str, StockEnrichedOut] = {}
+    for row in rows:
+        data = dict(row)
+        # Compute change / change_pct from latest_price & prev_close
+        lp = data.get("latest_price")
+        pc = data.get("prev_close")
+        if lp is not None and pc is not None and pc != 0:
+            data["change"] = round(float(lp) - float(pc), 4)
+            data["change_percent"] = round(
+                (float(lp) - float(pc)) / float(pc) * 100, 2
+            )
+        stock = StockEnrichedOut(**data)
+        stock_by_symbol.setdefault(stock.symbol, stock)
+
+    return [stock_by_symbol[sym] for sym in symbols if sym in stock_by_symbol]

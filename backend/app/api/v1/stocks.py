@@ -13,10 +13,18 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from app.api.deps import CacheDep, DbDep
 from app.core.exceptions import not_found_response
 from app.schemas.common import PageParams, PagedResponse
+from app.schemas.daily_basic import DailyBasicLatestOut, DailyBasicListResponse
 from app.schemas.feature import RadarChartData, StockFeatureOut
 from app.schemas.quote import KlineResponse, LatestQuoteOut
 from app.schemas.stock import StockOut, StockListParams
-from app.services import feature_service, quote_service, stock_service, stock_tag_service, user_tag_service
+from app.services import (
+    daily_basic_service,
+    feature_service,
+    quote_service,
+    stock_service,
+    stock_tag_service,
+    user_tag_service,
+)
 
 router = APIRouter()
 stocks_router = APIRouter()
@@ -121,6 +129,44 @@ async def get_latest_quote(
     result = await quote_service.get_latest_quote(db, cache, exchange, symbol)
     if result is None:
         raise not_found_response("Quote", f"{exchange}/{symbol}")
+    return result
+
+
+# ── /api/v1/exchanges/{exchange}/stocks/{symbol}/daily-basic ────────────────
+
+@stocks_router.get(
+    "/{symbol}/daily-basic", response_model=DailyBasicListResponse,
+)
+async def get_daily_basic_history(
+    exchange: str,
+    symbol: str,
+    db: DbDep,
+    cache: CacheDep,
+    start: date | None = None,
+    end: date | None = None,
+) -> DailyBasicListResponse:
+    result = await daily_basic_service.get_daily_basic_history(
+        db, cache, exchange, symbol, start, end,
+    )
+    if result is None:
+        raise not_found_response("Stock", f"{exchange}/{symbol}")
+    return result
+
+
+@stocks_router.get(
+    "/{symbol}/daily-basic/latest", response_model=DailyBasicLatestOut,
+)
+async def get_latest_daily_basic(
+    exchange: str,
+    symbol: str,
+    db: DbDep,
+    cache: CacheDep,
+) -> DailyBasicLatestOut:
+    result = await daily_basic_service.get_latest_daily_basic(
+        db, cache, exchange, symbol,
+    )
+    if result is None:
+        raise not_found_response("DailyBasic", f"{exchange}/{symbol}")
     return result
 
 

@@ -2,11 +2,51 @@ import { apiGet, apiPut } from "./client";
 import { mapBackendStock, type BackendStock } from "./stocks";
 import type { StockRecord, SwTagOption, StockSwTag } from "@/shared/types";
 
+// ---------------------------------------------------------------------------
+// Enriched backend stock — includes quote + daily_basic fields
+// ---------------------------------------------------------------------------
+
+export interface BackendStockEnriched extends BackendStock {
+    // Quote fields
+    latest_price?: number | null;
+    prev_close?: number | null;
+    change?: number | null;
+    change_percent?: number | null;
+    volume?: number | null;
+    amount?: number | null;
+    // Daily basic fields
+    pe_ttm?: number | null;
+    pb?: number | null;
+    total_mv?: number | null;
+    circ_mv?: number | null;
+    turnover_rate?: number | null;
+}
+
+export function mapBackendStockEnriched(item: BackendStockEnriched): StockRecord {
+    const base = mapBackendStock(item as BackendStock);
+    return {
+        ...base,
+        latestPrice: item.latest_price ?? undefined,
+        change: item.change ?? undefined,
+        changePercent: item.change_percent ?? undefined,
+        volume: item.volume ?? undefined,
+        turnover: item.amount ?? undefined,
+        marketCap: item.total_mv ?? undefined,
+        circulatingCap: item.circ_mv ?? undefined,
+        pe: item.pe_ttm ?? undefined,
+        pb: item.pb ?? undefined,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// SW industry tree & levels
+// ---------------------------------------------------------------------------
+
 export interface SwIndustryLevel3 {
   code: string;
   name: string;
   stockCount: number;
-  symbols: string[];
+  children: SwIndustryLevel3[];
 }
 
 export interface SwIndustryLevel2 {
@@ -26,6 +66,8 @@ export interface SwIndustryLevel1 {
 export function fetchSwIndustryTree(): Promise<SwIndustryLevel1[]> {
   return apiGet<SwIndustryLevel1[]>("/api/v1/market/sw-industry/tree");
 }
+
+// ── Fast (basic stock metadata) ──────────────────────────────────────────
 
 export async function fetchSwLevel1Stocks(level1Code: string): Promise<StockRecord[]> {
   const rows = await apiGet<BackendStock[]>(`/api/v1/market/sw-industry/${level1Code}/stocks`);
@@ -48,6 +90,33 @@ export async function fetchSwLevel3Stocks(
     `/api/v1/market/sw-industry/${level1Code}/${level2Code}/${level3Code}/stocks`
   );
   return rows.map(mapBackendStock);
+}
+
+// ── Enriched (basic + quote + daily_basic) — lazy-loaded after basic ─────
+
+export async function fetchSwLevel1StocksEnriched(level1Code: string): Promise<StockRecord[]> {
+  const rows = await apiGet<BackendStockEnriched[]>(
+    `/api/v1/market/sw-industry/${level1Code}/stocks/enriched`
+  );
+  return rows.map(mapBackendStockEnriched);
+}
+
+export async function fetchSwLevel2StocksEnriched(level1Code: string, level2Code: string): Promise<StockRecord[]> {
+  const rows = await apiGet<BackendStockEnriched[]>(
+    `/api/v1/market/sw-industry/${level1Code}/${level2Code}/stocks/enriched`
+  );
+  return rows.map(mapBackendStockEnriched);
+}
+
+export async function fetchSwLevel3StocksEnriched(
+  level1Code: string,
+  level2Code: string,
+  level3Code: string
+): Promise<StockRecord[]> {
+  const rows = await apiGet<BackendStockEnriched[]>(
+    `/api/v1/market/sw-industry/${level1Code}/${level2Code}/${level3Code}/stocks/enriched`
+  );
+  return rows.map(mapBackendStockEnriched);
 }
 
 // ---------------------------------------------------------------------------
