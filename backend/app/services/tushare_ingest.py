@@ -551,6 +551,169 @@ class TuShareIngestService:
         )
         return {"ts_code": ts_code, "fetched": len(df), "upserted": upserted}
 
+    # ------------------------------------------------------------------
+    # Daily basic indicators
+    # ------------------------------------------------------------------
+
+    async def ingest_daily_basic(
+        self,
+        db: AsyncSession,
+        trade_date: str,
+    ) -> dict[str, int]:
+        """Fetch full-market daily_basic for one trade date and persist.
+
+        Uses the efficient trade_date-based batch fetch (entire market per call).
+        """
+        from app.models.daily_basic import DailyBasicIndicator  # noqa: PLC0415
+        from app.repositories import daily_basic_repo  # noqa: PLC0415
+
+        df = await self.client.fetch_daily_basic(trade_date=trade_date)
+        if df.empty:
+            logger.info("No daily_basic data for trade_date=%s", trade_date)
+            return {"saved": 0, "upserted": 0, "trade_date": trade_date}
+
+        await self.saver.save_dataframe(
+            "daily_basic", df,
+            {"trade_date": trade_date},
+            exchange=f"all_{trade_date}",
+        )
+
+        stock_id_map = await self._build_stock_id_map(db)
+        if not stock_id_map:
+            logger.warning("No stocks in DB — run universe ingest first")
+            return {"saved": len(df), "upserted": 0, "trade_date": trade_date}
+
+        from datetime import datetime as _dt
+
+        parsed_date = _dt.strptime(trade_date, "%Y%m%d").date()
+        records: list[DailyBasicIndicator] = []
+        skipped = 0
+
+        for row in df.to_dict("records"):
+            ts_code = str(row.get("ts_code", "")).strip()
+            stock_id = stock_id_map.get(ts_code)
+            if stock_id is None:
+                skipped += 1
+                continue
+
+            close_val = _to_builtin(row.get("close"))
+            records.append(DailyBasicIndicator(
+                stock_id=stock_id,
+                trade_date=parsed_date,
+                close=close_val,
+                turnover_rate=_to_builtin(row.get("turnover_rate")),
+                turnover_rate_f=_to_builtin(row.get("turnover_rate_f")),
+                volume_ratio=_to_builtin(row.get("volume_ratio")),
+                pe=_to_builtin(row.get("pe")),
+                pe_ttm=_to_builtin(row.get("pe_ttm")),
+                pb=_to_builtin(row.get("pb")),
+                ps=_to_builtin(row.get("ps")),
+                ps_ttm=_to_builtin(row.get("ps_ttm")),
+                dv_ratio=_to_builtin(row.get("dv_ratio")),
+                dv_ttm=_to_builtin(row.get("dv_ttm")),
+                total_share=_to_builtin(row.get("total_share")),
+                float_share=_to_builtin(row.get("float_share")),
+                free_share=_to_builtin(row.get("free_share")),
+                total_mv=_to_builtin(row.get("total_mv")),
+                circ_mv=_to_builtin(row.get("circ_mv")),
+                source="tushare:daily_basic",
+            ))
+
+        upserted = 0
+        batch_size = 500
+        for i in range(0, len(records), batch_size):
+            batch = records[i : i + batch_size]
+            upserted += await daily_basic_repo.upsert_daily_basics(db, batch)
+            await db.commit()
+
+        logger.info(
+            "Daily basic ingest done: trade_date=%s fetched=%d upserted=%d skipped=%d",
+            trade_date, len(df), upserted, skipped,
+        )
+        return {
+            "saved": len(df),
+            "upserted": upserted,
+            "skipped": skipped,
+            "trade_date": trade_date,
+        }
+
+    async def ingest_daily_basic_for_stock(
+        self,
+        db: AsyncSession,
+        *,
+        stock_id: int,
+        exchange: str,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, int]:
+        """Fetch one stock's daily_basic history and upsert."""
+        from app.models.daily_basic import DailyBasicIndicator  # noqa: PLC0415
+        from app.repositories import daily_basic_repo  # noqa: PLC0415
+
+        ts_code = _stock_to_ts_code(exchange, symbol)
+        if not ts_code.endswith((".SH", ".SZ", ".BJ")):
+            return {"stock_id": stock_id, "symbol": symbol, "upserted": 0}
+
+        start_str = start_date.strftime("%Y%m%d")
+        end_str = end_date.strftime("%Y%m%d")
+        df = await self.client.fetch_daily_basic(
+            ts_code=ts_code,
+            start_date=start_str,
+            end_date=end_str,
+        )
+        if df.empty:
+            return {"stock_id": stock_id, "symbol": symbol, "upserted": 0}
+
+        records: list[DailyBasicIndicator] = []
+        from datetime import datetime as _dt
+
+        for row in df.to_dict("records"):
+            td_str = str(row.get("trade_date", "")).strip()
+            if len(td_str) != 8:
+                continue
+            parsed_date = _dt.strptime(td_str, "%Y%m%d").date()
+            records.append(DailyBasicIndicator(
+                stock_id=stock_id,
+                trade_date=parsed_date,
+                close=_to_builtin(row.get("close")),
+                turnover_rate=_to_builtin(row.get("turnover_rate")),
+                turnover_rate_f=_to_builtin(row.get("turnover_rate_f")),
+                volume_ratio=_to_builtin(row.get("volume_ratio")),
+                pe=_to_builtin(row.get("pe")),
+                pe_ttm=_to_builtin(row.get("pe_ttm")),
+                pb=_to_builtin(row.get("pb")),
+                ps=_to_builtin(row.get("ps")),
+                ps_ttm=_to_builtin(row.get("ps_ttm")),
+                dv_ratio=_to_builtin(row.get("dv_ratio")),
+                dv_ttm=_to_builtin(row.get("dv_ttm")),
+                total_share=_to_builtin(row.get("total_share")),
+                float_share=_to_builtin(row.get("float_share")),
+                free_share=_to_builtin(row.get("free_share")),
+                total_mv=_to_builtin(row.get("total_mv")),
+                circ_mv=_to_builtin(row.get("circ_mv")),
+                source="tushare:daily_basic",
+            ))
+
+        upserted = 0
+        batch_size = 500
+        for i in range(0, len(records), batch_size):
+            upserted += await daily_basic_repo.upsert_daily_basics(
+                db, records[i : i + batch_size]
+            )
+
+        return {
+            "stock_id": stock_id,
+            "symbol": symbol,
+            "ts_code": ts_code,
+            "saved": len(df),
+            "upserted": upserted,
+        }
+
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
     async def _build_stock_id_map(self, db: AsyncSession) -> dict[str, int]:
         """Build a mapping from TuShare ts_code (e.g. '000001.SZ') to DB stock_id."""
         from sqlalchemy import select  # noqa: PLC0415
