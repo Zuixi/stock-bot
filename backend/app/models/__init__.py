@@ -1,6 +1,7 @@
 """SQLAlchemy ORM models."""
 
 from app.models.cluster import ClusterExplanation, ClusteringMember, ClusteringRun
+from app.models.daily_basic import DailyBasicIndicator
 from app.models.feature import StockFeature
 from app.models.index_daily import IndexDaily
 from app.models.quote import DailyQuote
@@ -14,6 +15,7 @@ __all__ = [
     "StockHistory",
     "StockUserTag",
     "DailyQuote",
+    "DailyBasicIndicator",
     "IndexDaily",
     "SseIndexSnapshot",
     "StockFeature",
