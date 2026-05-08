@@ -33,7 +33,7 @@ EXCHANGE_TO_TUSHARE: dict[str, str] = {
 
 TUSHARE_TO_EXCHANGE: dict[str, str] = {v: k for k, v in EXCHANGE_TO_TUSHARE.items()}
 
-_REQUEST_INTERVAL = 1.2  # seconds between requests (50 req/min limit)
+_REQUEST_INTERVAL = 0.5  # seconds between requests (120 req/min, under 200/min limit)
 _MAX_RETRIES = 3
 
 
