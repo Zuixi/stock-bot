@@ -15,7 +15,7 @@ from app.schemas.sse_index import (
     SseIntradayResponse,
     SseSnapshotOut,
 )
-from app.schemas.stock import StockOut
+from app.schemas.stock import StockEnrichedOut, StockOut
 from app.services import market_service, stock_tag_service
 
 router = APIRouter()
@@ -119,6 +119,58 @@ async def get_sw_level3_stocks(
         raise not_found_response("SW level3", f"{level1_code}/{level2_code}/{level3_code}")
     symbols = await market_service.list_symbols_by_level3(level1_code, level2_code, level3_code)
     return await market_service.list_stocks_by_symbols(db, symbols)
+
+
+# ---------------------------------------------------------------------------
+# Enriched SW industry stock endpoints — include latest quote + daily_basic
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/sw-industry/{level1_code}/stocks/enriched",
+    response_model=list[StockEnrichedOut],
+)
+async def get_sw_level1_stocks_enriched(
+    level1_code: str, db: DbDep,
+) -> list[StockEnrichedOut]:
+    if await market_service.get_sw_level1(level1_code) is None:
+        raise not_found_response("SW level1", level1_code)
+    symbols = await market_service.list_symbols_by_level1(level1_code)
+    return await market_service.get_stocks_enriched_by_symbols(db, symbols)
+
+
+@router.get(
+    "/sw-industry/{level1_code}/{level2_code}/stocks/enriched",
+    response_model=list[StockEnrichedOut],
+)
+async def get_sw_level2_stocks_enriched(
+    level1_code: str, level2_code: str, db: DbDep,
+) -> list[StockEnrichedOut]:
+    if level1_code == "OTHER" and level2_code.startswith("OTHER_"):
+        industry_name = level2_code[len("OTHER_"):]
+        info = await market_service.get_sw_other_level2(industry_name)
+        if info is None:
+            raise not_found_response("SW OTHER level2", level2_code)
+        symbols = await market_service.list_symbols_by_other_level2(industry_name)
+        return await market_service.get_stocks_enriched_by_symbols(db, symbols)
+
+    if await market_service.get_sw_level2(level1_code, level2_code) is None:
+        raise not_found_response("SW level2", f"{level1_code}/{level2_code}")
+    symbols = await market_service.list_symbols_by_level2(level1_code, level2_code)
+    return await market_service.get_stocks_enriched_by_symbols(db, symbols)
+
+
+@router.get(
+    "/sw-industry/{level1_code}/{level2_code}/{level3_code}/stocks/enriched",
+    response_model=list[StockEnrichedOut],
+)
+async def get_sw_level3_stocks_enriched(
+    level1_code: str, level2_code: str, level3_code: str, db: DbDep,
+) -> list[StockEnrichedOut]:
+    if await market_service.get_sw_level3(level1_code, level2_code, level3_code) is None:
+        raise not_found_response("SW level3", f"{level1_code}/{level2_code}/{level3_code}")
+    symbols = await market_service.list_symbols_by_level3(level1_code, level2_code, level3_code)
+    return await market_service.get_stocks_enriched_by_symbols(db, symbols)
 
 
 # ---------------------------------------------------------------------------

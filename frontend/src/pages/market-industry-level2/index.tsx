@@ -5,7 +5,7 @@ import type { TableProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { StockTable } from "@/features/market/components/StockTable";
 import type { StockRecord } from "@/shared/types";
-import { fetchSwIndustryTree, fetchSwLevel1Stocks } from "@/shared/api/swIndustry";
+import { fetchSwIndustryTree, fetchSwLevel1Stocks, fetchSwLevel1StocksEnriched } from "@/shared/api/swIndustry";
 
 type SortState = {
   sortBy?: keyof StockRecord;
@@ -33,15 +33,30 @@ export default function IndustryLevel2Page() {
     queryKey: ["sw-industry-tree"],
     queryFn: fetchSwIndustryTree,
   });
-  const { data: level1Stocks = [], isLoading: stocksLoading } = useQuery({
+
+  // ── Fast: basic stock metadata (renders immediately) ──
+  const { data: basicStocks = [], isLoading: stocksLoading } = useQuery({
     queryKey: ["sw-level1-stocks", level1Code],
     queryFn: () => fetchSwLevel1Stocks(level1Code),
     enabled: Boolean(level1Code),
   });
 
+  // ── Deferred: quote + daily_basic (fills financial columns async) ──
+  const { data: enrichedStocks = [] } = useQuery({
+    queryKey: ["sw-level1-stocks-enriched", level1Code],
+    queryFn: () => fetchSwLevel1StocksEnriched(level1Code),
+    enabled: Boolean(level1Code && basicStocks.length > 0),
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+
   const level1 = useMemo(() => tree.find((node) => node.code === level1Code), [tree, level1Code]);
 
-  const displayStocks = useMemo(() => applySort(level1Stocks, sort), [level1Stocks, sort]);
+  const displayStocks = useMemo(() => {
+    const enrichedMap = new Map(enrichedStocks.map((s) => [s.symbol, s]));
+    const merged = basicStocks.map((s) => enrichedMap.get(s.symbol) ?? s);
+    return applySort(merged, sort);
+  }, [basicStocks, enrichedStocks, sort]);
 
   const onTableChange: TableProps<StockRecord>["onChange"] = (_pagination, _filters, sorter) => {
     if (!Array.isArray(sorter) && sorter.field) {

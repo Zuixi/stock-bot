@@ -5,7 +5,7 @@ import type { TableProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { StockTable } from "@/features/market/components/StockTable";
 import type { StockRecord } from "@/shared/types";
-import { fetchSwIndustryTree, fetchSwLevel2Stocks, fetchSwLevel3Stocks } from "@/shared/api/swIndustry";
+import { fetchSwIndustryTree, fetchSwLevel2Stocks, fetchSwLevel3Stocks, fetchSwLevel2StocksEnriched, fetchSwLevel3StocksEnriched } from "@/shared/api/swIndustry";
 
 type SortState = {
   sortBy?: keyof StockRecord;
@@ -40,6 +40,7 @@ export default function IndustryLevel3Page() {
     [level1, level2Code]
   );
 
+  // ── Fast: basic stock metadata (renders immediately) ──
   const { data: baseLevel2Stocks = [], isLoading: level2Loading } = useQuery({
     queryKey: ["sw-level2-stocks", level1Code, level2Code],
     queryFn: () => fetchSwLevel2Stocks(level1Code, level2Code),
@@ -51,10 +52,29 @@ export default function IndustryLevel3Page() {
     enabled: Boolean(level1Code && level2Code && selectedLevel3Code),
   });
 
+  // ── Deferred: quote + daily_basic (fills financial columns async) ──
+  const { data: enrichedLevel2Stocks = [] } = useQuery({
+    queryKey: ["sw-level2-stocks-enriched", level1Code, level2Code],
+    queryFn: () => fetchSwLevel2StocksEnriched(level1Code, level2Code),
+    enabled: Boolean(level1Code && level2Code && baseLevel2Stocks.length > 0),
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+  const { data: enrichedLevel3Stocks = [] } = useQuery({
+    queryKey: ["sw-level3-stocks-enriched", level1Code, level2Code, selectedLevel3Code],
+    queryFn: () => fetchSwLevel3StocksEnriched(level1Code, level2Code, selectedLevel3Code ?? ""),
+    enabled: Boolean(level1Code && level2Code && selectedLevel3Code && baseLevel3Stocks.length > 0),
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+
   const stocks = useMemo(() => {
-    const source = selectedLevel3Code ? baseLevel3Stocks : baseLevel2Stocks;
-    return applySort(source, sort);
-  }, [baseLevel2Stocks, baseLevel3Stocks, selectedLevel3Code, sort]);
+    const baseSource = selectedLevel3Code ? baseLevel3Stocks : baseLevel2Stocks;
+    const enrichedSource = selectedLevel3Code ? enrichedLevel3Stocks : enrichedLevel2Stocks;
+    const enrichedMap = new Map(enrichedSource.map((s) => [s.symbol, s]));
+    const merged = baseSource.map((s) => enrichedMap.get(s.symbol) ?? s);
+    return applySort(merged, sort);
+  }, [baseLevel2Stocks, baseLevel3Stocks, enrichedLevel2Stocks, enrichedLevel3Stocks, selectedLevel3Code, sort]);
 
   const onTableChange: TableProps<StockRecord>["onChange"] = (_pagination, _filters, sorter) => {
     if (!Array.isArray(sorter) && sorter.field) {
@@ -117,7 +137,11 @@ export default function IndustryLevel3Page() {
         extra={<Tag color={selectedLevel3Code ? "purple" : "blue"}>{selectedLevel3Code ? "三级" : "二级"}</Tag>}
       >
         {stocks.length > 0 ? (
-          <StockTable data={stocks} onChange={onTableChange} loading={selectedLevel3Code ? level3Loading : level2Loading} />
+          <StockTable
+            data={stocks}
+            onChange={onTableChange}
+            loading={selectedLevel3Code ? level3Loading : level2Loading}
+          />
         ) : (
           <Empty description="暂无个股数据" />
         )}

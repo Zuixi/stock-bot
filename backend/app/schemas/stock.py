@@ -35,6 +35,24 @@ class StockOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class StockEnrichedOut(StockOut):
+    """StockOut augmented with latest quote and daily_basic indicators."""
+
+    # Quote fields
+    latest_price: float | None = None
+    prev_close: float | None = None
+    change: float | None = None
+    change_percent: float | None = None
+    volume: int | None = None
+    amount: float | None = None
+    # Daily basic fields
+    pe_ttm: float | None = None
+    pb: float | None = None
+    total_mv: float | None = None
+    circ_mv: float | None = None
+    turnover_rate: float | None = None
+
+
 class StockListParams(BaseModel):
     exchange: str | None = None
     category: str | None = None
