@@ -1,42 +1,11 @@
 import { apiGet, apiPut } from "./client";
-import { mapBackendStock, type BackendStock } from "./stocks";
+import {
+    mapBackendStock,
+    mapBackendStockEnriched,
+    type BackendStock,
+    type BackendStockEnriched,
+} from "./stocks";
 import type { StockRecord, SwTagOption, StockSwTag } from "@/shared/types";
-
-// ---------------------------------------------------------------------------
-// Enriched backend stock — includes quote + daily_basic fields
-// ---------------------------------------------------------------------------
-
-export interface BackendStockEnriched extends BackendStock {
-    // Quote fields
-    latest_price?: number | null;
-    prev_close?: number | null;
-    change?: number | null;
-    change_percent?: number | null;
-    volume?: number | null;
-    amount?: number | null;
-    // Daily basic fields
-    pe_ttm?: number | null;
-    pb?: number | null;
-    total_mv?: number | null;
-    circ_mv?: number | null;
-    turnover_rate?: number | null;
-}
-
-export function mapBackendStockEnriched(item: BackendStockEnriched): StockRecord {
-    const base = mapBackendStock(item as BackendStock);
-    return {
-        ...base,
-        latestPrice: item.latest_price ?? undefined,
-        change: item.change ?? undefined,
-        changePercent: item.change_percent ?? undefined,
-        volume: item.volume ?? undefined,
-        turnover: item.amount ?? undefined,
-        marketCap: item.total_mv ?? undefined,
-        circulatingCap: item.circ_mv ?? undefined,
-        pe: item.pe_ttm ?? undefined,
-        pb: item.pb ?? undefined,
-    };
-}
 
 // ---------------------------------------------------------------------------
 // SW industry tree & levels

@@ -7,7 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.redis import CacheClient
 from app.repositories import stock_repo
 from app.schemas.common import PageParams
-from app.schemas.stock import CategoryOut, ExchangeOut, StockListParams, StockOut
+from app.schemas.stock import (
+    CategoryOut, ExchangeOut, StockEnrichedOut, StockListParams, StockOut,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,40 @@ async def get_stock(
 
 def list_exchanges() -> list[ExchangeOut]:
     return _EXCHANGES
+
+
+async def list_stocks_enriched(
+    db: AsyncSession,
+    cache: CacheClient,
+    params: StockListParams,
+    page_params: PageParams,
+) -> tuple[list[StockEnrichedOut], int]:
+    """Paginated stock list with latest quote + daily_basic enriched."""
+    # 1. Get paginated stock list (same as bare list_stocks)
+    stocks, total = await stock_repo.list_stocks(
+        db, params, offset=page_params.offset, limit=page_params.page_size,
+    )
+    if not stocks:
+        return [], 0
+
+    # 2. Enrich with quote + daily_basic (reuses existing enriched query)
+    from app.services.market_service import get_stocks_enriched_by_symbols  # noqa: PLC0415
+
+    symbols = [s.symbol for s in stocks]
+    enriched_list = await get_stocks_enriched_by_symbols(db, symbols)
+    enriched_map = {e.symbol: e for e in enriched_list}
+
+    # 3. Maintain original page order, fallback to bare StockOut for missing
+    items: list[StockEnrichedOut] = []
+    for s in stocks:
+        enriched = enriched_map.get(s.symbol)
+        if enriched:
+            items.append(enriched)
+        else:
+            base = StockOut.model_validate(s)
+            items.append(StockEnrichedOut(**base.model_dump()))
+
+    return items, total
 
 
 async def list_categories(
