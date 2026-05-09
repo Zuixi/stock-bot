@@ -1,27 +1,15 @@
 import { Typography, Card, Alert } from "antd";
 import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
 import type { TableProps } from "antd";
 import { MarketFilters } from "@/features/market/components/MarketFilters";
 import { StockTable } from "@/features/market/components/StockTable";
-import { fetchCategories, fetchStocksMerged, fetchStocksMergedEnriched } from "@/shared/api/stocks";
+import { fetchStocksMerged, fetchStocksMergedEnriched } from "@/shared/api/stocks";
 import type { Exchange } from "@/shared/types";
 import type { StockRecord } from "@/shared/types";
 
 export default function CategoryPage() {
-  const [searchParams] = useSearchParams();
-
-  const [filters, setFilters] = useState<{ exchange?: Exchange; category?: string }>({
-    category: searchParams.get("industry") ?? undefined,
-  });
-
-  useEffect(() => {
-    setFilters((prev) => ({
-      ...prev,
-      category: searchParams.get("industry") ?? undefined,
-    }));
-  }, [searchParams]);
+  const [filters, setFilters] = useState<{ exchange?: Exchange }>({});
   const [sort, setSort] = useState<{ sortBy?: keyof StockRecord; sortOrder?: "asc" | "desc" }>({
     sortBy: "symbol",
     sortOrder: "asc",
@@ -33,15 +21,14 @@ export default function CategoryPage() {
 
   useEffect(() => {
     setPagination({ page: 1, pageSize: 20 });
-  }, [filters.exchange, filters.category]);
+  }, [filters.exchange]);
 
   // ── Fast: basic stock metadata (renders skeleton immediately) ──
   const { data: remoteStocks, isLoading, error } = useQuery({
-    queryKey: ["market-category-stocks", filters.exchange, filters.category, pagination.page, pagination.pageSize],
+    queryKey: ["market-category-stocks", filters.exchange, pagination.page, pagination.pageSize],
     queryFn: () =>
       fetchStocksMerged({
         exchange: filters.exchange,
-        category: filters.category,
         page: pagination.page,
         page_size: pagination.pageSize,
       }),
@@ -49,11 +36,10 @@ export default function CategoryPage() {
 
   // ── Deferred: quote + daily_basic (fills financial columns async) ──
   const { data: enrichedStocks } = useQuery({
-    queryKey: ["market-category-stocks-enriched", filters.exchange, filters.category, pagination.page, pagination.pageSize],
+    queryKey: ["market-category-stocks-enriched", filters.exchange, pagination.page, pagination.pageSize],
     queryFn: () =>
       fetchStocksMergedEnriched({
         exchange: filters.exchange,
-        category: filters.category,
         page: pagination.page,
         page_size: pagination.pageSize,
       }),
@@ -61,40 +47,21 @@ export default function CategoryPage() {
     staleTime: 30_000,
   });
 
-  const { data: categoryRows = [] } = useQuery({
-    queryKey: ["market-categories", filters.exchange],
-    queryFn: () => fetchCategories(filters.exchange),
-  });
-
-  const categories = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          categoryRows
-            .filter((row) => (!filters.exchange ? true : row.exchange === filters.exchange))
-            .map((row) => row.category)
-        )
-      ),
-    [categoryRows, filters.exchange]
-  );
-
   // Merge basic (skeleton) with enriched (financial fields)
-  const data = useMemo(
-    () => {
-      const enrichedMap = new Map((enrichedStocks?.items ?? []).map((s) => [s.symbol, s]));
-      const listSource = remoteStocks?.items ?? [];
-      const list = listSource.map((s) => enrichedMap.get(s.symbol) ?? s);
-      if (!sort.sortBy) return list;
-      const direction = sort.sortOrder === "asc" ? 1 : -1;
-      list.sort((a, b) => {
-        const av = a[sort.sortBy!] ?? 0;
-        const bv = b[sort.sortBy!] ?? 0;
-        return av > bv ? direction : av < bv ? -direction : 0;
-      });
-      return list;
-    },
-    [remoteStocks?.items, enrichedStocks?.items, sort]
-  );
+  const data = useMemo(() => {
+    const enrichedMap = new Map((enrichedStocks?.items ?? []).map((s) => [s.symbol, s]));
+    const listSource = remoteStocks?.items ?? [];
+    const list = listSource.map((s) => enrichedMap.get(s.symbol) ?? s);
+    if (!sort.sortBy) return list;
+    const direction = sort.sortOrder === "asc" ? 1 : -1;
+    list.sort((a, b) => {
+      const av = a[sort.sortBy!] ?? 0;
+      const bv = b[sort.sortBy!] ?? 0;
+      return av > bv ? direction : av < bv ? -direction : 0;
+    });
+    return list;
+  }, [remoteStocks?.items, enrichedStocks?.items, sort]);
+
   const total = remoteStocks?.total ?? 0;
 
   const handleTableChange: TableProps<StockRecord>["onChange"] = (tablePagination, _filters, sorter) => {
@@ -118,7 +85,7 @@ export default function CategoryPage() {
       <Typography.Title level={4}>分类市场</Typography.Title>
 
       <Card size="small" style={{ marginBottom: 16 }}>
-        <MarketFilters value={filters} categories={categories} onChange={setFilters} />
+        <MarketFilters value={filters} onChange={setFilters} />
       </Card>
 
       {error ? (
