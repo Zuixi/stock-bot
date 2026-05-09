@@ -174,6 +174,20 @@ export async function fetchStockBySymbol(symbol: string): Promise<StockRecord | 
   return null;
 }
 
+export async function fetchStockEnrichedBySymbol(symbol: string): Promise<StockRecord | null> {
+  for (const exchange of EXCHANGES) {
+    try {
+      const item = await apiGet<BackendStockEnriched>(
+        `/api/v1/exchanges/${exchange}/stocks/${symbol}/enriched`
+      );
+      return mapBackendStockEnriched(item);
+    } catch {
+      // try next exchange
+    }
+  }
+  return null;
+}
+
 export async function fetchCategories(exchange?: Exchange): Promise<BackendCategory[]> {
   const response = await apiGet<BackendCategory[]>("/api/v1/exchanges/categories", {
     exchange,

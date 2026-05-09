@@ -62,6 +62,25 @@ async def get_stock(
     return out
 
 
+async def get_stock_enriched(
+    db: AsyncSession, cache: CacheClient, exchange: str, symbol: str,
+) -> StockEnrichedOut | None:
+    """Single stock with latest quote + daily_basic enriched."""
+    cache_key = f"stock:enriched:{exchange}:{symbol}"
+    cached = await cache.get(cache_key)
+    if cached:
+        return StockEnrichedOut(**cached)
+
+    from app.services.market_service import get_stocks_enriched_by_symbols  # noqa: PLC0415
+
+    enriched_list = await get_stocks_enriched_by_symbols(db, [symbol])
+    if not enriched_list:
+        return None
+    out = enriched_list[0]
+    await cache.set(cache_key, out.model_dump(mode="json"), ttl=300)
+    return out
+
+
 def list_exchanges() -> list[ExchangeOut]:
     return _EXCHANGES
 
