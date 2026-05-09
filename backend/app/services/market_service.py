@@ -1011,24 +1011,27 @@ SELECT
     d.circ_mv   AS circ_mv,
     d.turnover_rate AS turnover_rate
 FROM stocks s
-LEFT JOIN (
-    SELECT DISTINCT ON (stock_id)
-           stock_id, close, volume, amount, trade_date
+LEFT JOIN LATERAL (
+    SELECT close, volume, amount, trade_date
     FROM daily_quotes
-    ORDER BY stock_id, trade_date DESC
-) q ON q.stock_id = s.id
-LEFT JOIN daily_quotes q2 ON q2.stock_id = s.id
-    AND q2.trade_date = (
-        SELECT MAX(dq.trade_date)
-        FROM daily_quotes dq
-        WHERE dq.stock_id = s.id AND dq.trade_date < q.trade_date
-    )
-LEFT JOIN (
-    SELECT DISTINCT ON (stock_id)
-           stock_id, pe_ttm, pb, total_mv, circ_mv, turnover_rate
+    WHERE stock_id = s.id
+    ORDER BY trade_date DESC
+    LIMIT 1
+) q ON true
+LEFT JOIN LATERAL (
+    SELECT close
+    FROM daily_quotes
+    WHERE stock_id = s.id AND trade_date < q.trade_date
+    ORDER BY trade_date DESC
+    LIMIT 1
+) q2 ON true
+LEFT JOIN LATERAL (
+    SELECT pe_ttm, pb, total_mv, circ_mv, turnover_rate
     FROM daily_basic_indicators
-    ORDER BY stock_id, trade_date DESC
-) d ON d.stock_id = s.id
+    WHERE stock_id = s.id
+    ORDER BY trade_date DESC
+    LIMIT 1
+) d ON true
 WHERE s.symbol = ANY(:symbols)
 ORDER BY s.symbol
 """

@@ -2,7 +2,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { Typography, Result, Button, Divider, Row, Col, Spin } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { StockHeader, KLineChart, FundamentalCards, CustomSwTags, UserTags } from "@/features/stock-detail/components";
-import { fetchStockBySymbol } from "@/shared/api/stocks";
+import { fetchStockEnrichedBySymbol } from "@/shared/api/stocks";
 
 export default function StockDetailPage() {
   const { symbol } = useParams<{ symbol: string }>();
@@ -10,7 +10,7 @@ export default function StockDetailPage() {
 
   const { data: stock, isLoading } = useQuery({
     queryKey: ["stock-detail", symbol],
-    queryFn: async () => (symbol ? fetchStockBySymbol(symbol) : null),
+    queryFn: async () => (symbol ? fetchStockEnrichedBySymbol(symbol) : null),
     enabled: Boolean(symbol),
   });
 

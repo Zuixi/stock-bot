@@ -18,5 +18,6 @@
 - 调试数据空白问题时，优先直调后端 API 确认响应字段，再追代码。空字段可能来自三层中任意一层：后端未查 → schema 未定义 → 前端映射硬编码 undefined。本次三层全中。
 - 公共类型/映射函数应集中在语义匹配的模块中（如 `BackendStockEnriched` 从 `swIndustry.ts` 移到 `stocks.ts`），避免使用者因模块名误导而重复实现。
 - 数据回填路径应采用"APScheduler 定时任务（自动）+ RabbitMQ Worker（手动触发）"双轨制：APScheduler 处理每日增量避免遗漏，Worker 队列支持手动任意时间回补；两者共用同一 `ingest_daily_*` Service 方法，保证逻辑一致性。
+- 批量金融数据查询中 `DISTINCT ON (stock_id) ... FROM daily_quotes ORDER BY stock_id, trade_date DESC` 会对**全表**做 Seq Scan + Sort（3.8M rows），与 WHERE 条件解耦导致单次查询 3.5s。应使用 `LATERAL (SELECT ... WHERE stock_id = s.id ORDER BY trade_date DESC LIMIT 1)` 将过滤条件推入子查询，利用 `(stock_id, trade_date)` 复合索引实现 O(1) 每股票查询，延迟从 3.5s 降至 ~20ms（150x+ 提升）。
 - 新增 Scheduler 定时任务需要在 `runner.py` 的 `create_scheduler()` 中注册 `CronTrigger` 并在 `jobs.py` 中实现处理函数；同时在 `mq.py` 的 `QUEUES` 字典注册队列名，使 Worker 能消费消息。
 - 新增 Worker 队列消息类型时，需要同步新增：Schema（`Fetch*Request`）、Service 方法（`trigger_fetch_*`）、API 端点（`POST /tasks/fetch-*`）—— 三者缺一则端到端不通。

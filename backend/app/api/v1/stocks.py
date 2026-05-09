@@ -122,6 +122,19 @@ async def get_stock(
     return stock
 
 
+@stocks_router.get("/{symbol}/enriched", response_model=StockEnrichedOut)
+async def get_stock_enriched(
+    exchange: str,
+    symbol: str,
+    db: DbDep,
+    cache: CacheDep,
+) -> StockEnrichedOut:
+    stock = await stock_service.get_stock_enriched(db, cache, exchange, symbol)
+    if stock is None:
+        raise not_found_response("Stock", f"{exchange}/{symbol}")
+    return stock
+
+
 # ── /api/v1/exchanges/{exchange}/stocks/{symbol}/quotes ──────────────────────
 
 @stocks_router.get("/{symbol}/quotes/daily", response_model=KlineResponse)
