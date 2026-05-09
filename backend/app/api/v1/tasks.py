@@ -8,6 +8,7 @@ from app.api.deps import CacheDep, DbDep
 from app.core.exceptions import conflict_response, not_found_response
 from app.schemas.common import PageParams, PagedResponse
 from app.schemas.task import (
+    FetchDailyBasicRequest,
     FetchQuotesRequest,
     FetchUniverseRequest,
     RunClusteringRequest,
@@ -53,6 +54,16 @@ async def fetch_universe(req: FetchUniverseRequest, db: DbDep) -> TaskOut:
 async def fetch_quotes(req: FetchQuotesRequest, db: DbDep) -> TaskOut:
     """Trigger a quotes fetch task."""
     return await task_service.trigger_fetch_quotes(db, req)
+
+
+@router.post(
+    "/fetch-daily-basic",
+    response_model=TaskOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def fetch_daily_basic(req: FetchDailyBasicRequest, db: DbDep) -> TaskOut:
+    """Trigger a daily_basic fetch task (entire market per trade_date)."""
+    return await task_service.trigger_fetch_daily_basic(db, req)
 
 
 @router.post(

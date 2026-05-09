@@ -9,7 +9,12 @@ import signal
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from app.scheduler.jobs import sse_post_close_job, sse_trade_hours_job
+from app.scheduler.jobs import (
+    daily_basic_backfill_job,
+    daily_quotes_backfill_job,
+    sse_post_close_job,
+    sse_trade_hours_job,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,6 +66,36 @@ def create_scheduler() -> AsyncIOScheduler:
         ),
         id="sse_post_close",
         name="SSE post-close snapshot",
+        replace_existing=True,
+    )
+
+    # ── Daily data backfill jobs ──────────────────────────────────
+    # Run after market close so TuShare has processed the day's data.
+    # Quotes: 16:30 Mon-Fri
+    scheduler.add_job(
+        daily_quotes_backfill_job,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour=16,
+            minute=30,
+            timezone="Asia/Shanghai",
+        ),
+        id="daily_quotes_backfill",
+        name="Daily quotes backfill",
+        replace_existing=True,
+    )
+
+    # Daily basic: 16:45 Mon-Fri (after quotes backfill)
+    scheduler.add_job(
+        daily_basic_backfill_job,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour=16,
+            minute=45,
+            timezone="Asia/Shanghai",
+        ),
+        id="daily_basic_backfill",
+        name="Daily basic backfill",
         replace_existing=True,
     )
 

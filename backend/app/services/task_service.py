@@ -10,6 +10,7 @@ from app.core.redis import CacheClient
 from app.repositories import task_repo
 from app.schemas.common import PageParams
 from app.schemas.task import (
+    FetchDailyBasicRequest,
     FetchQuotesRequest,
     FetchUniverseRequest,
     RunClusteringRequest,
@@ -42,6 +43,20 @@ async def trigger_fetch_quotes(
         {"task_id": str(task.id), "type": "fetch_quotes", "payload": payload},
     )
     logger.info("Dispatched fetch_quotes task %s", task.id)
+    return TaskOut.model_validate(task)
+
+
+async def trigger_fetch_daily_basic(
+    db: AsyncSession, req: FetchDailyBasicRequest
+) -> TaskOut:
+    """Trigger a daily_basic fetch task (entire market per trade_date)."""
+    payload = req.model_dump(exclude_none=True)
+    task = await task_repo.create_task(db, "fetch_daily_basic", payload)
+    await publish_message(
+        "daily_basic.fetch",
+        {"task_id": str(task.id), "type": "fetch_daily_basic", "payload": payload},
+    )
+    logger.info("Dispatched fetch_daily_basic task %s", task.id)
     return TaskOut.model_validate(task)
 
 

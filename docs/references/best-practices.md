@@ -13,3 +13,10 @@
 - 当分类数据同时存在“官方成员映射”和“用户自定义标签”时，应在树统计、详情列表和兜底分类中统一按并集去重计算，防止展示与筛选结果不一致。
 - 对会影响聚合视图的数据编辑操作，应成对执行“前端 query invalidation + 后端 Redis 聚合键清理”，避免页面在 TTL 期间显示过期计数。
 - 列表页的批量金融数据展示应使用单次 JOIN 查询（`DISTINCT ON` + 子查询）一次获取全部股票的行情/基本面字段，而非前端逐只股票 N+1 请求，避免首屏数据空白和 API 洪泛。
+- 当已有页面解决过同类问题时，优先复用其基础设施（schema、service、SQL、前端映射函数）而非重新实现。本次 `market-industry-level2` 的 `StockEnrichedOut` + `get_stocks_enriched_by_symbols()` + `mapBackendStockEnriched()` 整套链路可直接复用，只需新增一个端点。
+- Docker build 缓存不可信：`COPY . .` 步骤即便显示 `DONE`（非 CACHED），实际可能未检测到文件变更（OrbStack on macOS 已知问题）。每次 rebuild 后必须 `docker exec` 验证容器内文件内容，不可仅依赖构建输出。
+- 调试数据空白问题时，优先直调后端 API 确认响应字段，再追代码。空字段可能来自三层中任意一层：后端未查 → schema 未定义 → 前端映射硬编码 undefined。本次三层全中。
+- 公共类型/映射函数应集中在语义匹配的模块中（如 `BackendStockEnriched` 从 `swIndustry.ts` 移到 `stocks.ts`），避免使用者因模块名误导而重复实现。
+- 数据回填路径应采用"APScheduler 定时任务（自动）+ RabbitMQ Worker（手动触发）"双轨制：APScheduler 处理每日增量避免遗漏，Worker 队列支持手动任意时间回补；两者共用同一 `ingest_daily_*` Service 方法，保证逻辑一致性。
+- 新增 Scheduler 定时任务需要在 `runner.py` 的 `create_scheduler()` 中注册 `CronTrigger` 并在 `jobs.py` 中实现处理函数；同时在 `mq.py` 的 `QUEUES` 字典注册队列名，使 Worker 能消费消息。
+- 新增 Worker 队列消息类型时，需要同步新增：Schema（`Fetch*Request`）、Service 方法（`trigger_fetch_*`）、API 端点（`POST /tasks/fetch-*`）—— 三者缺一则端到端不通。

@@ -5,6 +5,15 @@
 - 一句话总结更新的内容
 - 涉及模块有哪些，不需要列出具体文件，只需要列出模块名
 
+## 2026-05-09 - 数据回填管道完善（APScheduler 定时任务 + 手动触发 API）
+- **问题**：每日增量数据回填未纳入 APScheduler，导致系统只依赖启动时一次性回补；缺失手动触发 daily_basic 回填的 API 端点
+- **修复**：
+  - 新增 APScheduler 定时任务 `daily_quotes_backfill_job`（16:30）和 `daily_basic_backfill_job`（16:45），工作日 16:30-16:45 执行昨日数据回填
+  - 新增 `POST /api/v1/tasks/fetch-daily-basic` 端点，可手动触发 daily_basic 全量回填
+  - 新增 `FetchDailyBasicRequest` Schema + `trigger_fetch_daily_basic()` Service 方法
+  - `DailyBasicWorker` 已支持队列消费，只需发送对应 payload 即可触发
+- 涉及模块：backend/scheduler/jobs, backend/scheduler/runner, backend/api/v1/tasks, backend/services/task_service, backend/schemas/task
+
 ## 2026-05-08 - 申万分类详情页金融数据空白修复（含完整数据链路闭环）
 - **问题**：申万行业详情页个股表格金融列全空（最新价/涨跌幅/成交额/市值/PE），根因有三层：
   1. 前端 `mapBackendStock` 把金融字段硬编码 `undefined`
