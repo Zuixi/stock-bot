@@ -1,11 +1,11 @@
-"""Scheduled job definitions for SSE index snapshot collection."""
+"""Scheduled job definitions for SSE index snapshot + daily data backfill."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 import random
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -64,3 +64,87 @@ async def sse_post_close_job() -> None:
 
     logger.info("SSE post-close job triggered")
     await _collect_sse_snapshots()
+
+
+# ------------------------------------------------------------------
+# Daily data ingestion jobs (TuShare "daily" + "daily_basic" APIs)
+# ------------------------------------------------------------------
+
+async def _fetch_yesterday_daily_quotes() -> None:
+    """Fetch yesterday's full-market daily quotes and persist to DB."""
+    yesterday = date.today() - timedelta(days=1)
+    while yesterday.weekday() >= 5:
+        yesterday -= timedelta(days=1)
+    trade_date = yesterday.strftime("%Y%m%d")
+
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.repositories import quote_repo  # noqa: PLC0415
+    from app.services.tushare_ingest import TuShareIngestService  # noqa: PLC0415
+
+    try:
+        async with async_session_factory() as db:
+            if await quote_repo.trade_date_exists(db, yesterday):
+                logger.info("Skipping quotes backfill — trade_date=%s already exists", trade_date)
+                return
+
+        service = TuShareIngestService()
+        async with async_session_factory() as db:
+            result = await service.ingest_daily_quotes(db, trade_date)
+            await db.commit()
+            logger.info("Daily quotes backfill: trade_date=%s upserted=%d", trade_date, result.get("upserted", 0))
+    except Exception:
+        logger.exception("Daily quotes backfill failed for trade_date=%s", trade_date)
+
+
+async def _fetch_yesterday_daily_basic() -> None:
+    """Fetch yesterday's full-market daily_basic indicators and persist to DB."""
+    yesterday = date.today() - timedelta(days=1)
+    while yesterday.weekday() >= 5:
+        yesterday -= timedelta(days=1)
+    trade_date = yesterday.strftime("%Y%m%d")
+
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.repositories import daily_basic_repo  # noqa: PLC0415
+    from app.services.tushare_ingest import TuShareIngestService  # noqa: PLC0415
+
+    try:
+        async with async_session_factory() as db:
+            if await daily_basic_repo.trade_date_exists(db, yesterday):
+                logger.info("Skipping daily_basic backfill — trade_date=%s already exists", trade_date)
+                return
+
+        service = TuShareIngestService()
+        async with async_session_factory() as db:
+            result = await service.ingest_daily_basic(db, trade_date)
+            await db.commit()
+            logger.info("Daily basic backfill: trade_date=%s upserted=%d", trade_date, result.get("upserted", 0))
+    except Exception:
+        logger.exception("Daily basic backfill failed for trade_date=%s", trade_date)
+
+
+async def daily_quotes_backfill_job() -> None:
+    """Run daily quotes backfill after market close (16:30 Mon-Fri).
+
+    Fetches yesterday's trade date data so there's enough buffer for
+    TuShare to have processed the day's results.
+    """
+    if not _is_workday():
+        logger.debug("Skipping daily quotes backfill — not a workday")
+        return
+
+    logger.info("Daily quotes backfill job triggered")
+    await _fetch_yesterday_daily_quotes()
+
+
+async def daily_basic_backfill_job() -> None:
+    """Run daily_basic backfill after market close (16:45 Mon-Fri).
+
+    Must run after daily_quotes_backfill_job since daily_basic uses
+    the same trade_date source.
+    """
+    if not _is_workday():
+        logger.debug("Skipping daily_basic backfill — not a workday")
+        return
+
+    logger.info("Daily basic backfill job triggered")
+    await _fetch_yesterday_daily_basic()

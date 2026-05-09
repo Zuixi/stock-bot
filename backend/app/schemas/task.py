@@ -40,6 +40,11 @@ class FetchQuotesRequest(BaseModel):
     end_date: str | None = None
 
 
+class FetchDailyBasicRequest(BaseModel):
+    start_date: str | None = None
+    end_date: str | None = None
+
+
 class RunClusteringRequest(BaseModel):
     algorithm: str = "kmeans"
     n_clusters: int = 10

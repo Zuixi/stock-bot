@@ -73,6 +73,15 @@ async def get_trade_date_bounds_for_stocks(
     return data
 
 
+async def trade_date_exists(db: AsyncSession, trade_date: date) -> bool:
+    """Return True if any daily_quotes row exists for the given trade_date."""
+    from sqlalchemy import select, exists
+
+    stmt = select(exists().where(DailyQuote.trade_date == trade_date))
+    result = await db.execute(stmt)
+    return result.scalar() is True
+
+
 async def upsert_quotes(db: AsyncSession, quotes: list[DailyQuote]) -> int:
     """Bulk upsert daily quotes; returns the number of rows affected."""
     from sqlalchemy.dialects.postgresql import insert

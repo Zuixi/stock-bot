@@ -43,6 +43,15 @@ async def get_latest_daily_basic(
     return result.scalar_one_or_none()
 
 
+async def trade_date_exists(db: AsyncSession, trade_date: date) -> bool:
+    """Return True if any daily_basic_indicators row exists for the given trade_date."""
+    from sqlalchemy import select, exists
+
+    stmt = select(exists().where(DailyBasicIndicator.trade_date == trade_date))
+    result = await db.execute(stmt)
+    return result.scalar() is True
+
+
 async def upsert_daily_basics(
     db: AsyncSession, records: list[DailyBasicIndicator]
 ) -> int:
