@@ -15,9 +15,12 @@ interface Props {
   pageSize?: number;
   loading?: boolean;
   onChange?: TableProps<StockRecord>["onChange"];
+  /** Controlled sort — parent owns the sort state, StockTable only shows the indicator. */
+  sortBy?: keyof StockRecord;
+  sortOrder?: "ascend" | "descend";
 }
 
-export function StockTable({ data, total, current, pageSize, loading, onChange }: Props) {
+export function StockTable({ data, total, current, pageSize, loading, onChange, sortBy, sortOrder }: Props) {
   const navigate = useNavigate();
   const { items, toggle } = useWatchlistStore();
   const [paginationState, setPaginationState] = useState<{ current: number; pageSize: number }>({
@@ -100,6 +103,7 @@ export function StockTable({ data, total, current, pageSize, loading, onChange }
       dataIndex: "latestPrice",
       width: 90,
       sorter: true,
+      sortOrder: sortBy === "latestPrice" ? sortOrder : undefined,
       align: "right" as const,
       render: (v: number | undefined) => <NumberText value={v} />,
     },
@@ -108,6 +112,7 @@ export function StockTable({ data, total, current, pageSize, loading, onChange }
       dataIndex: "changePercent",
       width: 90,
       sorter: true,
+      sortOrder: sortBy === "changePercent" ? sortOrder : undefined,
       align: "right" as const,
       render: (v: number | undefined) => <ChangeText value={v} />,
     },
@@ -116,6 +121,7 @@ export function StockTable({ data, total, current, pageSize, loading, onChange }
       dataIndex: "turnover",
       width: 100,
       sorter: true,
+      sortOrder: sortBy === "turnover" ? sortOrder : undefined,
       align: "right" as const,
       render: (v: number | undefined) => <NumberText value={v} />,
     },
@@ -124,6 +130,7 @@ export function StockTable({ data, total, current, pageSize, loading, onChange }
       dataIndex: "marketCap",
       width: 100,
       sorter: true,
+      sortOrder: sortBy === "marketCap" ? sortOrder : undefined,
       align: "right" as const,
       render: (v: number | undefined) => <NumberText value={v} unit="cap" />,
     },
@@ -132,6 +139,7 @@ export function StockTable({ data, total, current, pageSize, loading, onChange }
       dataIndex: "pe",
       width: 80,
       sorter: true,
+      sortOrder: sortBy === "pe" ? sortOrder : undefined,
       align: "right" as const,
       render: (v: number | undefined) => <NumberText value={v} />,
     },

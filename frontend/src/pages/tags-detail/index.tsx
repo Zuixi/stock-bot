@@ -77,7 +77,7 @@ export default function TagsDetailPage() {
         {stocks.length === 0 && !isLoading ? (
           <Empty description="该标签下暂无股票" />
         ) : (
-          <StockTable data={displayStocks} onChange={onTableChange} loading={isLoading} />
+          <StockTable data={displayStocks} onChange={onTableChange} sortBy={sort.sortBy} sortOrder={sort.sortOrder === "asc" ? "ascend" : "descend"} loading={isLoading} />
         )}
       </Card>
     </Space>

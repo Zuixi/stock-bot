@@ -57,6 +57,8 @@ class StockListParams(BaseModel):
     exchange: str | None = None
     category: str | None = None
     keyword: str | None = None
+    sort_by: str | None = None
+    sort_order: str | None = None  # "asc" | "desc"
 
 
 class ExchangeOut(BaseModel):

@@ -140,6 +140,8 @@ export default function IndustryLevel3Page() {
           <StockTable
             data={stocks}
             onChange={onTableChange}
+            sortBy={sort.sortBy}
+            sortOrder={sort.sortOrder === "asc" ? "ascend" : "descend"}
             loading={selectedLevel3Code ? level3Loading : level2Loading}
           />
         ) : (
