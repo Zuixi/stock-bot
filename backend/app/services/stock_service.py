@@ -91,22 +91,53 @@ async def list_stocks_enriched(
     params: StockListParams,
     page_params: PageParams,
 ) -> tuple[list[StockEnrichedOut], int]:
-    """Paginated stock list with latest quote + daily_basic enriched."""
-    # 1. Get paginated stock list (same as bare list_stocks)
+    """Paginated stock list with latest quote + daily_basic enriched.
+
+    When sort_by is provided, fetches ALL matching stocks, enriches them,
+    sorts in Python, then paginates. This adds ~70ms for 2300 stocks (LATERAL).
+    Without sort_by, uses the original pagination-then-enrich flow.
+    """
+    from app.services.market_service import get_stocks_enriched_by_symbols  # noqa: PLC0415
+
+    if params.sort_by:
+        # ── Sort path: fetch all → enrich all → sort → paginate ──
+        all_stocks, total = await stock_repo.list_stocks(
+            db, params, offset=0, limit=10_000,
+        )
+        if not all_stocks:
+            return [], 0
+        symbols = [s.symbol for s in all_stocks]
+        enriched_list = await get_stocks_enriched_by_symbols(db, symbols)
+        enriched_map = {e.symbol: e for e in enriched_list}
+
+        items: list[StockEnrichedOut] = []
+        for s in all_stocks:
+            enriched = enriched_map.get(s.symbol)
+            if enriched:
+                items.append(enriched)
+            else:
+                base = StockOut.model_validate(s)
+                items.append(StockEnrichedOut(**base.model_dump()))
+
+        # Sort
+        reverse = params.sort_order == "desc"
+        key = _sort_key_for(params.sort_by, reverse)
+        items.sort(key=key, reverse=reverse)
+
+        # Paginate
+        return items[page_params.offset : page_params.offset + page_params.page_size], total
+
+    # ── Fast path: paginate first, enrich only the page ──
     stocks, total = await stock_repo.list_stocks(
         db, params, offset=page_params.offset, limit=page_params.page_size,
     )
     if not stocks:
         return [], 0
 
-    # 2. Enrich with quote + daily_basic (reuses existing enriched query)
-    from app.services.market_service import get_stocks_enriched_by_symbols  # noqa: PLC0415
-
     symbols = [s.symbol for s in stocks]
     enriched_list = await get_stocks_enriched_by_symbols(db, symbols)
     enriched_map = {e.symbol: e for e in enriched_list}
 
-    # 3. Maintain original page order, fallback to bare StockOut for missing
     items: list[StockEnrichedOut] = []
     for s in stocks:
         enriched = enriched_map.get(s.symbol)
@@ -117,6 +148,20 @@ async def list_stocks_enriched(
             items.append(StockEnrichedOut(**base.model_dump()))
 
     return items, total
+
+
+def _sort_key_for(field: str, reverse: bool):
+    """Return a sort key function for the given StockEnrichedOut field."""
+    field_map = {
+        "latestPrice": lambda s: (s.latest_price is None, s.latest_price or 0),
+        "changePercent": lambda s: (s.change_percent is None, s.change_percent or 0),
+        "turnover": lambda s: (s.amount is None, s.amount or 0),
+        "marketCap": lambda s: (s.total_mv is None, s.total_mv or 0),
+        "pe": lambda s: (s.pe_ttm is None, s.pe_ttm or 0),
+        "symbol": lambda s: s.symbol or "",
+        "name": lambda s: s.name or "",
+    }
+    return field_map.get(field, lambda s: s.symbol or "")
 
 
 async def list_categories(

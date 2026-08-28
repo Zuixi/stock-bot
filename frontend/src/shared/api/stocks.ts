@@ -144,6 +144,8 @@ export async function fetchStocksMergedEnriched(params: {
   keyword?: string;
   page?: number;
   page_size?: number;
+  sort_by?: string;
+  sort_order?: string;
 }): Promise<BackendPagedResponse<StockRecord>> {
   const pageSize = params.page_size ?? 100;
   const response = await apiGet<BackendPagedResponse<BackendStockEnriched>>(
@@ -154,6 +156,8 @@ export async function fetchStocksMergedEnriched(params: {
       keyword: params.keyword,
       page: params.page ?? 1,
       page_size: pageSize,
+      sort_by: params.sort_by,
+      sort_order: params.sort_order,
     }
   );
   return {

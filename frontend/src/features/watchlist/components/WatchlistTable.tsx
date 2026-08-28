@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ChangeText, NumberText } from "@/shared/ui";
 import { useWatchlistStore } from "../store";
-import { fetchStockBySymbol } from "@/shared/api/stocks";
+import { fetchStockEnrichedBySymbol } from "@/shared/api/stocks";
 import { EXCHANGE_LABELS } from "@/shared/types";
 import type { StockRecord } from "@/shared/types";
 import type { ColumnsType } from "antd/es/table";
@@ -16,7 +16,7 @@ export function WatchlistTable() {
   const { data = [], isLoading } = useQuery({
     queryKey: ["watchlist-stocks", items],
     queryFn: async () => {
-      const rows = await Promise.all(items.map((symbol) => fetchStockBySymbol(symbol)));
+      const rows = await Promise.all(items.map((symbol) => fetchStockEnrichedBySymbol(symbol)));
       return rows.filter((stock): stock is StockRecord => Boolean(stock));
     },
     enabled: items.length > 0,

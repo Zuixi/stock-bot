@@ -130,7 +130,7 @@ export default function IndustryLevel2Page() {
         size="small"
         extra={<Tag color="blue">一级</Tag>}
       >
-        <StockTable data={displayStocks} onChange={onTableChange} loading={stocksLoading} />
+        <StockTable data={displayStocks} onChange={onTableChange} sortBy={sort.sortBy} sortOrder={sort.sortOrder === "asc" ? "ascend" : "descend"} loading={stocksLoading} />
       </Card>
     </Space>
   );

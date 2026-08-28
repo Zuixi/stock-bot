@@ -23,6 +23,15 @@ export default function CategoryPage() {
     setPagination({ page: 1, pageSize: 20 });
   }, [filters.exchange]);
 
+  useEffect(() => {
+    setPagination((prev) => ({ ...prev, page: 1 }));
+  }, [sort.sortBy, sort.sortOrder]);
+
+  // When sorting by a financial column, the basic query returns a different
+  // set of stocks than the enriched query (which is correctly sorted server-side).
+  // In that case, skip the basic query and use enriched-only mode.
+  const isFinancialSort = !!(sort.sortBy && sort.sortBy !== "symbol" && sort.sortBy !== "name");
+
   // ── Fast: basic stock metadata (renders skeleton immediately) ──
   const { data: remoteStocks, isLoading, error } = useQuery({
     queryKey: ["market-category-stocks", filters.exchange, pagination.page, pagination.pageSize],
@@ -32,47 +41,54 @@ export default function CategoryPage() {
         page: pagination.page,
         page_size: pagination.pageSize,
       }),
+    enabled: !isFinancialSort,
   });
 
   // ── Deferred: quote + daily_basic (fills financial columns async) ──
-  const { data: enrichedStocks } = useQuery({
-    queryKey: ["market-category-stocks-enriched", filters.exchange, pagination.page, pagination.pageSize],
+  const { data: enrichedStocks, isLoading: enrichedLoading } = useQuery({
+    queryKey: [
+      "market-category-stocks-enriched",
+      filters.exchange,
+      pagination.page,
+      pagination.pageSize,
+      ...(isFinancialSort ? [sort.sortBy, sort.sortOrder] : []),
+    ],
     queryFn: () =>
       fetchStocksMergedEnriched({
         exchange: filters.exchange,
         page: pagination.page,
         page_size: pagination.pageSize,
+        ...(isFinancialSort && { sort_by: sort.sortBy as string, sort_order: sort.sortOrder }),
       }),
-    enabled: !!(remoteStocks?.items?.length),
+    enabled: !!(isFinancialSort || remoteStocks?.items?.length),
     staleTime: 30_000,
   });
 
-  // Merge basic (skeleton) with enriched (financial fields)
+  // Merge basic (skeleton) with enriched (financial fields).
+  // When sorting by financial columns, enriched data IS the source of truth.
   const data = useMemo(() => {
+    if (isFinancialSort) return enrichedStocks?.items ?? [];
+
     const enrichedMap = new Map((enrichedStocks?.items ?? []).map((s) => [s.symbol, s]));
     const listSource = remoteStocks?.items ?? [];
-    const list = listSource.map((s) => enrichedMap.get(s.symbol) ?? s);
-    if (!sort.sortBy) return list;
-    const direction = sort.sortOrder === "asc" ? 1 : -1;
-    list.sort((a, b) => {
-      const av = a[sort.sortBy!] ?? 0;
-      const bv = b[sort.sortBy!] ?? 0;
-      return av > bv ? direction : av < bv ? -direction : 0;
-    });
-    return list;
-  }, [remoteStocks?.items, enrichedStocks?.items, sort]);
+    // No client-side sort — sorting is handled server-side or is default symbol order
+    return listSource.map((s) => enrichedMap.get(s.symbol) ?? s);
+  }, [remoteStocks?.items, enrichedStocks?.items, isFinancialSort]);
 
-  const total = remoteStocks?.total ?? 0;
+  const total = isFinancialSort
+    ? (enrichedStocks?.total ?? 0)
+    : (remoteStocks?.total ?? 0);
 
   const handleTableChange: TableProps<StockRecord>["onChange"] = (tablePagination, _filters, sorter) => {
-    const nextPage = tablePagination.current ?? pagination.page;
     const nextPageSize = tablePagination.pageSize ?? pagination.pageSize;
+    const hasSort = !Array.isArray(sorter) && sorter.field;
+    const nextPage = hasSort ? 1 : (tablePagination.current ?? pagination.page);
     setPagination((prev) =>
       prev.page === nextPage && prev.pageSize === nextPageSize
         ? prev
         : { page: nextPage, pageSize: nextPageSize }
     );
-    if (!Array.isArray(sorter) && sorter.field) {
+    if (hasSort) {
       setSort({
         sortBy: sorter.field as keyof StockRecord,
         sortOrder: sorter.order === "ascend" ? "asc" : "desc",
@@ -103,7 +119,9 @@ export default function CategoryPage() {
         total={total}
         current={pagination.page}
         pageSize={pagination.pageSize}
-        loading={isLoading}
+        loading={isFinancialSort ? enrichedLoading : isLoading}
+        sortBy={sort.sortBy}
+        sortOrder={sort.sortOrder === "asc" ? "ascend" : "descend"}
         onChange={handleTableChange}
       />
     </div>

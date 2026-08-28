@@ -59,10 +59,13 @@ async def list_stocks_all_exchanges(
     keyword: str | None = None,
     page: int = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 20,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
 ) -> PagedResponse[StockOut]:
     """List stocks across all exchanges (optionally filtered by exchange)."""
     params = StockListParams(
-        exchange=exchange, category=category, keyword=keyword
+        exchange=exchange, category=category, keyword=keyword,
+        sort_by=sort_by, sort_order=sort_order,
     )
     page_params = PageParams(page=page, page_size=page_size)
     items, total = await stock_service.list_stocks(db, cache, params, page_params)
@@ -77,10 +80,13 @@ async def list_stocks_all_exchanges_enriched(
     keyword: str | None = None,
     page: int = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 20,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
 ) -> PagedResponse[StockEnrichedOut]:
     """List stocks across all exchanges with latest quote + daily_basic enriched."""
     params = StockListParams(
-        exchange=exchange, category=category, keyword=keyword
+        exchange=exchange, category=category, keyword=keyword,
+        sort_by=sort_by, sort_order=sort_order,
     )
     page_params = PageParams(page=page, page_size=page_size)
     items, total = await stock_service.list_stocks_enriched(
