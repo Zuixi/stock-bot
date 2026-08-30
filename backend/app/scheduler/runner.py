@@ -12,6 +12,7 @@ from apscheduler.triggers.cron import CronTrigger
 from app.scheduler.jobs import (
     daily_basic_backfill_job,
     daily_quotes_backfill_job,
+    industry_metrics_refresh_job,
     sse_post_close_job,
     sse_trade_hours_job,
 )
@@ -96,6 +97,20 @@ def create_scheduler() -> AsyncIOScheduler:
         ),
         id="daily_basic_backfill",
         name="Daily basic backfill",
+        replace_existing=True,
+    )
+
+    # Industry research metrics: 17:05 Mon-Fri (after quote/daily-basic backfills)
+    scheduler.add_job(
+        industry_metrics_refresh_job,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour=17,
+            minute=5,
+            timezone="Asia/Shanghai",
+        ),
+        id="industry_metrics_refresh",
+        name="Industry metrics refresh",
         replace_existing=True,
     )
 
