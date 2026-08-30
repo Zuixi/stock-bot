@@ -51,3 +51,8 @@ class RunClusteringRequest(BaseModel):
     window_days: int = 60
     asof_date: str | None = None
     name: str | None = None
+
+
+class FetchIndustryMetricsRequest(BaseModel):
+    industry_key: str = "pig"
+    source: str | None = Field(default=None, pattern="^(mock|akshare)$")

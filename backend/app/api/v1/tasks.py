@@ -9,6 +9,7 @@ from app.core.exceptions import conflict_response, not_found_response
 from app.schemas.common import PageParams, PagedResponse
 from app.schemas.task import (
     FetchDailyBasicRequest,
+    FetchIndustryMetricsRequest,
     FetchQuotesRequest,
     FetchUniverseRequest,
     RunClusteringRequest,
@@ -74,6 +75,16 @@ async def fetch_daily_basic(req: FetchDailyBasicRequest, db: DbDep) -> TaskOut:
 async def run_clustering(req: RunClusteringRequest, db: DbDep) -> TaskOut:
     """Trigger a clustering run."""
     return await task_service.trigger_clustering(db, req)
+
+
+@router.post(
+    "/fetch-industry-metrics",
+    response_model=TaskOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def fetch_industry_metrics(req: FetchIndustryMetricsRequest, db: DbDep) -> TaskOut:
+    """Trigger an industry metrics ingest task (mock/AKShare)."""
+    return await task_service.trigger_fetch_industry_metrics(db, req)
 
 
 @router.get("/{task_id}", response_model=TaskOut)

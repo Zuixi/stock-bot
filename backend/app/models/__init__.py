@@ -4,6 +4,11 @@ from app.models.cluster import ClusterExplanation, ClusteringMember, ClusteringR
 from app.models.daily_basic import DailyBasicIndicator
 from app.models.feature import StockFeature
 from app.models.index_daily import IndexDaily
+from app.models.industry_research import (
+    IndustryMetric,
+    IndustryReferencePoint,
+    IndustrySignal,
+)
 from app.models.quote import DailyQuote
 from app.models.sse_index_snapshot import SseIndexSnapshot
 from app.models.stock import Stock, StockHistory, StockUserTag
@@ -26,4 +31,7 @@ __all__ = [
     "SwIndustryMember",
     "StockCustomSwTag",
     "Task",
+    "IndustryMetric",
+    "IndustryReferencePoint",
+    "IndustrySignal",
 ]

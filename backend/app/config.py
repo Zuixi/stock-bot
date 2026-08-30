@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # TuShare
     tushare_token: str = ""
 
+    # Industry research workbench data source: "mock" (default) | "akshare"
+    # AKShare 接口名尚未实机验证（见 docs/design/data-source.md），默认 mock。
+    industry_data_source: str = "mock"
+
     # Shenwan industry classification XLS data directory
     sw_data_dir: str = ""
 

@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>猪智投 · 生猪养殖 — 投研工作台原型 | stock bot</title>
+<style>
+/* ============ 设计令牌：对齐现有 antd v5 主题 ============ */
+:root{
+  --bg:#f4f6f9;
+  --card:#ffffff;
+  --line:#f0f0f0;
+  --line2:#e8ecf1;
+  --ink:#1f2329;
+  --ink2:#4e5969;
+  --ink3:#86909c;
+  --primary:#1677ff;
+  --primary-soft:#e8f1ff;
+  --up:#ef4444;          /* 涨·红（A股惯例，与现有主题一致） */
+  --down:#22c55e;        /* 跌·绿 */
+  --warn:#faad14;
+  --warn-ink:#d48806;
+  --warn-soft:#fffbe6;
+  --navy:#12213c;
+  --radius:10px;
+  --num:"Bahnschrift","DIN Alternate","Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{color-scheme:light}
+body{background:var(--bg);color:var(--ink);font:14px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:var(--primary);text-decoration:none;cursor:pointer}
+b{font-weight:600}
+
+/* ============ 顶栏（模拟现有 MainLayout Header） ============ */
+.topbar{position:sticky;top:0;z-index:50;background:#fff;border-bottom:1px solid var(--line)}
+.topbar-inner{max-width:1720px;margin:0 auto;padding:0 28px;height:56px;display:flex;align-items:center;gap:32px}
+.brand{display:flex;align-items:center;gap:10px;font:700 16px var(--sans);letter-spacing:.2px}
+.brand-logo{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#1677ff,#69b1ff);display:grid;place-items:center;font-size:15px}
+.brand small{font:400 11px var(--sans);color:var(--ink3);border:1px solid var(--line2);border-radius:4px;padding:1px 6px}
+.mainnav{display:flex;gap:6px;height:100%}
+.mainnav a{display:flex;align-items:center;padding:0 14px;color:var(--ink2);font-weight:500;position:relative;transition:color .2s}
+.mainnav a:hover{color:var(--primary)}
+.mainnav a.active{color:var(--primary);font-weight:600}
+.mainnav a.active::after{content:"";position:absolute;left:14px;right:14px;bottom:0;height:2px;border-radius:2px 2px 0 0;background:var(--primary)}
+.search{margin-left:auto;display:flex;align-items:center;gap:8px;width:250px;height:32px;padding:0 12px;border:1px solid var(--line2);border-radius:16px;background:var(--bg);color:var(--ink3);font-size:13px}
+.search svg{flex:none}
+
+/* ============ 页面容器 ============ */
+.page{max-width:1720px;margin:0 auto;padding:20px 28px 48px}
+.crumb{color:var(--ink3);font-size:13px;margin:6px 0 10px}
+.crumb b{color:var(--ink2)}
+.crumb .back{margin-left:10px}
+
+/* ============ 工作台头部 ============ */
+.wb-title-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.wb-title-row h1{font:700 26px/1.2 var(--sans);letter-spacing:.3px;display:flex;align-items:baseline;gap:10px}
+.wb-title-row h1 .sub{font-size:17px;font-weight:600;color:var(--ink2)}
+.wb-title-row h1 .tag{font:500 11px var(--sans);color:var(--primary);border:1px solid #b8d4ff;background:var(--primary-soft);border-radius:4px;padding:2px 7px;transform:translateY(-3px)}
+.wb-chips{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 12px;border-radius:14px;font-size:12.5px;border:1px solid var(--line2);background:#fff;color:var(--ink2)}
+.chip b{font-weight:600}
+.chip .dot{width:7px;height:7px;border-radius:50%}
+.chip-phase{background:var(--navy);border-color:var(--navy);color:#c9d6ee}
+.chip-phase b{color:#fff}
+.chip-signal{background:var(--warn-soft);border-color:#ffe58f;color:var(--warn-ink)}
+.chip-signal b{color:var(--warn-ink)}
+.chip-demo{border-style:dashed;color:var(--ink3)}
+
+/* ============ Tabs ============ */
+.wb-tabs{display:flex;gap:30px;margin-top:18px;border-bottom:1px solid var(--line2)}
+.tab{appearance:none;background:none;border:none;cursor:pointer;padding:0 2px 11px;font:500 15px var(--sans);color:var(--ink2);position:relative;transition:color .2s}
+.tab:hover{color:var(--primary)}
+.tab.active{color:var(--primary);font-weight:600}
+.tab.active::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;border-radius:2px;background:var(--primary)}
+.tab em{font:500 10px var(--sans);font-style:normal;color:#b8bfc9;background:#f2f4f7;border-radius:4px;padding:1px 5px;margin-left:5px;transform:translateY(-1px);display:inline-block}
+
+/* ============ 区块标题 ============ */
+.sec-head{display:flex;align-items:baseline;gap:12px;margin:24px 4px 10px}
+.sec-head h2{font:600 15px var(--sans);display:flex;align-items:center;gap:8px}
+.sec-head h2::before{content:"";width:3px;height:14px;border-radius:2px;background:var(--primary)}
+.sec-head .legend{margin-left:auto;display:flex;gap:14px;font-size:11.5px;color:var(--ink3)}
+.legend span{display:inline-flex;align-items:center;gap:5px;cursor:help}
+.legend i{width:8px;height:8px;border-radius:2px}
+
+/* ============ 综合指标带 ============ */
+.strip{display:flex;gap:12px;overflow-x:auto;padding-bottom:4px}
+.strip-card{flex:1 0 236px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:13px 16px 8px;transition:box-shadow .2s,transform .2s}
+.strip-card:hover{box-shadow:0 8px 24px rgba(31,35,41,.08);transform:translateY(-2px)}
+.sc-top{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.sc-name{font-size:12.5px;color:var(--ink2);font-weight:500;white-space:nowrap}
+.badge{flex:none;font-size:10.5px;line-height:1;padding:3px 6px;border-radius:4px;cursor:help}
+.badge.official{color:#1256c4;background:var(--primary-soft);border:1px solid #b8d4ff}
+.badge.highfreq{color:#6b7686;background:#f7f8fa;border:1px solid #e5e9ef}
+.badge.calc{color:#5b4fc4;background:#f5f3ff;border:1px solid #ddd6fe}
+.sc-value{margin-top:6px;display:flex;align-items:baseline;gap:5px}
+.sc-value b{font:700 26px/1.1 var(--num);font-variant-numeric:tabular-nums;letter-spacing:.2px}
+.sc-value span{font-size:12px;color:var(--ink3)}
+.sc-delta{margin-top:5px;display:flex;align-items:center;gap:8px;font:600 12.5px var(--num)}
+.sc-delta .up{color:var(--up)} .sc-delta .down{color:var(--down)}
+.sc-delta .hint{font:400 12px var(--sans);color:var(--ink3)}
+.sc-delta .warn-tag{font:600 11px var(--sans);color:var(--warn-ink);background:var(--warn-soft);border:1px solid #ffe58f;border-radius:4px;padding:1px 6px}
+.sc-sub{margin-top:2px;font-size:11.5px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spark{width:100%;height:34px;margin-top:6px}
+
+/* ============ 主栅格 ============ */
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px;margin-top:16px}
+.span7{grid-column:span 7}
+.span5{grid-column:span 5}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px 20px;box-shadow:0 1px 2px rgba(31,35,41,.04);transition:box-shadow .2s;min-width:0}
+.card:hover{box-shadow:0 10px 28px rgba(31,35,41,.07)}
+.card h3{font:600 14px/1.4 var(--sans);display:flex;align-items:center;gap:8px}
+.card h3::before{content:"";width:3px;height:14px;border-radius:2px;background:var(--primary);flex:none}
+.h-meta{margin-left:auto;display:flex;gap:8px;align-items:center;font:400 11.5px var(--sans);color:var(--ink3);white-space:nowrap}
+.chart{width:100%}
+.chart-fallback{height:280px;display:grid;place-items:center;color:var(--ink3);font-size:13px;background:#fafbfc;border-radius:8px;margin-top:12px}
+
+/* ============ 周期阶段定位（相位波） ============ */
+.hero{padding-bottom:12px}
+.hero svg{width:100%;height:auto;display:block;margin-top:8px}
+.hero svg text{font-family:var(--sans)}
+.phase-legend{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:6px}
+.phase{border:1px solid transparent;border-radius:8px;padding:9px 12px;transition:background .2s}
+.phase:hover{background:#fafbfc}
+.phase .p-name{font:600 14px var(--sans);color:var(--ink2)}
+.phase .p-desc{font-size:12px;color:var(--ink3);margin-top:2px}
+.phase.cur{background:linear-gradient(180deg,#fffbeb,#fffefa);border-color:#ffe58f}
+.phase.cur .p-name{color:var(--warn-ink);display:flex;align-items:center;gap:7px}
+.phase.cur .p-name .mini{font:600 10.5px var(--sans);color:var(--warn-ink);background:#fff;border:1px solid #ffe58f;border-radius:4px;padding:0 5px}
+.hero-foot{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line2);font-size:12px;color:var(--ink3)}
+.hero-foot b{color:var(--ink2)}
+.pulse{fill:var(--warn);transform-box:fill-box;transform-origin:center;animation:pulse 2.2s ease-out infinite}
+@keyframes pulse{0%{transform:scale(.45);opacity:.65}70%{transform:scale(1.9);opacity:0}100%{transform:scale(1.9);opacity:0}}
+
+/* ============ 交易信号面板 ============ */
+.sig-now{display:flex;align-items:center;gap:14px;margin-top:14px;background:linear-gradient(135deg,#fffbeb,#fffdf4);border:1px solid #ffe58f;border-radius:10px;padding:13px 16px}
+.sig-now .ring{width:12px;height:12px;border-radius:50%;background:var(--warn);box-shadow:0 0 0 4px rgba(250,173,20,.18);animation:blink 1.8s ease-in-out infinite}
+@keyframes blink{50%{box-shadow:0 0 0 8px rgba(250,173,20,.08)}}
+.sig-now .lab{font-size:12.5px;color:var(--ink2)}
+.sig-now .val{font:700 22px/1 var(--sans);color:var(--warn-ink)}
+.sig-now .since{font-size:12px;color:var(--ink3)}
+.meter{margin-left:auto;display:flex;align-items:flex-end;gap:3px}
+.meter i{width:4px;border-radius:2px;background:#ffe58f}
+.meter i.on{background:var(--warn)}
+.meter-lab{font-size:11px;color:var(--ink3);margin-left:6px}
+.tl{position:relative;list-style:none;margin:16px 0 0;padding-left:20px}
+.tl::before{content:"";position:absolute;left:5px;top:10px;bottom:10px;width:2px;border-radius:1px;background:#eef1f5}
+.tl li{position:relative;padding:8px 10px;margin:6px 0;border-radius:8px;transition:background .15s}
+.tl li:hover{background:#fafbfc}
+.tl li.cur{background:var(--warn-soft);border:1px solid #ffe58f}
+.tl-dot{position:absolute;left:-20px;top:15px;width:11px;height:11px;border-radius:50%;background:var(--c,#8c8c8c);box-shadow:0 0 0 2.5px #fff}
+.tl-head{display:flex;align-items:baseline;gap:9px}
+.tl-head .sig{font:700 14px var(--sans)}
+.tl-head time{font:500 12px var(--num);color:var(--ink3);letter-spacing:.3px}
+.tl-tag{font-size:10.5px;color:var(--warn-ink);background:#fff;border:1px solid #ffe58f;border-radius:4px;padding:0 5px}
+.tl p{font-size:12px;color:var(--ink3);margin-top:2px;line-height:1.55}
+.card-foot{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line2);font-size:12px;color:var(--ink3)}
+
+/* ============ 仓位管理建议 ============ */
+.pos-bar{display:flex;height:20px;border-radius:10px;overflow:hidden;margin-top:16px;box-shadow:inset 0 0 0 1px rgba(31,35,41,.06)}
+.pos-bar i{position:relative}
+.pos-bar i+ i{box-shadow:inset 2px 0 0 #fff}
+.pos-bar b{position:absolute;inset:0;display:grid;place-items:center;color:#fff;font:600 11px var(--num);letter-spacing:.5px}
+.pos-rows{margin-top:14px;display:flex;flex-direction:column}
+.pos-row{display:flex;align-items:flex-start;gap:10px;padding:10px 4px;border-bottom:1px dashed var(--line2)}
+.pos-row:last-child{border-bottom:none}
+.pos-row .cdot{flex:none;width:9px;height:9px;border-radius:3px;margin-top:6px}
+.pos-row .info{flex:1;min-width:0}
+.pos-row .info b{font-size:13.5px}
+.pos-row .info .role{font-size:11.5px;color:var(--ink3);margin-left:6px}
+.pos-row .info p{font-size:12px;color:var(--ink3);margin-top:1px}
+.pos-row .pct{font:700 20px var(--num);font-variant-numeric:tabular-nums}
+
+/* ============ 核心指标速览 ============ */
+.kv-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.kv{background:#fafbfc;border:1px solid #f0f2f5;border-radius:8px;padding:9px 12px;transition:border-color .2s,background .2s}
+.kv:hover{border-color:#b8d4ff;background:#fff}
+.kv .n{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--ink2)}
+.kv .n .src{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:var(--ink3);cursor:help}
+.kv .n .src i{width:6px;height:6px;border-radius:50%;background:#b8d4ff}
+.kv .n .src.hf i{background:#d5dbe3}
+.kv .v{display:flex;align-items:baseline;gap:4px;margin-top:3px}
+.kv .v b{font:700 18px/1.2 var(--num);font-variant-numeric:tabular-nums}
+.kv .v span{font-size:11px;color:var(--ink3)}
+.kv .v .d{margin-left:auto;font:600 12px var(--num)}
+.kv .v .d.up{color:var(--up)} .kv .v .d.down{color:var(--down)} .kv .v .d.flat{color:var(--ink3)}
+.kv .v .warn-tag{font:600 10.5px var(--sans);color:var(--warn-ink);background:var(--warn-soft);border:1px solid #ffe58f;border-radius:4px;padding:0 5px}
+
+/* ============ 页脚 / Toast / 动效 ============ */
+.foot{margin-top:28px;text-align:center;font-size:12px;color:var(--ink3);line-height:2}
+#toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%) translateY(8px);background:rgba(31,35,41,.92);color:#fff;font-size:13px;padding:9px 18px;border-radius:8px;opacity:0;pointer-events:none;transition:.25s;z-index:99;white-space:nowrap}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.card,.strip-card{animation:fadeUp .5s cubic-bezier(.2,.7,.3,1) both}
+@media (max-width:1180px){.span7,.span5{grid-column:span 12}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<!-- 顶栏 -->
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><span class="brand-logo">🐷</span>stock bot<small>投研工作台 · 原型</small></div>
+    <nav class="mainnav">
+      <a>市场</a><a class="active">投研</a><a>分类</a><a>标签</a><a>自选</a>
+    </nav>
+    <div class="search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#86909c" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      搜索股票 / 行业 / 指标…
+    </div>
+  </div>
+</header>
+
+<main class="page">
+
+  <!-- 工作台头部 -->
+  <div class="crumb">投研 / <b>生猪养殖</b><span style="color:#c9cdd4">（申万Ⅲ级）</span><a class="back" data-toast>返回申万分类</a></div>
+
+  <section class="wb-head">
+    <div class="wb-title-row">
+      <h1>猪智投<span class="sub">· 生猪养殖</span><span class="tag">投研工作台</span></h1>
+      <div class="wb-chips">
+        <span class="chip chip-phase"><span class="dot" style="background:#8fb3ff"></span>周期阶段 <b>萧条 · 磨底</b></span>
+        <span class="chip chip-signal"><span class="dot" style="background:var(--warn)"></span>当前信号 <b>关注</b></span>
+        <span class="chip">数据截至 <b style="font-family:var(--num)">2026-08-28</b></span>
+        <span class="chip chip-demo">原型 · 演示数据</span>
+      </div>
+    </div>
+    <div class="wb-tabs" style="margin-top:16px">
+      <button class="tab active">投资看板</button>
+      <button class="tab" data-toast>行业知识库</button>
+      <button class="tab" data-toast>行情调研追踪</button>
+      <button class="tab" data-toast>交易管理<em>规划中</em></button>
+    </div>
+  </section>
+
+  <!-- 综合指标带 -->
+  <div class="sec-head">
+    <h2>综合指标</h2>
+    <div class="legend">
+      <span title="官方基准：以农业农村部 / 发改委 / 交易所口径为准，多源分歧时以官方为准"><i style="background:#b8d4ff"></i>官方基准</span>
+      <span title="高频参考：Mysteel / 涌益 / 卓创等市场化数据，用于跟踪边际变化"><i style="background:#d5dbe3"></i>高频参考</span>
+      <span title="测算指标：基于财报与出栏量等公开数据推算"><i style="background:#ddd6fe"></i>测算指标</span>
+    </div>
+  </div>
+  <section class="strip" id="strip"></section>
+
+  <!-- 主栅格 -->
+  <section class="grid">
+
+    <!-- 猪周期阶段定位 -->
+    <article class="card span7 hero">
+      <h3>猪周期阶段定位<span class="h-meta">判定因子：猪粮比 · 能繁产能 · 行业盈亏</span></h3>
+      <svg viewBox="0 0 1000 236" fill="none" aria-label="猪周期相位波：当前位于萧条磨底阶段">
+        <defs>
+          <linearGradient id="waveFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#1677ff" stop-opacity=".13"/>
+            <stop offset="1" stop-color="#1677ff" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <line x1="20" y1="212" x2="985" y2="212" stroke="#eef1f5" stroke-width="1.5"/>
+        <path d="M20,150 C70,100 130,55 190,55 C260,55 350,135 430,140 C510,145 560,190 640,190 C720,190 800,125 880,100 C920,88 955,86 985,86 L985,212 L20,212 Z" fill="url(#waveFill)"/>
+        <path d="M20,150 C70,100 130,55 190,55 C260,55 350,135 430,140 C510,145 560,190 640,190 C720,190 800,125 880,100 C920,88 955,86 985,86" stroke="#1677ff" stroke-width="3" stroke-linecap="round"/>
+        <!-- 繁荣 -->
+        <circle cx="190" cy="55" r="4.5" fill="#1677ff" stroke="#fff" stroke-width="2"/>
+        <text x="190" y="34" text-anchor="middle" font-size="13" font-weight="600" fill="#4e5969">繁荣</text>
+        <!-- 衰退 -->
+        <circle cx="430" cy="140" r="4.5" fill="#91caff" stroke="#fff" stroke-width="2"/>
+        <text x="430" y="121" text-anchor="middle" font-size="13" font-weight="600" fill="#4e5969">衰退</text>
+        <!-- 萧条（当前） -->
+        <circle class="pulse" cx="640" cy="190" r="12"/>
+        <circle cx="640" cy="190" r="5.5" fill="#faad14" stroke="#fff" stroke-width="2"/>
+        <line x1="640" y1="176" x2="640" y2="168" stroke="#ffe58f" stroke-width="1.5"/>
+        <rect x="576" y="142" width="128" height="26" rx="13" fill="#fffbeb" stroke="#ffe58f"/>
+        <text x="640" y="159.5" text-anchor="middle" font-size="12.5" font-weight="600" fill="#d48806">当前 · 萧条磨底</text>
+        <!-- 复苏 -->
+        <circle cx="880" cy="100" r="4.5" fill="#91caff" stroke="#fff" stroke-width="2"/>
+        <text x="880" y="131" text-anchor="middle" font-size="13" font-weight="600" fill="#4e5969">复苏</text>
+      </svg>
+      <div class="phase-legend">
+        <div class="phase"><div class="p-name">繁荣</div><div class="p-desc">猪价高位 · 产能扩张 · 二育活跃</div></div>
+        <div class="phase"><div class="p-name">衰退</div><div class="p-desc">猪价下行 · 利润收窄 · 产能惯性增长</div></div>
+        <div class="phase cur"><div class="p-name">萧条<span class="mini">磨底第 10 个月</span></div><div class="p-desc">全行业亏损 · 产能去化 · 政策托底</div></div>
+        <div class="phase"><div class="p-name">复苏</div><div class="p-desc">供给收缩 · 猪价回升 · 盈利修复</div></div>
+      </div>
+      <div class="hero-foot">判定依据：猪粮比 <b>5.70</b> 处于二级预警区间 · 能繁存栏环比<b>连续 4 个月回落</b> · Q2 行业头均亏损约 <b>130 元/头</b>；本轮磨底已持续 <b>10 个月</b>，产能去化拐点初现。</div>
+    </article>
+
+    <!-- 交易信号面板 -->
+    <article class="card span5">
+      <h3>交易信号面板<span class="h-meta">信号规则 v3.2</span></h3>
+      <div class="sig-now">
+        <span class="ring"></span>
+        <span class="lab">当前信号</span><span class="val">关注</span>
+        <span class="since">2026-08-15 生效</span>
+        <span class="meter" aria-label="信号强度：中">
+          <i style="height:7px" class="on"></i><i style="height:10px" class="on"></i><i style="height:13px" class="on"></i><i style="height:16px"></i><i style="height:19px"></i>
+          <span class="meter-lab">强度 · 中</span>
+        </span>
+      </div>
+      <ul class="tl">
+        <li class="cur"><span class="tl-dot" style="--c:#faad14"></span>
+          <div class="tl-head"><b class="sig" style="color:#d48806">关注</b><time>2026-08-15</time><span class="tl-tag">最新</span></div>
+          <p>猪粮比一度跌破 5:1 触发一级预警、国储收储启动；能繁去化提速，左侧布局窗口临近。</p></li>
+        <li><span class="tl-dot" style="--c:#8c8c8c"></span>
+          <div class="tl-head"><b class="sig" style="color:#8c8c8c">空仓</b><time>2025-10-09</time></div>
+          <p>猪价跌破行业平均成本线，二次育肥抛售压力释放，信号转防守。</p></li>
+        <li><span class="tl-dot" style="--c:#22c55e"></span>
+          <div class="tl-head"><b class="sig" style="color:#16a34a">卖出</b><time>2025-06-18</time></div>
+          <p>猪价冲高 17.3 元/kg、头均市值历史分位 86%，二育情绪过热，分批兑现收益。</p></li>
+        <li><span class="tl-dot" style="--c:#ef4444"></span>
+          <div class="tl-head"><b class="sig" style="color:#ef4444">买入</b><time>2024-04-22</time></div>
+          <p>产能去化兑现，猪价站稳成本线上方，右侧趋势确认。</p></li>
+        <li><span class="tl-dot" style="--c:#faad14"></span>
+          <div class="tl-head"><b class="sig" style="color:#d48806">关注</b><time>2024-01-10</time></div>
+          <p>磨底后期，能繁较高点去化 5.9%，开始左侧跟踪。</p></li>
+      </ul>
+      <div class="card-foot">信号回测（2020–2026）：胜率 68% · 平均持仓 5.2 个月 · <a data-toast>查看回测明细 →</a></div>
+    </article>
+
+    <!-- 生猪价格 vs 行业成本 -->
+    <article class="card span7">
+      <h3>生猪价格 vs 行业成本<span class="h-meta">月度 · 2023-08 ~ 2026-08 · 元/kg</span></h3>
+      <div class="chart" id="chartPrice" style="height:296px"></div>
+    </article>
+
+    <!-- 仓位管理建议 -->
+    <article class="card span5">
+      <h3>仓位管理建议<span class="h-meta">随信号联动 · 非投资建议</span></h3>
+      <div class="pos-bar">
+        <i style="flex:0 0 50%;background:#1677ff"><b>50%</b></i>
+        <i style="flex:0 0 30%;background:#faad14"><b>30%</b></i>
+        <i style="flex:0 0 20%;background:#94a3b8"><b>20%</b></i>
+      </div>
+      <div class="pos-rows">
+        <div class="pos-row"><span class="cdot" style="background:#1677ff"></span>
+          <div class="info"><b>核心底仓</b><span class="role">做周期 · 长持</span><p>成本与现金流领先的头部企业（牧原、温氏），穿越周期持有。</p></div>
+          <span class="pct" style="color:#1677ff">50%</span></div>
+        <div class="pos-row"><span class="cdot" style="background:#faad14"></span>
+          <div class="info"><b>波段仓位</b><span class="role">做波动 · 择时</span><p>畜牧 ETF / 高 β 龙头，跟随信号加减，捕捉周期波动。</p></div>
+          <span class="pct" style="color:#d48806">30%</span></div>
+        <div class="pos-row"><span class="cdot" style="background:#94a3b8"></span>
+          <div class="info"><b>现金储备</b><span class="role">底部加仓弹药</span><p>货基 / 国债逆回购，为极端行情与右侧确认预留子弹。</p></div>
+          <span class="pct" style="color:#86909c">20%</span></div>
+      </div>
+      <div class="card-foot">自 2026-08-15「关注」信号起，由空仓状态开始重建底仓；信号变更时本建议将联动调整。</div>
+    </article>
+
+    <!-- 能繁母猪存栏趋势 -->
+    <article class="card span7">
+      <h3>能繁母猪存栏趋势<span class="h-meta"><span class="badge official">官方基准</span>农业农村部 · 月度 · 万头</span></h3>
+      <div class="chart" id="chartSow" style="height:296px"></div>
+    </article>
+
+    <!-- 核心指标速览 -->
+    <article class="card span5">
+      <h3>核心指标速览<span class="h-meta">10 项 · 更新于 2026-08-28</span></h3>
+      <div class="kv-grid" id="kvGrid"></div>
+      <div class="card-foot">效率指标（MSY / PSY / 料肉比）为行业均值，年度更新；价格类指标多源交叉验证，分歧时以官方口径为准。</div>
+    </article>
+
+  </section>
+
+  <footer class="foot">
+    本页面为高保真原型，全部数据为演示用途，不构成任何投资建议。<br>
+    产能数据以农业农村部为最终基准 · 价格数据以发改委 / 农业农村部为官方基准 · 企业经营数据以上市公司经审计财报为准 · stock bot © 2026
+  </footer>
+</main>
+
+<div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<script>window.echarts||document.write('<script src="https://cdn.bootcdn.net/ajax/libs/echarts/5.5.1/echarts.min.js"><\/script>')</script>
+<script>
+/* ================= 演示数据（2023-08 ~ 2026-08，37 个月） ================= */
+const months=[];{let d=new Date(2023,7,1);for(let i=0;i<37;i++){months.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));d.setMonth(d.getMonth()+1);}}
+const price=[16.8,16.5,15.8,15.2,14.9, 14.6,14.3,14.2,14.6,15.4,16.9,18.4,19.9,21.1,21.6,21.2,20.3, 19.1,17.9,16.6,15.6,15.1,15.5,16.6,17.3,16.4,15.3,14.4,13.8, 13.2,12.9,12.5,12.3,12.6,13.1,13.5,13.85];
+const cost =[16.3,16.2,16.1,16.0,15.9, 15.9,15.8,15.7,15.6,15.5,15.3,15.1,15.0,14.9,14.8,14.7,14.6, 14.5,14.4,14.3,14.2,14.2,14.1,14.1,14.0,14.0,13.9,13.9,13.8, 13.8,13.7,13.7,13.6,13.6,13.5,13.5,13.4];
+const corn =[2.42,2.44,2.46,2.45,2.43, 2.38,2.35,2.33,2.32,2.34,2.38,2.42,2.45,2.48,2.50,2.51,2.52, 2.53,2.54,2.55,2.56,2.57,2.58,2.59,2.60,2.60,2.61,2.62,2.63, 2.46,2.47,2.48,2.50,2.52,2.50,2.47,2.43];
+const ratio=price.map((p,i)=>+(p/corn[i]).toFixed(2));
+const sow  =[4220,4205,4190,4180,4160, 4140,4120,4100,4080,4060,4045,4030,4020,4005,3990,3980,3975, 3970,3968,3972,3980,3995,4010,4030,4045,4055,4060,4055,4048, 4040,4030,4018,4005,3992,3988,3984,3982];
+const mcap =[5320,5280,5200,5150,5090,5040,4990,4950,4900,4870,4820,4780,4740,4700,4660,4630,4600,4570,4550,4530,4520];
+const fut  =[15200,15100,14980,14900,15050,14800,14700,14850,14880,14850];
+
+/* ================= 综合指标带 ================= */
+const strip=[
+  {name:'行业头均市值',value:'4,520',unit:'元/头',delta:{cls:'down',txt:'▼ 8.4%',hint:'近半年'},sub:'5 年历史分位 32% · 中低估值区',badge:{cls:'calc',label:'测算',tip:'基于上市公司市值与年出栏量测算'},spark:mcap,color:'#7c6ff0'},
+  {name:'能繁母猪存栏',value:'3,982',unit:'万头',delta:{cls:'down',txt:'▼ 0.05%',hint:'环比'},sub:'较正常保有量 3,900 万头 +2.1%',badge:{cls:'official',label:'官方基准',tip:'农业农村部月度数据为最终基准'},spark:sow.slice(-24),color:'#1677ff'},
+  {name:'生猪均价',value:'13.85',unit:'元/kg',delta:{cls:'up',txt:'▲ 0.3%',hint:'日环比'},sub:'猪肉批发价 19.6 元/kg',badge:{cls:'highfreq',label:'高频参考',tip:'Mysteel 日度价格，用于跟踪边际变化'},spark:price.slice(-24),color:'#1677ff'},
+  {name:'猪粮比',value:'5.70',unit:'',delta:{warn:'二级预警'},sub:'预警区间 5.0 ~ 6.0 · 收储预期',badge:{cls:'official',label:'官方基准',tip:'发改委周度猪粮比价，盈亏核心指标'},spark:ratio.slice(-24),color:'#faad14'},
+  {name:'生猪期货主力 LH2701',value:'14,850',unit:'元/吨',delta:{cls:'up',txt:'▲ 0.7%',hint:'日环比'},sub:'升水现货 +1,000 元/吨 · 预期回暖',badge:{cls:'official',label:'官方基准',tip:'大连商品交易所（DCE）行情'},spark:fut,color:'#22c55e'}
+];
+document.getElementById('strip').innerHTML=strip.map((c,i)=>`
+  <div class="strip-card">
+    <div class="sc-top"><span class="sc-name">${c.name}</span><span class="badge ${c.badge.cls}" title="${c.badge.tip}">${c.badge.label}</span></div>
+    <div class="sc-value"><b>${c.value}</b><span>${c.unit}</span></div>
+    <div class="sc-delta">
+      ${c.delta.warn?`<span class="warn-tag">${c.delta.warn}</span>`:`<span class="${c.delta.cls}">${c.delta.txt}</span><span class="hint">${c.delta.hint}</span>`}
+    </div>
+    <div class="sc-sub">${c.sub}</div>
+    <div class="spark" data-idx="${i}" data-color="${c.color}"></div>
+  </div>`).join('');
+
+/* ================= 核心指标速览 ================= */
+const kv=[
+  {n:'生猪价格',v:'13.85',u:'元/kg',d:{cls:'up',t:'▲0.3%'},src:['官方·日度','']},
+  {n:'仔猪价格（15kg）',v:'28.4',u:'元/kg',d:{cls:'down',t:'▼2.1%'},src:['高频·周度','hf']},
+  {n:'猪肉批发价',v:'19.6',u:'元/kg',d:{cls:'up',t:'▲0.3%'},src:['官方·日度','']},
+  {n:'玉米价格',v:'2.43',u:'元/kg',d:{cls:'down',t:'▼0.4%'},src:['高频·日度','hf']},
+  {n:'豆粕价格',v:'3.08',u:'元/kg',d:{cls:'down',t:'▼0.8%'},src:['高频·日度','hf']},
+  {n:'猪粮比',v:'5.70',u:'',warn:'二级预警',d:null,src:['官方·周度','']},
+  {n:'生猪期货（主力）',v:'14,850',u:'元/吨',d:{cls:'up',t:'▲0.7%'},src:['官方·实时','']},
+  {n:'MSY（行业均值）',v:'2.08',u:'头/年',d:{cls:'up',t:'▲0.02'},src:['协会·年度','hf']},
+  {n:'PSY（行业均值）',v:'23.6',u:'头',d:{cls:'up',t:'▲0.3'},src:['协会·年度','hf']},
+  {n:'料肉比',v:'2.72',u:'',d:{cls:'down',t:'▼0.01'},src:['高频·调研','hf']}
+];
+document.getElementById('kvGrid').innerHTML=kv.map(k=>`
+  <div class="kv">
+    <div class="n"><span>${k.n}</span><span class="src ${k.src[1]}" title="数据来源与更新频率">${k.src[0]}</span></div>
+    <div class="v"><b>${k.v}</b><span>${k.u}</span>
+      ${k.warn?`<span class="warn-tag">${k.warn}</span>`:''}
+      ${k.d?`<span class="d ${k.d.cls}">${k.d.t}</span>`:''}
+    </div>
+  </div>`).join('');
+
+/* ================= 交互：Toast（占位演示） ================= */
+const toastEl=document.getElementById('toast');let toastTimer;
+function toast(msg){toastEl.textContent=msg;toastEl.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toastEl.classList.remove('show'),2200);}
+document.querySelectorAll('[data-toast]').forEach(el=>el.addEventListener('click',e=>{e.preventDefault();toast('原型仅演示「投资看板」，其余模块为占位');}));
+
+/* ================= ECharts ================= */
+const dot=c=>`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:6px"></span>`;
+if(window.echarts){
+  const charts=[];
+  const AX={axisLine:{show:false},axisTick:{show:false},axisLabel:{color:'#86909c',fontSize:11,interval:5},splitLine:{show:false}};
+  const AXY={axisLine:{show:false},axisTick:{show:false},axisLabel:{color:'#86909c',fontSize:11},splitLine:{lineStyle:{color:'#f0f2f5'}}};
+
+  /* 生猪价格 vs 行业成本 */
+  const c1=echarts.init(document.getElementById('chartPrice'));
+  c1.setOption({
+    animationDuration:900,
+    grid:{left:46,right:18,top:40,bottom:28},
+    legend:{top:2,right:8,itemWidth:14,itemHeight:2.5,icon:'rect',textStyle:{color:'#4e5969',fontSize:12},data:['生猪均价','行业平均成本']},
+    tooltip:{trigger:'axis',backgroundColor:'#fff',borderColor:'#e8ecf1',padding:[10,14],textStyle:{color:'#1f2329',fontSize:12.5},
+      formatter(ps){
+        const p=ps[0].value,c=ps[1].value,d=p-c,win=d>=0;
+        return `<b>${ps[0].axisValue}</b><br>${dot('#1677ff')}生猪均价 <b>${p.toFixed(2)}</b> 元/kg<br>${dot('#fa8c16')}行业平均成本 ${c.toFixed(2)} 元/kg<br>${dot(win?'#ef4444':'#22c55e')}头均盈亏 ≈ <b style="color:${win?'#ef4444':'#22c55e'}">${win?'+':''}${(d*115).toFixed(0)}</b> 元/头`;}
+    },
+    xAxis:{type:'category',boundaryGap:false,data:months,...AX},
+    yAxis:{type:'value',min:11,max:23,...AXY},
+    series:[
+      {name:'生猪均价',type:'line',smooth:.3,symbol:'none',data:price,lineStyle:{width:2.5,color:'#1677ff'},itemStyle:{color:'#1677ff'},
+        areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,colorStops:[{offset:0,color:'rgba(22,119,255,.10)'},{offset:1,color:'rgba(22,119,255,0)'}]}},
+        markPoint:{data:[{type:'min',name:'周期低点'}],symbol:'pin',symbolSize:46,itemStyle:{color:'#ef4444'},label:{color:'#fff',fontSize:11,formatter:p=>p.value.toFixed(1)}}},
+      {name:'行业平均成本',type:'line',smooth:.3,symbol:'none',data:cost,lineStyle:{width:2,type:[4,3],color:'#fa8c16'},itemStyle:{color:'#fa8c16'}}
+    ]
+  });
+  charts.push(c1);
+
+  /* 能繁母猪存栏 */
+  const c2=echarts.init(document.getElementById('chartSow'));
+  c2.setOption({
+    animationDuration:900,
+    grid:{left:52,right:18,top:36,bottom:28},
+    tooltip:{trigger:'axis',backgroundColor:'#fff',borderColor:'#e8ecf1',padding:[10,14],textStyle:{color:'#1f2329',fontSize:12.5},
+      formatter(ps){
+        const i=ps[0].dataIndex,cur=sow[i],prev=i>0?sow[i-1]:cur,mom=((cur-prev)/prev*100).toFixed(2);
+        return `<b>${ps[0].axisValue}</b><br>${dot('#1677ff')}能繁母猪存栏 <b>${cur.toLocaleString()}</b> 万头<br>${dot(Number(mom)>=0?'#ef4444':'#22c55e')}环比 <b style="color:${Number(mom)>=0?'#ef4444':'#22c55e'}">${mom>0?'+':''}${mom}%</b>`;}
+    },
+    xAxis:{type:'category',data:months,...AX},
+    yAxis:{type:'value',min:3700,max:4300,...AXY},
+    series:[{type:'bar',data:sow.map((v,i)=>({value:v,itemStyle:{color:i===sow.length-1?'#1677ff':'#8cb8ff'}})),barWidth:'62%',itemStyle:{borderRadius:[3,3,0,0]},
+      markLine:{silent:true,symbol:'none',lineStyle:{type:'dashed',color:'#86909c'},label:{color:'#86909c',fontSize:11,position:'insideEndTop',formatter:'正常保有量 3,900'},
+        data:[{yAxis:3900}]}}]
+  });
+  charts.push(c2);
+
+  /* 迷你走势图 */
+  document.querySelectorAll('.spark').forEach(el=>{
+    const s=echarts.init(el);charts.push(s);
+    const color=el.dataset.color;
+    const data=strip[+el.dataset.idx].spark||[];
+    s.setOption({animation:false,grid:{left:0,right:0,top:2,bottom:0},
+      xAxis:{type:'category',show:false},
+      yAxis:{type:'value',show:false},
+      series:[{type:'line',data,symbol:'none',smooth:.35,
+        lineStyle:{width:1.5,color},areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,colorStops:[{offset:0,color:color+'2e'},{offset:1,color:color+'00'}]}}}]});
+  });
+
+  window.addEventListener('resize',()=>charts.forEach(c=>c.resize()));
+}else{
+  document.querySelectorAll('.chart').forEach(el=>el.innerHTML='<div class="chart-fallback">图表库（CDN）加载失败，布局不受影响</div>');
+}
+
+/* 卡片入场节奏 */
+document.querySelectorAll('.card,.strip-card').forEach((el,i)=>el.style.animationDelay=(i*55)+'ms');
+</script>
+</body>
+</html>
