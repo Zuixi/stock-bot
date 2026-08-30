@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
-import time
 from typing import Any
 
 import pandas as pd
+
+from app.core.providers.rate_limited import RateLimitedSyncProvider
 
 logger = logging.getLogger(__name__)
 
@@ -37,19 +37,39 @@ _REQUEST_INTERVAL = 0.5  # seconds between requests (120 req/min, under 200/min 
 _MAX_RETRIES = 3
 
 
-class TuShareClient:
-    """Async-friendly wrapper around ``tushare.pro_api``."""
+class TuShareClient(RateLimitedSyncProvider):
+    """Async-friendly wrapper around ``tushare.pro_api``.
+
+    Throttling / retry / thread-offload live in :class:`RateLimitedSyncProvider`.
+    """
+
+    request_interval = _REQUEST_INTERVAL
+    max_retries = _MAX_RETRIES
 
     def __init__(self, token: str, max_retries: int = _MAX_RETRIES) -> None:
+        super().__init__()
         import tushare as ts
 
         if not token:
             logger.error("[TOKEN ERROR]: NEED VALID TOKEN.")
             raise ValueError("TuShare token is required. Set TUSHARE_TOKEN in .env")
         self._pro = ts.pro_api(token)
-        self._max_retries = max(1, max_retries)
-        self._last_request_time: float = 0.0
-        self._query_lock = threading.Lock()
+        self.max_retries = max(1, max_retries)
+
+    # ------------------------------------------------------------------
+    # Base-class hooks
+    # ------------------------------------------------------------------
+
+    def handle_error(self, api_name: str, exc: Exception) -> None:
+        msg = str(exc)
+        if "权限" in msg or "40203" in msg:
+            raise RuntimeError(
+                f"TuShare API '{api_name}' permission denied. "
+                "Check your token credits at https://tushare.pro/document/1?doc_id=108"
+            ) from exc
+
+    def normalize_result(self, result: Any) -> Any:
+        return pd.DataFrame() if result is None else result
 
     # ------------------------------------------------------------------
     # Low-level query with retry + rate-limiting
@@ -57,36 +77,11 @@ class TuShareClient:
 
     def _query_sync(self, api_name: str, fields: str = "", **kwargs: Any) -> pd.DataFrame:
         """Call a TuShare Pro API with retry and inter-request throttling."""
-        for attempt in range(1, self._max_retries + 1):
-            try:
-                # Keep throttle + query in one critical section to avoid
-                # concurrent threads bypassing the global request interval.
-                with self._query_lock:
-                    elapsed = time.monotonic() - self._last_request_time
-                    if elapsed < _REQUEST_INTERVAL:
-                        time.sleep(_REQUEST_INTERVAL - elapsed)
-                    self._last_request_time = time.monotonic()
-                    if fields:
-                        df = self._pro.query(api_name, fields=fields, **kwargs)
-                    else:
-                        df = self._pro.query(api_name, **kwargs)
-                if df is not None:
-                    return df
-                return pd.DataFrame()
-            except Exception as exc:
-                msg = str(exc)
-                if "权限" in msg or "40203" in msg:
-                    raise RuntimeError(
-                        f"TuShare API '{api_name}' permission denied. "
-                        "Check your token credits at https://tushare.pro/document/1?doc_id=108"
-                    ) from exc
-                logger.warning(
-                    "TuShare %s attempt %d/%d failed: %s",
-                    api_name, attempt, self._max_retries, exc,
-                )
-                if attempt < self._max_retries:
-                    time.sleep(1)
-        raise RuntimeError(f"TuShare API '{api_name}' failed after {self._max_retries} retries")
+        if fields:
+            return self.invoke_sync(
+                api_name, lambda: self._pro.query(api_name, fields=fields, **kwargs)
+            )
+        return self.invoke_sync(api_name, lambda: self._pro.query(api_name, **kwargs))
 
     async def _query(self, api_name: str, fields: str = "", **kwargs: Any) -> pd.DataFrame:
         return await asyncio.to_thread(self._query_sync, api_name, fields=fields, **kwargs)

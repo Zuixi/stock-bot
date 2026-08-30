@@ -13,6 +13,8 @@ const StockDetailPage = lazy(() => import("@/pages/stock-detail"));
 const WatchlistPage = lazy(() => import("@/pages/watchlist"));
 const TagsPage = lazy(() => import("@/pages/tags"));
 const TagsDetailPage = lazy(() => import("@/pages/tags-detail"));
+const ResearchPage = lazy(() => import("@/pages/research"));
+const ResearchWorkbenchPage = lazy(() => import("@/pages/research-workbench"));
 
 function PageLoading() {
   return (
@@ -32,6 +34,22 @@ export function AppRouter() {
           element={
             <Suspense fallback={<PageLoading />}>
               <MarketPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/research"
+          element={
+            <Suspense fallback={<PageLoading />}>
+              <ResearchPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/research/:industryKey"
+          element={
+            <Suspense fallback={<PageLoading />}>
+              <ResearchWorkbenchPage />
             </Suspense>
           }
         />
