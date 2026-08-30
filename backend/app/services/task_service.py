@@ -11,6 +11,7 @@ from app.repositories import task_repo
 from app.schemas.common import PageParams
 from app.schemas.task import (
     FetchDailyBasicRequest,
+    FetchIndustryMetricsRequest,
     FetchQuotesRequest,
     FetchUniverseRequest,
     RunClusteringRequest,
@@ -70,6 +71,21 @@ async def trigger_clustering(
         {"task_id": str(task.id), "type": "run_clustering", "payload": payload},
     )
     logger.info("Dispatched clustering task %s, algorithm=%s", task.id, req.algorithm)
+    return TaskOut.model_validate(task)
+
+
+async def trigger_fetch_industry_metrics(
+    db: AsyncSession, req: FetchIndustryMetricsRequest
+) -> TaskOut:
+    payload = req.model_dump(exclude_none=True)
+    task = await task_repo.create_task(db, "fetch_industry_metrics", payload)
+    await publish_message(
+        "industry_metrics.fetch",
+        {"task_id": str(task.id), "type": "fetch_industry_metrics", "payload": payload},
+    )
+    logger.info(
+        "Dispatched fetch_industry_metrics task %s, industry=%s", task.id, req.industry_key
+    )
     return TaskOut.model_validate(task)
 
 

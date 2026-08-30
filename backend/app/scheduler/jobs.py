@@ -148,3 +148,25 @@ async def daily_basic_backfill_job() -> None:
 
     logger.info("Daily basic backfill job triggered")
     await _fetch_yesterday_daily_basic()
+
+
+# ------------------------------------------------------------------
+# Industry research metrics (dual-track: worker via MQ, scheduler direct)
+# ------------------------------------------------------------------
+
+async def industry_metrics_refresh_job() -> None:
+    """Refresh industry research metrics (17:05 Mon-Fri, after quote backfills)."""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import industry_metric_service  # noqa: PLC0415
+
+    logger.info("Industry metrics refresh job triggered")
+    try:
+        async with async_session_factory() as db:
+            result = await industry_metric_service.ingest_industry_metrics(db, "pig")
+            await db.commit()
+        logger.info(
+            "Industry metrics refresh done: source=%s upserted=%s signal=%s",
+            result.get("source"), result.get("upserted"), result.get("signal"),
+        )
+    except Exception:
+        logger.exception("Industry metrics refresh failed")
