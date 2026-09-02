@@ -68,3 +68,4 @@
 - 自定义标签系统应与现有分类体系独立设计：后端独立建表存储，前端独立组件管理，并通过专用页面展示聚合视图，避免与已有分类逻辑耦合。
 - 单股详情页 FundamentalCards 估值指标（marketCap/circulatingCap/PE/PB）依赖 enriched 接口，列表接口返回的 StockOut 不包含这些字段；新增详情接口时应复用同一 SQL 查询并统一缓存 key 前缀（如 `stock:enriched:`）以保证数据一致性。
 - ROE（净资产收益率）、营收同比、净利润同比等财务成长指标需 TuShare `fina_indicator` / `profit_data` 接口支持，后端需新增数据入库链路后方可展示；在此之前 FundamentalCards 应提供降级展示策略或临时隐藏相关指标。
+- Playwright 浏览器测试在中文重文案页面上，`getByText`/正则会同时命中嵌套容器或相邻重复文案而触发 strict mode violation；断言应优先落在唯一容器上用 `toContainText`，或用 `.locator(".ant-tag").filter({ hasText })` 一类结构选择器限定作用域。

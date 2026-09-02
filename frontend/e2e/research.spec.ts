@@ -1,0 +1,84 @@
+import { test, expect as baseExpect } from "@playwright/test";
+
+/**
+ * 投研工作台浏览器级 E2E（依赖运行中的 docker 栈，数据为实盘/混合源，故断言只锚定结构与中文标签，不锚定具体数值）。
+ * - /research：行业卡片（生猪养殖）+ 指标接入覆盖度
+ * - /research/pig：猪智投看板（周期标签 / 信号 / 指标带 / 相位条 / 仓位建议 / EChart / 核心速览 / 知识库占位）
+ */
+
+// 数据由 react-query 异步加载、图表异步渲染，统一放宽断言轮询窗口
+const expect = baseExpect.configure({ timeout: 15_000 });
+
+test("投研列表：生猪养殖行业卡片展示指标接入覆盖度", async ({ page }) => {
+  await page.goto("/research");
+
+  await expect(page.getByRole("heading", { name: "投研工作台" })).toBeVisible();
+
+  // 行业卡片（由 registry 驱动，卡片整体可点击进入工作台）
+  const card = page.locator(".ant-card").filter({ hasText: "生猪养殖" });
+  await expect(card).toBeVisible();
+  // 用 toContainText 规避嵌套元素严格模式冲突（卡片内文案可能命中多个后代节点）
+  // 申万Ⅲ 分类标签 + 指标接入覆盖度 metricWithData/metricTotal（数值随数据变化，只断言形状）
+  await expect(card).toContainText(/申万Ⅲ/);
+  await expect(card).toContainText(/指标接入\s*\d+\s*\/\s*\d+/);
+});
+
+test("猪智投工作台：从行业卡片进入，看板核心区块完整渲染", async ({ page }) => {
+  await page.goto("/research");
+
+  // 通过点击行业卡片导航（而非直接 goto），覆盖列表 → 工作台的真实路径
+  const card = page.locator(".ant-card").filter({ hasText: "生猪养殖" });
+  await card.click();
+  await page.waitForURL("**/research/pig");
+
+  // ── 头部标签：周期阶段 + 当前信号（作用域限定在 ant-tag，避免命中信号面板容器）──
+  const phaseTag = page.locator(".ant-tag").filter({ hasText: "周期阶段" });
+  await expect(phaseTag).toBeVisible();
+  await expect(phaseTag).toContainText(/繁荣|衰退|萧条|复苏/);
+  const signalTag = page.locator(".ant-tag").filter({ hasText: "当前信号" });
+  await expect(signalTag).toBeVisible();
+  await expect(signalTag).toContainText(/买入|卖出|关注|空仓/);
+
+  // ── 综合指标带：生猪均价卡片值非空（数值格式如 10.71 / 11,740） ──
+  const strip = page.locator("section").filter({ hasText: "综合指标" });
+  await expect(strip).toBeVisible();
+  const avgName = strip.getByText("生猪均价", { exact: true });
+  await expect(avgName).toBeVisible();
+  const avgCard = avgName.locator("xpath=../.."); // 名称 span → 卡片根节点
+  await expect(avgCard.getByText(/^[\d,]+(\.\d+)?$/)).toBeVisible();
+  // 能繁母猪存栏在指标带中展示（quick_view 分组不含该指标，见报告说明）
+  await expect(strip.getByText("能繁母猪存栏", { exact: true })).toBeVisible();
+
+  // ── 周期相位条：四阶段齐全且恰有一个"当前"高亮 ───────────────
+  const phaseCard = page.locator(".ant-card").filter({ hasText: "猪周期阶段定位" });
+  await expect(phaseCard).toBeVisible();
+  for (const label of ["繁荣", "衰退", "萧条", "复苏"]) {
+    await expect(phaseCard.getByText(label, { exact: true })).toBeVisible();
+  }
+  await expect(phaseCard.getByText("当前", { exact: true })).toBeVisible();
+
+  // ── 仓位管理建议：三段仓位（核心底仓/波段仓位/现金储备） ──────
+  const posCard = page.locator(".ant-card").filter({ hasText: "仓位管理建议" });
+  await expect(posCard).toBeVisible();
+  for (const name of ["核心底仓", "波段仓位", "现金储备"]) {
+    await expect(posCard.getByText(name, { exact: true })).toBeVisible();
+  }
+
+  // ── EChart 图表：价格 vs 成本 + 能繁母猪趋势（canvas 异步渲染） ──
+  await expect(page.getByText("生猪价格 vs 行业成本")).toBeVisible();
+  await expect(page.getByText("能繁母猪存栏趋势")).toBeVisible();
+  await page.locator("canvas").first().waitFor({ state: "visible" });
+  await expect
+    .poll(async () => page.locator("canvas").count())
+    .toBeGreaterThanOrEqual(2);
+
+  // ── 核心指标速览：网格卡片含 quick 分组指标 ───────────────────
+  const quickCard = page.locator(".ant-card").filter({ hasText: "核心指标速览" });
+  await expect(quickCard).toBeVisible();
+  await expect(quickCard.getByText("猪粮比", { exact: true })).toBeVisible();
+
+  // ── 行业知识库 Tab：P6 占位文案 ────────────────────────────────
+  // 放在最后：切换 Tab 后看板 pane 会被隐藏
+  await page.getByRole("tab", { name: "行业知识库" }).click();
+  await expect(page.getByText(/P6\s*阶段上线/)).toBeVisible();
+});
