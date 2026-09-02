@@ -58,3 +58,6 @@ plugins = ["pydantic.mypy"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-v --cov=app --cov-report=term-missing"
+markers = [
+    "e2e: 全链路测试 — 需要 docker compose 栈在运行（api+worker+rabbitmq），离线时用 -m 'not e2e' 跳过",
+]

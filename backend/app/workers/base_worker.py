@@ -37,7 +37,15 @@ class BaseWorker(ABC):
 
             async with async_session_factory() as db:
                 try:
-                    await task_repo.update_task_status(db, task_id, "running")
+                    if (
+                        await task_repo.update_task_status(db, task_id, "running")
+                        is None
+                    ):
+                        logger.warning(
+                            "Task %s row not found when marking running — "
+                            "stale message or producer committed after publish",
+                            task_id,
+                        )
                     await db.commit()
 
                     result = await self.process(task_id, payload)
