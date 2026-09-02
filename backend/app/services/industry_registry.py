@@ -51,7 +51,7 @@ class MetricDef:
     freq: str
     tier: str
     sources: list[str]              # ingest/查询源优先级（高→低）；mock 永远垫底，演示数据不得压过真实源
-    group: str = "quick"            # strip | quick | supply | cost
+    group: str = "quick"            # strip | quick | supply | cost | company（公司级，stock_id>0）
     strip: bool = False             # 进入综合指标带
     spark: bool = False             # 指标带附迷你走势
     higher_is_better: bool | None = None  # 涨跌颜色语义；None=中性
@@ -227,13 +227,35 @@ PIG_METRICS: list[MetricDef] = [
         group="quick", higher_is_better=False,
         description="消耗饲料/增重，越低效率越高",
     ),
+    # ── 公司级指标（标的分析，P5）：stock_id>0 落表，companies 端点按此下发列 ──
+    MetricDef(
+        key="company.hogs_sold_monthly", name="月度出栏量", unit="万头", freq="monthly",
+        tier=TIER_MANUAL, sources=["manual"],
+        group="company",
+        description="公司月度商品猪出栏量（销售简报/月度经营公告）",
+    ),
+    MetricDef(
+        key="company.cost_complete", name="完全成本", unit="元/kg", freq="quarterly",
+        tier=TIER_MANUAL, sources=["manual"],
+        group="company", higher_is_better=False,
+        description="公司养殖完全成本（季报/调研纪要口径）",
+    ),
+    MetricDef(
+        key="mcap_per_head", name="头均市值", unit="元/头", freq="monthly",
+        tier=TIER_CALC, sources=["derived"],
+        group="company", higher_is_better=False,
+        description="最新总市值 / 年化出栏量（测算）——生猪股跨周期估值锚；"
+                    "历史分位需积累派生行后开放",
+    ),
 ]
 
 PIG_INDUSTRY = IndustryConfig(
     key="pig",
     name="生猪养殖",
     description="猪智投 · 农林牧渔-养殖业-生猪养殖（申万Ⅲ级）",
-    sw_l3_codes=["110301"],
+    # 申万Ⅲ 生猪养殖 = 110702（docs/references/sw/申万行业分类.md · 2021新增，9 只成分股；
+    # 110301 为林业Ⅲ —— 建表时误抄，2026-09-03 随 P5 companies 端点实测修正）
+    sw_l3_codes=["110702"],
     metrics=PIG_METRICS,
     phases=[
         PhaseDef("prosperity", "繁荣", "猪价高位 · 产能扩张 · 二育活跃"),

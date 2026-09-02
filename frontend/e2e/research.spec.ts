@@ -4,6 +4,8 @@ import { test, expect as baseExpect } from "@playwright/test";
  * 投研工作台浏览器级 E2E（依赖运行中的 docker 栈，数据为实盘/混合源，故断言只锚定结构与中文标签，不锚定具体数值）。
  * - /research：行业卡片（生猪养殖）+ 指标接入覆盖度
  * - /research/pig：猪智投看板（周期标签 / 信号 / 指标带 / 相位条 / 仓位建议 / EChart / 核心速览 / 知识库占位）
+ * - /research/pig 行情调研追踪 Tab：标的分析成分股对比表（registry 列渲染 + 行点击跳 /stock/:symbol）
+ * - /market/industry/110000/110700：生猪养殖三级行业页的"进入投研工作台"banner 导航
  */
 
 // 数据由 react-query 异步加载、图表异步渲染，统一放宽断言轮询窗口
@@ -81,4 +83,40 @@ test("猪智投工作台：从行业卡片进入，看板核心区块完整渲�
   // 放在最后：切换 Tab 后看板 pane 会被隐藏
   await page.getByRole("tab", { name: "行业知识库" }).click();
   await expect(page.getByText(/P6\s*阶段上线/)).toBeVisible();
+});
+
+test("行情调研追踪：标的分析对比表渲染并跳转个股", async ({ page }) => {
+  await page.goto("/research/pig");
+  await page.getByRole("tab", { name: "行情调研追踪" }).click();
+
+  // 成分股对比表：卡片 + 表头（固定行情列 + registry 下发的公司指标列）
+  const card = page.locator(".ant-card").filter({ hasText: "标的分析 · 成分股对比" });
+  await expect(card).toBeVisible();
+  const table = card.locator(".ant-table");
+  await expect(table).toBeVisible();
+  // 限定 thead：开启横向滚动后 antd 会在 tbody 里加同文案的 measure 行（th）
+  for (const header of ["代码", "名称", "总市值(亿)", "完全成本", "头均市值"]) {
+    await expect(table.locator("thead th").filter({ hasText: header })).toBeVisible();
+  }
+
+  // 行数 ≥1（成分股来自 SW 分类）且行点击跳转 /stock/:symbol
+  // （.ant-table-row 跳过 antd 横向滚动的隐藏 measure 行）
+  await expect
+    .poll(async () => table.locator("tbody tr.ant-table-row").count())
+    .toBeGreaterThanOrEqual(1);
+  await table.locator("tbody tr.ant-table-row").first().click();
+  await page.waitForURL(/\/stock\/\d{6}$/);
+});
+
+test("生猪养殖三级行业页：投研工作台导航 banner", async ({ page }) => {
+  // 申万 110000 农林牧渔 / 110700 养殖业（含 110702 生猪养殖 → 已产品化行业）
+  await page.goto("/market/industry/110000/110700");
+
+  const banner = page.locator(".ant-card").filter({ hasText: "进入投研工作台" });
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText(/已产品化/);
+
+  await banner.getByRole("button", { name: "进入投研工作台" }).click();
+  await page.waitForURL("**/research/pig");
+  await expect(page.getByRole("heading", { name: "投研工作台" })).toBeVisible();
 });

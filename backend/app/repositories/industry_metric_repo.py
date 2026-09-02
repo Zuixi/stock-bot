@@ -80,6 +80,61 @@ async def get_metric_history(
     return list(reversed(result.scalars().all()))
 
 
+# ── 公司级指标（标的分析，P5）：stock_id > 0 ─────────────────────────
+
+async def get_company_metric_history(
+    db: AsyncSession,
+    industry_key: str,
+    metric_key: str,
+    limit: int = 4000,
+    freq: str | None = None,
+    source: str | None = None,
+) -> list[IndustryMetric]:
+    """Ascending series of one company metric across ALL stocks (stock_id > 0)."""
+    stmt = (
+        select(IndustryMetric)
+        .where(
+            IndustryMetric.industry_key == industry_key,
+            IndustryMetric.stock_id > 0,
+            IndustryMetric.metric_key == metric_key,
+        )
+        .order_by(desc(IndustryMetric.period))
+        .limit(limit)
+    )
+    if freq:
+        stmt = stmt.where(IndustryMetric.freq == freq)
+    if source:
+        stmt = stmt.where(IndustryMetric.source == source)
+    result = await db.execute(stmt)
+    return list(reversed(result.scalars().all()))
+
+
+async def latest_company_rows(
+    db: AsyncSession, industry_key: str
+) -> dict[tuple[int, str], list[IndustryMetric]]:
+    """Latest row per (stock_id, metric_key, source, freq), grouped by (stock_id, metric_key)."""
+    stmt = (
+        select(IndustryMetric)
+        .where(
+            IndustryMetric.industry_key == industry_key,
+            IndustryMetric.stock_id > 0,
+        )
+        .distinct(
+            IndustryMetric.stock_id, IndustryMetric.metric_key,
+            IndustryMetric.source, IndustryMetric.freq,
+        )
+        .order_by(
+            IndustryMetric.stock_id, IndustryMetric.metric_key,
+            IndustryMetric.source, IndustryMetric.freq, desc(IndustryMetric.period),
+        )
+    )
+    result = await db.execute(stmt)
+    grouped: dict[tuple[int, str], list[IndustryMetric]] = {}
+    for row in result.scalars():
+        grouped.setdefault((row.stock_id, row.metric_key), []).append(row)
+    return grouped
+
+
 # ── Reference points ──────────────────────────────────────────────────
 
 async def list_reference_points(

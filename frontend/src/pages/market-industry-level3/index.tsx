@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Breadcrumb, Card, Empty, Space, Tag, Typography } from "antd";
+import { Breadcrumb, Button, Card, Empty, Space, Tag, Typography } from "antd";
 import type { TableProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { StockTable } from "@/features/market/components/StockTable";
 import type { StockRecord } from "@/shared/types";
 import { fetchSwIndustryTree, fetchSwLevel2Stocks, fetchSwLevel3Stocks, fetchSwLevel2StocksEnriched, fetchSwLevel3StocksEnriched } from "@/shared/api/swIndustry";
+import { fetchIndustries } from "@/shared/api/industryResearch";
 
 type SortState = {
   sortBy?: keyof StockRecord;
@@ -39,6 +40,22 @@ export default function IndustryLevel3Page() {
     () => level1?.children.find((node) => node.code === level2Code),
     [level1, level2Code]
   );
+
+  // ── 已产品化行业导航：当前二级（或选中三级）命中 registry sw_l3_codes 时出 banner ──
+  // 复用 /research 列表页的 "industries" 查询缓存
+  const { data: productizedIndustries = [] } = useQuery({
+    queryKey: ["industries"],
+    queryFn: fetchIndustries,
+    staleTime: 5 * 60 * 1000,
+  });
+  const workbenchIndustry = useMemo(() => {
+    const codes = selectedLevel3Code
+      ? [selectedLevel3Code]
+      : (level2?.children.map((c) => c.code) ?? []);
+    return productizedIndustries.find((ind) =>
+      ind.swL3Codes.some((code) => codes.includes(code))
+    );
+  }, [productizedIndustries, selectedLevel3Code, level2]);
 
   // ── Fast: basic stock metadata (renders immediately) ──
   const { data: baseLevel2Stocks = [], isLoading: level2Loading } = useQuery({
@@ -102,6 +119,26 @@ export default function IndustryLevel3Page() {
           { title: level2.name },
         ]}
       />
+
+      {workbenchIndustry && (
+        <Card size="small">
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <Typography.Text>
+              <b>{workbenchIndustry.name}</b>
+              <span style={{ color: "#86909c", marginLeft: 8 }}>
+                已产品化 — 周期信号 / 指标带 / 标的分析
+              </span>
+            </Typography.Text>
+            <Button
+              type="primary"
+              size="small"
+              onClick={() => navigate(`/research/${workbenchIndustry.key}`)}
+            >
+              进入投研工作台
+            </Button>
+          </div>
+        </Card>
+      )}
 
       <Card
         title={`${level2.name} · 三级行业`}

@@ -12,6 +12,7 @@ import { PositionAdviceBar } from "@/features/industry-research/components/Posit
 import { PriceCostChart } from "@/features/industry-research/components/PriceCostChart";
 import { SowTrendChart } from "@/features/industry-research/components/SowTrendChart";
 import { SourceBadge } from "@/features/industry-research/components/SourceBadge";
+import { CompanyComparisonTable } from "@/features/industry-research/components/CompanyComparisonTable";
 
 const PHASE_COLORS: Record<string, string> = {
   prosperity: "#cf1322",
@@ -104,7 +105,13 @@ function Workbench({ dashboard }: { dashboard: Dashboard }) {
     {
       key: "tracking",
       label: "行情调研追踪",
-      children: <Empty description="供需周期核心指标追踪 / 标的分析 / 政策分析 / 资金流向 — P5 阶段上线" />,
+      // 标的分析（P5）：成分股对比表。antd Tabs 惰性挂载 pane，本组件的 useQuery
+      // 只在 Tab 首次激活时发起，看板首屏不受影响；ETF/转债表（P5 行情）后续并列于此。
+      children: (
+        <Card size="small" title="标的分析 · 成分股对比" extra={<span style={{ fontSize: 11.5, color: "#86909c" }}>点击行进入个股详情 · 公司指标列由 registry 下发</span>}>
+          <CompanyComparisonTable industryKey={industry.key} />
+        </Card>
+      ),
     },
     {
       key: "trading",

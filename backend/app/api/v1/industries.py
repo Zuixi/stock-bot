@@ -5,6 +5,7 @@
         GET   /{key}/dashboard                 看板聚合（指标带/速览/趋势/周期/信号/仓位）
         GET   /{key}/metrics/latest            全部指标最新值（源优先级裁决 + 预警标签）
         GET   /{key}/metrics/{metric_key}/history
+        GET   /{key}/companies                 成分股对比表（行情/估值 + 公司指标，列由 registry 下发）
         POST  /{key}/metrics/batch             人工/CSV 导入通道（幂等 upsert）
 """
 
@@ -14,6 +15,7 @@ from app.api.deps import CacheDep, DbDep
 from app.core.exceptions import not_found_response
 from app.schemas.industry import (
     DashboardOut,
+    IndustryCompaniesOut,
     IndustrySummaryOut,
     MetricBatchRequest,
     MetricBatchResponse,
@@ -69,6 +71,15 @@ async def get_metric_history(
         raise not_found_response("Industry", industry_key) from exc
     except service.UnknownMetricError as exc:
         raise not_found_response("Metric", metric_key) from exc
+
+
+@router.get("/{industry_key}/companies", response_model=IndustryCompaniesOut)
+async def get_industry_companies(industry_key: str, db: DbDep) -> IndustryCompaniesOut:
+    """Member-stock comparison table: quotes/valuation + latest company metrics."""
+    try:
+        return await service.get_industry_companies(db, industry_key)
+    except service.UnknownIndustryError as exc:
+        raise not_found_response("Industry", industry_key) from exc
 
 
 @router.post(

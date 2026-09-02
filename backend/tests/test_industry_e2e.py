@@ -200,6 +200,111 @@ async def test_ingest_idempotent(client: AsyncClient):
     assert after == before, "重跑 ingest 不得增删数据点"
 
 
+# ── 标的分析（P5）：成分股对比 + 头均市值派生 ────────────────────────
+
+async def _pig_member_stocks(client: AsyncClient) -> list[dict]:
+    """动态解析生猪养殖 L3 成分股（sw_l3_codes → tree 定位路径 → enriched 含 id/total_mv）。"""
+    industries = (await client.get("/api/v1/industries")).json()
+    l3_codes = set(next(i["sw_l3_codes"] for i in industries if i["key"] == "pig"))
+    tree = (await client.get("/api/v1/market/sw-industry/tree")).json()
+
+    def find_path(nodes):
+        for l1 in nodes:
+            for l2 in l1.get("children") or []:
+                for l3 in l2.get("children") or []:
+                    if l3["code"] in l3_codes:
+                        return l1["code"], l2["code"], l3["code"]
+        return None
+
+    path = find_path(tree)
+    assert path is not None, f"tree 中未找到 {l3_codes}（registry sw_l3_codes 与库内分类不一致？）"
+    l1, l2, l3 = path
+    stocks = (
+        await client.get(f"/api/v1/market/sw-industry/{l1}/{l2}/{l3}/stocks/enriched")
+    ).json()
+    assert stocks, "生猪养殖成分股不得为空"
+    return stocks
+
+
+async def test_companies_endpoint_with_company_metrics(client: AsyncClient):
+    """导入两只真实猪股公司数据 → companies 表含头均市值派生 + registry 列下发。"""
+    stocks = await _pig_member_stocks(client)
+    picks = sorted(
+        (s for s in stocks if s.get("total_mv")),  # daily_basic 有市值才可派生头均市值
+        key=lambda s: s["total_mv"], reverse=True,
+    )[:2]
+    assert len(picks) == 2, "需要 ≥2 只有 daily_basic 市值的成分股（牧原/温氏等）"
+
+    # 每股 6 个月出栏量 + 1 条完全成本（人工通道携带 stock_id=stocks.id）
+    hog_periods = _last_n_month_ends(6)
+    cost_period = next(
+        (d for d in reversed(_last_n_month_ends(5)) if d.month in (3, 6, 9, 12)),
+        hog_periods[0],  # 任意连续 ≥4 个月必含一个季末月，兜底仅为防御
+    )
+    items = []
+    for s in picks:
+        for period in hog_periods:
+            items.append({
+                "metric_key": "company.hogs_sold_monthly",
+                "period": period.isoformat(),
+                "value": 500.0,
+                "stock_id": s["id"],
+                "source": "manual",
+            })
+        items.append({
+            "metric_key": "company.cost_complete",
+            "period": cost_period.isoformat(),
+            "value": 13.2,
+            "stock_id": s["id"],
+            "source": "manual",
+        })
+    resp = await client.post(
+        "/api/v1/industries/pig/metrics/batch",
+        json={"items": items, "recompute_derived": True},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["upserted"] >= 14  # 2×(6+1)
+    assert body["skipped_unknown_metric"] == []
+    assert body["derived_upserted"] >= 1  # 头均市值派生行已落表
+
+    resp = await client.get("/api/v1/industries/pig/companies")
+    assert resp.status_code == 200
+    payload = resp.json()
+    labels = [c["label"] for c in payload["columns"]]
+    assert labels[:6] == ["代码", "名称", "最新价", "总市值(亿)", "PE(TTM)", "PB"]
+    assert {"完全成本", "头均市值", "月度出栏量"} <= set(labels)
+
+    rows = {r["symbol"]: r for r in payload["rows"]}
+    assert len(rows) >= 2
+    for s in picks:
+        row = rows[s["symbol"]]
+        assert row["name"] == s["name"]
+        assert row["has_company_data"] is True
+        # 6 个月历史 → 年化=500×12=6000 万头；头均市值 = total_mv(万)/6000 > 0（单位相消为元/头）
+        assert row["metrics"]["mcap_per_head"] > 0
+        assert row["metrics"]["company.cost_complete"] == 13.2
+        assert row["total_mv_yi"] is not None and row["total_mv_yi"] > 0
+
+
+async def test_companies_unknown_industry_404(client: AsyncClient):
+    resp = await client.get("/api/v1/industries/nope/companies")
+    assert resp.status_code == 404
+
+
+def _last_n_month_ends(n: int, today: date | None = None) -> list[date]:
+    """最近 n 个**已完整**自然月的月末（升序，不含当月）。"""
+    import calendar
+
+    today = today or date.today()
+    y, m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
+    ends = []
+    for i in range(n - 1, -1, -1):
+        yy, mm = y + (m - 1 - i) // 12, (m - 1 - i) % 12 + 1
+        ends.append(date(yy, mm, calendar.monthrange(yy, mm)[1]))
+    return ends
+
+
 # ── 前端烟雾（栈未含 frontend 时跳过） ──────────────────────────────
 
 async def test_frontend_serves_and_proxies_api():

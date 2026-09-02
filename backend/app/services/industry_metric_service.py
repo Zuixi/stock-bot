@@ -17,11 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.redis import CacheClient
 from app.models.industry_research import IndustryReferencePoint
+from app.repositories import daily_basic_repo
 from app.repositories import industry_metric_repo as repo
 from app.schemas.industry import (
+    CompanyColumnOut,
+    CompanyRowOut,
     CycleOut,
     DashboardOut,
     IndustryBriefOut,
+    IndustryCompaniesOut,
     IndustrySummaryOut,
     MetricDelta,
     MetricHistoryOut,
@@ -265,8 +269,46 @@ def _rollup_monthly_rows(cfg: IndustryConfig, m: MetricDef, rows: list) -> list[
     ]
 
 
+# ── 头均市值派生（纯函数，离线单测锁定） ─────────────────────────────
+
+def _month_key(d: date) -> tuple[int, int]:
+    return (d.year, d.month)
+
+
+def _hogs_by_month(monthly_points: list[tuple[date, float]]) -> dict[tuple[int, int], float]:
+    """同月多点取最新一条（人工修正语义），非正值剔除。"""
+    picked: dict[tuple[int, int], tuple[date, float]] = {}
+    for d, v in monthly_points:
+        if v and v > 0:
+            cur = picked.get(_month_key(d))
+            if cur is None or d > cur[0]:
+                picked[_month_key(d)] = (d, v)
+    return {k: v for k, (_, v) in picked.items()}
+
+
+def _annualize_hogs(monthly_points: list[tuple[date, float]]) -> float | None:
+    """月度出栏序列 → 年化出栏量（万头）。
+
+    - 不同月份数 ≥12 → 最近 12 个不同月的滚动求和（trailing-12M SUM）；
+    - 1-11 个月 → 最新月 × 12 粗年化（落表 extra.annualized=True 标记）；
+    - 空序列 / 全为非正值 → None。
+    """
+    by_month = _hogs_by_month(monthly_points)
+    months = sorted(by_month)
+    if not months:
+        return None
+    if len(months) >= 12:
+        return float(sum(by_month[k] for k in months[-12:]))
+    return float(by_month[months[-1]]) * 12
+
+
+def _hogs_ttm_ready(monthly_points: list[tuple[date, float]]) -> bool:
+    """是否满足 trailing-12M 求和条件（False = 最新月 ×12 粗年化）。"""
+    return len(_hogs_by_month(monthly_points)) >= 12
+
+
 async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int:
-    """rollup（日→月）+ 派生（猪粮比/能繁环比）— 统一幂等落表."""
+    """rollup（日→月）+ 派生（猪粮比/能繁环比/头均市值）— 统一幂等落表."""
     total = 0
 
     # 1) 日度→月度 rollup：先落库，后续月度派生当次可见
@@ -281,12 +323,15 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
 
     derived: list[dict] = []
 
-    def _row(m: MetricDef, freq: str, period: date, value: float) -> dict:
+    def _row(
+        m: MetricDef, freq: str, period: date, value: float,
+        stock_id: int = 0, extra: dict | None = None,
+    ) -> dict:
         return {
-            "industry_key": cfg.key, "stock_id": 0, "metric_key": m.key,
+            "industry_key": cfg.key, "stock_id": stock_id, "metric_key": m.key,
             "source": "derived", "source_tier": TIER_DERIVED, "freq": freq,
             "period": period, "value": round(value, 4), "unit": m.unit or None,
-            "extra": None,
+            "extra": extra,
         }
 
     # 猪粮比 = hog_price / corn_price（按 period 对齐，日/月各算一条序列）
@@ -310,15 +355,58 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
     # 能繁环比 = (本月 - 上月) / 上月
     mom_def = cfg.metric("sow_inventory_mom")
     if mom_def is not None:
-        sow = [
+        sow_rows = [
             r for r in await repo.get_metric_history(db, cfg.key, "sow_inventory", limit=240, freq="monthly")
             if r.value is not None
+        ]
+        # 同一 period 可能多源共存（真实源 ingest 后又重跑 mock 演示）：按 registry 源
+        # 优先级逐期去重，否则环比派生会对同一 period 产出重复行，单批 ON CONFLICT
+        # 二次命中同一行直接 CardinalityViolation（2026-09-03 实跑复现）。
+        sow_def = cfg.metric("sow_inventory")
+        by_period: dict[date, list] = {}
+        for r in sow_rows:
+            by_period.setdefault(r.period, []).append(r)
+        sow = [
+            p for p in (_pick_row(sow_def, rows) for rows in by_period.values())
+            if p is not None
         ]
         for prev, cur in zip(sow, sow[1:], strict=False):
             if prev.value:
                 derived.append(
                     _row(mom_def, "monthly", cur.period, (float(cur.value) - float(prev.value)) / float(prev.value) * 100)
                 )
+
+    # 头均市值 = 最新总市值 / 年化出栏（公司级派生，stock_id>0；source_tier 取 registry 的 calc）
+    # 单位相消：daily_basic_indicators.total_mv（万元）÷ 年化出栏（万头）= 元/头。
+    # 历史分位（percentile over history）暂缓：需 ≥1 年派生行积累后再开放，此处只落当期值。
+    mcap_def = cfg.metric("mcap_per_head")
+    hogs_def = cfg.metric("company.hogs_sold_monthly")
+    if mcap_def is not None and hogs_def is not None:
+        hogs_rows = await repo.get_company_metric_history(
+            db, cfg.key, hogs_def.key, limit=4000, freq="monthly"
+        )
+        by_stock: dict[int, list[tuple[date, float]]] = {}
+        for r in hogs_rows:
+            if r.value is not None:
+                by_stock.setdefault(r.stock_id, []).append((r.period, float(r.value)))
+        for stock_id, points in by_stock.items():
+            annual = _annualize_hogs(points)
+            if annual is None or annual <= 0:
+                continue
+            basic = await daily_basic_repo.get_latest_daily_basic(db, stock_id)
+            if basic is None or basic.total_mv is None:
+                continue  # 无估值行（新股/未回补）只跳过该公司，不牵连其他
+            derived.append({
+                "industry_key": cfg.key, "stock_id": stock_id,
+                "metric_key": mcap_def.key, "source": "derived",
+                "source_tier": mcap_def.tier, "freq": mcap_def.freq,
+                "period": date.today(), "value": round(float(basic.total_mv) / annual, 2),
+                "unit": mcap_def.unit or None,
+                "extra": {
+                    "annualized": not _hogs_ttm_ready(points),
+                    "annual_hogs_wan": round(annual, 2),
+                },
+            })
 
     total += await repo.upsert_metrics(db, derived)
     return total
@@ -367,9 +455,8 @@ async def _build_cycle_input(db: AsyncSession, cfg: IndustryConfig) -> cycle_eng
 
 # ── Query side ────────────────────────────────────────────────────────
 
-def _pick_latest(cfg: IndustryConfig, grouped: dict, metric_key: str):
-    rows = grouped.get(metric_key, [])
-    m = cfg.metric(metric_key)
+def _pick_row(m: MetricDef | None, rows: list):
+    """latest 行集合（按 source/freq 分组去重后）→ registry 源优先级裁决，兜底最新 period。"""
     if m is None or not rows:
         return None
     # 注册频率优先：月度行不得借月末日期压过日度行
@@ -379,6 +466,10 @@ def _pick_latest(cfg: IndustryConfig, grouped: dict, metric_key: str):
         if source_key in by_source:
             return by_source[source_key]
     return max(rows, key=lambda r: r.period)
+
+
+def _pick_latest(cfg: IndustryConfig, grouped: dict, metric_key: str):
+    return _pick_row(cfg.metric(metric_key), grouped.get(metric_key, []))
 
 
 async def _build_metric_latest(
@@ -469,6 +560,65 @@ async def get_metric_history(
                                   source=r.source, freq=r.freq)
             for r in rows
         ],
+    )
+
+
+# ── 标的分析（P5）：成分股对比 ────────────────────────────────────────
+
+def _company_columns(cfg: IndustryConfig) -> list[CompanyColumnOut]:
+    """对比表列定义：固定行情/估值列 + registry company 分组指标列（纯函数，单测锁定）。
+
+    新增公司指标 = registry 加一条 MetricDef，列自动下发，前端零改动。
+    """
+    fixed = [
+        CompanyColumnOut(key="symbol", label="代码", numeric=False),
+        CompanyColumnOut(key="name", label="名称", numeric=False),
+        CompanyColumnOut(key="latest_price", label="最新价"),
+        CompanyColumnOut(key="total_mv_yi", label="总市值(亿)"),
+        CompanyColumnOut(key="pe_ttm", label="PE(TTM)"),
+        CompanyColumnOut(key="pb", label="PB"),
+    ]
+    return fixed + [
+        CompanyColumnOut(key=m.key, label=m.name, unit=m.unit or None, tier=m.tier)
+        for m in cfg.metrics if m.group == "company"
+    ]
+
+
+async def get_industry_companies(
+    db: AsyncSession, industry_key: str
+) -> IndustryCompaniesOut:
+    """成分股对比表：sw_l3_codes 成员 + enriched 行情/估值 + 公司指标 latest。"""
+    from app.services import market_service  # noqa: PLC0415 （函数级导入，避免模块环）
+
+    cfg = _require_industry(industry_key)
+    symbols = await market_service.list_symbols_by_industry_codes(cfg.sw_l3_codes)
+    enriched = await market_service.get_stocks_enriched_by_symbols(db, symbols)
+
+    grouped = await repo.latest_company_rows(db, cfg.key)
+    company_defs = [m for m in cfg.metrics if m.group == "company"]
+
+    rows: list[CompanyRowOut] = []
+    for e in enriched:
+        metrics: dict[str, float | None] = {}
+        for m in company_defs:
+            row = _pick_row(m, grouped.get((e.id, m.key), []))
+            metrics[m.key] = float(row.value) if row is not None and row.value is not None else None
+        rows.append(CompanyRowOut(
+            symbol=e.symbol, name=e.name,
+            latest_price=e.latest_price,
+            total_mv_yi=round(e.total_mv / 1e4, 2) if e.total_mv is not None else None,
+            pe_ttm=e.pe_ttm, pb=e.pb,
+            has_company_data=any(v is not None for v in metrics.values()),
+            metrics=metrics,
+        ))
+
+    return IndustryCompaniesOut(
+        industry=IndustryBriefOut(
+            key=cfg.key, name=cfg.name, description=cfg.description,
+            sw_l3_codes=cfg.sw_l3_codes,
+        ),
+        columns=_company_columns(cfg),
+        rows=rows,
     )
 
 
