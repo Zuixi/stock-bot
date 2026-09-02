@@ -168,3 +168,33 @@ class IndustryCompaniesOut(BaseModel):
     industry: IndustryBriefOut
     columns: list[CompanyColumnOut]
     rows: list[CompanyRowOut]
+
+
+# ── 行情面（P5）：ETF / 可转债日线 ────────────────────────────────────
+
+class SecurityDailyPointOut(BaseModel):
+    """一天的 OHLCV（TuShare fund_daily/cb_daily 原样口径，volume 手/张、amount 千元）。"""
+
+    trade_date: date
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    pre_close: float | None = None
+    volume: float | None = None
+    amount: float | None = None
+
+
+class SecuritySeriesOut(BaseModel):
+    """一个标的：latest 一行 + 最近 N 日序列（sparkline 用）+ 最新涨跌幅。"""
+
+    ts_code: str
+    name: str | None = None
+    latest: SecurityDailyPointOut | None = None
+    change_pct: float | None = None  # (close - pre_close) / pre_close × 100
+    series: list[SecurityDailyPointOut] = []
+
+
+class IndustrySecuritiesOut(BaseModel):
+    type: str  # etf | cb
+    codes: list[SecuritySeriesOut]

@@ -101,6 +101,10 @@ class IndustryConfig:
     phases: list[PhaseDef]
     position_templates: dict[str, list[PositionSlice]]
     reference_points: list[ReferencePointDef] = field(default_factory=list)
+    # ── 行情面标的（P5）：TuShare fund_daily / cb_daily 逐代码回补 ──
+    etf_codes: list[str] = field(default_factory=list)
+    cb_codes: list[str] = field(default_factory=list)
+    securities_names: dict[str, str] = field(default_factory=dict)  # code → 展示名
 
     def metric(self, key: str) -> MetricDef | None:
         return next((m for m in self.metrics if m.key == key), None)
@@ -283,6 +287,22 @@ PIG_INDUSTRY = IndustryConfig(
             "《生猪产能综合调控实施方案（2026年修订）》",
         ),
     ],
+    # ── 行情面标的（2026-09-03 TuShare 实机核验）──────────────────────
+    # ETF：159865.SZ 国泰中证畜牧养殖ETF（畜牧养殖 ETF 中规模/流动性最佳，
+    # fund_basic 实测名"国泰中证畜牧养殖ETF"，上市 2021-03-08）。
+    etf_codes=["159865.SZ"],
+    # 可转债：cb_basic 按猪智投 9 只成分股正股名（stk_short_name）过滤、
+    # 仅保留在市（delist_date 为空）的转债。已退市：希望转债 127015.SZ
+    # （2026-01-05 摘牌）、正邦转债 128114.SZ（2024-01-31，正邦重整）。
+    # 牧原转债 127045.SZ ← 牧原股份；温氏转债 123107.SZ ← 温氏股份；
+    # 希望转2 127049.SZ ← 新希望。
+    cb_codes=["127045.SZ", "123107.SZ", "127049.SZ"],
+    securities_names={
+        "159865.SZ": "国泰中证畜牧养殖ETF",
+        "127045.SZ": "牧原转债",
+        "123107.SZ": "温氏转债",
+        "127049.SZ": "希望转2",
+    },
 )
 
 INDUSTRIES: dict[str, IndustryConfig] = {PIG_INDUSTRY.key: PIG_INDUSTRY}

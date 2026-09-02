@@ -5,6 +5,7 @@ import { test, expect as baseExpect } from "@playwright/test";
  * - /research：行业卡片（生猪养殖）+ 指标接入覆盖度
  * - /research/pig：猪智投看板（周期标签 / 信号 / 指标带 / 相位条 / 仓位建议 / EChart / 核心速览 / 知识库占位）
  * - /research/pig 行情调研追踪 Tab：标的分析成分股对比表（registry 列渲染 + 行点击跳 /stock/:symbol）
+ * - /research/pig 行情调研追踪 Tab：行业 ETF 表（P5 行情面，TuShare fund_daily 实拉数据）
  * - /market/industry/110000/110700：生猪养殖三级行业页的"进入投研工作台"banner 导航
  */
 
@@ -106,6 +107,24 @@ test("行情调研追踪：标的分析对比表渲染并跳转个股", async ({
     .toBeGreaterThanOrEqual(1);
   await table.locator("tbody tr.ant-table-row").first().click();
   await page.waitForURL(/\/stock\/\d{6}$/);
+});
+
+test("行情调研追踪：行业 ETF 表展示畜牧 ETF 日线", async ({ page }) => {
+  // 依赖后端 e2e 已触发 fetch-securities（TuShare 实拉一年日线）；行存在性用宽轮询兜底
+  await page.goto("/research/pig");
+  await page.getByRole("tab", { name: "行情调研追踪" }).click();
+
+  const etfCard = page.locator(".ant-card").filter({ hasText: "行业 ETF" });
+  await expect(etfCard).toBeVisible();
+  for (const header of ["代码", "名称", "最新价", "涨跌幅", "成交量"]) {
+    await expect(etfCard.locator("thead th").filter({ hasText: header })).toBeVisible();
+  }
+  // 拉取按钮存在（空态引导）；ETF 代码行渲染（registry 下发的 159865.SZ）
+  await expect(etfCard.getByRole("button", { name: "拉取数据" })).toBeVisible();
+  await expect
+    .poll(async () => etfCard.locator("tbody tr.ant-table-row").count())
+    .toBeGreaterThanOrEqual(1);
+  await expect(etfCard.locator("tbody")).toContainText("159865.SZ");
 });
 
 test("生猪养殖三级行业页：投研工作台导航 banner", async ({ page }) => {

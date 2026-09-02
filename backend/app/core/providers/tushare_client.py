@@ -261,6 +261,62 @@ class TuShareClient(RateLimitedSyncProvider):
         return await self._query("daily_basic", fields=fields, **kwargs)
 
     # ------------------------------------------------------------------
+    # Fund / convertible-bond daily APIs (P5 行情面)
+    # ------------------------------------------------------------------
+
+    async def fetch_fund_daily(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> pd.DataFrame:
+        """Fetch ETF/LOF daily OHLCV (TuShare fund_daily，vol=手、amount=千元).
+
+        See: docs/references/tushare/reference.md
+        """
+        kwargs: dict[str, str] = {}
+        if ts_code:
+            kwargs["ts_code"] = ts_code
+        if trade_date:
+            kwargs["trade_date"] = trade_date
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        return await self._query("fund_daily", **kwargs)
+
+    async def fetch_cb_daily(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> pd.DataFrame:
+        """Fetch convertible-bond daily OHLCV (TuShare cb_daily，vol=张、amount=千元).
+
+        See: docs/references/tushare/reference.md
+        """
+        kwargs: dict[str, str] = {}
+        if ts_code:
+            kwargs["ts_code"] = ts_code
+        if trade_date:
+            kwargs["trade_date"] = trade_date
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        return await self._query("cb_daily", **kwargs)
+
+    async def fetch_cb_basic(self) -> pd.DataFrame:
+        """Fetch convertible-bond reference list (cb_basic).
+
+        该积分档返回列不含 issuer/list_status：正股名称见 stk_short_name，
+        在市判定用 delist_date 为空。
+        """
+        return await self._query("cb_basic")
+
+    # ------------------------------------------------------------------
     # Shenwan industry classification APIs
     # ------------------------------------------------------------------
 

@@ -20,6 +20,7 @@ QUEUES: dict[str, str] = {
     "clustering.run": "stock_bot.clustering.run",
     "llm.explain": "stock_bot.llm.explain",
     "industry_metrics.fetch": "stock_bot.industry_metrics.fetch",
+    "securities.fetch": "stock_bot.securities.fetch",
 }
 
 _connection: AbstractRobustConnection | None = None

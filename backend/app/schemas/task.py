@@ -57,3 +57,8 @@ class FetchIndustryMetricsRequest(BaseModel):
     industry_key: str = "pig"
     source: str | None = Field(default=None, pattern="^(mock|akshare)$")
     months: int = Field(default=37, ge=1, le=120)
+
+
+class FetchIndustrySecuritiesRequest(BaseModel):
+    industry_key: str = "pig"
+    backfill_days: int = Field(default=365, ge=1, le=1825)

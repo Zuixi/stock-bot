@@ -170,3 +170,27 @@ async def industry_metrics_refresh_job() -> None:
         )
     except Exception:
         logger.exception("Industry metrics refresh failed")
+
+
+async def securities_refresh_job() -> None:
+    """Refresh industry ETF/CB daily bars (17:10 Mon-Fri, after industry_metrics).
+
+    日增量窗口（SCHEDULED_BACKFILL_DAYS）而非全年回补：幂等 upsert 兜底偶发缺口，
+    避免每个交易日对 TuShare 打满整年请求。首年历史由手动任务全量回补。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import securities_service  # noqa: PLC0415
+
+    logger.info("Securities refresh job triggered")
+    try:
+        async with async_session_factory() as db:
+            result = await securities_service.ingest_industry_securities(
+                db, "pig", backfill_days=securities_service.SCHEDULED_BACKFILL_DAYS
+            )
+            await db.commit()
+        logger.info(
+            "Securities refresh done: etf_upserted=%s cb_upserted=%s",
+            result.get("etf_upserted"), result.get("cb_upserted"),
+        )
+    except Exception:
+        logger.exception("Securities refresh failed")

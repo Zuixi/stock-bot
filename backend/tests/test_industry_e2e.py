@@ -305,6 +305,66 @@ def _last_n_month_ends(n: int, today: date | None = None) -> list[date]:
     return ends
 
 
+# ── 行情面（P5）：ETF/可转债日线管道 ────────────────────────────────
+
+async def _trigger_securities_fetch(client: AsyncClient) -> dict:
+    """POST fetch-securities → 轮询到终态 → 返回任务 dict（TuShare 实拉）。"""
+    resp = await client.post("/api/v1/tasks/fetch-securities", json={"industry_key": "pig"})
+    assert resp.status_code == 202, resp.text
+    task_id = resp.json()["id"]
+
+    deadline = time.monotonic() + TASK_POLL_TIMEOUT
+    task = None
+    while time.monotonic() < deadline:
+        task = (await client.get(f"/api/v1/tasks/{task_id}")).json()
+        if task["status"] in ("completed", "failed", "cancelled"):
+            break
+        await asyncio.sleep(0.5)
+    assert task is not None and task["status"] == "completed", (
+        f"securities task {task_id} stuck at {task['status'] if task else 'no-response'}"
+    )
+    return task
+
+
+async def test_securities_fetch_and_series(client: AsyncClient):
+    """fetch-securities 任务（TuShare fund/cb daily）→ securities 端点按代码分组出序列。"""
+    task = await _trigger_securities_fetch(client)
+    result = task["result"]
+    assert result["etf_codes"], "registry etf_codes 不得为空"
+    assert result["etf_upserted"] > 0
+
+    resp = await client.get("/api/v1/industries/pig/securities?type=etf&limit=90")
+    assert resp.status_code == 200, resp.text
+    etf = resp.json()
+    assert etf["type"] == "etf"
+    with_data = [c for c in etf["codes"] if c["latest"]]
+    assert with_data, "ETF 序列不得为空"
+    code = with_data[0]
+    assert len(code["series"]) >= 30  # 一年回补 ≥ 30 个交易日
+    assert code["latest"]["close"] > 0
+    # 涨跌幅 = close vs pre_close（后端算好，供表格直接渲染）
+    if code["latest"]["pre_close"]:
+        expected = (code["latest"]["close"] - code["latest"]["pre_close"]) / code["latest"]["pre_close"] * 100
+        assert abs(code["change_pct"] - round(expected, 2)) < 0.01
+
+    # 可转债：registry 有在市转债则断言序列；无则断言空 codes 形状（源无关分支）
+    from app.services.industry_registry import PIG_INDUSTRY
+
+    resp = await client.get("/api/v1/industries/pig/securities?type=cb&limit=90")
+    assert resp.status_code == 200
+    cb = resp.json()
+    if PIG_INDUSTRY.cb_codes:
+        cb_with_data = [c for c in cb["codes"] if c["latest"]]
+        assert cb_with_data and len(cb_with_data[0]["series"]) >= 30
+    else:
+        assert cb["codes"] == []
+
+
+async def test_securities_unknown_industry_404_and_bad_type_422(client: AsyncClient):
+    assert (await client.get("/api/v1/industries/nope/securities?type=etf")).status_code == 404
+    assert (await client.get("/api/v1/industries/pig/securities?type=bond")).status_code == 422
+
+
 # ── 前端烟雾（栈未含 frontend 时跳过） ──────────────────────────────
 
 async def test_frontend_serves_and_proxies_api():

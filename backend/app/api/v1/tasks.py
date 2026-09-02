@@ -6,10 +6,11 @@ from fastapi import APIRouter, Query, status
 
 from app.api.deps import CacheDep, DbDep
 from app.core.exceptions import conflict_response, not_found_response
-from app.schemas.common import PageParams, PagedResponse
+from app.schemas.common import PagedResponse, PageParams
 from app.schemas.task import (
     FetchDailyBasicRequest,
     FetchIndustryMetricsRequest,
+    FetchIndustrySecuritiesRequest,
     FetchQuotesRequest,
     FetchUniverseRequest,
     RunClusteringRequest,
@@ -85,6 +86,16 @@ async def run_clustering(req: RunClusteringRequest, db: DbDep) -> TaskOut:
 async def fetch_industry_metrics(req: FetchIndustryMetricsRequest, db: DbDep) -> TaskOut:
     """Trigger an industry metrics ingest task (mock/AKShare)."""
     return await task_service.trigger_fetch_industry_metrics(db, req)
+
+
+@router.post(
+    "/fetch-securities",
+    response_model=TaskOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def fetch_securities(req: FetchIndustrySecuritiesRequest, db: DbDep) -> TaskOut:
+    """Trigger an ETF/convertible-bond daily fetch task (TuShare fund/cb daily)."""
+    return await task_service.trigger_fetch_securities(db, req)
 
 
 @router.get("/{task_id}", response_model=TaskOut)
