@@ -164,14 +164,23 @@ async def _fetch_caaa_sow_row(
 
 # ── Ingest ────────────────────────────────────────────────────────────
 
+# 派生指标 → 其全部基础输入；输入全部被真实源覆盖时，旧 mock 派生行一并清除
+_DERIVED_INPUTS: dict[str, set[str]] = {
+    "hog_corn_ratio": {"hog_price", "corn_price"},
+    "sow_inventory_mom": {"sow_inventory"},
+}
+
+
 def _covered_purge_keys(covered: set[str]) -> set[str]:
     """已覆盖指标 → 需清除 mock/derived 行的指标集合（纯函数，单测锁定）.
 
     真实源 ingest 只清除**本次已覆盖指标**的演示行（修订 C2 裁定：无法补齐的指标
-    继续用 mock，宁可标注演示也不空缺）。当 hog_price 与 corn_price 同时被覆盖时，
-    猪粮比的两个输入都已真实化，连同清除其 derived 旧序列（当次重算即真实值）。
+    继续用 mock，宁可标注演示也不空缺）。当某派生指标的全部输入都被覆盖时（如
+    hog_price 与 corn_price 同时真实化 → 猪粮比），连同清除其 derived 旧序列
+    （当次重算即真实值）。
     """
-    return covered | ({"hog_corn_ratio"} if {"hog_price", "corn_price"} <= covered else set())
+    derived = {d for d, inputs in _DERIVED_INPUTS.items() if inputs <= covered}
+    return covered | derived
 
 
 async def ingest_industry_metrics(

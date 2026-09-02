@@ -152,7 +152,13 @@ def test_akshare_specs_sources_registered_in_registry():
 
 def test_covered_purge_keys_keeps_set_when_ratio_inputs_missing():
     assert _covered_purge_keys({"hog_price"}) == {"hog_price"}
-    assert _covered_purge_keys({"sow_inventory"}) == {"sow_inventory"}
+
+
+def test_covered_purge_keys_adds_mom_when_sow_inventory_covered():
+    # 能繁存栏被真实源（stats_gov/caaa）覆盖 → 连带清除 mock 派生的 sow_inventory_mom。
+    # 注意：派生 mom 需 ≥2 个基础点，单篇 caaa 文章在第二个月落地前派生不出任何行——
+    # 保守设计：宁可暂时缺 mom 也不让 mock 动量继续喂周期引擎。
+    assert _covered_purge_keys({"sow_inventory"}) == {"sow_inventory", "sow_inventory_mom"}
 
 
 def test_covered_purge_keys_adds_ratio_when_both_inputs_covered():
