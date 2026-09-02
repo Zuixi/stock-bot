@@ -16,9 +16,9 @@ def _row(metric_key, source, period, freq="daily", value=1.0):
 
 def test_rollup_takes_last_daily_value_per_month():
     rows = [
-        _row("hog_price", "akshare_100ppi", date(2026, 7, 10), value=10.0),
-        _row("hog_price", "akshare_100ppi", date(2026, 7, 31), value=12.0),
-        _row("hog_price", "akshare_100ppi", date(2026, 8, 5), value=13.0),
+        _row("hog_price", "akshare_soozhu", date(2026, 7, 10), value=10.0),
+        _row("hog_price", "akshare_soozhu", date(2026, 7, 31), value=12.0),
+        _row("hog_price", "akshare_soozhu", date(2026, 8, 5), value=13.0),
     ]
     m = PIG_INDUSTRY.metric("hog_price")
     out = _rollup_monthly_rows(PIG_INDUSTRY, m, rows)
@@ -26,13 +26,13 @@ def test_rollup_takes_last_daily_value_per_month():
         (date(2026, 7, 31), 12.0, "monthly"),
         (date(2026, 8, 31), 13.0, "monthly"),
     ]
-    assert all(r["source"] == "akshare_100ppi" and r["source_tier"] == m.tier for r in out)
+    assert all(r["source"] == "akshare_soozhu" and r["source_tier"] == m.tier for r in out)
 
 
 def test_rollup_marks_extra_and_skips_none_values():
     rows = [
-        _row("hog_price", "akshare_100ppi", date(2026, 7, 10), value=None),
-        _row("hog_price", "akshare_100ppi", date(2026, 7, 20), value=11.0),
+        _row("hog_price", "akshare_soozhu", date(2026, 7, 10), value=None),
+        _row("hog_price", "akshare_soozhu", date(2026, 7, 20), value=11.0),
     ]
     out = _rollup_monthly_rows(PIG_INDUSTRY, PIG_INDUSTRY.metric("hog_price"), rows)
     assert len(out) == 1

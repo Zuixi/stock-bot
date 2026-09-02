@@ -177,7 +177,7 @@ async def delete_rows_by_source(
         IndustryMetric.stock_id == 0,
         IndustryMetric.source.in_(sources),
     )
-    if metric_keys:
+    if metric_keys is not None:
         stmt = stmt.where(IndustryMetric.metric_key.in_(metric_keys))
     result = await db.execute(stmt)
     return result.rowcount or 0

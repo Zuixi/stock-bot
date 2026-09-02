@@ -11,7 +11,7 @@ def test_batch_accepts_manual_and_rejects_provider_sources():
         {"metric_key": "industry_cost_avg", "period": date(2026, 8, 31), "value": 13.5,
          "source": "manual"},
         {"metric_key": "industry_cost_avg", "period": date(2026, 8, 31), "value": 13.5,
-         "source": "akshare_100ppi"},  # 采集适配器专属 source，人工通道不得伪造
+         "source": "akshare_soozhu"},  # 采集适配器专属 source，人工通道不得伪造
         {"metric_key": "sow_inventory", "period": date(2026, 6, 30), "value": 4038.0,
          "source": "stats_gov"},  # 统计局 CSV 导入通道
         {"metric_key": "nope", "period": date(2026, 8, 31), "value": 1.0},
@@ -19,7 +19,7 @@ def test_batch_accepts_manual_and_rejects_provider_sources():
     rows, unknown, rejected = _prepare_batch_rows(PIG_INDUSTRY, items)
     assert [r["source"] for r in rows] == ["manual", "stats_gov"]
     assert unknown == ["nope"]
-    assert rejected == ["industry_cost_avg:akshare_100ppi"]
+    assert rejected == ["industry_cost_avg:akshare_soozhu"]
 
 
 def test_batch_source_tier_always_from_registry():
