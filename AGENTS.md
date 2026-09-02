@@ -13,6 +13,12 @@ stock bot 能够查看当前市场行情，股票类别，每个分类的具体�
   - React 18 + TypeScript + Vite + **Ant Design 5** + ECharts（echarts-for-react）
   - TanStack React Query 数据获取 + Zustand 本地持久化
   - feature-sliced 结构：`src/app`（路由/布局/主题）、`src/pages/<路由>/`、`src/features/<域>/`、`src/shared/`（api/ui/config）
+- 根目录 `src/` + `tests/` + 根 `pyproject.toml` 为早期 CLI 原型遗留，主项目在 `backend/` 与 `frontend/`
+
+## 常用命令
+- 后端（backend/ 下，uv 管理）：测试 `uv run pytest`；lint/类型检查 `uv run --extra dev ruff check .`、`uv run --extra dev mypy app`
+- 前端（frontend/ 下，npm 管理）：`npm install`（首次）、`npm run lint`、`npm run build`
+- 整体构建启动：`docker compose build && docker compose up -d`
 
 前后端都需要使用Docker Compose 进行部署。
 整体服务通过 docker compose build 和 docker compose up -d 进行构建和启动。
