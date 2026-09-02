@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import calendar
 import logging
 from dataclasses import asdict
 from datetime import date
@@ -167,8 +168,42 @@ async def _ensure_reference_points(db: AsyncSession, cfg: IndustryConfig) -> Non
     await repo.upsert_reference_points(db, rows)
 
 
+def _month_end(d: date) -> date:
+    return date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
+
+
+def _rollup_monthly_rows(cfg: IndustryConfig, m: MetricDef, rows: list) -> list[dict]:
+    """每日度序列 → 月度行：每月最后一个非空日度值，period=月末，source 原样保留。"""
+    by_key: dict[tuple[str, date], object] = {}
+    for r in rows:  # rows 为升序
+        if r.value is None:
+            continue
+        by_key[(r.source, _month_end(r.period))] = r
+    return [
+        {
+            "industry_key": cfg.key, "stock_id": 0, "metric_key": m.key,
+            "source": source, "source_tier": m.tier, "freq": "monthly",
+            "period": period, "value": float(r.value), "unit": m.unit or None,
+            "extra": {"rollup": "last_daily"},
+        }
+        for (source, period), r in sorted(by_key.items())
+    ]
+
+
 async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int:
-    """猪粮比（日/月）与能繁环比 — 从基础指标现算后以 source='derived' 落表."""
+    """rollup（日→月）+ 派生（猪粮比/能繁环比）— 统一幂等落表."""
+    total = 0
+
+    # 1) 日度→月度 rollup：先落库，后续月度派生当次可见
+    rollup_rows: list[dict] = []
+    for m in cfg.metrics:
+        if not m.rollup_monthly:
+            continue
+        daily = await repo.get_metric_history(db, cfg.key, m.key, limit=4000, freq="daily")
+        rollup_rows.extend(_rollup_monthly_rows(cfg, m, daily))
+    if rollup_rows:
+        total += await repo.upsert_metrics(db, rollup_rows)
+
     derived: list[dict] = []
 
     def _row(m: MetricDef, freq: str, period: date, value: float) -> dict:
@@ -210,7 +245,8 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
                     _row(mom_def, "monthly", cur.period, (float(cur.value) - float(prev.value)) / float(prev.value) * 100)
                 )
 
-    return await repo.upsert_metrics(db, derived)
+    total += await repo.upsert_metrics(db, derived)
+    return total
 
 
 async def evaluate_and_store_signal(db: AsyncSession, cfg: IndustryConfig):
@@ -261,6 +297,8 @@ def _pick_latest(cfg: IndustryConfig, grouped: dict, metric_key: str):
     m = cfg.metric(metric_key)
     if m is None or not rows:
         return None
+    # 注册频率优先：月度行不得借月末日期压过日度行
+    rows = [r for r in rows if r.freq == m.freq] or rows
     by_source = {r.source: r for r in rows}
     for source_key in m.sources:
         if source_key in by_source:
