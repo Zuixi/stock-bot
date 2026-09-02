@@ -55,6 +55,7 @@ class MetricDef:
     strip: bool = False             # 进入综合指标带
     spark: bool = False             # 指标带附迷你走势
     higher_is_better: bool | None = None  # 涨跌颜色语义；None=中性
+    rollup_monthly: bool = False    # 日度指标按"每月最后一个日度值"补一条月度行（source 不变）
     warn_bands: list[WarnBand] = field(default_factory=list)
     description: str = ""
 
@@ -145,12 +146,13 @@ PIG_METRICS: list[MetricDef] = [
         key="hog_price", name="生猪均价", unit="元/kg", freq="daily",
         tier=TIER_HIGHFREQ, sources=["akshare_100ppi", "mock"],
         group="quick", strip=True, spark=True, higher_is_better=True,
+        rollup_monthly=True,
         description="全国生猪出栏均价；官方批发价为基准，本值用于跟踪边际变化",
     ),
     MetricDef(
         key="corn_price", name="玉米价格", unit="元/kg", freq="daily",
         tier=TIER_HIGHFREQ, sources=["akshare_100ppi", "mock"],
-        group="quick", higher_is_better=True,
+        group="quick", higher_is_better=True, rollup_monthly=True,
         description="饲料成本端主要原料",
     ),
     MetricDef(

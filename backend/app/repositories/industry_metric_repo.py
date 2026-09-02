@@ -37,12 +37,15 @@ async def upsert_metrics(db: AsyncSession, rows: list[dict]) -> int:
 
 
 async def latest_rows_by_metric(db: AsyncSession, industry_key: str) -> dict[str, list[IndustryMetric]]:
-    """Latest row per (metric_key, source) —DISTINCT ON over a small keyed table."""
+    """Latest row per (metric_key, source, freq) —DISTINCT ON over a small keyed table."""
     stmt = (
         select(IndustryMetric)
         .where(IndustryMetric.industry_key == industry_key, IndustryMetric.stock_id == 0)
-        .distinct(IndustryMetric.metric_key, IndustryMetric.source)
-        .order_by(IndustryMetric.metric_key, IndustryMetric.source, desc(IndustryMetric.period))
+        .distinct(IndustryMetric.metric_key, IndustryMetric.source, IndustryMetric.freq)
+        .order_by(
+            IndustryMetric.metric_key, IndustryMetric.source,
+            IndustryMetric.freq, desc(IndustryMetric.period),
+        )
     )
     result = await db.execute(stmt)
     grouped: dict[str, list[IndustryMetric]] = {}
