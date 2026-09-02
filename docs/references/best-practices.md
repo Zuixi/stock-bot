@@ -69,3 +69,4 @@
 - 单股详情页 FundamentalCards 估值指标（marketCap/circulatingCap/PE/PB）依赖 enriched 接口，列表接口返回的 StockOut 不包含这些字段；新增详情接口时应复用同一 SQL 查询并统一缓存 key 前缀（如 `stock:enriched:`）以保证数据一致性。
 - ROE（净资产收益率）、营收同比、净利润同比等财务成长指标需 TuShare `fina_indicator` / `profit_data` 接口支持，后端需新增数据入库链路后方可展示；在此之前 FundamentalCards 应提供降级展示策略或临时隐藏相关指标。
 - Playwright 浏览器测试在中文重文案页面上，`getByText`/正则会同时命中嵌套容器或相邻重复文案而触发 strict mode violation；断言应优先落在唯一容器上用 `toContainText`，或用 `.locator(".ant-tag").filter({ hasText })` 一类结构选择器限定作用域。
+- 官方转载源（如协会月度文章）解析应拆成"网络抓取壳 + 纯解析函数"两层：解析用真实页面快照 fixture 做离线单测锁定正文形状（含环比方向词归一、数据期优先取标题月份），抓取壳只做发现与容错（任何失败 log 后返回 None 不抛穿），并为列表页改版预留显式 URL 设置逃生通道。

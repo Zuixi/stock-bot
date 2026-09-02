@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     # AKShare 接口名尚未实机验证（见 docs/design/data-source.md），默认 mock。
     industry_data_source: str = "mock"
 
+    # CAAA 能繁母猪文章直连 URL（逃生通道：栏目列表页改版时手动指定最新文章；
+    # 留空 = 自动从 pig.caaa.cn 行业动态栏目发现，见 app/core/providers/caaa_client.py）
+    caaa_sow_article_url: str = ""
+
     # Shenwan industry classification XLS data directory
     sw_data_dir: str = ""
 
