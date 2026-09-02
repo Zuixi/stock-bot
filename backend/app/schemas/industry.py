@@ -83,6 +83,7 @@ class IndustryBriefOut(BaseModel):
 class DashboardOut(BaseModel):
     industry: IndustryBriefOut
     as_of: date
+    data_source: str = "mock"  # settings.industry_data_source，前端据此展示演示标签
     strip: list[MetricLatestOut]
     quick_view: list[MetricLatestOut]
     trends: dict[str, TrendSeriesOut]
@@ -135,4 +136,6 @@ class MetricBatchRequest(BaseModel):
 
 class MetricBatchResponse(BaseModel):
     upserted: int
+    derived_upserted: int = 0
     skipped_unknown_metric: list[str] = []
+    skipped_invalid_source: list[str] = []

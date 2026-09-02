@@ -26,9 +26,9 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[IndustrySummaryOut])
-async def list_industries(db: DbDep, cache: CacheDep) -> list[IndustrySummaryOut]:
+async def list_industries(db: DbDep) -> list[IndustrySummaryOut]:
     """List productized industries with metric coverage."""
-    return await service.list_industries(db, cache)
+    return await service.list_industries(db)
 
 
 @router.get("/{industry_key}/dashboard", response_model=DashboardOut)
@@ -44,11 +44,10 @@ async def get_dashboard(industry_key: str, db: DbDep, cache: CacheDep) -> Dashbo
 async def get_latest_metrics(
     industry_key: str,
     db: DbDep,
-    cache: CacheDep,
     group: str | None = Query(None, description="Filter by display group (strip/quick/supply/cost)"),
 ) -> list[MetricLatestOut]:
     try:
-        return await service.get_latest_metrics(db, cache, industry_key, group=group)
+        return await service.get_latest_metrics(db, industry_key, group=group)
     except service.UnknownIndustryError as exc:
         raise not_found_response("Industry", industry_key) from exc
 
@@ -58,14 +57,13 @@ async def get_metric_history(
     industry_key: str,
     metric_key: str,
     db: DbDep,
-    cache: CacheDep,
-    months: int = Query(default=36, ge=1, le=240),
+    limit: int = Query(default=500, ge=1, le=5000, description="返回的最大数据点数"),
     freq: str | None = Query(None, description="Override metric default freq"),
     source: str | None = Query(None, description="Filter by data source"),
 ) -> MetricHistoryOut:
     try:
         return await service.get_metric_history(
-            db, cache, industry_key, metric_key, months=months, freq=freq, source=source
+            db, industry_key, metric_key, limit=limit, freq=freq, source=source
         )
     except service.UnknownIndustryError as exc:
         raise not_found_response("Industry", industry_key) from exc
