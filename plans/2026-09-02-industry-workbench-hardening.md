@@ -263,7 +263,7 @@ def test_fallback_prefers_most_recent_period():
 - [ ] **Step 2: 运行确认失败**
 
 Run: `cd backend && uv run pytest tests/test_industry_source_priority.py -v`
-Expected: 前 3 项 FAIL（mock 在前 / akshare_sina 未登记），兜底测试 PASS（现行为 `rows[0]` 恰为 other，改动后仍需保持）。
+Expected: 四项全 FAIL（mock 排在真实源前 / akshare_sina 未登记 / 兜底取 rows[0]=manual 而非最新 period 的 other）。
 
 - [ ] **Step 3: 改 registry sources**
 
