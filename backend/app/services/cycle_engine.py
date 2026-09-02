@@ -70,6 +70,9 @@ def evaluate_pig_cycle(inp: CycleInput) -> CycleOutput:
     ratio_low = inp.ratio is not None and inp.ratio < RATIO_LEVEL2
     ratio_deep_loss = inp.ratio is not None and inp.ratio < RATIO_LEVEL1
     ratio_overheat = inp.ratio is not None and inp.ratio > RATIO_OVERHEAT
+    # 盈亏平衡确认：成本口径（price≥cost）或猪粮比口径（ratio≥6，引擎自身的代理口径）。
+    # 走到复苏分支时亏损与低猪粮比已被排除，故二者任一非空即构成确认；全缺失则不确认。
+    breakeven_confirmed = loss is not None or inp.ratio is not None
 
     # ── 周期阶段判定（按优先级） ──────────────────────────────────
     # 猪粮比是行业盈亏的代理指标：ratio < 6 即视为仍在磨底（即使价格短暂站上成本线），
@@ -85,7 +88,7 @@ def evaluate_pig_cycle(inp: CycleInput) -> CycleOutput:
             )
         if ratio_low:
             reasons.append(f"猪粮比 {inp.ratio:.2f} 处于{ratio_band}区间，行业处于亏损预警区间")
-    elif sow_declining:
+    elif sow_declining and breakeven_confirmed:
         phase = PHASE_RECOVERY
         reasons.append("猪价站上盈亏平衡线，且能繁产能持续去化")
     elif loss is False:
@@ -106,7 +109,8 @@ def evaluate_pig_cycle(inp: CycleInput) -> CycleOutput:
     if phase == PHASE_PROSPERITY and ratio_overheat:
         signal = reg.SIGNAL_SELL
         reasons.append("周期繁荣+猪粮比过热，兑现收益")
-    elif phase == PHASE_DEPRESSION and sow_declining:
+    # 左侧布局提示与复苏判定同理：缺乏盈亏证据时不发左侧信号，保持防守
+    elif phase == PHASE_DEPRESSION and sow_declining and breakeven_confirmed:
         signal = reg.SIGNAL_WATCH
         reasons.append("产能去化提速，左侧布局窗口临近")
         if ratio_deep_loss:
