@@ -4,6 +4,11 @@ import { useNavigate } from "react-router-dom";
 import { RightOutlined } from "@ant-design/icons";
 import { StateWrapper } from "@/shared/ui/StateWrapper";
 import { fetchIndustries, type IndustrySummary } from "@/shared/api/industryResearch";
+import {
+  PHASE_COLORS,
+  SIGNAL_TEXT_COLORS,
+  phaseLabel,
+} from "@/features/industry-research/constants";
 
 /** 投研工作台入口：已产品化行业列表（由 registry 配置驱动，接入新行业自动出现） */
 export default function ResearchPage() {
@@ -66,6 +71,31 @@ function IndustryCard({ industry, onOpen }: { industry: IndustrySummary; onOpen:
       <Typography.Paragraph type="secondary" style={{ marginTop: 10, marginBottom: 14 }}>
         {industry.description}
       </Typography.Paragraph>
+      {(industry.phase || industry.signalType) && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {industry.phase && (
+            <Tag
+              style={{
+                color: PHASE_COLORS[industry.phase] ?? "#4e5969",
+                borderColor: PHASE_COLORS[industry.phase] ?? "#4e5969",
+                borderRadius: 14,
+                padding: "2px 10px",
+                background: "transparent",
+              }}
+            >
+              周期阶段 · {phaseLabel(industry.phase)}
+            </Tag>
+          )}
+          {industry.signalType && (
+            <Tag style={{ borderRadius: 14, padding: "2px 10px" }}>
+              当前信号 <b style={{ color: SIGNAL_TEXT_COLORS[industry.signalType] ?? "#4e5969" }}>{industry.signalType}</b>
+            </Tag>
+          )}
+          {industry.signalDate && (
+            <span style={{ fontSize: 11.5, color: "#c9cdd4" }}>{industry.signalDate}</span>
+          )}
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <Progress percent={pct} size="small" style={{ flex: 1, marginBottom: 0 }} showInfo={false} />
         <span style={{ fontSize: 12, color: "#86909c", whiteSpace: "nowrap" }}>

@@ -15,20 +15,7 @@ import { SourceBadge } from "@/features/industry-research/components/SourceBadge
 import { CompanyComparisonTable } from "@/features/industry-research/components/CompanyComparisonTable";
 import { SecuritiesTables } from "@/features/industry-research/components/SecuritiesTables";
 import { KnowledgeTab } from "@/features/industry-research/components/KnowledgeTab";
-
-const PHASE_COLORS: Record<string, string> = {
-  prosperity: "#cf1322",
-  recession: "#d48806",
-  depression: "#4e5969",
-  recovery: "#1677ff",
-};
-
-const SIGNAL_TEXT_COLORS: Record<string, string> = {
-  买入: "#cf1322",
-  卖出: "#389e0d",
-  关注: "#d48806",
-  空仓: "#8c8c8c",
-};
+import { PHASE_COLORS, SIGNAL_TEXT_COLORS } from "@/features/industry-research/constants";
 
 /** 行业投研工作台 — 投资看板（P1-P4）；知识库/调研追踪/交易管理为后续阶段占位 */
 export default function ResearchWorkbenchPage() {

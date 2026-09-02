@@ -52,8 +52,13 @@ def count_consecutive_negative(series: list[float]) -> int:
     return n
 
 
-def evaluate_pig_cycle(inp: CycleInput) -> CycleOutput:
-    cfg = reg.PIG_INDUSTRY
+def evaluate_pig_cycle(
+    inp: CycleInput, cfg: reg.IndustryConfig | None = None
+) -> CycleOutput:
+    """规则本体保持猪周期口径（猪粮比/能繁去化/盈亏平衡）；``cfg`` 仅驱动
+    预警档（registry warn_bands）与仓位模板——第二行业（如 broiler demo）传入
+    自身配置即可复用整套判定链，缺省仍为生猪。"""
+    cfg = cfg or reg.PIG_INDUSTRY
     reasons: list[str] = []
 
     ratio_band = None

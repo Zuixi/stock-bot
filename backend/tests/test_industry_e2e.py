@@ -6,7 +6,7 @@
 
 覆盖：任务生命周期（先发后提交竞态回归）、latest 频率裁决、dashboard 契约、
 history limit/频率覆写（月末双频共存）、batch 导入白名单、ingest 幂等、
-知识库 seed 聚合（P6）、前端烟雾。
+知识库 seed 聚合（P6）、泛化验证（broiler 第二行业，P6 收尾）、前端烟雾。
 """
 
 from __future__ import annotations
@@ -393,6 +393,76 @@ async def test_knowledge_endpoint_seed_content(client: AsyncClient):
 
 async def test_knowledge_unknown_industry_404(client: AsyncClient):
     assert (await client.get("/api/v1/industries/nope/knowledge")).status_code == 404
+
+
+# ── 泛化验证（P6 收尾）：broiler 第二行业零新页面端到端 ────────────────
+
+
+async def _l3_stocks(client: AsyncClient, industry_key: str) -> list[dict]:
+    """按 registry sw_l3_codes 动态解析行业成分股（tree 定位 → enriched 端点）。"""
+    industries = (await client.get("/api/v1/industries")).json()
+    l3_codes = set(next(i["sw_l3_codes"] for i in industries if i["key"] == industry_key))
+    tree = (await client.get("/api/v1/market/sw-industry/tree")).json()
+
+    def find_path(nodes):
+        for l1 in nodes:
+            for l2 in l1.get("children") or []:
+                for l3 in l2.get("children") or []:
+                    if l3["code"] in l3_codes:
+                        return l1["code"], l2["code"], l3["code"]
+        return None
+
+    path = find_path(tree)
+    assert path is not None, f"tree 中未找到 {l3_codes}"
+    l1, l2, l3 = path
+    stocks = (
+        await client.get(f"/api/v1/market/sw-industry/{l1}/{l2}/{l3}/stocks/enriched")
+    ).json()
+    assert stocks, f"{industry_key} 成分股不得为空"
+    return stocks
+
+
+async def test_broiler_mock_ingest_generalization(client: AsyncClient):
+    """fetch-industry-metrics {broiler} → completed；列表双行业 + 信号字段 + dashboard 可读。"""
+    task = await _trigger_industry_ingest(
+        client, {"industry_key": "broiler", "source": "mock"}
+    )
+    result = task["result"]
+    assert result["upserted"] >= 90  # 2 指标 × 45 天日度序列
+
+    industries = (await client.get("/api/v1/industries")).json()
+    by_key = {i["key"]: i for i in industries}
+    assert set(by_key) >= {"pig", "broiler"}
+
+    broiler = by_key["broiler"]
+    assert broiler["metric_with_data"] >= 2
+    assert broiler["phase"] in PHASES  # ingest 后信号已评估落表
+    assert broiler["signal_type"] in SIGNALS
+    assert broiler["signal_date"] is not None
+
+    pig = by_key["pig"]  # 真实源行业的列表状态行同步可用
+    assert pig["phase"] in PHASES and pig["signal_type"] in SIGNALS
+
+    resp = await client.get("/api/v1/industries/broiler/dashboard")
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["cycle"]["phase"] in PHASES
+    assert d["signal"]["signal_type"] in SIGNALS
+    assert any(m["metric_key"] == "chick_price" and m["value"] for m in d["strip"])
+    assert any(m["metric_key"] == "broiler_price" and m["value"] for m in d["strip"])
+
+
+async def test_broiler_sw_codes_disjoint_pig_companies_unaffected(client: AsyncClient):
+    """broiler 申万代码与 pig 不相交：pig companies 端点不受第二行业污染。"""
+    pig_syms = {s["symbol"] for s in await _l3_stocks(client, "pig")}
+    broiler_syms = {s["symbol"] for s in await _l3_stocks(client, "broiler")}
+    assert pig_syms and broiler_syms
+    assert pig_syms.isdisjoint(broiler_syms), "两行业 sw_l3_codes 必须不相交"
+
+    rows = (await client.get("/api/v1/industries/pig/companies")).json()["rows"]
+    row_syms = {r["symbol"] for r in rows}
+    assert pig_syms <= row_syms
+    assert row_syms.isdisjoint(broiler_syms)
 
 
 # ── 前端烟雾（栈未含 frontend 时跳过） ──────────────────────────────

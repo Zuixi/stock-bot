@@ -8,6 +8,7 @@ import { test, expect as baseExpect } from "@playwright/test";
  * - /research/pig 行情调研追踪 Tab：标的分析成分股对比表（registry 列渲染 + 行点击跳 /stock/:symbol）
  * - /research/pig 行情调研追踪 Tab：行业 ETF 表（P5 行情面，TuShare fund_daily 实拉数据）
  * - /market/industry/110000/110700：生猪养殖三级行业页的"进入投研工作台"banner 导航
+ * - 泛化验证（P6）：白羽肉鸡（broiler）第二行业卡片 → 同一工作台零新页面渲染
  */
 
 // 数据由 react-query 异步加载、图表异步渲染，统一放宽断言轮询窗口
@@ -34,6 +35,10 @@ test("猪智投工作台：从行业卡片进入，看板核心区块完整渲�
   const card = page.locator(".ant-card").filter({ hasText: "生猪养殖" });
   await card.click();
   await page.waitForURL("**/research/pig");
+
+  // 先等 Tab 栏挂载：/research 列表卡片也带 周期阶段/当前信号 Tag（P6），
+  // SPA 路由切换瞬间旧列表仍在 DOM，直接断言会撞严格模式多元素
+  await expect(page.getByRole("tab", { name: "投资看板" })).toBeVisible();
 
   // ── 头部标签：周期阶段 + 当前信号（作用域限定在 ant-tag，避免命中信号面板容器）──
   const phaseTag = page.locator(".ant-tag").filter({ hasText: "周期阶段" });
@@ -157,4 +162,50 @@ test("生猪养殖三级行业页：投研工作台导航 banner", async ({ page
   await banner.getByRole("button", { name: "进入投研工作台" }).click();
   await page.waitForURL("**/research/pig");
   await expect(page.getByRole("heading", { name: "投研工作台" })).toBeVisible();
+});
+
+test("投研列表：行业卡片状态行（周期阶段 + 当前信号）", async ({ page }) => {
+  // P6 收尾：列表卡片由最新信号行驱动渲染状态 Tag（ingest 前的行业无信号则为空，不渲染）
+  await page.goto("/research");
+
+  const pigCard = page.locator(".ant-card").filter({ hasText: "生猪养殖" });
+  await expect(pigCard).toBeVisible();
+  await expect(pigCard.locator(".ant-tag").filter({ hasText: "周期阶段" })).toHaveText(
+    /周期阶段 · (繁荣|衰退|萧条|复苏)/
+  );
+  await expect(pigCard.locator(".ant-tag").filter({ hasText: "当前信号" })).toHaveText(
+    /当前信号 (买入|卖出|关注|空仓)/
+  );
+});
+
+test("泛化验证：白羽肉鸡第二行业卡片零新页面进入工作台", async ({ page }) => {  // P6 泛化验证：registry 配置驱动，前端零改动 —— 列表同时出现两个行业卡片
+  await page.goto("/research");
+
+  const pigCard = page.locator(".ant-card").filter({ hasText: "生猪养殖" });
+  const broilerCard = page.locator(".ant-card").filter({ hasText: "白羽肉鸡" });
+  await expect(pigCard).toBeVisible();
+  await expect(broilerCard).toBeVisible();
+
+  // 列表卡片状态行：周期阶段 + 当前信号（pig 真实信号、broiler mock ingest 后均有）
+  await expect(pigCard).toContainText(/周期阶段/);
+  await expect(pigCard).toContainText(/当前信号/);
+  await expect(broilerCard).toContainText(/周期阶段/);
+  await expect(broilerCard).toContainText(/当前信号/);
+
+  // 点击 broiler 卡片 → 复用同一工作台路由与组件，指标带渲染 registry 下发的肉鸡指标
+  await broilerCard.click();
+  await page.waitForURL("**/research/broiler");
+
+  const strip = page.locator("section").filter({ hasText: "综合指标" });
+  await expect(strip).toBeVisible();
+  await expect(strip.getByText("鸡苗价格", { exact: true })).toBeVisible();
+  await expect(strip.getByText("毛鸡价格", { exact: true })).toBeVisible();
+  const chickName = strip.getByText("鸡苗价格", { exact: true });
+  const chickCard = chickName.locator("xpath=../..");
+  await expect(chickCard.getByText(/^[\d,]+(\.\d+)?$/)).toBeVisible();
+
+  // 周期相位条同样由 broiler registry 配置驱动渲染
+  const phaseCard = page.locator(".ant-card").filter({ hasText: "周期阶段定位" });
+  await expect(phaseCard).toBeVisible();
+  await expect(phaseCard.getByText("当前", { exact: true })).toBeVisible();
 });

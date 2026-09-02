@@ -38,7 +38,7 @@ from app.schemas.industry import (
     TrendSeriesOut,
 )
 from app.services import cycle_engine
-from app.services.industry_mock_data import build_pig_mock_points
+from app.services.industry_mock_data import build_industry_mock_points
 from app.services.industry_registry import (
     TIER_DERIVED,
     IndustryConfig,
@@ -198,7 +198,7 @@ async def ingest_industry_metrics(
     source = source or settings.industry_data_source
 
     if source == "mock":
-        rows = build_pig_mock_points(cfg.key, months=months)
+        rows = build_industry_mock_points(cfg, months=months)
     elif source == "akshare":
         # caaa 行在 upsert 前并入：sow_inventory 进入 covered_metrics → mock purge 覆盖
         rows = await _fetch_akshare_rows(cfg, months=months)
@@ -415,7 +415,7 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
 async def evaluate_and_store_signal(db: AsyncSession, cfg: IndustryConfig):
     """Build snapshot from latest rows → rules engine → persist (idempotent per day)."""
     inp = await _build_cycle_input(db, cfg)
-    out = cycle_engine.evaluate_pig_cycle(inp)
+    out = cycle_engine.evaluate_pig_cycle(inp, cfg)
 
     return await repo.upsert_signal(db, {
         "industry_key": cfg.key,
@@ -628,6 +628,9 @@ async def list_industries(db: AsyncSession) -> list[IndustrySummaryOut]:
         grouped = await repo.latest_rows_by_metric(db, cfg.key)
         coverage = {m.key: bool(grouped.get(m.key)) for m in cfg.metrics}
         periods = [r.period for rows in grouped.values() for r in rows]
+        # 列表卡片状态行（P6）：最新信号行带出周期阶段/信号/生效日期。
+        # 逐行业一次查询即可（N=行业数，个位数）；从未 ingest 的行业 signal 为 None。
+        signal = await repo.latest_signal(db, cfg.key)
         summaries.append(IndustrySummaryOut(
             key=cfg.key, name=cfg.name, description=cfg.description,
             sw_l3_codes=cfg.sw_l3_codes,
@@ -635,6 +638,9 @@ async def list_industries(db: AsyncSession) -> list[IndustrySummaryOut]:
             metric_with_data=sum(coverage.values()),
             coverage=coverage,
             last_period=max(periods) if periods else None,
+            phase=signal.phase if signal else None,
+            signal_type=signal.signal_type if signal else None,
+            signal_date=signal.effective_date if signal else None,
         ))
     return summaries
 
