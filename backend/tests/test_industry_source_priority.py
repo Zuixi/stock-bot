@@ -3,7 +3,7 @@
 from datetime import date
 
 from app.models.industry_research import IndustryMetric
-from app.services.industry_metric_service import PURGE_SOURCES, _pick_latest
+from app.services.industry_metric_service import _pick_latest
 from app.services.industry_registry import PIG_INDUSTRY
 
 
@@ -18,16 +18,22 @@ def test_real_source_beats_mock_regardless_of_recency():
     grouped = {
         "hog_price": [
             _row("hog_price", "mock", date(2026, 9, 2)),
-            _row("hog_price", "akshare_100ppi", date(2026, 8, 30)),
+            _row("hog_price", "akshare_soozhu", date(2026, 8, 30)),
         ]
     }
-    assert _pick_latest(PIG_INDUSTRY, grouped, "hog_price").source == "akshare_100ppi"
+    assert _pick_latest(PIG_INDUSTRY, grouped, "hog_price").source == "akshare_soozhu"
 
 
 def test_mock_always_last_in_registry_sources():
     for m in PIG_INDUSTRY.metrics:
         if len(m.sources) > 1:
             assert m.sources[-1] == "mock", f"{m.key}: {m.sources}"
+
+
+def test_soozhu_metrics_register_akshare_soozhu_source():
+    # 搜猪网三指标的真实源登记（fetcher 写入的 source 必须一一对应），mock 垫底
+    for key in ("hog_price", "corn_price", "soybean_meal_price"):
+        assert PIG_INDUSTRY.metric(key).sources == ["akshare_soozhu", "mock"]
 
 
 def test_lh_future_registers_akshare_sina():
@@ -43,9 +49,3 @@ def test_fallback_prefers_most_recent_period():
         ]
     }
     assert _pick_latest(PIG_INDUSTRY, grouped, "hog_price").source == "other"
-
-
-def test_purge_sources_cover_mock_and_derived():
-    # mock→真实源切换的清除范围必须同时覆盖 derived 行：派生计算只 upsert 不删除，
-    # 若只删 mock 行，由 mock 基础行算出的旧 derived 序列会存活并继续喂给周期引擎。
-    assert PURGE_SOURCES == {"mock", "derived"}

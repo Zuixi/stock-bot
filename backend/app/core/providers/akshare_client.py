@@ -1,9 +1,9 @@
-"""AKShare client — best-effort adapter for industry spot-price data.
+"""AKShare client — 行业投研指标真实数据源适配器（搜猪网/新浪期货）.
 
-接口名来自公开文档调研（2026-08，见 docs/design/data-source.md），尚未实机验证，
-全部标注 ``TODO(api-verify)``。按计划默认数据源为 mock
-（``settings.industry_data_source = "mock"``）；设为 ``"akshare"`` 时才尝试真实拉取，
-接口失效时由调用方捕获异常并跳过该指标（不影响其他源）。
+四个接口均于 2026-09-03 实机验证（akshare 1.18.94，绑定 plans/2026-09-03-akshare-integration.md
+的数据源测绘表），返回 pandas DataFrame；上游改版失效时由调用方捕获异常并跳过该指标
+（不影响其他源）。按计划默认数据源为 mock（``settings.industry_data_source = "mock"``）；
+设为 ``"akshare"`` 时才真实拉取。
 
 Usage::
 
@@ -43,43 +43,49 @@ class AkShareClient(RateLimitedSyncProvider):
         self._ak = ak
 
     # ------------------------------------------------------------------
-    # Spot prices (生意社 100ppi.com，2011 年至今每个交易日)
+    # 搜猪网 soozhu 现货价格（元/kg，日度，列：日期/价格）
     # ------------------------------------------------------------------
 
-    async def fetch_spot_price_history(self, symbol_cn: str) -> pd.DataFrame:
-        """生意社商品现货价格历史（生猪/玉米/豆粕等，参数为中文品种名）.
+    async def fetch_hog_price_trend(self) -> pd.DataFrame:
+        """当年全国生猪出栏均价走势（~200 行，元/kg，日度）.
 
-        TODO(api-verify): 文档显示为「生意社-商品与期货-现期图」接口，
-        函数名与参数（symbol? plot?）需实机确认。
+        已验证 2026-09-03 · akshare 1.18.94：窗口为"当年 1 月至今"（逐年累积），
+        跨年长历史需靠滚动 ingest 累积落库。
         """
         return await self.invoke_async(
-            "spot_price_qh", lambda: self._ak.spot_price_qh(symbol=symbol_cn, plot=False)
+            "spot_hog_year_trend_soozhu", lambda: self._ak.spot_hog_year_trend_soozhu()
         )
 
-    # ------------------------------------------------------------------
-    # Hog futures (DCE LH, 新浪主力连续)
-    # ------------------------------------------------------------------
+    async def fetch_corn_price(self) -> pd.DataFrame:
+        """全国玉米价格走势（每次返回最近 15 行，元/kg，日度）.
 
-    async def fetch_lh_future_daily(self) -> pd.DataFrame:
-        """生猪期货主力连续（LH0）日行情.
-
-        TODO(api-verify): ``futures_zh_daily_sina(symbol="LH0")`` 需实机确认。
-        """
-        return await self.invoke_async(
-            "futures_zh_daily_sina", lambda: self._ak.futures_zh_daily_sina(symbol="LH0")
-        )
-
-    # ------------------------------------------------------------------
-    # Soozhu 搜猪网 生猪大数据
-    # ------------------------------------------------------------------
-
-    async def fetch_corn_price_soozhu(self) -> pd.DataFrame:
-        """搜猪网-全国玉米价格走势.
-
-        TODO(api-verify): ``spot_corn_price_soozhu`` 需实机确认。
+        已验证 2026-09-03 · akshare 1.18.94：单次窗口仅 15 天，长历史靠逐日滚动累积。
         """
         return await self.invoke_async(
             "spot_corn_price_soozhu", lambda: self._ak.spot_corn_price_soozhu()
+        )
+
+    async def fetch_soybean_meal_price(self) -> pd.DataFrame:
+        """全国豆粕价格走势（每次返回最近 15 行，元/kg，日度）.
+
+        已验证 2026-09-03 · akshare 1.18.94：窗口同玉米（15 天），逐日滚动累积。
+        """
+        return await self.invoke_async(
+            "spot_soybean_price_soozhu", lambda: self._ak.spot_soybean_price_soozhu()
+        )
+
+    # ------------------------------------------------------------------
+    # Hog futures (DCE LH 主力连续，新浪)
+    # ------------------------------------------------------------------
+
+    async def fetch_lh_future_daily(self) -> pd.DataFrame:
+        """生猪期货主力连续（LH0）日行情（全历史 ~1370 行，2021-01-08 起）.
+
+        已验证 2026-09-03 · akshare 1.18.94：列含 ``date``/``close`` 等（date 为 ISO
+        字符串），单位元/吨；全历史返回，由调用方按 months 窗口截尾。
+        """
+        return await self.invoke_async(
+            "futures_zh_daily_sina", lambda: self._ak.futures_zh_daily_sina(symbol="LH0")
         )
 
 

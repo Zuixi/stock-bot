@@ -161,9 +161,15 @@ async def list_signals(
 
 
 async def delete_rows_by_source(
-    db: AsyncSession, industry_key: str, sources: list[str]
+    db: AsyncSession,
+    industry_key: str,
+    sources: list[str],
+    metric_keys: list[str] | None = None,
 ) -> int:
-    """Purge rows of the given sources once a real source has landed (mock never masquerades as data)."""
+    """Purge rows of the given sources once a real source has landed (mock never masquerades as data).
+
+    ``metric_keys`` 给定时仅清除这些指标（按覆盖清除：未覆盖指标保留 mock 演示行）。
+    """
     if not sources:
         return 0
     stmt = delete(IndustryMetric).where(
@@ -171,5 +177,7 @@ async def delete_rows_by_source(
         IndustryMetric.stock_id == 0,
         IndustryMetric.source.in_(sources),
     )
+    if metric_keys:
+        stmt = stmt.where(IndustryMetric.metric_key.in_(metric_keys))
     result = await db.execute(stmt)
     return result.rowcount or 0
