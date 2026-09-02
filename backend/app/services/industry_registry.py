@@ -144,20 +144,20 @@ def _position_slices(core: int, band: int, cash: int) -> list[PositionSlice]:
 PIG_METRICS: list[MetricDef] = [
     MetricDef(
         key="hog_price", name="生猪均价", unit="元/kg", freq="daily",
-        tier=TIER_HIGHFREQ, sources=["akshare_100ppi", "mock"],
+        tier=TIER_HIGHFREQ, sources=["akshare_soozhu", "mock"],
         group="quick", strip=True, spark=True, higher_is_better=True,
         rollup_monthly=True,
         description="全国生猪出栏均价；官方批发价为基准，本值用于跟踪边际变化",
     ),
     MetricDef(
         key="corn_price", name="玉米价格", unit="元/kg", freq="daily",
-        tier=TIER_HIGHFREQ, sources=["akshare_100ppi", "mock"],
+        tier=TIER_HIGHFREQ, sources=["akshare_soozhu", "mock"],
         group="quick", higher_is_better=True, rollup_monthly=True,
         description="饲料成本端主要原料",
     ),
     MetricDef(
         key="soybean_meal_price", name="豆粕价格", unit="元/kg", freq="daily",
-        tier=TIER_HIGHFREQ, sources=["akshare_100ppi", "mock"],
+        tier=TIER_HIGHFREQ, sources=["akshare_soozhu", "mock"],
         group="quick", higher_is_better=True,
         description="饲料成本端蛋白原料",
     ),

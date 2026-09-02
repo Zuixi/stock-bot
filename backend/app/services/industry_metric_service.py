@@ -10,6 +10,7 @@ import calendar
 import logging
 from dataclasses import asdict
 from datetime import date
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,10 +47,6 @@ logger = logging.getLogger(__name__)
 DASHBOARD_CACHE_TTL = 60
 SPARK_POINTS = 24
 
-# mock→真实源切换时一并清除的行：mock 基础行 + 由其派生的 derived 行
-# （upsert 只增不删，不清除 derived 会让 mock 算出的旧序列继续喂给周期引擎）。
-PURGE_SOURCES = frozenset({"mock", "derived"})
-
 
 class UnknownIndustryError(ValueError):
     pass
@@ -68,62 +65,79 @@ def _require_industry(industry_key: str) -> IndustryConfig:
 
 # ── Fetchers ──────────────────────────────────────────────────────────
 
-async def _fetch_akshare_rows(cfg: IndustryConfig, months: int = 37) -> list[dict]:
-    """Best-effort real fetch via AKShare（接口名未实机验证，失败即跳过该指标）."""
-    from app.core.providers.akshare_client import get_akshare_client
+if TYPE_CHECKING:
+    from app.core.providers.akshare_client import AkShareClient
 
-    client = get_akshare_client()
+# AKShare 真实源表驱动规格：(metric_key, source, client 方法, 日期列, 数值列, 数值上限护栏)。
+# 四个接口均于 2026-09-03 实机验证（akshare 1.18.94）：搜猪网 soozhu 现货（元/kg）+
+# 新浪 LH0 期货（元/吨）；value_max 用于剔除上游脏数据（现货 0<v<100、期货 0<v<100000）。
+_AKSHARE_SPECS: list[tuple[str, str, str, str, str, float]] = [
+    ("hog_price", "akshare_soozhu", "fetch_hog_price_trend", "日期", "价格", 100.0),
+    ("corn_price", "akshare_soozhu", "fetch_corn_price", "日期", "价格", 100.0),
+    ("soybean_meal_price", "akshare_soozhu", "fetch_soybean_meal_price", "日期", "价格", 100.0),
+    ("lh_future_main", "akshare_sina", "fetch_lh_future_daily", "date", "close", 100000.0),
+]
+
+
+async def _fetch_akshare_rows(
+    cfg: IndustryConfig, months: int = 37, client: AkShareClient | None = None
+) -> list[dict]:
+    """AKShare 真实拉取（已验证接口）：单指标失败/脏行只跳过该指标，互不牵连.
+
+    ``client`` 可注入假对象供纯单测（不触网）；默认取模块级单例。
+    """
+    if client is None:
+        from app.core.providers.akshare_client import get_akshare_client
+
+        client = get_akshare_client()
+
     rows: list[dict] = []
     today = date.today()
-
-    def _row(m: MetricDef, period: date, value: float) -> dict:
-        return {
-            "industry_key": cfg.key, "stock_id": 0, "metric_key": m.key,
-            "source": "akshare_100ppi" if m.key != "lh_future_main" else "akshare_sina",
-            "source_tier": m.tier, "freq": "daily", "period": period,
-            "value": value, "unit": m.unit or None, "extra": None,
-        }
 
     # 回补窗口：按月数换算行数下限（月均 ~31 天），保底 45 天近端窗口
     tail_rows = max(45, months * 31)
 
-    # TODO(api-verify): 生意社返回列名未确认，做启发式解析，失败跳过。
-    for metric_key, symbol_cn in [
-        ("hog_price", "生猪"),
-        ("corn_price", "玉米"),
-        ("soybean_meal_price", "豆粕"),
-    ]:
+    for metric_key, source, attr, date_col, val_col, value_max in _AKSHARE_SPECS:
         m = cfg.metric(metric_key)
         if m is None:
             continue
         try:
-            df = await client.fetch_spot_price_history(symbol_cn)
-            date_col = next(c for c in df.columns if "日期" in str(c) or "date" in str(c).lower())
-            val_col = next(c for c in df.columns if c != date_col)
+            df = await getattr(client, attr)()
             for _, r in df.tail(tail_rows).iterrows():
+                # soozhu 日期与 LH0 date 均为 ISO 字符串（已验证），截前 10 位防御性解析
                 period = date.fromisoformat(str(r[date_col])[:10])
                 if period > today:
                     continue
-                rows.append(_row(m, period, float(r[val_col])))
+                value = float(r[val_col])
+                if not 0 < value < value_max:
+                    logger.warning(
+                        "AKShare %s out-of-range value %s @ %s (row skipped)",
+                        metric_key, value, period,
+                    )
+                    continue
+                rows.append({
+                    "industry_key": cfg.key, "stock_id": 0, "metric_key": m.key,
+                    "source": source, "source_tier": m.tier, "freq": "daily",
+                    "period": period, "value": value, "unit": m.unit or None,
+                    "extra": None,
+                })
         except Exception as exc:
             logger.warning("AKShare %s fetch failed (skipped): %s", metric_key, exc)
-
-    try:
-        m = cfg.metric("lh_future_main")
-        df = await client.fetch_lh_future_daily()
-        if m is not None and not df.empty:
-            date_col = next(c for c in df.columns if "date" in str(c).lower() or "日期" in str(c))
-            val_col = "close"
-            for _, r in df.tail(tail_rows).iterrows():
-                period = date.fromisoformat(str(r[date_col])[:10])
-                rows.append(_row(m, period, float(r[val_col])))
-    except Exception as exc:
-        logger.warning("AKShare LH future fetch failed (skipped): %s", exc)
 
     return rows
 
 
 # ── Ingest ────────────────────────────────────────────────────────────
+
+def _covered_purge_keys(covered: set[str]) -> set[str]:
+    """已覆盖指标 → 需清除 mock/derived 行的指标集合（纯函数，单测锁定）.
+
+    真实源 ingest 只清除**本次已覆盖指标**的演示行（修订 C2 裁定：无法补齐的指标
+    继续用 mock，宁可标注演示也不空缺）。当 hog_price 与 corn_price 同时被覆盖时，
+    猪粮比的两个输入都已真实化，连同清除其 derived 旧序列（当次重算即真实值）。
+    """
+    return covered | ({"hog_corn_ratio"} if {"hog_price", "corn_price"} <= covered else set())
+
 
 async def ingest_industry_metrics(
     db: AsyncSession,
@@ -131,7 +145,7 @@ async def ingest_industry_metrics(
     source: str | None = None,
     months: int = 37,
 ) -> dict:
-    """Fetch → upsert → derive → signal，一次 ingest 完成整条链（幂等）."""
+    """Fetch → upsert → purge（按覆盖指标）→ derive → signal，一次 ingest 完成整条链（幂等）."""
     cfg = _require_industry(industry_key)
     source = source or settings.industry_data_source
 
@@ -144,11 +158,17 @@ async def ingest_industry_metrics(
 
     await _ensure_reference_points(db, cfg)
     upserted = await repo.upsert_metrics(db, rows)
+
+    # 按覆盖清除：真实源落库成功后，仅清除本次已覆盖指标的 mock 行 + 由 mock 派生的
+    # derived 行（派生计算只 upsert 不删除，不清除会让 mock 算出的旧序列继续喂给
+    # 周期引擎）；未覆盖指标（能繁/成本/仔猪等）保留 mock 演示数据。
+    covered = {r["metric_key"] for r in rows}
+    purge_keys = _covered_purge_keys(covered)
     purged = 0
-    # 真实源首次落库后清除演示数据：宁可空缺也不让 mock 冒充真实值。
-    # derived 行随 mock 基础行一并清除，当次 _compute_derived_metrics 全量重算（同事务）。
-    if source != "mock" and upserted > 0:
-        purged = await repo.delete_rows_by_source(db, cfg.key, sorted(PURGE_SOURCES))
+    if source != "mock" and upserted > 0 and purge_keys:
+        purged = await repo.delete_rows_by_source(
+            db, cfg.key, ["mock", "derived"], metric_keys=sorted(purge_keys)
+        )
     derived_count = await _compute_derived_metrics(db, cfg)
     signal = await evaluate_and_store_signal(db, cfg)
 
@@ -156,7 +176,8 @@ async def ingest_industry_metrics(
         "source": source,
         "upserted": upserted,
         "derived_upserted": derived_count,
-        "purged": purged,
+        "purged": purged,  # 已覆盖指标下清除的 mock/derived 行数
+        "covered_metrics": sorted(covered),
         "signal": signal.signal_type if signal else None,
     }
 

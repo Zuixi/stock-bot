@@ -167,7 +167,7 @@ async def test_batch_import_whitelist(client: AsyncClient):
                     "metric_key": "hog_price",
                     "period": period,
                     "value": 16.0,
-                    "source": "akshare_100ppi",  # 伪造采集源，必须拒绝
+                    "source": "akshare_soozhu",  # 伪造采集源，必须拒绝
                 },
             ],
             "recompute_derived": False,
@@ -176,7 +176,7 @@ async def test_batch_import_whitelist(client: AsyncClient):
     assert resp.status_code == 200
     body = resp.json()
     assert body["upserted"] >= 1
-    assert body["skipped_invalid_source"] == ["hog_price:akshare_100ppi"]
+    assert body["skipped_invalid_source"] == ["hog_price:akshare_soozhu"]
     assert "derived_upserted" in body
 
 
