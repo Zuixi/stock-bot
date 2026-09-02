@@ -14,6 +14,7 @@ import { SowTrendChart } from "@/features/industry-research/components/SowTrendC
 import { SourceBadge } from "@/features/industry-research/components/SourceBadge";
 import { CompanyComparisonTable } from "@/features/industry-research/components/CompanyComparisonTable";
 import { SecuritiesTables } from "@/features/industry-research/components/SecuritiesTables";
+import { KnowledgeTab } from "@/features/industry-research/components/KnowledgeTab";
 
 const PHASE_COLORS: Record<string, string> = {
   prosperity: "#cf1322",
@@ -101,7 +102,10 @@ function Workbench({ dashboard }: { dashboard: Dashboard }) {
     {
       key: "knowledge",
       label: "行业知识库",
-      children: <Empty description="行业思维导图 / 利益相关机构图谱 — P6 阶段上线" />,
+      // 知识库（P6）：机构图谱/权威性原则/思维导图，内容来自 industry_knowledge 内容表
+      // （迁移内 seed，内容即数据）。antd Tabs 惰性挂载 pane，子组件 useQuery 只在
+      // Tab 首次激活时发起，看板首屏不受影响。
+      children: <KnowledgeTab industryKey={industry.key} />,
     },
     {
       key: "tracking",

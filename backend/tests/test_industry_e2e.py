@@ -5,7 +5,8 @@
 离线环境用 `-m "not e2e"` 跳过本文件。
 
 覆盖：任务生命周期（先发后提交竞态回归）、latest 频率裁决、dashboard 契约、
-history limit/频率覆写（月末双频共存）、batch 导入白名单、ingest 幂等、前端烟雾。
+history limit/频率覆写（月末双频共存）、batch 导入白名单、ingest 幂等、
+知识库 seed 聚合（P6）、前端烟雾。
 """
 
 from __future__ import annotations
@@ -363,6 +364,35 @@ async def test_securities_fetch_and_series(client: AsyncClient):
 async def test_securities_unknown_industry_404_and_bad_type_422(client: AsyncClient):
     assert (await client.get("/api/v1/industries/nope/securities?type=etf")).status_code == 404
     assert (await client.get("/api/v1/industries/pig/securities?type=bond")).status_code == 422
+
+
+# ── 知识库（P6）：机构图谱 / 权威性原则 / 思维导图 ────────────────────
+
+
+async def test_knowledge_endpoint_seed_content(client: AsyncClient):
+    """迁移内 seed → knowledge 聚合：org ≥12 覆盖四分组、原则 ≥4 条、思维导图 ≥4 分支。"""
+    resp = await client.get("/api/v1/industries/pig/knowledge")
+    assert resp.status_code == 200
+    payload = resp.json()
+
+    orgs = payload["org"]
+    assert len(orgs) >= 12
+    assert {o["group"] for o in orgs} == {"官方", "协会", "数据平台", "期货"}
+    assert len({o["name"] for o in orgs}) == len(orgs)  # 机构名唯一
+    assert all(o["tier"] in ("official", "highfreq", "calc", "manual") for o in orgs)
+
+    principle = payload["principle"]
+    assert principle is not None
+    assert principle["title"] == "数据权威性使用原则"
+    assert len(principle["items"]) >= 4
+
+    mindmap = payload["mindmap"]
+    assert mindmap and mindmap["name"]
+    assert len(mindmap["children"]) >= 4  # 供给/需求/成本/政策/金融
+
+
+async def test_knowledge_unknown_industry_404(client: AsyncClient):
+    assert (await client.get("/api/v1/industries/nope/knowledge")).status_code == 404
 
 
 # ── 前端烟雾（栈未含 frontend 时跳过） ──────────────────────────────

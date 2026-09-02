@@ -150,6 +150,32 @@ export interface BackendIndustrySecurities {
   codes: BackendSecuritySeries[];
 }
 
+// ── 知识库（P6）：payload 透传（后端 JSONB 内容行，形状见 industry_knowledge_seed） ──
+
+export interface KnowledgeOrg {
+  name: string;
+  group: string; // 官方 | 协会 | 数据平台 | 期货
+  tier: string;  // SourceBadge 权威性层级（official/highfreq/...）
+  desc: string;
+  urls: string[];
+}
+
+export interface KnowledgePrinciple {
+  title: string;
+  items: string[];
+}
+
+export interface MindmapNode {
+  name: string;
+  children?: MindmapNode[];
+}
+
+export interface IndustryKnowledge {
+  org: KnowledgeOrg[];
+  principle: KnowledgePrinciple | null;
+  mindmap: MindmapNode | null;
+}
+
 // ── UI models (camelCase) ─────────────────────────────────────────────
 
 export interface MetricDelta {
@@ -452,6 +478,11 @@ export function fetchIndustrySecurities(
   return apiGet<BackendIndustrySecurities>(
     `/api/v1/industries/${industryKey}/securities?type=${type}`
   ).then(mapIndustrySecurities);
+}
+
+export function fetchIndustryKnowledge(industryKey: string): Promise<IndustryKnowledge> {
+  // payload 为后端内容表透传（字段名与 UI 模型一致），无需 mapper
+  return apiGet<IndustryKnowledge>(`/api/v1/industries/${industryKey}/knowledge`);
 }
 
 export function triggerFetchSecurities(

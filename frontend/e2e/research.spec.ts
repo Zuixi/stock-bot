@@ -3,7 +3,8 @@ import { test, expect as baseExpect } from "@playwright/test";
 /**
  * 投研工作台浏览器级 E2E（依赖运行中的 docker 栈，数据为实盘/混合源，故断言只锚定结构与中文标签，不锚定具体数值）。
  * - /research：行业卡片（生猪养殖）+ 指标接入覆盖度
- * - /research/pig：猪智投看板（周期标签 / 信号 / 指标带 / 相位条 / 仓位建议 / EChart / 核心速览 / 知识库占位）
+ * - /research/pig：猪智投看板（周期标签 / 信号 / 指标带 / 相位条 / 仓位建议 / EChart / 核心速览）
+ * - /research/pig 行业知识库 Tab：机构图谱分组卡片 + 权威性原则 + 思维导图（P6）
  * - /research/pig 行情调研追踪 Tab：标的分析成分股对比表（registry 列渲染 + 行点击跳 /stock/:symbol）
  * - /research/pig 行情调研追踪 Tab：行业 ETF 表（P5 行情面，TuShare fund_daily 实拉数据）
  * - /market/industry/110000/110700：生猪养殖三级行业页的"进入投研工作台"banner 导航
@@ -83,7 +84,25 @@ test("猪智投工作台：从行业卡片进入，看板核心区块完整渲�
   // ── 行业知识库 Tab：P6 占位文案 ────────────────────────────────
   // 放在最后：切换 Tab 后看板 pane 会被隐藏
   await page.getByRole("tab", { name: "行业知识库" }).click();
-  await expect(page.getByText(/P6\s*阶段上线/)).toBeVisible();
+  // 分组 Card 标题锚定 .ant-card-head-title：SourceBadge 徽章文案（"官方基准"）
+  // 也会出现在卡片正文里，须避免与其混淆
+  for (const group of ["官方基准", "行业协会", "数据平台", "期货市场"]) {
+    await expect(
+      page.locator(".ant-card-head-title").filter({ hasText: group })
+    ).toBeVisible();
+  }
+  // 机构条目（名称 + 权威性徽章）与数据权威性原则
+  await expect(page.getByText("农业农村部", { exact: true })).toBeVisible();
+  await expect(
+    page.locator(".ant-card-head-title").filter({ hasText: "数据权威性使用原则" })
+  ).toBeVisible();
+  // 思维导图 EChart tree 渲染出 canvas（切换 Tab 后看板 canvas 已隐藏不计入）
+  await expect(
+    page.locator(".ant-card-head-title").filter({ hasText: "行业思维导图" })
+  ).toBeVisible();
+  await expect
+    .poll(async () => page.locator("canvas:visible").count())
+    .toBeGreaterThanOrEqual(1);
 });
 
 test("行情调研追踪：标的分析对比表渲染并跳转个股", async ({ page }) => {
