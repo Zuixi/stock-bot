@@ -52,9 +52,9 @@ def _monthly_periods(today: date, count: int) -> list[date]:
 
 
 def _wobble_series(base: list[float], rng: random.Random, scale: float, n: int) -> list[float]:
-    """Prepend n-1 wobbled points before the exact latest base value."""
-    out = [round(b * (1 + rng.gauss(0, scale)), 3) for b in base]
-    return out + base[-1:]
+    """n 个点：前 n-1 个带抖动，末点精确等于基准值（保证日/月口径一致）。"""
+    out = [round(b * (1 + rng.gauss(0, scale)), 3) for b in base[: n - 1]]
+    return out + [round(base[-1], 3)]
 
 
 def build_pig_mock_points(industry_key: str = "pig", months: int = _MONTHS) -> list[dict[str, Any]]:
@@ -62,8 +62,7 @@ def build_pig_mock_points(industry_key: str = "pig", months: int = _MONTHS) -> l
 
     ``months`` 截取月度历史窗口（取各序列最后 N 个月）；日度/周度/年度段不受影响。
     """
-    if not 1 <= months <= _MONTHS:
-        raise ValueError(f"months must be within 1..{_MONTHS}")
+    months = max(1, min(months, _MONTHS))  # 越界钳制而非报错：API 上限 120 > 序列长度 37
     cfg = reg.PIG_INDUSTRY
     today = date.today()
     rng = random.Random(42)  # noqa: S311 - deterministic demo data

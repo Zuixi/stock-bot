@@ -7,8 +7,9 @@
 """
 
 import calendar
+import random
 
-from app.services.industry_mock_data import build_pig_mock_points
+from app.services.industry_mock_data import _wobble_series, build_pig_mock_points
 
 
 def test_mock_batch_has_no_duplicate_conflict_keys():
@@ -40,3 +41,34 @@ def test_mock_month_end_rows_legally_coexist_across_freqs():
         assert freqs_by_key[(metric_key, _source, period)] == {"daily", "monthly"}
     # 日度窗口（近 45 天）必然覆盖上一个自然月末，hog_price/corn_price 必有跨频共存
     assert any(k[0] in ("hog_price", "corn_price") for k in crosses)
+
+
+# ── months 回补窗口与抖动序列不变量（Task 4） ──────────────────────────
+
+
+def test_wobble_series_exact_length_and_last_point():
+    rng = random.Random(7)
+    out = _wobble_series([3.0] * 45, rng, 0.01, 45)
+    assert len(out) == 45
+    assert out[-1] == 3.0  # 末点精确等于基准值
+
+
+def test_mock_points_respects_months_window():
+    rows = build_pig_mock_points("pig", months=12)
+    monthly = [
+        r for r in rows
+        if r["metric_key"] == "hog_price" and r["freq"] == "monthly"
+    ]
+    assert len(monthly) == 12
+    daily = [
+        r for r in rows
+        if r["metric_key"] == "hog_price" and r["freq"] == "daily"
+    ]
+    assert len(daily) <= 45
+
+
+def test_mock_daily_last_equals_monthly_latest():
+    rows = build_pig_mock_points("pig", months=37)
+    daily = [r for r in rows if r["metric_key"] == "hog_price" and r["freq"] == "daily"]
+    monthly = [r for r in rows if r["metric_key"] == "hog_price" and r["freq"] == "monthly"]
+    assert daily[-1]["value"] == monthly[-1]["value"]
