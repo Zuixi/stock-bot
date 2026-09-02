@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import desc, select
+from sqlalchemy import delete, desc, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -156,3 +156,14 @@ async def list_signals(
     )
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+async def delete_mock_rows(db: AsyncSession, industry_key: str) -> int:
+    """Purge demo/mock rows once a real source has landed (mock never masquerades as data)."""
+    stmt = delete(IndustryMetric).where(
+        IndustryMetric.industry_key == industry_key,
+        IndustryMetric.stock_id == 0,
+        IndustryMetric.source == "mock",
+    )
+    result = await db.execute(stmt)
+    return result.rowcount or 0

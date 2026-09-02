@@ -50,7 +50,7 @@ class MetricDef:
     unit: str
     freq: str
     tier: str
-    sources: list[str]              # ingest/查询源优先级（高→低）
+    sources: list[str]              # ingest/查询源优先级（高→低）；mock 永远垫底，演示数据不得压过真实源
     group: str = "quick"            # strip | quick | supply | cost
     strip: bool = False             # 进入综合指标带
     spark: bool = False             # 指标带附迷你走势
@@ -143,37 +143,37 @@ def _position_slices(core: int, band: int, cash: int) -> list[PositionSlice]:
 PIG_METRICS: list[MetricDef] = [
     MetricDef(
         key="hog_price", name="生猪均价", unit="元/kg", freq="daily",
-        tier=TIER_HIGHFREQ, sources=["mock", "akshare_100ppi"],
+        tier=TIER_HIGHFREQ, sources=["akshare_100ppi", "mock"],
         group="quick", strip=True, spark=True, higher_is_better=True,
         description="全国生猪出栏均价；官方批发价为基准，本值用于跟踪边际变化",
     ),
     MetricDef(
         key="corn_price", name="玉米价格", unit="元/kg", freq="daily",
-        tier=TIER_HIGHFREQ, sources=["mock", "akshare_100ppi"],
+        tier=TIER_HIGHFREQ, sources=["akshare_100ppi", "mock"],
         group="quick", higher_is_better=True,
         description="饲料成本端主要原料",
     ),
     MetricDef(
         key="soybean_meal_price", name="豆粕价格", unit="元/kg", freq="daily",
-        tier=TIER_HIGHFREQ, sources=["mock", "akshare_100ppi"],
+        tier=TIER_HIGHFREQ, sources=["akshare_100ppi", "mock"],
         group="quick", higher_is_better=True,
         description="饲料成本端蛋白原料",
     ),
     MetricDef(
         key="pork_wholesale", name="猪肉批发价", unit="元/kg", freq="daily",
-        tier=TIER_OFFICIAL, sources=["mock"],
+        tier=TIER_OFFICIAL, sources=["manual", "mock"],
         group="quick", higher_is_better=True,
         description="农业农村部全国农产品批发市场猪肉均价",
     ),
     MetricDef(
         key="piglet_price_15kg", name="仔猪价格（15kg）", unit="元/kg", freq="weekly",
-        tier=TIER_HIGHFREQ, sources=["mock"],
+        tier=TIER_HIGHFREQ, sources=["manual", "mock"],
         group="quick", higher_is_better=True,
         description="补栏情绪的先行指标",
     ),
     MetricDef(
         key="lh_future_main", name="生猪期货主力", unit="元/吨", freq="daily",
-        tier=TIER_OFFICIAL, sources=["mock"],
+        tier=TIER_OFFICIAL, sources=["akshare_sina", "mock"],
         group="quick", strip=True, spark=True, higher_is_better=True,
         description="DCE 生猪期货主力连续，远月价格反映市场对未来供需的预期",
     ),
@@ -191,7 +191,7 @@ PIG_METRICS: list[MetricDef] = [
     ),
     MetricDef(
         key="sow_inventory", name="能繁母猪存栏", unit="万头", freq="monthly",
-        tier=TIER_OFFICIAL, sources=["mock", "stats_gov"],
+        tier=TIER_OFFICIAL, sources=["stats_gov", "mock"],
         group="supply", strip=True, spark=True,
         description="农业农村部月度环比 + 统计局季度末绝对数，产能最终基准（10 个月生产时滞）",
     ),
@@ -203,25 +203,25 @@ PIG_METRICS: list[MetricDef] = [
     ),
     MetricDef(
         key="industry_cost_avg", name="行业平均完全成本", unit="元/kg", freq="monthly",
-        tier=TIER_MANUAL, sources=["mock"],
+        tier=TIER_MANUAL, sources=["manual", "mock"],
         group="cost",
         description="协会调研/研报口径，季度更新后线性插值为月度",
     ),
     MetricDef(
         key="msy", name="MSY（行业均值）", unit="头/年", freq="yearly",
-        tier=TIER_MANUAL, sources=["mock"],
+        tier=TIER_MANUAL, sources=["manual", "mock"],
         group="quick", higher_is_better=True,
         description="每头能繁母猪年提供出栏肥猪数",
     ),
     MetricDef(
         key="psy", name="PSY（行业均值）", unit="头", freq="yearly",
-        tier=TIER_MANUAL, sources=["mock"],
+        tier=TIER_MANUAL, sources=["manual", "mock"],
         group="quick", higher_is_better=True,
         description="每头能繁母猪年提供断奶仔猪数",
     ),
     MetricDef(
         key="feed_meat_ratio", name="料肉比", unit="", freq="yearly",
-        tier=TIER_MANUAL, sources=["mock"],
+        tier=TIER_MANUAL, sources=["manual", "mock"],
         group="quick", higher_is_better=False,
         description="消耗饲料/增重，越低效率越高",
     ),
