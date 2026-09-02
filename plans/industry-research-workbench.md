@@ -8,6 +8,7 @@
 > 外部 API 未实机验证的项（AKShare 接口名）按约定以 mock 数据源落地（`INDUSTRY_DATA_SOURCE=mock`，适配器已就绪）；
 > P3 协会源抓取器接入与 P4 规则参数实机调优，待 docker compose 环境验证迁移 + ingest 后进行。
 > **加固备注**（2026-09-02）：P1-P4 评审修复已落地（源优先级/rollup/months 贯通/引擎测试/读路径卫生），详见 `docs/Changelog.md` 2026-09-02 条目。
+> 另：akshare 有意未入 pyproject.toml（no-new-deps 约束），切换 `INDUSTRY_DATA_SOURCE=akshare` 前需先在容器内安装 akshare（`uv add akshare` 或 pip），否则 17:05 定时任务将报 RuntimeError 并跳过。
 
 ## 设计原则（组件化 / 模块化 / DRY）
 

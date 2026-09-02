@@ -11,7 +11,7 @@ export function CyclePhaseStrip({ cycle }: Props) {
     ratio?: number | null;
     price?: number | null;
     cost?: number | null;
-    sowConsecutiveDecline?: number;
+    sow_consecutive_decline?: number;
   };
 
   return (
@@ -98,8 +98,8 @@ export function CyclePhaseStrip({ cycle }: Props) {
         {typeof basis.ratio === "number" && (
           <> 猪粮比 <b style={{ color: "#4e5969" }}>{basis.ratio.toFixed(2)}</b> ·</>
         )}
-        {typeof basis.sowConsecutiveDecline === "number" && basis.sowConsecutiveDecline > 0 && (
-          <> 能繁存栏环比<b style={{ color: "#4e5969" }}>连续 {basis.sowConsecutiveDecline} 个月回落</b> ·</>
+        {typeof basis.sow_consecutive_decline === "number" && basis.sow_consecutive_decline > 0 && (
+          <> 能繁存栏环比<b style={{ color: "#4e5969" }}>连续 {basis.sow_consecutive_decline} 个月回落</b> ·</>
         )}
         {typeof basis.price === "number" && typeof basis.cost === "number" && (
           <> 价格 vs 成本{" "}

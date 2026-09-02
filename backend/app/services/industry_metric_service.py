@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 DASHBOARD_CACHE_TTL = 60
 SPARK_POINTS = 24
 
+# mock→真实源切换时一并清除的行：mock 基础行 + 由其派生的 derived 行
+# （upsert 只增不删，不清除 derived 会让 mock 算出的旧序列继续喂给周期引擎）。
+PURGE_SOURCES = frozenset({"mock", "derived"})
+
 
 class UnknownIndustryError(ValueError):
     pass
@@ -141,9 +145,10 @@ async def ingest_industry_metrics(
     await _ensure_reference_points(db, cfg)
     upserted = await repo.upsert_metrics(db, rows)
     purged = 0
-    # 真实源首次落库后清除演示数据：宁可空缺也不让 mock 冒充真实值
+    # 真实源首次落库后清除演示数据：宁可空缺也不让 mock 冒充真实值。
+    # derived 行随 mock 基础行一并清除，当次 _compute_derived_metrics 全量重算（同事务）。
     if source != "mock" and upserted > 0:
-        purged = await repo.delete_mock_rows(db, cfg.key)
+        purged = await repo.delete_rows_by_source(db, cfg.key, sorted(PURGE_SOURCES))
     derived_count = await _compute_derived_metrics(db, cfg)
     signal = await evaluate_and_store_signal(db, cfg)
 
@@ -151,7 +156,7 @@ async def ingest_industry_metrics(
         "source": source,
         "upserted": upserted,
         "derived_upserted": derived_count,
-        "purged_mock": purged,
+        "purged": purged,
         "signal": signal.signal_type if signal else None,
     }
 

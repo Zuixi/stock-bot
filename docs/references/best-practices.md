@@ -20,7 +20,8 @@
 - 数据回填路径应采用"APScheduler 定时任务（自动）+ RabbitMQ Worker（手动触发）"双轨制：APScheduler 处理每日增量避免遗漏，Worker 队列支持手动任意时间回补；两者共用同一 `ingest_daily_*` Service 方法，保证逻辑一致性。
 - 批量金融数据查询中 `DISTINCT ON (stock_id) ... FROM daily_quotes ORDER BY stock_id, trade_date DESC` 会对**全表**做 Seq Scan + Sort（3.8M rows），与 WHERE 条件解耦导致单次查询 3.5s。应使用 `LATERAL (SELECT ... WHERE stock_id = s.id ORDER BY trade_date DESC LIMIT 1)` 将过滤条件推入子查询，利用 `(stock_id, trade_date)` 复合索引实现 O(1) 每股票查询，延迟从 3.5s 降至 ~20ms（150x+ 提升）。
 - 新增 Scheduler 定时任务需要在 `runner.py` 的 `create_scheduler()` 中注册 `CronTrigger` 并在 `jobs.py` 中实现处理函数；同时在 `mq.py` 的 `QUEUES` 字典注册队列名，使 Worker 能消费消息。
-- 新增 Worker 队列消息类型时，需要同步新增：Schema（`Fetch*Request`）、Service 方法（`trigger_fetch_*`）、API 端点（`POST /tasks/fetch-*`）—— 三者缺一则端到端不通。- 定时任务的"时间窗判断"必须与 APScheduler 的 CronTrigger 使用同一时区：容器默认 UTC 时，`CronTrigger(timezone="Asia/Shanghai")` 会在正确的北京时间触发，但 job 内部再用 `datetime.now()`（UTC）判断 `_in_trading_hours()` 会永远为 False，导致任务全部被静默跳过；同理，"回填上一交易日"必须查 `trade_cal` 而不是 `weekday()` 推算，否则节假日后会产生永久缺口。
+- 新增 Worker 队列消息类型时，需要同步新增：Schema（`Fetch*Request`）、Service 方法（`trigger_fetch_*`）、API 端点（`POST /tasks/fetch-*`）—— 三者缺一则端到端不通。
+- 定时任务的"时间窗判断"必须与 APScheduler 的 CronTrigger 使用同一时区：容器默认 UTC 时，`CronTrigger(timezone="Asia/Shanghai")` 会在正确的北京时间触发，但 job 内部再用 `datetime.now()`（UTC）判断 `_in_trading_hours()` 会永远为 False，导致任务全部被静默跳过；同理，"回填上一交易日"必须查 `trade_cal` 而不是 `weekday()` 推算，否则节假日后会产生永久缺口。
 - 新产品模块（如行业投研工作台）落地前，先用单文件 HTML + CDN ECharts 做高保真交互原型验证信息架构与布局（结论先行、证据下钻、数据源权威性分级徽章），再迁移为 React 组件，可大幅降低前端返工成本；原型视觉应贴近真实技术栈（antd v5）而非另起炉灶。
 - 跨行业可复制的产品（投研工作台）应"一套资产服务所有行业"：指标单表（industry_key + nullable stock_id + metric_key + source + period）+ 代码级指标注册表（metric registry）+ 派生指标统一落表 + 源适配器隔离；接入新行业 = 配置 + 采集器，而非新表新页面。会随政策修订的参考锚点（如能繁正常保有量 4100→3900→3750）必须入库带生效日期，禁止硬编码。
 - 纯函数规则引擎中所有"转多"判定分支（阶段复苏、左侧布局信号）都应显式要求正向证据在场（如盈亏口径任一非空），避免 None 缺失值在布尔短路中被静默当作"已确认"；并用无 DB 的纯单测把该不变量锁定为回归门。
@@ -30,3 +31,4 @@
 - 回补窗口类参数（months）必须从 API schema → worker payload → service → fetcher 全链贯通并各自设默认值，任何一层残留硬编码窗口（如 `df.tail(45)`）都会让上游参数静默失效；生成演示序列时"末点精确等于基准值"（日度末点==月度最新值）要靠生成器结构保证并用纯单测钉死，不能依赖抖动碰巧为零。
 - 读路径（GET）不得隐式写库：信号/派生类结果应在 ingest 时评估落表、查询时只读存储行，最多保留"空库引导补算一次"的兜底；写通道入口（人工/CSV batch）必须按白名单校验 source，防止伪造采集适配器专属来源污染源优先级裁决。
 - 封装组件的 prop 语义即契约（如 EChart 的 silent 必须真正关 animation+tooltip，不能用换 renderer 这类无副作用的近似实现），文案/标签类展示值应由后端 payload 下发而非前端维护重复映射表（只留纯展示常量如颜色）——否则后端语义演进（新枚举值、切换真实数据源）时前端会静默回退或误标。
+- 数据源切换的"清除演示数据"必须连同派生行一起删：派生计算只 upsert 不删除，仅删 mock 基础行时由 mock 算出的 derived 序列会存活并继续喂给规则引擎，且前后端透传的 JSONB dict 键名要保持 snake_case 一致（前端读 camelCase 会静默不渲染，类型断言不报错）。

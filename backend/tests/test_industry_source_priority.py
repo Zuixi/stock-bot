@@ -3,7 +3,7 @@
 from datetime import date
 
 from app.models.industry_research import IndustryMetric
-from app.services.industry_metric_service import _pick_latest
+from app.services.industry_metric_service import PURGE_SOURCES, _pick_latest
 from app.services.industry_registry import PIG_INDUSTRY
 
 
@@ -43,3 +43,9 @@ def test_fallback_prefers_most_recent_period():
         ]
     }
     assert _pick_latest(PIG_INDUSTRY, grouped, "hog_price").source == "other"
+
+
+def test_purge_sources_cover_mock_and_derived():
+    # mock→真实源切换的清除范围必须同时覆盖 derived 行：派生计算只 upsert 不删除，
+    # 若只删 mock 行，由 mock 基础行算出的旧 derived 序列会存活并继续喂给周期引擎。
+    assert PURGE_SOURCES == {"mock", "derived"}
