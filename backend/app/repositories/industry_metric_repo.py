@@ -26,7 +26,6 @@ async def upsert_metrics(db: AsyncSession, rows: list[dict]) -> int:
         constraint="uq_industry_metrics_key",
         set_={
             "source_tier": stmt.excluded.source_tier,
-            "freq": stmt.excluded.freq,
             "value": stmt.excluded.value,
             "unit": stmt.excluded.unit,
             "extra": stmt.excluded.extra,
@@ -161,12 +160,16 @@ async def list_signals(
     return list(result.scalars().all())
 
 
-async def delete_mock_rows(db: AsyncSession, industry_key: str) -> int:
-    """Purge demo/mock rows once a real source has landed (mock never masquerades as data)."""
+async def delete_rows_by_source(
+    db: AsyncSession, industry_key: str, sources: list[str]
+) -> int:
+    """Purge rows of the given sources once a real source has landed (mock never masquerades as data)."""
+    if not sources:
+        return 0
     stmt = delete(IndustryMetric).where(
         IndustryMetric.industry_key == industry_key,
         IndustryMetric.stock_id == 0,
-        IndustryMetric.source == "mock",
+        IndustryMetric.source.in_(sources),
     )
     result = await db.execute(stmt)
     return result.rowcount or 0
