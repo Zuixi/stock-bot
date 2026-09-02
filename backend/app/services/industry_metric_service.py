@@ -67,6 +67,7 @@ def _require_industry(industry_key: str) -> IndustryConfig:
 
 if TYPE_CHECKING:
     from app.core.providers.akshare_client import AkShareClient
+    from app.core.providers.caaa_client import CaaaClient
 
 # AKShare 真实源表驱动规格：(metric_key, source, client 方法, 日期列, 数值列, 数值上限护栏)。
 # 四个接口均于 2026-09-03 实机验证（akshare 1.18.94）：搜猪网 soozhu 现货（元/kg）+
@@ -127,6 +128,40 @@ async def _fetch_akshare_rows(
     return rows
 
 
+async def _fetch_caaa_sow_row(
+    cfg: IndustryConfig, client: CaaaClient | None = None
+) -> list[dict]:
+    """中国畜牧业协会（pig.caaa.cn）能繁母猪存栏 → 单行 metric row.
+
+    协会行业动态栏目月度转载五部委数据，正文正则解析（见 ``caaa_client``）；
+    stats_gov CSV 通道优先级仍最高，本源作为自动月度补充。任何失败返回
+    空列表（不抛穿），未命中 registry 定义时静默跳过。
+    """
+    m = cfg.metric("sow_inventory")
+    if m is None:
+        return []
+    if client is None:
+        from app.core.providers.caaa_client import get_caaa_client
+
+        client = get_caaa_client()
+
+    try:
+        data = await client.fetch_latest_sow_inventory()
+    except Exception as exc:  # 双保险：client 自身已兜底，此处防注入实现抛穿
+        logger.warning("CAAA sow fetch raised (skipped): %s", exc)
+        return []
+    if data is None:
+        return []
+
+    return [{
+        "industry_key": cfg.key, "stock_id": 0, "metric_key": "sow_inventory",
+        "source": "caaa", "source_tier": m.tier, "freq": "monthly",
+        "period": data["period"], "value": data["inventory_wan_tou"],
+        "unit": m.unit or None,
+        "extra": {"article_url": data["article_url"], "mom_pct": data.get("mom_pct")},
+    }]
+
+
 # ── Ingest ────────────────────────────────────────────────────────────
 
 def _covered_purge_keys(covered: set[str]) -> set[str]:
@@ -152,7 +187,9 @@ async def ingest_industry_metrics(
     if source == "mock":
         rows = build_pig_mock_points(cfg.key, months=months)
     elif source == "akshare":
+        # caaa 行在 upsert 前并入：sow_inventory 进入 covered_metrics → mock purge 覆盖
         rows = await _fetch_akshare_rows(cfg, months=months)
+        rows += await _fetch_caaa_sow_row(cfg)
     else:
         raise ValueError(f"Unknown industry data source: {source}")
 

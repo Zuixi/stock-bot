@@ -181,3 +181,9 @@
 ## 2026-09-03 - Playwright 浏览器级 E2E（投研列表 + 猪智投工作台）
 - frontend 新增 Playwright 套件（devDep `@playwright/test` + `npm run test:e2e` 脚本，chromium 本地安装）：`/research` 断言生猪养殖行业卡片、申万Ⅲ标签与"指标接入 x/x"覆盖度形状；`/research/pig` 经卡片点击导航后断言头部"周期阶段/当前信号"标签（信号 ∈ 买入|卖出|关注|空仓）、指标带生猪均价卡片数值非空、周期相位条四阶段（繁荣/衰退/萧条/复苏）且唯一"当前"高亮、仓位建议三段（核心底仓/波段仓位/现金储备）、≥2 个 EChart canvas、核心指标速览网格、行业知识库 Tab 的 P6 占位文案；断言全部锚定中文标签与 DOM 结构、不锚定实盘数值（数据为真实/混合源）；tsconfig include 未覆盖 e2e/ 目录，`tsc -b` 与 vite 构建不受影响（已验证）
 - 涉及模块：frontend/e2e（research.spec.ts）、frontend（package.json / playwright.config.ts）
+
+## 2026-09-03 - 能繁协会源接入
+- 新增 `CaaaClient`（pig.caaa.cn 中国畜牧业协会猪业分会）：行业动态栏目列表页（`/html/pig_rd/pig_hydt/`，年份目录 403 但栏目页 200）倒序发现最新"全国生猪产品数据"月度文章，正文纯文本正则解析（无表格）"能繁母猪存栏XXXX万头，环比下降/上升X%"——`parse_sow_article`/`find_latest_data_article` 为纯函数可离线单测；数据期取标题月份的月末（"2026年3月份"→03-31，与正文"1季度末"一致），环比按方向词归一符号；任何失败 log warning 返回 None，绝不抛穿；`CAAA_SOW_ARTICLE_URL` 设置可指定文章直连兜底
+- ingest 接线：`source=="akshare"` 时 `_fetch_caaa_sow_row`（可注入假 client）在 upsert 前并入 → sow_inventory 进入 covered_metrics，mock purge 覆盖能繁演示行；registry sow sources → `["stats_gov", "caaa", "mock"]`（统计局 CSV 通道仍最高优先）；row extra 落 article_url/mom_pct 溯源
+- 实跑验证：live 探针返回 `{period: 2026-03-31, inventory: 3904.0 万头, mom_pct: -1.5%, article: /2026/0427/2467.html}`；新增 `tests/test_caaa_client.py` 18 项离线单测（真实文章快照 fixture + 符号归一 + 兜底链 + 容错 + 服务接线/registry 对齐）
+- 涉及模块：backend/core/providers/caaa_client, backend/services/industry_metric_service, backend/services/industry_registry, backend/config, backend/tests

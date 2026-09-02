@@ -193,7 +193,7 @@ PIG_METRICS: list[MetricDef] = [
     ),
     MetricDef(
         key="sow_inventory", name="能繁母猪存栏", unit="万头", freq="monthly",
-        tier=TIER_OFFICIAL, sources=["stats_gov", "mock"],
+        tier=TIER_OFFICIAL, sources=["stats_gov", "caaa", "mock"],
         group="supply", strip=True, spark=True,
         description="农业农村部月度环比 + 统计局季度末绝对数，产能最终基准（10 个月生产时滞）",
     ),
