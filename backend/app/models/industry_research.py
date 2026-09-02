@@ -37,7 +37,7 @@ class IndustryMetric(Base):
     __tablename__ = "industry_metrics"
     __table_args__ = (
         UniqueConstraint(
-            "industry_key", "stock_id", "metric_key", "source", "period",
+            "industry_key", "stock_id", "metric_key", "source", "freq", "period",
             name="uq_industry_metrics_key",
         ),
         Index("idx_industry_metrics_lookup", "industry_key", "metric_key", "period"),

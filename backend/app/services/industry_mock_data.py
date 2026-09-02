@@ -57,8 +57,13 @@ def _wobble_series(base: list[float], rng: random.Random, scale: float, n: int) 
     return out + base[-1:]
 
 
-def build_pig_mock_points(industry_key: str = "pig") -> list[dict[str, Any]]:
-    """Build all mock metric rows (industry-level) for upsert."""
+def build_pig_mock_points(industry_key: str = "pig", months: int = _MONTHS) -> list[dict[str, Any]]:
+    """Build all mock metric rows (industry-level) for upsert.
+
+    ``months`` 截取月度历史窗口（取各序列最后 N 个月）；日度/周度/年度段不受影响。
+    """
+    if not 1 <= months <= _MONTHS:
+        raise ValueError(f"months must be within 1..{_MONTHS}")
     cfg = reg.PIG_INDUSTRY
     today = date.today()
     rng = random.Random(42)  # noqa: S311 - deterministic demo data
@@ -81,10 +86,13 @@ def build_pig_mock_points(industry_key: str = "pig") -> list[dict[str, Any]]:
             "extra": None,
         })
 
-    months = _monthly_periods(today, _MONTHS)
+    periods = _monthly_periods(today, months)
 
     # ── 月度历史 ──
-    for period, price, cost, corn, sow in zip(months, _PRICE, _COST, _CORN, _SOW, strict=True):
+    for period, price, cost, corn, sow in zip(
+        periods, _PRICE[-months:], _COST[-months:], _CORN[-months:], _SOW[-months:],
+        strict=True,
+    ):
         add("hog_price", "monthly", period, price)
         add("industry_cost_avg", "monthly", period, cost)
         add("corn_price", "monthly", period, corn)

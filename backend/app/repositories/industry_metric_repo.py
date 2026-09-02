@@ -14,7 +14,7 @@ from app.models.industry_research import (
     IndustrySignal,
 )
 
-_METRIC_CONFLICT_COLS = ("industry_key", "stock_id", "metric_key", "source", "period")
+_METRIC_CONFLICT_COLS = ("industry_key", "stock_id", "metric_key", "source", "freq", "period")
 
 
 async def upsert_metrics(db: AsyncSession, rows: list[dict]) -> int:
