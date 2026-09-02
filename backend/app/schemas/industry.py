@@ -101,6 +101,10 @@ class IndustrySummaryOut(BaseModel):
     metric_with_data: int
     coverage: dict[str, bool]
     last_period: date | None = None
+    # 列表卡片状态行（P6）：最新信号（从未 ingest 评估过的行业为全 None）
+    phase: str | None = None       # 周期阶段 key（prosperity/recession/depression/recovery）
+    signal_type: str | None = None  # 买入/卖出/关注/空仓
+    signal_date: date | None = None
 
 
 class MetricHistoryPointOut(BaseModel):

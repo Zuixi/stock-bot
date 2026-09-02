@@ -57,6 +57,8 @@ class MetricDef:
     higher_is_better: bool | None = None  # 涨跌颜色语义；None=中性
     rollup_monthly: bool = False    # 日度指标按"每月最后一个日度值"补一条月度行（source 不变）
     warn_bands: list[WarnBand] = field(default_factory=list)
+    # 通用 mock 基准值：generic mock builder 据此生成抖动序列（未配置则该指标跳过）
+    mock_base: float | None = None
     description: str = ""
 
     def band_label(self, value: float) -> str | None:
@@ -305,7 +307,51 @@ PIG_INDUSTRY = IndustryConfig(
     },
 )
 
-INDUSTRIES: dict[str, IndustryConfig] = {PIG_INDUSTRY.key: PIG_INDUSTRY}
+# ── 白羽肉鸡（泛化验证演示行业：mock-only，零前端改动跑通 列表→工作台） ──
+# 刻意保持最小：2 个 mock 价格指标 + 通用四阶段相位 + 通用仓位模板，
+# 证明"接入新行业 = 写配置"的设计原则（无 fetcher / 无 scheduler / 无新表）。
+BROILER_METRICS: list[MetricDef] = [
+    MetricDef(
+        key="chick_price", name="鸡苗价格", unit="元/羽", freq="daily",
+        tier=TIER_HIGHFREQ, sources=["mock"], mock_base=2.9,
+        group="quick", strip=True, spark=True, higher_is_better=True,
+        description="白羽肉鸡苗出厂价，补栏情绪先行指标（演示数据源，未接真实源）",
+    ),
+    MetricDef(
+        key="broiler_price", name="毛鸡价格", unit="元/kg", freq="daily",
+        tier=TIER_HIGHFREQ, sources=["mock"], mock_base=7.4,
+        group="quick", strip=True, spark=True, higher_is_better=True,
+        description="白羽肉鸡毛鸡收购价，养殖盈亏核心指标（演示数据源，未接真实源）",
+    ),
+]
+
+BROILER_INDUSTRY = IndustryConfig(
+    key="broiler",
+    name="白羽肉鸡",
+    description="肉鸡投研 · 农林牧渔-养殖业-肉鸡养殖（申万Ⅲ级）· 泛化验证演示行业（mock 数据源）",
+    # 申万Ⅲ 肉鸡养殖 = 110703（三源核验 2026-09-03：backend/data/sw_seed.sql +
+    # docs/references/sw/申万行业分类.md + 库内 live tree，7 只成分股，与生猪 110702 不相交）
+    sw_l3_codes=["110703"],
+    metrics=BROILER_METRICS,
+    # 复用通用四周期键位（与 cycle_engine 阶段 key 对齐），描述按肉鸡行业口径改写
+    phases=[
+        PhaseDef("prosperity", "繁荣", "鸡价高位 · 补栏积极 · 苗价强势"),
+        PhaseDef("recession", "衰退", "鸡价下行 · 养殖利润收窄 · 出栏惯性增加"),
+        PhaseDef("depression", "萧条", "全行业亏损 · 种蛋转商 · 产能去化"),
+        PhaseDef("recovery", "复苏", "供给收缩 · 鸡价回升 · 盈利修复"),
+    ],
+    position_templates={
+        SIGNAL_EMPTY: _position_slices(0, 10, 90),
+        SIGNAL_WATCH: _position_slices(50, 30, 20),
+        SIGNAL_BUY: _position_slices(60, 30, 10),
+        SIGNAL_SELL: _position_slices(20, 30, 50),
+    },
+)
+
+INDUSTRIES: dict[str, IndustryConfig] = {
+    PIG_INDUSTRY.key: PIG_INDUSTRY,
+    BROILER_INDUSTRY.key: BROILER_INDUSTRY,
+}
 
 
 def get_industry(key: str) -> IndustryConfig | None:

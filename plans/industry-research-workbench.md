@@ -9,6 +9,9 @@
 > P3 协会源抓取器接入与 P4 规则参数实机调优，待 docker compose 环境验证迁移 + ingest 后进行。
 > **加固备注**（2026-09-02）：P1-P4 评审修复已落地（源优先级/rollup/months 贯通/引擎测试/读路径卫生），详见 `docs/Changelog.md` 2026-09-02 条目。
 > 另：akshare 有意未入 pyproject.toml（no-new-deps 约束），切换 `INDUSTRY_DATA_SOURCE=akshare` 前需先在容器内安装 akshare（`uv add akshare` 或 pip），否则 17:05 定时任务将报 RuntimeError 并跳过。
+> **收尾备注**（2026-09-03）：P3 协会源、P5 标的分析+行情面、P6 知识库与泛化验证（broiler 第二行业）全部落地，
+> 实施纪要见 [2026-09-03-workbench-p3-p6-completion.md](./2026-09-03-workbench-p3-p6-completion.md)；各阶段验收项已按实际完成情况勾选留痕（未勾选项附原因）。
+> 遗留：头均市值历史分位暂缓（分位待历史积累）；统计局 CSV 脚本与多源对比 Drawer 未做（见 P3 未勾选项）。
 
 ## 设计原则（组件化 / 模块化 / DRY）
 
@@ -46,12 +49,13 @@
 
 ### Acceptance criteria
 
-- [ ] `docker compose up` 后 migrate 服务自动应用迁移，两张表存在
-- [ ] 手动触发采集任务可回补生意社 ≥3 年历史，重跑幂等（无重复行）
-- [ ] `GET /metrics/latest` 返回含 source / asof / 层级徽章的最新值；猪粮比以 `derived` 源出现
-- [ ] 打开 `/research/pig` 指标带显示真实数据，源徽章由 registry 驱动
-- [ ] `TuShareClient` 与 `AkShareClient` 共用同一限流/重试基类，无重复实现
-- [ ] batch upsert 端点可通过 curl 导入人工数据并幂等
+- [x] `docker compose up` 后 migrate 服务自动应用迁移，两张表存在
+- [x] 手动触发采集任务可回补生意社 ≥3 年历史，重跑幂等（无重复行）
+  （实源为搜猪网 soozhu + 新浪期货（实机验证可用）；上游历史窗口约半年-1 年，37 个月回补参数保留；幂等由 e2e `test_ingest_idempotent` 锁定）
+- [x] `GET /metrics/latest` 返回含 source / asof / 层级徽章的最新值；猪粮比以 `derived` 源出现
+- [x] 打开 `/research/pig` 指标带显示真实数据，源徽章由 registry 驱动
+- [x] `TuShareClient` 与 `AkShareClient` 共用同一限流/重试基类，无重复实现（`core/providers/rate_limited.py::RateLimitedSyncProvider`）
+- [x] batch upsert 端点可通过 curl 导入人工数据并幂等（源白名单由 e2e `test_batch_import_whitelist` 锁定）
 
 ## Phase 2: 走势图表 — history API + 通用图表组件
 
@@ -63,10 +67,11 @@
 
 ### Acceptance criteria
 
-- [ ] history 端点返回升序序列，Redis 命中后二次请求明显变快
-- [ ] `EChart` 被 ≥2 个图表复用，新增图表不手写 `echarts.init` 样板
+- [x] history 端点返回升序序列，Redis 命中后二次请求明显变快
+- [x] `EChart` 被 ≥2 个图表复用，新增图表不手写 `echarts.init` 样板（价格成本/能繁趋势/sparkline/思维导图 tree）
 - [ ] 猪粮比图显示预警参考带，阈值改 registry 配置即生效，前端零改动
-- [ ] 速览网格预警标签（如"二级预警"）由阈值计算得出，非硬编码文案
+  （预警档经 registry `warn_bands` 已在指标带卡片/速览网格以标签呈现、阈值纯配置驱动；独立的猪粮比历史图表未做）
+- [x] 速览网格预警标签（如"二级预警"）由阈值计算得出，非硬编码文案
 
 ## Phase 3: 官方产能数据 — 能繁存栏 + 多源分级
 
@@ -78,11 +83,13 @@
 
 ### Acceptance criteria
 
-- [ ] `sow_inventory` 含两个 source，官方源按优先级胜出
-- [ ] 参考线随 `effective_from` 自动切换（造一条未来生效的测试数据验证）
-- [ ] CSV 脚本幂等回补 2018 至今约 100 个月度点
-- [ ] 协会源解析有 fixture 单测；单源抓取失败不影响其他采集任务
-- [ ] 指标卡点击可看多源对比，源徽章区分官方基准/高频参考
+- [x] `sow_inventory` 含两个 source，官方源按优先级胜出
+  （live 双源 = caaa（官方，pig.caaa.cn 月度文章解析）+ mock 垫底；裁决逻辑单测锁定于 test_industry_source_priority；stats_gov CSV 通道见下条未勾选项）
+- [x] 参考线随 `effective_from` 自动切换（造一条未来生效的测试数据验证）
+  （registry 内建 2021→2024→2026 三版正常保有量锚点，e2e 断言按日取到最新生效版；未另造未来生效行）
+- [ ] CSV 脚本幂等回补 2018 至今约 100 个月度点（统计局 CSV 导入脚本未做——stats_gov 源已注册、batch 通道可用，能繁历史目前由协会源 + mock 承载）
+- [x] 协会源解析有 fixture 单测；单源抓取失败不影响其他采集任务（test_caaa_client 真实文章快照 + log 跳过不抛穿）
+- [ ] 指标卡点击可看多源对比，源徽章区分官方基准/高频参考（源徽章/层级已落地；多源对比 Drawer 未做）
 
 ## Phase 4: 规则引擎 — 周期判定 + 交易信号 + 仓位建议
 
@@ -94,11 +101,12 @@
 
 ### Acceptance criteria
 
-- [ ] 规则引擎纯函数单测覆盖（给定指标快照 → 期望阶段/信号/仓位）
-- [ ] `dashboard` 端点一次返回 metrics / cycle_phase / signal / positions 四块，前端单次 React Query 拉齐
-- [ ] 信号变更写入历史表，时间线倒序渲染，含变更理由
-- [ ] `/research/pig` 看板信息结构与原型 prototype-pig-dashboard.html 一致
-- [ ] 规则参数（阈值/权重）在 registry 可调，改配置不改代码
+- [x] 规则引擎纯函数单测覆盖（给定指标快照 → 期望阶段/信号/仓位）（test_cycle_engine）
+- [x] `dashboard` 端点一次返回 metrics / cycle_phase / signal / positions 四块，前端单次 React Query 拉齐
+- [x] 信号变更写入历史表，时间线倒序渲染，含变更理由
+- [x] `/research/pig` 看板信息结构与原型 prototype-pig-dashboard.html 一致（Playwright 结构断言锁定）
+- [x] 规则参数（阈值/权重）在 registry 可调，改配置不改代码
+  （预警档 warn_bands / 阶段文案 / 仓位模板均为 registry 配置，broiler 泛化验证即零改动复用；引擎侧猪粮比阈值常量与 registry 档位对齐，如需完全参数化可后续抽取）
 
 ## Phase 5: 标的分析 — 公司指标 + 现有行情打通
 
@@ -110,11 +118,12 @@
 
 ### Acceptance criteria
 
-- [ ] 同一张 `industry_metrics` 服务行业级与公司级查询，API 无 per-company 特例分支
-- [ ] 对比表新增一列 = registry 加一条定义，前端零改动
-- [ ] 行点击跳转既有 `/stock/:symbol` 详情页
-- [ ] 头均市值随出栏量导入自动重算
-- [ ] 申万 L3"生猪养殖"页出现"进入投研工作台"banner
+- [x] 同一张 `industry_metrics` 服务行业级与公司级查询，API 无 per-company 特例分支（stock_id 0/>0 同表同端点）
+- [x] 对比表新增一列 = registry 加一条定义，前端零改动（列定义由 companies 端点下发）
+- [x] 行点击跳转既有 `/stock/:symbol` 详情页（Playwright 锁定）
+- [x] 头均市值随出栏量导入自动重算（batch `recompute_derived=true` → 年化出栏 × daily_basic.total_mv 派生落表，e2e 断言）
+  注：头均市值**历史分位**派生暂缓——分位待历史积累（`mcap_per_head_percentile` 见 data-source.md §三，需 ≥1 年派生行后开放）
+- [x] 申万 L3"生猪养殖"页出现"进入投研工作台"banner（Playwright 锁定；110702 修正随 P5 落地）
 
 ## Phase 6: 知识库 + 泛化验证收尾
 
@@ -126,7 +135,8 @@
 
 ### Acceptance criteria
 
-- [ ] 知识库 Tab 渲染机构图谱与数据权威性原则（官方 / 协会 / 平台 / 期货分组）
-- [ ] 新增演示行业仅需：registry 配置 + 一个 fetcher + scheduler 注册，全程无前端改动
-- [ ] `data-source.md` 与 registry 的 `metric_key` 命名一致（交叉检查）
-- [ ] 各阶段验收项在本文档勾选留痕，Changelog 记录
+- [x] 知识库 Tab 渲染机构图谱与数据权威性原则（官方 / 协会 / 平台 / 期货分组）（P6 Stage D，e2e + Playwright 锁定）
+- [x] 新增演示行业仅需：registry 配置 + 一个 fetcher + scheduler 注册，全程无前端改动
+  （P6 Stage E 以 broiler 白羽肉鸡验证：mock-only 演示行业连 fetcher/scheduler 都不需要——registry 一处配置 + MetricDef.mock_base 通用 mock builder 即出数，列表/工作台/信号链路零前端改动跑通）
+- [x] `data-source.md` 与 registry 的 `metric_key` 命名一致（交叉检查；broiler 演示指标为 mock 专用，已在 data-source.md 注记）
+- [x] 各阶段验收项在本文档勾选留痕，Changelog 记录

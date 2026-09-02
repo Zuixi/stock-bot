@@ -128,3 +128,62 @@ def build_pig_mock_points(industry_key: str = "pig", months: int = _MONTHS) -> l
     add("feed_meat_ratio", "yearly", today, 2.72)
 
     return rows
+
+
+# ── 通用 mock builder（泛化验证，P6） ─────────────────────────────────
+# 选择通用（配置驱动）而非 broiler 专用小 builder：新演示行业 = registry 里给
+# MetricDef 配 mock_base 即出数，不再每行业写一个 builder 模块；pig 的原型
+# 对齐序列继续走专用 builder（形状语义不可由单基准值表达）。
+
+_WOBBLE_SCALE = 0.004
+
+
+def build_generic_mock_points(
+    cfg: reg.IndustryConfig,
+    months: int = 12,
+    *,
+    days: int = 45,
+    weeks: int = 26,
+) -> list[dict[str, Any]]:
+    """对 cfg 中所有配置了 ``mock_base`` 的指标，按注册频率生成抖动序列。
+
+    - daily → 近 ``days`` 天逐日；weekly → 近 ``weeks`` 周每周；其余频率（monthly/
+      quarterly/yearly）→ 近 ``months`` 个月末对齐，行 freq 用注册频率标注；
+    - 末点精确等于 ``mock_base``（与 pig builder 口径一致），seeded 抖动可重跑复现。
+    """
+    rng = random.Random(42)  # noqa: S311 - deterministic demo data
+    today = date.today()
+    rows: list[dict[str, Any]] = []
+
+    for m in cfg.metrics:
+        if m.mock_base is None:
+            continue
+        if m.freq == "daily":
+            periods = [today - timedelta(days=days - 1 - i) for i in range(days)]
+        elif m.freq == "weekly":
+            periods = [today - timedelta(weeks=weeks - 1 - i) for i in range(weeks)]
+        else:
+            periods = _monthly_periods(today, max(1, months))
+        series = _wobble_series([m.mock_base] * len(periods), rng, _WOBBLE_SCALE, len(periods))
+        for period, value in zip(periods, series, strict=True):
+            rows.append({
+                "industry_key": cfg.key,
+                "stock_id": 0,
+                "metric_key": m.key,
+                "source": "mock",
+                "source_tier": m.tier,
+                "freq": m.freq,
+                "period": period,
+                "value": value,
+                "unit": m.unit or None,
+                "extra": None,
+            })
+
+    return rows
+
+
+def build_industry_mock_points(cfg: reg.IndustryConfig, months: int = 37) -> list[dict[str, Any]]:
+    """行业 mock 统一入口：pig 走原型对齐专用序列，其余行业走 mock_base 通用抖动。"""
+    if cfg.key == "pig":
+        return build_pig_mock_points(cfg.key, months=months)
+    return build_generic_mock_points(cfg, months=months)

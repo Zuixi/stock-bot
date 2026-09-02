@@ -94,6 +94,9 @@ export interface BackendIndustrySummary {
   metric_with_data: number;
   coverage: Record<string, boolean>;
   last_period: string | null;
+  phase: string | null;
+  signal_type: string | null;
+  signal_date: string | null;
 }
 
 export interface BackendCompanyColumn {
@@ -264,6 +267,9 @@ export interface IndustrySummary {
   metricTotal: number;
   metricWithData: number;
   lastPeriod: string | null;
+  phase: string | null;
+  signalType: string | null;
+  signalDate: string | null;
 }
 
 export interface CompanyColumn {
@@ -457,6 +463,9 @@ export function fetchIndustries(): Promise<IndustrySummary[]> {
       metricTotal: r.metric_total,
       metricWithData: r.metric_with_data,
       lastPeriod: r.last_period,
+      phase: r.phase,
+      signalType: r.signal_type,
+      signalDate: r.signal_date,
     }))
   );
 }

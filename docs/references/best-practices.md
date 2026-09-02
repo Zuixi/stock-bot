@@ -73,3 +73,4 @@
 - 批量 `INSERT ... ON CONFLICT DO UPDATE` 前必须保证单批内冲突键唯一：多源共存（真实源+mock 演示）的历史序列做派生时，先按 registry 源优先级逐 period 去重，否则同批重复键直接 CardinalityViolation 使整个 ingest 任务失败。
 - 逐项容错（per-item skip+log）的采集任务必须把每项错误摘要写进任务 result：否则接线类 bug（如 upsert 缺 db 参数）只留一条日志警告、任务仍报 completed，实跑"成功"零数据要到查库才发现。
 内容型功能（知识库/图谱/原则）应落"迁移内 seed + JSONB 内容表 + 读路径装配"而非硬编码前端：内容单点维护在 seed 模块供迁移与单测共用，前端组件零行业知识、Playwright 断言锚定 `.ant-card-head-title` 一类标题容器以规避徽章同文案混淆。
+SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局 locator：列表与详情页出现同名 Tag（如行业卡片与工作台头部的"周期阶段"）后，路由 URL 变更与 React 卸载旧页之间存在空窗，Playwright strict mode 多元素错误即时抛出不重试，仅 waitForURL 不足以防护。
