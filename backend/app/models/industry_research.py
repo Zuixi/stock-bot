@@ -1,9 +1,10 @@
 """Industry research workbench ORM models.
 
-行业投研工作台（猪智投为首个实例）的三张核心表：
+行业投研工作台（猪智投为首个实例）的四张核心表：
 - industry_metrics          指标单表（行业级 + 公司级共用，见 stock_id 说明）
 - industry_reference_points 政策锚点（随政策修订带生效日期，禁止硬编码）
 - industry_signals          信号历史（周期判定结果，可回测可审计）
+- industry_knowledge        知识库内容（机构图谱/权威性原则/思维导图，JSONB 纯内容）
 
 metric_key 命名与 docs/design/data-source.md 对齐。
 """
@@ -111,6 +112,30 @@ class IndustrySignal(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     basis: Mapped[dict | None] = mapped_column(JSONB)
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class IndustryKnowledge(Base):
+    """Knowledge-base content row (P6): org map entries / principles / mindmap tree.
+
+    内容是数据不是代码：payload 形状随 kind 而定（org: {name, group, tier, desc, urls}；
+    principle: {title, items}；mindmap: EChart tree {name, children}）。org 每机构一行
+    （同 kind 多行），principle/mindmap 各取首行；读取按 (kind, sort, id) 排序。
+    """
+
+    __tablename__ = "industry_knowledge"
+    __table_args__ = (
+        Index("idx_industry_knowledge_lookup", "industry_key", "kind", "sort"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    industry_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    # org | principle | mindmap
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    sort: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -198,3 +198,26 @@ class SecuritySeriesOut(BaseModel):
 class IndustrySecuritiesOut(BaseModel):
     type: str  # etf | cb
     codes: list[SecuritySeriesOut]
+
+
+# ── 知识库（P6）：机构图谱 / 权威性原则 / 思维导图 ─────────────────────
+
+class KnowledgeOrgOut(BaseModel):
+    """机构条目：分组 + 权威性徽章 tier（复用 official/highfreq/calc/manual 五级）。"""
+
+    name: str
+    group: str            # 官方 | 协会 | 数据平台 | 期货
+    tier: str             # official | highfreq | calc | manual
+    desc: str = ""
+    urls: list[str] = []
+
+
+class KnowledgePrincipleOut(BaseModel):
+    title: str
+    items: list[str]
+
+
+class IndustryKnowledgeOut(BaseModel):
+    org: list[KnowledgeOrgOut] = []
+    principle: KnowledgePrincipleOut | None = None
+    mindmap: dict | None = None  # EChart tree 直用 {name, children}（透传）

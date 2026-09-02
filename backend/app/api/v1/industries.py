@@ -7,6 +7,7 @@
         GET   /{key}/metrics/{metric_key}/history
         GET   /{key}/companies                 成分股对比表（行情/估值 + 公司指标，registry 列）
         GET   /{key}/securities                行情面标的日线（type=etf|cb，registry 代码清单）
+        GET   /{key}/knowledge                 知识库（机构图谱/权威性原则/思维导图，内容表 seed）
         POST  /{key}/metrics/batch             人工/CSV 导入通道（幂等 upsert）
 """
 
@@ -19,6 +20,7 @@ from app.core.exceptions import not_found_response
 from app.schemas.industry import (
     DashboardOut,
     IndustryCompaniesOut,
+    IndustryKnowledgeOut,
     IndustrySecuritiesOut,
     IndustrySummaryOut,
     MetricBatchRequest,
@@ -26,6 +28,7 @@ from app.schemas.industry import (
     MetricHistoryOut,
     MetricLatestOut,
 )
+from app.services import industry_knowledge_service as knowledge_service
 from app.services import industry_metric_service as service
 from app.services import securities_service
 
@@ -99,6 +102,15 @@ async def get_industry_securities(
         return await securities_service.get_industry_securities(
             db, industry_key, sec_type=type, limit=limit
         )
+    except service.UnknownIndustryError as exc:
+        raise not_found_response("Industry", industry_key) from exc
+
+
+@router.get("/{industry_key}/knowledge", response_model=IndustryKnowledgeOut)
+async def get_industry_knowledge(industry_key: str, db: DbDep) -> IndustryKnowledgeOut:
+    """Knowledge base: org map / authority principles / mindmap tree (content rows)."""
+    try:
+        return await knowledge_service.get_industry_knowledge(db, industry_key)
     except service.UnknownIndustryError as exc:
         raise not_found_response("Industry", industry_key) from exc
 
