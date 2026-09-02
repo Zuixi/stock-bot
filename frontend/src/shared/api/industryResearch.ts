@@ -76,6 +76,7 @@ export interface BackendDashboard {
     sw_l3_codes: string[];
   };
   as_of: string;
+  data_source: string;
   strip: BackendMetricLatest[];
   quick_view: BackendMetricLatest[];
   trends: Record<string, BackendTrendSeries>;
@@ -166,6 +167,7 @@ export interface Cycle {
 export interface Dashboard {
   industry: { key: string; name: string; description: string; swL3Codes: string[] };
   asOf: string;
+  dataSource: string;
   strip: MetricLatest[];
   quickView: MetricLatest[];
   trends: Record<string, TrendSeries>;
@@ -238,6 +240,7 @@ function mapDashboard(d: BackendDashboard): Dashboard {
       swL3Codes: d.industry.sw_l3_codes,
     },
     asOf: d.as_of,
+    dataSource: d.data_source,
     strip: d.strip.map(mapMetricLatest),
     quickView: d.quick_view.map(mapMetricLatest),
     trends: Object.fromEntries(
