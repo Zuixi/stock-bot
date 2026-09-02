@@ -364,7 +364,7 @@ async def _delta_of(
 
 
 async def get_latest_metrics(
-    db: AsyncSession, cache: CacheClient, industry_key: str, group: str | None = None
+    db: AsyncSession, industry_key: str, group: str | None = None
 ) -> list[MetricLatestOut]:
     cfg = _require_industry(industry_key)
     grouped = await repo.latest_rows_by_metric(db, cfg.key)
@@ -377,10 +377,9 @@ async def get_latest_metrics(
 
 async def get_metric_history(
     db: AsyncSession,
-    cache: CacheClient,
     industry_key: str,
     metric_key: str,
-    months: int = 36,
+    limit: int = 500,
     freq: str | None = None,
     source: str | None = None,
 ) -> MetricHistoryOut:
@@ -389,7 +388,7 @@ async def get_metric_history(
     if m is None:
         raise UnknownMetricError(f"Metric '{metric_key}' is not defined for '{industry_key}'")
     rows = await repo.get_metric_history(
-        db, industry_key, metric_key, limit=months, freq=freq or m.freq, source=source
+        db, industry_key, metric_key, limit=limit, freq=freq or m.freq, source=source
     )
     return MetricHistoryOut(
         metric_key=m.key, name=m.name, unit=m.unit, freq=freq or m.freq, tier=m.tier,
@@ -401,9 +400,7 @@ async def get_metric_history(
     )
 
 
-async def list_industries(
-    db: AsyncSession, cache: CacheClient
-) -> list[IndustrySummaryOut]:
+async def list_industries(db: AsyncSession) -> list[IndustrySummaryOut]:
     summaries: list[IndustrySummaryOut] = []
     for cfg in get_all_industries():
         grouped = await repo.latest_rows_by_metric(db, cfg.key)
@@ -464,9 +461,10 @@ async def get_dashboard(
     sow_trend.reference = ref
     trends["sow_inventory"] = sow_trend
 
-    # 规则引擎结果：evaluate_and_store_signal 已用最新快照评估并落表（幂等），
-    # 直接复用存储行构造输出，避免重复查询。
-    signal_row = await evaluate_and_store_signal(db, cfg)
+    # 信号在 ingest 时评估落表；GET 只读。空库引导：从未评估过才补算一次。
+    signal_row = await repo.latest_signal(db, cfg.key)
+    if signal_row is None:
+        signal_row = await evaluate_and_store_signal(db, cfg)
     basis = signal_row.basis or {}
     cycle = CycleOut(
         phase=signal_row.phase,
@@ -485,6 +483,7 @@ async def get_dashboard(
         industry=IndustryBriefOut(key=cfg.key, name=cfg.name, description=cfg.description,
                                   sw_l3_codes=cfg.sw_l3_codes),
         as_of=date.today(),
+        data_source=settings.industry_data_source,
         strip=strip,
         quick_view=quick,
         trends=trends,
@@ -537,34 +536,54 @@ async def _applicable_reference(
     )
 
 
-async def batch_upsert_metrics(
-    db: AsyncSession, industry_key: str, items: list[dict], recompute_derived: bool = False
-) -> dict:
-    """人工/CSV 导入通道：仅接受 registry 内已定义的 metric_key，幂等 upsert。"""
-    cfg = _require_industry(industry_key)
+# 人工/CSV 导入通道允许写库的 source：人工录入 + 统计局 CSV（data-source.md L2 通道）。
+# 采集适配器专属 source（akshare_* 等）与 mock/derived 不得经人工通道伪造。
+IMPORT_ALLOWED_SOURCES = {"manual", "stats_gov"}
+
+
+def _prepare_batch_rows(
+    cfg: IndustryConfig, items: list[dict]
+) -> tuple[list[dict], list[str], list[str]]:
+    """校验并规整导入行：返回 (rows, skipped_unknown_metric, skipped_invalid_source)."""
     rows: list[dict] = []
     skipped: list[str] = []
+    rejected: list[str] = []
     for item in items:
         m = cfg.metric(item["metric_key"])
+        source = item.get("source") or "manual"
         if m is None:
             skipped.append(item["metric_key"])
+            continue
+        if source not in IMPORT_ALLOWED_SOURCES:
+            rejected.append(f"{m.key}:{source}")
             continue
         rows.append({
             "industry_key": cfg.key,
             "stock_id": item.get("stock_id") or 0,
             "metric_key": m.key,
-            "source": item.get("source") or "manual",
-            "source_tier": m.tier if item.get("source") in (None, "manual") else m.tier,
+            "source": source,
+            "source_tier": m.tier,
             "freq": item.get("freq") or m.freq,
             "period": item["period"],
             "value": item["value"],
             "unit": item.get("unit") or m.unit or None,
             "extra": None,
         })
+    return rows, sorted(set(skipped)), sorted(set(rejected))
+
+
+async def batch_upsert_metrics(
+    db: AsyncSession, industry_key: str, items: list[dict], recompute_derived: bool = False
+) -> dict:
+    """人工/CSV 导入通道：白名单校验 + 幂等 upsert."""
+    cfg = _require_industry(industry_key)
+    rows, skipped, rejected = _prepare_batch_rows(cfg, items)
     upserted = await repo.upsert_metrics(db, rows)
     derived = 0
     if recompute_derived:
         derived = await _compute_derived_metrics(db, cfg)
         await evaluate_and_store_signal(db, cfg)
-    return {"upserted": upserted, "derived_upserted": derived,
-            "skipped_unknown_metric": sorted(set(skipped))}
+    return {
+        "upserted": upserted, "derived_upserted": derived,
+        "skipped_unknown_metric": skipped, "skipped_invalid_source": rejected,
+    }
