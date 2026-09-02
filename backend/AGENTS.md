@@ -1,23 +1,24 @@
 # backend
 
-backend service used to provide unified restful api for the frontend service, and fetch and manage all data from the exchanges.
+backend service：为 frontend 提供 RESTful API，并负责三大交易所数据的采集与管理。
 
-## Componenes
-- app: fastAPI service to provide restful api for the frontend service.
-- crons: cron jobs to fetch and manage data from the exchanges.
-- docs: documentation for the backend service
-- tests: tests for the backend service
-- core: core fetching module to get datas.
-- fetchers: unified fetcher client for 3 exchanges.
-- schemas: pydantic models for the backend service.
-
+## Components
+- app: FastAPI 服务主体（分层：`app/api/v1` 路由 → `app/services` → `app/repositories`；`app/models` + Alembic 迁移 `app/migrations`；`app/schemas` pydantic 模型；`app/core` 基础设施/数据源客户端；`app/scheduler` APScheduler 定时任务；`app/workers` RabbitMQ Worker 手动触发）
+- crons: 独立爬虫脚本（如 `crons/SSE` 上交所指数爬取）
+- data: 原始数据备份（JSONL）与静态种子文件
+- docs: backend 文档
+- scripts: 运维脚本
+- tests: pytest 测试
 
 ## Tech Stack
-- Using FastAPI to build the restful api for the frontend service.
-- Using SQLModel to build the database models.
-- Using Redis to cache the data.
-- Using RabbitMQ to manage the data flow.
-- Using TuShare Pro API as primary data source for stock universe and quotes.
+- FastAPI + SQLAlchemy 2.0 (async) + Alembic 迁移
+- PostgreSQL（基础镜像 quay.io/sclorg/postgresql-15-c9s）+ Redis 缓存 + RabbitMQ 任务队列
+- uv 管理 Python 依赖；ruff（line-length 100）+ mypy（pydantic plugin）做静态检查
+
+## 常用命令（在 backend/ 目录下）
+- 跑测试：`uv run pytest`
+- Lint / 类型检查：`uv run --extra dev ruff check .`、`uv run --extra dev mypy app`
+- 注意：ruff/mypy 在 dev extra 中，直接 `uv run ruff` 会找不到命令
 
 ## Data Sources
 - Primary: TuShare Pro API (stock_basic, stock_company, daily, trade_cal)
@@ -28,8 +29,7 @@ backend service used to provide unified restful api for the frontend service, an
 - Index: CNINFO WebAPI (`app/core/providers/cninfo_client.py`)
 
 Tushare API Reference: [Tushare API Reference](../docs/references/tushare/index.md)
-database use "quay.io/sclorg/postgresql-15-c9s:latest" as base image.
 
 IMPORTANT:
 - UPDATE THIS FILE WHEN YOU MEET SOMETHING IMPORTANT AND USEFUL
-- AFTER EACH TASK COMPLETION, SUMMARIZE USEFUL EXPERIENCES AND ADD TO [THIS DOCUMENT](../docs/references/best-practice.md)
+- AFTER EACH TASK COMPLETION, SUMMARIZE USEFUL EXPERIENCES AND ADD TO [THIS DOCUMENT](../docs/references/best-practices.md)

@@ -5,4 +5,4 @@
 结构：`src/app`（路由/布局/主题）、`src/pages/<路由>/`、`src/features/<域>/`、`src/shared/`（api/ui/config）。
 
 IMPORTANT:
-- 每次完成任务时，结合业内最佳实践，总结经验教训，用一句话沉淀到 [this document](../../docs/references/best-practices.md)
+- 每次完成任务时，结合业内最佳实践，总结经验教训，用一句话沉淀到 [this document](../docs/references/best-practices.md)
