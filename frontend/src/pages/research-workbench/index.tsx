@@ -20,13 +20,6 @@ const PHASE_COLORS: Record<string, string> = {
   recovery: "#1677ff",
 };
 
-const PHASE_LABELS: Record<string, string> = {
-  prosperity: "繁荣",
-  recession: "衰退",
-  depression: "萧条",
-  recovery: "复苏",
-};
-
 const SIGNAL_TEXT_COLORS: Record<string, string> = {
   买入: "#cf1322",
   卖出: "#389e0d",
@@ -57,6 +50,8 @@ function Workbench({ dashboard }: { dashboard: Dashboard }) {
   const { industry, cycle, signal } = dashboard;
   const phaseColor = PHASE_COLORS[cycle.phase] ?? COLORS.flat;
   const signalColor = SIGNAL_TEXT_COLORS[signal.signalType] ?? COLORS.flat;
+  const phaseLabel =
+    dashboard.cycle.phases.find((p) => p.key === cycle.phase)?.label ?? cycle.phase;
 
   const tabItems = [
     {
@@ -129,7 +124,7 @@ function Workbench({ dashboard }: { dashboard: Dashboard }) {
         </Typography.Title>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <Tag color="#12213c" style={{ color: "#fff", border: "none", borderRadius: 14, padding: "2px 12px" }}>
-            周期阶段 {PHASE_LABELS[cycle.phase] ?? cycle.phase}
+            周期阶段 {phaseLabel}
           </Tag>
           <Tag color="gold" style={{ borderRadius: 14, padding: "2px 12px" }}>
             当前信号 <b style={{ color: signalColor }}>{signal.signalType}</b>
@@ -137,9 +132,11 @@ function Workbench({ dashboard }: { dashboard: Dashboard }) {
           <Tag style={{ borderRadius: 14, padding: "2px 12px", color: "#86909c" }}>
             数据截至 {dashboard.asOf}
           </Tag>
-          <Tag style={{ borderRadius: 14, padding: "2px 12px", color: "#86909c", borderStyle: "dashed" }}>
-            演示数据源：mock
-          </Tag>
+          {dashboard.dataSource === "mock" && (
+            <Tag style={{ borderRadius: 14, padding: "2px 12px", color: "#86909c", borderStyle: "dashed" }}>
+              演示数据源：mock
+            </Tag>
+          )}
         </div>
       </div>
 

@@ -9,13 +9,16 @@ interface Props {
 
 /** ECharts 统一封装：统一交互默认值，避免每个图表重复 echarts.init 样板。 */
 export function EChart({ option, height = 300, silent = false }: Props) {
+  const finalOption = silent
+    ? { ...option, animation: false, tooltip: { show: false } }
+    : option;
   return (
     <ReactECharts
-      option={option}
+      option={finalOption}
       notMerge
       lazyUpdate
       style={{ height, width: "100%" }}
-      opts={silent ? { renderer: "canvas" } : undefined}
+      opts={{ renderer: "canvas" }}
     />
   );
 }
