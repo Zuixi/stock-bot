@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.mq import publish_message
 from app.core.redis import CacheClient
+from app.models.task import Task
 from app.repositories import task_repo
 from app.schemas.common import PageParams
 from app.schemas.task import (
@@ -21,15 +22,36 @@ from app.schemas.task import (
 logger = logging.getLogger(__name__)
 
 
+async def _dispatch_task(
+    db: AsyncSession, task_type: str, queue_key: str, payload: dict
+) -> Task:
+    """创建任务行 → 先提交、后发消息。
+
+    提交必须先于 publish：worker 消费到消息时任务行必须已可见，
+    否则 update_task_status 查无此行会静默跳过，任务永远停在 pending。
+    publish 失败时把任务标记为 failed，避免留下无消息的孤儿 pending。
+    """
+    task = await task_repo.create_task(db, task_type, payload)
+    await db.commit()
+    try:
+        await publish_message(
+            queue_key,
+            {"task_id": str(task.id), "type": task_type, "payload": payload},
+        )
+    except Exception as exc:
+        await task_repo.update_task_status(
+            db, task.id, "failed", error=f"publish failed: {exc}"
+        )
+        await db.commit()
+        raise
+    return task
+
+
 async def trigger_fetch_universe(
     db: AsyncSession, req: FetchUniverseRequest
 ) -> TaskOut:
     payload = req.model_dump(exclude_none=True)
-    task = await task_repo.create_task(db, "fetch_universe", payload)
-    await publish_message(
-        "universe.fetch",
-        {"task_id": str(task.id), "type": "fetch_universe", "payload": payload},
-    )
+    task = await _dispatch_task(db, "fetch_universe", "universe.fetch", payload)
     logger.info("Dispatched fetch_universe task %s for exchange=%s", task.id, req.exchange)
     return TaskOut.model_validate(task)
 
@@ -38,11 +60,7 @@ async def trigger_fetch_quotes(
     db: AsyncSession, req: FetchQuotesRequest
 ) -> TaskOut:
     payload = req.model_dump(exclude_none=True)
-    task = await task_repo.create_task(db, "fetch_quotes", payload)
-    await publish_message(
-        "quotes.fetch",
-        {"task_id": str(task.id), "type": "fetch_quotes", "payload": payload},
-    )
+    task = await _dispatch_task(db, "fetch_quotes", "quotes.fetch", payload)
     logger.info("Dispatched fetch_quotes task %s", task.id)
     return TaskOut.model_validate(task)
 
@@ -52,11 +70,7 @@ async def trigger_fetch_daily_basic(
 ) -> TaskOut:
     """Trigger a daily_basic fetch task (entire market per trade_date)."""
     payload = req.model_dump(exclude_none=True)
-    task = await task_repo.create_task(db, "fetch_daily_basic", payload)
-    await publish_message(
-        "daily_basic.fetch",
-        {"task_id": str(task.id), "type": "fetch_daily_basic", "payload": payload},
-    )
+    task = await _dispatch_task(db, "fetch_daily_basic", "daily_basic.fetch", payload)
     logger.info("Dispatched fetch_daily_basic task %s", task.id)
     return TaskOut.model_validate(task)
 
@@ -65,11 +79,7 @@ async def trigger_clustering(
     db: AsyncSession, req: RunClusteringRequest
 ) -> TaskOut:
     payload = req.model_dump(exclude_none=True)
-    task = await task_repo.create_task(db, "run_clustering", payload)
-    await publish_message(
-        "clustering.run",
-        {"task_id": str(task.id), "type": "run_clustering", "payload": payload},
-    )
+    task = await _dispatch_task(db, "run_clustering", "clustering.run", payload)
     logger.info("Dispatched clustering task %s, algorithm=%s", task.id, req.algorithm)
     return TaskOut.model_validate(task)
 
@@ -78,10 +88,8 @@ async def trigger_fetch_industry_metrics(
     db: AsyncSession, req: FetchIndustryMetricsRequest
 ) -> TaskOut:
     payload = req.model_dump(exclude_none=True)
-    task = await task_repo.create_task(db, "fetch_industry_metrics", payload)
-    await publish_message(
-        "industry_metrics.fetch",
-        {"task_id": str(task.id), "type": "fetch_industry_metrics", "payload": payload},
+    task = await _dispatch_task(
+        db, "fetch_industry_metrics", "industry_metrics.fetch", payload
     )
     logger.info(
         "Dispatched fetch_industry_metrics task %s, industry=%s", task.id, req.industry_key
