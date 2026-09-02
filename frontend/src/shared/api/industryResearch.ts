@@ -126,6 +126,30 @@ export interface BackendIndustryCompanies {
   rows: BackendCompanyRow[];
 }
 
+export interface BackendSecurityDailyPoint {
+  trade_date: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  pre_close: number | null;
+  volume: number | null;
+  amount: number | null;
+}
+
+export interface BackendSecuritySeries {
+  ts_code: string;
+  name: string | null;
+  latest: BackendSecurityDailyPoint | null;
+  change_pct: number | null;
+  series: BackendSecurityDailyPoint[];
+}
+
+export interface BackendIndustrySecurities {
+  type: "etf" | "cb";
+  codes: BackendSecuritySeries[];
+}
+
 // ── UI models (camelCase) ─────────────────────────────────────────────
 
 export interface MetricDelta {
@@ -241,6 +265,30 @@ export interface IndustryCompanies {
   rows: CompanyRow[];
 }
 
+export interface SecurityDailyPoint {
+  tradeDate: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  preClose: number | null;
+  volume: number | null;
+  amount: number | null;
+}
+
+export interface SecuritySeries {
+  tsCode: string;
+  name: string | null;
+  latest: SecurityDailyPoint | null;
+  changePct: number | null;
+  series: SecurityDailyPoint[];
+}
+
+export interface IndustrySecurities {
+  type: "etf" | "cb";
+  codes: SecuritySeries[];
+}
+
 // ── Mappers ───────────────────────────────────────────────────────────
 
 function mapMetricLatest(m: BackendMetricLatest): MetricLatest {
@@ -345,6 +393,32 @@ function mapIndustryCompanies(c: BackendIndustryCompanies): IndustryCompanies {
   };
 }
 
+function mapSecurityPoint(p: BackendSecurityDailyPoint): SecurityDailyPoint {
+  return {
+    tradeDate: p.trade_date,
+    open: p.open,
+    high: p.high,
+    low: p.low,
+    close: p.close,
+    preClose: p.pre_close,
+    volume: p.volume,
+    amount: p.amount,
+  };
+}
+
+function mapIndustrySecurities(s: BackendIndustrySecurities): IndustrySecurities {
+  return {
+    type: s.type,
+    codes: s.codes.map((c) => ({
+      tsCode: c.ts_code,
+      name: c.name,
+      latest: c.latest ? mapSecurityPoint(c.latest) : null,
+      changePct: c.change_pct,
+      series: c.series.map(mapSecurityPoint),
+    })),
+  };
+}
+
 // ── Fetchers ──────────────────────────────────────────────────────────
 
 export function fetchIndustries(): Promise<IndustrySummary[]> {
@@ -369,6 +443,25 @@ export function fetchIndustryCompanies(industryKey: string): Promise<IndustryCom
   return apiGet<BackendIndustryCompanies>(`/api/v1/industries/${industryKey}/companies`).then(
     mapIndustryCompanies
   );
+}
+
+export function fetchIndustrySecurities(
+  industryKey: string,
+  type: "etf" | "cb"
+): Promise<IndustrySecurities> {
+  return apiGet<BackendIndustrySecurities>(
+    `/api/v1/industries/${industryKey}/securities?type=${type}`
+  ).then(mapIndustrySecurities);
+}
+
+export function triggerFetchSecurities(
+  industryKey: string,
+  backfillDays?: number
+): Promise<{ id: string; status: string }> {
+  return apiPost("/api/v1/tasks/fetch-securities", {
+    industry_key: industryKey,
+    ...(backfillDays ? { backfill_days: backfillDays } : {}),
+  });
 }
 
 export function triggerFetchIndustryMetrics(

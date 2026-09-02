@@ -13,6 +13,7 @@ from app.scheduler.jobs import (
     daily_basic_backfill_job,
     daily_quotes_backfill_job,
     industry_metrics_refresh_job,
+    securities_refresh_job,
     sse_post_close_job,
     sse_trade_hours_job,
 )
@@ -111,6 +112,20 @@ def create_scheduler() -> AsyncIOScheduler:
         ),
         id="industry_metrics_refresh",
         name="Industry metrics refresh",
+        replace_existing=True,
+    )
+
+    # Industry ETF/CB daily bars: 17:10 Mon-Fri (after industry_metrics refresh)
+    scheduler.add_job(
+        securities_refresh_job,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour=17,
+            minute=10,
+            timezone="Asia/Shanghai",
+        ),
+        id="securities_refresh",
+        name="Securities (ETF/CB) refresh",
         replace_existing=True,
     )
 

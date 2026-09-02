@@ -10,6 +10,7 @@ from app.models.industry_research import (
     IndustrySignal,
 )
 from app.models.quote import DailyQuote
+from app.models.securities import CbDaily, FundEtfDaily
 from app.models.sse_index_snapshot import SseIndexSnapshot
 from app.models.stock import Stock, StockHistory, StockUserTag
 from app.models.sw_industry import StockCustomSwTag, SwIndustryClass, SwIndustryMember
@@ -34,4 +35,6 @@ __all__ = [
     "IndustryMetric",
     "IndustryReferencePoint",
     "IndustrySignal",
+    "FundEtfDaily",
+    "CbDaily",
 ]

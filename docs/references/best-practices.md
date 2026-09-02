@@ -71,3 +71,4 @@
 - Playwright 浏览器测试在中文重文案页面上，`getByText`/正则会同时命中嵌套容器或相邻重复文案而触发 strict mode violation；断言应优先落在唯一容器上用 `toContainText`，或用 `.locator(".ant-tag").filter({ hasText })` 一类结构选择器限定作用域。
 - 官方转载源（如协会月度文章）解析应拆成"网络抓取壳 + 纯解析函数"两层：解析用真实页面快照 fixture 做离线单测锁定正文形状（含环比方向词归一、数据期优先取标题月份），抓取壳只做发现与容错（任何失败 log 后返回 None 不抛穿），并为列表页改版预留显式 URL 设置逃生通道。
 - 批量 `INSERT ... ON CONFLICT DO UPDATE` 前必须保证单批内冲突键唯一：多源共存（真实源+mock 演示）的历史序列做派生时，先按 registry 源优先级逐 period 去重，否则同批重复键直接 CardinalityViolation 使整个 ingest 任务失败。
+- 逐项容错（per-item skip+log）的采集任务必须把每项错误摘要写进任务 result：否则接线类 bug（如 upsert 缺 db 参数）只留一条日志警告、任务仍报 completed，实跑"成功"零数据要到查库才发现。

@@ -5,9 +5,12 @@
         GET   /{key}/dashboard                 看板聚合（指标带/速览/趋势/周期/信号/仓位）
         GET   /{key}/metrics/latest            全部指标最新值（源优先级裁决 + 预警标签）
         GET   /{key}/metrics/{metric_key}/history
-        GET   /{key}/companies                 成分股对比表（行情/估值 + 公司指标，列由 registry 下发）
+        GET   /{key}/companies                 成分股对比表（行情/估值 + 公司指标，registry 列）
+        GET   /{key}/securities                行情面标的日线（type=etf|cb，registry 代码清单）
         POST  /{key}/metrics/batch             人工/CSV 导入通道（幂等 upsert）
 """
+
+from typing import Literal
 
 from fastapi import APIRouter, Query, status
 
@@ -16,6 +19,7 @@ from app.core.exceptions import not_found_response
 from app.schemas.industry import (
     DashboardOut,
     IndustryCompaniesOut,
+    IndustrySecuritiesOut,
     IndustrySummaryOut,
     MetricBatchRequest,
     MetricBatchResponse,
@@ -23,6 +27,7 @@ from app.schemas.industry import (
     MetricLatestOut,
 )
 from app.services import industry_metric_service as service
+from app.services import securities_service
 
 router = APIRouter()
 
@@ -78,6 +83,22 @@ async def get_industry_companies(industry_key: str, db: DbDep) -> IndustryCompan
     """Member-stock comparison table: quotes/valuation + latest company metrics."""
     try:
         return await service.get_industry_companies(db, industry_key)
+    except service.UnknownIndustryError as exc:
+        raise not_found_response("Industry", industry_key) from exc
+
+
+@router.get("/{industry_key}/securities", response_model=IndustrySecuritiesOut)
+async def get_industry_securities(
+    industry_key: str,
+    db: DbDep,
+    type: Literal["etf", "cb"] = Query(description="行情面标的类型"),
+    limit: int = Query(default=90, ge=1, le=1000, description="每代码返回的最近 N 个交易日"),
+) -> IndustrySecuritiesOut:
+    """Securities daily series (ETF via fund_daily / CB via cb_daily), registry-driven."""
+    try:
+        return await securities_service.get_industry_securities(
+            db, industry_key, sec_type=type, limit=limit
+        )
     except service.UnknownIndustryError as exc:
         raise not_found_response("Industry", industry_key) from exc
 

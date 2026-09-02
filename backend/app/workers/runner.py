@@ -6,6 +6,7 @@ import logging
 from app.workers.daily_basic_worker import DailyBasicWorker
 from app.workers.industry_metrics_worker import IndustryMetricsWorker
 from app.workers.quotes_worker import QuotesWorker
+from app.workers.securities_worker import SecuritiesWorker
 from app.workers.universe_worker import UniverseWorker
 
 logging.basicConfig(
@@ -21,6 +22,7 @@ async def main() -> None:
         QuotesWorker(),
         DailyBasicWorker(),
         IndustryMetricsWorker(),
+        SecuritiesWorker(),
     ]
     logger.info("Starting %d worker(s)", len(workers))
     await asyncio.gather(*[w.run() for w in workers])

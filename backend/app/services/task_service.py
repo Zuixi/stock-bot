@@ -13,6 +13,7 @@ from app.schemas.common import PageParams
 from app.schemas.task import (
     FetchDailyBasicRequest,
     FetchIndustryMetricsRequest,
+    FetchIndustrySecuritiesRequest,
     FetchQuotesRequest,
     FetchUniverseRequest,
     RunClusteringRequest,
@@ -93,6 +94,18 @@ async def trigger_fetch_industry_metrics(
     )
     logger.info(
         "Dispatched fetch_industry_metrics task %s, industry=%s", task.id, req.industry_key
+    )
+    return TaskOut.model_validate(task)
+
+
+async def trigger_fetch_securities(
+    db: AsyncSession, req: FetchIndustrySecuritiesRequest
+) -> TaskOut:
+    payload = req.model_dump(exclude_none=True)
+    task = await _dispatch_task(db, "fetch_securities", "securities.fetch", payload)
+    logger.info(
+        "Dispatched fetch_securities task %s, industry=%s backfill_days=%s",
+        task.id, req.industry_key, req.backfill_days,
     )
     return TaskOut.model_validate(task)
 

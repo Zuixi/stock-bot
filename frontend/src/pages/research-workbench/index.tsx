@@ -13,6 +13,7 @@ import { PriceCostChart } from "@/features/industry-research/components/PriceCos
 import { SowTrendChart } from "@/features/industry-research/components/SowTrendChart";
 import { SourceBadge } from "@/features/industry-research/components/SourceBadge";
 import { CompanyComparisonTable } from "@/features/industry-research/components/CompanyComparisonTable";
+import { SecuritiesTables } from "@/features/industry-research/components/SecuritiesTables";
 
 const PHASE_COLORS: Record<string, string> = {
   prosperity: "#cf1322",
@@ -105,12 +106,15 @@ function Workbench({ dashboard }: { dashboard: Dashboard }) {
     {
       key: "tracking",
       label: "行情调研追踪",
-      // 标的分析（P5）：成分股对比表。antd Tabs 惰性挂载 pane，本组件的 useQuery
-      // 只在 Tab 首次激活时发起，看板首屏不受影响；ETF/转债表（P5 行情）后续并列于此。
+      // 标的分析（P5）：成分股对比 + 行情面 ETF/可转债表。antd Tabs 惰性挂载 pane，
+      // 子组件的 useQuery 只在 Tab 首次激活时发起，看板首屏不受影响。
       children: (
-        <Card size="small" title="标的分析 · 成分股对比" extra={<span style={{ fontSize: 11.5, color: "#86909c" }}>点击行进入个股详情 · 公司指标列由 registry 下发</span>}>
-          <CompanyComparisonTable industryKey={industry.key} />
-        </Card>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <Card size="small" title="标的分析 · 成分股对比" extra={<span style={{ fontSize: 11.5, color: "#86909c" }}>点击行进入个股详情 · 公司指标列由 registry 下发</span>}>
+            <CompanyComparisonTable industryKey={industry.key} />
+          </Card>
+          <SecuritiesTables industryKey={industry.key} />
+        </div>
       ),
     },
     {
