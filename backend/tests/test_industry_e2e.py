@@ -117,7 +117,8 @@ async def test_dashboard_contract(client: AsyncClient):
     assert sum(p["pct"] for p in d["signal"]["positions"]) == 100
 
     price_vs_cost = d["trends"]["price_vs_cost"]
-    assert len(price_vs_cost["periods"]) >= 12
+    # 真实源（搜猪网当年序列）月度窗口短于 mock 37 个月，取 ≥6 保证趋势图仍有实质历史
+    assert len(price_vs_cost["periods"]) >= 6
     assert set(price_vs_cost["series"]) >= {"生猪均价", "行业平均完全成本"}
 
     ref = d["trends"]["sow_inventory"]["reference"]
