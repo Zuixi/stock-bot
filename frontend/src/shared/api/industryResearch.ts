@@ -96,6 +96,36 @@ export interface BackendIndustrySummary {
   last_period: string | null;
 }
 
+export interface BackendCompanyColumn {
+  key: string;
+  label: string;
+  unit: string | null;
+  numeric: boolean;
+  tier: string | null;
+}
+
+export interface BackendCompanyRow {
+  symbol: string;
+  name: string;
+  latest_price: number | null;
+  total_mv_yi: number | null;
+  pe_ttm: number | null;
+  pb: number | null;
+  has_company_data: boolean;
+  metrics: Record<string, number | null>;
+}
+
+export interface BackendIndustryCompanies {
+  industry: {
+    key: string;
+    name: string;
+    description: string;
+    sw_l3_codes: string[];
+  };
+  columns: BackendCompanyColumn[];
+  rows: BackendCompanyRow[];
+}
+
 // ── UI models (camelCase) ─────────────────────────────────────────────
 
 export interface MetricDelta {
@@ -186,6 +216,31 @@ export interface IndustrySummary {
   lastPeriod: string | null;
 }
 
+export interface CompanyColumn {
+  key: string;
+  label: string;
+  unit: string | null;
+  numeric: boolean;
+  tier: string | null;
+}
+
+export interface CompanyRow {
+  symbol: string;
+  name: string;
+  latestPrice: number | null;
+  totalMvYi: number | null;
+  peTtm: number | null;
+  pb: number | null;
+  hasCompanyData: boolean;
+  metrics: Record<string, number | null>;
+}
+
+export interface IndustryCompanies {
+  industry: { key: string; name: string; description: string; swL3Codes: string[] };
+  columns: CompanyColumn[];
+  rows: CompanyRow[];
+}
+
 // ── Mappers ───────────────────────────────────────────────────────────
 
 function mapMetricLatest(m: BackendMetricLatest): MetricLatest {
@@ -258,6 +313,38 @@ function mapDashboard(d: BackendDashboard): Dashboard {
   };
 }
 
+function mapCompanyRow(r: BackendCompanyRow): CompanyRow {
+  return {
+    symbol: r.symbol,
+    name: r.name,
+    latestPrice: r.latest_price,
+    totalMvYi: r.total_mv_yi,
+    peTtm: r.pe_ttm,
+    pb: r.pb,
+    hasCompanyData: r.has_company_data,
+    metrics: r.metrics,
+  };
+}
+
+function mapIndustryCompanies(c: BackendIndustryCompanies): IndustryCompanies {
+  return {
+    industry: {
+      key: c.industry.key,
+      name: c.industry.name,
+      description: c.industry.description,
+      swL3Codes: c.industry.sw_l3_codes,
+    },
+    columns: c.columns.map((col) => ({
+      key: col.key,
+      label: col.label,
+      unit: col.unit,
+      numeric: col.numeric,
+      tier: col.tier,
+    })),
+    rows: c.rows.map(mapCompanyRow),
+  };
+}
+
 // ── Fetchers ──────────────────────────────────────────────────────────
 
 export function fetchIndustries(): Promise<IndustrySummary[]> {
@@ -276,6 +363,12 @@ export function fetchIndustries(): Promise<IndustrySummary[]> {
 
 export function fetchIndustryDashboard(industryKey: string): Promise<Dashboard> {
   return apiGet<BackendDashboard>(`/api/v1/industries/${industryKey}/dashboard`).then(mapDashboard);
+}
+
+export function fetchIndustryCompanies(industryKey: string): Promise<IndustryCompanies> {
+  return apiGet<BackendIndustryCompanies>(`/api/v1/industries/${industryKey}/companies`).then(
+    mapIndustryCompanies
+  );
 }
 
 export function triggerFetchIndustryMetrics(

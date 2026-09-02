@@ -139,3 +139,32 @@ class MetricBatchResponse(BaseModel):
     derived_upserted: int = 0
     skipped_unknown_metric: list[str] = []
     skipped_invalid_source: list[str] = []
+
+
+# ── 标的分析（P5）：成分股对比表 ───────────────────────────────────────
+
+class CompanyColumnOut(BaseModel):
+    """对比表列定义：固定行情列 + registry 下发的公司指标列（前端零改动扩展）。"""
+
+    key: str                     # 行取值键：固定列同名字段，公司指标列读 row.metrics[key]
+    label: str
+    unit: str | None = None
+    numeric: bool = True         # 前端右对齐 + 排序
+    tier: str | None = None      # 公司指标列的数据源层级徽章
+
+
+class CompanyRowOut(BaseModel):
+    symbol: str
+    name: str
+    latest_price: float | None = None
+    total_mv_yi: float | None = None   # 亿元（daily_basic.total_mv 万元 / 1e4）
+    pe_ttm: float | None = None
+    pb: float | None = None
+    has_company_data: bool = False
+    metrics: dict[str, float | None] = {}   # metric_key → latest 公司指标值（含 mcap_per_head）
+
+
+class IndustryCompaniesOut(BaseModel):
+    industry: IndustryBriefOut
+    columns: list[CompanyColumnOut]
+    rows: list[CompanyRowOut]

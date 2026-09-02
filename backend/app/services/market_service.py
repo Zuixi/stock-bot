@@ -869,11 +869,16 @@ async def list_symbols_by_level2(level1_code: str, level2_code: str) -> list[str
     return list(ordered)
 
 
-async def list_symbols_by_level3(
-    level1_code: str, level2_code: str, level3_code: str
-) -> list[str]:
-    """Get all member symbols under a level-3 industry."""
+async def list_symbols_by_industry_codes(l3_codes: list[str]) -> list[str]:
+    """Get member symbols under any of the given level-3 industry codes.
+
+    官方申万成分 + 自定义标签并集，仅保留 stocks 表内在市标的（按交易所+代码排序）。
+    行业工作台 companies 端点按 registry sw_l3_codes 复用本查询。
+    """
     from app.models.sw_industry import StockCustomSwTag, SwIndustryMember  # noqa: PLC0415
+
+    if not l3_codes:
+        return []
 
     async with async_session_factory() as db:
         official_symbols = (
@@ -881,7 +886,7 @@ async def list_symbols_by_level3(
                 select(SwIndustryMember.symbol)
                 .join(Stock, Stock.symbol == SwIndustryMember.symbol)
                 .where(
-                    SwIndustryMember.industry_code == level3_code
+                    SwIndustryMember.industry_code.in_(l3_codes)
                 )
             )
         ).scalars().all()
@@ -889,7 +894,7 @@ async def list_symbols_by_level3(
             await db.execute(
                 select(StockCustomSwTag.symbol)
                 .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
-                .where(StockCustomSwTag.industry_code == level3_code)
+                .where(StockCustomSwTag.industry_code.in_(l3_codes))
             )
         ).scalars().all()
         symbol_set = set(official_symbols) | set(custom_symbols)
@@ -901,6 +906,13 @@ async def list_symbols_by_level3(
             )
         ).scalars().all()
     return list(ordered)
+
+
+async def list_symbols_by_level3(
+    level1_code: str, level2_code: str, level3_code: str
+) -> list[str]:
+    """Get all member symbols under a level-3 industry."""
+    return await list_symbols_by_industry_codes([level3_code])
 
 
 def _uncategorized_symbols_subquery():
