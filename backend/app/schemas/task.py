@@ -56,3 +56,4 @@ class RunClusteringRequest(BaseModel):
 class FetchIndustryMetricsRequest(BaseModel):
     industry_key: str = "pig"
     source: str | None = Field(default=None, pattern="^(mock|akshare)$")
+    months: int = Field(default=37, ge=1, le=120)

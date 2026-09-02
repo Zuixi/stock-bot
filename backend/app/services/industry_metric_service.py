@@ -64,7 +64,7 @@ def _require_industry(industry_key: str) -> IndustryConfig:
 
 # ── Fetchers ──────────────────────────────────────────────────────────
 
-async def _fetch_akshare_rows(cfg: IndustryConfig) -> list[dict]:
+async def _fetch_akshare_rows(cfg: IndustryConfig, months: int = 37) -> list[dict]:
     """Best-effort real fetch via AKShare（接口名未实机验证，失败即跳过该指标）."""
     from app.core.providers.akshare_client import get_akshare_client
 
@@ -80,6 +80,9 @@ async def _fetch_akshare_rows(cfg: IndustryConfig) -> list[dict]:
             "value": value, "unit": m.unit or None, "extra": None,
         }
 
+    # 回补窗口：按月数换算行数下限（月均 ~31 天），保底 45 天近端窗口
+    tail_rows = max(45, months * 31)
+
     # TODO(api-verify): 生意社返回列名未确认，做启发式解析，失败跳过。
     for metric_key, symbol_cn in [
         ("hog_price", "生猪"),
@@ -93,7 +96,7 @@ async def _fetch_akshare_rows(cfg: IndustryConfig) -> list[dict]:
             df = await client.fetch_spot_price_history(symbol_cn)
             date_col = next(c for c in df.columns if "日期" in str(c) or "date" in str(c).lower())
             val_col = next(c for c in df.columns if c != date_col)
-            for _, r in df.tail(45).iterrows():
+            for _, r in df.tail(tail_rows).iterrows():
                 period = date.fromisoformat(str(r[date_col])[:10])
                 if period > today:
                     continue
@@ -107,7 +110,7 @@ async def _fetch_akshare_rows(cfg: IndustryConfig) -> list[dict]:
         if m is not None and not df.empty:
             date_col = next(c for c in df.columns if "date" in str(c).lower() or "日期" in str(c))
             val_col = "close"
-            for _, r in df.tail(45).iterrows():
+            for _, r in df.tail(tail_rows).iterrows():
                 period = date.fromisoformat(str(r[date_col])[:10])
                 rows.append(_row(m, period, float(r[val_col])))
     except Exception as exc:
@@ -129,9 +132,9 @@ async def ingest_industry_metrics(
     source = source or settings.industry_data_source
 
     if source == "mock":
-        rows = build_pig_mock_points(cfg.key)
+        rows = build_pig_mock_points(cfg.key, months=months)
     elif source == "akshare":
-        rows = await _fetch_akshare_rows(cfg)
+        rows = await _fetch_akshare_rows(cfg, months=months)
     else:
         raise ValueError(f"Unknown industry data source: {source}")
 

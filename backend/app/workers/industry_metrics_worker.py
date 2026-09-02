@@ -23,6 +23,7 @@ class IndustryMetricsWorker(BaseWorker):
     ------------------------------------
     industry_key : str (default "pig")
     source : str (default settings.industry_data_source, "mock" | "akshare")
+    months : int (default 37, 1..120 — 月度回补窗口，透传给 ingest)
     """
 
     queue_key = "industry_metrics.fetch"
@@ -30,15 +31,16 @@ class IndustryMetricsWorker(BaseWorker):
     async def process(self, task_id: uuid.UUID, payload: dict) -> dict:
         industry_key = payload.get("industry_key", "pig")
         source = payload.get("source")
+        months = int(payload.get("months", 37))
 
         logger.info(
-            "IndustryMetricsWorker task=%s industry=%s source=%s",
-            task_id, industry_key, source or "default",
+            "IndustryMetricsWorker task=%s industry=%s source=%s months=%s",
+            task_id, industry_key, source or "default", months,
         )
 
         async with async_session_factory() as db:
             result = await industry_metric_service.ingest_industry_metrics(
-                db, industry_key=industry_key, source=source
+                db, industry_key=industry_key, source=source, months=months
             )
             await db.commit()
         return {"status": "completed", **result}
