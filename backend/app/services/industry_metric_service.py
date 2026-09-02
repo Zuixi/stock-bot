@@ -136,6 +136,10 @@ async def ingest_industry_metrics(
 
     await _ensure_reference_points(db, cfg)
     upserted = await repo.upsert_metrics(db, rows)
+    purged = 0
+    # 真实源首次落库后清除演示数据：宁可空缺也不让 mock 冒充真实值
+    if source != "mock" and upserted > 0:
+        purged = await repo.delete_mock_rows(db, cfg.key)
     derived_count = await _compute_derived_metrics(db, cfg)
     signal = await evaluate_and_store_signal(db, cfg)
 
@@ -143,6 +147,7 @@ async def ingest_industry_metrics(
         "source": source,
         "upserted": upserted,
         "derived_upserted": derived_count,
+        "purged_mock": purged,
         "signal": signal.signal_type if signal else None,
     }
 
@@ -260,7 +265,7 @@ def _pick_latest(cfg: IndustryConfig, grouped: dict, metric_key: str):
     for source_key in m.sources:
         if source_key in by_source:
             return by_source[source_key]
-    return rows[0]
+    return max(rows, key=lambda r: r.period)
 
 
 async def _build_metric_latest(
