@@ -17,7 +17,7 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import clusters, industries, market, stocks, tags, tasks
+from app.api.v1 import clusters, industries, market, market_data, stocks, tags, tasks
 
 router = APIRouter(prefix="/api/v1")
 
@@ -36,6 +36,9 @@ router.include_router(clusters.router, prefix="/clusters", tags=["clusters"])
 
 # Market dashboard
 router.include_router(market.router, prefix="/market", tags=["market"])
+
+# Market-data face: /api/v1/market/global-indices（后续 moneyflow/龙虎榜等面片追加至此）
+router.include_router(market_data.router, prefix="/market", tags=["market-data"])
 
 # Background tasks
 router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
