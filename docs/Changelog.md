@@ -293,3 +293,9 @@
   - KlineChart 死代码清理：删未使用 DEFAULT_TAIL_BARS import、MA 行冗余 `!isLoading &&` 守卫
 - **验证**：e2e 头部用例追加形状断言（600519 总市值含"万亿"、成交额含"亿"），17 用例全绿；实机 curl 推演总市值 1.62万亿 / 成交额 26.34亿
 - 涉及模块：frontend/shared/api/stocks, frontend/features/market, frontend/shared/ui/kline, frontend/e2e
+
+## 2026-09-03 - K线 tooltip 列式布局（P5 小迭代）
+- **问题**：tooltip 三行挤排（"开：x 高：x 低：x 收：x"横排）无数字对齐、无涨跌额，与主流行情终端差距明显
+- **修复**：`klineOption.ts` formatter 重写为参考图 1 的两列式逐行布局（灰标签左 + 右对齐 tabular-nums 语义色数值右）：日期标题行 → 开盘/收盘/最高/最低/涨跌额/涨跌幅（随当日涨跌着色，涨跌额带正负号，首日中性）→ 成交量/成交额（中性）→ MA 尾行（线色，悬停根的值）；容器 min-width:150px 保证列对齐
+- **验证**：e2e tooltip 用例强化（开盘/收盘/涨跌额标签断言），全量 17/17 绿；浏览器实测两列对齐与着色规则符合预期
+- 涉及模块：frontend/shared/ui/kline, frontend/e2e
