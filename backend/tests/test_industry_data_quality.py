@@ -10,6 +10,7 @@ from app.services.industry_data_quality import (
     MetricQualityResult,
     aggregate_industry_quality,
     assess_metric_quality,
+    is_formal_signal_config_valid,
 )
 from app.services.industry_registry import (
     BROILER_INDUSTRY,
@@ -19,6 +20,9 @@ from app.services.industry_registry import (
     TIER_HIGHFREQ,
     IndustryConfig,
     MetricDef,
+    SignalVerificationConfig,
+    VerificationHorizonDef,
+    VerificationRuleDef,
 )
 
 
@@ -206,6 +210,56 @@ def test_formal_config_without_complete_gate_declarations_fails_closed():
     quality = aggregate_industry_quality(cfg, demo_ready_results())
     assert quality.status == "unavailable"
     assert quality.signal_ready is False
+
+
+def test_present_but_empty_verification_fails_closed():
+    cfg = replace(
+        PIG_INDUSTRY,
+        verification=SignalVerificationConfig(
+            methodology_version="",
+            supported_signals=(),
+            horizons=(),
+        ),
+    )
+    assert is_formal_signal_config_valid(cfg) is False
+    quality = aggregate_industry_quality(cfg, ready_pig_results_except())
+    assert quality.status == "unavailable"
+    assert quality.signal_ready is False
+
+
+def test_malformed_horizon_rule_fails_closed():
+    cfg = replace(
+        PIG_INDUSTRY,
+        verification=SignalVerificationConfig(
+            methodology_version="pig-cycle-v1",
+            supported_signals=(SIGNAL_BUY,),
+            horizons=(
+                VerificationHorizonDef(
+                    days=30,
+                    rules=(
+                        VerificationRuleDef(
+                            metric_key="unknown_metric",
+                            direction="sideways",
+                            threshold_pct=3.0,
+                            weight=0,
+                            grace_days=-1,
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+    assert is_formal_signal_config_valid(cfg) is False
+    quality = aggregate_industry_quality(cfg, ready_pig_results_except())
+    assert quality.status == "unavailable"
+    assert quality.signal_ready is False
+
+
+def test_pig_valid_config_and_ready_results_remain_signal_ready():
+    assert is_formal_signal_config_valid(PIG_INDUSTRY) is True
+    quality = aggregate_industry_quality(PIG_INDUSTRY, ready_pig_results_except())
+    assert quality.status == "healthy"
+    assert quality.signal_ready is True
 
 
 def test_duplicate_metric_results_are_rejected():

@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from app.services.industry_registry import IndustryConfig, MetricDef
+from app.services.industry_registry import (
+    SIGNAL_BUY,
+    SIGNAL_SELL,
+    IndustryConfig,
+    MetricDef,
+)
 
 _READY = "ready"
 
@@ -117,6 +122,44 @@ def assess_metric_quality(
     )
 
 
+def is_formal_signal_config_valid(cfg: IndustryConfig) -> bool:
+    """Return whether a formal signal registry declaration is complete and safe."""
+    required_metrics = [metric for metric in cfg.metrics if metric.required_for_signal]
+    verification = cfg.verification
+    if (
+        not required_metrics
+        or any(not metric.allow_signal_sources for metric in required_metrics)
+        or verification is None
+        or not verification.methodology_version.strip()
+        or not verification.supported_signals
+        or any(
+            signal not in {SIGNAL_BUY, SIGNAL_SELL} or signal not in cfg.position_templates
+            for signal in verification.supported_signals
+        )
+        or not verification.horizons
+    ):
+        return False
+
+    metric_keys = {metric.key for metric in cfg.metrics}
+    horizon_days: set[int] = set()
+    allowed_directions = {"increase", "decrease", "non_positive", "non_negative"}
+    for horizon in verification.horizons:
+        if horizon.days <= 0 or horizon.days in horizon_days or not horizon.rules:
+            return False
+        horizon_days.add(horizon.days)
+        if sum(rule.weight for rule in horizon.rules) != 100:
+            return False
+        if any(
+            rule.metric_key not in metric_keys
+            or rule.direction not in allowed_directions
+            or rule.weight <= 0
+            or rule.grace_days < 0
+            for rule in horizon.rules
+        ):
+            return False
+    return True
+
+
 def aggregate_industry_quality(
     cfg: IndustryConfig,
     results: list[MetricQualityResult],
@@ -144,11 +187,7 @@ def aggregate_industry_quality(
             details.append(missing)
 
     required_signal_metrics = [metric for metric in cfg.metrics if metric.required_for_signal]
-    formal_config_valid = (
-        bool(required_signal_metrics)
-        and cfg.verification is not None
-        and all(metric.allow_signal_sources for metric in required_signal_metrics)
-    )
+    formal_config_valid = is_formal_signal_config_valid(cfg)
     signal_ready = (
         cfg.signal_quality_required
         and formal_config_valid
