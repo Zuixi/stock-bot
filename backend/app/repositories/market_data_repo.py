@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import desc, func, nullslast, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.market_data import SectorMoneyflowSnapshot
@@ -53,9 +54,10 @@ async def upsert_sector_moneyflow(
             },
         )
     )
-    result = await db.execute(stmt)
+    # Core INSERT 的 execute 运行时返回 CursorResult（带 rowcount）；Result 存根无该属性
+    result = cast("CursorResult[Any]", await db.execute(stmt))
     await db.flush()
-    return result.rowcount
+    return int(result.rowcount)
 
 
 async def list_sector_moneyflow(
