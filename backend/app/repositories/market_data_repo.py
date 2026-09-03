@@ -16,6 +16,8 @@ from app.models.market_data import (
     DragonTigerEntry,
     NorthboundDaily,
     SectorMoneyflowSnapshot,
+    ShareFloat,
+    StockRepurchase,
 )
 from app.models.stock import Stock
 
@@ -231,5 +233,123 @@ async def list_block_trades(
             "symbol": trade.ts_code.split(".")[0], "name": stock_name,
             "price": trade.price, "volume": trade.volume, "amount": trade.amount,
             "buyer": trade.buyer, "seller": trade.seller,
+        })
+    return rows
+
+
+async def upsert_share_floats(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
+    """限售解禁明细入库（uq_share_floats_dedupe 冲突 DO NOTHING——计划快照，重复直接跳过）。
+
+    ann_date 可为 NULL：Postgres 唯一约束不判重 NULL → NULL ann_date 行可能重复入库（可接受）。
+    """
+    if not rows:
+        return 0
+    values = [
+        {
+            "ann_date": r.get("ann_date"), "float_date": r["float_date"], "ts_code": r["ts_code"],
+            "float_share": r.get("float_share"), "float_ratio": r.get("float_ratio"),
+            "holder_name": r.get("holder_name"), "share_type": r.get("share_type"),
+            "source": "tushare:share_float",
+        }
+        for r in rows
+    ]
+    stmt = (
+        pg_insert(ShareFloat)
+        .values(values)
+        .on_conflict_do_nothing(constraint="uq_share_floats_dedupe")
+    )
+    # Core INSERT 的 execute 运行时返回 CursorResult（带 rowcount）；Result 存根无该属性
+    result = cast("CursorResult[Any]", await db.execute(stmt))
+    await db.flush()
+    return int(result.rowcount)
+
+
+async def list_share_floats(
+    db: AsyncSession, start: date, end: date, symbol: str | None, limit: int = 30
+) -> list[dict]:
+    """解禁窗口内按解禁日期倒序（LEFT JOIN stocks 补股票名；symbol 过滤 6 位代码）。"""
+    sym = func.split_part(ShareFloat.ts_code, ".", 1)
+    stmt = (
+        select(ShareFloat, Stock.name.label("stock_name"))
+        .outerjoin(Stock, sym == Stock.symbol)
+        .where(ShareFloat.float_date.between(start, end))
+    )
+    if symbol:
+        stmt = stmt.where(sym == symbol)
+    stmt = stmt.order_by(nullslast(desc(ShareFloat.float_date))).limit(limit)
+    rows: list[dict] = []
+    for sf, stock_name in (await db.execute(stmt)).all():
+        rows.append({
+            "ann_date": sf.ann_date.isoformat() if sf.ann_date else None,
+            "float_date": sf.float_date.isoformat(), "ts_code": sf.ts_code,
+            "symbol": sf.ts_code.split(".")[0], "name": stock_name,
+            "float_share": sf.float_share, "float_ratio": sf.float_ratio,
+            "holder_name": sf.holder_name, "share_type": sf.share_type,
+        })
+    return rows
+
+
+async def upsert_repurchases(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
+    """股票回购入库（uq_stock_repurchases_dedupe 冲突 DO UPDATE——进度/数量/价格区间会修订）。
+
+    同批 (ann_date, ts_code, proc) 重复行 ON CONFLICT 不自处理，先保留末次出现去重。
+    """
+    if not rows:
+        return 0
+    deduped = list({
+        (r["ann_date"], r["ts_code"], r["proc"]): r for r in rows
+    }.values())
+    values = [
+        {
+            "ann_date": r["ann_date"], "ts_code": r["ts_code"],
+            "end_date": r.get("end_date"), "proc": r["proc"], "exp_date": r.get("exp_date"),
+            "vol": r.get("vol"), "amount": r.get("amount"),
+            "high_limit": r.get("high_limit"), "low_limit": r.get("low_limit"),
+            "source": "tushare:repurchase",
+        }
+        for r in deduped
+    ]
+    stmt = (
+        pg_insert(StockRepurchase)
+        .values(values)
+        .on_conflict_do_update(
+            constraint="uq_stock_repurchases_dedupe",
+            set_={
+                "end_date": pg_insert(StockRepurchase).excluded.end_date,
+                "exp_date": pg_insert(StockRepurchase).excluded.exp_date,
+                "vol": pg_insert(StockRepurchase).excluded.vol,
+                "amount": pg_insert(StockRepurchase).excluded.amount,
+                "high_limit": pg_insert(StockRepurchase).excluded.high_limit,
+                "low_limit": pg_insert(StockRepurchase).excluded.low_limit,
+            },
+        )
+    )
+    # Core INSERT 的 execute 运行时返回 CursorResult（带 rowcount）；Result 存根无该属性
+    result = cast("CursorResult[Any]", await db.execute(stmt))
+    await db.flush()
+    return int(result.rowcount)
+
+
+async def list_repurchases(
+    db: AsyncSession, start: date, end: date, symbol: str | None, limit: int = 30
+) -> list[dict]:
+    """回购窗口内按公告日期倒序（LEFT JOIN stocks 补股票名；symbol 过滤 6 位代码）。"""
+    sym = func.split_part(StockRepurchase.ts_code, ".", 1)
+    stmt = (
+        select(StockRepurchase, Stock.name.label("stock_name"))
+        .outerjoin(Stock, sym == Stock.symbol)
+        .where(StockRepurchase.ann_date.between(start, end))
+    )
+    if symbol:
+        stmt = stmt.where(sym == symbol)
+    stmt = stmt.order_by(nullslast(desc(StockRepurchase.ann_date))).limit(limit)
+    rows: list[dict] = []
+    for rp, stock_name in (await db.execute(stmt)).all():
+        rows.append({
+            "ann_date": rp.ann_date.isoformat(), "ts_code": rp.ts_code,
+            "symbol": rp.ts_code.split(".")[0], "name": stock_name,
+            "proc": rp.proc, "end_date": rp.end_date.isoformat() if rp.end_date else None,
+            "exp_date": rp.exp_date.isoformat() if rp.exp_date else None,
+            "vol": rp.vol, "amount": rp.amount,
         })
     return rows

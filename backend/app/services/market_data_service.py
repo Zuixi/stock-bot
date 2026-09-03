@@ -81,6 +81,13 @@ def _d(v: str) -> date:
     return datetime.strptime(str(v), "%Y%m%d").date()
 
 
+def _d_opt(v: Any) -> date | None:
+    """可空日期字段（share_float.ann_date / repurchase.end_date、exp_date 常为 NaN）。"""
+    if v is None or pd.isna(v):
+        return None
+    return _d(str(v))
+
+
 def _map_index_global_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "ts_code": row["ts_code"],
@@ -376,6 +383,44 @@ async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> li
     return rows
 
 
+def _map_share_float_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """share_float → share float rows（float_share 万股 / float_ratio %；ann_date 可空）。"""
+    rows: list[dict[str, Any]] = []
+    for rec in df.to_dict("records"):
+        rows.append({
+            "ann_date": _d_opt(rec.get("ann_date")), "float_date": _d(rec["float_date"]),
+            "ts_code": rec["ts_code"], "symbol": rec["ts_code"].split(".")[0],
+            "float_share": _f(rec.get("float_share")), "float_ratio": _f(rec.get("float_ratio")),
+            "holder_name": rec.get("holder_name"), "share_type": rec.get("share_type"),
+        })
+    return rows
+
+
+def _map_repurchase_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """repurchase → repurchase rows（vol 股 / amount 元；exp_date 常为 NaN → None）。"""
+    rows: list[dict[str, Any]] = []
+    for rec in df.to_dict("records"):
+        rows.append({
+            "ann_date": _d(rec["ann_date"]), "ts_code": rec["ts_code"],
+            "symbol": rec["ts_code"].split(".")[0],
+            "end_date": _d_opt(rec.get("end_date")), "proc": str(rec.get("proc") or "")[:16],
+            "exp_date": _d_opt(rec.get("exp_date")),
+            "vol": _f(rec.get("vol")), "amount": _f(rec.get("amount")),
+            "high_limit": _f(rec.get("high_limit")), "low_limit": _f(rec.get("low_limit")),
+        })
+    return rows
+
+
+def _dedupe_repurchase_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按去重键（ann_date+ts_code+proc）同批去重，保留末次出现。
+
+    ON CONFLICT 只处理与既有行的冲突、不处理同批 INSERT 内自冲突，须先在 Python 端去重。
+    """
+    return list({
+        (r["ann_date"], r["ts_code"], r["proc"]): r for r in rows
+    }.values())
+
+
 async def ingest_dragon_tiger(db: AsyncSession, trade_date: date | None = None) -> dict[str, int]:
     """盘后采集：指定交易日龙虎榜个股明细（top_list；None=今日上海日期，幂等 upsert）。"""
     client = _get_tushare()
@@ -474,6 +519,105 @@ async def get_block_trades(
     return rows[:limit]
 
 
+async def ingest_share_floats(db: AsyncSession, days: int = 7) -> dict[str, int]:
+    """盘后采集：近 N 日公告的限售解禁计划（share_float，TuShare 按 ann_date 过滤，DO NOTHING）。"""
+    client = _get_tushare()
+    start = (_today_sh() - timedelta(days=days)).strftime("%Y%m%d")
+    end = _today_sh().strftime("%Y%m%d")
+    df = await client.fetch_share_float(start_date=start, end_date=end)
+    upserted = await market_data_repo.upsert_share_floats(db, _map_share_float_rows(df))
+    logger.info("ingest_share_floats days=%s upserted=%s", days, upserted)
+    return {"upserted": upserted}
+
+
+async def ingest_repurchases(db: AsyncSession, days: int = 7) -> dict[str, int]:
+    """盘后采集：近 N 日股票回购进度（repurchase，进度/数量会修订 → DO UPDATE 幂等 upsert）。"""
+    client = _get_tushare()
+    start = (_today_sh() - timedelta(days=days)).strftime("%Y%m%d")
+    end = _today_sh().strftime("%Y%m%d")
+    df = await client.fetch_repurchase(start_date=start, end_date=end)
+    rows = _dedupe_repurchase_rows(_map_repurchase_rows(df))
+    upserted = await market_data_repo.upsert_repurchases(db, rows)
+    logger.info("ingest_repurchases days=%s upserted=%s", days, upserted)
+    return {"upserted": upserted}
+
+
+SHARE_FLOATS_CACHE_KEY = "market:share-floats:{start}:{end}:{symbol}"
+SHARE_FLOATS_TTL = 300
+SHARE_FLOATS_CACHE_LIMIT = 100  # 端点 limit 上限（le=100）：缓存全量再按请求切片
+
+
+async def get_share_floats(
+    cache: CacheClient | None,
+    start_iso: str | None = None,
+    end_iso: str | None = None,
+    symbol: str | None = None,
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    """解禁时间表（按 float_date 过滤，缺省近 30 天至未来 90 天——解禁是未来事件；Redis 300s）。"""
+    end = datetime.fromisoformat(end_iso).date() if end_iso else _today_sh() + timedelta(days=90)
+    start = (
+        datetime.fromisoformat(start_iso).date() if start_iso else _today_sh() - timedelta(days=30)
+    )
+    key = SHARE_FLOATS_CACHE_KEY.format(
+        start=start.isoformat(), end=end.isoformat(), symbol=symbol or "all"
+    )
+    if cache is not None:
+        cached = await cache.get(key)
+        if cached:
+            rows_cached: list[dict[str, Any]] = cached
+            return rows_cached[:limit]
+
+    from app.core.database import async_session_factory  # noqa: PLC0415
+
+    rows: list[dict[str, Any]] = []
+    async with async_session_factory() as db:
+        rows = await market_data_repo.list_share_floats(
+            db, start, end, symbol, SHARE_FLOATS_CACHE_LIMIT
+        )
+    if cache is not None and rows:
+        await cache.set(key, rows, ttl=SHARE_FLOATS_TTL)
+    return rows[:limit]
+
+
+REPURCHASES_CACHE_KEY = "market:repurchases:{start}:{end}:{symbol}"
+REPURCHASES_TTL = 300
+REPURCHASES_CACHE_LIMIT = 100  # 端点 limit 上限（le=100）：缓存全量再按请求切片
+
+
+async def get_repurchases(
+    cache: CacheClient | None,
+    start_iso: str | None = None,
+    end_iso: str | None = None,
+    symbol: str | None = None,
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    """股票回购进度（按 ann_date 过滤，缺省近 30 天至今；Redis 300s 共享缓存）。"""
+    end = datetime.fromisoformat(end_iso).date() if end_iso else _today_sh()
+    start = (
+        datetime.fromisoformat(start_iso).date() if start_iso else _today_sh() - timedelta(days=30)
+    )
+    key = REPURCHASES_CACHE_KEY.format(
+        start=start.isoformat(), end=end.isoformat(), symbol=symbol or "all"
+    )
+    if cache is not None:
+        cached = await cache.get(key)
+        if cached:
+            rows_cached2: list[dict[str, Any]] = cached
+            return rows_cached2[:limit]
+
+    from app.core.database import async_session_factory  # noqa: PLC0415
+
+    rows: list[dict[str, Any]] = []
+    async with async_session_factory() as db:
+        rows = await market_data_repo.list_repurchases(
+            db, start, end, symbol, REPURCHASES_CACHE_LIMIT
+        )
+    if cache is not None and rows:
+        await cache.set(key, rows, ttl=REPURCHASES_TTL)
+    return rows[:limit]
+
+
 async def _main() -> None:
     from app.core.database import async_session_factory  # noqa: PLC0415
 
@@ -494,10 +638,15 @@ async def _main() -> None:
             result = await ingest_dragon_tiger(db, _d(args[1]) if len(args) > 1 else None)
         elif job == "block_trades":
             result = await ingest_block_trades(db, _d(args[1]) if len(args) > 1 else None)
+        elif job == "share_floats":
+            result = await ingest_share_floats(db, days=int(args[1]) if len(args) > 1 else 7)
+        elif job == "repurchases":
+            result = await ingest_repurchases(db, days=int(args[1]) if len(args) > 1 else 7)
         else:
             raise SystemExit(
                 f"unknown job: {job}; available: global_index_daily, "
-                "backfill_global_index, sector_moneyflow, northbound, dragon_tiger, block_trades"
+                "backfill_global_index, sector_moneyflow, northbound, dragon_tiger, "
+                "block_trades, share_floats, repurchases"
             )
         await db.commit()
     print(job, "->", result)

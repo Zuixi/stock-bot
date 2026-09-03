@@ -17,8 +17,10 @@ from app.scheduler.jobs import (
     global_index_daily_job,
     industry_metrics_refresh_job,
     northbound_daily_job,
+    repurchase_daily_job,
     sector_moneyflow_job,
     securities_refresh_job,
+    share_float_daily_job,
     sse_post_close_job,
     sse_trade_hours_job,
 )
@@ -169,6 +171,24 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(day_of_week="mon-fri", hour=17, minute=0, timezone="Asia/Shanghai"),
         id="block_trade_daily",
         name="Block trade daily",
+        replace_existing=True,
+    )
+
+    # Share float (解禁) plans: Mon-Fri 17:30 post close (DO NOTHING dedupe)
+    scheduler.add_job(
+        share_float_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute=30, timezone="Asia/Shanghai"),
+        id="share_float_daily",
+        name="Share float daily",
+        replace_existing=True,
+    )
+
+    # Stock repurchases (回购): Mon-Fri 17:40 post close (DO UPDATE upsert)
+    scheduler.add_job(
+        repurchase_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute=40, timezone="Asia/Shanghai"),
+        id="repurchase_daily",
+        name="Repurchase daily",
         replace_existing=True,
     )
 

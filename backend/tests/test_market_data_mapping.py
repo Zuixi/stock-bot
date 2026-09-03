@@ -240,3 +240,48 @@ def test_map_block_trade_rows_dedupes_intra_batch_duplicates():
          "amount": 94.0, "buyer": "机构专用", "seller": "机构专用"},
     ])
     assert len(mds._dedupe_block_trade_rows(mds._map_block_trade_rows(df))) == 1
+
+
+def test_map_share_float_rows():
+    df = mds.pd.DataFrame([{
+        "ts_code": "002747.SZ", "ann_date": "20260901", "float_date": "20260902",
+        "float_share": 60000.0, "float_ratio": 0.0069, "holder_name": "朱樟兴",
+        "share_type": "股权激励限售流通",
+    }])
+    rows = mds._map_share_float_rows(df)
+    r = rows[0]
+    assert r["float_date"] == date(2026, 9, 2) and r["ann_date"] == date(2026, 9, 1)
+    assert r["float_share"] == 60000.0 and r["symbol"] == "002747"
+
+
+def test_map_share_float_rows_null_ann_date():
+    """share_float ann_date 可为 NULL：NaN → None（unique 约束对 NULL 不判重，见 repo）。"""
+    df = mds.pd.DataFrame([{
+        "ts_code": "002747.SZ", "ann_date": float("nan"), "float_date": "20260902",
+        "float_share": 60000.0, "float_ratio": float("nan"), "holder_name": "朱樟兴",
+        "share_type": "股权激励限售流通",
+    }])
+    r = mds._map_share_float_rows(df)[0]
+    assert r["ann_date"] is None and r["float_ratio"] is None
+
+
+def test_map_repurchase_rows_nan_exp_date():
+    df = mds.pd.DataFrame([{
+        "ts_code": "002120.SZ", "ann_date": "20260902", "end_date": "20260831", "proc": "完成",
+        "exp_date": float("nan"), "vol": 12074600.0, "amount": 87945900.0,
+        "high_limit": 8.05, "low_limit": 6.17,
+    }])
+    rows = mds._map_repurchase_rows(df)
+    r = rows[0]
+    assert r["proc"] == "完成" and r["exp_date"] is None and r["amount"] == 87945900.0
+    assert r["ann_date"] == date(2026, 9, 2) and r["end_date"] == date(2026, 8, 31)
+
+
+def test_map_repurchase_rows_dedupes_intra_batch_duplicates():
+    """回购同批 (ann_date, ts_code, proc) 重复行 ON CONFLICT 不自处理，映射后 Python 端去重。"""
+    df = mds.pd.DataFrame([
+        {"ts_code": "002120.SZ", "ann_date": "20260902", "proc": "完成", "vol": 12074600.0},
+        {"ts_code": "002120.SZ", "ann_date": "20260902", "proc": "完成", "vol": 12074700.0},
+    ])
+    rows = mds._dedupe_repurchase_rows(mds._map_repurchase_rows(df))
+    assert len(rows) == 1 and rows[0]["vol"] == 12074700.0  # 保留末次出现

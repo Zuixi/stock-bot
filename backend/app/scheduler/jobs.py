@@ -281,3 +281,35 @@ async def block_trade_daily_job() -> None:
         logger.info("Block trade daily done: %s", result)
     except Exception:
         logger.exception("Block trade daily job failed")
+
+
+async def share_float_daily_job() -> None:
+    """限售解禁每日计划（交易日 17:30 盘后，近 7 日窗口 DO NOTHING 去重）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_share_floats(db)
+            await db.commit()
+        logger.info("Share float daily done: %s", result)
+    except Exception:
+        logger.exception("Share float daily job failed")
+
+
+async def repurchase_daily_job() -> None:
+    """股票回购每日进度（交易日 17:40 盘后，近 7 日窗口 DO UPDATE 幂等 upsert）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_repurchases(db)
+            await db.commit()
+        logger.info("Repurchase daily done: %s", result)
+    except Exception:
+        logger.exception("Repurchase daily job failed")
