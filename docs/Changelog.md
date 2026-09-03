@@ -353,3 +353,7 @@
 ## 2026-09-03 - 市场数据面 Task 13 — 板块主力资金流卡 + 北向折线卡替换近似实现
 - 新增 `features/market/components/format.ts`（fmtYi/fmtSignedYi/fmtWanGu/fmtYiGu/fmtNorthYi 五个单位换算格式化器，null/undefined 统一返 "—"）；新增 `SectorMoneyflowCard`（行业/概念 Segmented 切换，`["sector-moneyflow", dimension]` staleTime+refetchInterval 双 60s 盘中轮询，TOP10 主力净流入横向柱图正红负绿，tooltip 带板块涨跌幅/主力净占比，非交易时段无数据展示"暂无资金流数据"空态）；新增 `NorthboundCard`（`["northbound", 30]` staleTime 5min，30 日净流入折线+零轴虚线，当日/近30日累计红绿着色，万元→亿换算）；市场页 Row2 由 CapitalFlowChart+HotSectors 换为 SectorMoneyflowCard+NorthboundCard，Row3 HotSectors 全宽（span=24）；删除近似实现 `CapitalFlowChart.tsx`（grep 确认仅 barrel+市场页引用）；`npm run build` 通过，活栈 `/market` 200，资金流卡 60s 自动刷新经 Network 请求复现（northbound 仅首载一次，符合无 refetchInterval 语义）
 - 涉及模块：frontend/features/market/components, frontend/pages/market
+
+## 2026-09-03 - 市场数据面 Task 14 — 数据面 Tab 区块（龙虎榜/大宗/解禁/回购/公告快讯）
+- 新增 `MarketDataBoard`（antd Tabs 懒挂载 5 pane，首激活才发 useQuery）；`dataFace/` 五组件：`DragonTigerTable`（涨跌幅/净买额 ±红绿+金额加粗，行点击跳个股）、`BlockTradeTable`（成交额万元→亿新增 `fmtWanYi`，买/卖营业部 ellipsis）、`ShareFloatTable`（解禁数量亿股、占总股本%、类型）、`RepurchaseTable`（进度 Tag 实施=blue/完成=green/其他=default、金额元→亿、数量股→万股内联换算）、`AnnouncementFeed`（List 时间+分类 Tag+证简称+PDF 新窗链接，30 条滚动）；统一表格规范 size=small/pagination=false/scroll.y=320/空态文案；顺手清理 SectorMoneyflowCard 遗留的死导入 `fmtYi`；活数据校准两处 rowKey 防撞键（解禁同股多持有人追加 holderName、大宗同股同价同买方追加 volume）；`npm run build` 通过，活栈 `/market` 五 Tab 实数据切换验证通过（大宗 9034.54万→0.90亿换算核对）
+- 涉及模块：frontend/features/market/components, frontend/pages/market
