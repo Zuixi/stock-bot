@@ -249,3 +249,35 @@ async def northbound_daily_job() -> None:
         logger.info("Northbound daily done: %s", result)
     except Exception:
         logger.exception("Northbound daily job failed")
+
+
+async def dragon_tiger_daily_job() -> None:
+    """龙虎榜每日个股明细（交易日 18:00 盘后，幂等 upsert 当日）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_dragon_tiger(db)
+            await db.commit()
+        logger.info("Dragon tiger daily done: %s", result)
+    except Exception:
+        logger.exception("Dragon tiger daily job failed")
+
+
+async def block_trade_daily_job() -> None:
+    """大宗交易每日明细（交易日 17:00 盘后，DO NOTHING 去重，重复采集直接跳过）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_block_trades(db)
+            await db.commit()
+        logger.info("Block trade daily done: %s", result)
+    except Exception:
+        logger.exception("Block trade daily job failed")

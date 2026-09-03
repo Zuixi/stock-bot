@@ -35,3 +35,31 @@ class SectorMoneyflowOut(BaseModel):
 class NorthboundPointOut(BaseModel):
     date: str
     net_amount: float | None = None  # 万元
+
+
+class DragonTigerOut(BaseModel):
+    trade_date: str
+    ts_code: str
+    symbol: str
+    name: str | None = None
+    close: float | None = None
+    pct_change: float | None = None
+    turnover_rate: float | None = None
+    amount: float | None = None      # 元
+    l_buy: float | None = None       # 元
+    l_sell: float | None = None      # 元
+    l_amount: float | None = None    # 元
+    net_amount: float | None = None  # 元
+    reason: str
+
+
+class BlockTradeOut(BaseModel):
+    trade_date: str
+    ts_code: str
+    symbol: str
+    name: str | None = None
+    price: float | None = None   # 元
+    volume: float | None = None  # 万股
+    amount: float | None = None  # 万元
+    buyer: str | None = None
+    seller: str | None = None
