@@ -21,6 +21,7 @@ class MetricQualityResult:
     metric_key: str
     status: str
     source: str | None
+    freq: str | None
     period: date | None
     age_days: int | None
     reason: str | None
@@ -53,6 +54,7 @@ def assess_metric_quality(
             metric_key=metric.key,
             status="missing",
             source=None,
+            freq=None,
             period=None,
             age_days=None,
             reason="no selected observation",
@@ -60,6 +62,7 @@ def assess_metric_quality(
         )
 
     source = row.source
+    freq = row.freq
     period = row.period
     age_days = (as_of - period).days
 
@@ -68,6 +71,7 @@ def assess_metric_quality(
             metric_key=metric.key,
             status="missing",
             source=source,
+            freq=freq,
             period=period,
             age_days=age_days,
             reason="selected observation has no value",
@@ -79,6 +83,7 @@ def assess_metric_quality(
             metric_key=metric.key,
             status="stale",
             source=source,
+            freq=freq,
             period=period,
             age_days=age_days,
             reason=f"observation is older than {metric.max_age_days} days",
@@ -90,6 +95,7 @@ def assess_metric_quality(
             metric_key=metric.key,
             status="source_rejected",
             source=source,
+            freq=freq,
             period=period,
             age_days=age_days,
             reason=f"source {source!r} is not allowed for formal signals",
@@ -105,6 +111,7 @@ def assess_metric_quality(
             metric_key=metric.key,
             status="partial",
             source=source,
+            freq=freq,
             period=period,
             age_days=age_days,
             reason=f"entity coverage is below {metric.min_entity_coverage:.0%}",
@@ -115,6 +122,7 @@ def assess_metric_quality(
         metric_key=metric.key,
         status=_READY,
         source=source,
+        freq=freq,
         period=period,
         age_days=age_days,
         reason=None,
@@ -183,6 +191,7 @@ def aggregate_industry_quality(
                 metric_key=metric.key,
                 status="missing",
                 source=None,
+                freq=None,
                 period=None,
                 age_days=None,
                 reason="quality result was not provided",

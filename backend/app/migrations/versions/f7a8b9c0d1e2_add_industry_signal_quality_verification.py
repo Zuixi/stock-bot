@@ -54,7 +54,6 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("industry_key", sa.String(length=32), nullable=False),
         sa.Column("event_date", sa.Date(), nullable=False),
-        sa.Column("event_sequence", sa.Integer(), nullable=False),
         sa.Column("previous_signal_type", sa.String(length=16), nullable=True),
         sa.Column("previous_phase", sa.String(length=16), nullable=True),
         sa.Column("signal_type", sa.String(length=16), nullable=False),
@@ -69,7 +68,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
-            "industry_key", "event_date", "event_sequence",
+            "industry_key", "event_date", "signal_type", "phase",
             name="uq_industry_signal_event",
         ),
     )

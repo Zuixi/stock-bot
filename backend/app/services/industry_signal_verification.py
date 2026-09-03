@@ -155,20 +155,16 @@ async def _build_cycle_snapshot(db: AsyncSession, cfg: IndustryConfig) -> CycleS
 
 
 def _event_start_snapshot(
-    cfg: IndustryConfig,
     signal_row: Any,
     basis_periods: dict[str, str],
     quality: IndustryQualityResult,
 ) -> dict[str, Any]:
     basis = signal_row.basis or {}
     metrics: dict[str, dict[str, Any]] = {}
-    provenance: dict[str, dict[str, str | None]] = {}
-    for item in quality.details:
-        metric = cfg.metric(item.metric_key)
-        provenance[item.metric_key] = {
-            "source": item.source,
-            "freq": metric.freq if metric is not None else None,
-        }
+    provenance = {
+        item.metric_key: {"source": item.source, "freq": item.freq}
+        for item in quality.details
+    }
     values = {
         "hog_corn_ratio": basis.get("ratio"),
         "hog_price": basis.get("price"),
@@ -197,6 +193,7 @@ async def ensure_signal_event(
     verification = cfg.verification
     if verification is None:
         return None
+    await repo.lock_signal_event_day(db, cfg.key, signal_row.effective_date)
     previous = await repo.latest_signal_event(db, cfg.key)
     if (
         previous is not None
@@ -235,7 +232,7 @@ async def ensure_signal_event(
     if event is None or signal_row.signal_type not in verification.supported_signals:
         return event
 
-    start_snapshot = _event_start_snapshot(cfg, signal_row, basis_periods, quality)
+    start_snapshot = _event_start_snapshot(signal_row, basis_periods, quality)
     for horizon in verification.horizons:
         await repo.upsert_signal_evaluation(
             db,

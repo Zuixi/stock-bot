@@ -31,6 +31,7 @@ def _result(metric_key: str, status: str = "ready") -> MetricQualityResult:
         metric_key=metric_key,
         status=status,
         source="derived",
+        freq="daily",
         period=date(2026, 9, 3),
         age_days=0,
         reason=None,
@@ -58,15 +59,18 @@ def demo_ready_results() -> list[MetricQualityResult]:
 
 def test_daily_metric_becomes_stale_after_max_age():
     metric = replace(PIG_INDUSTRY.metric("hog_price"), max_age_days=7)
-    row = SimpleNamespace(source="akshare_soozhu", period=date(2026, 8, 20), value=13.5)
+    row = SimpleNamespace(
+        source="akshare_soozhu", freq="weekly", period=date(2026, 8, 20), value=13.5
+    )
     result = assess_metric_quality(metric, row, as_of=date(2026, 9, 3), for_signal=True)
     assert result.status == "stale"
+    assert result.freq == "weekly"
     assert result.age_days == 14
 
 
 def test_mock_source_is_rejected_for_formal_signal():
     metric = PIG_INDUSTRY.metric("hog_price")
-    row = SimpleNamespace(source="mock", period=date(2026, 9, 3), value=13.5)
+    row = SimpleNamespace(source="mock", freq="daily", period=date(2026, 9, 3), value=13.5)
     result = assess_metric_quality(metric, row, as_of=date(2026, 9, 3), for_signal=True)
     assert result.status == "source_rejected"
 
@@ -98,7 +102,7 @@ def test_missing_row_is_reported_without_provenance():
 
 
 def test_none_value_is_missing_but_preserves_provenance():
-    row = SimpleNamespace(source="derived", period=date(2026, 9, 1), value=None)
+    row = SimpleNamespace(source="derived", freq="monthly", period=date(2026, 9, 1), value=None)
     result = assess_metric_quality(
         PIG_INDUSTRY.metric("sow_inventory_mom"),
         row,
@@ -112,7 +116,7 @@ def test_none_value_is_missing_but_preserves_provenance():
 
 
 def test_none_required_value_makes_pig_unavailable():
-    row = SimpleNamespace(source="derived", period=date(2026, 9, 1), value=None)
+    row = SimpleNamespace(source="derived", freq="monthly", period=date(2026, 9, 1), value=None)
     result = assess_metric_quality(
         PIG_INDUSTRY.metric("sow_inventory_mom"),
         row,
@@ -130,7 +134,7 @@ def test_none_required_value_makes_pig_unavailable():
 
 
 def test_zero_value_is_not_missing():
-    row = SimpleNamespace(source="derived", period=date(2026, 9, 1), value=0.0)
+    row = SimpleNamespace(source="derived", freq="monthly", period=date(2026, 9, 1), value=0.0)
     result = assess_metric_quality(
         PIG_INDUSTRY.metric("sow_inventory_mom"),
         row,
@@ -146,7 +150,7 @@ def test_company_metric_below_minimum_coverage_is_partial():
         coverage_scope="company",
         min_entity_coverage=0.8,
     )
-    row = SimpleNamespace(source="manual", period=date(2026, 9, 3), value=10.0)
+    row = SimpleNamespace(source="manual", freq="monthly", period=date(2026, 9, 3), value=10.0)
     result = assess_metric_quality(
         metric,
         row,
