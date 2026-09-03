@@ -315,3 +315,7 @@
 ## 2026-09-03 - 行业信号冻结频率与并发序列修复（Task 3 Fix 2）
 - 质量快照改为携带选中行真实频率，新增 g8 迁移演进 event_sequence，并用稳定 PostgreSQL 事务 advisory lock 串行化同日转换比较与序列分配。
 - 涉及模块：backend/services, backend/repositories, backend/migrations, backend/tests
+
+## 2026-09-03 - 行业信号质量验证 API 与调度
+- Dashboard 与只读 signal-events 端点现已暴露数据质量、历史信号事件和样本门控验证摘要，并在 17:20 扫描到期评价且于事务提交后失效缓存。
+- 涉及模块：backend/schemas、backend/services、backend/api、backend/workers、backend/scheduler、backend/tests

@@ -10,7 +10,7 @@ import calendar
 import logging
 from dataclasses import asdict
 from datetime import date
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,7 @@ from app.schemas.industry import (
     CompanyRowOut,
     CycleOut,
     DashboardOut,
+    DataQualityOut,
     IndustryBriefOut,
     IndustryCompaniesOut,
     IndustrySummaryOut,
@@ -34,8 +35,11 @@ from app.schemas.industry import (
     PhaseOut,
     PositionSliceOut,
     ReferenceOut,
+    SignalEvaluationOut,
+    SignalEventOut,
     SignalOut,
     TrendSeriesOut,
+    VerificationSummaryOut,
 )
 from app.services import cycle_engine
 from app.services.industry_mock_data import build_industry_mock_points
@@ -659,6 +663,90 @@ def _signal_out(row) -> SignalOut:
     )
 
 
+def _quality_out(row: Any | None, *, cfg: IndustryConfig) -> DataQualityOut:
+    if row is None:
+        return DataQualityOut(
+            as_of=date.today(),
+            status="demo" if not cfg.signal_quality_required else "unavailable",
+            signal_ready=False,
+        )
+    return DataQualityOut(
+        as_of=row.as_of,
+        status=row.status,
+        signal_ready=row.signal_ready,
+        ready_count=row.ready_count,
+        missing_count=row.missing_count,
+        stale_count=row.stale_count,
+        rejected_count=row.rejected_count,
+        partial_count=row.partial_count,
+        details=row.details or [],
+    )
+
+
+def _evaluation_out(row: Any) -> SignalEvaluationOut:
+    return SignalEvaluationOut(
+        horizon_days=row.horizon_days,
+        status=row.status,
+        target_date=row.target_date,
+        score=float(row.score) if row.score is not None else None,
+        criteria_results=row.criteria_results or [],
+        insufficient_reasons=row.insufficient_reasons or [],
+        evaluated_at=row.evaluated_at,
+    )
+
+
+def _verification_summary(evaluations: list[Any]) -> VerificationSummaryOut:
+    counts = {
+        "confirmed": 0,
+        "partially_confirmed": 0,
+        "invalidated": 0,
+        "inconclusive": 0,
+        "pending": 0,
+    }
+    for evaluation in evaluations:
+        if evaluation.status in counts:
+            counts[evaluation.status] += 1
+    completed_directional = (
+        counts["confirmed"] + counts["partially_confirmed"] + counts["invalidated"]
+    )
+    accuracy = None
+    if completed_directional >= 5:
+        accuracy = round(counts["confirmed"] / completed_directional * 100, 2)
+    return VerificationSummaryOut(
+        completed_directional_evaluations=completed_directional,
+        accuracy_pct=accuracy,
+        **counts,
+    )
+
+
+async def get_signal_events(
+    db: AsyncSession, industry_key: str, *, limit: int = 20
+) -> tuple[list[SignalEventOut], VerificationSummaryOut]:
+    cfg = _require_industry(industry_key)
+    events = await repo.list_signal_events(db, cfg.key, limit=limit)
+    evaluations = await repo.list_event_evaluations(db, [event.id for event in events])
+    by_event: dict[int, list[Any]] = {}
+    for evaluation in evaluations:
+        by_event.setdefault(evaluation.signal_event_id, []).append(evaluation)
+    mapped = [
+        SignalEventOut(
+            event_date=event.event_date,
+            signal_type=event.signal_type,
+            phase=event.phase,
+            previous_signal_type=event.previous_signal_type,
+            previous_phase=event.previous_phase,
+            rule_version=event.rule_version,
+            verification_supported=(
+                cfg.verification is not None
+                and event.signal_type in cfg.verification.supported_signals
+            ),
+            evaluations=[_evaluation_out(item) for item in by_event.get(event.id, [])],
+        )
+        for event in events
+    ]
+    return mapped, _verification_summary(evaluations)
+
+
 async def get_dashboard(
     db: AsyncSession, cache: CacheClient, industry_key: str
 ) -> DashboardOut:
@@ -703,6 +791,9 @@ async def get_dashboard(
         )
     history_rows = await repo.list_signals(db, cfg.key, limit=10)
     signal_history = [_signal_out(r) for r in history_rows]
+    quality_row = await repo.latest_quality_snapshot(db, cfg.key)
+    data_quality = _quality_out(quality_row, cfg=cfg)
+    signal_events, verification_summary = await get_signal_events(db, cfg.key, limit=20)
 
     dashboard = DashboardOut(
         industry=IndustryBriefOut(key=cfg.key, name=cfg.name, description=cfg.description,
@@ -714,6 +805,10 @@ async def get_dashboard(
         trends=trends,
         cycle=cycle,
         signal=_signal_out(signal_row) if signal_row is not None else None,
+        signal_is_stale=not data_quality.signal_ready and cfg.signal_quality_required,
+        data_quality=data_quality,
+        signal_events=signal_events,
+        verification_summary=verification_summary,
         signal_history=signal_history,
     )
     await cache.set(cache_key, dashboard.model_dump(mode="json"), ttl=DASHBOARD_CACHE_TTL)

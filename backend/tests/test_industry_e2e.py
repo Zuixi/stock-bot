@@ -112,6 +112,10 @@ async def test_dashboard_contract(client: AsyncClient):
     d = resp.json()
 
     assert d["data_source"] in ("mock", "akshare")
+    assert d["data_quality"]["status"] in {"healthy", "degraded", "unavailable", "demo"}
+    assert isinstance(d["signal_is_stale"], bool)
+    assert "signal_events" in d
+    assert "verification_summary" in d
     assert d["cycle"]["phase"] in PHASES
     assert len(d["cycle"]["phases"]) == 4
     assert d["signal"]["signal_type"] in SIGNALS
@@ -128,6 +132,29 @@ async def test_dashboard_contract(client: AsyncClient):
 
     assert d["strip"], "综合指标带不得为空"
     assert any(s["effective_date"] for s in d["signal_history"]), "信号历史不得为空"
+    for event in d["signal_events"]:
+        for evaluation in event["evaluations"]:
+            assert {"horizon_days", "status", "target_date", "score", "criteria_results"} <= set(
+                evaluation
+            )
+
+
+async def test_signal_events_endpoint_is_read_only_ordered_and_validates_limit(
+    client: AsyncClient,
+):
+    before = await client.get("/api/v1/industries/pig/signal-events?limit=20")
+    assert before.status_code == 200
+    events = before.json()
+    event_dates = [item["event_date"] for item in events]
+    assert event_dates == sorted(event_dates, reverse=True)
+
+    repeated = await client.get("/api/v1/industries/pig/signal-events?limit=20")
+    assert repeated.status_code == 200
+    assert repeated.json() == events
+
+    assert (await client.get("/api/v1/industries/nope/signal-events")).status_code == 404
+    assert (await client.get("/api/v1/industries/pig/signal-events?limit=0")).status_code == 422
+    assert (await client.get("/api/v1/industries/pig/signal-events?limit=101")).status_code == 422
 
 
 async def test_history_limit_and_month_end_dual_freq(client: AsyncClient):

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -80,6 +80,60 @@ class IndustryBriefOut(BaseModel):
     sw_l3_codes: list[str]
 
 
+class MetricQualityOut(BaseModel):
+    metric_key: str
+    status: str
+    source: str | None = None
+    freq: str | None = None
+    period: date | None = None
+    age_days: int | None = None
+    reason: str | None = None
+    entity_coverage: float | None = None
+
+
+class DataQualityOut(BaseModel):
+    as_of: date
+    status: str
+    signal_ready: bool
+    ready_count: int = 0
+    missing_count: int = 0
+    stale_count: int = 0
+    rejected_count: int = 0
+    partial_count: int = 0
+    details: list[MetricQualityOut] = []
+
+
+class SignalEvaluationOut(BaseModel):
+    horizon_days: int
+    status: str
+    target_date: date
+    score: float | None = None
+    criteria_results: list[dict] = []
+    insufficient_reasons: list[str] = []
+    evaluated_at: datetime | None = None
+
+
+class SignalEventOut(BaseModel):
+    event_date: date
+    signal_type: str
+    phase: str
+    previous_signal_type: str | None = None
+    previous_phase: str | None = None
+    rule_version: str
+    verification_supported: bool
+    evaluations: list[SignalEvaluationOut] = []
+
+
+class VerificationSummaryOut(BaseModel):
+    completed_directional_evaluations: int = 0
+    confirmed: int = 0
+    partially_confirmed: int = 0
+    invalidated: int = 0
+    inconclusive: int = 0
+    pending: int = 0
+    accuracy_pct: float | None = None
+
+
 class DashboardOut(BaseModel):
     industry: IndustryBriefOut
     as_of: date
@@ -89,6 +143,10 @@ class DashboardOut(BaseModel):
     trends: dict[str, TrendSeriesOut]
     cycle: CycleOut | None = None
     signal: SignalOut | None = None
+    signal_is_stale: bool = False
+    data_quality: DataQualityOut
+    signal_events: list[SignalEventOut] = []
+    verification_summary: VerificationSummaryOut
     signal_history: list[SignalOut]
 
 

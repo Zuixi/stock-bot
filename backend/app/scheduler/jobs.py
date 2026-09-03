@@ -7,6 +7,11 @@ import logging
 import random
 from datetime import date, datetime, timedelta
 
+from app.core.database import async_session_factory
+from app.core.redis import CacheClient, get_redis_pool
+from app.services.industry_metric_service import get_all_industries
+from app.services.industry_signal_verification import run_due_signal_evaluations
+
 logger = logging.getLogger(__name__)
 
 JITTER_SEC = 30
@@ -91,7 +96,11 @@ async def _fetch_yesterday_daily_quotes() -> None:
         async with async_session_factory() as db:
             result = await service.ingest_daily_quotes(db, trade_date)
             await db.commit()
-            logger.info("Daily quotes backfill: trade_date=%s upserted=%d", trade_date, result.get("upserted", 0))
+            logger.info(
+                "Daily quotes backfill: trade_date=%s upserted=%d",
+                trade_date,
+                result.get("upserted", 0),
+            )
     except Exception:
         logger.exception("Daily quotes backfill failed for trade_date=%s", trade_date)
 
@@ -110,14 +119,21 @@ async def _fetch_yesterday_daily_basic() -> None:
     try:
         async with async_session_factory() as db:
             if await daily_basic_repo.trade_date_exists(db, yesterday):
-                logger.info("Skipping daily_basic backfill — trade_date=%s already exists", trade_date)
+                logger.info(
+                    "Skipping daily_basic backfill — trade_date=%s already exists",
+                    trade_date,
+                )
                 return
 
         service = TuShareIngestService()
         async with async_session_factory() as db:
             result = await service.ingest_daily_basic(db, trade_date)
             await db.commit()
-            logger.info("Daily basic backfill: trade_date=%s upserted=%d", trade_date, result.get("upserted", 0))
+            logger.info(
+                "Daily basic backfill: trade_date=%s upserted=%d",
+                trade_date,
+                result.get("upserted", 0),
+            )
     except Exception:
         logger.exception("Daily basic backfill failed for trade_date=%s", trade_date)
 
@@ -156,7 +172,6 @@ async def daily_basic_backfill_job() -> None:
 
 async def industry_metrics_refresh_job() -> None:
     """Refresh industry research metrics (17:05 Mon-Fri, after quote backfills)."""
-    from app.core.database import async_session_factory  # noqa: PLC0415
     from app.services import industry_metric_service  # noqa: PLC0415
 
     logger.info("Industry metrics refresh job triggered")
@@ -164,12 +179,37 @@ async def industry_metrics_refresh_job() -> None:
         async with async_session_factory() as db:
             result = await industry_metric_service.ingest_industry_metrics(db, "pig")
             await db.commit()
+            cache = CacheClient(await get_redis_pool())
+            await cache.delete("industry:pig:dashboard")
         logger.info(
             "Industry metrics refresh done: source=%s upserted=%s signal=%s",
             result.get("source"), result.get("upserted"), result.get("signal"),
         )
     except Exception:
         logger.exception("Industry metrics refresh failed")
+
+
+async def industry_signal_evaluation_job() -> None:
+    """Evaluate due industry signal horizons (17:20 Mon-Fri)."""
+    logger.info("Industry signal evaluation job triggered")
+    for cfg in get_all_industries():
+        if cfg.verification is None:
+            continue
+        try:
+            async with async_session_factory() as db:
+                result = await run_due_signal_evaluations(db, cfg, as_of=date.today())
+                await db.commit()
+                cache = CacheClient(await get_redis_pool())
+                await cache.delete(f"industry:{cfg.key}:dashboard")
+            logger.info(
+                "Industry signal evaluation done: industry=%s due=%s evaluated=%s pending=%s",
+                cfg.key,
+                result.due,
+                result.evaluated,
+                result.pending,
+            )
+        except Exception:
+            logger.exception("Industry signal evaluation failed: industry=%s", cfg.key)
 
 
 async def securities_refresh_job() -> None:

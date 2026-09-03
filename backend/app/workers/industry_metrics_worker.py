@@ -10,6 +10,7 @@ import logging
 import uuid
 
 from app.core.database import async_session_factory
+from app.core.redis import CacheClient, get_redis_pool
 from app.services import industry_metric_service
 from app.workers.base_worker import BaseWorker
 
@@ -43,4 +44,6 @@ class IndustryMetricsWorker(BaseWorker):
                 db, industry_key=industry_key, source=source, months=months
             )
             await db.commit()
+            cache = CacheClient(await get_redis_pool())
+            await cache.delete(f"industry:{industry_key}:dashboard")
         return {"status": "completed", **result}
