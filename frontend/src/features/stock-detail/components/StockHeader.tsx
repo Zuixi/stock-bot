@@ -60,7 +60,7 @@ export function StockHeader({ stock }: Props) {
           </Descriptions.Item>
         </Descriptions>
         <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-          数据截至 {stock.asof}
+          数据截至 {stock.latestQuoteDate ?? "--"}
         </Typography.Text>
       </div>
       <Button

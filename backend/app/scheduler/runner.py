@@ -16,6 +16,7 @@ from app.scheduler.jobs import (
     securities_refresh_job,
     sse_post_close_job,
     sse_trade_hours_job,
+    universe_refresh_job,
 )
 
 logging.basicConfig(
@@ -126,6 +127,21 @@ def create_scheduler() -> AsyncIOScheduler:
         ),
         id="securities_refresh",
         name="Securities (ETF/CB) refresh",
+        replace_existing=True,
+    )
+
+    # Stock universe metadata: 09:00 Sat weekly (non-trading day, low load;
+    # keeps stocks.asof / stocks_history snapshots from freezing forever)
+    scheduler.add_job(
+        universe_refresh_job,
+        CronTrigger(
+            day_of_week="sat",
+            hour=9,
+            minute=0,
+            timezone="Asia/Shanghai",
+        ),
+        id="universe_refresh",
+        name="Universe metadata refresh",
         replace_existing=True,
     )
 

@@ -70,6 +70,8 @@ export interface StockRecord {
   turnoverRate?: number;
   detail?: Record<string, unknown>;
   asof: string;
+  /** 最新行情的 trade_date（行情口径"数据截至"）；asof 是名录 ingest 时间，勿混用 */
+  latestQuoteDate?: string;
 }
 
 export interface KLinePoint {

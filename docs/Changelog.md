@@ -316,3 +316,7 @@
 - **审计**：临时库灌入 repo 种子与活库逐行 diff——sw_industry_classes 511 / sw_industry_members 4430 / stock_custom_sw_tags 1439 三表完全一致，全新 docker 部署分类数据与当前显示一致
 - **发现并修复**：data_init 的 overlay 加载被 is_sw_data_loaded 门控——先于 overlay 的老部署升级后 SW 表已有数据、跳过导入、1439 行永不生效；改为加性幂等的 overlay 每次 startup 无条件尝试（日志可观测）
 - 涉及模块：backend/app/services/data_init
+
+## 2026-09-04 - 个股页"数据截至"口径修复 + 每周名录刷新
+- 修复个股头部"数据截至"错绑名录 ingest 时间（stocks.asof 冻结在 5 月 8 日）的问题：enriched 响应新增 latest_quote_date（最新行情 trade_date），前端改绑并格式化为 YYYY-MM-DD；调度器新增每周六 09:00 universe 元数据刷新任务，stocks.asof 不再永久冻结。
+- 涉及模块：backend/schemas、backend/services、backend/scheduler、backend/tests、frontend/shared/api、frontend/shared/types、frontend/features/stock-detail、frontend/e2e
