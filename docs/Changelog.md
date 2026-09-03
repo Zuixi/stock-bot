@@ -299,3 +299,7 @@
 - **修复**：`klineOption.ts` formatter 重写为参考图 1 的两列式逐行布局（灰标签左 + 右对齐 tabular-nums 语义色数值右）：日期标题行 → 开盘/收盘/最高/最低/涨跌额/涨跌幅（随当日涨跌着色，涨跌额带正负号，首日中性）→ 成交量/成交额（中性）→ MA 尾行（线色，悬停根的值）；容器 min-width:150px 保证列对齐
 - **验证**：e2e tooltip 用例强化（开盘/收盘/涨跌额标签断言），全量 17/17 绿；浏览器实测两列对齐与着色规则符合预期
 - 涉及模块：frontend/shared/ui/kline, frontend/e2e
+
+## 2026-09-03 - 行业信号质量与验证持久化（Task 2）
+- 新增行业数据质量快照、不可变信号事件和 30/90 日信号验证 ORM/迁移及幂等 repository；事件冲突只忽略不改写，质量与验证按命名唯一约束 upsert，查询层保持事务提交权在调用方。
+- 涉及模块：backend/models, backend/migrations, backend/repositories, backend/tests

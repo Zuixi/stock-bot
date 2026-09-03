@@ -14,6 +14,7 @@ from datetime import date, datetime
 from sqlalchemy import (
     Date,
     DateTime,
+    ForeignKey,
     Index,
     Numeric,
     String,
@@ -114,6 +115,97 @@ class IndustrySignal(Base):
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class IndustryDataQualitySnapshot(Base):
+    """Auditable, idempotent quality assessment for one industry and date."""
+
+    __tablename__ = "industry_data_quality_snapshots"
+    __table_args__ = (
+        UniqueConstraint("industry_key", "as_of", name="uq_industry_quality_date"),
+        Index("idx_industry_quality_lookup", "industry_key", "as_of"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    industry_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    as_of: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    signal_ready: Mapped[bool] = mapped_column(nullable=False)
+    ready_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    missing_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    stale_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    rejected_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    partial_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    details: Mapped[list] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class IndustrySignalEvent(Base):
+    """Immutable baseline or transition in an industry's effective cycle signal."""
+
+    __tablename__ = "industry_signal_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "industry_key", "event_date", "signal_type", "phase",
+            name="uq_industry_signal_event",
+        ),
+        Index("idx_industry_signal_events_lookup", "industry_key", "event_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    industry_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_date: Mapped[date] = mapped_column(Date, nullable=False)
+    previous_signal_type: Mapped[str | None] = mapped_column(String(16))
+    previous_phase: Mapped[str | None] = mapped_column(String(16))
+    signal_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    phase: Mapped[str] = mapped_column(String(16), nullable=False)
+    basis: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    basis_periods: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    quality_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    rule_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class IndustrySignalEvaluation(Base):
+    """Idempotent frozen-methodology evaluation for a signal event horizon."""
+
+    __tablename__ = "industry_signal_evaluations"
+    __table_args__ = (
+        UniqueConstraint(
+            "signal_event_id", "horizon_days", "methodology_version",
+            name="uq_industry_signal_evaluation",
+        ),
+        Index("idx_industry_signal_evaluations_due", "status", "target_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    signal_event_id: Mapped[int] = mapped_column(
+        ForeignKey("industry_signal_events.id", ondelete="CASCADE"), nullable=False
+    )
+    horizon_days: Mapped[int] = mapped_column(nullable=False)
+    methodology_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    rules: Mapped[list] = mapped_column(JSONB, nullable=False)
+    start_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    end_snapshot: Mapped[dict | None] = mapped_column(JSONB)
+    criteria_results: Mapped[list | None] = mapped_column(JSONB)
+    insufficient_reasons: Mapped[list | None] = mapped_column(JSONB)
+    score: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 

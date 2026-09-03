@@ -5,10 +5,13 @@ from app.models.daily_basic import DailyBasicIndicator
 from app.models.feature import StockFeature
 from app.models.index_daily import IndexDaily
 from app.models.industry_research import (
+    IndustryDataQualitySnapshot,
     IndustryKnowledge,
     IndustryMetric,
     IndustryReferencePoint,
     IndustrySignal,
+    IndustrySignalEvaluation,
+    IndustrySignalEvent,
 )
 from app.models.quote import DailyQuote
 from app.models.securities import CbDaily, FundEtfDaily
@@ -36,6 +39,9 @@ __all__ = [
     "IndustryMetric",
     "IndustryReferencePoint",
     "IndustrySignal",
+    "IndustryDataQualitySnapshot",
+    "IndustrySignalEvent",
+    "IndustrySignalEvaluation",
     "IndustryKnowledge",
     "FundEtfDaily",
     "CbDaily",
