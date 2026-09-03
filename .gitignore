@@ -56,3 +56,6 @@ data/*
 backend/.coverage
 frontend/tsconfig.tsbuildinfo
 !**/data/sw_custom_tags_seed.sql
+
+# git worktrees
+.worktrees/
