@@ -12,3 +12,4 @@ data/*
 tests/
 scripts/
 docs/
+!data/sw_custom_tags_seed.sql
