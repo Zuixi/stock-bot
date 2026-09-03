@@ -73,7 +73,7 @@ export interface KlineChartProps {   // defaultRange 删除，其余不变
 }
 ```
 
-- [ ] **Step 1: `klineMath.ts` 重构**——删除 `MA_WARMUP_CALENDAR_DAYS`、`cropToRange`、`buildAxisLabels` 及其实现；新增：
+- [x] **Step 1: `klineMath.ts` 重构**——删除 `MA_WARMUP_CALENDAR_DAYS`、`cropToRange`、`buildAxisLabels` 及其实现；新增：
 
 ```ts
 export type KlineFreq = "day" | "week" | "month";
@@ -112,7 +112,7 @@ export function aggregateDaily(points: KLinePoint[], freq: KlineFreq): KLinePoin
 }
 ```
 
-- [ ] **Step 2: `klineOption.ts` 布局改版**——`buildKlineOption` 内部修改（签名不变）：
+- [x] **Step 2: `klineOption.ts` 布局改版**——`buildKlineOption` 内部修改（签名不变）：
   1. `const dates = points.map((p) => p.date);`（原始 ISO 串，删除 buildAxisLabels 调用与 import）
   2. 两 xAxis：`data: dates`，`axisLabel: { show: false }`（主图与成交量均不显示日期）
   3. dataZoom 改为：
@@ -133,7 +133,7 @@ dataZoom: [
   4. grid 微调释放日期轴空间：grid1 `{ left: 60, right: 20, top: "68%", height: "16%" }`（原 66%/13%）；import 改从 `./klineMath` 引 `DEFAULT_TAIL_BARS`，删 `buildAxisLabels` import。
   5. tooltip formatter 逻辑不动（`p.date` 已是全日期）。
 
-- [ ] **Step 3: `KlineChart.tsx` 容器改版**：
+- [x] **Step 3: `KlineChart.tsx` 容器改版**：
   1. import 清理：删 `MA_WARMUP_CALENDAR_DAYS/cropToRange`，加 `aggregateDaily/DEFAULT_TAIL_BARS/KlineFreq`；删 `RANGES` 常量与 `rangeCutoff` 函数；删 `Tag` import（MA chips 移除）。
   2. state：`const [freq, setFreq] = useState<KlineFreq>("day");` 替换 range（adjust/visibleMas 保留）。
   3. 查询（freq 不进 key——聚合纯前端）：
@@ -201,12 +201,12 @@ const maSeries = useMemo(() => {
 
   8. `KlineChartProps` 删除 `defaultRange` 字段；resetZoom 保留 `dispatchAction({ type: "dataZoom", start: 0, end: 100 })`。
 
-- [ ] **Step 4: 构建验证**
+- [x] **Step 4: 构建验证**
 
 Run: `cd frontend && npm run build`
 Expected: 通过（若 `KlineFreq` 从 barrel `export *` 透出与现有导出冲突则调整 barrel）
 
-- [ ] **Step 5: 重写 e2e 图表用例**（`frontend/e2e/kline.spec.ts` 全文件替换）：
+- [x] **Step 5: 重写 e2e 图表用例**（`frontend/e2e/kline.spec.ts` 全文件替换）：
 
 ```ts
 import { test, expect as baseExpect } from "@playwright/test";
@@ -279,12 +279,12 @@ test("复权开关：数据就绪后可切换前复权/不复权", async ({ page
 
 **注意**：上方 `page2`/`segItem` 骨架是示意（helper 形态），写入文件时整合为文件内局部函数（`const segItem = (card: Locator, text: string) => card.locator(...)`，从 `@playwright/test` import `Locator` 类型），四个用例共用；不要保留 `page2` 占位函数。
 
-- [ ] **Step 6: 重建前端 + 全量 e2e**
+- [x] **Step 6: 重建前端 + 全量 e2e**
 
 Run: `cd frontend && npm run build && cd .. && docker compose build frontend && docker compose up -d frontend && cd frontend && npx playwright test`
 Expected: 全部通过（含 research/navigation 既有用例）。周K 聚合后 MA 行断言若因 warm 数据不足显示 `--` 失败，检查正则（`/^MA5\s\d/` 要求有数值——600519 日线 800+ 根全量，MA 必有值；失败多半是定位器命中多个 span，用 `.first()` 收窄）。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git checkout -- frontend/tsconfig.tsbuildinfo 2>/dev/null
@@ -323,14 +323,14 @@ open: item.open ?? undefined, high: item.high ?? undefined, low: item.low ?? und
 prevClose: item.prev_close ?? undefined, turnoverRate: item.turnover_rate ?? undefined,
 ```
 
-- [ ] **Step 1: 后端 schema + 查询**——`StockEnrichedOut` 按上方追加 3 字段；grep `get_stocks_enriched_by_symbols`（market_service.py），在其 LATERAL/查询构造处为最新行情行补选 `open/high/low` 三列并填入出参（模式照同函数内 `prev_close` 的现有取法：同一条 daily_quotes 最新行）。改完跑：
+- [x] **Step 1: 后端 schema + 查询**——`StockEnrichedOut` 按上方追加 3 字段；grep `get_stocks_enriched_by_symbols`（market_service.py），在其 LATERAL/查询构造处为最新行情行补选 `open/high/low` 三列并填入出参（模式照同函数内 `prev_close` 的现有取法：同一条 daily_quotes 最新行）。改完跑：
 
 Run: `cd backend && uv run pytest`
 Expected: 既有全绿（基线 19 环境失败不变）
 
-- [ ] **Step 2: 前端类型 + 映射**——按 Interfaces 追加（`BackendStockEnriched` 接口同步加 `open?/high?/low?`）。
+- [x] **Step 2: 前端类型 + 映射**——按 Interfaces 追加（`BackendStockEnriched` 接口同步加 `open?/high?/low?`）。
 
-- [ ] **Step 3: StockHeader 网格改版**——`Descriptions size="small" column={4}` 两行 8 项替换现有 2 项（数值全部 `NumberText`，undefined 显示维持现状能力；换手率无适配单位则内联 `?? "--"` 后 `toFixed(2) + "%"`）：
+- [x] **Step 3: StockHeader 网格改版**——`Descriptions size="small" column={4}` 两行 8 项替换现有 2 项（数值全部 `NumberText`，undefined 显示维持现状能力；换手率无适配单位则内联 `?? "--"` 后 `toFixed(2) + "%"`）：
 
 ```tsx
 <Descriptions size="small" column={4} style={{ marginTop: 8 }}>
@@ -349,7 +349,7 @@ Expected: 既有全绿（基线 19 环境失败不变）
 
 （若 NumberText 不接受 undefined，先 `grep -n "NumberText" frontend/src/shared/ui/index.ts` 读其实现按实际签名适配，保持 "--" 空态。）
 
-- [ ] **Step 4: e2e 追加头部用例**（kline.spec.ts 末尾）：
+- [x] **Step 4: e2e 追加头部用例**（kline.spec.ts 末尾）：
 
 ```ts
 test("个股头部：8项指标网格含今开/昨收/换手率", async ({ page }) => {
@@ -361,9 +361,9 @@ test("个股头部：8项指标网格含今开/昨收/换手率", async ({ page 
 });
 ```
 
-- [ ] **Step 5: 重建验证**——后端 `docker compose build api scheduler worker && docker compose up -d api scheduler worker`；前端 build + rebuild frontend；实机 curl 确认新字段下发（600519 enriched 含非空 open/high/low）；`cd frontend && npx playwright test` 全绿。
+- [x] **Step 5: 重建验证**——后端 `docker compose build api scheduler worker && docker compose up -d api scheduler worker`；前端 build + rebuild frontend；实机 curl 确认新字段下发（600519 enriched 含非空 open/high/low）；`cd frontend && npx playwright test` 全绿。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git checkout -- frontend/tsconfig.tsbuildinfo 2>/dev/null
@@ -380,11 +380,11 @@ git commit -m "feat: 个股头部8项指标网格 — 后端enriched补今开/�
 - Modify: `docs/references/best-practices.md`
 - Modify: 本计划文档（勾选）
 
-- [ ] **Step 1: 全量回归**——`cd backend && uv run pytest`（基线对比零回归）+ `cd frontend && npm run build` + `npx playwright test`（全绿）。
+- [x] **Step 1: 全量回归**——`cd backend && uv run pytest`（基线对比零回归）+ `cd frontend && npm run build` + `npx playwright test`（全绿）。
 
-- [ ] **Step 2: 文档**——Changelog 追加 P4 条目（MA对比度根因/频率Tab语义/头部8项/默认120根，格式照既有）；best-practices 追加一条：`antd CheckableTag 选中态自带主题色实底，inline 彩色文字色会与之撞色（对比度~1.2:1）——彩色图例类控件用图内绝对定位文本行（线色文字 on 白底），不要用 CheckableTag 承载。`（先 grep 去重）。
+- [x] **Step 2: 文档**——Changelog 追加 P4 条目（MA对比度根因/频率Tab语义/头部8项/默认120根，格式照既有）；best-practices 追加一条：`antd CheckableTag 选中态自带主题色实底，inline 彩色文字色会与之撞色（对比度~1.2:1）——彩色图例类控件用图内绝对定位文本行（线色文字 on 白底），不要用 CheckableTag 承载。`（先 grep 去重）。
 
-- [ ] **Step 3: 勾选计划 checkbox + Commit**
+- [x] **Step 3: 勾选计划 checkbox + Commit**
 
 ```bash
 git add docs/Changelog.md docs/references/best-practices.md plans/2026-09-03-kline-p4-ui-iteration.md

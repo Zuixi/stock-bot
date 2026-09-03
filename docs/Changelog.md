@@ -272,3 +272,15 @@
 - **问题（I1）**：复权禁用态 Tooltip 承诺"稍后自动可用"但 5min staleTime 内不会自动重取——`useQuery` 加 `refetchInterval`（`adjustAvailable === false` 时 10s 轮询，就绪即停）
 - **验证**：`tests/test_kline_adjust.py` 8/8（新增冷却 key 契约测试）；全量 pytest 126 passed / 19 基线环境性失败零回归；docker 重建后跨日自愈模拟——置 NULL 最新行 → qfq `adjust_available:False` 触发回补（updated=808，冷却 key TTL≈300）→ 20s 后 `available:True` 库内因子恢复；冷却期内重复请求不重触；容器内重灌 09-01 既有日期（因子 None）COALESCE 保住原值；frontend build + playwright 16/16
 - 涉及模块：backend/repositories/quote_repo, backend/services/quote_service, backend/api/v1/stocks, frontend/shared/ui/kline, backend/tests
+
+## 2026-09-03 - K线P4 图表区重构（频率Tab + 图内MA行 + 去日期轴）
+- 共享 `KlineChart` 按主流行情终端风格重构：频率 Segmented（日K/周K/月K）替换范围选择，周/月K 纯前端聚合（`aggregateDaily`：open=组首、close=组末、high/low=极值、volume/amount=求和；freq 不进 queryKey、fetcher 固定 3650 天=库内全量，切换零请求）；MA 数值行从 Card extra 的 CheckableTag 移入图表左上角绝对定位 span 行（选中=线色带最新值、未选=灰 #9ca3af、可点击切换，修复 CheckableTag 对比度问题）；主图/成交量两轴 `axisLabel.show=false` 去掉成交量区日期轴，x data 用原始 ISO 日期串由 tooltip 直接消费；dataZoom 改 startValue/endValue 按末尾 `DEFAULT_TAIL_BARS=120` 根定初始视图（TradingView 式：数据全量、视图局部、slider 漫游），grid2 由 66%/13% 调至 68%/16%；删除 `MA_WARMUP_CALENDAR_DAYS/cropToRange/buildAxisLabels` 导出与 `defaultRange` prop（两个页面调用点无引用，零破坏）。验证：npm run build 通过；docker 重建后 playwright 全量 16 passed / 4.7s（首跑 15/16——MA60 off 态 span 文本为 "MA60 "，JSX 保留尾部空格致 `^MA60$` 正则不命中，改 `\s?$` 后全绿）
+- 涉及模块：frontend/shared/ui/kline, frontend/e2e
+
+## 2026-09-03 - K线P4 UI迭代收官（行情终端风格 + 个股头部8项网格）
+- **MA对比度根因与图内数值行方案**：MA 开关原用 antd CheckableTag 承载，其选中态自带主题色实底，与 inline 均线色文字撞色（对比度 ~1.2:1）——改为图表左上角绝对定位文本行（选中=线色文字带最新值、未选=灰 #9ca3af、可点击切换），线色文字落在白底图区对比度天然达标（教训沉淀 best-practices）
+- **频率Tab语义与前端聚合**：日K/周K/月K 是同一份日行情的"重新分桶"而非不同数据窗口——周/月K 由 `aggregateDaily` 纯前端聚合（open=组首/close=组末/high-low=极值/量额=求和），freq 不进 queryKey、fetcher 固定 3650 天拉库内全量，切换零请求零延迟；替代原"1/3/6月/1年"范围选择
+- **头部8项**：个股头部升级 `Descriptions column={4}` 两行 8 项网格（今开/最高/最低/昨收/成交量/成交额/换手率/总市值），后端 enriched 查询补选最新行情行 open/high/low 三列（模式照既有 prev_close 同行取法）
+- **默认120根**：初始视图改 dataZoom startValue/endValue 按末尾 `DEFAULT_TAIL_BARS=120` 根定位（TradingView 式：数据全量、视图局部、slider 漫游），成交量区去日期轴
+- **收官回归**：backend pytest 126 passed / 19 failed（全为基线 httpx.ConnectError 环境性失败，零回归）；frontend `npm run build` 通过；playwright 17/17 passed（含新增头部8项网格与频率Tab/图内MA行用例）
+- 涉及模块：frontend/shared/ui/kline, frontend/features/stock-detail, backend/services/market_service, backend/schemas/stock, frontend/e2e
