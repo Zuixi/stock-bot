@@ -695,17 +695,14 @@ def _evaluation_out(row: Any) -> SignalEvaluationOut:
     )
 
 
-def _verification_summary(evaluations: list[Any]) -> VerificationSummaryOut:
+def _verification_summary(status_counts: dict[str, int]) -> VerificationSummaryOut:
     counts = {
-        "confirmed": 0,
-        "partially_confirmed": 0,
-        "invalidated": 0,
-        "inconclusive": 0,
-        "pending": 0,
+        "confirmed": status_counts.get("confirmed", 0),
+        "partially_confirmed": status_counts.get("partially_confirmed", 0),
+        "invalidated": status_counts.get("invalidated", 0),
+        "inconclusive": status_counts.get("inconclusive", 0),
+        "pending": status_counts.get("pending", 0),
     }
-    for evaluation in evaluations:
-        if evaluation.status in counts:
-            counts[evaluation.status] += 1
     completed_directional = (
         counts["confirmed"] + counts["partially_confirmed"] + counts["invalidated"]
     )
@@ -725,6 +722,7 @@ async def get_signal_events(
     cfg = _require_industry(industry_key)
     events = await repo.list_signal_events(db, cfg.key, limit=limit)
     evaluations = await repo.list_event_evaluations(db, [event.id for event in events])
+    status_counts = await repo.aggregate_evaluation_status_counts(db, cfg.key)
     by_event: dict[int, list[Any]] = {}
     for evaluation in evaluations:
         by_event.setdefault(evaluation.signal_event_id, []).append(evaluation)
@@ -744,7 +742,7 @@ async def get_signal_events(
         )
         for event in events
     ]
-    return mapped, _verification_summary(evaluations)
+    return mapped, _verification_summary(status_counts)
 
 
 async def get_dashboard(
