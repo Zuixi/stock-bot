@@ -1,5 +1,5 @@
 import { apiGet } from "./client";
-import type { Exchange, StockRecord } from "@/shared/types";
+import type { Exchange, StockRecord, SwChainNode } from "@/shared/types";
 
 interface BackendPagedResponse<T> {
   items: T[];
@@ -120,6 +120,8 @@ export interface BackendStockEnriched extends BackendStock {
     total_mv?: number | null;
     circ_mv?: number | null;
     turnover_rate?: number | null;
+    // Stock's own SW industry chain L1→L2→L3 (empty when unmapped)
+    sw_chain?: SwChainNode[];
 }
 
 export function mapBackendStockEnriched(item: BackendStockEnriched): StockRecord {
@@ -135,6 +137,7 @@ export function mapBackendStockEnriched(item: BackendStockEnriched): StockRecord
         circulatingCap: item.circ_mv ?? undefined,
         pe: item.pe_ttm ?? undefined,
         pb: item.pb ?? undefined,
+        swChain: item.sw_chain ?? [],
     };
 }
 

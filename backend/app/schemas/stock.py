@@ -2,7 +2,15 @@
 
 from datetime import date, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class SwChainNode(BaseModel):
+    """One node of a stock's Shenwan industry chain (L1→L2→L3)."""
+
+    level: int
+    code: str
+    name: str
 
 
 class StockOut(BaseModel):
@@ -51,6 +59,8 @@ class StockEnrichedOut(StockOut):
     total_mv: float | None = None
     circ_mv: float | None = None
     turnover_rate: float | None = None
+    # Stock's own SW industry chain L1→L2→L3 (empty when unmapped)
+    sw_chain: list[SwChainNode] = Field(default_factory=list)
 
 
 class StockListParams(BaseModel):

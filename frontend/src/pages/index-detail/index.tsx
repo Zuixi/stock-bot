@@ -1,5 +1,5 @@
-import { useParams, useNavigate } from "react-router-dom";
-import { Typography, Result, Button, Divider, Descriptions, Space, Spin } from "antd";
+import { useParams, useNavigate, Link } from "react-router-dom";
+import { Typography, Result, Button, Divider, Descriptions, Space, Spin, Breadcrumb } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { ChangeText } from "@/shared/ui";
@@ -43,6 +43,14 @@ export default function IndexDetailPage() {
 
   return (
     <div>
+      {/* 层级式面包屑：市场 / {指数名}（末项为当前页不可点击） */}
+      <Breadcrumb
+        style={{ marginBottom: 8 }}
+        items={[
+          { title: <Link to="/market">市场</Link> },
+          { title: index.name },
+        ]}
+      />
       <Space align="center" size={12} style={{ marginBottom: 16 }}>
         <Button
           type="text"
