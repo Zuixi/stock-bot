@@ -1,6 +1,7 @@
 """Quote service: K-line and latest quote with caching."""
 
 import logging
+import math
 from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,9 +37,13 @@ def map_adj_factor_rows(rows: list[dict]) -> list[tuple[date, float]]:
         if len(td) != 8 or factor is None:
             continue
         try:
-            out.append((datetime.strptime(td, "%Y%m%d").date(), float(factor)))
+            parsed_date = datetime.strptime(td, "%Y%m%d").date()
+            factor_val = float(factor)
         except (ValueError, TypeError):
             continue
+        if not math.isfinite(factor_val):  # NaN/Inf 跳过，防整批 UPDATE 失败
+            continue
+        out.append((parsed_date, factor_val))
     return out
 
 
@@ -80,22 +85,35 @@ async def get_kline(
     symbol: str,
     start_date: date | None = None,
     end_date: date | None = None,
+    adjust: str = "raw",
 ) -> KlineResponse | None:
     stock = await stock_repo.get_stock_by_symbol(db, exchange, symbol)
     if stock is None:
         return None
 
-    start_str = start_date.isoformat() if start_date else "all"
-    end_str = end_date.isoformat() if end_date else "all"
-    cache_key = f"quote:kline:{exchange}:{symbol}:{start_str}:{end_str}"
+    cache_key = kline_cache_key(exchange, symbol, start_date, end_date, adjust)
     cached = await cache.get(cache_key)
     if cached:
         return KlineResponse(**cached)
 
     quotes = await quote_repo.get_kline(db, stock.id, start_date, end_date)
     data = [DailyQuoteOut.model_validate(q) for q in quotes]
-    response = KlineResponse(symbol=symbol, name=stock.name, exchange=exchange, data=data)
-    await cache.set(cache_key, response.model_dump(mode="json"), ttl=600)
+
+    factors_complete = bool(data) and all(q.adj_factor is not None for q in quotes)
+    if adjust == "qfq" and factors_complete:
+        data = apply_qfq(data) or data
+
+    response = KlineResponse(
+        symbol=symbol,
+        name=stock.name,
+        exchange=exchange,
+        data=data,
+        adjust=adjust,
+        adjust_available=factors_complete,
+    )
+    # qfq 且因子不完整 → 不缓存（回补完成后由 delete_pattern 兜底失效）
+    if not (adjust == "qfq" and not factors_complete):
+        await cache.set(cache_key, response.model_dump(mode="json"), ttl=600)
     return response
 
 
