@@ -184,6 +184,20 @@ class TuShareClient(RateLimitedSyncProvider):
             kwargs["end_date"] = end_date
         return await self._query("daily", **kwargs)
 
+    async def fetch_adj_factor(
+        self,
+        ts_code: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> pd.DataFrame:
+        """Fetch daily adjust factors (复权因子) for one stock's history."""
+        kwargs: dict[str, str] = {"ts_code": ts_code}
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        return await self._query("adj_factor", **kwargs)
+
     async def fetch_trade_cal(
         self,
         exchange: str = "SSE",

@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import and_, desc, exists, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.quote import DailyQuote
@@ -75,8 +75,6 @@ async def get_trade_date_bounds_for_stocks(
 
 async def trade_date_exists(db: AsyncSession, trade_date: date) -> bool:
     """Return True if any daily_quotes row exists for the given trade_date."""
-    from sqlalchemy import select, exists
-
     stmt = select(exists().where(DailyQuote.trade_date == trade_date))
     result = await db.execute(stmt)
     return result.scalar() is True
@@ -120,6 +118,34 @@ async def upsert_quotes(db: AsyncSession, quotes: list[DailyQuote]) -> int:
                 "adj_factor": insert(DailyQuote).excluded.adj_factor,
             },
         )
+    )
+    result = await db.execute(stmt)
+    await db.flush()
+    return result.rowcount
+
+
+async def has_adj_factor(db: AsyncSession, stock_id: int) -> bool:
+    """Return True if the stock has at least one non-null adj_factor row."""
+    stmt = select(
+        exists().where(and_(DailyQuote.stock_id == stock_id, DailyQuote.adj_factor.is_not(None)))
+    )
+    result = await db.execute(stmt)
+    return result.scalar() is True
+
+
+async def update_adj_factors(
+    db: AsyncSession, stock_id: int, factors: list[tuple[date, float]]
+) -> int:
+    """Bulk-update adj_factor on existing daily_quotes rows; returns rows updated."""
+    if not factors:
+        return 0
+    values = ", ".join(
+        f"({stock_id}, '{d.isoformat()}', {f})" for d, f in factors
+    )
+    stmt = text(
+        f"UPDATE daily_quotes AS dq SET adj_factor = v.adj_factor "
+        f"FROM (VALUES {values}) AS v(stock_id, trade_date, adj_factor) "
+        f"WHERE dq.stock_id = v.stock_id AND dq.trade_date = v.trade_date"
     )
     result = await db.execute(stmt)
     await db.flush()
