@@ -88,6 +88,11 @@ async def assess_current_quality(
     grouped = await repo.latest_rows_by_metric(db, cfg.key)
     results = []
     for metric in cfg.metrics:
+        if metric.coverage_scope != "industry":
+            # company-scoped metrics live under stock_id > 0 and can never be
+            # selected by latest_rows_by_metric (stock_id == 0) — assessing them
+            # here would only produce permanent phantom "missing" entries.
+            continue
         selected = _pick_row(metric, grouped.get(metric.key, []))
         results.append(
             assess_metric_quality(

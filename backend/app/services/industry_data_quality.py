@@ -167,6 +167,10 @@ def is_formal_signal_config_valid(cfg: IndustryConfig) -> bool:
             or rule.direction not in allowed_directions
             or rule.weight <= 0
             or rule.grace_days < 0
+            or (
+                rule.direction == "buy_up_sell_down"
+                and (rule.threshold_pct is None or rule.threshold_pct <= 0)
+            )
             for rule in horizon.rules
         ):
             return False

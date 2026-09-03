@@ -272,22 +272,23 @@ PIG_METRICS: list[MetricDef] = [
         description="消耗饲料/增重，越低效率越高",
     ),
     # ── 公司级指标（标的分析，P5）：stock_id>0 落表，companies 端点按此下发列 ──
+    # coverage_scope="company"：行业级行情/质量评估（stock_id==0）必须跳过
     MetricDef(
         key="company.hogs_sold_monthly", name="月度出栏量", unit="万头", freq="monthly",
         tier=TIER_MANUAL, sources=["manual"],
-        group="company",
+        group="company", coverage_scope="company",
         description="公司月度商品猪出栏量（销售简报/月度经营公告）",
     ),
     MetricDef(
         key="company.cost_complete", name="完全成本", unit="元/kg", freq="quarterly",
         tier=TIER_MANUAL, sources=["manual"],
-        group="company", higher_is_better=False,
+        group="company", coverage_scope="company", higher_is_better=False,
         description="公司养殖完全成本（季报/调研纪要口径）",
     ),
     MetricDef(
         key="mcap_per_head", name="头均市值", unit="元/头", freq="monthly",
         tier=TIER_CALC, sources=["derived"],
-        group="company", higher_is_better=False,
+        group="company", coverage_scope="company", higher_is_better=False,
         description="最新总市值 / 年化出栏量（测算）——生猪股跨周期估值锚；"
                     "历史分位需积累派生行后开放",
     ),

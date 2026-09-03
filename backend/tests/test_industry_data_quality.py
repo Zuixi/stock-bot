@@ -277,6 +277,26 @@ def test_dashboard_only_rule_reference_is_rejected():
     assert is_formal_signal_config_valid(cfg) is False
 
 
+@pytest.mark.parametrize("threshold_pct", [None, 0.0, -3.0])
+def test_buy_up_sell_down_rule_without_positive_threshold_is_rejected(threshold_pct):
+    """Directional rules degrade to threshold 0 in scoring — must fail validation."""
+    verification = PIG_INDUSTRY.verification
+    assert verification is not None
+    first_horizon = verification.horizons[0]
+    rules = (
+        replace(first_horizon.rules[0], threshold_pct=threshold_pct),
+        *first_horizon.rules[1:],
+    )
+    cfg = replace(
+        PIG_INDUSTRY,
+        verification=replace(
+            verification,
+            horizons=(replace(first_horizon, rules=rules), *verification.horizons[1:]),
+        ),
+    )
+    assert is_formal_signal_config_valid(cfg) is False
+
+
 def test_horizon_missing_required_metric_is_rejected():
     verification = PIG_INDUSTRY.verification
     assert verification is not None
