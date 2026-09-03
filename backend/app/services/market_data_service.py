@@ -281,6 +281,57 @@ async def get_sector_moneyflow(
     return rows[:limit]
 
 
+def _map_hsgt_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """moneyflow_hsgt 全列字符串 → northbound rows（north_money 万元，缺失/NaN 置 None）。"""
+    rows: list[dict[str, Any]] = []
+    for rec in df.to_dict("records"):
+        raw = rec.get("north_money")
+        net: float | None = None
+        if raw is not None:
+            try:
+                f = float(raw)
+            except (TypeError, ValueError):
+                f = float("nan")
+            net = None if math.isnan(f) else f
+        rows.append({"trade_date": _d(rec["trade_date"]), "net_amount": net})
+    return rows
+
+
+async def ingest_northbound(db: AsyncSession, days: int = 30) -> dict[str, int]:
+    """盘后采集：近 N 日沪深港通北向净流入（moneyflow_hsgt，幂等 upsert）。"""
+    client = _get_tushare()
+    start = (_today_sh() - timedelta(days=days)).strftime("%Y%m%d")
+    end = _today_sh().strftime("%Y%m%d")
+    df = await client.fetch_moneyflow_hsgt(start_date=start, end_date=end)
+    upserted = await market_data_repo.upsert_northbound(db, _map_hsgt_rows(df))
+    logger.info("ingest_northbound days=%s upserted=%s", days, upserted)
+    return {"upserted": upserted}
+
+
+NORTHBOUND_CACHE_KEY = "market:northbound:{days}"
+NORTHBOUND_TTL = 300
+
+
+async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> list[dict[str, Any]]:
+    """北向净流入日序列（升序，Redis 300s 共享缓存）。"""
+    key = NORTHBOUND_CACHE_KEY.format(days=days)
+    if cache is not None:
+        cached = await cache.get(key)
+        if cached:
+            rows_cached: list[dict[str, Any]] = cached
+            return rows_cached
+
+    from app.core.database import async_session_factory  # noqa: PLC0415
+
+    rows: list[dict[str, Any]] = []
+    async with async_session_factory() as db:
+        for n in await market_data_repo.list_northbound(db, days):
+            rows.append({"date": n.trade_date.isoformat(), "net_amount": n.net_amount})
+    if cache is not None and rows:
+        await cache.set(key, rows, ttl=NORTHBOUND_TTL)
+    return rows
+
+
 async def _main() -> None:
     from app.core.database import async_session_factory  # noqa: PLC0415
 
@@ -295,10 +346,12 @@ async def _main() -> None:
             )
         elif job == "sector_moneyflow":
             result = await ingest_sector_moneyflow(db)
+        elif job == "northbound":
+            result = await ingest_northbound(db)
         else:
             raise SystemExit(
                 f"unknown job: {job}; available: global_index_daily, "
-                "backfill_global_index, sector_moneyflow"
+                "backfill_global_index, sector_moneyflow, northbound"
             )
         await db.commit()
     print(job, "->", result)

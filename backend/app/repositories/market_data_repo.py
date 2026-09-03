@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import desc, func, nullslast, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.market_data import SectorMoneyflowSnapshot
+from app.models.market_data import NorthboundDaily, SectorMoneyflowSnapshot
 
 
 async def upsert_sector_moneyflow(
@@ -72,5 +73,34 @@ async def list_sector_moneyflow(
         )
         .order_by(nullslast(desc(SectorMoneyflowSnapshot.main_net_inflow)))
         .limit(limit)
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def upsert_northbound(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
+    """北向净流入日序列幂等 upsert（冲突时只刷 net_amount；source 首写后不变）。"""
+    if not rows:
+        return 0
+    stmt = (
+        pg_insert(NorthboundDaily)
+        .values([{**r, "source": "tushare:moneyflow_hsgt"} for r in rows])
+        .on_conflict_do_update(
+            constraint="uq_northbound_date",
+            set_={"net_amount": pg_insert(NorthboundDaily).excluded.net_amount},
+        )
+    )
+    # Core INSERT 的 execute 运行时返回 CursorResult（带 rowcount）；Result 存根无该属性
+    result = cast("CursorResult[Any]", await db.execute(stmt))
+    await db.flush()
+    return int(result.rowcount)
+
+
+async def list_northbound(db: AsyncSession, days: int) -> list[NorthboundDaily]:
+    """近 N 日北向净流入按交易日升序（上海时区语义，与 ingest 窗口对齐）。"""
+    cutoff = datetime.now(ZoneInfo("Asia/Shanghai")).date() - timedelta(days=days)
+    stmt = (
+        select(NorthboundDaily)
+        .where(NorthboundDaily.trade_date >= cutoff)
+        .order_by(NorthboundDaily.trade_date)
     )
     return list((await db.execute(stmt)).scalars().all())
