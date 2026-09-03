@@ -1,5 +1,6 @@
 """Market-data face endpoints: global indices / sector moneyflow / northbound（北向）/
-dragon-tiger（龙虎榜）/ block-trades（大宗交易）/ share-floats（解禁）/ repurchases（回购）."""
+dragon-tiger（龙虎榜）/ block-trades（大宗交易）/ share-floats（解禁）/ repurchases（回购）/
+announcements（公告快讯）."""
 
 from __future__ import annotations
 
@@ -9,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import CacheDep
 from app.schemas.market_data import (
+    AnnouncementOut,
     BlockTradeOut,
     DragonTigerOut,
     GlobalIndexCardOut,
@@ -109,3 +111,15 @@ async def get_repurchases_endpoint(
             status_code=400, detail="start/end must be ISO format, e.g. 2026-09-02"
         ) from None
     return [RepurchaseOut(**r) for r in rows]
+
+
+@router.get("/announcements", response_model=list[AnnouncementOut])
+async def get_announcements_endpoint(
+    cache: CacheDep,
+    symbol: str | None = Query(default=None, description="6 位股票代码，如 002762"),
+    limit: int = Query(default=30, ge=1, le=100),
+) -> list[AnnouncementOut]:
+    from app.services import announcement_service  # noqa: PLC0415
+
+    rows = await announcement_service.get_announcements(cache, symbol, limit)
+    return [AnnouncementOut(**r) for r in rows]

@@ -642,11 +642,17 @@ async def _main() -> None:
             result = await ingest_share_floats(db, days=int(args[1]) if len(args) > 1 else 7)
         elif job == "repurchases":
             result = await ingest_repurchases(db, days=int(args[1]) if len(args) > 1 else 7)
+        elif job == "announcements":
+            from app.services import announcement_service  # noqa: PLC0415
+
+            result = await announcement_service.ingest_announcements(
+                db, days=int(args[1]) if len(args) > 1 else 3
+            )
         else:
             raise SystemExit(
                 f"unknown job: {job}; available: global_index_daily, "
                 "backfill_global_index, sector_moneyflow, northbound, dragon_tiger, "
-                "block_trades, share_floats, repurchases"
+                "block_trades, share_floats, repurchases, announcements"
             )
         await db.commit()
     print(job, "->", result)

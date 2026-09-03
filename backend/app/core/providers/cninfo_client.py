@@ -29,10 +29,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
+import re
 import time
-from datetime import date, timedelta
-from typing import Any
+from datetime import date, datetime, timedelta
+from typing import Any, Literal, cast
 
 import httpx
 
@@ -92,9 +92,12 @@ def _generate_mcode() -> str:
     i = 0
     length = len(data)
     while i < length:
-        c1 = data[i]; i += 1
-        c2 = data[i] if i < length else None; i += 1
-        c3 = data[i] if i < length else None; i += 1
+        c1 = data[i]
+        i += 1
+        c2 = data[i] if i < length else None
+        i += 1
+        c3 = data[i] if i < length else None
+        i += 1
 
         e1 = c1 >> 2
         e2 = ((c1 & 3) << 4) | ((c2 >> 4) if c2 is not None else 0)
@@ -268,7 +271,7 @@ class CnInfoClient:
         self._token: str = token or os.environ.get("CNINFO_TOKEN", "")
         self._client: httpx.AsyncClient | None = None
 
-    async def __aenter__(self) -> "CnInfoClient":
+    async def __aenter__(self) -> CnInfoClient:
         await self._ensure_client()
         return self
 
@@ -519,3 +522,103 @@ def get_cninfo_client() -> CnInfoClient:
     if _default_client is None:
         _default_client = CnInfoClient()
     return _default_client
+
+
+# ---------------------------------------------------------------------------
+# Announcement search — www.cninfo.com.cn hisAnnouncement/query（巨潮公告检索）
+#
+# 与上面 webapi.cninfo.com.cn 的行情/指数 API 完全独立：免 token、POST 表单、
+# announcementTime 为 epoch 毫秒、标题含 <em> 高亮标签、PDF 前缀 static.cninfo.com.cn。
+# column=szse 覆盖沪深两市。
+# ---------------------------------------------------------------------------
+
+_ANNOUNCEMENT_QUERY_URL = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
+_ANNOUNCEMENT_PDF_BASE = "http://static.cninfo.com.cn/"
+_ANNOUNCEMENT_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+
+ANNOUNCEMENT_CATEGORY_QUERY: dict[str, str] = {
+    "report": (
+        "category_yjdbg_szsh;category_bndbg_szsh;category_sjdbg_szsh;category_ndbg_szsh;"
+        "category_yjygjxz_szsh;category_yjkb_szsh"
+    ),
+    "event": "category_zf_szsh;category_pgjz_szsh;category_gqfpxzcs_szsh;category_lr_gqbl_szsh",
+}
+
+_ANNOUNCEMENT_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _map_announcement_record(a: dict[str, Any], category: str) -> dict[str, Any]:
+    """Raw cninfo announcement → snake_case 行（去高亮标签、毫秒时间戳转 datetime）。"""
+    title = a.get("announcementTitle") or ""
+    return {
+        "announcement_id": str(a["announcementId"]),
+        "sec_code": a.get("secCode") or "",
+        "sec_name": a.get("secName"),
+        "title": _ANNOUNCEMENT_TAG_RE.sub("", title),
+        "announce_time": datetime.fromtimestamp(int(a["announcementTime"]) / 1000),
+        "category": category,
+        "pdf_url": _ANNOUNCEMENT_PDF_BASE + a["adjunctUrl"] if a.get("adjunctUrl") else None,
+    }
+
+
+class CninfoClient:
+    """Async client for the public cninfo announcement search (hisAnnouncement/query).
+
+    Usage::
+
+        client = get_announcement_client()
+        rows = await client.fetch_announcements("2026-08-20~2026-09-03", "report")
+    """
+
+    def __init__(self) -> None:
+        self._client = httpx.AsyncClient(
+            headers={
+                "User-Agent": _ANNOUNCEMENT_UA,
+                "Referer": "http://www.cninfo.com.cn/",
+            },
+            timeout=httpx.Timeout(15.0),
+        )
+
+    async def _post_json(self, url: str, data: dict[str, Any]) -> dict[str, Any]:
+        resp = await self._client.post(url, data=data)
+        resp.raise_for_status()
+        return cast("dict[str, Any]", resp.json())
+
+    async def fetch_announcements(
+        self,
+        se_date: str,
+        category_key: Literal["report", "event"],
+        page_size: int = 30,
+        max_pages: int = 5,
+    ) -> list[dict[str, Any]]:
+        """按日期区间（``YYYY-MM-DD~YYYY-MM-DD``）+ 类目分页拉取公告并映射为行。"""
+        rows: list[dict[str, Any]] = []
+        for page in range(1, max_pages + 1):
+            data = await self._post_json(
+                _ANNOUNCEMENT_QUERY_URL,
+                {
+                    "pageNum": page,
+                    "pageSize": page_size,
+                    "column": "szse",
+                    "tabName": "fulltext",
+                    "seDate": se_date,
+                    "category": ANNOUNCEMENT_CATEGORY_QUERY[category_key],
+                    "isHLtitle": "true",
+                },
+            )
+            anns = data.get("announcements") or []
+            rows.extend(_map_announcement_record(a, category_key) for a in anns)
+            if len(anns) < page_size:
+                break
+        return rows
+
+
+_announcement_client: CninfoClient | None = None
+
+
+def get_announcement_client() -> CninfoClient:
+    """Return the module-level singleton announcement ``CninfoClient`` (lazy init)."""
+    global _announcement_client  # noqa: PLW0603
+    if _announcement_client is None:
+        _announcement_client = CninfoClient()
+    return _announcement_client
