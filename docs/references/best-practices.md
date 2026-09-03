@@ -88,3 +88,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - antd CheckableTag 选中态自带主题色实底，inline 彩色文字色会与之撞色（对比度~1.2:1）——彩色图例类控件用图内绝对定位文本行（线色文字 on 白底），不要用 CheckableTag 承载。
 - 多源单位在映射层一次性归一（元），消费端只做展示分档：后端字段单位（TuShare total_mv 万元/amount 千元）与前端 formatCap 分档基准（元）错位时，在唯一 mapper 处换算并注释口径，表格列新增时核对 unit props——多消费点各自补偿是单位错误的标准成因。
 - 数值型 tooltip 用「灰标签左 + 右对齐 tabular-nums 数值右」的两列式行布局（flex space-between + min-width），OHLC/涨跌随当日涨跌统一着色、量额中性——横排挤合（"开：x 高：x 低：x"）无对齐基准，是主流行情软件与其余 tooltip 的主要视觉分界。
+- 行业覆盖缺口的合并优先用三方分类接口交叉验证而非纯名称匹配：TuShare index_member_all 有 3000 行上限且不支持按股查询；东财 push2 接口 f127 字段与申万 2021 同名可直接映射（突发批量会被限流，push2delay 镜像 + 0.3s 间隔可绕），特例用同花顺 F10 双源核验；落库走幂等 custom tag 表而非改原始字段。
