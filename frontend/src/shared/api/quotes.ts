@@ -1,5 +1,5 @@
 import { apiGet } from "./client";
-import type { KLinePoint } from "@/shared/types";
+import type { AdjustMode, KLinePoint, KlineResult } from "@/shared/types";
 
 interface BackendDailyQuote {
   trade_date: string;
@@ -8,6 +8,7 @@ interface BackendDailyQuote {
   low?: number | null;
   close: number;
   volume?: number | null;
+  amount?: number | null;
 }
 
 interface BackendKlineResponse {
@@ -15,11 +16,17 @@ interface BackendKlineResponse {
   name: string;
   exchange: string;
   data: BackendDailyQuote[];
+  /** 后端复权能力声明（P2 之前后端不返回该字段，前端按可用处理） */
+  adjust_available?: boolean;
 }
 
 const QUOTE_EXCHANGES = ["Shanghai_Stocks", "Shenzen_Stocks", "Beijing_Stocks"] as const;
 
-export async function fetchKlineBySymbol(symbol: string, days: number): Promise<KLinePoint[]> {
+export async function fetchKlineBySymbol(
+  symbol: string,
+  days: number,
+  adjust: AdjustMode = "raw",
+): Promise<KlineResult> {
   const end = new Date();
   const start = new Date();
   start.setDate(end.getDate() - days);
@@ -30,12 +37,12 @@ export async function fetchKlineBySymbol(symbol: string, days: number): Promise<
     try {
       const response = await apiGet<BackendKlineResponse>(
         `/api/v1/exchanges/${exchange}/stocks/${symbol}/quotes/daily`,
-        { start: startDate, end: endDate }
+        { start: startDate, end: endDate, adjust },
       );
       if (!response.data.length) {
         continue;
       }
-      return response.data.map((item) => {
+      const points: KLinePoint[] = response.data.map((item) => {
         const open = item.open ?? item.close;
         const high = item.high ?? Math.max(open, item.close);
         const low = item.low ?? Math.min(open, item.close);
@@ -46,12 +53,14 @@ export async function fetchKlineBySymbol(symbol: string, days: number): Promise<
           high,
           low,
           volume: item.volume ?? 0,
+          amount: item.amount ?? undefined,
         };
       });
+      return { points, adjustAvailable: response.adjust_available !== false };
     } catch {
       // Try the next exchange.
     }
   }
 
-  return [];
+  return { points: [], adjustAvailable: true };
 }

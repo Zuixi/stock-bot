@@ -1,5 +1,5 @@
 import { apiGet } from "./client";
-import type { KLinePoint, MarketIndex, SectorSummary, SseIntradayResponse, SseSnapshot } from "@/shared/types";
+import type { KLinePoint, KlineResult, MarketIndex, SectorSummary, SseIntradayResponse, SseSnapshot } from "@/shared/types";
 
 export interface DistributionItem {
   range: string;
@@ -41,6 +41,7 @@ interface IndexKlineResponse {
     low: number | null;
     close: number;
     volume: number | null;
+    amount?: number | null;
   }[];
 }
 
@@ -72,7 +73,7 @@ export function fetchSseIntraday(code: string, date?: string): Promise<SseIntrad
   return apiGet<SseIntradayResponse>(`/api/v1/market/sse-snapshots/${code}/intraday`, date ? { date } : undefined);
 }
 
-export async function fetchIndexKline(tsCode: string, days: number): Promise<KLinePoint[]> {
+export async function fetchIndexKline(tsCode: string, days: number): Promise<KlineResult> {
   const end = new Date();
   const start = new Date();
   start.setDate(end.getDate() - days);
@@ -84,7 +85,7 @@ export async function fetchIndexKline(tsCode: string, days: number): Promise<KLi
     { start: startDate, end: endDate },
   );
 
-  return resp.data.map((item) => {
+  const points: KLinePoint[] = resp.data.map((item) => {
     const open = item.open ?? item.close;
     const high = item.high ?? Math.max(open, item.close);
     const low = item.low ?? Math.min(open, item.close);
@@ -95,6 +96,9 @@ export async function fetchIndexKline(tsCode: string, days: number): Promise<KLi
       high,
       low,
       volume: item.volume ?? 0,
+      amount: item.amount ?? undefined,
     };
   });
+  // 指数无复权概念，恒为可用
+  return { points, adjustAvailable: true };
 }
