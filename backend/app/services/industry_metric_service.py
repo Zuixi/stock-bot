@@ -45,6 +45,11 @@ from app.services.industry_registry import (
     MetricDef,
     get_industry,
 )
+from app.services.industry_signal_verification import (
+    assess_current_quality,
+    evaluate_and_store_signal,
+    run_due_signal_evaluations,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +225,12 @@ async def ingest_industry_metrics(
             db, cfg.key, ["mock", "derived"], metric_keys=sorted(purge_keys)
         )
     derived_count = await _compute_derived_metrics(db, cfg)
-    signal = await evaluate_and_store_signal(db, cfg)
+    as_of = date.today()
+    quality = await assess_current_quality(db, cfg, as_of=as_of)
+    signal_update = await evaluate_and_store_signal(
+        db, cfg, quality=quality, effective_date=as_of
+    )
+    evaluations = await run_due_signal_evaluations(db, cfg, as_of=as_of)
 
     return {
         "source": source,
@@ -228,7 +238,14 @@ async def ingest_industry_metrics(
         "derived_upserted": derived_count,
         "purged": purged,  # 已覆盖指标下清除的 mock/derived 行数
         "covered_metrics": sorted(covered),
-        "signal": signal.signal_type if signal else None,
+        "quality": asdict(quality),
+        "signal": signal_update.signal.signal_type if signal_update.signal else None,
+        "signal_updated": signal_update.updated,
+        "signal_stale": signal_update.stale,
+        "event_created": signal_update.event is not None,
+        "evaluations_due": evaluations.due,
+        "evaluations_completed": evaluations.evaluated,
+        "evaluations_pending": evaluations.pending,
     }
 
 
@@ -410,47 +427,6 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
 
     total += await repo.upsert_metrics(db, derived)
     return total
-
-
-async def evaluate_and_store_signal(db: AsyncSession, cfg: IndustryConfig):
-    """Build snapshot from latest rows → rules engine → persist (idempotent per day)."""
-    inp = await _build_cycle_input(db, cfg)
-    out = cycle_engine.evaluate_pig_cycle(inp, cfg)
-
-    return await repo.upsert_signal(db, {
-        "industry_key": cfg.key,
-        "phase": out.phase,
-        "signal_type": out.signal,
-        "positions": [asdict(s) for s in out.positions],
-        "reason": "；".join(out.reasons),
-        "basis": out.basis,
-        "effective_date": date.today(),
-    })
-
-
-async def _build_cycle_input(db: AsyncSession, cfg: IndustryConfig) -> cycle_engine.CycleInput:
-    """指标快照：latest 行按 registry 源优先级裁决 + 环比/猪粮比序列。"""
-    grouped = await repo.latest_rows_by_metric(db, cfg.key)
-    ratio_row = _pick_latest(cfg, grouped, "hog_corn_ratio")
-    price_row = _pick_latest(cfg, grouped, "hog_price")
-    cost_row = _pick_latest(cfg, grouped, "industry_cost_avg")
-    sow_mom = [
-        float(r.value)
-        for r in await repo.get_metric_history(db, cfg.key, "sow_inventory_mom", limit=12, freq="monthly")
-        if r.value is not None
-    ]
-    ratio_series = [
-        float(r.value)
-        for r in await repo.get_metric_history(db, cfg.key, "hog_corn_ratio", limit=30, freq="daily")
-        if r.value is not None
-    ]
-    return cycle_engine.CycleInput(
-        ratio=float(ratio_row.value) if ratio_row and ratio_row.value is not None else None,
-        price=float(price_row.value) if price_row and price_row.value is not None else None,
-        cost=float(cost_row.value) if cost_row and cost_row.value is not None else None,
-        sow_mom_series=sow_mom,
-        ratio_series=ratio_series,
-    )
 
 
 # ── Query side ────────────────────────────────────────────────────────
@@ -689,11 +665,9 @@ async def get_dashboard(
     sow_trend.reference = ref
     trends["sow_inventory"] = sow_trend
 
-    # 信号在 ingest 时评估落表；GET 只读。空库引导：从未评估过才补算一次。
+    # 信号只在 ingest 时按质量门控评估落表；GET 严格只读。
     signal_row = await repo.latest_signal(db, cfg.key)
-    if signal_row is None:
-        signal_row = await evaluate_and_store_signal(db, cfg)
-    basis = signal_row.basis or {}
+    basis = signal_row.basis or {} if signal_row is not None else {}
     cycle = CycleOut(
         phase=signal_row.phase,
         phase_index=cycle_engine.phase_index(cfg, signal_row.phase),
@@ -810,7 +784,10 @@ async def batch_upsert_metrics(
     derived = 0
     if recompute_derived:
         derived = await _compute_derived_metrics(db, cfg)
-        await evaluate_and_store_signal(db, cfg)
+        as_of = date.today()
+        quality = await assess_current_quality(db, cfg, as_of=as_of)
+        await evaluate_and_store_signal(db, cfg, quality=quality, effective_date=as_of)
+        await run_due_signal_evaluations(db, cfg, as_of=as_of)
     return {
         "upserted": upserted, "derived_upserted": derived,
         "skipped_unknown_metric": skipped, "skipped_invalid_source": rejected,
