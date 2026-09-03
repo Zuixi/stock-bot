@@ -66,3 +66,11 @@ test("复权开关：数据就绪后可切换前复权/不复权", async ({ page
   await card.locator(".ant-segmented-item").filter({ hasText: "前复权" }).click();
   await expect(card.locator(".ant-segmented-item").filter({ hasText: "前复权" })).toHaveClass(/ant-segmented-item-selected/);
 });
+
+test("个股头部：8项指标网格含今开/昨收/换手率", async ({ page }) => {
+  await page.goto("/stock/600519");
+  await expect(page.locator(".ant-descriptions").first()).toBeVisible();
+  for (const label of ["今开", "最高", "最低", "昨收", "成交量", "成交额", "换手率", "总市值"]) {
+    await expect(page.locator(".ant-descriptions-item-label").filter({ hasText: label })).toBeVisible();
+  }
+});

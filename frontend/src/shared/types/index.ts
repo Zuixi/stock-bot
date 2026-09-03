@@ -63,6 +63,11 @@ export interface StockRecord {
   roe?: number;
   revenueGrowth?: number;
   profitGrowth?: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  prevClose?: number;
+  turnoverRate?: number;
   detail?: Record<string, unknown>;
   asof: string;
 }

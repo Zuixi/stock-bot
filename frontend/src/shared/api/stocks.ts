@@ -110,6 +110,9 @@ export interface BackendStockEnriched extends BackendStock {
     // Quote fields
     latest_price?: number | null;
     prev_close?: number | null;
+    open?: number | null;
+    high?: number | null;
+    low?: number | null;
     change?: number | null;
     change_percent?: number | null;
     volume?: number | null;
@@ -137,6 +140,11 @@ export function mapBackendStockEnriched(item: BackendStockEnriched): StockRecord
         circulatingCap: item.circ_mv ?? undefined,
         pe: item.pe_ttm ?? undefined,
         pb: item.pb ?? undefined,
+        open: item.open ?? undefined,
+        high: item.high ?? undefined,
+        low: item.low ?? undefined,
+        prevClose: item.prev_close ?? undefined,
+        turnoverRate: item.turnover_rate ?? undefined,
         swChain: item.sw_chain ?? [],
     };
 }

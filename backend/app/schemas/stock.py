@@ -49,6 +49,9 @@ class StockEnrichedOut(StockOut):
     # Quote fields
     latest_price: float | None = None
     prev_close: float | None = None
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
     change: float | None = None
     change_percent: float | None = None
     volume: int | None = None
