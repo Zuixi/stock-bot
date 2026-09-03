@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import ReactECharts from "echarts-for-react";
 import { fetchSectorMoneyflow, type SectorMoneyflowItem } from "@/shared/api/marketData";
 import { COLORS } from "@/app/theme";
-import { fmtYi } from "./format";
 
 const STALE_TIME = 60 * 1000;
 const REFETCH_INTERVAL = 60 * 1000;
