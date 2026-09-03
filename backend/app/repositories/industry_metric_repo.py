@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import cast
 
 from sqlalchemy import delete, desc, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.industry_research import (
+    IndustryDataQualitySnapshot,
     IndustryMetric,
     IndustryReferencePoint,
     IndustrySignal,
+    IndustrySignalEvaluation,
+    IndustrySignalEvent,
 )
 
 _METRIC_CONFLICT_COLS = ("industry_key", "stock_id", "metric_key", "source", "freq", "period")
@@ -35,7 +39,9 @@ async def upsert_metrics(db: AsyncSession, rows: list[dict]) -> int:
     return result.rowcount or 0
 
 
-async def latest_rows_by_metric(db: AsyncSession, industry_key: str) -> dict[str, list[IndustryMetric]]:
+async def latest_rows_by_metric(
+    db: AsyncSession, industry_key: str
+) -> dict[str, list[IndustryMetric]]:
     """Latest row per (metric_key, source, freq) —DISTINCT ON over a small keyed table."""
     stmt = (
         select(IndustryMetric)
@@ -215,13 +221,153 @@ async def list_signals(
     return list(result.scalars().all())
 
 
+# ── Data quality snapshots and immutable signal verification ───────────
+
+async def upsert_quality_snapshot(
+    db: AsyncSession, row: dict
+) -> IndustryDataQualitySnapshot:
+    insert_stmt = pg_insert(IndustryDataQualitySnapshot).values(row)
+    stmt = insert_stmt.on_conflict_do_update(
+        constraint="uq_industry_quality_date",
+        set_={
+            "status": insert_stmt.excluded.status,
+            "signal_ready": insert_stmt.excluded.signal_ready,
+            "ready_count": insert_stmt.excluded.ready_count,
+            "missing_count": insert_stmt.excluded.missing_count,
+            "stale_count": insert_stmt.excluded.stale_count,
+            "rejected_count": insert_stmt.excluded.rejected_count,
+            "partial_count": insert_stmt.excluded.partial_count,
+            "details": insert_stmt.excluded.details,
+            "updated_at": insert_stmt.excluded.updated_at,
+        },
+    ).returning(IndustryDataQualitySnapshot)
+    result = await db.execute(stmt)
+    return cast(IndustryDataQualitySnapshot, result.scalar_one())
+
+
+async def latest_quality_snapshot(
+    db: AsyncSession, industry_key: str
+) -> IndustryDataQualitySnapshot | None:
+    stmt = (
+        select(IndustryDataQualitySnapshot)
+        .where(IndustryDataQualitySnapshot.industry_key == industry_key)
+        .order_by(desc(IndustryDataQualitySnapshot.as_of))
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def latest_signal_event(
+    db: AsyncSession, industry_key: str
+) -> IndustrySignalEvent | None:
+    stmt = (
+        select(IndustrySignalEvent)
+        .where(IndustrySignalEvent.industry_key == industry_key)
+        .order_by(desc(IndustrySignalEvent.event_date), desc(IndustrySignalEvent.id))
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def create_signal_event(
+    db: AsyncSession, row: dict
+) -> IndustrySignalEvent | None:
+    stmt = (
+        pg_insert(IndustrySignalEvent)
+        .values(row)
+        .on_conflict_do_nothing(constraint="uq_industry_signal_event")
+        .returning(IndustrySignalEvent)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def list_signal_events(
+    db: AsyncSession, industry_key: str, limit: int = 20
+) -> list[IndustrySignalEvent]:
+    stmt = (
+        select(IndustrySignalEvent)
+        .where(IndustrySignalEvent.industry_key == industry_key)
+        .order_by(desc(IndustrySignalEvent.event_date), desc(IndustrySignalEvent.id))
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def upsert_signal_evaluation(
+    db: AsyncSession, row: dict
+) -> IndustrySignalEvaluation:
+    insert_stmt = pg_insert(IndustrySignalEvaluation).values(row)
+    stmt = insert_stmt.on_conflict_do_update(
+        constraint="uq_industry_signal_evaluation",
+        set_={
+            "target_date": insert_stmt.excluded.target_date,
+            "status": insert_stmt.excluded.status,
+            "rules": insert_stmt.excluded.rules,
+            "start_snapshot": insert_stmt.excluded.start_snapshot,
+            "end_snapshot": insert_stmt.excluded.end_snapshot,
+            "criteria_results": insert_stmt.excluded.criteria_results,
+            "insufficient_reasons": insert_stmt.excluded.insufficient_reasons,
+            "score": insert_stmt.excluded.score,
+            "evaluated_at": insert_stmt.excluded.evaluated_at,
+            "updated_at": insert_stmt.excluded.updated_at,
+        },
+    ).returning(IndustrySignalEvaluation)
+    result = await db.execute(stmt)
+    return cast(IndustrySignalEvaluation, result.scalar_one())
+
+
+async def list_due_signal_evaluations(
+    db: AsyncSession, industry_key: str, as_of: date
+) -> list[IndustrySignalEvaluation]:
+    stmt = (
+        select(IndustrySignalEvaluation)
+        .join(
+            IndustrySignalEvent,
+            IndustrySignalEvent.id == IndustrySignalEvaluation.signal_event_id,
+        )
+        .where(
+            IndustrySignalEvent.industry_key == industry_key,
+            IndustrySignalEvaluation.status == "pending",
+            IndustrySignalEvaluation.target_date <= as_of,
+        )
+        .order_by(
+            IndustrySignalEvaluation.target_date.asc(),
+            IndustrySignalEvaluation.signal_event_id.asc(),
+            IndustrySignalEvaluation.horizon_days.asc(),
+        )
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def list_event_evaluations(
+    db: AsyncSession, event_ids: list[int]
+) -> list[IndustrySignalEvaluation]:
+    if not event_ids:
+        return []
+    stmt = (
+        select(IndustrySignalEvaluation)
+        .where(IndustrySignalEvaluation.signal_event_id.in_(event_ids))
+        .order_by(
+            IndustrySignalEvaluation.signal_event_id.asc(),
+            IndustrySignalEvaluation.horizon_days.asc(),
+        )
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def delete_rows_by_source(
     db: AsyncSession,
     industry_key: str,
     sources: list[str],
     metric_keys: list[str] | None = None,
 ) -> int:
-    """Purge rows of the given sources once a real source has landed (mock never masquerades as data).
+    """Purge source rows after real data lands so mock data cannot masquerade as real.
 
     ``metric_keys`` 给定时仅清除这些指标（按覆盖清除：未覆盖指标保留 mock 演示行）。
     """
