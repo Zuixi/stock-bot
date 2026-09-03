@@ -3,6 +3,7 @@
 from datetime import date
 
 from app.schemas.quote import DailyQuoteOut
+from app.services import quote_service
 from app.services.quote_service import apply_qfq, kline_cache_key, map_adj_factor_rows
 
 
@@ -73,3 +74,65 @@ def test_apply_qfq_returns_none_when_any_factor_missing():
 
 def test_apply_qfq_empty_rows():
     assert apply_qfq([]) is None
+
+
+# ── get_kline service 级：qfq 因子不完整不写缓存 / raw 正常缓存 ──────
+
+
+class _FakeCache:
+    """极简 cache 替身：get 恒 miss，只记录 set 调用。"""
+
+    def __init__(self) -> None:
+        self.set_calls: list[str] = []
+
+    async def get(self, key: str):
+        return None
+
+    async def set(self, key: str, value, ttl: int | None = None) -> None:
+        self.set_calls.append(key)
+
+
+class _FakeStock:
+    id = 1
+    name = "贵州茅台"
+
+
+def _patch_kline_source(monkeypatch, rows: list[DailyQuoteOut]) -> None:
+    """monkeypatch stock/quote repo，绕开 DB 直接喂行情行。"""
+
+    async def fake_get_stock(db, exchange, symbol):
+        return _FakeStock()
+
+    async def fake_get_kline(db, stock_id, start_date, end_date):
+        return rows
+
+    monkeypatch.setattr(quote_service.stock_repo, "get_stock_by_symbol", fake_get_stock)
+    monkeypatch.setattr(quote_service.quote_repo, "get_kline", fake_get_kline)
+
+
+async def test_get_kline_qfq_incomplete_factors_skips_cache(monkeypatch):
+    rows = [_q("2026-01-02", 100.0, None), _q("2026-01-05", 200.0, 2.0)]
+    _patch_kline_source(monkeypatch, rows)
+    cache = _FakeCache()
+    result = await quote_service.get_kline(
+        None, cache, "Shanghai_Stocks", "600519",
+        date(2026, 1, 1), date(2026, 1, 31), adjust="qfq",
+    )
+    assert result is not None
+    assert result.adjust_available is False
+    assert result.data[0].close == 100.0  # 因子缺失回退原始行情
+    assert cache.set_calls == []  # qfq 不完整不缓存，回补后由 delete_pattern 兜底失效
+
+
+async def test_get_kline_raw_caches_even_without_factors(monkeypatch):
+    rows = [_q("2026-01-02", 100.0, None), _q("2026-01-05", 200.0, 2.0)]
+    _patch_kline_source(monkeypatch, rows)
+    cache = _FakeCache()
+    result = await quote_service.get_kline(
+        None, cache, "Shanghai_Stocks", "600519",
+        date(2026, 1, 1), date(2026, 1, 31), adjust="raw",
+    )
+    assert result is not None
+    assert result.adjust_available is False  # 因子缺失但 raw 不受影响
+    assert len(cache.set_calls) == 1
+    assert cache.set_calls[0].endswith(":raw")

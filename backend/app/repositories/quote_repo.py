@@ -140,7 +140,9 @@ async def update_adj_factors(
     if not factors:
         return 0
     values = ", ".join(
-        f"({stock_id}, '{d.isoformat()}', {f})" for d, f in factors
+        # ::date 显式转型：VALUES 派生表中未定型字面量会被推断为 text，
+        # 与 daily_quotes.trade_date(date) 比较时抛 date = text 无操作符错误
+        f"({stock_id}, '{d.isoformat()}'::date, {f})" for d, f in factors
     )
     stmt = text(
         f"UPDATE daily_quotes AS dq SET adj_factor = v.adj_factor "

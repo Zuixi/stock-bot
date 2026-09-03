@@ -3,6 +3,7 @@
 import logging
 import math
 from datetime import date
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -144,3 +145,35 @@ async def get_latest_quote(
     )
     await cache.set(cache_key, out.model_dump(mode="json"), ttl=600)
     return out
+
+
+async def backfill_adj_factor(exchange: str, symbol: str) -> dict[str, Any]:
+    """懒加载回补单股 adj_factor 全历史（幂等）；完成后失效该股 kline 缓存。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415 — 与 market_service 同源
+    from app.core.providers.tushare_client import get_tushare_client  # noqa: PLC0415
+    from app.core.redis import get_redis_pool  # noqa: PLC0415
+
+    try:
+        async with async_session_factory() as db:
+            stock = await stock_repo.get_stock_by_symbol(db, exchange, symbol)
+            if stock is None:
+                return {"symbol": symbol, "status": "skipped", "reason": "stock not found"}
+            if await quote_repo.has_adj_factor(db, stock.id):
+                return {"symbol": symbol, "status": "skipped", "reason": "already backfilled"}
+            # ts_code 后缀：SH/SZ/BJ（EXCHANGE_TO_TUSHARE 是 SSE/SZSE/BSE 交易所码，不适用）
+            suffix = {
+                "Shanghai_Stocks": "SH",
+                "Shenzen_Stocks": "SZ",
+                "Beijing_Stocks": "BJ",
+            }[exchange]
+            df = await get_tushare_client().fetch_adj_factor(ts_code=f"{symbol}.{suffix}")
+            factors = map_adj_factor_rows(df.to_dict("records"))
+            updated = await quote_repo.update_adj_factors(db, stock.id, factors) if factors else 0
+            await db.commit()
+        redis = await get_redis_pool()
+        await CacheClient(redis).delete_pattern(f"quote:kline:{exchange}:{symbol}:*")
+        logger.info("[adj_factor backfill] %s.%s updated=%d", exchange, symbol, updated)
+        return {"symbol": symbol, "status": "ok", "updated": updated}
+    except Exception as exc:  # noqa: BLE001 — 后台任务兜底，失败不影响响应
+        logger.warning("[adj_factor backfill] %s.%s failed: %s", exchange, symbol, exc)
+        return {"symbol": symbol, "status": "error", "reason": str(exc)}
