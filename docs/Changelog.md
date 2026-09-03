@@ -320,3 +320,7 @@
 ## 2026-09-03 - 市场数据面 Task 1 — 7 张数据表模型与迁移
 - 新增市场数据面数据层：板块资金流快照 / 龙虎榜 / 北向资金 / 大宗交易 / 限售解禁 / 股票回购 / 公告快讯 7 个 ORM 模型（`app/models/market_data.py`，注册到 models `__init__`）+ 手写 Alembic 迁移 `9d4e7a2c8b1f`（down_revision `e6f7a8b9c0d1`），含唯一约束去重键与 10 个查询索引
 - 涉及模块：backend/app/models, backend/app/migrations/versions
+
+## 2026-09-03 - 市场数据面 Task 4 — GET /market/global-indices 全球指数卡片
+- 新增 `market_data_service.get_global_index_cards(cache)`：东财 push2delay 实时快照（`_em_code` 对齐 secid→code，60s Redis 共享缓存 `market:global-indices`）+ `index_dailies` 近 30 日 spark + 实时缺失时 EOD 兜底（全球指数行 pre_close=NULL，用相邻收盘逐日差值算涨跌额/幅）→ `GlobalIndexCardOut`（`app/schemas/market_data.py`）经 `app/api/v1/market_data.py` 挂到 `/api/v1/market/global-indices`（子路由不带 prefix、include 时挂 `/market`，与 market.router 共存）；活体验证 9 卡全 realtime、spark=30、二次请求命中缓存
+- 涉及模块：backend/app/services/market_data_service, backend/app/schemas/market_data, backend/app/api/v1/market_data, backend/app/api/v1/__init__
