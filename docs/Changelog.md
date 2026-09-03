@@ -303,3 +303,7 @@
 ## 2026-09-03 - 行业信号质量与验证持久化（Task 2）
 - 新增行业数据质量快照、不可变信号事件和 30/90 日信号验证 ORM/迁移及幂等 repository；事件冲突只忽略不改写，质量与验证按命名唯一约束 upsert，查询层保持事务提交权在调用方。
 - 涉及模块：backend/models, backend/migrations, backend/repositories, backend/tests
+
+## 2026-09-03 - 行业信号质量门控与确定性回评（Task 3）
+- 行业 ingest 改为先持久化质量快照再门控周期引擎，按信号/阶段转换生成不可变事件，并以冻结规则和行业指标完成 30/90 日确定性回评；Dashboard GET 不再隐式写入信号。
+- 涉及模块：backend/services, backend/tests
