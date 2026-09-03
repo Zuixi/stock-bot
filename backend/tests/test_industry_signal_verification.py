@@ -907,6 +907,44 @@ async def test_quality_uses_engine_source_selection_and_persists_selected_period
 
 
 @pytest.mark.asyncio
+async def test_industry_quality_skips_company_scoped_metrics(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.industry_signal_verification.repo.latest_rows_by_metric",
+        AsyncMock(return_value={}),
+    )
+    persist = AsyncMock(return_value=SimpleNamespace(id=1))
+    monkeypatch.setattr(
+        "app.services.industry_signal_verification.repo.upsert_quality_snapshot", persist
+    )
+
+    result = await assess_current_quality(
+        SimpleNamespace(), PIG_INDUSTRY, as_of=date(2026, 9, 3)
+    )
+
+    company_keys = {
+        metric.key
+        for metric in PIG_INDUSTRY.metrics
+        if metric.coverage_scope == "company"
+    }
+    assert company_keys == {
+        "company.hogs_sold_monthly",
+        "company.cost_complete",
+        "mcap_per_head",
+    }
+    detail_keys = {item.metric_key for item in result.details}
+    assert detail_keys.isdisjoint(company_keys)
+    assert detail_keys == {
+        metric.key
+        for metric in PIG_INDUSTRY.metrics
+        if metric.coverage_scope == "industry"
+    }
+    # counts derive only from industry-scoped details — no phantom missing entries
+    assert result.missing_count == len(detail_keys)
+    payload = persist.await_args.args[1]
+    assert {item["metric_key"] for item in payload["details"]}.isdisjoint(company_keys)
+
+
+@pytest.mark.asyncio
 async def test_unavailable_quality_without_previous_signal_is_still_stale(monkeypatch):
     monkeypatch.setattr(
         "app.services.industry_signal_verification.repo.latest_signal",
