@@ -336,13 +336,13 @@ test("猪智投工作台：从行业卡片进入，看板核心区块完整渲�
   // SPA 路由切换瞬间旧列表仍在 DOM，直接断言会撞严格模式多元素
   await expect(page.getByRole("tab", { name: "投资看板" })).toBeVisible();
 
-  // ── 头部标签：周期阶段 + 当前信号（作用域限定在 ant-tag，避免命中信号面板容器）──
+  // ── 头部标签：质量门禁未通过时必须明确降级为待评估 ──────────────
   const phaseTag = page.locator(".ant-tag").filter({ hasText: "周期阶段" });
   await expect(phaseTag).toBeVisible();
-  await expect(phaseTag).toContainText(/繁荣|衰退|萧条|复苏/);
-  const signalTag = page.locator(".ant-tag").filter({ hasText: "当前信号" });
+  await expect(phaseTag).toContainText(/繁荣|衰退|萧条|复苏|待评估/);
+  const signalTag = page.locator(".ant-tag").filter({ hasText: /当前信号|信号状态/ });
   await expect(signalTag).toBeVisible();
-  await expect(signalTag).toContainText(/买入|卖出|关注|空仓/);
+  await expect(signalTag).toContainText(/买入|卖出|关注|空仓|待评估/);
 
   // ── 综合指标带：生猪均价卡片值非空（数值格式如 10.71 / 11,740） ──
   const strip = page.locator("section").filter({ hasText: "综合指标" });
@@ -354,19 +354,26 @@ test("猪智投工作台：从行业卡片进入，看板核心区块完整渲�
   // 能繁母猪存栏在指标带中展示（quick_view 分组不含该指标，见报告说明）
   await expect(strip.getByText("能繁母猪存栏", { exact: true })).toBeVisible();
 
-  // ── 周期相位条：四阶段齐全且恰有一个"当前"高亮 ───────────────
+  // ── 周期/仓位区：有信号时渲染业务值，无信号时展示明确空态 ──────
   const phaseCard = page.locator(".ant-card").filter({ hasText: "猪周期阶段定位" });
   await expect(phaseCard).toBeVisible();
-  for (const label of ["繁荣", "衰退", "萧条", "复苏"]) {
-    await expect(phaseCard.getByText(label, { exact: true })).toBeVisible();
+  const hasActiveCycle = (await phaseCard.getByText("当前", { exact: true }).count()) > 0;
+  if (hasActiveCycle) {
+    for (const label of ["繁荣", "衰退", "萧条", "复苏"]) {
+      await expect(phaseCard.getByText(label, { exact: true })).toBeVisible();
+    }
+  } else {
+    await expect(phaseCard.getByText("暂无有效周期阶段", { exact: true })).toBeVisible();
   }
-  await expect(phaseCard.getByText("当前", { exact: true })).toBeVisible();
 
-  // ── 仓位管理建议：三段仓位（核心底仓/波段仓位/现金储备） ──────
   const posCard = page.locator(".ant-card").filter({ hasText: "仓位管理建议" });
   await expect(posCard).toBeVisible();
-  for (const name of ["核心底仓", "波段仓位", "现金储备"]) {
-    await expect(posCard.getByText(name, { exact: true })).toBeVisible();
+  if (hasActiveCycle) {
+    for (const name of ["核心底仓", "波段仓位", "现金储备"]) {
+      await expect(posCard.getByText(name, { exact: true })).toBeVisible();
+    }
+  } else {
+    await expect(posCard.getByText("暂无仓位建议", { exact: true })).toBeVisible();
   }
 
   // ── EChart 图表：价格 vs 成本 + 能繁母猪趋势（canvas 异步渲染） ──
@@ -460,18 +467,22 @@ test("生猪养殖三级行业页：投研工作台导航 banner", async ({ page
   await expect(page.getByRole("heading", { name: "投研工作台" })).toBeVisible();
 });
 
-test("投研列表：行业卡片状态行（周期阶段 + 当前信号）", async ({ page }) => {
-  // P6 收尾：列表卡片由最新信号行驱动渲染状态 Tag（ingest 前的行业无信号则为空，不渲染）
+test("投研列表：行业卡片状态行遵循质量门禁", async ({ page, request }) => {
   await page.goto("/research");
 
   const pigCard = page.locator(".ant-card").filter({ hasText: "生猪养殖" });
   await expect(pigCard).toBeVisible();
-  await expect(pigCard.locator(".ant-tag").filter({ hasText: "周期阶段" })).toHaveText(
-    /周期阶段 · (繁荣|衰退|萧条|复苏)/
-  );
-  await expect(pigCard.locator(".ant-tag").filter({ hasText: "当前信号" })).toHaveText(
-    /当前信号 (买入|卖出|关注|空仓)/
-  );
+  const dashboard = await (await request.get("http://localhost:8000/api/v1/industries/pig/dashboard")).json();
+  if (dashboard.data_quality.signal_ready) {
+    await expect(pigCard.locator(".ant-tag").filter({ hasText: "周期阶段" })).toHaveText(
+      /周期阶段 · (繁荣|衰退|萧条|复苏)/
+    );
+    await expect(pigCard.locator(".ant-tag").filter({ hasText: "当前信号" })).toHaveText(
+      /当前信号 (买入|卖出|关注|空仓)/
+    );
+  } else {
+    await expect(pigCard.locator(".ant-tag").filter({ hasText: /周期阶段|当前信号/ })).toHaveCount(0);
+  }
 });
 
 test("泛化验证：白羽肉鸡第二行业卡片零新页面进入工作台", async ({ page }) => {  // P6 泛化验证：registry 配置驱动，前端零改动 —— 列表同时出现两个行业卡片
@@ -482,9 +493,7 @@ test("泛化验证：白羽肉鸡第二行业卡片零新页面进入工作台",
   await expect(pigCard).toBeVisible();
   await expect(broilerCard).toBeVisible();
 
-  // 列表卡片状态行：周期阶段 + 当前信号（pig 真实信号、broiler mock ingest 后均有）
-  await expect(pigCard).toContainText(/周期阶段/);
-  await expect(pigCard).toContainText(/当前信号/);
+  // broiler mock ingest 具备有效信号；pig 是否展示状态由质量门禁决定
   await expect(broilerCard).toContainText(/周期阶段/);
   await expect(broilerCard).toContainText(/当前信号/);
 

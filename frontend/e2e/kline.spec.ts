@@ -55,6 +55,15 @@ test("指数K线：频率Tab可用，无复权控件", async ({ page }) => {
   await page.goto("/index/000001.SH");
   const card = page.locator(".ant-card").filter({ hasText: "指数历史行情" });
   await expect(card).toBeVisible();
+  await expect
+    .poll(async () => {
+      if (await card.getByText("暂无K线数据", { exact: true }).isVisible().catch(() => false)) return "empty";
+      if (await card.getByText(/^MA20\s\d/).first().isVisible().catch(() => false)) return "ready";
+      return "loading";
+    })
+    .not.toBe("loading");
+  const noData = card.getByText("暂无K线数据", { exact: true });
+  test.skip(await noData.isVisible().catch(() => false), "指数 000001.SH 无历史 K 线基线数据");
   await expect(card.getByText(/^MA20\s\d/).first()).toBeVisible();
   await expect(card.locator(".ant-segmented-item").filter({ hasText: "周K" })).toBeVisible();
   await expect(card.locator(".ant-segmented-item").filter({ hasText: "前复权" })).toHaveCount(0);
