@@ -34,11 +34,29 @@ export function StockHeader({ stock }: Props) {
           <ChangeText value={stock.changePercent} style={{ fontSize: 16 }} />
         </div>
         <Descriptions size="small" column={4} style={{ marginTop: 8 }}>
+          <Descriptions.Item label="今开">
+            <NumberText value={stock.open} />
+          </Descriptions.Item>
+          <Descriptions.Item label="最高">
+            <NumberText value={stock.high} />
+          </Descriptions.Item>
+          <Descriptions.Item label="最低">
+            <NumberText value={stock.low} />
+          </Descriptions.Item>
+          <Descriptions.Item label="昨收">
+            <NumberText value={stock.prevClose} />
+          </Descriptions.Item>
           <Descriptions.Item label="成交量">
             <NumberText value={stock.volume} unit="cap" />
           </Descriptions.Item>
           <Descriptions.Item label="成交额">
             <NumberText value={stock.turnover} unit="cap" />
+          </Descriptions.Item>
+          <Descriptions.Item label="换手率">
+            {stock.turnoverRate == null ? "--" : `${stock.turnoverRate.toFixed(2)}%`}
+          </Descriptions.Item>
+          <Descriptions.Item label="总市值">
+            <NumberText value={stock.marketCap} unit="cap" />
           </Descriptions.Item>
         </Descriptions>
         <Typography.Text type="secondary" style={{ fontSize: 11 }}>

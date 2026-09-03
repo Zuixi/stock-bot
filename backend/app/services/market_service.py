@@ -1070,6 +1070,9 @@ SELECT
     s.act_name, s.act_ent_type, s.category, s.csrc_code, s.csrc_desc,
     s.province, s.status, s.detail, s.asof,
     q.close     AS latest_price,
+    q.open      AS "open",
+    q.high      AS high,
+    q.low       AS low,
     q.volume    AS volume,
     q.amount    AS amount,
     q2.close    AS prev_close,
@@ -1080,7 +1083,7 @@ SELECT
     d.turnover_rate AS turnover_rate
 FROM stocks s
 LEFT JOIN LATERAL (
-    SELECT close, volume, amount, trade_date
+    SELECT open, high, low, close, volume, amount, trade_date
     FROM daily_quotes
     WHERE stock_id = s.id
     ORDER BY trade_date DESC
