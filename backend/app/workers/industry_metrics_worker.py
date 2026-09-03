@@ -44,6 +44,13 @@ class IndustryMetricsWorker(BaseWorker):
                 db, industry_key=industry_key, source=source, months=months
             )
             await db.commit()
-            cache = CacheClient(await get_redis_pool())
-            await cache.delete(f"industry:{industry_key}:dashboard")
+            try:
+                cache = CacheClient(await get_redis_pool())
+                await cache.delete(f"industry:{industry_key}:dashboard")
+            except Exception:
+                logger.warning(
+                    "Industry dashboard cache invalidation failed after commit: industry=%s",
+                    industry_key,
+                    exc_info=True,
+                )
         return {"status": "completed", **result}

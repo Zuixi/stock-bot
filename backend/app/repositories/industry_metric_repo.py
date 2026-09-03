@@ -393,6 +393,23 @@ async def list_event_evaluations(
     return list(result.scalars().all())
 
 
+async def aggregate_evaluation_status_counts(
+    db: AsyncSession, industry_key: str
+) -> dict[str, int]:
+    """Count all persisted evaluations for an industry, independent of event display limits."""
+    stmt = (
+        select(IndustrySignalEvaluation.status, func.count(IndustrySignalEvaluation.id))
+        .join(
+            IndustrySignalEvent,
+            IndustrySignalEvent.id == IndustrySignalEvaluation.signal_event_id,
+        )
+        .where(IndustrySignalEvent.industry_key == industry_key)
+        .group_by(IndustrySignalEvaluation.status)
+    )
+    result = await db.execute(stmt)
+    return {status: count for status, count in result.all()}
+
+
 async def delete_rows_by_source(
     db: AsyncSession,
     industry_key: str,

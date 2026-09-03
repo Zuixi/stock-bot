@@ -179,8 +179,15 @@ async def industry_metrics_refresh_job() -> None:
         async with async_session_factory() as db:
             result = await industry_metric_service.ingest_industry_metrics(db, "pig")
             await db.commit()
-            cache = CacheClient(await get_redis_pool())
-            await cache.delete("industry:pig:dashboard")
+            try:
+                cache = CacheClient(await get_redis_pool())
+                await cache.delete("industry:pig:dashboard")
+            except Exception:
+                logger.warning(
+                    "Industry dashboard cache invalidation failed after metrics commit: "
+                    "industry=pig",
+                    exc_info=True,
+                )
         logger.info(
             "Industry metrics refresh done: source=%s upserted=%s signal=%s",
             result.get("source"), result.get("upserted"), result.get("signal"),
@@ -199,8 +206,16 @@ async def industry_signal_evaluation_job() -> None:
             async with async_session_factory() as db:
                 result = await run_due_signal_evaluations(db, cfg, as_of=date.today())
                 await db.commit()
-                cache = CacheClient(await get_redis_pool())
-                await cache.delete(f"industry:{cfg.key}:dashboard")
+                try:
+                    cache = CacheClient(await get_redis_pool())
+                    await cache.delete(f"industry:{cfg.key}:dashboard")
+                except Exception:
+                    logger.warning(
+                        "Industry dashboard cache invalidation failed after evaluation commit: "
+                        "industry=%s",
+                        cfg.key,
+                        exc_info=True,
+                    )
             logger.info(
                 "Industry signal evaluation done: industry=%s due=%s evaluated=%s pending=%s",
                 cfg.key,

@@ -100,7 +100,7 @@ class DataQualityOut(BaseModel):
     stale_count: int = 0
     rejected_count: int = 0
     partial_count: int = 0
-    details: list[MetricQualityOut] = []
+    details: list[MetricQualityOut] = Field(default_factory=list)
 
 
 class SignalEvaluationOut(BaseModel):
@@ -108,8 +108,8 @@ class SignalEvaluationOut(BaseModel):
     status: str
     target_date: date
     score: float | None = None
-    criteria_results: list[dict] = []
-    insufficient_reasons: list[str] = []
+    criteria_results: list[dict] = Field(default_factory=list)
+    insufficient_reasons: list[str] = Field(default_factory=list)
     evaluated_at: datetime | None = None
 
 
@@ -121,7 +121,7 @@ class SignalEventOut(BaseModel):
     previous_phase: str | None = None
     rule_version: str
     verification_supported: bool
-    evaluations: list[SignalEvaluationOut] = []
+    evaluations: list[SignalEvaluationOut] = Field(default_factory=list)
 
 
 class VerificationSummaryOut(BaseModel):
@@ -145,7 +145,7 @@ class DashboardOut(BaseModel):
     signal: SignalOut | None = None
     signal_is_stale: bool = False
     data_quality: DataQualityOut
-    signal_events: list[SignalEventOut] = []
+    signal_events: list[SignalEventOut] = Field(default_factory=list)
     verification_summary: VerificationSummaryOut
     signal_history: list[SignalOut]
 

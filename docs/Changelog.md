@@ -319,3 +319,7 @@
 ## 2026-09-03 - 行业信号质量验证 API 与调度
 - Dashboard 与只读 signal-events 端点现已暴露数据质量、历史信号事件和样本门控验证摘要，并在 17:20 扫描到期评价且于事务提交后失效缓存。
 - 涉及模块：backend/schemas、backend/services、backend/api、backend/workers、backend/scheduler、backend/tests
+
+## 2026-09-03 - 行业信号验证审查修复（Task 4 Fix 1）
+- 验证摘要改为独立聚合行业全部评价而不受最新 20 条事件展示限制，提交后的 Redis 失效异常降级为告警且不改变 Worker/调度成功状态，并修正新增 DTO 的列表默认工厂。
+- 涉及模块：backend/repositories、backend/services、backend/schemas、backend/workers、backend/scheduler、backend/tests

@@ -21,6 +21,7 @@ from app.models.industry_research import (
     IndustrySignalEvent,
 )
 from app.repositories.industry_metric_repo import (
+    aggregate_evaluation_status_counts,
     create_signal_event,
     latest_quality_snapshot,
     latest_signal_event,
@@ -33,6 +34,7 @@ from app.repositories.industry_metric_repo import (
 )
 from app.scheduler.jobs import industry_metrics_refresh_job, industry_signal_evaluation_job
 from app.scheduler.runner import create_scheduler
+from app.schemas.industry import DataQualityOut, SignalEvaluationOut, SignalEventOut
 from app.services.industry_data_quality import IndustryQualityResult, MetricQualityResult
 from app.services.industry_metric_service import (
     get_dashboard,
@@ -140,6 +142,45 @@ def test_verification_models_declare_constraints_jsonb_and_cascade():
 
 def test_evaluation_score_annotation_matches_numeric_decimal_values():
     assert get_args(get_type_hints(IndustrySignalEvaluation)["score"]) == (Decimal | None,)
+
+
+def test_new_dto_list_defaults_are_not_shared():
+    first_quality = DataQualityOut(as_of=date(2026, 9, 3), status="healthy", signal_ready=True)
+    second_quality = DataQualityOut(as_of=date(2026, 9, 3), status="healthy", signal_ready=True)
+    first_evaluation = SignalEvaluationOut(
+        horizon_days=30,
+        status="pending",
+        target_date=date(2026, 10, 3),
+    )
+    second_evaluation = SignalEvaluationOut(
+        horizon_days=30,
+        status="pending",
+        target_date=date(2026, 10, 3),
+    )
+    first_event = SignalEventOut(
+        event_date=date(2026, 9, 3),
+        signal_type=SIGNAL_BUY,
+        phase="recovery",
+        rule_version="pig-cycle-v1",
+        verification_supported=True,
+    )
+    second_event = SignalEventOut(
+        event_date=date(2026, 9, 3),
+        signal_type=SIGNAL_BUY,
+        phase="recovery",
+        rule_version="pig-cycle-v1",
+        verification_supported=True,
+    )
+
+    first_quality.details.append(SimpleNamespace())
+    first_evaluation.criteria_results.append({"criterion": "price"})
+    first_evaluation.insufficient_reasons.append("missing")
+    first_event.evaluations.append(first_evaluation)
+
+    assert second_quality.details == []
+    assert second_evaluation.criteria_results == []
+    assert second_evaluation.insufficient_reasons == []
+    assert second_event.evaluations == []
 
 
 def test_models_declare_lookup_indexes():
@@ -277,6 +318,23 @@ async def test_evaluation_repository_upserts_and_due_query_is_scoped_and_ordered
     assert "industry_signal_evaluations.horizon_days" in sql and " ASC" in sql
 
 
+async def test_evaluation_status_aggregate_is_scoped_to_all_industry_events():
+    db = FakeSession(
+        FakeScalarResult(many=[("confirmed", 21), ("invalidated", 3), ("pending", 6)])
+    )
+
+    assert await aggregate_evaluation_status_counts(db, "pig") == {
+        "confirmed": 21,
+        "invalidated": 3,
+        "pending": 6,
+    }
+    sql = compile_sql(db.statements[-1], literal_binds=True)
+    assert "JOIN industry_signal_events" in sql
+    assert "industry_signal_events.industry_key = 'pig'" in sql
+    assert "GROUP BY industry_signal_evaluations.status" in sql
+    assert "LIMIT" not in sql
+
+
 async def test_list_event_evaluations_skips_database_for_empty_ids():
     db = FakeSession(FakeScalarResult(many=[]))
     assert await list_event_evaluations(db, []) == []
@@ -391,6 +449,10 @@ async def test_dashboard_without_valid_signal_returns_nullable_cycle_and_signal(
         "app.services.industry_metric_service.repo.list_event_evaluations",
         AsyncMock(return_value=[]),
     )
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.aggregate_evaluation_status_counts",
+        AsyncMock(return_value={}),
+    )
 
     result = await get_dashboard(SimpleNamespace(), FakeCache(), "pig")
 
@@ -423,6 +485,10 @@ async def test_signal_event_mapper_hides_audit_json_and_summary_requires_five_sa
         "app.services.industry_metric_service.repo.list_event_evaluations",
         AsyncMock(return_value=evaluations),
     )
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.aggregate_evaluation_status_counts",
+        AsyncMock(return_value={"confirmed": 1, "invalidated": 1}),
+    )
 
     mapped, summary = await get_signal_events(SimpleNamespace(), "pig", limit=20)
 
@@ -452,31 +518,47 @@ async def test_signal_event_mapper_hides_audit_json_and_summary_requires_five_sa
 
 
 @pytest.mark.asyncio
-async def test_verification_summary_exposes_accuracy_after_five_completed_directional_evaluations(
-    monkeypatch,
-):
-    events = [event_row(row_id=index) for index in range(1, 6)]
-    evaluations = [
-        evaluation_row(
-            event_id=index,
-            status="invalidated" if index == 5 else "confirmed",
-            score=Decimal("20") if index == 5 else Decimal("80"),
-        )
-        for index in range(1, 6)
+async def test_verification_summary_aggregates_beyond_latest_twenty_events(monkeypatch):
+    displayed_events = [event_row(row_id=index) for index in range(6, 26)]
+    displayed_evaluations = [
+        evaluation_row(event_id=index, status="confirmed", score=Decimal("80"))
+        for index in range(6, 26)
     ]
-    monkeypatch.setattr(
-        "app.services.industry_metric_service.repo.list_signal_events",
-        AsyncMock(return_value=events),
+    list_events = AsyncMock(return_value=displayed_events)
+    list_evaluations = AsyncMock(return_value=displayed_evaluations)
+    aggregate_counts = AsyncMock(
+        return_value={
+            "confirmed": 21,
+            "partially_confirmed": 1,
+            "invalidated": 3,
+            "inconclusive": 2,
+            "pending": 6,
+        }
     )
     monkeypatch.setattr(
-        "app.services.industry_metric_service.repo.list_event_evaluations",
-        AsyncMock(return_value=evaluations),
+        "app.services.industry_metric_service.repo.list_signal_events", list_events
+    )
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.list_event_evaluations", list_evaluations
+    )
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.aggregate_evaluation_status_counts",
+        aggregate_counts,
     )
 
-    _, summary = await get_signal_events(SimpleNamespace(), "pig", limit=20)
+    db = SimpleNamespace()
+    mapped, summary = await get_signal_events(db, "pig", limit=20)
 
-    assert summary.completed_directional_evaluations == 5
-    assert summary.accuracy_pct == 80.0
+    assert len(mapped) == 20
+    list_events.assert_awaited_once_with(db, "pig", limit=20)
+    assert summary.completed_directional_evaluations == 25
+    assert summary.confirmed == 21
+    assert summary.partially_confirmed == 1
+    assert summary.invalidated == 3
+    assert summary.inconclusive == 2
+    assert summary.pending == 6
+    assert summary.accuracy_pct == 84.0
+    aggregate_counts.assert_awaited_once()
 
 
 class SessionContext:
@@ -534,6 +616,37 @@ async def test_worker_commits_before_dashboard_cache_invalidation(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_worker_cache_runtime_error_is_nonfatal_after_commit(monkeypatch):
+    calls = []
+    session = SimpleNamespace(commit=AsyncMock(side_effect=lambda: calls.append("commit")))
+    cache = SimpleNamespace(delete=AsyncMock(side_effect=RuntimeError("redis unavailable")))
+    monkeypatch.setattr(
+        "app.workers.industry_metrics_worker.async_session_factory",
+        lambda: SessionContext(session),
+    )
+    monkeypatch.setattr(
+        "app.workers.industry_metrics_worker.industry_metric_service.ingest_industry_metrics",
+        AsyncMock(return_value={"source": "mock"}),
+    )
+    monkeypatch.setattr(
+        "app.workers.industry_metrics_worker.get_redis_pool",
+        AsyncMock(return_value=SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        "app.workers.industry_metrics_worker.CacheClient",
+        lambda _redis: cache,
+    )
+
+    result = await IndustryMetricsWorker.process(
+        object.__new__(IndustryMetricsWorker), uuid.UUID(int=2), {"industry_key": "pig"}
+    )
+
+    assert calls == ["commit"]
+    assert result == {"status": "completed", "source": "mock"}
+    cache.delete.assert_awaited_once_with("industry:pig:dashboard")
+
+
+@pytest.mark.asyncio
 async def test_scheduled_ingest_commits_before_dashboard_cache_invalidation(monkeypatch):
     calls = []
     session = SimpleNamespace(commit=AsyncMock(side_effect=lambda: calls.append("commit")))
@@ -560,6 +673,32 @@ async def test_scheduled_ingest_commits_before_dashboard_cache_invalidation(monk
 
 
 @pytest.mark.asyncio
+async def test_scheduled_ingest_cache_runtime_error_is_nonfatal_after_commit(monkeypatch):
+    calls = []
+    session = SimpleNamespace(commit=AsyncMock(side_effect=lambda: calls.append("commit")))
+    cache = SimpleNamespace(delete=AsyncMock(side_effect=RuntimeError("redis unavailable")))
+    monkeypatch.setattr(
+        "app.scheduler.jobs.async_session_factory",
+        lambda: SessionContext(session),
+    )
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.ingest_industry_metrics",
+        AsyncMock(return_value={"source": "mock", "upserted": 1, "signal": SIGNAL_BUY}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "app.scheduler.jobs.get_redis_pool",
+        AsyncMock(return_value=SimpleNamespace()),
+    )
+    monkeypatch.setattr("app.scheduler.jobs.CacheClient", lambda _redis: cache)
+
+    await industry_metrics_refresh_job()
+
+    assert calls == ["commit"]
+    cache.delete.assert_awaited_once_with("industry:pig:dashboard")
+
+
+@pytest.mark.asyncio
 async def test_scheduled_evaluation_commits_before_nonfatal_cache_invalidation(monkeypatch):
     calls = []
     session = SimpleNamespace(commit=AsyncMock(side_effect=lambda: calls.append("commit")))
@@ -571,7 +710,7 @@ async def test_scheduled_evaluation_commits_before_nonfatal_cache_invalidation(m
         lambda: SessionContext(session),
         raising=False,
     )
-    evaluation = AsyncMock(return_value=SimpleNamespace(evaluated=1))
+    evaluation = AsyncMock(return_value=SimpleNamespace(due=1, evaluated=1, pending=0))
     monkeypatch.setattr(
         "app.scheduler.jobs.run_due_signal_evaluations", evaluation, raising=False
     )
@@ -587,6 +726,38 @@ async def test_scheduled_evaluation_commits_before_nonfatal_cache_invalidation(m
     await industry_signal_evaluation_job()
 
     assert calls == ["commit", "delete"]
+    evaluation.assert_awaited_once()
+    cache.delete.assert_awaited_once_with("industry:pig:dashboard")
+
+
+@pytest.mark.asyncio
+async def test_scheduled_evaluation_cache_runtime_error_is_nonfatal_after_commit(monkeypatch):
+    calls = []
+    session = SimpleNamespace(commit=AsyncMock(side_effect=lambda: calls.append("commit")))
+    cache = SimpleNamespace(delete=AsyncMock(side_effect=RuntimeError("redis unavailable")))
+    monkeypatch.setattr(
+        "app.scheduler.jobs.async_session_factory",
+        lambda: SessionContext(session),
+        raising=False,
+    )
+    evaluation = AsyncMock(
+        return_value=SimpleNamespace(due=1, evaluated=1, pending=0)
+    )
+    monkeypatch.setattr(
+        "app.scheduler.jobs.run_due_signal_evaluations", evaluation, raising=False
+    )
+    monkeypatch.setattr(
+        "app.scheduler.jobs.get_redis_pool",
+        AsyncMock(return_value=SimpleNamespace()),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "app.scheduler.jobs.CacheClient", lambda _redis: cache, raising=False
+    )
+
+    await industry_signal_evaluation_job()
+
+    assert calls == ["commit"]
     evaluation.assert_awaited_once()
     cache.delete.assert_awaited_once_with("industry:pig:dashboard")
 
