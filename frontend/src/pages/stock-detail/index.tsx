@@ -2,7 +2,9 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import { Typography, Result, Button, Divider, Row, Col, Spin, Breadcrumb } from "antd";
 import type { BreadcrumbProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { StockHeader, KLineChart, FundamentalCards, CustomSwTags, UserTags } from "@/features/stock-detail/components";
+import { StockHeader, FundamentalCards, CustomSwTags, UserTags } from "@/features/stock-detail/components";
+import { KlineChart } from "@/shared/ui/kline";
+import { fetchKlineBySymbol } from "@/shared/api/quotes";
 import { fetchStockEnrichedBySymbol } from "@/shared/api/stocks";
 import type { StockRecord } from "@/shared/types";
 
@@ -87,7 +89,12 @@ export default function StockDetailPage() {
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={14}>
-          <KLineChart symbol={stock.symbol} />
+          <KlineChart
+            title="历史行情"
+            queryKey={`stock-kline-${stock.symbol}`}
+            fetcher={(days, adjust) => fetchKlineBySymbol(stock.symbol, days, adjust)}
+            showAdjust
+          />
         </Col>
         <Col xs={24} lg={10}>
           <FundamentalCards stock={stock} />

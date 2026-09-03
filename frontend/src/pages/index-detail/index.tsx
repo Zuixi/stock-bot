@@ -3,8 +3,8 @@ import { Typography, Result, Button, Divider, Descriptions, Space, Spin, Breadcr
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { ChangeText } from "@/shared/ui";
-import { fetchMarketIndices } from "@/shared/api/market";
-import { IndexKLineChart } from "./IndexKLineChart";
+import { KlineChart } from "@/shared/ui/kline";
+import { fetchIndexKline, fetchMarketIndices } from "@/shared/api/market";
 
 export default function IndexDetailPage() {
   const { tsCode } = useParams<{ tsCode: string }>();
@@ -82,7 +82,13 @@ export default function IndexDetailPage() {
 
       <Divider style={{ margin: "16px 0" }} />
 
-      {tsCode && <IndexKLineChart tsCode={tsCode} />}
+      {tsCode && (
+        <KlineChart
+          title="指数历史行情"
+          queryKey={`index-kline-${tsCode}`}
+          fetcher={(days) => fetchIndexKline(tsCode, days)}
+        />
+      )}
 
       <Divider style={{ margin: "16px 0" }} />
 
