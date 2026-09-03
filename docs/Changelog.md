@@ -336,3 +336,7 @@
 - Docker E2E 验证发现质量快照中的 `date` 值无法直接写入任务 JSONB；Worker 现统一编码返回结果为 JSON 兼容值，并新增日期嵌套回归测试。
 - 后端与 Playwright 全链路断言同步质量门禁契约：正式信号不可用时接受空周期/空信号与待评估 UI；指数基线无历史 K 线时明确跳过数据依赖断言。
 - 涉及模块：backend/workers、backend/tests、frontend/e2e
+
+## 2026-09-03 - 行业质量评估最终审查修复
+- 行业级数据质量评估跳过公司级（stock_id>0）指标并在 registry 显式标注 coverage_scope，消除质量快照与 UI 中永久性"缺失"幻影项；方向性验证规则强制要求正阈值，防止退化为阈值 0 的 fail-open。
+- 涉及模块：backend/services、backend/tests
