@@ -316,3 +316,7 @@
 - **审计**：临时库灌入 repo 种子与活库逐行 diff——sw_industry_classes 511 / sw_industry_members 4430 / stock_custom_sw_tags 1439 三表完全一致，全新 docker 部署分类数据与当前显示一致
 - **发现并修复**：data_init 的 overlay 加载被 is_sw_data_loaded 门控——先于 overlay 的老部署升级后 SW 表已有数据、跳过导入、1439 行永不生效；改为加性幂等的 overlay 每次 startup 无条件尝试（日志可观测）
 - 涉及模块：backend/app/services/data_init
+
+## 2026-09-03 - 市场数据面 Task 1 — 7 张数据表模型与迁移
+- 新增市场数据面数据层：板块资金流快照 / 龙虎榜 / 北向资金 / 大宗交易 / 限售解禁 / 股票回购 / 公告快讯 7 个 ORM 模型（`app/models/market_data.py`，注册到 models `__init__`）+ 手写 Alembic 迁移 `9d4e7a2c8b1f`（down_revision `e6f7a8b9c0d1`），含唯一约束去重键与 10 个查询索引
+- 涉及模块：backend/app/models, backend/app/migrations/versions
