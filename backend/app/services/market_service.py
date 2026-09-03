@@ -1075,6 +1075,7 @@ SELECT
     q.low       AS low,
     q.volume    AS volume,
     q.amount    AS amount,
+    q.trade_date AS latest_quote_date,
     q2.close    AS prev_close,
     d.pe_ttm    AS pe_ttm,
     d.pb        AS pb,

@@ -194,3 +194,45 @@ async def securities_refresh_job() -> None:
         )
     except Exception:
         logger.exception("Securities refresh failed")
+
+
+# ------------------------------------------------------------------
+# Stock universe refresh (weekly — metadata changes slowly, but stocks.asof
+# feeds "名录更新于" semantics and must not stay frozen forever)
+# ------------------------------------------------------------------
+
+UNIVERSE_EXCHANGES = ["Shanghai_Stocks", "Shenzen_Stocks", "Beijing_Stocks"]
+
+
+async def universe_refresh_job() -> None:
+    """Refresh stock universe metadata (09:00 Sat, weekly).
+
+    与 UniverseWorker 共用同一 ingest 方法：upsert 会刷新 stocks.asof 并写入
+    stocks_history 快照。逐交易所隔离失败，最后统一失效列表类缓存（与 worker 一致）。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.core.redis import CacheClient, get_redis_pool  # noqa: PLC0415
+    from app.services.tushare_ingest import TuShareIngestService  # noqa: PLC0415
+
+    logger.info("Universe refresh job triggered")
+    service = TuShareIngestService()
+    for exchange in UNIVERSE_EXCHANGES:
+        try:
+            async with async_session_factory() as db:
+                result = await service.ingest_stock_universe(db, exchange)
+                await db.commit()
+            logger.info(
+                "Universe refresh %s done: inserted=%s skipped=%s",
+                exchange, result.get("inserted"), result.get("skipped"),
+            )
+        except Exception:
+            logger.exception("Universe refresh failed for %s", exchange)
+
+    try:
+        redis = await get_redis_pool()
+        cache = CacheClient(redis)
+        await cache.delete_pattern("stock:list:*")
+        await cache.delete_pattern("stock:categories:*")
+    except Exception:
+        logger.exception("Universe refresh cache invalidation failed (non-fatal)")
+
