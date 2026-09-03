@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import logging
 import uuid
 from datetime import date
-from typing import Any
+from typing import Any, get_args
 
 from app.core.database import async_session_factory
+from app.schemas.task import MarketDataJobType
 from app.workers.base_worker import BaseWorker
 
-logger = logging.getLogger(__name__)
+_KNOWN_TYPES: frozenset[str] = frozenset(get_args(MarketDataJobType))
 
 
 def _opt_date(v: Any) -> date | None:
@@ -56,6 +56,7 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
                 db, days=int(params.get("days", 3))
             )
         else:
+            # Defensive: unreachable via process() — the type is validated there.
             return {"status": "failed", "error": f"unknown market_data type: {job}"}
         await db.commit()
     return {"status": "completed", "type": job, **result}
@@ -67,10 +68,15 @@ class MarketDataWorker(BaseWorker):
     queue_key = "market_data.fetch"
 
     async def process(self, task_id: uuid.UUID, payload: dict) -> dict:
+        """Execute one ingest job; service exceptions propagate (BaseWorker marks the
+        task failed). Expected payload keys (top-level or nested in "params"):
+        global_index_daily/sector_moneyflow — none; backfill_global_index — years(=2);
+        northbound/share_floats/repurchases — days(=30/7/7); dragon_tiger/block_trades —
+        trade_date(yyyymmdd, optional); announcements — days(=3). Unknown types return
+        a failed dict without touching the DB.
+        """
         job = str(payload.get("type") or "")
+        if job not in _KNOWN_TYPES:
+            return {"status": "failed", "error": f"unknown market_data type: {job}"}
         params = payload.get("params") or {}
-        try:
-            return await _run(job, {**payload, **params})
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("market_data task %s failed", job)
-            return {"status": "failed", "error": str(exc)}
+        return await _run(job, {**payload, **params})
