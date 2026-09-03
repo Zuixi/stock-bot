@@ -16,6 +16,7 @@ from app.schemas.task import (
     FetchIndustrySecuritiesRequest,
     FetchQuotesRequest,
     FetchUniverseRequest,
+    MarketDataFetchRequest,
     RunClusteringRequest,
     TaskOut,
 )
@@ -107,6 +108,16 @@ async def trigger_fetch_securities(
         "Dispatched fetch_securities task %s, industry=%s backfill_days=%s",
         task.id, req.industry_key, req.backfill_days,
     )
+    return TaskOut.model_validate(task)
+
+
+async def trigger_fetch_market_data(
+    db: AsyncSession, req: MarketDataFetchRequest
+) -> TaskOut:
+    """Trigger a market-data ingest task (worker dispatches by req.type)."""
+    payload = {"type": req.type, **(req.params or {})}
+    task = await _dispatch_task(db, "fetch_market_data", "market_data.fetch", payload)
+    logger.info("Dispatched fetch_market_data task %s, type=%s", task.id, req.type)
     return TaskOut.model_validate(task)
 
 

@@ -21,6 +21,7 @@ QUEUES: dict[str, str] = {
     "llm.explain": "stock_bot.llm.explain",
     "industry_metrics.fetch": "stock_bot.industry_metrics.fetch",
     "securities.fetch": "stock_bot.securities.fetch",
+    "market_data.fetch": "stock_bot.market_data.fetch",
 }
 
 _connection: AbstractRobustConnection | None = None
