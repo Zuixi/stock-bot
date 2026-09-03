@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -648,6 +649,46 @@ async def test_worker_cache_runtime_error_is_nonfatal_after_commit(monkeypatch):
     assert calls == ["commit"]
     assert result == {"status": "completed", "source": "mock"}
     cache.delete.assert_awaited_once_with("industry:pig:dashboard")
+
+
+@pytest.mark.asyncio
+async def test_worker_result_is_json_serializable_when_ingest_returns_quality_dates(monkeypatch):
+    session = SimpleNamespace(commit=AsyncMock())
+    cache = SimpleNamespace(delete=AsyncMock())
+    monkeypatch.setattr(
+        "app.workers.industry_metrics_worker.async_session_factory",
+        lambda: SessionContext(session),
+    )
+    monkeypatch.setattr(
+        "app.workers.industry_metrics_worker.industry_metric_service.ingest_industry_metrics",
+        AsyncMock(
+            return_value={
+                "source": "mock",
+                "quality": {
+                    "as_of": date(2026, 9, 3),
+                    "details": [{"period": date(2026, 9, 2)}],
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "app.workers.industry_metrics_worker.get_redis_pool",
+        AsyncMock(return_value=SimpleNamespace()),
+    )
+    monkeypatch.setattr("app.workers.industry_metrics_worker.CacheClient", lambda _redis: cache)
+
+    result = await IndustryMetricsWorker.process(
+        object.__new__(IndustryMetricsWorker), uuid.UUID(int=3), {"industry_key": "pig"}
+    )
+
+    assert json.loads(json.dumps(result)) == {
+        "status": "completed",
+        "source": "mock",
+        "quality": {
+            "as_of": "2026-09-03",
+            "details": [{"period": "2026-09-02"}],
+        },
+    }
 
 
 @pytest.mark.asyncio

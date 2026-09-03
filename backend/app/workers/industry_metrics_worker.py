@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Any, cast
+
+from fastapi.encoders import jsonable_encoder
 
 from app.core.database import async_session_factory
 from app.core.redis import CacheClient, get_redis_pool
@@ -53,4 +56,4 @@ class IndustryMetricsWorker(BaseWorker):
                     industry_key,
                     exc_info=True,
                 )
-        return {"status": "completed", **result}
+        return cast(dict[str, Any], jsonable_encoder({"status": "completed", **result}))

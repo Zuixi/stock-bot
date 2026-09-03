@@ -116,10 +116,16 @@ async def test_dashboard_contract(client: AsyncClient):
     assert isinstance(d["signal_is_stale"], bool)
     assert "signal_events" in d
     assert "verification_summary" in d
-    assert d["cycle"]["phase"] in PHASES
-    assert len(d["cycle"]["phases"]) == 4
-    assert d["signal"]["signal_type"] in SIGNALS
-    assert sum(p["pct"] for p in d["signal"]["positions"]) == 100
+    if d["data_quality"]["signal_ready"]:
+        assert d["cycle"]["phase"] in PHASES
+        assert len(d["cycle"]["phases"]) == 4
+        assert d["signal"]["signal_type"] in SIGNALS
+        assert sum(p["pct"] for p in d["signal"]["positions"]) == 100
+        assert any(s["effective_date"] for s in d["signal_history"])
+    else:
+        assert d["signal_is_stale"] is True
+        assert d["cycle"] is None
+        assert d["signal"] is None
 
     price_vs_cost = d["trends"]["price_vs_cost"]
     # 真实源（搜猪网当年序列）月度窗口短于 mock 37 个月，取 ≥6 保证趋势图仍有实质历史
@@ -131,7 +137,6 @@ async def test_dashboard_contract(client: AsyncClient):
     assert ref["effective_from"] <= date.today().isoformat()  # 政策锚点按生效日期切换
 
     assert d["strip"], "综合指标带不得为空"
-    assert any(s["effective_date"] for s in d["signal_history"]), "信号历史不得为空"
     for event in d["signal_events"]:
         for evaluation in event["evaluations"]:
             assert {"horizon_days", "status", "target_date", "score", "criteria_results"} <= set(
@@ -372,7 +377,11 @@ async def test_securities_fetch_and_series(client: AsyncClient):
     assert code["latest"]["close"] > 0
     # 涨跌幅 = close vs pre_close（后端算好，供表格直接渲染）
     if code["latest"]["pre_close"]:
-        expected = (code["latest"]["close"] - code["latest"]["pre_close"]) / code["latest"]["pre_close"] * 100
+        expected = (
+            (code["latest"]["close"] - code["latest"]["pre_close"])
+            / code["latest"]["pre_close"]
+            * 100
+        )
         assert abs(code["change_pct"] - round(expected, 2)) < 0.01
 
     # 可转债：registry 有在市转债则断言序列；无则断言空 codes 形状（源无关分支）
@@ -467,8 +476,13 @@ async def test_broiler_mock_ingest_generalization(client: AsyncClient):
     assert broiler["signal_type"] in SIGNALS
     assert broiler["signal_date"] is not None
 
-    pig = by_key["pig"]  # 真实源行业的列表状态行同步可用
-    assert pig["phase"] in PHASES and pig["signal_type"] in SIGNALS
+    pig = by_key["pig"]
+    pig_dashboard = (await client.get("/api/v1/industries/pig/dashboard")).json()
+    if pig_dashboard["data_quality"]["signal_ready"]:
+        assert pig["phase"] in PHASES and pig["signal_type"] in SIGNALS
+    else:
+        assert pig["phase"] is None and pig["signal_type"] is None
+        assert pig_dashboard["signal_is_stale"] is True
 
     resp = await client.get("/api/v1/industries/broiler/dashboard")
     assert resp.status_code == 200

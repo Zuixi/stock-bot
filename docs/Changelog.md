@@ -331,3 +331,8 @@
 ## 2026-09-03 - 行业信号时间线审查修复（Task 5 Fix 1）
 - Dashboard 事件 DTO 透传 `event_sequence` 并用于同日事件/评价唯一标识；空当前信号仅清空当前卡片而保留历史与摘要，空态头部改为“信号状态 待评估”，信号说明支持键盘聚焦展示。
 - 涉及模块：backend/schemas、backend/services、backend/tests、frontend/shared/api、frontend/features/industry-research、frontend/pages/research-workbench、frontend/e2e
+
+## 2026-09-03 - 行业信号质量全栈验证修复（Task 6）
+- Docker E2E 验证发现质量快照中的 `date` 值无法直接写入任务 JSONB；Worker 现统一编码返回结果为 JSON 兼容值，并新增日期嵌套回归测试。
+- 后端与 Playwright 全链路断言同步质量门禁契约：正式信号不可用时接受空周期/空信号与待评估 UI；指数基线无历史 K 线时明确跳过数据依赖断言。
+- 涉及模块：backend/workers、backend/tests、frontend/e2e
