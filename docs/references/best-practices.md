@@ -101,3 +101,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - Worker 的 `process` 不要用 blanket try/except 把异常吞成返回 dict：BaseWorker.handle_message 只把「抛异常」翻译成 failed 任务行，正常返回一律标 completed/100——数据源故障是常态，失败语义必须靠异常传播；只有未知 job type 这类「没开工」的错误才适合直接返回 failed dict（触库前拦截）。
 - 前端接真实数据源时 ECharts tooltip/label formatter 里的可空数值必须先判空再 `.toFixed`（板块热力图 `d.changePercent.toFixed(2)` 无守卫页面加载即抛 TypeError，属存量隐患）；替换"近似实现"组件前先 grep 全量引用确认只剩 barrel+单页两处，且轮询语义要区分 `refetchInterval`（盘中定时刷新）与 `staleTime`（仅去抖），漏配会把"60s 自动更新"做成假象。
 - 计划 brief 给定的表格 rowKey 组合键先对活端点跑唯一性校验再落码：Tushare 明细类数据（解禁一股多持有人、大宗同日同股同价同买方多笔）在默认键上必撞 React duplicate key，复合键以「业务键 + 区分度最高且前端已展示的字段」补位（如 +holderName/+volume）而非引入未展示字段。
+- 把为全市场设计的端点复用到个股维度时，客户端 filter 的覆盖边界要在 UI 上写明而非只靠空态：龙虎榜接口无 symbol 参数，个股卡拉 limit=50 最新日再前端过滤，本股不在当日榜即显示"暂无上榜记录"，footer 同步注明"全市场最新日筛选本股"，避免用户把覆盖范围导致的空态误读为数据缺失；另外计划 brief 末尾自带的防未用报错脚手架（hidden span + 死 import）按其收尾指令删除即可，落库前对"这段代码存在的理由"过一遍能直接清掉这类残留。
