@@ -67,6 +67,7 @@ export interface KLinePoint {
   high: number;
   low: number;
   volume: number;
+  amount?: number;
 }
 
 export interface SectorSummary {
@@ -132,3 +133,7 @@ export interface TagSummary {
   tag_name: string;
   stock_count: number;
 }
+
+export type AdjustMode = "raw" | "qfq";
+export interface KlineResult { points: KLinePoint[]; adjustAvailable: boolean; }
+export type KlineFetcher = (days: number, adjust: AdjustMode) => Promise<KlineResult>;
