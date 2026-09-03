@@ -1,64 +1,51 @@
 import ReactECharts from "echarts-for-react";
 import { AimOutlined } from "@ant-design/icons";
-import { Button, Card, Divider, Empty, Segmented, Space, Spin, Tag, Tooltip as AntTooltip } from "antd";
+import { Button, Card, Empty, Segmented, Space, Spin, Tooltip as AntTooltip } from "antd";
 import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { AdjustMode, KLinePoint } from "@/shared/types";
 import { buildKlineOption } from "./klineOption";
-import { MA_DEFS, MA_WARMUP_CALENDAR_DAYS, cropToRange, movingAverage, type MaKey } from "./klineMath";
-
-const RANGES = [
-  { label: "1月", value: 30 },
-  { label: "3月", value: 90 },
-  { label: "6月", value: 180 },
-  { label: "1年", value: 365 },
-] as const;
+import {
+  DEFAULT_TAIL_BARS,
+  MA_DEFS,
+  aggregateDaily,
+  movingAverage,
+  type KlineFreq,
+  type MaKey,
+} from "./klineMath";
 
 const STALE_TIME = 5 * 60 * 1000;
 const DEFAULT_VISIBLE_MAS: MaKey[] = ["MA5", "MA10", "MA20"];
-
-function rangeCutoff(rangeDays: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - rangeDays);
-  return d.toISOString().slice(0, 10);
-}
 
 export interface KlineChartProps {
   title: string;
   queryKey: string;
   fetcher: (days: number, adjust: AdjustMode) => Promise<{ points: KLinePoint[]; adjustAvailable: boolean }>;
   showAdjust?: boolean;
-  defaultRange?: number;
 }
 
-export function KlineChart({ title, queryKey, fetcher, showAdjust = false, defaultRange = 90 }: KlineChartProps) {
-  const [range, setRange] = useState<number>(defaultRange);
+export function KlineChart({ title, queryKey, fetcher, showAdjust = false }: KlineChartProps) {
+  const [freq, setFreq] = useState<KlineFreq>("day");
   const [adjust, setAdjust] = useState<AdjustMode>(showAdjust ? "qfq" : "raw");
   const [visibleMas, setVisibleMas] = useState<MaKey[]>(DEFAULT_VISIBLE_MAS);
   const chartRef = useRef<InstanceType<typeof ReactECharts> | null>(null);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["kline", queryKey, range, adjust],
-    queryFn: () => fetcher(range + MA_WARMUP_CALENDAR_DAYS, adjust),
+    queryKey: ["kline", queryKey, adjust],
+    queryFn: () => fetcher(3650, adjust), // 10年窗口 = 库内全量，频率切换纯前端聚合
     staleTime: STALE_TIME,
     // 复权因子后台回补中：禁用态提示"稍后自动可用"，10s 轮询直至就绪后停止
     refetchInterval: (q) => (q.state.data?.adjustAvailable === false ? 10_000 : false),
   });
 
-  const points = useMemo(
-    () => cropToRange(data?.points ?? [], rangeCutoff(range)),
-    [data, range],
-  );
+  const points = useMemo(() => aggregateDaily(data?.points ?? [], freq), [data, freq]);
 
   const maSeries = useMemo(() => {
-    const full = data?.points ?? [];
-    const closes = full.map((p) => p.close);
+    const closes = points.map((p) => p.close);
     const out: Partial<Record<MaKey, (number | null)[]>> = {};
-    for (const def of MA_DEFS) {
-      out[def.key] = cropToRange(movingAverage(closes, def.window).map((v, i) => ({ date: full[i].date, v })), rangeCutoff(range)).map((x) => x.v);
-    }
+    for (const def of MA_DEFS) out[def.key] = movingAverage(closes, def.window);
     return out;
-  }, [data, range]);
+  }, [points]);
 
   const option = useMemo(
     () => buildKlineOption({ points, maSeries, visibleMas }),
@@ -74,19 +61,16 @@ export function KlineChart({ title, queryKey, fetcher, showAdjust = false, defau
       size="small"
       extra={
         <Space size={8} wrap style={{ justifyContent: "flex-end" }}>
-          {MA_DEFS.map((d) => (
-            <Tag.CheckableTag
-              key={d.key}
-              checked={visibleMas.includes(d.key)}
-              onChange={(c) =>
-                setVisibleMas((prev) => (c ? [...prev, d.key] : prev.filter((k) => k !== d.key)))
-              }
-              style={visibleMas.includes(d.key) ? { color: d.color, borderColor: d.color } : undefined}
-            >
-              {d.key}
-            </Tag.CheckableTag>
-          ))}
-          <Divider type="vertical" />
+          <Segmented
+            size="small"
+            value={freq}
+            onChange={(v) => setFreq(v as KlineFreq)}
+            options={[
+              { label: "日K", value: "day" },
+              { label: "周K", value: "week" },
+              { label: "月K", value: "month" },
+            ]}
+          />
           {showAdjust &&
             (data?.adjustAvailable ?? false ? (
               <Segmented
@@ -111,12 +95,6 @@ export function KlineChart({ title, queryKey, fetcher, showAdjust = false, defau
                 />
               </AntTooltip>
             ))}
-          <Segmented
-            size="small"
-            value={range}
-            onChange={(v) => setRange(v as number)}
-            options={RANGES.map((r) => ({ label: r.label, value: r.value }))}
-          />
           <AntTooltip title="重置缩放">
             <Button size="small" type="text" icon={<AimOutlined />} onClick={resetZoom} />
           </AntTooltip>
@@ -128,7 +106,28 @@ export function KlineChart({ title, queryKey, fetcher, showAdjust = false, defau
           <Spin />
         </div>
       ) : points.length > 0 ? (
-        <ReactECharts ref={chartRef} option={option} notMerge lazyUpdate style={{ height: 400 }} />
+        <div style={{ position: "relative" }}>
+          {!isLoading && points.length > 0 && (
+            <div style={{ position: "absolute", top: 6, left: 66, right: 20, display: "flex", gap: 12, fontSize: 11, zIndex: 5 }}>
+              {MA_DEFS.map((d) => {
+                const on = visibleMas.includes(d.key);
+                const v = maSeries[d.key]?.[points.length - 1] ?? null;
+                return (
+                  <span
+                    key={d.key}
+                    onClick={() =>
+                      setVisibleMas((prev) => (on ? prev.filter((k) => k !== d.key) : [...prev, d.key]))
+                    }
+                    style={{ color: on ? d.color : "#9ca3af", cursor: "pointer", userSelect: "none" }}
+                  >
+                    {d.key} {on ? (v == null ? "--" : v.toFixed(2)) : ""}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          <ReactECharts ref={chartRef} option={option} notMerge lazyUpdate style={{ height: 400 }} />
+        </div>
       ) : (
         <div style={{ height: 400, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <Empty description="暂无K线数据" />
