@@ -45,6 +45,10 @@ test("个股K线：tooltip 结构化展示（无可见日期轴）", async ({ pa
   await expect(card.getByText(/涨跌幅/)).toBeVisible();
   await expect(card.getByText(/成交量/)).toBeVisible();
   await expect(card.getByText(/成交额/)).toBeVisible();
+  // 列式布局（P5）：标签逐行 + 涨跌额行
+  await expect(card.getByText(/^开盘$/)).toBeVisible();
+  await expect(card.getByText(/^收盘$/)).toBeVisible();
+  await expect(card.getByText(/涨跌额/)).toBeVisible();
 });
 
 test("指数K线：频率Tab可用，无复权控件", async ({ page }) => {

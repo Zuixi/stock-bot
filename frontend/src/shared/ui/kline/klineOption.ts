@@ -9,7 +9,16 @@ export interface KlineOptionInput {
 }
 
 const pct = (cur: number, prev: number | undefined) =>
-  prev == null ? "--" : `${(((cur - prev) / prev) * 100).toFixed(2)}%`;
+  prev == null || prev === 0 ? "--" : `${(((cur - prev) / prev) * 100).toFixed(2)}%`;
+
+const signed = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
+
+/** tooltip 列式行：灰标签左、语义色数值右（tabular 对齐） */
+const row = (label: string, value: string, color?: string) =>
+  `<div style="display:flex;justify-content:space-between;gap:16px">` +
+  `<span style="color:${COLORS.flat}">${label}</span>` +
+  `<span style="font-variant-numeric:tabular-nums${color ? `;color:${color};font-weight:600` : ""}">${value}</span>` +
+  `</div>`;
 
 export function buildKlineOption({ points, maSeries, visibleMas }: KlineOptionInput) {
   const dates = points.map((p) => p.date); // 原始 ISO 日期串（tooltip 直接消费）
@@ -25,18 +34,26 @@ export function buildKlineOption({ points, maSeries, visibleMas }: KlineOptionIn
     const p = points[i];
     const [open, close, low, high] = candle.value as number[];
     const prev = i > 0 ? points[i - 1].close : undefined;
-    const change = pct(close, prev);
+    // A股习惯：开/收/高/低/涨跌额/涨跌幅 随当日涨跌着色（首日中性）
     const color = prev == null ? COLORS.flat : close >= prev ? COLORS.up : COLORS.down;
-    const maLine = (name: MaKey) => {
+    const change = pct(close, prev);
+    const diff = prev == null ? "--" : signed(close - prev);
+    const maRow = (name: MaKey) => {
       const def = MA_DEFS.find((d) => d.key === name);
       const v = maSeries[name]?.[i];
-      return v == null ? "" : `<span style="margin-left:8px;color:${def?.color}">${name} ${v.toFixed(2)}</span>`;
+      return v == null ? "" : row(name, v.toFixed(2), def?.color);
     };
-    return `<div style="font-size:12px;line-height:1.9">
-      <div style="font-weight:600">${p.date}</div>
-      <div>开：<b>${open.toFixed(2)}</b>　高：<b>${high.toFixed(2)}</b>　低：<b>${low.toFixed(2)}</b>　收：<b>${close.toFixed(2)}</b></div>
-      <div>涨跌幅：<b style="color:${color}">${change}</b>　成交量：${fmtVolume(p.volume)}　成交额：${fmtAmount(p.amount)}</div>
-      <div>${visibleMas.map((k) => maLine(k)).join("")}</div>
+    return `<div style="font-size:12px;line-height:1.8;min-width:150px">
+      <div style="font-weight:600;margin-bottom:2px">${p.date}</div>
+      ${row("开盘", open.toFixed(2), color)}
+      ${row("收盘", close.toFixed(2), color)}
+      ${row("最高", high.toFixed(2), color)}
+      ${row("最低", low.toFixed(2), color)}
+      ${row("涨跌额", diff, color)}
+      ${row("涨跌幅", change, color)}
+      ${row("成交量", fmtVolume(p.volume))}
+      ${row("成交额", fmtAmount(p.amount))}
+      ${visibleMas.map((k) => maRow(k)).join("")}
     </div>`;
   };
 
