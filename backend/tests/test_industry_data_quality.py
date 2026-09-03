@@ -255,6 +255,61 @@ def test_malformed_horizon_rule_fails_closed():
     assert quality.signal_ready is False
 
 
+def test_dashboard_only_rule_reference_is_rejected():
+    verification = PIG_INDUSTRY.verification
+    assert verification is not None
+    first_horizon = verification.horizons[0]
+    rules = (
+        replace(first_horizon.rules[0], metric_key="industry_cost_avg"),
+        *first_horizon.rules[1:],
+    )
+    cfg = replace(
+        PIG_INDUSTRY,
+        verification=replace(
+            verification,
+            horizons=(replace(first_horizon, rules=rules), *verification.horizons[1:]),
+        ),
+    )
+    assert is_formal_signal_config_valid(cfg) is False
+
+
+def test_horizon_missing_required_metric_is_rejected():
+    verification = PIG_INDUSTRY.verification
+    assert verification is not None
+    first_horizon = verification.horizons[0]
+    rules = (
+        replace(first_horizon.rules[0], weight=50),
+        replace(first_horizon.rules[1], weight=50),
+    )
+    cfg = replace(
+        PIG_INDUSTRY,
+        verification=replace(
+            verification,
+            horizons=(replace(first_horizon, rules=rules), *verification.horizons[1:]),
+        ),
+    )
+    assert is_formal_signal_config_valid(cfg) is False
+
+
+def test_duplicate_rule_metric_is_rejected():
+    verification = PIG_INDUSTRY.verification
+    assert verification is not None
+    first_horizon = verification.horizons[0]
+    rules = (
+        first_horizon.rules[0],
+        first_horizon.rules[1],
+        replace(first_horizon.rules[2], metric_key="hog_price"),
+    )
+    cfg = replace(
+        PIG_INDUSTRY,
+        verification=replace(
+            verification,
+            horizons=(replace(first_horizon, rules=rules), *verification.horizons[1:]),
+        ),
+    )
+    assert is_formal_signal_config_valid(cfg) is False
+
+
 def test_pig_valid_config_and_ready_results_remain_signal_ready():
     assert is_formal_signal_config_valid(PIG_INDUSTRY) is True
     quality = aggregate_industry_quality(PIG_INDUSTRY, ready_pig_results_except())
@@ -289,6 +344,12 @@ def test_pig_registry_declares_quality_gate_and_verification_rules():
     assert verification.methodology_version == "pig-cycle-v1"
     assert verification.supported_signals == (SIGNAL_BUY, SIGNAL_SELL)
     assert [horizon.days for horizon in verification.horizons] == [30, 90]
+    for horizon in verification.horizons:
+        assert [rule.direction for rule in horizon.rules] == [
+            "buy_up_sell_down",
+            "buy_up_sell_down",
+            "buy_lte_zero_sell_gte_zero",
+        ]
     assert [sum(rule.weight for rule in horizon.rules) for horizon in verification.horizons] == [
         100,
         100,
