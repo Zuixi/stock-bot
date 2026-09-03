@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.database import async_session_factory
-from app.models.sw_industry import SwIndustryClass, SwIndustryMember
+from app.models.sw_industry import StockCustomSwTag, SwIndustryClass, SwIndustryMember
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]  # /app in Docker, .../backend on host
 SW_SQL_FILE = _BACKEND_ROOT / "data" / "sw_seed.sql"
+CUSTOM_TAGS_SQL_FILE = _BACKEND_ROOT / "data" / "sw_custom_tags_seed.sql"
 
 
 def _resolve_sw_data_dir() -> Path:
@@ -157,6 +158,31 @@ async def import_sw_from_sql(src: Path | None = None) -> dict[str, int]:
     return result
 
 
+async def import_custom_tags_from_sql(src: Path | None = None) -> int:
+    """Import the curated custom-tag overlay seed (additive — user tags preserved).
+
+    The overlay carries the 2026-09-03 OTHER→SW merge (1439 rows). Statements are
+    INSERT ... ON CONFLICT DO NOTHING, so re-runs and user-added tags are safe.
+    """
+    src = src or CUSTOM_TAGS_SQL_FILE
+    if not src.exists():
+        return 0
+    sql = src.read_text(encoding="utf-8")
+    if not sql.strip():
+        return 0
+
+    async with async_session_factory() as db:
+        for statement in sql.split(";"):
+            stmt = statement.strip()
+            if stmt and not stmt.startswith("--"):
+                await db.execute(text(stmt))
+        await db.commit()
+        count = len((await db.execute(select(StockCustomSwTag.id))).scalars().all())
+
+    logger.info("Imported custom-tag overlay from SQL seed: %d rows", count)
+    return count
+
+
 # ---------------------------------------------------------------------------
 # XLS import (original path)
 # ---------------------------------------------------------------------------
@@ -263,7 +289,12 @@ async def import_all() -> dict[str, int]:
     # 1) Try SQL seed first
     if SW_SQL_FILE.exists():
         logger.info("SW seed SQL found at %s — importing from SQL", SW_SQL_FILE)
-        return await import_sw_from_sql()
+        result = await import_sw_from_sql()
+        try:
+            await import_custom_tags_from_sql()
+        except Exception:
+            logger.warning("Failed to import custom-tag overlay seed", exc_info=True)
+        return result
 
     # 2) Fall back to XLS parsing
     logger.info("No SW seed SQL — parsing XLS files")
@@ -277,6 +308,11 @@ async def import_all() -> dict[str, int]:
             await export_sw_to_sql()
         except Exception:
             logger.warning("Failed to auto-export SW seed SQL", exc_info=True)
+
+    try:
+        await import_custom_tags_from_sql()
+    except Exception:
+        logger.warning("Failed to import custom-tag overlay seed", exc_info=True)
 
     return result
 

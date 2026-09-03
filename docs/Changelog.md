@@ -305,3 +305,9 @@
 - **处理**：A 精确重名 321 只按同名映射 + B 近似名 52 组 1017 只按语义映射表 + C 电气设备 99 只按东财行业接口三方归类（同花顺双源核验特例）+ 2 只银行逐股，共 1439 行写入 stock_custom_sw_tags（幂等）；"其他"清零，L1 组 32→31
 - **验证**：API 实测电子 524/电力设备 351/医药生物 498/银行 42 与推演一致；树缓存失效后浏览器即时生效
 - 涉及模块：数据层 stock_custom_sw_tags（无代码变更）
+
+## 2026-09-03 - 行业分类种子同步 — custom_tags overlay 种子与启动加载
+- **问题**：1439 只"其他"合并数据只存在于运行库，repo 种子未同步——全新部署会退回"其他"83 组状态；且 `sw_seed.sql` 为自动再生成文件（仅覆盖申万官方两表），手改会被抹掉
+- **修复**：新增 `backend/data/sw_custom_tags_seed.sql` overlay 种子（1439 行，INSERT ON CONFLICT DO NOTHING 加性语义，保留用户自建标签）+ `sw_industry_service` 新增 `import_custom_tags_from_sql()` 并接入 `import_all()` 两条路径（SQL 种子/XLS 引导），启动初始化自动加载；`.gitignore`/`backend/.dockerignore` 补豁免使种子进 git 与镜像
+- **验证**：种子在活库幂等重跑（INSERT 0 0）；api 重建后容器内 loader 实测返回 1439；mypy 零新增（基线 5 项既有）
+- 涉及模块：backend/data, backend/app/services/sw_industry_service, backend/.dockerignore, .gitignore

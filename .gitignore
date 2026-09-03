@@ -55,3 +55,4 @@ data/*
 ## Build artifacts (test coverage / TS incremental build — regenerated locally)
 backend/.coverage
 frontend/tsconfig.tsbuildinfo
+!**/data/sw_custom_tags_seed.sql
