@@ -6,9 +6,9 @@ and per-exchange stock resources under ``/api/v1/exchanges/{exchange}/stocks``.
 """
 
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 
 from app.api.deps import CacheDep, DbDep
 from app.core.exceptions import not_found_response
@@ -149,12 +149,18 @@ async def get_kline(
     symbol: str,
     db: DbDep,
     cache: CacheDep,
+    background_tasks: BackgroundTasks,
     start: date | None = None,
     end: date | None = None,
+    adjust: Literal["raw", "qfq"] = "raw",
 ) -> KlineResponse:
-    result = await quote_service.get_kline(db, cache, exchange, symbol, start, end)
+    result = await quote_service.get_kline(
+        db, cache, exchange, symbol, start, end, adjust=adjust
+    )
     if result is None:
         raise not_found_response("Stock", f"{exchange}/{symbol}")
+    if not result.adjust_available:
+        background_tasks.add_task(quote_service.backfill_adj_factor, exchange, symbol)
     return result
 
 
