@@ -14,6 +14,7 @@ from app.scheduler.jobs import (
     daily_quotes_backfill_job,
     global_index_daily_job,
     industry_metrics_refresh_job,
+    northbound_daily_job,
     sector_moneyflow_job,
     securities_refresh_job,
     sse_post_close_job,
@@ -148,6 +149,15 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5", timezone="Asia/Shanghai"),
         id="sector_moneyflow_poll",
         name="Sector moneyflow intraday poll",
+        replace_existing=True,
+    )
+
+    # Northbound daily net inflow: Mon-Fri 16:10 post close (idempotent upsert)
+    scheduler.add_job(
+        northbound_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=10, timezone="Asia/Shanghai"),
+        id="northbound_daily",
+        name="Northbound daily net inflow",
         replace_existing=True,
     )
 

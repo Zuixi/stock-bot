@@ -30,3 +30,8 @@ class SectorMoneyflowOut(BaseModel):
     main_net_ratio: float | None = None  # %
     up_count: int | None = None
     down_count: int | None = None
+
+
+class NorthboundPointOut(BaseModel):
+    date: str
+    net_amount: float | None = None  # 万元

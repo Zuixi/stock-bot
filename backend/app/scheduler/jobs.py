@@ -233,3 +233,19 @@ async def sector_moneyflow_job() -> None:
         logger.info("Sector moneyflow poll done: %s", result)
     except Exception:
         logger.exception("Sector moneyflow poll failed")
+
+
+async def northbound_daily_job() -> None:
+    """北向资金每日净流入（交易日 16:10 盘后，幂等 upsert 近 30 日窗口）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_northbound(db)
+            await db.commit()
+        logger.info("Northbound daily done: %s", result)
+    except Exception:
+        logger.exception("Northbound daily job failed")

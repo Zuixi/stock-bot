@@ -180,3 +180,15 @@ async def test_ingest_sector_moneyflow_uses_today_and_both_dims(monkeypatch):
     assert result == {"industry": 1, "concept": 0}
     assert set(fetched) == {"industry", "concept"}
     assert upserts[0][0] == mds._today_sh() and upserts[0][1] == "industry"
+
+
+def test_map_hsgt_rows_string_to_float():
+    df = mds.pd.DataFrame([
+        {"trade_date": "20260902", "north_money": "244809.28"},
+        {"trade_date": "20260901", "north_money": "273259.26"},
+    ])
+    rows = mds._map_hsgt_rows(df)
+    assert rows == [
+        {"trade_date": date(2026, 9, 2), "net_amount": 244809.28},
+        {"trade_date": date(2026, 9, 1), "net_amount": 273259.26},
+    ]
