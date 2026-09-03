@@ -313,3 +313,20 @@ async def repurchase_daily_job() -> None:
         logger.info("Repurchase daily done: %s", result)
     except Exception:
         logger.exception("Repurchase daily job failed")
+
+
+async def announcements_poll_job() -> None:
+    """巨潮公告轮询（8-22 点每 10 分钟，DO NOTHING 去重近 3 日窗口）。
+
+    公告发布含非交易日/盘后时段 → 无交易时段与工作日守卫。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import announcement_service  # noqa: PLC0415
+
+    try:
+        async with async_session_factory() as db:
+            result = await announcement_service.ingest_announcements(db)
+            await db.commit()
+        logger.info("Announcements poll done: %s", result)
+    except Exception:
+        logger.exception("Announcements poll failed")

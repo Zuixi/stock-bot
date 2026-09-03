@@ -87,3 +87,13 @@ class RepurchaseOut(BaseModel):
     exp_date: str | None = None
     vol: float | None = None     # 股
     amount: float | None = None  # 元
+
+
+class AnnouncementOut(BaseModel):
+    announcement_id: str
+    sec_code: str
+    sec_name: str | None = None
+    title: str
+    announce_time: str  # ISO datetime str
+    category: str       # report | event
+    pdf_url: str | None = None

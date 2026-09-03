@@ -10,6 +10,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.scheduler.jobs import (
+    announcements_poll_job,
     block_trade_daily_job,
     daily_basic_backfill_job,
     daily_quotes_backfill_job,
@@ -198,6 +199,16 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(day_of_week="mon-fri", hour=18, minute=0, timezone="Asia/Shanghai"),
         id="dragon_tiger_daily",
         name="Dragon tiger daily",
+        replace_existing=True,
+    )
+
+    # Cninfo announcements poll: daily 08:00-22:59 every 10 min
+    # (公告含非交易日/盘后发布 → 无工作日/交易时段守卫；DO NOTHING 去重)
+    scheduler.add_job(
+        announcements_poll_job,
+        CronTrigger(hour="8-22", minute="*/10", timezone="Asia/Shanghai"),
+        id="announcements_poll",
+        name="Cninfo announcements poll",
         replace_existing=True,
     )
 
