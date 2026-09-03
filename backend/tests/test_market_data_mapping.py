@@ -146,4 +146,7 @@ async def test_get_global_index_cards_merges_realtime_and_spark(monkeypatch):
     assert len(by_code["N225"]["spark"]) == 30  # 35 行裁到 30
     # KS11 实时缺失 → 用日线最后一根 close 兜底（pre_close 为 NULL，逐 close 差值算涨跌）
     assert by_code["KS11"]["price"] == 60034.0 and by_code["KS11"]["source"] == "eod"
+    assert by_code["KS11"]["change"] == 1.0 and by_code["KS11"]["pct_change"] == 0.0  # 60033→60034
+    # N225 实时透传
+    assert by_code["N225"]["change"] == -111.16 and by_code["N225"]["pct_change"] == -0.17
     assert set(kline_calls) == {g["ts_code"] for g in mds.GLOBAL_INDICES}
