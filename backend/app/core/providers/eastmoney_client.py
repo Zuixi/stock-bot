@@ -2,7 +2,8 @@
 
 Verified endpoints (2026-09-03):
 - ulist.np/get on push2delay (push2 proper returns empty in this environment)
-- clist/get on push2 for sector money flow
+- clist/get on push2delay for sector money flow
+  (push2 began refusing connections mid-day 2026-09-03)
 """
 
 from __future__ import annotations
@@ -19,7 +20,9 @@ logger = logging.getLogger(__name__)
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 _EM_UT = "fa5fd1943c7b386f172d6893dbfba10b"
 _SNAPSHOT_BASE = "https://push2delay.eastmoney.com"
-_CLIST_BASE = "https://push2.eastmoney.com"
+# push2 主站在本环境已开始拒连（host/容器均 000 disconnect，2026-09-03 下午实测）；
+# clist 端点在 push2delay 同构可用（字段/数据一致），改走 delay 域保住盘中轮询可用性。
+_CLIST_BASE = "https://push2delay.eastmoney.com"
 _MIN_INTERVAL = 0.3
 
 

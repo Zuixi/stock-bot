@@ -18,3 +18,15 @@ class GlobalIndexCardOut(BaseModel):
     spark: list[float] = Field(default_factory=list)
     updated_at: datetime
     source: str
+
+
+class SectorMoneyflowOut(BaseModel):
+    board_code: str
+    board_name: str | None = None
+    pct_change: float | None = None
+    main_net_inflow: float | None = None  # 元
+    super_large_net: float | None = None  # 元
+    large_net: float | None = None  # 元
+    main_net_ratio: float | None = None  # %
+    up_count: int | None = None
+    down_count: int | None = None
