@@ -63,3 +63,40 @@ async def test_ingest_global_index_daily_filters_and_upserts(monkeypatch):
     assert result == {"upserted": 1}
     assert upserted[0].ts_code == "N225" and upserted[0].volume == 1724660.8
     assert set(calls) == {"HSI", "N225", "KS11", "DJI", "SPX", "IXIC"}  # 只拉 index_global 源
+
+
+@pytest.mark.asyncio
+async def test_ingest_global_index_daily_partial_failure(monkeypatch):
+    """单指数拉取失败不中断整体 ingest（部分成功仍入库）。"""
+    calls: list = []
+
+    async def fake_fetch_index_global(ts_code, start_date, end_date):
+        calls.append(ts_code)
+        if ts_code == "KS11":
+            raise RuntimeError("TuShareClient API 'index_global' failed after 3 retries")
+        if ts_code != "N225":
+            return mds.pd.DataFrame()
+        return mds.pd.DataFrame(
+            [{"ts_code": "N225", "trade_date": "20260902", "open": 65195.43, "close": 64325.64,
+              "high": 65195.43, "low": 64215.47, "vol": 1724660.8}]
+        )
+
+    async def fake_fetch_index_daily(ts_code, start_date, end_date):
+        return mds.pd.DataFrame()
+
+    upserted: list = []
+
+    async def fake_upsert(db, rows):
+        upserted.extend(rows)
+        return len(rows)
+
+    monkeypatch.setattr(mds, "_get_tushare", lambda: type("C", (), {
+        "fetch_index_global": staticmethod(fake_fetch_index_global),
+        "fetch_index_daily": staticmethod(fake_fetch_index_daily),
+    })())
+    monkeypatch.setattr(mds.index_repo, "upsert_index_dailies", fake_upsert)
+
+    result = await mds.ingest_global_index_daily(db=None, lookback_days=14)
+    assert result == {"upserted": 1}
+    assert upserted[0].ts_code == "N225" and upserted[0].volume == 1724660.8
+    assert "KS11" in calls and "N225" in calls  # 失败后继续拉取后续指数
