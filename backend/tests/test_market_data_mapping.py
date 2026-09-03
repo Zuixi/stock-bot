@@ -192,3 +192,51 @@ def test_map_hsgt_rows_string_to_float():
         {"trade_date": date(2026, 9, 2), "net_amount": 244809.28},
         {"trade_date": date(2026, 9, 1), "net_amount": 273259.26},
     ]
+
+
+def test_map_top_list_rows():
+    df = mds.pd.DataFrame([{
+        "trade_date": "20260902", "ts_code": "000019.SZ", "name": "深粮控股", "close": 7.18,
+        "pct_change": -9.3434, "turnover_rate": 14.8, "amount": 453755737.0, "l_sell": 112970021.2,
+        "l_buy": 30878730.2, "l_amount": 143848751.4, "net_amount": -82091291.0, "net_rate": -18.09,
+        "amount_rate": 31.7, "float_values": 3153460155.46,
+        "reason": "日跌幅偏离值达到7%的前5只证券",
+    }])
+    rows = mds._map_top_list_rows(df)
+    r = rows[0]
+    assert r["ts_code"] == "000019.SZ" and r["symbol"] == "000019"
+    assert r["trade_date"] == date(2026, 9, 2) and r["net_amount"] == -82091291.0
+    assert r["reason"].startswith("日跌幅偏离值")
+
+
+def test_map_top_list_rows_truncates_long_reason():
+    """reason 列 String(160)：TuShare 超长上榜原因映射层截断，避免 DB 报错。"""
+    df = mds.pd.DataFrame([{
+        "trade_date": "20260902", "ts_code": "000019.SZ", "reason": "长" * 200,
+    }])
+    reason = mds._map_top_list_rows(df)[0]["reason"]
+    assert len(reason) == 160
+
+
+def test_map_block_trade_rows():
+    df = mds.pd.DataFrame([{
+        "ts_code": "000488.SZ", "trade_date": "20260902", "price": 1.88, "vol": 50.0,
+        "amount": 94.0, "buyer": "机构专用", "seller": "机构专用",
+    }])
+    rows = mds._map_block_trade_rows(df)
+    assert rows[0] == {
+        "trade_date": date(2026, 9, 2), "ts_code": "000488.SZ", "symbol": "000488",
+        "price": 1.88, "volume": 50.0, "amount": 94.0,
+        "buyer": "机构专用", "seller": "机构专用",
+    }
+
+
+def test_map_block_trade_rows_dedupes_intra_batch_duplicates():
+    """大宗交易无稳定业务键：同批重复行映射后按去重键（date+code+buyer+seller+price+vol）保留一条。"""
+    df = mds.pd.DataFrame([
+        {"ts_code": "000488.SZ", "trade_date": "20260902", "price": 1.88, "vol": 50.0,
+         "amount": 94.0, "buyer": "机构专用", "seller": "机构专用"},
+        {"ts_code": "000488.SZ", "trade_date": "20260902", "price": 1.88, "vol": 50.0,
+         "amount": 94.0, "buyer": "机构专用", "seller": "机构专用"},
+    ])
+    assert len(mds._dedupe_block_trade_rows(mds._map_block_trade_rows(df))) == 1

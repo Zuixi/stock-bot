@@ -10,8 +10,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.scheduler.jobs import (
+    block_trade_daily_job,
     daily_basic_backfill_job,
     daily_quotes_backfill_job,
+    dragon_tiger_daily_job,
     global_index_daily_job,
     industry_metrics_refresh_job,
     northbound_daily_job,
@@ -158,6 +160,24 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(day_of_week="mon-fri", hour=16, minute=10, timezone="Asia/Shanghai"),
         id="northbound_daily",
         name="Northbound daily net inflow",
+        replace_existing=True,
+    )
+
+    # Block trades: Mon-Fri 17:00 post close (DO NOTHING dedupe)
+    scheduler.add_job(
+        block_trade_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute=0, timezone="Asia/Shanghai"),
+        id="block_trade_daily",
+        name="Block trade daily",
+        replace_existing=True,
+    )
+
+    # Dragon tiger entries: Mon-Fri 18:00 post close (idempotent upsert)
+    scheduler.add_job(
+        dragon_tiger_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=18, minute=0, timezone="Asia/Shanghai"),
+        id="dragon_tiger_daily",
+        name="Dragon tiger daily",
         replace_existing=True,
     )
 

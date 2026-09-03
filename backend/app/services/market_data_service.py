@@ -281,6 +281,50 @@ async def get_sector_moneyflow(
     return rows[:limit]
 
 
+def _map_top_list_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """top_list → dragon tiger rows（金额元；reason 列 String(160)，超长截断防 DB 报错）。"""
+    rows: list[dict[str, Any]] = []
+    for rec in df.to_dict("records"):
+        rows.append({
+            "trade_date": _d(rec["trade_date"]), "ts_code": rec["ts_code"],
+            "symbol": rec["ts_code"].split(".")[0],
+            "name": rec.get("name"), "close": _f(rec.get("close")),
+            "pct_change": _f(rec.get("pct_change")), "turnover_rate": _f(rec.get("turnover_rate")),
+            "amount": _f(rec.get("amount")),
+            "l_buy": _f(rec.get("l_buy")), "l_sell": _f(rec.get("l_sell")),
+            "l_amount": _f(rec.get("l_amount")), "net_amount": _f(rec.get("net_amount")),
+            "net_rate": _f(rec.get("net_rate")), "amount_rate": _f(rec.get("amount_rate")),
+            "float_values": _f(rec.get("float_values")),
+            "reason": str(rec.get("reason") or "")[:160],
+        })
+    return rows
+
+
+def _map_block_trade_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """block_trade → block trade rows（price 元 / vol 万股 / amount 万元）。"""
+    rows: list[dict[str, Any]] = []
+    for rec in df.to_dict("records"):
+        rows.append({
+            "trade_date": _d(rec["trade_date"]), "ts_code": rec["ts_code"],
+            "symbol": rec["ts_code"].split(".")[0],
+            "price": _f(rec.get("price")), "volume": _f(rec.get("vol")),
+            "amount": _f(rec.get("amount")), "buyer": rec.get("buyer"), "seller": rec.get("seller"),
+        })
+    return rows
+
+
+def _dedupe_block_trade_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按去重键（date+code+buyer+seller+price+volume）同批去重，保留末次出现。
+
+    ON CONFLICT 只处理与既有行的冲突、不处理同批 INSERT 内自冲突，须先在 Python 端去重。
+    """
+    deduped = {
+        (r["trade_date"], r["ts_code"], r["buyer"], r["seller"], r["price"], r["volume"]): r
+        for r in rows
+    }
+    return list(deduped.values())
+
+
 def _map_hsgt_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
     """moneyflow_hsgt 全列字符串 → northbound rows（north_money 万元，缺失/NaN 置 None）。"""
     rows: list[dict[str, Any]] = []
@@ -332,6 +376,104 @@ async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> li
     return rows
 
 
+async def ingest_dragon_tiger(db: AsyncSession, trade_date: date | None = None) -> dict[str, int]:
+    """盘后采集：指定交易日龙虎榜个股明细（top_list；None=今日上海日期，幂等 upsert）。"""
+    client = _get_tushare()
+    day = trade_date or _today_sh()
+    df = await client.fetch_top_list(day.strftime("%Y%m%d"))
+    upserted = await market_data_repo.upsert_dragon_tiger(db, _map_top_list_rows(df))
+    logger.info("ingest_dragon_tiger trade_date=%s upserted=%s", day, upserted)
+    return {"upserted": upserted}
+
+
+async def ingest_block_trades(db: AsyncSession, trade_date: date | None = None) -> dict[str, int]:
+    """盘后采集：指定交易日大宗交易明细（block_trade；None=今日上海日期）。
+
+    行无稳定业务主键 → DO NOTHING；同批重复行先 Python 端去重（见 _dedupe_block_trade_rows）。
+    """
+    client = _get_tushare()
+    day = trade_date or _today_sh()
+    df = await client.fetch_block_trade(day.strftime("%Y%m%d"))
+    rows = _dedupe_block_trade_rows(_map_block_trade_rows(df))
+    upserted = await market_data_repo.upsert_block_trades(db, rows)
+    logger.info("ingest_block_trades trade_date=%s upserted=%s", day, upserted)
+    return {"upserted": upserted}
+
+
+DRAGON_TIGER_CACHE_KEY = "market:dragon-tiger:{date}"
+DRAGON_TIGER_TTL = 300
+DRAGON_TIGER_CACHE_LIMIT = 100  # 端点 limit 上限（le=100）：缓存全量再按请求切片
+
+
+async def get_dragon_tiger(
+    cache: CacheClient | None, date_iso: str | None = None, limit: int = 15
+) -> list[dict[str, Any]]:
+    """某交易日龙虎榜明细（date 缺省取表内最新 trade_date；Redis 300s 共享缓存）。"""
+    day = datetime.fromisoformat(date_iso).date() if date_iso else None
+
+    from app.core.database import async_session_factory  # noqa: PLC0415
+
+    rows: list[dict[str, Any]] = []
+    async with async_session_factory() as db:
+        effective = day or await market_data_repo.max_dragon_tiger_date(db)
+        if effective is None:
+            return []
+        key = DRAGON_TIGER_CACHE_KEY.format(date=effective.isoformat())
+        if cache is not None:
+            cached = await cache.get(key)
+            if cached:
+                rows_cached: list[dict[str, Any]] = cached
+                return rows_cached[:limit]
+        for t in await market_data_repo.list_dragon_tiger(
+            db, effective, DRAGON_TIGER_CACHE_LIMIT
+        ):
+            rows.append({
+                "trade_date": t.trade_date.isoformat(), "ts_code": t.ts_code,
+                "symbol": t.ts_code.split(".")[0], "name": t.name, "close": t.close,
+                "pct_change": t.pct_change, "turnover_rate": t.turnover_rate, "amount": t.amount,
+                "l_buy": t.l_buy, "l_sell": t.l_sell, "l_amount": t.l_amount,
+                "net_amount": t.net_amount, "reason": t.reason,
+            })
+    if cache is not None and rows:
+        await cache.set(key, rows, ttl=DRAGON_TIGER_TTL)
+    return rows[:limit]
+
+
+BLOCK_TRADES_CACHE_KEY = "market:block-trades:{date}:{symbol}"
+BLOCK_TRADES_TTL = 300
+BLOCK_TRADES_CACHE_LIMIT = 100  # 端点 limit 上限（le=100）：缓存全量再按请求切片
+
+
+async def get_block_trades(
+    cache: CacheClient | None,
+    date_iso: str | None = None,
+    symbol: str | None = None,
+    limit: int = 15,
+) -> list[dict[str, Any]]:
+    """某交易日大宗交易明细（date 缺省取表内最新；symbol 为 6 位代码；Redis 300s 共享缓存）。"""
+    day = datetime.fromisoformat(date_iso).date() if date_iso else None
+
+    from app.core.database import async_session_factory  # noqa: PLC0415
+
+    rows: list[dict[str, Any]] = []
+    async with async_session_factory() as db:
+        effective = day or await market_data_repo.max_block_trade_date(db)
+        if effective is None:
+            return []
+        key = BLOCK_TRADES_CACHE_KEY.format(date=effective.isoformat(), symbol=symbol or "all")
+        if cache is not None:
+            cached = await cache.get(key)
+            if cached:
+                rows_cached: list[dict[str, Any]] = cached
+                return rows_cached[:limit]
+        rows = await market_data_repo.list_block_trades(
+            db, effective, symbol, BLOCK_TRADES_CACHE_LIMIT
+        )
+    if cache is not None and rows:
+        await cache.set(key, rows, ttl=BLOCK_TRADES_TTL)
+    return rows[:limit]
+
+
 async def _main() -> None:
     from app.core.database import async_session_factory  # noqa: PLC0415
 
@@ -348,10 +490,14 @@ async def _main() -> None:
             result = await ingest_sector_moneyflow(db)
         elif job == "northbound":
             result = await ingest_northbound(db)
+        elif job == "dragon_tiger":
+            result = await ingest_dragon_tiger(db, _d(args[1]) if len(args) > 1 else None)
+        elif job == "block_trades":
+            result = await ingest_block_trades(db, _d(args[1]) if len(args) > 1 else None)
         else:
             raise SystemExit(
                 f"unknown job: {job}; available: global_index_daily, "
-                "backfill_global_index, sector_moneyflow, northbound"
+                "backfill_global_index, sector_moneyflow, northbound, dragon_tiger, block_trades"
             )
         await db.commit()
     print(job, "->", result)
