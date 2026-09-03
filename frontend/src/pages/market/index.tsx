@@ -1,6 +1,6 @@
 import { Typography, Row, Col, Divider } from "antd";
 import {
-  MarketOverview,
+  GlobalMarketBoard,
   DistributionChart,
   SectorHeatmap,
   CapitalFlowChart,
@@ -12,7 +12,7 @@ export default function MarketPage() {
   return (
     <div>
       <Typography.Title level={4}>全球市场</Typography.Title>
-      <MarketOverview />
+      <GlobalMarketBoard />
 
       <Divider style={{ margin: "16px 0" }} />
 
