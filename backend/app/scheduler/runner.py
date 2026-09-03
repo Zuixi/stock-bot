@@ -14,6 +14,7 @@ from app.scheduler.jobs import (
     daily_quotes_backfill_job,
     global_index_daily_job,
     industry_metrics_refresh_job,
+    sector_moneyflow_job,
     securities_refresh_job,
     sse_post_close_job,
     sse_trade_hours_job,
@@ -137,6 +138,16 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(hour=17, minute=30, timezone="Asia/Shanghai"),
         id="global_index_daily",
         name="Global index daily refresh",
+        replace_existing=True,
+    )
+
+    # Sector moneyflow intraday poll: Mon-Fri 9:00-15:55 every 5 min
+    # (job itself guards _is_workday/_in_trading_hours)
+    scheduler.add_job(
+        sector_moneyflow_job,
+        CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5", timezone="Asia/Shanghai"),
+        id="sector_moneyflow_poll",
+        name="Sector moneyflow intraday poll",
         replace_existing=True,
     )
 

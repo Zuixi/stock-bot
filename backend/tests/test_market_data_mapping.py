@@ -150,3 +150,33 @@ async def test_get_global_index_cards_merges_realtime_and_spark(monkeypatch):
     # N225 实时透传
     assert by_code["N225"]["change"] == -111.16 and by_code["N225"]["pct_change"] == -0.17
     assert set(kline_calls) == {g["ts_code"] for g in mds.GLOBAL_INDICES}
+
+
+@pytest.mark.asyncio
+async def test_ingest_sector_moneyflow_uses_today_and_both_dims(monkeypatch):
+    fetched: list[str] = []
+
+    async def fake_flow(dimension):
+        fetched.append(dimension)
+        if dimension != "industry":
+            return []
+        return [{"board_code": "BK1203", "board_name": "非银金融", "pct_change": 0.28,
+                 "main_net_inflow": 2151238400.0, "super_large_net": 1925688320.0,
+                 "large_net": 225550080.0, "up_count": 48, "down_count": 26,
+                 "main_net_ratio": 4.15}]
+
+    upserts: list = []
+
+    async def fake_upsert(db, trade_date, dimension, rows):
+        upserts.append((trade_date, dimension, rows))
+        return len(rows)
+
+    monkeypatch.setattr(mds, "_get_eastmoney", lambda: type("C", (), {
+        "fetch_sector_moneyflow": staticmethod(fake_flow),
+    }))
+    monkeypatch.setattr(mds.market_data_repo, "upsert_sector_moneyflow", fake_upsert)
+
+    result = await mds.ingest_sector_moneyflow(db=None)
+    assert result == {"industry": 1, "concept": 0}
+    assert set(fetched) == {"industry", "concept"}
+    assert upserts[0][0] == mds._today_sh() and upserts[0][1] == "industry"

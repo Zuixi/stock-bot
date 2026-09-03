@@ -217,3 +217,19 @@ async def global_index_daily_job() -> None:
         logger.info("Global index daily done: %s", result)
     except Exception:
         logger.exception("Global index daily job failed")
+
+
+async def sector_moneyflow_job() -> None:
+    """板块资金流盘中轮询（交易日 9:00-15:55 每 5 分钟，job 内交易时段守卫）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday() or not _in_trading_hours():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_sector_moneyflow(db)
+            await db.commit()
+        logger.info("Sector moneyflow poll done: %s", result)
+    except Exception:
+        logger.exception("Sector moneyflow poll failed")

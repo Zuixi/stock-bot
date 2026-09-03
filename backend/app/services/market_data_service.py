@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.repositories import index_repo
+from app.repositories import index_repo, market_data_repo
 
 if TYPE_CHECKING:
     from app.core.redis import CacheClient
@@ -232,6 +232,52 @@ def _em_code(secid: str) -> str:
     return secid.split(".", 1)[1]
 
 
+SECTOR_MONEYFLOW_CACHE_KEY = "market:sector-moneyflow:{dimension}"
+SECTOR_MONEYFLOW_TTL = 60
+
+
+async def ingest_sector_moneyflow(db: AsyncSession) -> dict[str, int]:
+    """盘中轮询：industry/concept 两维当日快照 upsert。"""
+    em = _get_eastmoney()
+    today = _today_sh()
+    result: dict[str, int] = {}
+    for dimension in ("industry", "concept"):
+        rows = await em.fetch_sector_moneyflow(dimension)
+        result[dimension] = await market_data_repo.upsert_sector_moneyflow(
+            db, today, dimension, rows
+        )
+    logger.info("ingest_sector_moneyflow %s", result)
+    return result
+
+
+async def get_sector_moneyflow(
+    cache: CacheClient | None, dimension: str = "industry", limit: int = 15
+) -> list[dict[str, Any]]:
+    """当日板块主力资金流榜（Redis 60s 共享缓存）。"""
+    key = SECTOR_MONEYFLOW_CACHE_KEY.format(dimension=dimension)
+    if cache is not None:
+        cached = await cache.get(key)
+        if cached:
+            rows_cached: list[dict[str, Any]] = cached
+            return rows_cached
+
+    from app.core.database import async_session_factory  # noqa: PLC0415
+
+    rows: list[dict[str, Any]] = []
+    async with async_session_factory() as db:
+        for snap in await market_data_repo.list_sector_moneyflow(db, _today_sh(), dimension, limit):
+            rows.append({
+                "board_code": snap.board_code, "board_name": snap.board_name,
+                "pct_change": snap.pct_change, "main_net_inflow": snap.main_net_inflow,
+                "super_large_net": snap.super_large_net, "large_net": snap.large_net,
+                "main_net_ratio": snap.main_net_ratio,
+                "up_count": snap.up_count, "down_count": snap.down_count,
+            })
+    if cache is not None and rows:
+        await cache.set(key, rows, ttl=SECTOR_MONEYFLOW_TTL)
+    return rows
+
+
 async def _main() -> None:
     from app.core.database import async_session_factory  # noqa: PLC0415
 
@@ -244,9 +290,12 @@ async def _main() -> None:
             result = await backfill_global_index_history(
                 db, years=int(args[1]) if len(args) > 1 else 2
             )
+        elif job == "sector_moneyflow":
+            result = await ingest_sector_moneyflow(db)
         else:
             raise SystemExit(
-                f"unknown job: {job}; available: global_index_daily, backfill_global_index"
+                f"unknown job: {job}; available: global_index_daily, "
+                "backfill_global_index, sector_moneyflow"
             )
         await db.commit()
     print(job, "->", result)
