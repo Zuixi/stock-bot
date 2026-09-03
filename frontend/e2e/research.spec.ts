@@ -120,6 +120,7 @@ const dashboardFixture = {
   signal_events: [
     {
       event_date: "2026-08-01",
+      event_sequence: 1,
       signal_type: "买入",
       phase: "recovery",
       previous_signal_type: "关注",
@@ -225,6 +226,56 @@ test("signal verification: event timeline renders confirmed 30d score and pendin
   await expect(page.getByTestId("signal-evaluation-30")).toContainText("30天 已确认");
   await expect(page.getByTestId("signal-evaluation-30")).toContainText("80分");
   await expect(page.getByTestId("signal-evaluation-90")).toContainText("目标日期 2026-10-30");
+
+  const helpTrigger = page.getByRole("button", { name: "查看信号说明" });
+  await helpTrigger.focus();
+  await expect(helpTrigger).toBeFocused();
+  await expect(page.getByText("右侧趋势确认，做多", { exact: true })).toBeVisible();
+});
+
+test("signal verification: same-day events keep unique containers, keys, and primary evaluation IDs", async ({ page }) => {
+  const olderEvent = {
+    ...dashboardFixture.signal_events[0],
+    event_sequence: 1,
+    signal_type: "关注",
+    previous_signal_type: "空仓",
+    evaluations: dashboardFixture.signal_events[0].evaluations.map((evaluation) => ({
+      ...evaluation,
+      score: evaluation.horizon_days === 30 ? 60 : evaluation.score,
+    })),
+  };
+  const latestEvent = {
+    ...dashboardFixture.signal_events[0],
+    event_sequence: 2,
+    previous_signal_type: "关注",
+  };
+  await mockDashboard(page, { signal_events: [latestEvent, olderEvent] });
+
+  await page.goto("/research/pig");
+
+  const latestContainer = page.getByTestId("signal-event-2026-08-01-2");
+  const olderContainer = page.getByTestId("signal-event-2026-08-01-1");
+  await expect(latestContainer).toBeVisible();
+  await expect(olderContainer).toBeVisible();
+  await expect(latestContainer.locator('[data-evaluation-id="2026-08-01-2-30"]')).toContainText("80分");
+  await expect(olderContainer.locator('[data-evaluation-id="2026-08-01-1-30"]')).toContainText("60分");
+  await expect(page.getByTestId("signal-evaluation-30")).toHaveCount(1);
+  await expect(page.getByTestId("signal-evaluation-90")).toHaveCount(1);
+});
+
+test("signal verification: null current signal preserves summary and historical events", async ({ page }) => {
+  await mockDashboard(page, { signal: null, cycle: null });
+
+  await page.goto("/research/pig");
+
+  const signalCard = page.locator(".ant-card").filter({ hasText: "交易信号面板" });
+  await expect(signalCard.getByText("暂无有效信号", { exact: true })).toBeVisible();
+  await expect(signalCard).toContainText("已验证 1");
+  await expect(signalCard).toContainText("确认 1");
+  await expect(page.getByTestId("signal-event-2026-08-01-1")).toBeVisible();
+  await expect(page.getByTestId("signal-evaluation-30")).toContainText("30天 已确认");
+  await expect(page.locator(".ant-tag").filter({ hasText: "信号状态" })).toContainText("待评估");
+  await expect(page.getByText("当前信号 待评估", { exact: true })).toHaveCount(0);
 });
 
 test("signal verification: inconclusive reason and healthy compact status render", async ({ page }) => {

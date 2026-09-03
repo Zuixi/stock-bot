@@ -113,6 +113,7 @@ export interface BackendSignalEvaluation {
 
 export interface BackendSignalEvent {
   event_date: string;
+  event_sequence: number;
   signal_type: string;
   phase: string;
   previous_signal_type: string | null;
@@ -360,6 +361,7 @@ export interface SignalEvaluation {
 
 export interface SignalEvent {
   eventDate: string;
+  eventSequence: number;
   signalType: string;
   phase: string;
   previousSignalType: string | null;
@@ -553,6 +555,7 @@ function mapSignalEvaluation(e: BackendSignalEvaluation): SignalEvaluation {
 function mapSignalEvent(e: BackendSignalEvent): SignalEvent {
   return {
     eventDate: e.event_date,
+    eventSequence: e.event_sequence,
     signalType: e.signal_type,
     phase: e.phase,
     previousSignalType: e.previous_signal_type,

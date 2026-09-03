@@ -115,6 +115,7 @@ class SignalEvaluationOut(BaseModel):
 
 class SignalEventOut(BaseModel):
     event_date: date
+    event_sequence: int
     signal_type: str
     phase: str
     previous_signal_type: str | None = None

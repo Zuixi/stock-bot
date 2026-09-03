@@ -159,6 +159,7 @@ def test_new_dto_list_defaults_are_not_shared():
     )
     first_event = SignalEventOut(
         event_date=date(2026, 9, 3),
+        event_sequence=1,
         signal_type=SIGNAL_BUY,
         phase="recovery",
         rule_version="pig-cycle-v1",
@@ -166,6 +167,7 @@ def test_new_dto_list_defaults_are_not_shared():
     )
     second_event = SignalEventOut(
         event_date=date(2026, 9, 3),
+        event_sequence=2,
         signal_type=SIGNAL_BUY,
         phase="recovery",
         rule_version="pig-cycle-v1",
@@ -493,9 +495,11 @@ async def test_signal_event_mapper_hides_audit_json_and_summary_requires_five_sa
     mapped, summary = await get_signal_events(SimpleNamespace(), "pig", limit=20)
 
     assert [item.event_date for item in mapped] == [date(2026, 9, 4), date(2026, 9, 3)]
+    assert [item.event_sequence for item in mapped] == [1, 1]
     payload = mapped[0].model_dump(mode="json")
     assert set(payload) == {
         "event_date",
+        "event_sequence",
         "signal_type",
         "phase",
         "previous_signal_type",
