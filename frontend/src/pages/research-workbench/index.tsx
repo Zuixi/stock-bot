@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Breadcrumb, Card, Col, Empty, Row, Tabs, Tag, Typography } from "antd";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { StateWrapper } from "@/shared/ui/StateWrapper";
 import { COLORS } from "@/app/theme";
 import { fetchIndustryDashboard, type Dashboard } from "@/shared/api/industryResearch";
@@ -28,7 +28,10 @@ export default function ResearchWorkbenchPage() {
 
   return (
     <div style={{ maxWidth: 1720, margin: "0 auto" }}>
-      <Breadcrumb style={{ marginBottom: 10, fontSize: 13 }} items={[{ title: "投研" }, { title: "工作台" }]} />
+      <Breadcrumb
+        style={{ marginBottom: 10, fontSize: 13 }}
+        items={[{ title: <Link to="/research">投研</Link> }, { title: "工作台" }]}
+      />
       <StateWrapper loading={isLoading} error={error} onRetry={refetch} empty={!data}>
         {data && <Workbench dashboard={data} />}
       </StateWrapper>

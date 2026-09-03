@@ -9,6 +9,8 @@ import { test, expect as baseExpect } from "@playwright/test";
  * - /research/pig 行情调研追踪 Tab：行业 ETF 表（P5 行情面，TuShare fund_daily 实拉数据）
  * - /market/industry/110000/110700：生猪养殖三级行业页的"进入投研工作台"banner 导航
  * - 泛化验证（P6）：白羽肉鸡（broiler）第二行业卡片 → 同一工作台零新页面渲染
+ * - /research：行业卡片等高（描述单行省略号 + Col flex 拉伸兜底）
+ * - /research/pig：面包屑"投研"可点击返回行业列表
  */
 
 // 数据由 react-query 异步加载、图表异步渲染，统一放宽断言轮询窗口
@@ -208,4 +210,31 @@ test("泛化验证：白羽肉鸡第二行业卡片零新页面进入工作台",
   const phaseCard = page.locator(".ant-card").filter({ hasText: "周期阶段定位" });
   await expect(phaseCard).toBeVisible();
   await expect(phaseCard.getByText("当前", { exact: true })).toBeVisible();
+});
+
+test("投研列表：行业卡片任意断点下等高", async ({ page }) => {
+  // 描述单行省略号消除换行撑高 + Col display:flex / Card height:100% 兜底标签换行等场景
+  await page.goto("/research");
+
+  const pigCard = page.locator(".ant-card").filter({ hasText: "生猪养殖" });
+  const broilerCard = page.locator(".ant-card").filter({ hasText: "白羽肉鸡" });
+  await expect(pigCard).toBeVisible();
+  await expect(broilerCard).toBeVisible();
+
+  const pigHeight = (await pigCard.boundingBox())?.height ?? 0;
+  const broilerHeight = (await broilerCard.boundingBox())?.height ?? 0;
+  // 子像素渲染允许 ≤1px 容差
+  expect(Math.abs(pigHeight - broilerHeight)).toBeLessThanOrEqual(1);
+});
+
+test("工作台面包屑：投研项可点击返回行业列表", async ({ page }) => {
+  await page.goto("/research/pig");
+
+  // 面包屑首项为 react-router Link，末项"工作台"为当前页（无链接）
+  const crumbLink = page.getByRole("link", { name: "投研" });
+  await expect(crumbLink).toBeVisible();
+  await crumbLink.click();
+
+  await page.waitForURL("**/research");
+  await expect(page.locator(".ant-card").filter({ hasText: "生猪养殖" })).toBeVisible();
 });
