@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, get_args, get_type_hints
 
 from sqlalchemy import UniqueConstraint
 from sqlalchemy.dialects import postgresql
@@ -111,6 +112,10 @@ def test_verification_models_declare_constraints_jsonb_and_cascade():
         assert all(isinstance(model.__table__.columns[name].type, JSONB) for name in names)
 
 
+def test_evaluation_score_annotation_matches_numeric_decimal_values():
+    assert get_args(get_type_hints(IndustrySignalEvaluation)["score"]) == (Decimal | None,)
+
+
 def test_models_declare_lookup_indexes():
     assert {index.name for index in IndustryDataQualitySnapshot.__table__.indexes} >= {
         "idx_industry_quality_lookup"
@@ -171,6 +176,20 @@ async def test_signal_event_repository_is_immutable_and_lists_newest_first():
     assert "ON CONFLICT ON CONSTRAINT uq_industry_signal_event DO NOTHING" in sql
     assert "DO UPDATE" not in sql
     assert "RETURNING" in sql
+
+    injected_row = {
+        **row,
+        "id": 999,
+        "created_at": datetime(2000, 1, 1, tzinfo=UTC),
+    }
+    assert await create_signal_event(db, injected_row) is stored
+    statement = db.statements[-1]
+    assert "id" not in statement.compile().params
+    assert "created_at" not in statement.compile().params
+    insert_sql = compile_sql(statement)
+    insert_columns = insert_sql.split("(", maxsplit=1)[1].split(")", maxsplit=1)[0]
+    assert "id" not in {column.strip() for column in insert_columns.split(",")}
+    assert "created_at" not in {column.strip() for column in insert_columns.split(",")}
 
     assert await latest_signal_event(db, "pig") is stored
     assert "industry_signal_events.event_date DESC" in compile_sql(db.statements[-1])

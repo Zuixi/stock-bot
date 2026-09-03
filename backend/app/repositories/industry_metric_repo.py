@@ -274,9 +274,24 @@ async def latest_signal_event(
 async def create_signal_event(
     db: AsyncSession, row: dict
 ) -> IndustrySignalEvent | None:
+    payload = {
+        key: row[key]
+        for key in (
+            "industry_key",
+            "event_date",
+            "previous_signal_type",
+            "previous_phase",
+            "signal_type",
+            "phase",
+            "basis",
+            "basis_periods",
+            "quality_snapshot",
+            "rule_version",
+        )
+    }
     stmt = (
         pg_insert(IndustrySignalEvent)
-        .values(row)
+        .values(payload)
         .on_conflict_do_nothing(constraint="uq_industry_signal_event")
         .returning(IndustrySignalEvent)
     )
