@@ -4,6 +4,8 @@ from dataclasses import replace
 from datetime import date
 from types import SimpleNamespace
 
+import pytest
+
 from app.services.industry_data_quality import (
     MetricQualityResult,
     aggregate_industry_quality,
@@ -14,6 +16,9 @@ from app.services.industry_registry import (
     PIG_INDUSTRY,
     SIGNAL_BUY,
     SIGNAL_SELL,
+    TIER_HIGHFREQ,
+    IndustryConfig,
+    MetricDef,
 )
 
 
@@ -88,6 +93,49 @@ def test_missing_row_is_reported_without_provenance():
     assert result.age_days is None
 
 
+def test_none_value_is_missing_but_preserves_provenance():
+    row = SimpleNamespace(source="derived", period=date(2026, 9, 1), value=None)
+    result = assess_metric_quality(
+        PIG_INDUSTRY.metric("sow_inventory_mom"),
+        row,
+        as_of=date(2026, 9, 3),
+        for_signal=True,
+    )
+    assert result.status == "missing"
+    assert result.source == "derived"
+    assert result.period == date(2026, 9, 1)
+    assert result.age_days == 2
+
+
+def test_none_required_value_makes_pig_unavailable():
+    row = SimpleNamespace(source="derived", period=date(2026, 9, 1), value=None)
+    result = assess_metric_quality(
+        PIG_INDUSTRY.metric("sow_inventory_mom"),
+        row,
+        as_of=date(2026, 9, 3),
+        for_signal=True,
+    )
+    results = ready_pig_results_except()
+    results = [
+        result if item.metric_key == "sow_inventory_mom" else item
+        for item in results
+    ]
+    quality = aggregate_industry_quality(PIG_INDUSTRY, results)
+    assert quality.status == "unavailable"
+    assert quality.signal_ready is False
+
+
+def test_zero_value_is_not_missing():
+    row = SimpleNamespace(source="derived", period=date(2026, 9, 1), value=0.0)
+    result = assess_metric_quality(
+        PIG_INDUSTRY.metric("sow_inventory_mom"),
+        row,
+        as_of=date(2026, 9, 3),
+        for_signal=True,
+    )
+    assert result.status == "ready"
+
+
 def test_company_metric_below_minimum_coverage_is_partial():
     metric = replace(
         PIG_INDUSTRY.metric("company.hogs_sold_monthly"),
@@ -128,7 +176,46 @@ def test_missing_required_result_is_synthesized_as_unavailable():
     )
 
 
+def test_unconfigured_industry_defaults_to_demo_and_cannot_become_signal_ready():
+    cfg = IndustryConfig(
+        key="unconfigured",
+        name="未配置行业",
+        description="quality gate defaults must fail closed",
+        sw_l3_codes=[],
+        metrics=[
+            MetricDef(
+                key="price",
+                name="价格",
+                unit="元",
+                freq="daily",
+                tier=TIER_HIGHFREQ,
+                sources=["real"],
+            )
+        ],
+        phases=[],
+        position_templates={},
+    )
+    quality = aggregate_industry_quality(cfg, [_result("price")])
+    assert cfg.signal_quality_required is False
+    assert quality.status == "demo"
+    assert quality.signal_ready is False
+
+
+def test_formal_config_without_complete_gate_declarations_fails_closed():
+    cfg = replace(BROILER_INDUSTRY, signal_quality_required=True)
+    quality = aggregate_industry_quality(cfg, demo_ready_results())
+    assert quality.status == "unavailable"
+    assert quality.signal_ready is False
+
+
+def test_duplicate_metric_results_are_rejected():
+    duplicate = _result("hog_price")
+    with pytest.raises(ValueError, match="duplicate metric quality result: hog_price"):
+        aggregate_industry_quality(PIG_INDUSTRY, [duplicate, duplicate])
+
+
 def test_pig_registry_declares_quality_gate_and_verification_rules():
+    assert PIG_INDUSTRY.signal_quality_required is True
     for key in ("hog_price", "hog_corn_ratio"):
         metric = PIG_INDUSTRY.metric(key)
         assert metric.required_for_dashboard is True

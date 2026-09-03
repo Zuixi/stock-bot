@@ -58,6 +58,17 @@ def assess_metric_quality(
     period = row.period
     age_days = (as_of - period).days
 
+    if row.value is None:
+        return MetricQualityResult(
+            metric_key=metric.key,
+            status="missing",
+            source=source,
+            period=period,
+            age_days=age_days,
+            reason="selected observation has no value",
+            entity_coverage=entity_coverage,
+        )
+
     if metric.max_age_days is not None and age_days > metric.max_age_days:
         return MetricQualityResult(
             metric_key=metric.key,
@@ -111,7 +122,11 @@ def aggregate_industry_quality(
     results: list[MetricQualityResult],
 ) -> IndustryQualityResult:
     """Aggregate metric results according to registry dashboard and signal requirements."""
-    by_key = {result.metric_key: result for result in results}
+    by_key: dict[str, MetricQualityResult] = {}
+    for result in results:
+        if result.metric_key in by_key:
+            raise ValueError(f"duplicate metric quality result: {result.metric_key}")
+        by_key[result.metric_key] = result
     details = list(results)
     for metric in cfg.metrics:
         required = metric.required_for_dashboard or metric.required_for_signal
@@ -128,10 +143,16 @@ def aggregate_industry_quality(
             by_key[metric.key] = missing
             details.append(missing)
 
-    signal_ready = cfg.signal_quality_required and all(
-        by_key[metric.key].status == _READY
-        for metric in cfg.metrics
-        if metric.required_for_signal
+    required_signal_metrics = [metric for metric in cfg.metrics if metric.required_for_signal]
+    formal_config_valid = (
+        bool(required_signal_metrics)
+        and cfg.verification is not None
+        and all(metric.allow_signal_sources for metric in required_signal_metrics)
+    )
+    signal_ready = (
+        cfg.signal_quality_required
+        and formal_config_valid
+        and all(by_key[metric.key].status == _READY for metric in required_signal_metrics)
     )
     dashboard_degraded = any(
         by_key[metric.key].status != _READY
