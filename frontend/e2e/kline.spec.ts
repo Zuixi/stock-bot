@@ -54,3 +54,17 @@ test("周期切换后缩放重置：1年 → 1月 视图变化且控件状态跟
   await segItem(card, "1年").click();
   await expect(segItem(card, "1年")).toHaveClass(/ant-segmented-item-selected/);
 });
+
+test("复权开关：数据就绪后可切换前复权/不复权", async ({ page }) => {
+  await page.goto("/stock/600519");
+  const card = page.locator(".ant-card").filter({ hasText: "历史行情" });
+  await expect(card).toBeVisible();
+  // 600519 已在 Task 7 实机回补过（或 ≤30s 内后台完成）；禁用态也带 Segmented 结构
+  const adjust = card.locator(".ant-segmented").filter({ hasText: /前复权/ });
+  await expect(adjust).toBeVisible({ timeout: 30_000 });
+  // 就绪后点击不复权再切回，不报错
+  await segItem(card, "不复权").click({ timeout: 30_000 });
+  await expect(segItem(card, "不复权")).toHaveClass(/ant-segmented-item-selected/);
+  await segItem(card, "前复权").click();
+  await expect(segItem(card, "前复权")).toHaveClass(/ant-segmented-item-selected/);
+});

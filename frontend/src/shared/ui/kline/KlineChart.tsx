@@ -85,17 +85,30 @@ export function KlineChart({ title, queryKey, fetcher, showAdjust = false, defau
             </Tag.CheckableTag>
           ))}
           <Divider type="vertical" />
-          {showAdjust && (
-            <Segmented
-              size="small"
-              value={adjust}
-              onChange={(v) => setAdjust(v as AdjustMode)}
-              options={[
-                { label: "不复权", value: "raw" },
-                { label: "前复权", value: "qfq" },
-              ]}
-            />
-          )}
+          {showAdjust &&
+            (data?.adjustAvailable ?? false ? (
+              <Segmented
+                size="small"
+                value={adjust}
+                onChange={(v) => setAdjust(v as AdjustMode)}
+                options={[
+                  { label: "不复权", value: "raw" },
+                  { label: "前复权", value: "qfq" },
+                ]}
+              />
+            ) : (
+              <AntTooltip title="复权数据后台拉取中，稍后自动可用">
+                <Segmented
+                  size="small"
+                  disabled
+                  value="raw"
+                  options={[
+                    { label: "不复权", value: "raw" },
+                    { label: "前复权", value: "qfq" },
+                  ]}
+                />
+              </AntTooltip>
+            ))}
           <Segmented
             size="small"
             value={range}
