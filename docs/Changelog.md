@@ -367,3 +367,6 @@
 - 计划级总结——2026-09-03 市场数据面：全球市场指数区块（亚洲/美洲 Tab、徽章卡+30日sparkline）、板块主力资金流盘中轮询卡、北向资金折线卡、数据面五类榜单（龙虎榜/大宗/解禁/回购/公告快讯，TuShare+东财+巨潮）、个股相关数据卡；新增 7 表与 `market_data.fetch` 队列。
 - 新增 `frontend/e2e/marketDataFace.spec.ts` 5 用例（全球市场 Tab 与指数卡/全球指数详情/板块资金流行业概念切换/数据面 Tab 表格/个股相关数据卡），数据缺失处按惯例 test.skip 守卫；全量 e2e 22 通过；`docs/design/data-source.md` 补「市场数据面数据源」小节（实测端点/字段/单位/调度限频）。
 - 涉及模块：frontend/e2e, docs/design/data-source.md, docs/references/best-practices.md
+
+## 2026-09-03 - 市场数据面评审修复
+- 修复 RepurchaseTable rowKey 冲突（同日多进度回购行：补 proc 维度），并移除 market.ts 中无消费方的 `fetchSseLatestSnapshots`。

@@ -1,5 +1,5 @@
 import { apiGet } from "./client";
-import type { KLinePoint, KlineResult, MarketIndex, SectorSummary, SseIntradayResponse, SseSnapshot } from "@/shared/types";
+import type { KLinePoint, KlineResult, MarketIndex, SectorSummary, SseIntradayResponse } from "@/shared/types";
 
 export interface DistributionItem {
   range: string;
@@ -63,10 +63,6 @@ export function fetchCapitalFlow(): Promise<CapitalFlowItem[]> {
 
 export function fetchHotBoards(category: HotBoardCategory): Promise<HotBoardItem[]> {
   return apiGet<HotBoardItem[]>("/api/v1/market/hot-boards", { category });
-}
-
-export function fetchSseLatestSnapshots(): Promise<SseSnapshot[]> {
-  return apiGet<SseSnapshot[]>("/api/v1/market/sse-snapshots/latest");
 }
 
 export function fetchSseIntraday(code: string, date?: string): Promise<SseIntradayResponse> {
