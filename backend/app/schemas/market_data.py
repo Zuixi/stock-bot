@@ -63,3 +63,27 @@ class BlockTradeOut(BaseModel):
     amount: float | None = None  # 万元
     buyer: str | None = None
     seller: str | None = None
+
+
+class ShareFloatOut(BaseModel):
+    ann_date: str | None = None
+    float_date: str
+    ts_code: str
+    symbol: str
+    name: str | None = None
+    float_share: float | None = None  # 万股
+    float_ratio: float | None = None  # %
+    holder_name: str | None = None
+    share_type: str | None = None
+
+
+class RepurchaseOut(BaseModel):
+    ann_date: str
+    ts_code: str
+    symbol: str
+    name: str | None = None
+    proc: str
+    end_date: str | None = None
+    exp_date: str | None = None
+    vol: float | None = None     # 股
+    amount: float | None = None  # 元
