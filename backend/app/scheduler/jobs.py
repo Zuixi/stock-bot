@@ -91,7 +91,10 @@ async def _fetch_yesterday_daily_quotes() -> None:
         async with async_session_factory() as db:
             result = await service.ingest_daily_quotes(db, trade_date)
             await db.commit()
-            logger.info("Daily quotes backfill: trade_date=%s upserted=%d", trade_date, result.get("upserted", 0))
+            logger.info(
+                "Daily quotes backfill: trade_date=%s upserted=%d",
+                trade_date, result.get("upserted", 0),
+            )
     except Exception:
         logger.exception("Daily quotes backfill failed for trade_date=%s", trade_date)
 
@@ -110,14 +113,19 @@ async def _fetch_yesterday_daily_basic() -> None:
     try:
         async with async_session_factory() as db:
             if await daily_basic_repo.trade_date_exists(db, yesterday):
-                logger.info("Skipping daily_basic backfill — trade_date=%s already exists", trade_date)
+                logger.info(
+                    "Skipping daily_basic backfill — trade_date=%s already exists", trade_date,
+                )
                 return
 
         service = TuShareIngestService()
         async with async_session_factory() as db:
             result = await service.ingest_daily_basic(db, trade_date)
             await db.commit()
-            logger.info("Daily basic backfill: trade_date=%s upserted=%d", trade_date, result.get("upserted", 0))
+            logger.info(
+                "Daily basic backfill: trade_date=%s upserted=%d",
+                trade_date, result.get("upserted", 0),
+            )
     except Exception:
         logger.exception("Daily basic backfill failed for trade_date=%s", trade_date)
 
@@ -194,3 +202,18 @@ async def securities_refresh_job() -> None:
         )
     except Exception:
         logger.exception("Securities refresh failed")
+
+
+async def global_index_daily_job() -> None:
+    """全球+A股指数日线刷新（每日 17:30，覆盖美盘前一日与亚欧当日）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    logger.info("Global index daily job triggered")
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_global_index_daily(db)
+            await db.commit()
+        logger.info("Global index daily done: %s", result)
+    except Exception:
+        logger.exception("Global index daily job failed")

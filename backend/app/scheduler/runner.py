@@ -12,6 +12,7 @@ from apscheduler.triggers.cron import CronTrigger
 from app.scheduler.jobs import (
     daily_basic_backfill_job,
     daily_quotes_backfill_job,
+    global_index_daily_job,
     industry_metrics_refresh_job,
     securities_refresh_job,
     sse_post_close_job,
@@ -126,6 +127,16 @@ def create_scheduler() -> AsyncIOScheduler:
         ),
         id="securities_refresh",
         name="Securities (ETF/CB) refresh",
+        replace_existing=True,
+    )
+
+    # Global + A-share index daily bars: 17:30 daily
+    # (covers prior US session and same-day Asia/Europe; idempotent upsert)
+    scheduler.add_job(
+        global_index_daily_job,
+        CronTrigger(hour=17, minute=30, timezone="Asia/Shanghai"),
+        id="global_index_daily",
+        name="Global index daily refresh",
         replace_existing=True,
     )
 
