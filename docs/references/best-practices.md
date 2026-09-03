@@ -90,3 +90,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - 数值型 tooltip 用「灰标签左 + 右对齐 tabular-nums 数值右」的两列式行布局（flex space-between + min-width），OHLC/涨跌随当日涨跌统一着色、量额中性——横排挤合（"开：x 高：x 低：x"）无对齐基准，是主流行情软件与其余 tooltip 的主要视觉分界。
 - 行业覆盖缺口的合并优先用三方分类接口交叉验证而非纯名称匹配：TuShare index_member_all 有 3000 行上限且不支持按股查询；东财 push2 接口 f127 字段与申万 2021 同名可直接映射（突发批量会被限流，push2delay 镜像 + 0.3s 间隔可绕），特例用同花顺 F10 双源核验；落库走幂等 custom tag 表而非改原始字段。
 - 人工策展数据进 repo 用"overlay 种子文件 + 加性 ON CONFLICT"而非追加进自动再生成的种子（会被下次导出抹掉），并同步补 .gitignore 的 data/* 豁免与 backend/.dockerignore 的 data/* 豁免——漏 dockerignore 会导致镜像内文件缺失、加载器静默返回 0。
+- 手写 Alembic 迁移的 revision ID 在多分支并行开发时是全局命名空间——先 `git log --all -S "<revision>"` 查重再落盘，活库 alembic_version 落在其他分支的 head 上时用临时隔离库验证迁移链而非硬闯活库。
