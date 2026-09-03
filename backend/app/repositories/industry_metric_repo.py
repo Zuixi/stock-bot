@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import cast
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -258,6 +258,14 @@ async def latest_quality_snapshot(
     return result.scalar_one_or_none()
 
 
+async def lock_signal_event_day(
+    db: AsyncSession, industry_key: str, event_date: date
+) -> None:
+    """Serialize transition comparison and sequence allocation for one industry day."""
+    lock_name = f"signal-event:{industry_key}:{event_date.isoformat()}"
+    await db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(lock_name, 0))))
+
+
 async def latest_signal_event(
     db: AsyncSession, industry_key: str
 ) -> IndustrySignalEvent | None:
@@ -296,7 +304,9 @@ async def create_signal_event(
     stmt = (
         pg_insert(IndustrySignalEvent)
         .values(payload)
-        .on_conflict_do_nothing(constraint="uq_industry_signal_event")
+        .on_conflict_do_nothing(
+            index_elements=["industry_key", "event_date", "event_sequence"]
+        )
         .returning(IndustrySignalEvent)
     )
     result = await db.execute(stmt)

@@ -311,3 +311,7 @@
 ## 2026-09-03 - 行业信号验证审查修复（Task 3 Fix 1）
 - 修复无有效信号时 Dashboard 只读构建、冻结指标来源与频率、Decimal 精确阈值评分，并以 event_sequence 保留同日 A→B→A 不可变转换及各自验证记录。
 - 涉及模块：backend/models, backend/migrations, backend/repositories, backend/services, backend/schemas, backend/tests
+
+## 2026-09-03 - 行业信号冻结频率与并发序列修复（Task 3 Fix 2）
+- 质量快照改为携带选中行真实频率，新增 g8 迁移演进 event_sequence，并用稳定 PostgreSQL 事务 advisory lock 串行化同日转换比较与序列分配。
+- 涉及模块：backend/services, backend/repositories, backend/migrations, backend/tests
