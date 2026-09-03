@@ -1,4 +1,4 @@
-export { MarketOverview } from "./MarketOverview";
+export { GlobalMarketBoard } from "./GlobalMarketBoard";
 export { DistributionChart } from "./DistributionChart";
 export { SectorHeatmap } from "./SectorHeatmap";
 export { CapitalFlowChart } from "./CapitalFlowChart";
