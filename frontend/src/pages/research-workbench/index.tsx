@@ -142,7 +142,7 @@ function Workbench({ dashboard }: { dashboard: Dashboard }) {
             周期阶段 {phaseLabel}
           </Tag>
           <Tag color="gold" style={{ borderRadius: 14, padding: "2px 12px" }}>
-            当前信号 <b style={{ color: signalColor }}>{signal?.signalType ?? "待评估"}</b>
+            {signal ? "当前信号" : "信号状态"} <b style={{ color: signalColor }}>{signal?.signalType ?? "待评估"}</b>
           </Tag>
           <Tag style={{ borderRadius: 14, padding: "2px 12px", color: "#86909c" }}>
             数据截至 {dashboard.asOf}

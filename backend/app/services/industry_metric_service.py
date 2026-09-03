@@ -729,6 +729,7 @@ async def get_signal_events(
     mapped = [
         SignalEventOut(
             event_date=event.event_date,
+            event_sequence=event.event_sequence,
             signal_type=event.signal_type,
             phase=event.phase,
             previous_signal_type=event.previous_signal_type,

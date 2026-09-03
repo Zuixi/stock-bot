@@ -327,3 +327,7 @@
 ## 2026-09-03 - 行业数据质量提示与信号验证时间线（Task 5）
 - 前端集中映射 Dashboard 质量与验证契约，支持空周期/空信号降级展示，新增非阻断数据质量提示、去重信号事件 30/90 天回评和后端验证摘要，并补齐可复现的 ESLint 9 flat 配置与 mocked Playwright 覆盖。
 - 涉及模块：frontend/shared/api、frontend/features/industry-research、frontend/pages/research-workbench、frontend/e2e、frontend/tooling
+
+## 2026-09-03 - 行业信号时间线审查修复（Task 5 Fix 1）
+- Dashboard 事件 DTO 透传 `event_sequence` 并用于同日事件/评价唯一标识；空当前信号仅清空当前卡片而保留历史与摘要，空态头部改为“信号状态 待评估”，信号说明支持键盘聚焦展示。
+- 涉及模块：backend/schemas、backend/services、backend/tests、frontend/shared/api、frontend/features/industry-research、frontend/pages/research-workbench、frontend/e2e

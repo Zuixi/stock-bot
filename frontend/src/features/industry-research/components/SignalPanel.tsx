@@ -32,7 +32,19 @@ function metaOf(type: string) {
   return SIGNAL_META[type] ?? { color: "#8c8c8c", desc: "" };
 }
 
-function EvaluationBadge({ evaluation }: { evaluation: SignalEvaluation }) {
+function eventIdentity(event: SignalEvent) {
+  return `${event.eventDate}-${event.eventSequence}`;
+}
+
+function EvaluationBadge({
+  evaluation,
+  eventId,
+  primary,
+}: {
+  evaluation: SignalEvaluation;
+  eventId: string;
+  primary: boolean;
+}) {
   const verdict = VERDICT_META[evaluation.status] ?? {
     text: evaluation.status,
     color: "default",
@@ -44,10 +56,14 @@ function EvaluationBadge({ evaluation }: { evaluation: SignalEvaluation }) {
       .slice(0, 2)
       .map((criterion) => criterion.metricKey)
       .join("、");
+  const genericTestId = primary && [30, 90].includes(evaluation.horizonDays)
+    ? `signal-evaluation-${evaluation.horizonDays}`
+    : undefined;
 
   return (
     <div
-      data-testid={`signal-evaluation-${evaluation.horizonDays}`}
+      data-testid={genericTestId}
+      data-evaluation-id={`${eventId}-${evaluation.horizonDays}`}
       style={{ fontSize: 12, color: "#4e5969" }}
     >
       <Space size={6} wrap>
@@ -60,16 +76,11 @@ function EvaluationBadge({ evaluation }: { evaluation: SignalEvaluation }) {
   );
 }
 
-/** 交易信号面板：当前有效信号 + 去重后的信号事件及后端验证摘要 */
-export function SignalPanel({ current, events, signalIsStale, verificationSummary }: Props) {
-  if (!current) {
-    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无有效信号" />;
-  }
-
+function CurrentSignalCard({ current, signalIsStale }: { current: Signal; signalIsStale: boolean }) {
   const meta = metaOf(current.signalType);
 
   return (
-    <div>
+    <>
       <div
         style={{
           display: "flex",
@@ -98,10 +109,23 @@ export function SignalPanel({ current, events, signalIsStale, verificationSummar
           {current.signalType}
         </span>
         <span style={{ fontSize: 12, color: "#86909c" }}>{current.effectiveDate} 生效</span>
-        <Tooltip title={meta.desc}>
-          <span style={{ marginLeft: "auto", fontSize: 12, color: "#86909c", cursor: "help" }}>
+        <Tooltip title={meta.desc} trigger={["hover", "focus"]}>
+          <button
+            type="button"
+            aria-label="查看信号说明"
+            style={{
+              marginLeft: "auto",
+              padding: 0,
+              border: 0,
+              background: "transparent",
+              font: "inherit",
+              fontSize: 12,
+              color: "#86909c",
+              cursor: "help",
+            }}
+          >
             信号说明 ⓘ
-          </span>
+          </button>
         </Tooltip>
       </div>
 
@@ -114,6 +138,19 @@ export function SignalPanel({ current, events, signalIsStale, verificationSummar
         <div style={{ marginTop: 8, fontSize: 12, color: "#86909c", lineHeight: 1.7 }}>
           {current.reason}
         </div>
+      )}
+    </>
+  );
+}
+
+/** 交易信号面板：当前有效信号 + 去重后的信号事件及后端验证摘要 */
+export function SignalPanel({ current, events, signalIsStale, verificationSummary }: Props) {
+  return (
+    <div>
+      {current ? (
+        <CurrentSignalCard current={current} signalIsStale={signalIsStale} />
+      ) : (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无有效信号" />
       )}
 
       <Space size={[4, 6]} wrap style={{ marginTop: 12 }}>
@@ -135,12 +172,14 @@ export function SignalPanel({ current, events, signalIsStale, verificationSummar
         ) : (
           <Timeline
             style={{ marginTop: 16, marginBottom: 0 }}
-            items={events.slice(0, 6).map((event) => {
+            items={events.slice(0, 6).map((event, eventIndex) => {
               const eventMeta = metaOf(event.signalType);
+              const eventId = eventIdentity(event);
               return {
+                key: eventId,
                 color: eventMeta.color,
                 children: (
-                  <div>
+                  <div data-testid={`signal-event-${eventId}`}>
                     <div style={{ display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap" }}>
                       <b style={{ fontSize: 14, color: eventMeta.color }}>{event.signalType}</b>
                       <span style={{ fontSize: 12, color: "#86909c" }}>{event.eventDate}</span>
@@ -154,8 +193,10 @@ export function SignalPanel({ current, events, signalIsStale, verificationSummar
                       <Space direction="vertical" size={4} style={{ marginTop: 6 }}>
                         {event.evaluations.map((evaluation) => (
                           <EvaluationBadge
-                            key={`${event.eventDate}-${evaluation.horizonDays}`}
+                            key={`${eventId}-${evaluation.horizonDays}`}
                             evaluation={evaluation}
+                            eventId={eventId}
+                            primary={eventIndex === 0}
                           />
                         ))}
                       </Space>
