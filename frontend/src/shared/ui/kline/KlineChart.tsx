@@ -41,6 +41,8 @@ export function KlineChart({ title, queryKey, fetcher, showAdjust = false, defau
     queryKey: ["kline", queryKey, range, adjust],
     queryFn: () => fetcher(range + MA_WARMUP_CALENDAR_DAYS, adjust),
     staleTime: STALE_TIME,
+    // 复权因子后台回补中：禁用态提示"稍后自动可用"，10s 轮询直至就绪后停止
+    refetchInterval: (q) => (q.state.data?.adjustAvailable === false ? 10_000 : false),
   });
 
   const points = useMemo(

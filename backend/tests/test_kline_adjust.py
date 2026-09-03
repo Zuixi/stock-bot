@@ -41,6 +41,20 @@ def test_kline_cache_key_includes_adjust():
     assert key_raw == "quote:kline:Shanghai_Stocks:600519:2026-08-01:2026-09-01:raw"
 
 
+# ── 回补冷却 key：service 与 API 层共享的模板契约 ───────────────────
+
+
+def test_adj_factor_backfill_cd_key_contract():
+    from app.services.quote_service import (
+        ADJ_FACTOR_BACKFILL_CD_KEY,
+        ADJ_FACTOR_BACKFILL_CD_TTL,
+    )
+
+    key = ADJ_FACTOR_BACKFILL_CD_KEY.format(exchange="Shanghai_Stocks", symbol="600519")
+    assert key == "quote:adj-factor:backfill-cd:Shanghai_Stocks:600519"
+    assert ADJ_FACTOR_BACKFILL_CD_TTL == 300
+
+
 # ── apply_qfq：前复权计算 ───────────────────────────────────────────
 
 

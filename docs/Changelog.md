@@ -265,3 +265,10 @@
 - **关键架构决策**：① 共享组件契约先冻结——`KlineFetcher = (days, adjust) => Promise<KlineResult>` 作为 Task 1 类型签名发布，shared 层不 import 业务 API，靠 fetcher 回调注入实现依赖倒置，个股/指数页各传一份；② 复权三重缓存防护——缓存 key 追加 `:{adjust}` 维度、qfq 因子不完整不写缓存、回补完成后 `delete_pattern("quote:kline:{exchange}:{symbol}:*")` 兜底，杜绝 qfq 结果污染 raw 缓存与回补后读到陈旧数据；③ `::date` 转型根因——手写 `UPDATE ... FROM (VALUES ...)` 派生表日期字面量被 PG 推断为 text 抛 `date = text`，此类 SQL 类型错误纯函数单测覆盖不到，接线任务以实机验证闭环
 - **收官回归**：backend pytest 19 failed / 125 passed（19 个全为基线 httpx.ConnectError 环境性失败，与 Task 7 记录的失败集一致，零回归）；frontend `npm run build` 通过；playwright 16/16 passed
 - 涉及模块：frontend/shared/ui/kline, frontend/shared/types, frontend/shared/api, frontend/pages/stock-detail, frontend/pages/index-detail, backend/services/quote_service, backend/api/v1/stocks, backend/repositories/quote_repo, backend/core/providers, frontend/e2e
+
+## 2026-09-03 - qfq 跨日死锁修复（K线组件升级最终审查 C1+I1）
+- **问题（C1）**：每日 ingest 以 `adj_factor=None` upsert 新日期行情且 ON CONFLICT SET 无条件覆盖——重灌既有日期会抹掉已回补因子；回补幂等判定 `has_adj_factor`（任一行非空即 skip）与 `get_kline` 可用性口径（区间全部行非空）错位，且 skip 在缓存失效之前 return → 次日起 qfq 永久 `adjust_available=false` 死锁
+- **修复**：① `upsert_quotes` SET 子句 `adj_factor` 改 `COALESCE(excluded.adj_factor, daily_quotes.adj_factor)`（NULL 不覆盖既有因子）；② 幂等判定换 `latest_adj_factor_present`（最新交易日行有因子才 skip，跨日新增 NULL 行可增量再触发）并删除口径错位的 `has_adj_factor`；③ 真实外呼后写 300s Redis 冷却 key `quote:adj-factor:backfill-cd:{exchange}:{symbol}`（skip 不冷却、失败也冷却防失败风暴），API 层 `add_task` 前以 `cache.exists` 守卫，key 模板提为 quote_service 模块常量两处共用
+- **问题（I1）**：复权禁用态 Tooltip 承诺"稍后自动可用"但 5min staleTime 内不会自动重取——`useQuery` 加 `refetchInterval`（`adjustAvailable === false` 时 10s 轮询，就绪即停）
+- **验证**：`tests/test_kline_adjust.py` 8/8（新增冷却 key 契约测试）；全量 pytest 126 passed / 19 基线环境性失败零回归；docker 重建后跨日自愈模拟——置 NULL 最新行 → qfq `adjust_available:False` 触发回补（updated=808，冷却 key TTL≈300）→ 20s 后 `available:True` 库内因子恢复；冷却期内重复请求不重触；容器内重灌 09-01 既有日期（因子 None）COALESCE 保住原值；frontend build + playwright 16/16
+- 涉及模块：backend/repositories/quote_repo, backend/services/quote_service, backend/api/v1/stocks, frontend/shared/ui/kline, backend/tests

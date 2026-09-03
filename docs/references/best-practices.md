@@ -83,3 +83,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - 手写 `UPDATE ... FROM (VALUES ...)` 派生表 SQL 时，未定型的日期字符串字面量会被 PostgreSQL 推断为 text 列，与实体表 date 列比较直接抛 `operator does not exist: date = text`——VALUES 行内必须显式 `'...'::date` 转型；此类 SQL 类型错误纯函数单测覆盖不到，接线任务必须以实机验证（docker 重建 + curl + psql 计数）闭环。
 - 后端能力未就绪（如复权因子懒加载中）的前端控件应降级为"禁用+Tooltip 提示"而非条件隐藏：DOM 结构保持稳定让 E2E 能以长超时轮询等就绪（禁用态也渲染完整选项结构），且禁用只锁视觉层——受控 state 与 queryKey 不变、value 固定为当前真实展示值，能力恢复后无缝启用且不发额外请求。
 - 复权基准必须随最新因子滚动（qfq=当日因子/最新因子），且缓存 key 必须包含复权维度——否则 qfq 结果污染 raw 缓存；数据不完整时宁可不缓存，靠回补后的 delete_pattern 兜底。
+- UPSERT 覆盖"懒回补型"可空字段（如 adj_factor）时 SET 子句必须 COALESCE(excluded.x, table.x) 防 NULL 重灌抹掉历史回补值；回补的幂等判定口径必须与读取端可用性口径一致（按最新交易日行而非"任一行非空"），并为真实外呼加短 TTL 冷却 key 防数据未发布期间高频重拉——三者缺任一都会形成"不可用但永不修复"的跨日死锁。
