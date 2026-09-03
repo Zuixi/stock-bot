@@ -52,8 +52,9 @@ export function KLineChart({ symbol }: Props) {
       { scale: true, gridIndex: 0, splitLine: { lineStyle: { type: "dashed" as const } } },
       { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false } },
     ],
+    // 不设 start/end：周期切换后默认展示所选区间全量数据，滚轮缩放由用户主动控制
     dataZoom: [
-      { type: "inside" as const, xAxisIndex: [0, 1], start: 60, end: 100 },
+      { type: "inside" as const, xAxisIndex: [0, 1] },
     ],
     series: [
       {
@@ -96,7 +97,7 @@ export function KLineChart({ symbol }: Props) {
           <Spin />
         </div>
       ) : data.length > 0 ? (
-        <ReactECharts option={option} style={{ height: 380 }} />
+        <ReactECharts option={option} notMerge style={{ height: 380 }} />
       ) : (
         <div style={{ height: 380, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <Empty description="暂无K线数据" />
