@@ -38,12 +38,19 @@ export interface MarketIndex {
   asof: string;
 }
 
+export interface SwChainNode {
+  level: number;
+  code: string;
+  name: string;
+}
+
 export interface StockRecord {
   symbol: string;
   name: string;
   exchange: Exchange;
   category: string;
   industry?: string;
+  swChain?: SwChainNode[];
   latestPrice?: number;
   change?: number;
   changePercent?: number;

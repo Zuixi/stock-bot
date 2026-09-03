@@ -728,6 +728,62 @@ async def get_sw_level3(
     return {"code": row.industry_code, "name": row.industry_name}
 
 
+# ---------------------------------------------------------------------------
+# Per-stock SW chain (L1→L2→L3) — for stock-detail breadcrumbs
+# ---------------------------------------------------------------------------
+
+# Resolve the stock's own L3 membership, then walk parent_code up to L1 in one
+# round trip. Members map to L3 codes only; a stock may rarely map to several
+# L3s — we deterministically keep the smallest industry_code.
+_SW_CHAIN_SQL = """
+WITH RECURSIVE chain AS (
+    SELECT * FROM (
+        SELECT c.industry_code, c.level, c.industry_name, c.parent_code
+        FROM sw_industry_members m
+        JOIN sw_industry_classes c ON c.industry_code = m.industry_code
+        WHERE m.symbol = :symbol AND c.level = 3
+        ORDER BY c.industry_code
+        LIMIT 1
+    ) anchor
+  UNION ALL
+    SELECT c.industry_code, c.level, c.industry_name, c.parent_code
+    FROM sw_industry_classes c
+    JOIN chain ch ON c.industry_code = ch.parent_code
+)
+SELECT industry_code, level, industry_name FROM chain
+"""
+
+
+def assemble_sw_chain(rows: list[dict]) -> list[dict]:
+    """Pure: order recursive-CTE rows into an L1→L2→L3 chain payload.
+
+    Rows may arrive in any order; only levels actually found are emitted, so a
+    partially-resolved tree degrades gracefully instead of erroring.
+    """
+    by_level = {row["level"]: row for row in rows}
+    return [
+        {
+            "level": level,
+            "code": by_level[level]["industry_code"],
+            "name": by_level[level]["industry_name"],
+        }
+        for level in (1, 2, 3)
+        if level in by_level
+    ]
+
+
+async def get_sw_chain_by_symbol(db: AsyncSession, symbol: str) -> list[dict]:
+    """Resolve a stock's own SW industry chain from its official L3 membership.
+
+    Entry-point independent (derived from sw_industry_members only); returns an
+    empty list when the stock has no official SW mapping.
+    """
+    from sqlalchemy import text  # noqa: PLC0415
+
+    result = await db.execute(text(_SW_CHAIN_SQL), {"symbol": symbol})
+    return assemble_sw_chain([dict(r) for r in result.mappings().all()])
+
+
 async def list_symbols_by_level1(level1_code: str) -> list[str]:
     """Get all member symbols under a level-1 industry."""
     from app.models.sw_industry import (  # noqa: PLC0415

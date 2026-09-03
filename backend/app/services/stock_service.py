@@ -8,7 +8,12 @@ from app.core.redis import CacheClient
 from app.repositories import stock_repo
 from app.schemas.common import PageParams
 from app.schemas.stock import (
-    CategoryOut, ExchangeOut, StockEnrichedOut, StockListParams, StockOut,
+    CategoryOut,
+    ExchangeOut,
+    StockEnrichedOut,
+    StockListParams,
+    StockOut,
+    SwChainNode,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,12 +76,18 @@ async def get_stock_enriched(
     if cached:
         return StockEnrichedOut(**cached)
 
-    from app.services.market_service import get_stocks_enriched_by_symbols  # noqa: PLC0415
+    from app.services.market_service import (  # noqa: PLC0415
+        get_stocks_enriched_by_symbols,
+        get_sw_chain_by_symbol,
+    )
 
     enriched_list = await get_stocks_enriched_by_symbols(db, [symbol])
     if not enriched_list:
         return None
     out = enriched_list[0]
+    out.sw_chain = [
+        SwChainNode(**node) for node in await get_sw_chain_by_symbol(db, symbol)
+    ]
     await cache.set(cache_key, out.model_dump(mode="json"), ttl=300)
     return out
 
