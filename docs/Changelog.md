@@ -311,3 +311,8 @@
 - **修复**：新增 `backend/data/sw_custom_tags_seed.sql` overlay 种子（1439 行，INSERT ON CONFLICT DO NOTHING 加性语义，保留用户自建标签）+ `sw_industry_service` 新增 `import_custom_tags_from_sql()` 并接入 `import_all()` 两条路径（SQL 种子/XLS 引导），启动初始化自动加载；`.gitignore`/`backend/.dockerignore` 补豁免使种子进 git 与镜像
 - **验证**：种子在活库幂等重跑（INSERT 0 0）；api 重建后容器内 loader 实测返回 1439；mypy 零新增（基线 5 项既有）
 - 涉及模块：backend/data, backend/app/services/sw_industry_service, backend/.dockerignore, .gitignore
+
+## 2026-09-03 - 种子一致性审计 + overlay 加载修复
+- **审计**：临时库灌入 repo 种子与活库逐行 diff——sw_industry_classes 511 / sw_industry_members 4430 / stock_custom_sw_tags 1439 三表完全一致，全新 docker 部署分类数据与当前显示一致
+- **发现并修复**：data_init 的 overlay 加载被 is_sw_data_loaded 门控——先于 overlay 的老部署升级后 SW 表已有数据、跳过导入、1439 行永不生效；改为加性幂等的 overlay 每次 startup 无条件尝试（日志可观测）
+- 涉及模块：backend/app/services/data_init

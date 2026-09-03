@@ -53,6 +53,13 @@ async def maybe_seed_on_startup() -> None:
             logger.info("data_init: SW industry import -> %s", result)
         else:
             logger.info("data_init: SW industry data already loaded")
+
+        # Custom-tag overlay is additive & idempotent — must run even when SW
+        # tables are already loaded (pre-overlay deployments upgrading would
+        # otherwise never receive the OTHER→SW merge).
+        from app.services.sw_industry_service import import_custom_tags_from_sql  # noqa: PLC0415
+
+        await import_custom_tags_from_sql()
     except Exception:
         logger.warning("data_init: SW industry check/import failed", exc_info=True)
 
