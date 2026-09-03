@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from sqlalchemy import and_, desc, exists, func, select, text
+from sqlalchemy import desc, exists, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.quote import DailyQuote
@@ -115,7 +115,11 @@ async def upsert_quotes(db: AsyncSession, quotes: list[DailyQuote]) -> int:
                 "close": insert(DailyQuote).excluded.close,
                 "volume": insert(DailyQuote).excluded.volume,
                 "amount": insert(DailyQuote).excluded.amount,
-                "adj_factor": insert(DailyQuote).excluded.adj_factor,
+                # COALESCE：新行因子为 NULL（每日 ingest 不带因子）时不覆盖既有已回补值
+                "adj_factor": func.coalesce(
+                    insert(DailyQuote).excluded.adj_factor,
+                    DailyQuote.__table__.c.adj_factor,
+                ),
             },
         )
     )
@@ -124,13 +128,21 @@ async def upsert_quotes(db: AsyncSession, quotes: list[DailyQuote]) -> int:
     return result.rowcount
 
 
-async def has_adj_factor(db: AsyncSession, stock_id: int) -> bool:
-    """Return True if the stock has at least one non-null adj_factor row."""
-    stmt = select(
-        exists().where(and_(DailyQuote.stock_id == stock_id, DailyQuote.adj_factor.is_not(None)))
+async def latest_adj_factor_present(db: AsyncSession, stock_id: int) -> bool:
+    """True if the stock's latest trade_date row has a non-null adj_factor.
+
+    无行情行时返回 False（视为未回补，可触发首次拉取）。
+    与 get_kline 的可用性口径（区间内全部行非空）相比偏宽松：
+    每日 ingest 追加 NULL 因子新行后允许增量回补，避免"任一行非空即 skip"的死锁。
+    """
+    stmt = (
+        select(DailyQuote.adj_factor)
+        .where(DailyQuote.stock_id == stock_id)
+        .order_by(desc(DailyQuote.trade_date))
+        .limit(1)
     )
     result = await db.execute(stmt)
-    return result.scalar() is True
+    return result.scalar_one_or_none() is not None
 
 
 async def update_adj_factors(

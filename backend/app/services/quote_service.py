@@ -13,6 +13,10 @@ from app.schemas.quote import DailyQuoteOut, KlineResponse, LatestQuoteOut
 
 logger = logging.getLogger(__name__)
 
+# 回补冷却：因子未发布期间防高频重拉 TuShare（API 层与 service 共用，避免魔法串）
+ADJ_FACTOR_BACKFILL_CD_KEY = "quote:adj-factor:backfill-cd:{exchange}:{symbol}"
+ADJ_FACTOR_BACKFILL_CD_TTL = 300
+
 
 def kline_cache_key(
     exchange: str,
@@ -148,17 +152,22 @@ async def get_latest_quote(
 
 
 async def backfill_adj_factor(exchange: str, symbol: str) -> dict[str, Any]:
-    """懒加载回补单股 adj_factor 全历史（幂等）；完成后失效该股 kline 缓存。"""
+    """懒加载回补单股 adj_factor 全历史（幂等）；完成后失效该股 kline 缓存。
+
+    幂等口径：最新交易日行已有因子即 skip（每日 ingest 追加 NULL 新行后可增量再触发）。
+    每次真实外呼后写 300s 冷却 key（API 层守卫消费），防因子未发布期间高频重拉。
+    """
     from app.core.database import async_session_factory  # noqa: PLC0415 — 与 market_service 同源
     from app.core.providers.tushare_client import get_tushare_client  # noqa: PLC0415
     from app.core.redis import get_redis_pool  # noqa: PLC0415
 
+    cd_key = ADJ_FACTOR_BACKFILL_CD_KEY.format(exchange=exchange, symbol=symbol)
     try:
         async with async_session_factory() as db:
             stock = await stock_repo.get_stock_by_symbol(db, exchange, symbol)
             if stock is None:
                 return {"symbol": symbol, "status": "skipped", "reason": "stock not found"}
-            if await quote_repo.has_adj_factor(db, stock.id):
+            if await quote_repo.latest_adj_factor_present(db, stock.id):
                 return {"symbol": symbol, "status": "skipped", "reason": "already backfilled"}
             # ts_code 后缀：SH/SZ/BJ（EXCHANGE_TO_TUSHARE 是 SSE/SZSE/BSE 交易所码，不适用）
             suffix = {
@@ -171,9 +180,17 @@ async def backfill_adj_factor(exchange: str, symbol: str) -> dict[str, Any]:
             updated = await quote_repo.update_adj_factors(db, stock.id, factors) if factors else 0
             await db.commit()
         redis = await get_redis_pool()
-        await CacheClient(redis).delete_pattern(f"quote:kline:{exchange}:{symbol}:*")
+        cache = CacheClient(redis)
+        await cache.delete_pattern(f"quote:kline:{exchange}:{symbol}:*")
+        # 外呼已发起（结果完整/不完整均算）——进入冷却
+        await cache.set(cd_key, 1, ttl=ADJ_FACTOR_BACKFILL_CD_TTL)
         logger.info("[adj_factor backfill] %s.%s updated=%d", exchange, symbol, updated)
         return {"symbol": symbol, "status": "ok", "updated": updated}
     except Exception as exc:  # noqa: BLE001 — 后台任务兜底，失败不影响响应
         logger.warning("[adj_factor backfill] %s.%s failed: %s", exchange, symbol, exc)
+        try:  # 失败的尝试同样冷却，避免失败风暴
+            redis = await get_redis_pool()
+            await CacheClient(redis).set(cd_key, 1, ttl=ADJ_FACTOR_BACKFILL_CD_TTL)
+        except Exception:  # noqa: BLE001,S110 — 冷却写入失败可容忍，下个请求重试
+            pass
         return {"symbol": symbol, "status": "error", "reason": str(exc)}

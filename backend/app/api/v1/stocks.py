@@ -160,7 +160,10 @@ async def get_kline(
     if result is None:
         raise not_found_response("Stock", f"{exchange}/{symbol}")
     if not result.adjust_available:
-        background_tasks.add_task(quote_service.backfill_adj_factor, exchange, symbol)
+        # 冷却守卫：300s 内已尝试过回补（因子未发布/拉取失败）则不再重复外呼
+        cd_key = quote_service.ADJ_FACTOR_BACKFILL_CD_KEY.format(exchange=exchange, symbol=symbol)
+        if not await cache.exists(cd_key):
+            background_tasks.add_task(quote_service.backfill_adj_factor, exchange, symbol)
     return result
 
 
