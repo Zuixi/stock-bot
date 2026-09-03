@@ -322,13 +322,13 @@ PIG_INDUSTRY = IndustryConfig(
                 days=days,
                 rules=(
                     VerificationRuleDef(
-                        "hog_corn_ratio", "buy_up_sell_down", 3.0, 40,
+                        "hog_corn_ratio", "increase", 3.0, 40,
                     ),
                     VerificationRuleDef(
-                        "hog_price", "buy_up_sell_down", 3.0, 30,
+                        "hog_price", "increase", 3.0, 30,
                     ),
                     VerificationRuleDef(
-                        "sow_inventory_mom", "buy_lte_zero_sell_gte_zero", None, 30,
+                        "sow_inventory_mom", "non_positive", None, 30,
                         grace_days=45,
                     ),
                 ),
