@@ -60,6 +60,12 @@ class MetricDef:
     # 通用 mock 基准值：generic mock builder 据此生成抖动序列（未配置则该指标跳过）
     mock_base: float | None = None
     description: str = ""
+    required_for_dashboard: bool = False
+    required_for_signal: bool = False
+    max_age_days: int | None = None
+    allow_signal_sources: tuple[str, ...] = ()
+    coverage_scope: str = "industry"
+    min_entity_coverage: float | None = None
 
     def band_label(self, value: float) -> str | None:
         for band in sorted(self.warn_bands, key=lambda b: (b.upper is None, b.upper or 0)):
@@ -94,6 +100,29 @@ class ReferencePointDef:
 
 
 @dataclass(frozen=True)
+class VerificationRuleDef:
+    metric_key: str
+    direction: str
+    threshold_pct: float | None
+    weight: int
+    required: bool = True
+    grace_days: int = 7
+
+
+@dataclass(frozen=True)
+class VerificationHorizonDef:
+    days: int
+    rules: tuple[VerificationRuleDef, ...]
+
+
+@dataclass(frozen=True)
+class SignalVerificationConfig:
+    methodology_version: str
+    supported_signals: tuple[str, ...]
+    horizons: tuple[VerificationHorizonDef, ...]
+
+
+@dataclass(frozen=True)
 class IndustryConfig:
     key: str
     name: str
@@ -107,6 +136,8 @@ class IndustryConfig:
     etf_codes: list[str] = field(default_factory=list)
     cb_codes: list[str] = field(default_factory=list)
     securities_names: dict[str, str] = field(default_factory=dict)  # code → 展示名
+    signal_quality_required: bool = True
+    verification: SignalVerificationConfig | None = None
 
     def metric(self, key: str) -> MetricDef | None:
         return next((m for m in self.metrics if m.key == key), None)
@@ -154,6 +185,8 @@ PIG_METRICS: list[MetricDef] = [
         group="quick", strip=True, spark=True, higher_is_better=True,
         rollup_monthly=True,
         description="全国生猪出栏均价；官方批发价为基准，本值用于跟踪边际变化",
+        required_for_dashboard=True, required_for_signal=True, max_age_days=7,
+        allow_signal_sources=("akshare_soozhu",),
     ),
     MetricDef(
         key="corn_price", name="玉米价格", unit="元/kg", freq="daily",
@@ -196,6 +229,8 @@ PIG_METRICS: list[MetricDef] = [
             WarnBand(None, "过度上涨", "danger"),
         ],
         description="生猪价格/玉米价格，行业盈亏核心指标（自算口径，与发改委周度口径略有差异）",
+        required_for_dashboard=True, required_for_signal=True, max_age_days=7,
+        allow_signal_sources=("derived",),
     ),
     MetricDef(
         key="sow_inventory", name="能繁母猪存栏", unit="万头", freq="monthly",
@@ -208,12 +243,15 @@ PIG_METRICS: list[MetricDef] = [
         tier=TIER_DERIVED, sources=["derived"],
         group="supply", higher_is_better=None,
         description="由能繁存栏序列计算，连续为负即产能去化",
+        required_for_dashboard=True, required_for_signal=True, max_age_days=75,
+        allow_signal_sources=("derived",),
     ),
     MetricDef(
         key="industry_cost_avg", name="行业平均完全成本", unit="元/kg", freq="monthly",
         tier=TIER_MANUAL, sources=["manual", "mock"],
         group="cost",
         description="协会调研/研报口径，季度更新后线性插值为月度",
+        required_for_dashboard=True, max_age_days=75,
     ),
     MetricDef(
         key="msy", name="MSY（行业均值）", unit="头/年", freq="yearly",
@@ -275,6 +313,28 @@ PIG_INDUSTRY = IndustryConfig(
         SIGNAL_BUY: _position_slices(60, 30, 10),
         SIGNAL_SELL: _position_slices(20, 30, 50),
     },
+    verification=SignalVerificationConfig(
+        methodology_version="pig-cycle-v1",
+        supported_signals=(SIGNAL_BUY, SIGNAL_SELL),
+        horizons=tuple(
+            VerificationHorizonDef(
+                days=days,
+                rules=(
+                    VerificationRuleDef(
+                        "hog_corn_ratio", "buy_up_sell_down", 3.0, 40,
+                    ),
+                    VerificationRuleDef(
+                        "hog_price", "buy_up_sell_down", 3.0, 30,
+                    ),
+                    VerificationRuleDef(
+                        "sow_inventory_mom", "buy_lte_zero_sell_gte_zero", None, 30,
+                        grace_days=45,
+                    ),
+                ),
+            )
+            for days in (30, 90)
+        ),
+    ),
     reference_points=[
         ReferencePointDef(
             "sow_inventory", "正常保有量", 4100, date(2021, 1, 1),
@@ -346,6 +406,7 @@ BROILER_INDUSTRY = IndustryConfig(
         SIGNAL_BUY: _position_slices(60, 30, 10),
         SIGNAL_SELL: _position_slices(20, 30, 50),
     },
+    signal_quality_required=False,
 )
 
 INDUSTRIES: dict[str, IndustryConfig] = {
