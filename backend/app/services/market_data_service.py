@@ -234,6 +234,7 @@ def _em_code(secid: str) -> str:
 
 SECTOR_MONEYFLOW_CACHE_KEY = "market:sector-moneyflow:{dimension}"
 SECTOR_MONEYFLOW_TTL = 60
+SECTOR_MONEYFLOW_CACHE_LIMIT = 100  # 端点 limit 上限（le=100）：缓存全量再按请求切片
 
 
 async def ingest_sector_moneyflow(db: AsyncSession) -> dict[str, int]:
@@ -253,19 +254,21 @@ async def ingest_sector_moneyflow(db: AsyncSession) -> dict[str, int]:
 async def get_sector_moneyflow(
     cache: CacheClient | None, dimension: str = "industry", limit: int = 15
 ) -> list[dict[str, Any]]:
-    """当日板块主力资金流榜（Redis 60s 共享缓存）。"""
+    """当日板块主力资金流榜（Redis 60s 共享缓存；缓存 limit 上限行，按请求切片）。"""
     key = SECTOR_MONEYFLOW_CACHE_KEY.format(dimension=dimension)
     if cache is not None:
         cached = await cache.get(key)
         if cached:
             rows_cached: list[dict[str, Any]] = cached
-            return rows_cached
+            return rows_cached[:limit]
 
     from app.core.database import async_session_factory  # noqa: PLC0415
 
     rows: list[dict[str, Any]] = []
     async with async_session_factory() as db:
-        for snap in await market_data_repo.list_sector_moneyflow(db, _today_sh(), dimension, limit):
+        for snap in await market_data_repo.list_sector_moneyflow(
+            db, _today_sh(), dimension, SECTOR_MONEYFLOW_CACHE_LIMIT
+        ):
             rows.append({
                 "board_code": snap.board_code, "board_name": snap.board_name,
                 "pct_change": snap.pct_change, "main_net_inflow": snap.main_net_inflow,
@@ -275,7 +278,7 @@ async def get_sector_moneyflow(
             })
     if cache is not None and rows:
         await cache.set(key, rows, ttl=SECTOR_MONEYFLOW_TTL)
-    return rows
+    return rows[:limit]
 
 
 async def _main() -> None:
