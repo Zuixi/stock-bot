@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -29,6 +30,7 @@ from app.repositories.industry_metric_repo import (
     upsert_signal_evaluation,
 )
 from app.services.industry_data_quality import IndustryQualityResult, MetricQualityResult
+from app.services.industry_metric_service import get_dashboard
 from app.services.industry_registry import (
     BROILER_INDUSTRY,
     PIG_INDUSTRY,
@@ -98,9 +100,9 @@ def test_verification_models_declare_constraints_jsonb_and_cascade():
     assert named_unique(IndustrySignalEvent, "uq_industry_signal_event") == {
         "industry_key",
         "event_date",
-        "signal_type",
-        "phase",
+        "event_sequence",
     }
+    assert IndustrySignalEvent.__table__.columns["event_sequence"].nullable is False
     assert named_unique(IndustrySignalEvaluation, "uq_industry_signal_evaluation") == {
         "signal_event_id",
         "horizon_days",
@@ -177,6 +179,7 @@ async def test_signal_event_repository_is_immutable_and_lists_newest_first():
     row = {
         "industry_key": "pig",
         "event_date": date(2026, 9, 3),
+        "event_sequence": 1,
         "previous_signal_type": None,
         "previous_phase": None,
         "signal_type": "买入",
@@ -208,11 +211,14 @@ async def test_signal_event_repository_is_immutable_and_lists_newest_first():
     assert "created_at" not in {column.strip() for column in insert_columns.split(",")}
 
     assert await latest_signal_event(db, "pig") is stored
-    assert "industry_signal_events.event_date DESC" in compile_sql(db.statements[-1])
+    latest_sql = compile_sql(db.statements[-1])
+    assert "industry_signal_events.event_date DESC" in latest_sql
+    assert "industry_signal_events.event_sequence DESC" in latest_sql
 
     assert await list_signal_events(db, "pig", 7) == [stored]
     sql = compile_sql(db.statements[-1], literal_binds=True)
     assert "industry_signal_events.event_date DESC" in sql
+    assert "industry_signal_events.event_sequence DESC" in sql
     assert "LIMIT 7" in sql
 
 
@@ -258,6 +264,48 @@ async def test_list_event_evaluations_skips_database_for_empty_ids():
     assert db.statements == []
 
 
+class FakeCache:
+    def __init__(self) -> None:
+        self.stored = None
+
+    async def get(self, _key):
+        return None
+
+    async def set(self, _key, value, *, ttl):
+        self.stored = (value, ttl)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_without_valid_signal_returns_nullable_cycle_and_signal(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.latest_rows_by_metric",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.get_metric_history",
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.list_reference_points",
+        AsyncMock(return_value=[]),
+    )
+    latest_signal = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.latest_signal", latest_signal
+    )
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.list_signals",
+        AsyncMock(return_value=[]),
+    )
+
+    result = await get_dashboard(SimpleNamespace(), FakeCache(), "pig")
+
+    assert result.cycle is None
+    assert result.signal is None
+    assert result.signal_history == []
+    latest_signal.assert_awaited_once()
+
+
 def quality_result(*, status: str = "healthy", signal_ready: bool = True):
     return IndustryQualityResult(
         status=status,
@@ -269,13 +317,18 @@ def quality_result(*, status: str = "healthy", signal_ready: bool = True):
         partial_count=0,
         details=[
             MetricQualityResult(
-                metric_key="hog_price",
+                metric_key=metric_key,
                 status="ready" if signal_ready else "missing",
-                source="akshare_soozhu" if signal_ready else None,
-                period=date(2026, 9, 3) if signal_ready else None,
+                source=source if signal_ready else None,
+                period=period if signal_ready else None,
                 age_days=0 if signal_ready else None,
                 reason=None if signal_ready else "no selected observation",
                 entity_coverage=None,
+            )
+            for metric_key, source, period in (
+                ("hog_price", "akshare_soozhu", date(2026, 9, 3)),
+                ("hog_corn_ratio", "derived", date(2026, 9, 3)),
+                ("sow_inventory_mom", "derived", date(2026, 8, 31)),
             )
         ],
     )
@@ -506,6 +559,8 @@ async def test_signal_events_are_created_only_for_baseline_or_transition(
     else:
         assert result is event
         create_event.assert_awaited_once()
+        event_payload = create_event.await_args.args[1]
+        assert event_payload["event_sequence"] == (1 if previous is None else 2)
         if current_signal in (SIGNAL_BUY, SIGNAL_SELL):
             assert [call.args[1]["horizon_days"] for call in upsert_evaluation.await_args_list] == [
                 30,
@@ -519,6 +574,71 @@ async def test_signal_events_are_created_only_for_baseline_or_transition(
             upsert_evaluation.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_same_day_a_to_b_to_a_appends_sequences_and_repeated_a_is_idempotent(
+    monkeypatch,
+):
+    stored_events = []
+
+    async def latest(_db, _industry_key):
+        return stored_events[-1] if stored_events else None
+
+    async def create(_db, payload):
+        event = SimpleNamespace(id=len(stored_events) + 1, **payload)
+        stored_events.append(event)
+        return event
+
+    monkeypatch.setattr(
+        "app.services.industry_signal_verification.repo.latest_signal_event", latest
+    )
+    monkeypatch.setattr(
+        "app.services.industry_signal_verification.repo.create_signal_event", create
+    )
+    upsert_evaluation = AsyncMock(return_value=SimpleNamespace(id=21))
+    monkeypatch.setattr(
+        "app.services.industry_signal_verification.repo.upsert_signal_evaluation",
+        upsert_evaluation,
+    )
+    kwargs = {
+        "basis_periods": {
+            "hog_corn_ratio": "2026-09-03",
+            "hog_price": "2026-09-03",
+            "sow_inventory_mom": "2026-08-31",
+        },
+        "quality": quality_result(),
+    }
+
+    first_a = await ensure_signal_event(
+        SimpleNamespace(), PIG_INDUSTRY, signal_row(), **kwargs
+    )
+    event_b = await ensure_signal_event(
+        SimpleNamespace(),
+        PIG_INDUSTRY,
+        signal_row(signal_type=SIGNAL_SELL, phase="prosperity"),
+        **kwargs,
+    )
+    second_a = await ensure_signal_event(
+        SimpleNamespace(), PIG_INDUSTRY, signal_row(), **kwargs
+    )
+    repeated_a = await ensure_signal_event(
+        SimpleNamespace(), PIG_INDUSTRY, signal_row(), **kwargs
+    )
+
+    assert [event.event_sequence for event in stored_events] == [1, 2, 3]
+    assert first_a.id == 1
+    assert event_b.id == 2
+    assert second_a.id == 3
+    assert repeated_a is None
+    assert [call.args[1]["signal_event_id"] for call in upsert_evaluation.await_args_list] == [
+        1,
+        1,
+        2,
+        2,
+        3,
+        3,
+    ]
+
+
 def rules_for(horizon: int = 30):
     verification = PIG_INDUSTRY.verification
     assert verification is not None
@@ -527,11 +647,26 @@ def rules_for(horizon: int = 30):
 
 def snapshot(signal_type: str, ratio: float, price: float, sow_mom: float | None):
     metrics = {
-        "hog_corn_ratio": {"value": ratio, "period": "2026-09-03"},
-        "hog_price": {"value": price, "period": "2026-09-03"},
+        "hog_corn_ratio": {
+            "value": ratio,
+            "period": "2026-09-03",
+            "source": "derived",
+            "freq": "daily",
+        },
+        "hog_price": {
+            "value": price,
+            "period": "2026-09-03",
+            "source": "akshare_soozhu",
+            "freq": "daily",
+        },
     }
     if sow_mom is not None:
-        metrics["sow_inventory_mom"] = {"value": sow_mom, "period": "2026-09-30"}
+        metrics["sow_inventory_mom"] = {
+            "value": sow_mom,
+            "period": "2026-09-30",
+            "source": "derived",
+            "freq": "monthly",
+        }
     return {"signal_type": signal_type, "metrics": metrics}
 
 
@@ -554,6 +689,28 @@ def test_verification_score_is_signal_direction_dependent(
     assert result.score == expected_score
     assert result.status == expected_status
     assert len(result.criteria_results) == 3
+
+
+@pytest.mark.parametrize(
+    ("signal_type", "end_ratio"),
+    [
+        (SIGNAL_BUY, 10.3),
+        (SIGNAL_SELL, 9.7),
+    ],
+)
+def test_percentage_rule_exact_three_percent_boundary_gets_full_weight(
+    signal_type, end_ratio
+):
+    rule = replace(rules_for()[0], weight=100)
+    start = snapshot(signal_type, 10.0, 10.0, -0.2)
+    end = snapshot(signal_type, end_ratio, 10.0, -0.2)
+
+    result = score_verification((rule,), start, end)
+
+    assert result.status == "confirmed"
+    assert result.score == Decimal("100")
+    assert result.criteria_results[0]["change_pct"] in {"3.00", "-3.00"}
+    assert result.criteria_results[0]["score"] == "100"
 
 
 def test_required_evidence_missing_is_inconclusive():
@@ -600,6 +757,104 @@ async def test_due_evaluation_before_rule_grace_remains_pending(monkeypatch):
     assert result.pending == 1
     assert result.evaluated == 0
     upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_due_evaluation_missing_frozen_provenance_is_inconclusive(monkeypatch):
+    start = snapshot(SIGNAL_BUY, 6.0, 10.0, -0.2)
+    start["metrics"]["hog_price"].pop("freq")
+    evaluation = SimpleNamespace(
+        id=21,
+        signal_event_id=11,
+        target_date=date(2026, 10, 3),
+        rules=[vars(rule) for rule in rules_for()],
+        start_snapshot=start,
+        methodology_version="pig-cycle-v1",
+        horizon_days=30,
+    )
+    event = SimpleNamespace(id=11, industry_key="pig", signal_type=SIGNAL_BUY)
+    db = SimpleNamespace(get=AsyncMock(return_value=event))
+    monkeypatch.setattr(
+        "app.services.industry_signal_verification.repo.list_due_signal_evaluations",
+        AsyncMock(return_value=[evaluation]),
+    )
+    history = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "app.services.industry_signal_verification.repo.get_metric_history", history
+    )
+    upsert = AsyncMock(return_value=SimpleNamespace(id=21))
+    monkeypatch.setattr(
+        "app.services.industry_signal_verification.repo.upsert_signal_evaluation", upsert
+    )
+
+    result = await run_due_signal_evaluations(
+        db, PIG_INDUSTRY, as_of=date(2026, 12, 1)
+    )
+
+    assert result.inconclusive == 1
+    payload = upsert.await_args.args[1]
+    assert payload["insufficient_reasons"] == [
+        "hog_price: missing frozen source or freq"
+    ]
+    assert all(call.args[2] != "hog_price" for call in history.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_due_evaluation_uses_frozen_freq_after_registry_changes(monkeypatch):
+    evaluation = SimpleNamespace(
+        id=21,
+        signal_event_id=11,
+        target_date=date(2026, 10, 3),
+        rules=[vars(rule) for rule in rules_for()],
+        start_snapshot=snapshot(SIGNAL_BUY, 6.0, 10.0, -0.2),
+        methodology_version="frozen-v1",
+        horizon_days=30,
+    )
+    event = SimpleNamespace(id=11, industry_key="pig", signal_type=SIGNAL_BUY)
+    changed_metrics = [
+        replace(metric, freq="weekly") if metric.key == "hog_price" else metric
+        for metric in PIG_INDUSTRY.metrics
+    ]
+    changed_cfg = replace(PIG_INDUSTRY, metrics=changed_metrics)
+    db = SimpleNamespace(get=AsyncMock(return_value=event))
+    monkeypatch.setattr(
+        "app.services.industry_signal_verification.repo.list_due_signal_evaluations",
+        AsyncMock(return_value=[evaluation]),
+    )
+    rows = {
+        "hog_corn_ratio": [
+            SimpleNamespace(period=date(2026, 10, 4), value=6.3, source="derived")
+        ],
+        "hog_price": [
+            SimpleNamespace(
+                period=date(2026, 10, 4), value=10.3, source="akshare_soozhu"
+            )
+        ],
+        "sow_inventory_mom": [
+            SimpleNamespace(period=date(2026, 10, 31), value=-0.1, source="derived")
+        ],
+    }
+    calls = []
+
+    async def history(_db, _industry, metric_key, **kwargs):
+        calls.append((metric_key, kwargs))
+        return rows[metric_key]
+
+    monkeypatch.setattr(
+        "app.services.industry_signal_verification.repo.get_metric_history", history
+    )
+    monkeypatch.setattr(
+        "app.services.industry_signal_verification.repo.upsert_signal_evaluation",
+        AsyncMock(return_value=SimpleNamespace(id=21)),
+    )
+
+    result = await run_due_signal_evaluations(
+        db, changed_cfg, as_of=date(2026, 11, 20)
+    )
+
+    assert result.confirmed == 1
+    hog_price_call = next(kwargs for key, kwargs in calls if key == "hog_price")
+    assert hog_price_call == {"limit": 4000, "freq": "daily", "source": "akshare_soozhu"}
 
 
 @pytest.mark.asyncio
@@ -652,8 +907,9 @@ async def test_due_evaluation_uses_first_observation_on_or_after_target(monkeypa
     payload = upsert.await_args.args[1]
     assert payload["methodology_version"] == "frozen-v1"
     assert payload["end_snapshot"]["metrics"]["hog_corn_ratio"] == {
-        "value": 6.3,
+        "value": "6.3",
         "period": "2026-10-04",
         "source": "derived",
+        "freq": "daily",
     }
     assert payload["status"] == "confirmed"

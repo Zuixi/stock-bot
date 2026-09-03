@@ -264,7 +264,10 @@ async def latest_signal_event(
     stmt = (
         select(IndustrySignalEvent)
         .where(IndustrySignalEvent.industry_key == industry_key)
-        .order_by(desc(IndustrySignalEvent.event_date), desc(IndustrySignalEvent.id))
+        .order_by(
+            desc(IndustrySignalEvent.event_date),
+            desc(IndustrySignalEvent.event_sequence),
+        )
         .limit(1)
     )
     result = await db.execute(stmt)
@@ -279,6 +282,7 @@ async def create_signal_event(
         for key in (
             "industry_key",
             "event_date",
+            "event_sequence",
             "previous_signal_type",
             "previous_phase",
             "signal_type",
@@ -305,7 +309,10 @@ async def list_signal_events(
     stmt = (
         select(IndustrySignalEvent)
         .where(IndustrySignalEvent.industry_key == industry_key)
-        .order_by(desc(IndustrySignalEvent.event_date), desc(IndustrySignalEvent.id))
+        .order_by(
+            desc(IndustrySignalEvent.event_date),
+            desc(IndustrySignalEvent.event_sequence),
+        )
         .limit(limit)
     )
     result = await db.execute(stmt)

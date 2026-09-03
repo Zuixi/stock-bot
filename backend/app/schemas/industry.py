@@ -87,8 +87,8 @@ class DashboardOut(BaseModel):
     strip: list[MetricLatestOut]
     quick_view: list[MetricLatestOut]
     trends: dict[str, TrendSeriesOut]
-    cycle: CycleOut
-    signal: SignalOut
+    cycle: CycleOut | None = None
+    signal: SignalOut | None = None
     signal_history: list[SignalOut]
 
 
