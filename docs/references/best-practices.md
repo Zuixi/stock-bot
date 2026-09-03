@@ -79,3 +79,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - 重复图表组件的合并应先落纯函数层（计算/格式化/裁剪）并配 barrel 导出，且把类型签名当依赖契约先于组件实现冻结（任务 brief 的 Interfaces 块即签名源）——后续 UI 任务只依赖稳定签名，不再各自重复实现；brief 代码块可用 diff 逐字校验落地无漂移。
 - ECharts option builder 保持返回未注解的结构化对象（推断类型天然可赋给 `Record<string, unknown>`），formatter 一律收 `params: unknown` 再局部断言；当 `string` 参数要索引 `Partial<Record<字面量联合,…>>` 时直接把参数收窄为字面量联合类型（如 `MaKey`），比在索引处加 `as` 断言更不易漂移。
 - antd 5.x 的命名导出随小版本漂移：子组件（如 CheckableTag）可能只挂在主组件命名空间（`Tag.CheckableTag`）而非顶层导出，逐字移植参考代码时先对齐代码库内同组件既有用法再定 import 形态；此类 TS2305 还会连带制造"参数隐式 any"的次生报错，修掉根因即一并消除，无需逐个补类型。
+- antd 5 Segmented 的 radio input（`.ant-segmented-item-input`）是零尺寸隐藏元素：Playwright 对 `getByRole("radio")` 做 toBeVisible/click 必失败，E2E 应操作可见的 `label.ant-segmented-item`（label 点击天然转发到 input），选中态改断言其 `ant-segmented-item-selected` 类。
