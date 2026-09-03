@@ -7,6 +7,7 @@ import {
   NorthboundCard,
   HotSectors,
   IndustryClassification,
+  MarketDataBoard,
 } from "@/features/market/components";
 
 export default function MarketPage() {
@@ -39,6 +40,12 @@ export default function MarketPage() {
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col span={24}>
           <HotSectors />
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Col span={24}>
+          <MarketDataBoard />
         </Col>
       </Row>
 
