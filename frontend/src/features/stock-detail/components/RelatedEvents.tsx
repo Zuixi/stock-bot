@@ -102,11 +102,11 @@ export function RelatedEvents({ symbol }: { symbol: string }) {
           pagination={false} dataSource={dragon.data ?? []} columns={dragonCols} locale={{ emptyText: "暂无上榜记录" }} />
       )}
       {kind === "block-trades" && (
-        <Table<BlockTradeItem> rowKey={(r) => `${r.tradeDate}-${r.buyer}-${r.price}`} size="small" loading={block.isLoading}
+        <Table<BlockTradeItem> rowKey={(r) => `${r.tradeDate}-${r.buyer}-${r.price}-${r.volume}`} size="small" loading={block.isLoading}
           pagination={false} dataSource={block.data ?? []} columns={blockCols} locale={{ emptyText: "暂无大宗交易记录" }} />
       )}
       {kind === "share-floats" && (
-        <Table<ShareFloatItem> rowKey={(r) => `${r.floatDate}-${r.shareType}`} size="small" loading={floats.isLoading}
+        <Table<ShareFloatItem> rowKey={(r) => `${r.floatDate}-${r.shareType}-${r.holderName}`} size="small" loading={floats.isLoading}
           pagination={false} dataSource={floats.data ?? []} columns={floatCols} locale={{ emptyText: "暂无解禁记录" }} />
       )}
       {kind === "repurchases" && (
