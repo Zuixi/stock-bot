@@ -52,3 +52,6 @@ data/*
 
 ## claude code
 .claude/**
+## Build artifacts (test coverage / TS incremental build — regenerated locally)
+backend/.coverage
+frontend/tsconfig.tsbuildinfo
