@@ -30,7 +30,7 @@ export default function ResearchPage() {
       <StateWrapper loading={isLoading} error={error} onRetry={refetch} empty={!data?.length}>
         <Row gutter={[16, 16]}>
           {(data ?? []).map((item) => (
-            <Col key={item.key} xs={24} md={12} lg={8}>
+            <Col key={item.key} xs={24} md={12} lg={8} style={{ display: "flex" }}>
               <IndustryCard industry={item} onOpen={() => navigate(`/research/${item.key}`)} />
             </Col>
           ))}
@@ -55,22 +55,31 @@ function IndustryCard({ industry, onOpen }: { industry: IndustrySummary; onOpen:
       hoverable
       size="small"
       onClick={onOpen}
+      style={{ height: "100%", width: "100%" }}
       styles={{ body: { padding: 20 } }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>
+        <Typography.Title
+          level={4}
+          style={{ margin: 0, minWidth: 0 }}
+          ellipsis={{ rows: 1 }}
+        >
           {industry.name}
         </Typography.Title>
         {industry.swL3Codes.map((code) => (
-          <Tag key={code} style={{ color: "#86909c" }}>
+          <Tag key={code} style={{ color: "#86909c", flexShrink: 0 }}>
             申万Ⅲ · {code}
           </Tag>
         ))}
-        <RightOutlined style={{ marginLeft: "auto", color: "#86909c" }} />
+        <RightOutlined style={{ marginLeft: "auto", color: "#86909c", flexShrink: 0 }} />
       </div>
-      <Typography.Paragraph type="secondary" style={{ marginTop: 10, marginBottom: 14 }}>
+      <Typography.Text
+        type="secondary"
+        style={{ display: "block", marginTop: 10, marginBottom: 14 }}
+        ellipsis={{ tooltip: true }}
+      >
         {industry.description}
-      </Typography.Paragraph>
+      </Typography.Text>
       {(industry.phase || industry.signalType) && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
           {industry.phase && (

@@ -222,3 +222,9 @@
 - **测试**：新增 `tests/test_industry_generalization.py` 10 项离线单测（registry 双行业 sw 码不相交 / broiler mock-only / 通用 builder 无重复冲突键+确定性+末点=基准 / 引擎 cfg 注入）；e2e 追加 broiler ingest→列表→dashboard 全链路 + pig/broiler 成分股隔离断言；Playwright 追加列表状态行与"broiler 卡片零新页面进入工作台"两用例（并修一处竞态：列表卡片新增周期/信号 Tag 后，SPA 路由切换瞬间旧列表 DOM 触发严格模式多元素，现先等 Tab 栏挂载再断言头部标签）；全量 133 backend（117 offline + 16 e2e）+ 7 Playwright 通过（docker 重建实跑）
 - **文档收尾**：`plans/industry-research-workbench.md` P1-P6 验收项按实际完成情况勾选留痕（未勾选项附原因：猪粮比独立图表、统计局 CSV 脚本、多源对比 Drawer；头均市值分位注明"分位待历史积累"）；`plans/2026-09-03-workbench-p3-p6-completion.md` 五阶段标记完成；data-source.md 补 `sow_inventory_mom` 派生行与 broiler mock 演示指标注记（metric_key 交叉引用对齐）
 - 涉及模块：backend/services/industry_registry, backend/services/industry_mock_data, backend/services/industry_metric_service, backend/services/cycle_engine, backend/schemas/industry, frontend/pages/research, frontend/pages/research-workbench, frontend/features/industry-research, frontend/shared/api/industryResearch, backend/tests, frontend/e2e, plans, docs
+
+## 2026-09-03 - 前端交互修复
+- **面包屑可点击**：投研工作台（/research/pig、/research/broiler 共用组件）面包屑首项"投研"由纯文本改为 react-router `<Link to="/research">`（antd Breadcrumb item title 直接承载 Link，末项"工作台"保持当前页无链接约定）；/research 列表页无面包屑，不涉及
+- **行业卡片等高 + 描述截断**：/research 两张行业卡片在部分宽度不等高（broiler 描述换行 2 行撑高 246/268px）——描述改 `Typography.Text` `ellipsis={{ tooltip: true }}` 单行省略（hover 出全文）消除换行差；再以 Col `display:flex` + Card `height:100%` 拉伸兜底（窄宽度 Tag 换行等场景仍等高）；卡片头部 h4 名称加 `minWidth:0` + `ellipsis={{ rows:1 }}`、申万 Tag/箭头 `flexShrink:0`，超长行业名同样省略号截断
+- **测试**：Playwright 新增两用例——/research 两 `.ant-card` boundingBox 等高（≤1px 子像素容差）；/research/pig 点面包屑"投研"→ waitForURL `**/research` 且生猪养殖卡片可见；9/9 通过（docker 重建前端实跑；另 1280/480 双宽度实测 diff=0，ellipsis computed style 核验）
+- 涉及模块：frontend/pages/research, frontend/pages/research-workbench, frontend/e2e
