@@ -2,7 +2,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import { Typography, Result, Button, Divider, Row, Col, Spin, Breadcrumb } from "antd";
 import type { BreadcrumbProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { StockHeader, FundamentalCards, CustomSwTags, UserTags } from "@/features/stock-detail/components";
+import { StockHeader, FundamentalCards, CustomSwTags, UserTags, RelatedEvents } from "@/features/stock-detail/components";
 import { KlineChart } from "@/shared/ui/kline";
 import { fetchKlineBySymbol } from "@/shared/api/quotes";
 import { fetchStockEnrichedBySymbol } from "@/shared/api/stocks";
@@ -98,6 +98,12 @@ export default function StockDetailPage() {
         </Col>
         <Col xs={24} lg={10}>
           <FundamentalCards stock={stock} />
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Col span={24}>
+          <RelatedEvents symbol={stock.symbol} />
         </Col>
       </Row>
 
