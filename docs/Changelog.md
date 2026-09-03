@@ -357,3 +357,7 @@
 ## 2026-09-03 - 市场数据面 Task 14 — 数据面 Tab 区块（龙虎榜/大宗/解禁/回购/公告快讯）
 - 新增 `MarketDataBoard`（antd Tabs 懒挂载 5 pane，首激活才发 useQuery）；`dataFace/` 五组件：`DragonTigerTable`（涨跌幅/净买额 ±红绿+金额加粗，行点击跳个股）、`BlockTradeTable`（成交额万元→亿新增 `fmtWanYi`，买/卖营业部 ellipsis）、`ShareFloatTable`（解禁数量亿股、占总股本%、类型）、`RepurchaseTable`（进度 Tag 实施=blue/完成=green/其他=default、金额元→亿、数量股→万股内联换算）、`AnnouncementFeed`（List 时间+分类 Tag+证简称+PDF 新窗链接，30 条滚动）；统一表格规范 size=small/pagination=false/scroll.y=320/空态文案；顺手清理 SectorMoneyflowCard 遗留的死导入 `fmtYi`；活数据校准两处 rowKey 防撞键（解禁同股多持有人追加 holderName、大宗同股同价同买方追加 volume）；`npm run build` 通过，活栈 `/market` 五 Tab 实数据切换验证通过（大宗 9034.54万→0.90亿换算核对）
 - 涉及模块：frontend/features/market/components, frontend/pages/market
+
+## 2026-09-03 - 市场数据面 Task 15 — 个股详情页相关数据卡（公告/龙虎榜/大宗/解禁/回购）
+- 新增 `features/stock-detail/components/RelatedEvents.tsx`（Card title="相关数据" + Segmented 五视图：公告默认 Tab（时间+标题 PDF 新窗链接）、龙虎榜（fetchDragonTiger(50) 全市场最新日客户端 filter 本股，净买额 ±红绿）、大宗（fmtWanGu/fmtWanYi）、解禁（fmtYiGu/占比%）、回购（进度+fmtYi 金额）；每 Tab 独立 queryKey 且 enabled 门控首激活才请求，staleTime 5min，统一 size=small/pagination=false/空态文案，footer 注明"龙虎榜为全市场最新日筛选本股"数据语义）；接线 `pages/stock-detail/index.tsx`（K线/基础信息 Row 之后、末尾免责声明 Divider 之前插入全宽 Row，symbol 取 `stock.symbol` 规避 useParams 可空类型）；删除 brief 末尾防未用报错的脚手架残留（hidden span + useNavigate import）；`npm run build` 通过，活栈 `/stock/600519` 公告默认 Tab + 五 Tab 空态切换验证、`/stock/002536` 龙虎榜实数据（+4.59亿 红色）验证，零 console 错误
+- 涉及模块：frontend/features/stock-detail/components, frontend/pages/stock-detail
