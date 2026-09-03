@@ -136,7 +136,7 @@ class IndustryConfig:
     etf_codes: list[str] = field(default_factory=list)
     cb_codes: list[str] = field(default_factory=list)
     securities_names: dict[str, str] = field(default_factory=dict)  # code → 展示名
-    signal_quality_required: bool = True
+    signal_quality_required: bool = False
     verification: SignalVerificationConfig | None = None
 
     def metric(self, key: str) -> MetricDef | None:
@@ -313,6 +313,7 @@ PIG_INDUSTRY = IndustryConfig(
         SIGNAL_BUY: _position_slices(60, 30, 10),
         SIGNAL_SELL: _position_slices(20, 30, 50),
     },
+    signal_quality_required=True,
     verification=SignalVerificationConfig(
         methodology_version="pig-cycle-v1",
         supported_signals=(SIGNAL_BUY, SIGNAL_SELL),
