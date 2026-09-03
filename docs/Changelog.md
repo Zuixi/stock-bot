@@ -223,6 +223,12 @@
 - **文档收尾**：`plans/industry-research-workbench.md` P1-P6 验收项按实际完成情况勾选留痕（未勾选项附原因：猪粮比独立图表、统计局 CSV 脚本、多源对比 Drawer；头均市值分位注明"分位待历史积累"）；`plans/2026-09-03-workbench-p3-p6-completion.md` 五阶段标记完成；data-source.md 补 `sow_inventory_mom` 派生行与 broiler mock 演示指标注记（metric_key 交叉引用对齐）
 - 涉及模块：backend/services/industry_registry, backend/services/industry_mock_data, backend/services/industry_metric_service, backend/services/cycle_engine, backend/schemas/industry, frontend/pages/research, frontend/pages/research-workbench, frontend/features/industry-research, frontend/shared/api/industryResearch, backend/tests, frontend/e2e, plans, docs
 
+## 2026-09-03 - 个股/指数详情 K 线周期切换修复
+- **问题**：个股详情（及指数详情）K 线图切换 1月/3月/6月/1年 周期"显示不对、似未生效"——任何周期都只渲染所选区间尾部 40%（dataZoom 固定 start:60），且 `ReactECharts` 默认 merge 模式下用户滚轮缩放状态粘滞，切周期后可见窗口不重置；后端 start/end 过滤与缓存 key 均正常（已实测 30d=22 行 / 365d=242 行）
+- **修复**：`KLineChart` 与 `IndexKLineChart` 去掉 dataZoom 固定 `start:60/end:100`（周期切换后默认展示全量区间，滚轮缩放留给用户主动操作），并加 `notMerge`（与 `shared/ui/EChart` 封装既有约定对齐），确保切周期时完整重放 option、重置缩放状态
+- **验证**：docker 重建前端后浏览器实测——滚轮缩放至窄窗口再切"1年"，视图与干净的全年视图逐字节一致（修复前该场景窗口冻结）；1月=整月 22 根、1年=全年 200+ 根全量渲染
+- 涉及模块：frontend/features/stock-detail, frontend/pages/index-detail
+
 ## 2026-09-03 - 前端交互修复
 - **面包屑可点击**：投研工作台（/research/pig、/research/broiler 共用组件）面包屑首项"投研"由纯文本改为 react-router `<Link to="/research">`（antd Breadcrumb item title 直接承载 Link，末项"工作台"保持当前页无链接约定）；/research 列表页无面包屑，不涉及
 - **行业卡片等高 + 描述截断**：/research 两张行业卡片在部分宽度不等高（broiler 描述换行 2 行撑高 246/268px）——描述改 `Typography.Text` `ellipsis={{ tooltip: true }}` 单行省略（hover 出全文）消除换行差；再以 Col `display:flex` + Card `height:100%` 拉伸兜底（窄宽度 Tag 换行等场景仍等高）；卡片头部 h4 名称加 `minWidth:0` + `ellipsis={{ rows:1 }}`、申万 Tag/箭头 `flexShrink:0`，超长行业名同样省略号截断
