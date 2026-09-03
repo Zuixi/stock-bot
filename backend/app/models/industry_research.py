@@ -10,6 +10,7 @@ metric_key 命名与 docs/design/data-source.md 对齐。
 """
 
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Date,
@@ -199,7 +200,7 @@ class IndustrySignalEvaluation(Base):
     end_snapshot: Mapped[dict | None] = mapped_column(JSONB)
     criteria_results: Mapped[list | None] = mapped_column(JSONB)
     insufficient_reasons: Mapped[list | None] = mapped_column(JSONB)
-    score: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
