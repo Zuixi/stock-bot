@@ -76,3 +76,4 @@
 SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局 locator：列表与详情页出现同名 Tag（如行业卡片与工作台头部的"周期阶段"）后，路由 URL 变更与 React 卸载旧页之间存在空窗，Playwright strict mode 多元素错误即时抛出不重试，仅 waitForURL 不足以防护。
 - echarts-for-react 默认 merge 模式下，用户交互过的组件状态（如 dataZoom 滚轮缩放窗口）不会被新 option 同名配置重置：数据全集切换的图表必须 `notMerge`（对齐 shared/ui/EChart 封装），且不要用固定 start/end 百分比裁剪初始视图——周期切换类交互的正确语义是"所选区间全量展示 + 每次切换重置缩放"。
 - antd 栅格内卡片等高要"双保险"：内容侧 Typography `ellipsis`（描述 `tooltip:true`）消除换行撑高，布局侧 Col `display:flex` + Card `height:100%` 拉伸兜底；flex 行内文本省略号必须给文本容器 `minWidth:0`（flex item 默认 min-width:auto 不收缩），Tag/图标侧补 `flexShrink:0`。
+- 重复图表组件的合并应先落纯函数层（计算/格式化/裁剪）并配 barrel 导出，且把类型签名当依赖契约先于组件实现冻结（任务 brief 的 Interfaces 块即签名源）——后续 UI 任务只依赖稳定签名，不再各自重复实现；brief 代码块可用 diff 逐字校验落地无漂移。

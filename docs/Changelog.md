@@ -234,3 +234,7 @@
 - **行业卡片等高 + 描述截断**：/research 两张行业卡片在部分宽度不等高（broiler 描述换行 2 行撑高 246/268px）——描述改 `Typography.Text` `ellipsis={{ tooltip: true }}` 单行省略（hover 出全文）消除换行差；再以 Col `display:flex` + Card `height:100%` 拉伸兜底（窄宽度 Tag 换行等场景仍等高）；卡片头部 h4 名称加 `minWidth:0` + `ellipsis={{ rows:1 }}`、申万 Tag/箭头 `flexShrink:0`，超长行业名同样省略号截断
 - **测试**：Playwright 新增两用例——/research 两 `.ant-card` boundingBox 等高（≤1px 子像素容差）；/research/pig 点面包屑"投研"→ waitForURL `**/research` 且生猪养殖卡片可见；9/9 通过（docker 重建前端实跑；另 1280/480 双宽度实测 diff=0，ellipsis computed style 核验）
 - 涉及模块：frontend/pages/research, frontend/pages/research-workbench, frontend/e2e
+
+## 2026-09-03 - K线共享组件纯函数层（K线组件升级 Task 1）
+- 新建 `frontend/src/shared/ui/kline/`（`klineMath.ts` + barrel `index.ts`）：MA5/10/20/60 定义与滑动平均（暖窗前为 null）、同年 MM-DD/跨年首日 YYYY-MM-DD 轴标签、日期区间裁剪 `cropToRange`、成交量/成交额格式化 `fmtVolume`/`fmtAmount`，并 re-export 复权三类型；`shared/types` 的 `KLinePoint` 增 `amount?: number`，文件末尾追加 `AdjustMode` / `KlineResult` / `KlineFetcher`——为个股/指数两处重复 K 线图合并为共享组件打底，类型签名作为后续任务的依赖契约冻结（plans/2026-09-03-kline-component-upgrade.md Task 1）
+- 涉及模块：frontend/shared/ui/kline, frontend/shared/types
