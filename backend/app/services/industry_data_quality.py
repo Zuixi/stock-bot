@@ -140,17 +140,22 @@ def is_formal_signal_config_valid(cfg: IndustryConfig) -> bool:
     ):
         return False
 
-    metric_keys = {metric.key for metric in cfg.metrics}
+    required_metric_keys = {metric.key for metric in required_metrics}
     horizon_days: set[int] = set()
-    allowed_directions = {"increase", "decrease", "non_positive", "non_negative"}
+    allowed_directions = {"buy_up_sell_down", "buy_lte_zero_sell_gte_zero"}
     for horizon in verification.horizons:
         if horizon.days <= 0 or horizon.days in horizon_days or not horizon.rules:
             return False
         horizon_days.add(horizon.days)
+        rule_metric_keys = [rule.metric_key for rule in horizon.rules]
+        if len(rule_metric_keys) != len(set(rule_metric_keys)):
+            return False
+        if set(rule_metric_keys) != required_metric_keys:
+            return False
         if sum(rule.weight for rule in horizon.rules) != 100:
             return False
         if any(
-            rule.metric_key not in metric_keys
+            rule.metric_key not in required_metric_keys
             or rule.direction not in allowed_directions
             or rule.weight <= 0
             or rule.grace_days < 0
