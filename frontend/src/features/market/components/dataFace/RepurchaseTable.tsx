@@ -40,7 +40,7 @@ export function RepurchaseTable() {
 
   return (
     <Table<RepurchaseItem>
-      rowKey={(r) => `${r.tsCode}-${r.annDate}`}
+      rowKey={(r) => `${r.tsCode}-${r.annDate}-${r.proc}`}
       size="small"
       loading={isLoading}
       columns={columns}
