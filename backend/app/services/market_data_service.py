@@ -110,24 +110,37 @@ async def _upsert_rows(db: AsyncSession, rows: list[IndexDaily]) -> int:
     return upserted
 
 
-async def ingest_global_index_daily(db: AsyncSession, lookback_days: int = 14) -> dict[str, int]:
-    """全球指数 + A股三大指数近 N 日日线 → index_dailies（幂等 upsert）。"""
+async def _collect_index_rows(client: Any, start: str, end: str) -> list[IndexDaily]:
+    """按注册表逐指数拉取并映射为 IndexDaily 行。
+
+    单指数失败只告警并跳过（部分成功仍入库），避免一次抖动作废整个调度批次。
+    """
     from app.models.index_daily import IndexDaily  # noqa: PLC0415
 
+    rows: list[IndexDaily] = []
+    for g in GLOBAL_INDICES:
+        try:
+            if g["source"] == "index_global":
+                df: pd.DataFrame = await client.fetch_index_global(g["ts_code"], start, end)
+            else:
+                # fetch_index_daily 第二个位置参数是 trade_date，必须关键字传参
+                df = await client.fetch_index_daily(
+                    ts_code=g["ts_code"], start_date=start, end_date=end
+                )
+        except Exception:
+            logger.warning("global index %s fetch failed", g["ts_code"], exc_info=True)
+            continue
+        for rec in df.to_dict("records"):
+            rows.append(IndexDaily(**_map_index_global_row(rec), amount=None))
+    return rows
+
+
+async def ingest_global_index_daily(db: AsyncSession, lookback_days: int = 14) -> dict[str, int]:
+    """全球指数 + A股三大指数近 N 日日线 → index_dailies（幂等 upsert）。"""
     client = _get_tushare()
     start = (_today_sh() - timedelta(days=lookback_days)).strftime("%Y%m%d")
     end = _today_sh().strftime("%Y%m%d")
-    rows: list[IndexDaily] = []
-    for g in GLOBAL_INDICES:
-        if g["source"] == "index_global":
-            df: pd.DataFrame = await client.fetch_index_global(g["ts_code"], start, end)
-        else:
-            # fetch_index_daily 第二个位置参数是 trade_date，必须关键字传参
-            df = await client.fetch_index_daily(
-                ts_code=g["ts_code"], start_date=start, end_date=end
-            )
-        for rec in df.to_dict("records"):
-            rows.append(IndexDaily(**_map_index_global_row(rec), amount=None))
+    rows = await _collect_index_rows(client, start, end)
     upserted = await _upsert_rows(db, rows)
     logger.info("ingest_global_index_daily lookback=%s upserted=%s", lookback_days, upserted)
     return {"upserted": upserted}
@@ -135,21 +148,10 @@ async def ingest_global_index_daily(db: AsyncSession, lookback_days: int = 14) -
 
 async def backfill_global_index_history(db: AsyncSession, years: int = 2) -> dict[str, int]:
     """一次性回补全球指数历史（供 spark30 与指数详情 K 线）。"""
-    from app.models.index_daily import IndexDaily  # noqa: PLC0415
-
     client = _get_tushare()
     start = (_today_sh() - timedelta(days=365 * years)).strftime("%Y%m%d")
     end = _today_sh().strftime("%Y%m%d")
-    rows: list[IndexDaily] = []
-    for g in GLOBAL_INDICES:
-        if g["source"] == "index_global":
-            df: pd.DataFrame = await client.fetch_index_global(g["ts_code"], start, end)
-        else:
-            df = await client.fetch_index_daily(
-                ts_code=g["ts_code"], start_date=start, end_date=end
-            )
-        for rec in df.to_dict("records"):
-            rows.append(IndexDaily(**_map_index_global_row(rec), amount=None))
+    rows = await _collect_index_rows(client, start, end)
     upserted = await _upsert_rows(db, rows)
     logger.info("backfill_global_index_history years=%s upserted=%s", years, upserted)
     return {"upserted": upserted}
