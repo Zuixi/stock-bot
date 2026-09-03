@@ -307,3 +307,7 @@
 ## 2026-09-03 - 行业信号质量门控与确定性回评（Task 3）
 - 行业 ingest 改为先持久化质量快照再门控周期引擎，按信号/阶段转换生成不可变事件，并以冻结规则和行业指标完成 30/90 日确定性回评；Dashboard GET 不再隐式写入信号。
 - 涉及模块：backend/services, backend/tests
+
+## 2026-09-03 - 行业信号验证审查修复（Task 3 Fix 1）
+- 修复无有效信号时 Dashboard 只读构建、冻结指标来源与频率、Decimal 精确阈值评分，并以 event_sequence 保留同日 A→B→A 不可变转换及各自验证记录。
+- 涉及模块：backend/models, backend/migrations, backend/repositories, backend/services, backend/schemas, backend/tests

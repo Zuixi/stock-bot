@@ -155,13 +155,20 @@ async def _build_cycle_snapshot(db: AsyncSession, cfg: IndustryConfig) -> CycleS
 
 
 def _event_start_snapshot(
+    cfg: IndustryConfig,
     signal_row: Any,
     basis_periods: dict[str, str],
     quality: IndustryQualityResult,
 ) -> dict[str, Any]:
     basis = signal_row.basis or {}
     metrics: dict[str, dict[str, Any]] = {}
-    sources = {item.metric_key: item.source for item in quality.details}
+    provenance: dict[str, dict[str, str | None]] = {}
+    for item in quality.details:
+        metric = cfg.metric(item.metric_key)
+        provenance[item.metric_key] = {
+            "source": item.source,
+            "freq": metric.freq if metric is not None else None,
+        }
     values = {
         "hog_corn_ratio": basis.get("ratio"),
         "hog_price": basis.get("price"),
@@ -173,7 +180,7 @@ def _event_start_snapshot(
             metrics[metric_key] = {
                 "value": value,
                 "period": period,
-                "source": sources.get(metric_key),
+                **provenance.get(metric_key, {"source": None, "freq": None}),
             }
     return {"signal_type": signal_row.signal_type, "metrics": metrics}
 
@@ -205,6 +212,16 @@ async def ensure_signal_event(
         {
             "industry_key": cfg.key,
             "event_date": signal_row.effective_date,
+            "event_sequence": (
+                getattr(previous, "event_sequence", 1) + 1
+                if previous is not None
+                and (
+                    getattr(previous, "event_date", None)
+                    or getattr(previous, "effective_date", None)
+                )
+                == signal_row.effective_date
+                else 1
+            ),
             "previous_signal_type": previous.signal_type if previous else None,
             "previous_phase": previous.phase if previous else None,
             "signal_type": signal_row.signal_type,
@@ -218,7 +235,7 @@ async def ensure_signal_event(
     if event is None or signal_row.signal_type not in verification.supported_signals:
         return event
 
-    start_snapshot = _event_start_snapshot(signal_row, basis_periods, quality)
+    start_snapshot = _event_start_snapshot(cfg, signal_row, basis_periods, quality)
     for horizon in verification.horizons:
         await repo.upsert_signal_evaluation(
             db,
@@ -311,20 +328,22 @@ def score_verification(
             criteria.append({"metric_key": rule.metric_key, "status": "missing", "score": None})
             continue
 
-        start_value = float(start["value"])
-        end_value = float(end["value"])
+        start_value = Decimal(str(start["value"]))
+        end_value = Decimal(str(end["value"]))
         awarded = Decimal("0")
         outcome = "failed"
-        change_pct: float | None = None
+        change_pct: Decimal | None = None
         if rule.direction == "buy_up_sell_down":
             if start_value == 0:
                 if rule.required:
                     insufficient.append(f"{rule.metric_key}: zero start value")
                 criteria.append({"metric_key": rule.metric_key, "status": "missing", "score": None})
                 continue
-            change_pct = (end_value - start_value) / abs(start_value) * 100
+            change_pct = (
+                (end_value - start_value) / abs(start_value) * Decimal("100")
+            )
             directed_change = change_pct if signal_type == SIGNAL_BUY else -change_pct
-            threshold = rule.threshold_pct or 0.0
+            threshold = Decimal(str(rule.threshold_pct or 0))
             if directed_change >= threshold:
                 awarded = Decimal(rule.weight)
                 outcome = "met"
@@ -343,9 +362,9 @@ def score_verification(
                 "status": outcome,
                 "weight": rule.weight,
                 "score": str(awarded),
-                "start_value": start_value,
-                "end_value": end_value,
-                "change_pct": change_pct,
+                "start_value": str(start_value),
+                "end_value": str(end_value),
+                "change_pct": str(change_pct) if change_pct is not None else None,
             }
         )
 
@@ -393,35 +412,50 @@ async def run_due_signal_evaluations(
 
         end_metrics: dict[str, dict[str, Any]] = {}
         waiting = False
+        provenance_reasons: list[str] = []
         for raw_rule in evaluation.rules:
             rule = _rule_from(raw_rule)
-            metric = cfg.metric(rule.metric_key)
             start_metric = _metric(evaluation.start_snapshot, rule.metric_key)
             frozen_source = start_metric.get("source") if start_metric else None
+            frozen_freq = start_metric.get("freq") if start_metric else None
+            if not frozen_source or not frozen_freq:
+                if rule.required:
+                    provenance_reasons.append(
+                        f"{rule.metric_key}: missing frozen source or freq"
+                    )
+                continue
             rows = await repo.get_metric_history(
                 db,
                 cfg.key,
                 rule.metric_key,
                 limit=4000,
-                freq=metric.freq if metric else None,
+                freq=frozen_freq,
                 source=frozen_source,
             )
             deadline = evaluation.target_date + timedelta(days=rule.grace_days)
             selected = _first_eligible(rows, evaluation.target_date, deadline)
             if selected is not None:
                 end_metrics[rule.metric_key] = {
-                    "value": float(selected.value),
+                    "value": str(Decimal(str(selected.value))),
                     "period": selected.period.isoformat(),
-                    "source": selected.source,
+                    "source": frozen_source,
+                    "freq": frozen_freq,
                 }
             elif as_of <= deadline:
                 waiting = True
-        if waiting:
+        if waiting and not provenance_reasons:
             counts["pending"] += 1
             continue
 
         end_snapshot = {"signal_type": event.signal_type, "metrics": end_metrics}
         scored = score_verification(evaluation.rules, evaluation.start_snapshot, end_snapshot)
+        if provenance_reasons:
+            scored = VerificationScore(
+                status="inconclusive",
+                score=None,
+                criteria_results=scored.criteria_results,
+                insufficient_reasons=provenance_reasons,
+            )
         await repo.upsert_signal_evaluation(
             db,
             {

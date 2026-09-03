@@ -153,7 +153,7 @@ class IndustrySignalEvent(Base):
     __tablename__ = "industry_signal_events"
     __table_args__ = (
         UniqueConstraint(
-            "industry_key", "event_date", "signal_type", "phase",
+            "industry_key", "event_date", "event_sequence",
             name="uq_industry_signal_event",
         ),
         Index("idx_industry_signal_events_lookup", "industry_key", "event_date"),
@@ -162,6 +162,7 @@ class IndustrySignalEvent(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     industry_key: Mapped[str] = mapped_column(String(32), nullable=False)
     event_date: Mapped[date] = mapped_column(Date, nullable=False)
+    event_sequence: Mapped[int] = mapped_column(nullable=False)
     previous_signal_type: Mapped[str | None] = mapped_column(String(16))
     previous_phase: Mapped[str | None] = mapped_column(String(16))
     signal_type: Mapped[str] = mapped_column(String(16), nullable=False)

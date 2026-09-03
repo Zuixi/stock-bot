@@ -355,15 +355,17 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
     ratio_def = cfg.metric("hog_corn_ratio")
     if ratio_def is not None:
         for freq in ("daily", "monthly"):
+            hog_rows = await repo.get_metric_history(
+                db, cfg.key, "hog_price", limit=400, freq=freq
+            )
             hogs = {
-                r.period: float(r.value)
-                for r in await repo.get_metric_history(db, cfg.key, "hog_price", limit=400, freq=freq)
-                if r.value is not None
+                r.period: float(r.value) for r in hog_rows if r.value is not None
             }
+            corn_rows = await repo.get_metric_history(
+                db, cfg.key, "corn_price", limit=400, freq=freq
+            )
             corns = {
-                r.period: float(r.value)
-                for r in await repo.get_metric_history(db, cfg.key, "corn_price", limit=400, freq=freq)
-                if r.value is not None
+                r.period: float(r.value) for r in corn_rows if r.value is not None
             }
             for period in sorted(set(hogs) & set(corns)):
                 if corns[period]:
@@ -372,10 +374,10 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
     # 能繁环比 = (本月 - 上月) / 上月
     mom_def = cfg.metric("sow_inventory_mom")
     if mom_def is not None:
-        sow_rows = [
-            r for r in await repo.get_metric_history(db, cfg.key, "sow_inventory", limit=240, freq="monthly")
-            if r.value is not None
-        ]
+        history = await repo.get_metric_history(
+            db, cfg.key, "sow_inventory", limit=240, freq="monthly"
+        )
+        sow_rows = [r for r in history if r.value is not None]
         # 同一 period 可能多源共存（真实源 ingest 后又重跑 mock 演示）：按 registry 源
         # 优先级逐期去重，否则环比派生会对同一 period 产出重复行，单批 ON CONFLICT
         # 二次命中同一行直接 CardinalityViolation（2026-09-03 实跑复现）。
@@ -390,7 +392,12 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
         for prev, cur in zip(sow, sow[1:], strict=False):
             if prev.value:
                 derived.append(
-                    _row(mom_def, "monthly", cur.period, (float(cur.value) - float(prev.value)) / float(prev.value) * 100)
+                    _row(
+                        mom_def,
+                        "monthly",
+                        cur.period,
+                        (float(cur.value) - float(prev.value)) / float(prev.value) * 100,
+                    )
                 )
 
     # 头均市值 = 最新总市值 / 年化出栏（公司级派生，stock_id>0；source_tier 取 registry 的 calc）
@@ -469,8 +476,13 @@ async def _build_metric_latest(
                  "quarterly": "季环比", "yearly": "年同比"}.get(row.freq, "环比")
         out.delta = await _delta_of(db, cfg.key, m, row, label)
         if m.warn_bands:
-            band = next((b for b in sorted(m.warn_bands, key=lambda b: (b.upper is None, b.upper or 0))
-                         if b.upper is None or out.value <= b.upper), None)
+            bands = sorted(
+                m.warn_bands, key=lambda b: (b.upper is None, b.upper or 0)
+            )
+            band = next(
+                (b for b in bands if b.upper is None or out.value <= b.upper),
+                None,
+            )
             if band is not None:
                 out.warn = band.label
                 out.warn_severity = band.severity
@@ -532,8 +544,12 @@ async def get_metric_history(
     return MetricHistoryOut(
         metric_key=m.key, name=m.name, unit=m.unit, freq=freq or m.freq, tier=m.tier,
         points=[
-            MetricHistoryPointOut(period=r.period, value=float(r.value) if r.value is not None else None,
-                                  source=r.source, freq=r.freq)
+            MetricHistoryPointOut(
+                period=r.period,
+                value=float(r.value) if r.value is not None else None,
+                source=r.source,
+                freq=r.freq,
+            )
             for r in rows
         ],
     )
@@ -653,8 +669,14 @@ async def get_dashboard(
         return DashboardOut(**cached)
 
     grouped = await repo.latest_rows_by_metric(db, cfg.key)
-    strip = [await _build_metric_latest(db, cfg, m, grouped, with_spark=True) for m in cfg.strip_metrics]
-    quick = [await _build_metric_latest(db, cfg, m, grouped, with_spark=False) for m in cfg.quick_metrics]
+    strip = [
+        await _build_metric_latest(db, cfg, m, grouped, with_spark=True)
+        for m in cfg.strip_metrics
+    ]
+    quick = [
+        await _build_metric_latest(db, cfg, m, grouped, with_spark=False)
+        for m in cfg.quick_metrics
+    ]
 
     trends: dict[str, TrendSeriesOut] = {}
     trends["price_vs_cost"] = await _trend_two_series(
@@ -667,17 +689,18 @@ async def get_dashboard(
 
     # 信号只在 ingest 时按质量门控评估落表；GET 严格只读。
     signal_row = await repo.latest_signal(db, cfg.key)
-    basis = signal_row.basis or {} if signal_row is not None else {}
-    cycle = CycleOut(
-        phase=signal_row.phase,
-        phase_index=cycle_engine.phase_index(cfg, signal_row.phase),
-        phases=[
-            PhaseOut(key=p.key, label=p.label, desc=p.desc, active=p.key == signal_row.phase)
-            for p in cfg.phases
-        ],
-        reasons=[s for s in (signal_row.reason or "").split("；") if s],
-        basis=basis,
-    )
+    cycle = None
+    if signal_row is not None:
+        cycle = CycleOut(
+            phase=signal_row.phase,
+            phase_index=cycle_engine.phase_index(cfg, signal_row.phase),
+            phases=[
+                PhaseOut(key=p.key, label=p.label, desc=p.desc, active=p.key == signal_row.phase)
+                for p in cfg.phases
+            ],
+            reasons=[s for s in (signal_row.reason or "").split("；") if s],
+            basis=signal_row.basis or {},
+        )
     history_rows = await repo.list_signals(db, cfg.key, limit=10)
     signal_history = [_signal_out(r) for r in history_rows]
 
@@ -690,7 +713,7 @@ async def get_dashboard(
         quick_view=quick,
         trends=trends,
         cycle=cycle,
-        signal=_signal_out(signal_row),
+        signal=_signal_out(signal_row) if signal_row is not None else None,
         signal_history=signal_history,
     )
     await cache.set(cache_key, dashboard.model_dump(mode="json"), ttl=DASHBOARD_CACHE_TTL)
