@@ -40,12 +40,12 @@
 
 **Interfaces:** 无代码产出，仅保证后续任务从干净工作区开始。
 
-- [ ] **Step 1: 确认工作区状态**
+- [x] **Step 1: 确认工作区状态**
 
 Run: `git status --short`
 Expected: 恰好上述 4 个文件 modified（允许 `?? .playwright-mcp/`、`?? .superpowers/` 未跟踪目录存在）
 
-- [ ] **Step 2: 提交**
+- [x] **Step 2: 提交**
 
 ```bash
 git add frontend/src/features/stock-detail/components/KLineChart.tsx frontend/src/pages/index-detail/IndexKLineChart.tsx docs/Changelog.md docs/references/best-practices.md
@@ -87,9 +87,9 @@ export interface KlineResult { points: KLinePoint[]; adjustAvailable: boolean; }
 export type KlineFetcher = (days: number, adjust: AdjustMode) => Promise<KlineResult>;
 ```
 
-- [ ] **Step 1: 修改 `shared/types/index.ts`**——`KLinePoint` 增加 `amount?: number`（放在 `volume` 之后），文件末尾（`SectorSummary` 之后）追加 `AdjustMode` / `KlineResult` / `KlineFetcher` 三个类型，代码照 Interfaces 块原文。
+- [x] **Step 1: 修改 `shared/types/index.ts`**——`KLinePoint` 增加 `amount?: number`（放在 `volume` 之后），文件末尾（`SectorSummary` 之后）追加 `AdjustMode` / `KlineResult` / `KlineFetcher` 三个类型，代码照 Interfaces 块原文。
 
-- [ ] **Step 2: 创建 `frontend/src/shared/ui/kline/klineMath.ts`**
+- [x] **Step 2: 创建 `frontend/src/shared/ui/kline/klineMath.ts`**
 
 ```ts
 import type { AdjustMode, KlineResult, KlineFetcher } from "@/shared/types";
@@ -137,18 +137,18 @@ export function fmtAmount(a: number | undefined): string {
 }
 ```
 
-- [ ] **Step 3: 创建 barrel `frontend/src/shared/ui/kline/index.ts`**（先只导出 Task 1 产物，后续任务追加）:
+- [x] **Step 3: 创建 barrel `frontend/src/shared/ui/kline/index.ts`**（先只导出 Task 1 产物，后续任务追加）:
 
 ```ts
 export * from "./klineMath";
 ```
 
-- [ ] **Step 4: 构建验证**
+- [x] **Step 4: 构建验证**
 
 Run: `cd frontend && npm run build`
 Expected: 无 TS 错误（unused `import type` 若报错，把类型 import 合并进 export 行即可）
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/shared/ui/kline/ frontend/src/shared/types/index.ts
@@ -176,7 +176,7 @@ export interface KlineOptionInput {
 export function buildKlineOption(input: KlineOptionInput): Record<string, unknown>;
 ```
 
-- [ ] **Step 1: 创建 `klineOption.ts`**（完整实现；tooltip 为 DOM 渲染，formatter 返回 HTML 字符串）:
+- [x] **Step 1: 创建 `klineOption.ts`**（完整实现；tooltip 为 DOM 渲染，formatter 返回 HTML 字符串）:
 
 ```ts
 import { COLORS } from "@/app/theme";
@@ -284,18 +284,18 @@ export function buildKlineOption({ points, maSeries, visibleMas }: KlineOptionIn
 }
 ```
 
-- [ ] **Step 2: barrel 追加导出**（`shared/ui/kline/index.ts`）:
+- [x] **Step 2: barrel 追加导出**（`shared/ui/kline/index.ts`）:
 
 ```ts
 export * from "./klineOption";
 ```
 
-- [ ] **Step 3: 构建验证**
+- [x] **Step 3: 构建验证**
 
 Run: `cd frontend && npm run build`
 Expected: 通过（`formatter: () => ...` 若 TS 报 markLine label 签名不匹配，改为 `formatter: lastClose.toFixed(2)`）
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add frontend/src/shared/ui/kline/
@@ -324,7 +324,7 @@ export interface KlineChartProps {
 export function KlineChart(props: KlineChartProps): JSX.Element;
 ```
 
-- [ ] **Step 1: 创建组件**（完整实现）:
+- [x] **Step 1: 创建组件**（完整实现）:
 
 ```tsx
 import ReactECharts from "echarts-for-react";
@@ -453,18 +453,18 @@ export function KlineChart({ title, queryKey, fetcher, showAdjust = false, defau
 }
 ```
 
-- [ ] **Step 2: barrel 追加**（`shared/ui/kline/index.ts`）:
+- [x] **Step 2: barrel 追加**（`shared/ui/kline/index.ts`）:
 
 ```ts
 export { KlineChart } from "./KlineChart";
 ```
 
-- [ ] **Step 3: 构建验证**
+- [x] **Step 3: 构建验证**
 
 Run: `cd frontend && npm run build`
 Expected: 通过。若 `ref={chartRef}` 类型不匹配（echarts-for-react 版本差异），把 `chartRef` 声明改为 `useRef<any>(null)` 并保持其余不变。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add frontend/src/shared/ui/kline/
@@ -495,11 +495,11 @@ export async function fetchKlineBySymbol(symbol: string, days: number, adjust: A
 export async function fetchIndexKline(tsCode: string, days: number): Promise<KlineResult>;
 ```
 
-- [ ] **Step 1: 改 `quotes.ts`**——`fetchKlineBySymbol` 增加第三参 `adjust: AdjustMode = "raw"`，`apiGet` 参数追加 `adjust`，映射处加 `amount: item.amount ?? undefined`，空数据 `continue` 不变，函数返回 `{ points, adjustAvailable: (response as { adjust_available?: boolean }).adjust_available !== false }`（BackendKlineResponse 接口加 `adjust_available?: boolean` 可选字段）。
+- [x] **Step 1: 改 `quotes.ts`**——`fetchKlineBySymbol` 增加第三参 `adjust: AdjustMode = "raw"`，`apiGet` 参数追加 `adjust`，映射处加 `amount: item.amount ?? undefined`，空数据 `continue` 不变，函数返回 `{ points, adjustAvailable: (response as { adjust_available?: boolean }).adjust_available !== false }`（BackendKlineResponse 接口加 `adjust_available?: boolean` 可选字段）。
 
-- [ ] **Step 2: 改 `market.ts`**——`fetchIndexKline` 同样映射 `amount: item.amount ?? undefined`，返回 `{ points, adjustAvailable: true }`。
+- [x] **Step 2: 改 `market.ts`**——`fetchIndexKline` 同样映射 `amount: item.amount ?? undefined`，返回 `{ points, adjustAvailable: true }`。
 
-- [ ] **Step 3: 改个股详情页**——`import { KlineChart } from "@/shared/ui/kline";`，从 features barrel 的 import 中去掉 `KLineChart`，渲染处替换为:
+- [x] **Step 3: 改个股详情页**——`import { KlineChart } from "@/shared/ui/kline";`，从 features barrel 的 import 中去掉 `KLineChart`，渲染处替换为:
 
 ```tsx
 <KlineChart
@@ -512,7 +512,7 @@ export async function fetchIndexKline(tsCode: string, days: number): Promise<Kli
 
 同时删除 `frontend/src/features/stock-detail/components/KLineChart.tsx`，并从 `features/stock-detail/components/index.ts` barrel 移除其导出行。
 
-- [ ] **Step 4: 改指数详情页**——`import { KlineChart } from "@/shared/ui/kline";`，删除 `IndexKLineChart` import 与文件，渲染处替换为:
+- [x] **Step 4: 改指数详情页**——`import { KlineChart } from "@/shared/ui/kline";`，删除 `IndexKLineChart` import 与文件，渲染处替换为:
 
 ```tsx
 <KlineChart
@@ -524,12 +524,12 @@ export async function fetchIndexKline(tsCode: string, days: number): Promise<Kli
 
 （`fetchIndexKline` 需在 market.ts import；fetcher 的第二参 adjust 忽略——指数无复权。）
 
-- [ ] **Step 5: 构建 + 重建容器**
+- [x] **Step 5: 构建 + 重建容器**
 
 Run: `cd frontend && npm run build && cd .. && docker compose build frontend && docker compose up -d frontend`
 Expected: 构建通过、容器重启健康
 
-- [ ] **Step 6: 写 e2e `frontend/e2e/kline.spec.ts`**
+- [x] **Step 6: 写 e2e `frontend/e2e/kline.spec.ts`**
 
 ```ts
 import { test, expect as baseExpect } from "@playwright/test";
@@ -597,12 +597,12 @@ test("周期切换后缩放重置：1年 → 1月 视图变化且控件状态跟
 });
 ```
 
-- [ ] **Step 7: 跑 e2e（新用例 + 全量回归）**
+- [x] **Step 7: 跑 e2e（新用例 + 全量回归）**
 
 Run: `cd frontend && npx playwright test`
 Expected: 全部通过（含既有 research.spec.ts）。tooltip 断言若因 hover 坐标落在空白处失败，把 `width * 0.7` 调到 `0.8`、`height * 0.4` 调到 `0.35` 再试。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add frontend/src frontend/e2e/kline.spec.ts
@@ -632,7 +632,7 @@ async def update_adj_factors(db: AsyncSession, stock_id: int, factors: list[tupl
 def map_adj_factor_rows(rows: list[dict]) -> list[tuple[date, float]]  # TuShare 行→(trade_date, adj_factor)，脏行跳过
 ```
 
-- [ ] **Step 1: 写失败测试** `backend/tests/test_kline_adjust.py`:
+- [x] **Step 1: 写失败测试** `backend/tests/test_kline_adjust.py`:
 
 ```python
 """纯单元测试：K线复权 — TuShare adj_factor 行映射 / qfq 计算 / 缓存 key 隔离。"""
@@ -698,12 +698,12 @@ def test_apply_qfq_empty_rows():
     assert apply_qfq([]) is None
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd backend && uv run pytest tests/test_kline_adjust.py -v`
 Expected: FAIL（ImportError: `apply_qfq`/`kline_cache_key`/`map_adj_factor_rows` 不存在）
 
-- [ ] **Step 3: 实现**——三个文件分别追加:
+- [x] **Step 3: 实现**——三个文件分别追加:
 
 `tushare_client.py`（放在 `fetch_daily` 之后，Daily metrics 注释块之前）:
 
@@ -776,17 +776,17 @@ def map_adj_factor_rows(rows: list[dict]) -> list[tuple[date, float]]:
 
 （Task 6 之前 `apply_qfq`/`kline_cache_key` 尚未实现——本任务先在测试文件里注释掉这两个函数的用例，或本任务一并实现（见 Task 6 Step 1 的代码，可提前实现使全部用例一次转绿——推荐提前，测试文件一次写全）。**推荐路径：本任务直接把 Task 6 Step 1 的两个纯函数一并写入 quote_service.py，Step 2 的失败来自"测试先写、实现后写"的 TDD 顺序：先写测试→跑失败→写全部实现→跑通过。**）
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd backend && uv run pytest tests/test_kline_adjust.py -v`
 Expected: 5 passed
 
-- [ ] **Step 5: 全量回归**
+- [x] **Step 5: 全量回归**
 
 Run: `cd backend && uv run pytest`
 Expected: 全部通过（既有 111 项不回归）
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/app/core/providers/tushare_client.py backend/app/repositories/quote_repo.py backend/app/services/quote_service.py backend/tests/test_kline_adjust.py
@@ -820,9 +820,9 @@ def apply_qfq(rows: list[DailyQuoteOut]) -> list[DailyQuoteOut] | None
 async def get_kline(db, cache, exchange, symbol, start_date=None, end_date=None, adjust: str = "raw") -> KlineResponse | None
 ```
 
-- [ ] **Step 1: schema 扩展**——`KlineResponse` 按上方 Interfaces 追加 `adjust` / `adjust_available` 两行（带默认值，旧调用方向后兼容）。
+- [x] **Step 1: schema 扩展**——`KlineResponse` 按上方 Interfaces 追加 `adjust` / `adjust_available` 两行（带默认值，旧调用方向后兼容）。
 
-- [ ] **Step 2: 实现 service 纯函数**（若 Task 5 已写入则跳过）:
+- [x] **Step 2: 实现 service 纯函数**（若 Task 5 已写入则跳过）:
 
 ```python
 def kline_cache_key(
@@ -854,7 +854,7 @@ def apply_qfq(rows: list[DailyQuoteOut]) -> list[DailyQuoteOut] | None:
     return out
 ```
 
-- [ ] **Step 3: 改 `get_kline`**——签名加 `adjust: str = "raw"`，cache key 用 `kline_cache_key(...)`，读缓存命中直接返回；未命中走 repo 查询后:
+- [x] **Step 3: 改 `get_kline`**——签名加 `adjust: str = "raw"`，cache key 用 `kline_cache_key(...)`，读缓存命中直接返回；未命中走 repo 查询后:
 
 ```python
     quotes = await quote_repo.get_kline(db, stock.id, start_date, end_date)
@@ -874,12 +874,12 @@ def apply_qfq(rows: list[DailyQuoteOut]) -> list[DailyQuoteOut] | None:
     return response
 ```
 
-- [ ] **Step 4: 测试通过 + 回归**
+- [x] **Step 4: 测试通过 + 回归**
 
 Run: `cd backend && uv run pytest tests/test_kline_adjust.py -v && uv run pytest`
 Expected: 全部通过
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/services/quote_service.py backend/app/schemas/quote.py
@@ -904,7 +904,7 @@ async def backfill_adj_factor(exchange: str, symbol: str) -> dict[str, Any]  # �
 #      响应 adjust_available=false 时 BackgroundTasks 触发回补
 ```
 
-- [ ] **Step 1: 实现 `backfill_adj_factor`**（quote_service.py 末尾）:
+- [x] **Step 1: 实现 `backfill_adj_factor`**（quote_service.py 末尾）:
 
 ```python
 async def backfill_adj_factor(exchange: str, symbol: str) -> dict[str, Any]:
@@ -937,7 +937,7 @@ async def backfill_adj_factor(exchange: str, symbol: str) -> dict[str, Any]:
 
 （`EXCHANGE_TO_TUSHARE` 是 SSE/SZSE/BSE 映射，后缀不同——上面直接内联 SH/SZ/BJ 后缀映射，不走 EXCHANGE_TO_TUSHARE；`async_session_factory` / `get_tushare_client` 的实际 import 路径以 `market_service.py` 和 `tushare_ingest.py` 现有代码为准，grep 确认后再写。）
 
-- [ ] **Step 2: 改 API 端点** `stocks.py` 的 `get_kline`（146 行起）:
+- [x] **Step 2: 改 API 端点** `stocks.py` 的 `get_kline`（146 行起）:
 
 ```python
 @stocks_router.get("/{symbol}/quotes/daily", response_model=KlineResponse)
@@ -961,12 +961,12 @@ async def get_kline(
 
 （`from fastapi import BackgroundTasks` 与 `from typing import Literal` 补 import；`/api/v1/quotes.py` 的 `/{symbol}/daily` 端点签名不同步改——只走 exchanges 路由，前端只用后者。）
 
-- [ ] **Step 3: pytest 回归**
+- [x] **Step 3: pytest 回归**
 
 Run: `cd backend && uv run pytest`
 Expected: 全部通过
 
-- [ ] **Step 4: 重建后端 + 实机验证**
+- [x] **Step 4: 重建后端 + 实机验证**
 
 Run: `docker compose build api scheduler worker && docker compose up -d api scheduler worker`
 然后:
@@ -982,7 +982,7 @@ docker exec postgres psql -U stock_user -d stock_bot -t -c "SELECT count(*) FROM
 
 Expected: 第一次 `available: False`；第二次 `available: True`；库内 adj_factor 非空行数 > 0。若 TuShare token 无权限（异常），第二次仍 False——检查 `docker logs backend_api | grep adj_factor`，属环境问题记录后继续（不阻断任务）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/services/quote_service.py backend/app/api/v1/stocks.py
@@ -1000,7 +1000,7 @@ git commit -m "feat(backend): adj_factor 懒加载回补 — quotes/daily 缺因
 **Interfaces:**
 - Consumes: Task 4 起 fetcher 已返回 `adjustAvailable`；Task 7 后端已真实下发。
 
-- [ ] **Step 1: KlineChart 禁用态**——`showAdjust` 时渲染复权 Segmented 的条件改为:
+- [x] **Step 1: KlineChart 禁用态**——`showAdjust` 时渲染复权 Segmented 的条件改为:
 
 ```tsx
 {showAdjust &&
@@ -1031,7 +1031,7 @@ git commit -m "feat(backend): adj_factor 懒加载回补 — quotes/daily 缺因
 
 （默认 adjust 状态在数据未就绪时保持 "qfq" 但 UI 锁在不复权展示——禁用态 value 固定 "raw" 表示当前看到的是 raw 数据；数据就绪后受控值恢复 "qfq" 触发一次刷新。若担心首屏两次请求，可将初始 adjust 定为 "qfq" 不变——禁用态仅视觉，queryKey 不变不发额外请求。）
 
-- [ ] **Step 2: e2e 补充**（追加到 kline.spec.ts）:
+- [x] **Step 2: e2e 补充**（追加到 kline.spec.ts）:
 
 ```ts
 test("复权开关：数据就绪后可切换前复权/不复权", async ({ page }) => {
@@ -1049,12 +1049,12 @@ test("复权开关：数据就绪后可切换前复权/不复权", async ({ page
 });
 ```
 
-- [ ] **Step 3: 构建 + 重建 + e2e**
+- [x] **Step 3: 构建 + 重建 + e2e**
 
 Run: `cd frontend && npm run build && cd .. && docker compose build frontend && docker compose up -d frontend && cd frontend && npx playwright test`
 Expected: 全部通过
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add frontend/src/shared/ui/kline/KlineChart.tsx frontend/e2e/kline.spec.ts
@@ -1070,16 +1070,16 @@ git commit -m "feat(frontend): 复权开关完整接入 — 因子未就绪禁�
 - Modify: `docs/references/best-practices.md`
 - Modify: 本计划文档（勾选已完成项）
 
-- [ ] **Step 1: Changelog 追加**（格式照既有条目）——一句话级总结 P1（共享组件+MA+tooltip+slider）、P2（adj_factor 懒加载+qfq+缓存隔离）、P3（复权开关），涉及模块列表。
+- [x] **Step 1: Changelog 追加**（格式照既有条目）——一句话级总结 P1（共享组件+MA+tooltip+slider）、P2（adj_factor 懒加载+qfq+缓存隔离）、P3（复权开关），涉及模块列表。
 
-- [ ] **Step 2: best-practices 追加一条**：`复权基准必须随最新因子滚动（qfq=当日因子/最新因子），且缓存 key 必须包含复权维度——否则 qfq 结果污染 raw 缓存；数据不完整时宁可不缓存，靠回补后的 delete_pattern 兜底。`
+- [x] **Step 2: best-practices 追加一条**：`复权基准必须随最新因子滚动（qfq=当日因子/最新因子），且缓存 key 必须包含复权维度——否则 qfq 结果污染 raw 缓存；数据不完整时宁可不缓存，靠回补后的 delete_pattern 兜底。`
 
-- [ ] **Step 3: 全量回归**
+- [x] **Step 3: 全量回归**
 
 Run: `cd backend && uv run pytest && cd ../frontend && npm run build && npx playwright test`
 Expected: 全绿
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/Changelog.md docs/references/best-practices.md plans/2026-09-03-kline-component-upgrade.md

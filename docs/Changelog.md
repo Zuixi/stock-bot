@@ -259,3 +259,9 @@
 ## 2026-09-03 - K线复权开关前端完整接入（K线组件升级 Task 8）
 - 共享 `KlineChart` 的复权 Segmented 接入 `adjustAvailable` 禁用态：`data.adjustAvailable` 为假（含首帧 loading）时降级为 Tooltip（"复权数据后台拉取中，稍后自动可用"）包裹的 `disabled` Segmented 且 value 固定 "raw"（表示当前展示即 raw 数据），`adjust` 状态保持 "qfq"、queryKey 不变不发额外请求；因子就绪后受控值恢复 "qfq" 无缝启用。`frontend/e2e/kline.spec.ts` 新增用例"数据就绪后可切换前复权/不复权"——按 Task 4 沉淀以 `label.ant-segmented-item` 文案定位 + `ant-segmented-item-selected` 类断言改写 brief 原始的 `getByRole("radio")`/`toBeChecked`（antd 5.24 radio input 零尺寸隐藏必失败），两处 30s 超时为后端懒加载回补留等待余量。验证：`npm run build` 通过（chunk 警告为既有基线）；docker 重建后 playwright 全量 16 passed / 4.7s（含既有 spec 零回归；600519 实况 `adjust_available: True`）
 - 涉及模块：frontend/shared/ui/kline, frontend/e2e
+
+## 2026-09-03 - K线组件升级整期收官（Task 0-9，P1 组件统一 + P2 复权链路 + P3 复权开关）
+- **整期成果**：个股/指数两份重复 K 线图合并为共享 `shared/ui/kline/KlineChart`（P1：MA5/10/20/60 显隐、结构化 tooltip、inside+slider 缩放与重置、最新价 markLine、跨年轴标签）；后端打通 adj_factor 懒加载链路（P2：`GET /quotes/daily?adjust=qfq|raw` + `adjust_available` 标记 + BackgroundTasks 幂等单股回补 + `delete_pattern` 缓存失效）；前端复权开关完整接入（P3：因子未就绪禁用+Tooltip 降级，就绪后无缝启用）。净删除两份旧图表组件，e2e 扩至 16 用例
+- **关键架构决策**：① 共享组件契约先冻结——`KlineFetcher = (days, adjust) => Promise<KlineResult>` 作为 Task 1 类型签名发布，shared 层不 import 业务 API，靠 fetcher 回调注入实现依赖倒置，个股/指数页各传一份；② 复权三重缓存防护——缓存 key 追加 `:{adjust}` 维度、qfq 因子不完整不写缓存、回补完成后 `delete_pattern("quote:kline:{exchange}:{symbol}:*")` 兜底，杜绝 qfq 结果污染 raw 缓存与回补后读到陈旧数据；③ `::date` 转型根因——手写 `UPDATE ... FROM (VALUES ...)` 派生表日期字面量被 PG 推断为 text 抛 `date = text`，此类 SQL 类型错误纯函数单测覆盖不到，接线任务以实机验证闭环
+- **收官回归**：backend pytest 19 failed / 125 passed（19 个全为基线 httpx.ConnectError 环境性失败，与 Task 7 记录的失败集一致，零回归）；frontend `npm run build` 通过；playwright 16/16 passed
+- 涉及模块：frontend/shared/ui/kline, frontend/shared/types, frontend/shared/api, frontend/pages/stock-detail, frontend/pages/index-detail, backend/services/quote_service, backend/api/v1/stocks, backend/repositories/quote_repo, backend/core/providers, frontend/e2e
