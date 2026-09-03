@@ -1,4 +1,4 @@
-import { Typography, Button, Space } from "antd";
+import { Typography, Button } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
 import { WatchlistTable } from "@/features/watchlist/components";
 import { useWatchlistStore } from "@/features/watchlist/store";

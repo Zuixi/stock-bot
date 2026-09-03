@@ -323,3 +323,7 @@
 ## 2026-09-03 - 行业信号验证审查修复（Task 4 Fix 1）
 - 验证摘要改为独立聚合行业全部评价而不受最新 20 条事件展示限制，提交后的 Redis 失效异常降级为告警且不改变 Worker/调度成功状态，并修正新增 DTO 的列表默认工厂。
 - 涉及模块：backend/repositories、backend/services、backend/schemas、backend/workers、backend/scheduler、backend/tests
+
+## 2026-09-03 - 行业数据质量提示与信号验证时间线（Task 5）
+- 前端集中映射 Dashboard 质量与验证契约，支持空周期/空信号降级展示，新增非阻断数据质量提示、去重信号事件 30/90 天回评和后端验证摘要，并补齐可复现的 ESLint 9 flat 配置与 mocked Playwright 覆盖。
+- 涉及模块：frontend/shared/api、frontend/features/industry-research、frontend/pages/research-workbench、frontend/e2e、frontend/tooling

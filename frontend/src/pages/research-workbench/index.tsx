@@ -8,6 +8,7 @@ import { IndicatorStrip } from "@/features/industry-research/components/Indicato
 import { IndicatorGrid } from "@/features/industry-research/components/IndicatorGrid";
 import { CyclePhaseStrip } from "@/features/industry-research/components/CyclePhaseStrip";
 import { SignalPanel } from "@/features/industry-research/components/SignalPanel";
+import { DataQualityBanner } from "@/features/industry-research/components/DataQualityBanner";
 import { PositionAdviceBar } from "@/features/industry-research/components/PositionAdviceBar";
 import { PriceCostChart } from "@/features/industry-research/components/PriceCostChart";
 import { SowTrendChart } from "@/features/industry-research/components/SowTrendChart";
@@ -15,7 +16,7 @@ import { SourceBadge } from "@/features/industry-research/components/SourceBadge
 import { CompanyComparisonTable } from "@/features/industry-research/components/CompanyComparisonTable";
 import { SecuritiesTables } from "@/features/industry-research/components/SecuritiesTables";
 import { KnowledgeTab } from "@/features/industry-research/components/KnowledgeTab";
-import { PHASE_COLORS, SIGNAL_TEXT_COLORS } from "@/features/industry-research/constants";
+import { SIGNAL_TEXT_COLORS } from "@/features/industry-research/constants";
 
 /** 行业投研工作台 — 投资看板（P1-P4）；知识库/调研追踪/交易管理为后续阶段占位 */
 export default function ResearchWorkbenchPage() {
@@ -41,10 +42,10 @@ export default function ResearchWorkbenchPage() {
 
 function Workbench({ dashboard }: { dashboard: Dashboard }) {
   const { industry, cycle, signal } = dashboard;
-  const phaseColor = PHASE_COLORS[cycle.phase] ?? COLORS.flat;
-  const signalColor = SIGNAL_TEXT_COLORS[signal.signalType] ?? COLORS.flat;
-  const phaseLabel =
-    dashboard.cycle.phases.find((p) => p.key === cycle.phase)?.label ?? cycle.phase;
+  const signalColor = signal ? SIGNAL_TEXT_COLORS[signal.signalType] ?? COLORS.flat : COLORS.flat;
+  const phaseLabel = cycle
+    ? cycle.phases.find((p) => p.key === cycle.phase)?.label ?? cycle.phase
+    : "待评估";
 
   const tabItems = [
     {
@@ -52,17 +53,26 @@ function Workbench({ dashboard }: { dashboard: Dashboard }) {
       label: "投资看板",
       children: (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <DataQualityBanner
+            quality={dashboard.dataQuality}
+            signalIsStale={dashboard.signalIsStale}
+          />
           <IndicatorStrip metrics={dashboard.strip} />
 
           <Row gutter={[16, 16]}>
             <Col xs={24} lg={14}>
               <Card size="small" title="猪周期阶段定位" extra={<span style={{ fontSize: 11.5, color: "#86909c" }}>判定因子：猪粮比 · 能繁产能 · 行业盈亏</span>}>
-                <CyclePhaseStrip cycle={cycle} />
+                {cycle ? <CyclePhaseStrip cycle={cycle} /> : <Empty description="暂无有效周期阶段" />}
               </Card>
             </Col>
             <Col xs={24} lg={10}>
               <Card size="small" title="交易信号面板" extra={<span style={{ fontSize: 11.5, color: "#86909c" }}>规则引擎 · 信号历史可回测</span>}>
-                <SignalPanel current={signal} history={dashboard.signalHistory} />
+                <SignalPanel
+                  current={signal}
+                  events={dashboard.signalEvents}
+                  signalIsStale={dashboard.signalIsStale}
+                  verificationSummary={dashboard.verificationSummary}
+                />
               </Card>
             </Col>
             <Col xs={24} lg={14}>
@@ -72,7 +82,7 @@ function Workbench({ dashboard }: { dashboard: Dashboard }) {
             </Col>
             <Col xs={24} lg={10}>
               <Card size="small" title="仓位管理建议" extra={<span style={{ fontSize: 11.5, color: "#86909c" }}>随信号联动 · 非投资建议</span>}>
-                <PositionAdviceBar positions={signal.positions} />
+                {signal ? <PositionAdviceBar positions={signal.positions} /> : <Empty description="暂无仓位建议" />}
               </Card>
             </Col>
             <Col xs={24} lg={14}>
@@ -132,7 +142,7 @@ function Workbench({ dashboard }: { dashboard: Dashboard }) {
             周期阶段 {phaseLabel}
           </Tag>
           <Tag color="gold" style={{ borderRadius: 14, padding: "2px 12px" }}>
-            当前信号 <b style={{ color: signalColor }}>{signal.signalType}</b>
+            当前信号 <b style={{ color: signalColor }}>{signal?.signalType ?? "待评估"}</b>
           </Tag>
           <Tag style={{ borderRadius: 14, padding: "2px 12px", color: "#86909c" }}>
             数据截至 {dashboard.asOf}

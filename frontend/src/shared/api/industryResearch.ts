@@ -68,6 +68,70 @@ export interface BackendCycle {
   basis: Record<string, unknown>;
 }
 
+export interface BackendMetricQuality {
+  metric_key: string;
+  status: string;
+  source: string | null;
+  freq: string | null;
+  period: string | null;
+  age_days: number | null;
+  reason: string | null;
+  entity_coverage: number | null;
+}
+
+export interface BackendDataQuality {
+  as_of: string;
+  status: string;
+  signal_ready: boolean;
+  ready_count: number;
+  missing_count: number;
+  stale_count: number;
+  rejected_count: number;
+  partial_count: number;
+  details: BackendMetricQuality[];
+}
+
+export interface BackendEvaluationCriterion {
+  metric_key: string;
+  status: string;
+  weight?: number;
+  score: string | null;
+  start_value?: string;
+  end_value?: string;
+  change_pct?: string | null;
+}
+
+export interface BackendSignalEvaluation {
+  horizon_days: number;
+  status: string;
+  target_date: string;
+  score: number | null;
+  criteria_results: BackendEvaluationCriterion[];
+  insufficient_reasons: string[];
+  evaluated_at: string | null;
+}
+
+export interface BackendSignalEvent {
+  event_date: string;
+  signal_type: string;
+  phase: string;
+  previous_signal_type: string | null;
+  previous_phase: string | null;
+  rule_version: string;
+  verification_supported: boolean;
+  evaluations: BackendSignalEvaluation[];
+}
+
+export interface BackendVerificationSummary {
+  completed_directional_evaluations: number;
+  confirmed: number;
+  partially_confirmed: number;
+  invalidated: number;
+  inconclusive: number;
+  pending: number;
+  accuracy_pct: number | null;
+}
+
 export interface BackendDashboard {
   industry: {
     key: string;
@@ -80,8 +144,12 @@ export interface BackendDashboard {
   strip: BackendMetricLatest[];
   quick_view: BackendMetricLatest[];
   trends: Record<string, BackendTrendSeries>;
-  cycle: BackendCycle;
-  signal: BackendSignal;
+  cycle: BackendCycle | null;
+  signal: BackendSignal | null;
+  signal_is_stale: boolean;
+  data_quality: BackendDataQuality;
+  signal_events: BackendSignalEvent[];
+  verification_summary: BackendVerificationSummary;
   signal_history: BackendSignal[];
 }
 
@@ -247,6 +315,70 @@ export interface Cycle {
   basis: Record<string, unknown>;
 }
 
+export interface MetricQuality {
+  metricKey: string;
+  status: string;
+  source: string | null;
+  freq: string | null;
+  period: string | null;
+  ageDays: number | null;
+  reason: string | null;
+  entityCoverage: number | null;
+}
+
+export interface DataQuality {
+  asOf: string;
+  status: string;
+  signalReady: boolean;
+  readyCount: number;
+  missingCount: number;
+  staleCount: number;
+  rejectedCount: number;
+  partialCount: number;
+  details: MetricQuality[];
+}
+
+export interface EvaluationCriterion {
+  metricKey: string;
+  status: string;
+  weight?: number;
+  score: string | null;
+  startValue?: string;
+  endValue?: string;
+  changePct?: string | null;
+}
+
+export interface SignalEvaluation {
+  horizonDays: number;
+  status: string;
+  targetDate: string;
+  score: number | null;
+  criteriaResults: EvaluationCriterion[];
+  insufficientReasons: string[];
+  evaluatedAt: string | null;
+}
+
+export interface SignalEvent {
+  eventDate: string;
+  signalType: string;
+  phase: string;
+  previousSignalType: string | null;
+  previousPhase: string | null;
+  ruleVersion: string;
+  verificationSupported: boolean;
+  evaluations: SignalEvaluation[];
+}
+
+export interface VerificationSummary {
+  completedDirectionalEvaluations: number;
+  confirmed: number;
+  partiallyConfirmed: number;
+  invalidated: number;
+  inconclusive: number;
+  pending: number;
+  accuracyPct: number | null;
+}
+
 export interface Dashboard {
   industry: { key: string; name: string; description: string; swL3Codes: string[] };
   asOf: string;
@@ -254,8 +386,12 @@ export interface Dashboard {
   strip: MetricLatest[];
   quickView: MetricLatest[];
   trends: Record<string, TrendSeries>;
-  cycle: Cycle;
-  signal: Signal;
+  cycle: Cycle | null;
+  signal: Signal | null;
+  signalIsStale: boolean;
+  dataQuality: DataQuality;
+  signalEvents: SignalEvent[];
+  verificationSummary: VerificationSummary;
   signalHistory: Signal[];
 }
 
@@ -266,6 +402,7 @@ export interface IndustrySummary {
   swL3Codes: string[];
   metricTotal: number;
   metricWithData: number;
+  coverage: Record<string, boolean>;
   lastPeriod: string | null;
   phase: string | null;
   signalType: string | null;
@@ -366,6 +503,78 @@ function mapSignal(s: BackendSignal): Signal {
   };
 }
 
+function mapMetricQuality(q: BackendMetricQuality): MetricQuality {
+  return {
+    metricKey: q.metric_key,
+    status: q.status,
+    source: q.source,
+    freq: q.freq,
+    period: q.period,
+    ageDays: q.age_days,
+    reason: q.reason,
+    entityCoverage: q.entity_coverage,
+  };
+}
+
+function mapDataQuality(q: BackendDataQuality): DataQuality {
+  return {
+    asOf: q.as_of,
+    status: q.status,
+    signalReady: q.signal_ready,
+    readyCount: q.ready_count,
+    missingCount: q.missing_count,
+    staleCount: q.stale_count,
+    rejectedCount: q.rejected_count,
+    partialCount: q.partial_count,
+    details: q.details.map(mapMetricQuality),
+  };
+}
+
+function mapSignalEvaluation(e: BackendSignalEvaluation): SignalEvaluation {
+  return {
+    horizonDays: e.horizon_days,
+    status: e.status,
+    targetDate: e.target_date,
+    score: e.score,
+    criteriaResults: e.criteria_results.map((criterion) => ({
+      metricKey: criterion.metric_key,
+      status: criterion.status,
+      weight: criterion.weight,
+      score: criterion.score,
+      startValue: criterion.start_value,
+      endValue: criterion.end_value,
+      changePct: criterion.change_pct,
+    })),
+    insufficientReasons: e.insufficient_reasons,
+    evaluatedAt: e.evaluated_at,
+  };
+}
+
+function mapSignalEvent(e: BackendSignalEvent): SignalEvent {
+  return {
+    eventDate: e.event_date,
+    signalType: e.signal_type,
+    phase: e.phase,
+    previousSignalType: e.previous_signal_type,
+    previousPhase: e.previous_phase,
+    ruleVersion: e.rule_version,
+    verificationSupported: e.verification_supported,
+    evaluations: e.evaluations.map(mapSignalEvaluation),
+  };
+}
+
+function mapVerificationSummary(s: BackendVerificationSummary): VerificationSummary {
+  return {
+    completedDirectionalEvaluations: s.completed_directional_evaluations,
+    confirmed: s.confirmed,
+    partiallyConfirmed: s.partially_confirmed,
+    invalidated: s.invalidated,
+    inconclusive: s.inconclusive,
+    pending: s.pending,
+    accuracyPct: s.accuracy_pct,
+  };
+}
+
 function mapDashboard(d: BackendDashboard): Dashboard {
   return {
     industry: {
@@ -381,14 +590,20 @@ function mapDashboard(d: BackendDashboard): Dashboard {
     trends: Object.fromEntries(
       Object.entries(d.trends).map(([k, v]) => [k, mapTrendSeries(v)])
     ),
-    cycle: {
-      phase: d.cycle.phase,
-      phaseIndex: d.cycle.phase_index,
-      phases: d.cycle.phases,
-      reasons: d.cycle.reasons,
-      basis: d.cycle.basis,
-    },
-    signal: mapSignal(d.signal),
+    cycle: d.cycle
+      ? {
+          phase: d.cycle.phase,
+          phaseIndex: d.cycle.phase_index,
+          phases: d.cycle.phases,
+          reasons: d.cycle.reasons,
+          basis: d.cycle.basis,
+        }
+      : null,
+    signal: d.signal ? mapSignal(d.signal) : null,
+    signalIsStale: d.signal_is_stale,
+    dataQuality: mapDataQuality(d.data_quality),
+    signalEvents: d.signal_events.map(mapSignalEvent),
+    verificationSummary: mapVerificationSummary(d.verification_summary),
     signalHistory: d.signal_history.map(mapSignal),
   };
 }
@@ -462,6 +677,7 @@ export function fetchIndustries(): Promise<IndustrySummary[]> {
       swL3Codes: r.sw_l3_codes,
       metricTotal: r.metric_total,
       metricWithData: r.metric_with_data,
+      coverage: r.coverage,
       lastPeriod: r.last_period,
       phase: r.phase,
       signalType: r.signal_type,
