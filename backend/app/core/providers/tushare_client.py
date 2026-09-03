@@ -381,6 +381,41 @@ class TuShareClient(RateLimitedSyncProvider):
             kwargs["ts_code"] = ts_code
         return await self._query("stk_limit", **kwargs)
 
+    # ------------------------------------------------------------------
+    # Market-data face APIs (全球指数 + 资金面/事件面)
+    # ------------------------------------------------------------------
+
+    async def fetch_index_global(
+        self, ts_code: str, start_date: str, end_date: str
+    ) -> pd.DataFrame:
+        """全球指数日线（裸代码如 N225/KS11/HSI/DJI/SPX/IXIC）。"""
+        return await self._query(
+            "index_global",
+            ts_code=ts_code,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    async def fetch_moneyflow_hsgt(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """沪深港通资金（north_money 为字符串、单位万元，映射层处理）。"""
+        return await self._query("moneyflow_hsgt", start_date=start_date, end_date=end_date)
+
+    async def fetch_top_list(self, trade_date: str) -> pd.DataFrame:
+        """龙虎榜（每日个股上榜明细）。"""
+        return await self._query("top_list", trade_date=trade_date)
+
+    async def fetch_block_trade(self, trade_date: str) -> pd.DataFrame:
+        """大宗交易（每日成交明细）。"""
+        return await self._query("block_trade", trade_date=trade_date)
+
+    async def fetch_share_float(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """限售股解禁（计划解禁明细）。"""
+        return await self._query("share_float", start_date=start_date, end_date=end_date)
+
+    async def fetch_repurchase(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """股票回购（回购明细）。"""
+        return await self._query("repurchase", start_date=start_date, end_date=end_date)
+
 
 # ---------------------------------------------------------------------------
 # Module-level singleton
