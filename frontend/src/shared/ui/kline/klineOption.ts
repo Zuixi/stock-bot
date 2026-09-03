@@ -1,9 +1,9 @@
 import { COLORS } from "@/app/theme";
 import type { KLinePoint } from "@/shared/types";
-import { MA_DEFS, buildAxisLabels, fmtAmount, fmtVolume, type MaKey } from "./klineMath";
+import { DEFAULT_TAIL_BARS, MA_DEFS, fmtAmount, fmtVolume, type MaKey } from "./klineMath";
 
 export interface KlineOptionInput {
-  points: KLinePoint[];
+  points: KLinePoint[]; // 聚合后的全量序列
   maSeries: Partial<Record<MaKey, (number | null)[]>>;
   visibleMas: MaKey[];
 }
@@ -12,10 +12,10 @@ const pct = (cur: number, prev: number | undefined) =>
   prev == null ? "--" : `${(((cur - prev) / prev) * 100).toFixed(2)}%`;
 
 export function buildKlineOption({ points, maSeries, visibleMas }: KlineOptionInput) {
-  const dates = points.map((p) => p.date);
-  const axisLabels = buildAxisLabels(dates);
+  const dates = points.map((p) => p.date); // 原始 ISO 日期串（tooltip 直接消费）
   const ohlc = points.map((p) => [p.open, p.close, p.low, p.high]);
   const lastClose = points.length ? points[points.length - 1].close : 0;
+  const tailStart = Math.max(0, points.length - DEFAULT_TAIL_BARS);
 
   const tooltipFormatter = (params: unknown): string => {
     const list = params as Array<{ dataIndex: number; seriesType: string; seriesName?: string; value?: unknown }>;
@@ -45,19 +45,27 @@ export function buildKlineOption({ points, maSeries, visibleMas }: KlineOptionIn
     legend: { show: false },
     grid: [
       { left: 60, right: 20, top: 28, height: "50%" },
-      { left: 60, right: 20, top: "66%", height: "13%" },
+      { left: 60, right: 20, top: "68%", height: "16%" },
     ],
     xAxis: [
-      { type: "category", data: axisLabels, boundaryGap: true, axisLine: { onZero: false }, gridIndex: 0, axisLabel: { show: false } },
-      { type: "category", data: axisLabels, boundaryGap: true, gridIndex: 1, axisLabel: { fontSize: 10 } },
+      { type: "category", data: dates, boundaryGap: true, axisLine: { onZero: false }, gridIndex: 0, axisLabel: { show: false } },
+      { type: "category", data: dates, boundaryGap: true, gridIndex: 1, axisLabel: { show: false } },
     ],
     yAxis: [
       { scale: true, gridIndex: 0, splitLine: { lineStyle: { type: "dashed" } } },
       { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false } },
     ],
     dataZoom: [
-      { type: "inside", xAxisIndex: [0, 1] },
-      { type: "slider", xAxisIndex: [0, 1], height: 16, bottom: 6, start: 0, end: 100 },
+      { type: "inside", xAxisIndex: [0, 1], startValue: tailStart, endValue: points.length - 1 },
+      {
+        type: "slider",
+        xAxisIndex: [0, 1],
+        height: 16,
+        bottom: 6,
+        startValue: tailStart,
+        endValue: points.length - 1,
+        labelFormatter: (v: unknown) => String(v),
+      },
     ],
     series: [
       {
