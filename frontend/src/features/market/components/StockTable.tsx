@@ -123,7 +123,7 @@ export function StockTable({ data, total, current, pageSize, loading, onChange, 
       sorter: true,
       sortOrder: sortBy === "turnover" ? sortOrder : undefined,
       align: "right" as const,
-      render: (v: number | undefined) => <NumberText value={v} />,
+      render: (v: number | undefined) => <NumberText value={v} unit="cap" />,
     },
     {
       title: "总市值",
