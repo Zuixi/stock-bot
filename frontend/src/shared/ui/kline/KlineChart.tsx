@@ -6,7 +6,6 @@ import { useQuery } from "@tanstack/react-query";
 import type { AdjustMode, KLinePoint } from "@/shared/types";
 import { buildKlineOption } from "./klineOption";
 import {
-  DEFAULT_TAIL_BARS,
   MA_DEFS,
   aggregateDaily,
   movingAverage,
@@ -107,7 +106,7 @@ export function KlineChart({ title, queryKey, fetcher, showAdjust = false }: Kli
         </div>
       ) : points.length > 0 ? (
         <div style={{ position: "relative" }}>
-          {!isLoading && points.length > 0 && (
+          {points.length > 0 && (
             <div style={{ position: "absolute", top: 6, left: 66, right: 20, display: "flex", gap: 12, fontSize: 11, zIndex: 5 }}>
               {MA_DEFS.map((d) => {
                 const on = visibleMas.includes(d.key);

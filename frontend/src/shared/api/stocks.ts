@@ -134,10 +134,11 @@ export function mapBackendStockEnriched(item: BackendStockEnriched): StockRecord
         latestPrice: item.latest_price ?? undefined,
         change: item.change ?? undefined,
         changePercent: item.change_percent ?? undefined,
-        volume: item.volume ?? undefined,
-        turnover: item.amount ?? undefined,
-        marketCap: item.total_mv ?? undefined,
-        circulatingCap: item.circ_mv ?? undefined,
+        volume: item.volume ?? undefined, // 手：formatCap 万档恰为万手数值，不换算
+        // TuShare 口径：amount 千元、total_mv/circ_mv 万元 → 统一换算为元（formatCap 按元分档）
+        turnover: item.amount == null ? undefined : item.amount * 1e3,
+        marketCap: item.total_mv == null ? undefined : item.total_mv * 1e4,
+        circulatingCap: item.circ_mv == null ? undefined : item.circ_mv * 1e4,
         pe: item.pe_ttm ?? undefined,
         pb: item.pb ?? undefined,
         open: item.open ?? undefined,

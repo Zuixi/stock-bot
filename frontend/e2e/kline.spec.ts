@@ -73,4 +73,10 @@ test("个股头部：8项指标网格含今开/昨收/换手率", async ({ page 
   for (const label of ["今开", "最高", "最低", "昨收", "成交量", "成交额", "换手率", "总市值"]) {
     await expect(page.locator(".ant-descriptions-item-label").filter({ hasText: label })).toBeVisible();
   }
+
+  // 单位口径：600519 总市值 ≈1.6万亿(>1e12)、成交额为亿级——断言形状不断言精确数
+  const mcapCell = page.locator(".ant-descriptions-item").filter({ hasText: "总市值" });
+  await expect(mcapCell).toContainText(/万亿/);
+  const turnoverCell = page.locator(".ant-descriptions-item").filter({ hasText: "成交额" });
+  await expect(turnoverCell).toContainText(/亿/);
 });

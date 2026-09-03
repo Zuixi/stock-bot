@@ -284,3 +284,12 @@
 - **默认120根**：初始视图改 dataZoom startValue/endValue 按末尾 `DEFAULT_TAIL_BARS=120` 根定位（TradingView 式：数据全量、视图局部、slider 漫游），成交量区去日期轴
 - **收官回归**：backend pytest 126 passed / 19 failed（全为基线 httpx.ConnectError 环境性失败，零回归）；frontend `npm run build` 通过；playwright 17/17 passed（含新增头部8项网格与频率Tab/图内MA行用例）
 - 涉及模块：frontend/shared/ui/kline, frontend/features/stock-detail, backend/services/market_service, backend/schemas/stock, frontend/e2e
+
+## 2026-09-03 - 市值/成交额单位口径统一（单位归一 Task 1）
+- **问题**：全站市值/成交额显示差 1e4/1e3 倍——后端 TuShare 口径 total_mv/circ_mv 为万元、amount 为千元，前端 formatCap 按元分档（≥1e12 万亿/≥1e8 亿/≥1e4 万），mapBackendStockEnriched 原样透传未换算，导致 600519 总市值显示为"1.62亿"量级错误
+- **修复**：
+  - mapBackendStockEnriched 单点换算为元（amount ×1e3、total_mv/circ_mv ×1e4，判空在前避免 null 归零），volume 保持手口径不换算
+  - StockTable 成交额列 NumberText 补 `unit="cap"`（WatchlistTable 核对无缺）
+  - KlineChart 死代码清理：删未使用 DEFAULT_TAIL_BARS import、MA 行冗余 `!isLoading &&` 守卫
+- **验证**：e2e 头部用例追加形状断言（600519 总市值含"万亿"、成交额含"亿"），17 用例全绿；实机 curl 推演总市值 1.62万亿 / 成交额 26.34亿
+- 涉及模块：frontend/shared/api/stocks, frontend/features/market, frontend/shared/ui/kline, frontend/e2e
