@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories import index_repo
 
 if TYPE_CHECKING:
+    from app.core.redis import CacheClient
     from app.models.index_daily import IndexDaily
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,12 @@ def _get_tushare() -> Any:
     return get_tushare_client()
 
 
+def _get_eastmoney() -> Any:
+    from app.core.providers.eastmoney_client import get_eastmoney_client  # noqa: PLC0415
+
+    return get_eastmoney_client()
+
+
 # asyncpg 单条语句 bind 参数上限 32767；index_dailies 每行 9 列 → 单批最多 ~3600 行，
 # 分批 upsert 以支持多年回补（见 upsert_index_dailies 的多行 INSERT）。
 _UPSERT_CHUNK = 2000
@@ -155,6 +162,74 @@ async def backfill_global_index_history(db: AsyncSession, years: int = 2) -> dic
     upserted = await _upsert_rows(db, rows)
     logger.info("backfill_global_index_history years=%s upserted=%s", years, upserted)
     return {"upserted": upserted}
+
+
+GLOBAL_INDICES_CACHE_KEY = "market:global-indices"
+GLOBAL_INDICES_TTL = 60
+
+
+async def get_global_index_cards(cache: CacheClient | None = None) -> list[dict[str, Any]]:
+    """全球市场卡片：东财实时快照（60s 共享缓存）+ 近 30 日 spark + EOD 兜底。"""
+    if cache is not None:
+        cached = await cache.get(GLOBAL_INDICES_CACHE_KEY)
+        if cached:
+            cards_cached: list[dict[str, Any]] = cached
+            return cards_cached
+
+    quotes: dict[str, dict[str, Any]] = {}
+    try:
+        em = _get_eastmoney()
+        snap = await em.fetch_index_snapshot([g["em_secid"] for g in GLOBAL_INDICES])
+        quotes = {q["code"]: q for q in snap if q.get("code")}
+    except Exception:
+        logger.warning("global index snapshot fetch failed, falling back to EOD", exc_info=True)
+
+    cards: list[dict[str, Any]] = []
+    from app.core.database import async_session_factory  # noqa: PLC0415
+
+    async with async_session_factory() as db:
+        for g in GLOBAL_INDICES:
+            spark: list[float] = []
+            last_close: float | None = None
+            try:
+                rows = await index_repo.get_kline(db, g["ts_code"])
+                spark = [float(r.close) for r in rows[-30:] if r.close is not None]
+                last_close = spark[-1] if spark else None
+            except Exception:
+                logger.warning("spark fetch failed for %s", g["ts_code"], exc_info=True)
+
+            q = quotes.get(_em_code(g["em_secid"]))
+            now = datetime.now(_SH).isoformat(timespec="seconds")
+            if q and q.get("price") is not None:
+                cards.append({
+                    "ts_code": g["ts_code"], "name": q.get("name") or g["name"],
+                    "market": g["market"], "region": g["region"],
+                    "price": q["price"], "change": q.get("change"),
+                    "pct_change": q.get("pct_change"),
+                    "spark": spark, "updated_at": now, "source": "realtime",
+                })
+            else:
+                # 全球指数行 pre_close 为 NULL → 用相邻收盘价逐日差值算涨跌
+                prev = spark[-2] if len(spark) >= 2 else None
+                change = (
+                    round(last_close - prev, 2)
+                    if (last_close is not None and prev is not None) else None
+                )
+                pct = round(change / prev * 100, 2) if (change is not None and prev) else None
+                cards.append({
+                    "ts_code": g["ts_code"], "name": g["name"],
+                    "market": g["market"], "region": g["region"],
+                    "price": last_close, "change": change, "pct_change": pct,
+                    "spark": spark, "updated_at": now, "source": "eod",
+                })
+
+    if cache is not None and any(c["price"] is not None for c in cards):
+        await cache.set(GLOBAL_INDICES_CACHE_KEY, cards, ttl=GLOBAL_INDICES_TTL)
+    return cards
+
+
+def _em_code(secid: str) -> str:
+    return secid.split(".", 1)[1]
 
 
 async def _main() -> None:

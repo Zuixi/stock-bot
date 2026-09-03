@@ -1,6 +1,6 @@
 """market_data_service 纯映射/组装单测（monkeypatch，不触 DB/网络）。"""
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -100,3 +100,50 @@ async def test_ingest_global_index_daily_partial_failure(monkeypatch):
     assert result == {"upserted": 1}
     assert upserted[0].ts_code == "N225" and upserted[0].volume == 1724660.8
     assert "KS11" in calls and "N225" in calls  # 失败后继续拉取后续指数
+
+
+@pytest.mark.asyncio
+async def test_get_global_index_cards_merges_realtime_and_spark(monkeypatch):
+    class _FakeCache:
+        def __init__(self) -> None:
+            self.store: dict = {}
+
+        async def get(self, key):
+            return self.store.get(key)
+
+        async def set(self, key, value, ttl=None):
+            self.store[key] = value
+
+    async def fake_snapshot(secids):
+        return [
+            {"code": "N225", "name": "日经225", "price": 64214.48,
+             "pct_change": -0.17, "change": -111.16},
+            {"code": "KS11", "name": "韩国KOSPI",
+             "price": None, "pct_change": None, "change": None},
+        ]
+
+    kline_calls: list = []
+
+    async def fake_kline(db, ts_code):
+        kline_calls.append(ts_code)
+        return [
+            type("R", (), {
+                "trade_date": date(2026, 7, 28) + timedelta(days=i),
+                "close": 60000.0 + i,
+            })()
+            for i in range(35)
+        ]
+
+    monkeypatch.setattr(mds, "_get_eastmoney", lambda: type("C", (), {
+        "fetch_index_snapshot": staticmethod(fake_snapshot),
+    }))
+    monkeypatch.setattr(mds.index_repo, "get_kline", fake_kline)
+
+    cards = await mds.get_global_index_cards(cache=_FakeCache())
+    by_code = {c["ts_code"]: c for c in cards}
+    assert len(cards) == 9
+    assert by_code["N225"]["price"] == 64214.48 and by_code["N225"]["source"] == "realtime"
+    assert len(by_code["N225"]["spark"]) == 30  # 35 行裁到 30
+    # KS11 实时缺失 → 用日线最后一根 close 兜底（pre_close 为 NULL，逐 close 差值算涨跌）
+    assert by_code["KS11"]["price"] == 60034.0 and by_code["KS11"]["source"] == "eod"
+    assert set(kline_calls) == {g["ts_code"] for g in mds.GLOBAL_INDICES}
