@@ -23,6 +23,8 @@ class KlineResponse(BaseModel):
     name: str
     exchange: str
     data: list[DailyQuoteOut]
+    adjust: str = "raw"
+    adjust_available: bool = True
 
 
 class LatestQuoteOut(BaseModel):
