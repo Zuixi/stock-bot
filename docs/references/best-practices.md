@@ -93,3 +93,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - 手写 Alembic 迁移的 revision ID 在多分支并行开发时是全局命名空间——先 `git log --all -S "<revision>"` 查重再落盘，活库 alembic_version 落在其他分支的 head 上时用临时隔离库验证迁移链而非硬闯活库。
 - 测试夹具按日历日生成序列时用「基准日 + timedelta(days=i)」而非手写 `date(y, m, d+1)`——月份天数溢出抛 ValueError 后若被测代码按设计静默兜底（per-item try/except），失败断言会指向兜底路径（spark 为空）而非夹具根因，排查方向被带偏。
 - 东财 push2/push2delay 主站可用性日内可变（实测当日 push2 上午可用、下午开始 TCP 拒连）——数据源客户端的域名 base 以"当天实测可达"为准切换并留时间戳注释，clist 类端点在 push2delay 同构镜像可用（字段/数值一致），避免盘中轮询任务对不可达域名反复重试静默失败；排查连通性时 host 与容器两侧都要 curl（代理/DNS 差异）。
+- TuShare 部分接口（如 moneyflow_hsgt）全列返回字符串且缺值为 NaN/空串——数值归一（str→float|None）必须在映射层一次完成并对 NaN/空串显式兜底，让 repo/DB 只见规范类型；pg ON CONFLICT DO UPDATE 的 set_ 只列会变化的字段，首写后不变的字段（如 source）留在 values 中即可，避免无谓覆盖。
