@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -30,8 +31,13 @@ from app.repositories.industry_metric_repo import (
     upsert_quality_snapshot,
     upsert_signal_evaluation,
 )
+from app.scheduler.jobs import industry_metrics_refresh_job, industry_signal_evaluation_job
+from app.scheduler.runner import create_scheduler
 from app.services.industry_data_quality import IndustryQualityResult, MetricQualityResult
-from app.services.industry_metric_service import get_dashboard
+from app.services.industry_metric_service import (
+    get_dashboard,
+    get_signal_events,
+)
 from app.services.industry_registry import (
     BROILER_INDUSTRY,
     PIG_INDUSTRY,
@@ -45,6 +51,7 @@ from app.services.industry_signal_verification import (
     run_due_signal_evaluations,
     score_verification,
 )
+from app.workers.industry_metrics_worker import IndustryMetricsWorker
 
 
 def named_unique(model: type[Any], name: str) -> set[str]:
@@ -287,6 +294,69 @@ class FakeCache:
         self.stored = (value, ttl)
 
 
+def quality_snapshot_row(*, status: str = "healthy", signal_ready: bool = True):
+    return SimpleNamespace(
+        as_of=date(2026, 9, 3),
+        status=status,
+        signal_ready=signal_ready,
+        ready_count=3,
+        missing_count=0,
+        stale_count=0,
+        rejected_count=0,
+        partial_count=0,
+        details=[
+            {
+                "metric_key": "hog_price",
+                "status": "ready",
+                "source": "akshare_soozhu",
+                "freq": "daily",
+                "period": "2026-09-03",
+                "age_days": 0,
+                "reason": None,
+                "entity_coverage": None,
+            }
+        ],
+    )
+
+
+def event_row(*, row_id: int = 11, event_date: date = date(2026, 9, 3)):
+    return SimpleNamespace(
+        id=row_id,
+        event_date=event_date,
+        event_sequence=1,
+        previous_signal_type=None,
+        previous_phase=None,
+        signal_type=SIGNAL_BUY,
+        phase="recovery",
+        basis={"private": "audit-only"},
+        basis_periods={"hog_price": "2026-09-03"},
+        quality_snapshot={"private": "audit-only"},
+        rule_version="pig-cycle-v1",
+    )
+
+
+def evaluation_row(
+    *,
+    event_id: int = 11,
+    status: str = "confirmed",
+    score: Decimal | None = Decimal("80"),
+):
+    return SimpleNamespace(
+        signal_event_id=event_id,
+        horizon_days=30,
+        target_date=date(2026, 10, 3),
+        status=status,
+        score=score,
+        criteria_results=[{"metric_key": "hog_price", "status": "met", "score": "30"}],
+        insufficient_reasons=None,
+        evaluated_at=datetime(2026, 10, 4, tzinfo=UTC),
+        rules=[{"private": "audit-only"}],
+        start_snapshot={"private": "audit-only"},
+        end_snapshot={"private": "audit-only"},
+        methodology_version="pig-cycle-v1",
+    )
+
+
 @pytest.mark.asyncio
 async def test_dashboard_without_valid_signal_returns_nullable_cycle_and_signal(monkeypatch):
     monkeypatch.setattr(
@@ -309,13 +379,216 @@ async def test_dashboard_without_valid_signal_returns_nullable_cycle_and_signal(
         "app.services.industry_metric_service.repo.list_signals",
         AsyncMock(return_value=[]),
     )
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.latest_quality_snapshot",
+        AsyncMock(return_value=quality_snapshot_row(status="unavailable", signal_ready=False)),
+    )
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.list_signal_events",
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.list_event_evaluations",
+        AsyncMock(return_value=[]),
+    )
 
     result = await get_dashboard(SimpleNamespace(), FakeCache(), "pig")
 
     assert result.cycle is None
     assert result.signal is None
     assert result.signal_history == []
+    assert result.signal_is_stale is True
+    assert result.data_quality.status == "unavailable"
+    assert result.signal_events == []
+    assert result.verification_summary.completed_directional_evaluations == 0
+    assert result.verification_summary.accuracy_pct is None
     latest_signal.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_signal_event_mapper_hides_audit_json_and_summary_requires_five_samples(monkeypatch):
+    events = [
+        event_row(row_id=12, event_date=date(2026, 9, 4)),
+        event_row(row_id=11, event_date=date(2026, 9, 3)),
+    ]
+    evaluations = [
+        evaluation_row(event_id=12, status="confirmed", score=Decimal("80")),
+        evaluation_row(event_id=11, status="invalidated", score=Decimal("20")),
+    ]
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.list_signal_events",
+        AsyncMock(return_value=events),
+    )
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.list_event_evaluations",
+        AsyncMock(return_value=evaluations),
+    )
+
+    mapped, summary = await get_signal_events(SimpleNamespace(), "pig", limit=20)
+
+    assert [item.event_date for item in mapped] == [date(2026, 9, 4), date(2026, 9, 3)]
+    payload = mapped[0].model_dump(mode="json")
+    assert set(payload) == {
+        "event_date",
+        "signal_type",
+        "phase",
+        "previous_signal_type",
+        "previous_phase",
+        "rule_version",
+        "verification_supported",
+        "evaluations",
+    }
+    assert set(payload["evaluations"][0]) == {
+        "horizon_days",
+        "status",
+        "target_date",
+        "score",
+        "criteria_results",
+        "insufficient_reasons",
+        "evaluated_at",
+    }
+    assert summary.completed_directional_evaluations == 2
+    assert summary.accuracy_pct is None
+
+
+@pytest.mark.asyncio
+async def test_verification_summary_exposes_accuracy_after_five_completed_directional_evaluations(
+    monkeypatch,
+):
+    events = [event_row(row_id=index) for index in range(1, 6)]
+    evaluations = [
+        evaluation_row(
+            event_id=index,
+            status="invalidated" if index == 5 else "confirmed",
+            score=Decimal("20") if index == 5 else Decimal("80"),
+        )
+        for index in range(1, 6)
+    ]
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.list_signal_events",
+        AsyncMock(return_value=events),
+    )
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.repo.list_event_evaluations",
+        AsyncMock(return_value=evaluations),
+    )
+
+    _, summary = await get_signal_events(SimpleNamespace(), "pig", limit=20)
+
+    assert summary.completed_directional_evaluations == 5
+    assert summary.accuracy_pct == 80.0
+
+
+class SessionContext:
+    def __init__(self, session):
+        self.session = session
+
+    async def __aenter__(self):
+        return self.session
+
+    async def __aexit__(self, *_args):
+        return None
+
+
+def test_scheduler_registers_signal_evaluation_at_1720_shanghai():
+    job = next(
+        item
+        for item in create_scheduler().get_jobs()
+        if item.id == "industry_signal_evaluation"
+    )
+
+    assert job.func is industry_signal_evaluation_job
+    assert "hour='17'" in str(job.trigger)
+    assert "minute='20'" in str(job.trigger)
+    assert str(job.trigger.timezone) == "Asia/Shanghai"
+
+
+@pytest.mark.asyncio
+async def test_worker_commits_before_dashboard_cache_invalidation(monkeypatch):
+    calls = []
+    session = SimpleNamespace(commit=AsyncMock(side_effect=lambda: calls.append("commit")))
+    cache = SimpleNamespace(delete=AsyncMock(side_effect=lambda _key: calls.append("delete")))
+    monkeypatch.setattr(
+        "app.workers.industry_metrics_worker.async_session_factory",
+        lambda: SessionContext(session),
+    )
+    monkeypatch.setattr(
+        "app.workers.industry_metrics_worker.industry_metric_service.ingest_industry_metrics",
+        AsyncMock(return_value={"source": "mock"}),
+    )
+    monkeypatch.setattr(
+        "app.workers.industry_metrics_worker.get_redis_pool",
+        AsyncMock(return_value=SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        "app.workers.industry_metrics_worker.CacheClient",
+        lambda _redis: cache,
+    )
+
+    await IndustryMetricsWorker.process(
+        object.__new__(IndustryMetricsWorker), uuid.UUID(int=1), {"industry_key": "pig"}
+    )
+
+    assert calls == ["commit", "delete"]
+    cache.delete.assert_awaited_once_with("industry:pig:dashboard")
+
+
+@pytest.mark.asyncio
+async def test_scheduled_ingest_commits_before_dashboard_cache_invalidation(monkeypatch):
+    calls = []
+    session = SimpleNamespace(commit=AsyncMock(side_effect=lambda: calls.append("commit")))
+    cache = SimpleNamespace(delete=AsyncMock(side_effect=lambda _key: calls.append("delete")))
+    monkeypatch.setattr(
+        "app.scheduler.jobs.async_session_factory",
+        lambda: SessionContext(session),
+    )
+    monkeypatch.setattr(
+        "app.services.industry_metric_service.ingest_industry_metrics",
+        AsyncMock(return_value={"source": "mock", "upserted": 1, "signal": SIGNAL_BUY}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "app.scheduler.jobs.get_redis_pool",
+        AsyncMock(return_value=SimpleNamespace()),
+    )
+    monkeypatch.setattr("app.scheduler.jobs.CacheClient", lambda _redis: cache)
+
+    await industry_metrics_refresh_job()
+
+    assert calls == ["commit", "delete"]
+    cache.delete.assert_awaited_once_with("industry:pig:dashboard")
+
+
+@pytest.mark.asyncio
+async def test_scheduled_evaluation_commits_before_nonfatal_cache_invalidation(monkeypatch):
+    calls = []
+    session = SimpleNamespace(commit=AsyncMock(side_effect=lambda: calls.append("commit")))
+    cache = SimpleNamespace(
+        delete=AsyncMock(side_effect=lambda _key: (calls.append("delete"), 0)[1])
+    )
+    monkeypatch.setattr(
+        "app.scheduler.jobs.async_session_factory",
+        lambda: SessionContext(session),
+        raising=False,
+    )
+    evaluation = AsyncMock(return_value=SimpleNamespace(evaluated=1))
+    monkeypatch.setattr(
+        "app.scheduler.jobs.run_due_signal_evaluations", evaluation, raising=False
+    )
+    monkeypatch.setattr(
+        "app.scheduler.jobs.get_redis_pool",
+        AsyncMock(return_value=SimpleNamespace()),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "app.scheduler.jobs.CacheClient", lambda _redis: cache, raising=False
+    )
+
+    await industry_signal_evaluation_job()
+
+    assert calls == ["commit", "delete"]
+    evaluation.assert_awaited_once()
+    cache.delete.assert_awaited_once_with("industry:pig:dashboard")
 
 
 def quality_result(*, status: str = "healthy", signal_ready: bool = True):

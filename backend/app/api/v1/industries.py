@@ -27,6 +27,7 @@ from app.schemas.industry import (
     MetricBatchResponse,
     MetricHistoryOut,
     MetricLatestOut,
+    SignalEventOut,
 )
 from app.services import industry_knowledge_service as knowledge_service
 from app.services import industry_metric_service as service
@@ -50,11 +51,27 @@ async def get_dashboard(industry_key: str, db: DbDep, cache: CacheDep) -> Dashbo
         raise not_found_response("Industry", industry_key) from exc
 
 
+@router.get("/{industry_key}/signal-events", response_model=list[SignalEventOut])
+async def get_signal_events(
+    industry_key: str,
+    db: DbDep,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[SignalEventOut]:
+    """Read immutable signal transitions and their frozen evaluations."""
+    try:
+        events, _ = await service.get_signal_events(db, industry_key, limit=limit)
+        return events
+    except service.UnknownIndustryError as exc:
+        raise not_found_response("Industry", industry_key) from exc
+
+
 @router.get("/{industry_key}/metrics/latest", response_model=list[MetricLatestOut])
 async def get_latest_metrics(
     industry_key: str,
     db: DbDep,
-    group: str | None = Query(None, description="Filter by display group (strip/quick/supply/cost)"),
+    group: str | None = Query(
+        None, description="Filter by display group (strip/quick/supply/cost)"
+    ),
 ) -> list[MetricLatestOut]:
     try:
         return await service.get_latest_metrics(db, industry_key, group=group)
