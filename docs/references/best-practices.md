@@ -96,3 +96,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - TuShare 部分接口（如 moneyflow_hsgt）全列返回字符串且缺值为 NaN/空串——数值归一（str→float|None）必须在映射层一次完成并对 NaN/空串显式兜底，让 repo/DB 只见规范类型；pg ON CONFLICT DO UPDATE 的 set_ 只列会变化的字段，首写后不变的字段（如 source）留在 values 中即可，避免无谓覆盖。
 - pg ON CONFLICT 不处理同一 INSERT 语句内的自冲突（Postgres 约束检查逐行进行，同批两行撞同一唯一键直接报错）——无稳定业务键的表（如大宗交易 date+code+buyer+seller+price+volume 去重键）采集时先在 Python 端按约束键去重（保留末次）再 DO NOTHING；映射层截断超长字符串列（如 reason String(160)）优先于让 DB 报错，比 DDL 放宽更可控。
 - 事件类数据（解禁/回购）的读取窗口语义由业务性质决定而非对齐 ingest 窗口：解禁 float_date 是未来事件（缺省窗口须含 today+N 未来段），回购按 ann_date 回看——同表两种"默认窗口"方向相反时在 service docstring 写明因果，避免后人"统一"成今日窗口把未来解禁静默滤掉；另外 Postgres 唯一约束不判重 NULL（ann_date 可空的 DO NOTHING 去重存在旁路）属可接受偏差，须在 repo docstring 落字说明而非默默容忍。
+- 实施计划的 brief 说"创建"某文件前先确认它是否已存在：cninfo_client.py 已有 webapi 行情客户端（CnInfoClient/get_cninfo_client），追加公告检索客户端时新类名 CninfoClient + 新工厂 get_announcement_client 与既有命名并存，沿用 brief 的同名工厂会静默 shadow 旧客户端把行情/指数采集换成公告协议。
