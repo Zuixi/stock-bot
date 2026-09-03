@@ -1,4 +1,4 @@
-import { Card, Row, Col, Statistic, Tooltip, Typography } from "antd";
+import { Card, Row, Col, Statistic, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { NumberText, ChangeText } from "@/shared/ui";
 import type { StockRecord } from "@/shared/types";

@@ -16,6 +16,249 @@ import { test, expect as baseExpect } from "@playwright/test";
 // 数据由 react-query 异步加载、图表异步渲染，统一放宽断言轮询窗口
 const expect = baseExpect.configure({ timeout: 15_000 });
 
+const dashboardFixture = {
+  industry: {
+    key: "pig",
+    name: "生猪养殖",
+    description: "生猪养殖行业周期投研",
+    sw_l3_codes: ["110702"],
+  },
+  as_of: "2026-09-03",
+  data_source: "akshare",
+  strip: [
+    {
+      metric_key: "hog_price",
+      name: "生猪均价",
+      value: 14.8,
+      unit: "元/kg",
+      tier: "highfreq",
+      source: "akshare_soozhu",
+      freq: "daily",
+      period: "2026-09-03",
+      delta: { pct: 2.1, direction: "up", label: "环比" },
+      warn: null,
+      warn_severity: null,
+      spark: [14.2, 14.5, 14.8],
+      description: "全国生猪均价",
+    },
+  ],
+  quick_view: [
+    {
+      metric_key: "hog_corn_ratio",
+      name: "猪粮比",
+      value: 6.2,
+      unit: null,
+      tier: "calc",
+      source: "derived",
+      freq: "daily",
+      period: "2026-09-03",
+      delta: null,
+      warn: null,
+      warn_severity: null,
+      spark: null,
+      description: "猪价与玉米价格比值",
+    },
+  ],
+  trends: {
+    price_vs_cost: {
+      periods: ["2026-07-31", "2026-08-31"],
+      series: { 生猪均价: [14.2, 14.8], 行业平均完全成本: [15.5, 15.4] },
+      reference: null,
+    },
+    sow_inventory: {
+      periods: ["2026-07-31", "2026-08-31"],
+      series: { 能繁母猪存栏: [3920, 3904] },
+      reference: { label: "正常保有量", value: 3900, note: null, effective_from: "2025-01-01" },
+    },
+  },
+  cycle: {
+    phase: "recovery",
+    phase_index: 3,
+    phases: [
+      { key: "prosperity", label: "繁荣", desc: "盈利高位", active: false },
+      { key: "recession", label: "衰退", desc: "盈利收窄", active: false },
+      { key: "depression", label: "萧条", desc: "产能去化", active: false },
+      { key: "recovery", label: "复苏", desc: "价格修复", active: true },
+    ],
+    reasons: ["猪价修复"],
+    basis: {},
+  },
+  signal: {
+    signal_type: "买入",
+    phase: "recovery",
+    effective_date: "2026-08-01",
+    reason: "周期进入复苏",
+    positions: [
+      { name: "核心底仓", role: "core", desc: "长期配置", pct: 50, color: "#ef4444" },
+      { name: "波段仓位", role: "tactical", desc: "趋势增强", pct: 30, color: "#faad14" },
+      { name: "现金储备", role: "cash", desc: "风险缓冲", pct: 20, color: "#8c8c8c" },
+    ],
+  },
+  signal_is_stale: false,
+  data_quality: {
+    as_of: "2026-09-03",
+    status: "healthy",
+    signal_ready: true,
+    ready_count: 3,
+    missing_count: 0,
+    stale_count: 0,
+    rejected_count: 0,
+    partial_count: 0,
+    details: [
+      {
+        metric_key: "hog_price",
+        status: "ready",
+        source: "akshare_soozhu",
+        freq: "daily",
+        period: "2026-09-03",
+        age_days: 0,
+        reason: null,
+        entity_coverage: null,
+      },
+    ],
+  },
+  signal_events: [
+    {
+      event_date: "2026-08-01",
+      signal_type: "买入",
+      phase: "recovery",
+      previous_signal_type: "关注",
+      previous_phase: "depression",
+      rule_version: "pig-cycle-v1",
+      verification_supported: true,
+      evaluations: [
+        {
+          horizon_days: 30,
+          status: "confirmed",
+          target_date: "2026-08-31",
+          score: 80,
+          criteria_results: [{ metric_key: "hog_price", status: "met", score: "30" }],
+          insufficient_reasons: [],
+          evaluated_at: "2026-09-01T08:00:00Z",
+        },
+        {
+          horizon_days: 90,
+          status: "pending",
+          target_date: "2026-10-30",
+          score: null,
+          criteria_results: [],
+          insufficient_reasons: [],
+          evaluated_at: null,
+        },
+      ],
+    },
+  ],
+  verification_summary: {
+    completed_directional_evaluations: 1,
+    confirmed: 1,
+    partially_confirmed: 0,
+    invalidated: 0,
+    inconclusive: 0,
+    pending: 1,
+    accuracy_pct: null,
+  },
+  signal_history: [],
+};
+
+async function mockDashboard(page: import("@playwright/test").Page, overrides: Record<string, unknown>) {
+  await page.route("**/api/v1/industries/pig/dashboard", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ...dashboardFixture, ...overrides }),
+    });
+  });
+}
+
+test("data quality: unavailable stale signal shows warning and retained-signal disclosure", async ({ page }) => {
+  await mockDashboard(page, {
+    signal_is_stale: true,
+    data_quality: {
+      ...dashboardFixture.data_quality,
+      status: "unavailable",
+      signal_ready: false,
+      ready_count: 1,
+      missing_count: 1,
+      stale_count: 1,
+      details: [
+        ...dashboardFixture.data_quality.details,
+        {
+          metric_key: "hog_corn_ratio",
+          status: "stale",
+          source: "derived",
+          freq: "daily",
+          period: "2026-08-20",
+          age_days: 14,
+          reason: "超过 7 天新鲜度要求",
+          entity_coverage: null,
+        },
+        {
+          metric_key: "sow_inventory_mom",
+          status: "missing",
+          source: null,
+          freq: "monthly",
+          period: null,
+          age_days: null,
+          reason: "缺少必需指标",
+          entity_coverage: null,
+        },
+      ],
+    },
+  });
+
+  await page.goto("/research/pig");
+
+  const quality = page.getByTestId("industry-data-quality");
+  await expect(quality).toBeVisible();
+  await expect(quality).toContainText("数据质量异常");
+  await expect(quality).toContainText("当前展示为最近一次有效信号，本次因数据不足未更新");
+  await expect(page.getByText("最近一次有效信号", { exact: true })).toBeVisible();
+});
+
+test("signal verification: event timeline renders confirmed 30d score and pending 90d target", async ({ page }) => {
+  await mockDashboard(page, {});
+
+  await page.goto("/research/pig");
+
+  const timeline = page.getByTestId("signal-event-timeline");
+  await expect(timeline).toBeVisible();
+  await expect(page.getByTestId("signal-evaluation-30")).toContainText("30天 已确认");
+  await expect(page.getByTestId("signal-evaluation-30")).toContainText("80分");
+  await expect(page.getByTestId("signal-evaluation-90")).toContainText("目标日期 2026-10-30");
+});
+
+test("signal verification: inconclusive reason and healthy compact status render", async ({ page }) => {
+  await mockDashboard(page, {
+    signal_events: [
+      {
+        ...dashboardFixture.signal_events[0],
+        evaluations: [
+          {
+            ...dashboardFixture.signal_events[0].evaluations[0],
+            status: "inconclusive",
+            score: null,
+            insufficient_reasons: ["能繁母猪存栏环比缺少目标期观测"],
+          },
+          dashboardFixture.signal_events[0].evaluations[1],
+        ],
+      },
+    ],
+    verification_summary: {
+      ...dashboardFixture.verification_summary,
+      completed_directional_evaluations: 0,
+      confirmed: 0,
+      inconclusive: 1,
+    },
+  });
+
+  await page.goto("/research/pig");
+
+  await expect(page.getByTestId("industry-data-quality")).toContainText("数据质量正常");
+  await expect(page.getByTestId("industry-data-quality").locator(".ant-alert")).toHaveCount(0);
+  await expect(page.getByTestId("signal-evaluation-30")).toContainText("证据不足");
+  await expect(page.getByTestId("signal-evaluation-30")).toContainText("能繁母猪存栏环比缺少目标期观测");
+});
+
 test("投研列表：生猪养殖行业卡片展示指标接入覆盖度", async ({ page }) => {
   await page.goto("/research");
 

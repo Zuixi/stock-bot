@@ -1,4 +1,4 @@
-import { Typography, Tag, Button, Space, Descriptions, Tooltip } from "antd";
+import { Typography, Tag, Button, Space, Descriptions } from "antd";
 import { StarOutlined, StarFilled } from "@ant-design/icons";
 import { ChangeText, NumberText } from "@/shared/ui";
 import { EXCHANGE_LABELS } from "@/shared/types";
