@@ -242,3 +242,7 @@
 ## 2026-09-03 - K线 option builder（K线组件升级 Task 2）
 - 新建 `frontend/src/shared/ui/kline/klineOption.ts` 并入 barrel：`buildKlineOption(KlineOptionInput)` 消费 Task 1 纯函数产出完整 ECharts option——candlestick 主图 + visibleMas 过滤的 MA 折线叠加 + 成交量副图（涨红跌绿）、结构化 tooltip（DOM formatter 返回 HTML：OHLC/涨跌幅/量额/MA 行，按前收着色）、最新收盘价虚线 markLine、inside+slider 双 dataZoom、跨年轴标签；一次构建失败修复：tooltip 内 `maLine` 参数 `string` 收窄为 `MaKey`（string 不能索引 `Partial<Record<MaKey,…>>`）（plans/2026-09-03-kline-component-upgrade.md Task 2）
 - 涉及模块：frontend/shared/ui/kline
+
+## 2026-09-03 - K线共享容器组件 KlineChart（K线组件升级 Task 3）
+- 新建 `frontend/src/shared/ui/kline/KlineChart.tsx` 并入 barrel：`KlineChartProps` 五字段契约（title/queryKey/fetcher/showAdjust/defaultRange）——React Query 按 `["kline", queryKey, range, adjust]` 取数并加 130 日历日 MA warm-up 缓冲，本地按 `rangeCutoff` 裁剪可见区间（K 线与 MA 同口径对齐）；工具栏 MA CheckableTag 开关（选中按均线色着色）/ 复权 Segmented（showAdjust 时展示，默认 qfq）/ 周期 Segmented（1/3/6月/1年）/ 重置缩放按钮——直用 ReactECharts + `notMerge` + `lazyUpdate` 并以实例 ref `dispatchAction(dataZoom)`，不走未透传 ref 的 EChart 封装；loading/empty 固定 400px 占位；一次构建失败修复：antd 5.24 顶层无 `CheckableTag` 命名导出，改 `Tag.CheckableTag`（对齐 market-industry-level3 既有用法），其连带的 onChange 隐式 any 次生报错随之消除（plans/2026-09-03-kline-component-upgrade.md Task 3）
+- 涉及模块：frontend/shared/ui/kline
