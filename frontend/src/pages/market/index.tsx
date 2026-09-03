@@ -3,7 +3,8 @@ import {
   GlobalMarketBoard,
   DistributionChart,
   SectorHeatmap,
-  CapitalFlowChart,
+  SectorMoneyflowCard,
+  NorthboundCard,
   HotSectors,
   IndustryClassification,
 } from "@/features/market/components";
@@ -28,9 +29,15 @@ export default function MarketPage() {
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col xs={24} lg={12}>
-          <CapitalFlowChart />
+          <SectorMoneyflowCard />
         </Col>
         <Col xs={24} lg={12}>
+          <NorthboundCard />
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Col span={24}>
           <HotSectors />
         </Col>
       </Row>
