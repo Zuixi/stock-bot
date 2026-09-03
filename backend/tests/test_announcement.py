@@ -29,7 +29,8 @@ async def test_client_fetch_maps(monkeypatch):
     assert rows == [{
         "announcement_id": "1225542181", "sec_code": "002762", "sec_name": "金发拉比",
         "title": "金发拉比2026年半年度报告",
-        "announce_time": datetime.fromtimestamp(1788278400000 / 1000),
+        # 1788278400000ms = 2026-09-01 16:00 UTC = 上海 2026-09-02 00:00（naive 上海 wall-clock）
+        "announce_time": datetime(2026, 9, 2, 0, 0),
         "category": "report",
         "pdf_url": "http://static.cninfo.com.cn/finalpage/2026-09-02/1225542181.PDF",
     }]

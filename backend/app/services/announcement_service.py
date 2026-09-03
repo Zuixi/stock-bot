@@ -45,24 +45,25 @@ async def ingest_announcements(db: AsyncSession, days: int = 3) -> dict[str, int
 
 
 ANNOUNCEMENTS_CACHE_KEY = "market:announcements:{symbol}"
+ANNOUNCEMENTS_CACHE_LIMIT = 100  # 端点 limit 上限：缓存整页、按请求切片，limit 不进缓存键
 ANNOUNCEMENTS_TTL = 300
 
 
 async def get_announcements(
     cache: Any | None, symbol: str | None = None, limit: int = 30
 ) -> list[dict[str, Any]]:
-    """公告快讯按披露时间倒序（symbol 可选过滤；缓存 5 分钟）。"""
+    """公告快讯按披露时间倒序（symbol 可选过滤；缓存 5 分钟，整页 100 行按请求切片）。"""
     key = ANNOUNCEMENTS_CACHE_KEY.format(symbol=symbol or "all")
     if cache is not None:
         cached = await cache.get(key)
         if cached:
             rows_cached: list[dict[str, Any]] = cached
-            return rows_cached
+            return rows_cached[:limit]
     from app.core.database import async_session_factory  # noqa: PLC0415
 
     rows: list[dict[str, Any]] = []
     async with async_session_factory() as db:
-        for a in await market_data_repo.list_announcements(db, symbol, limit):
+        for a in await market_data_repo.list_announcements(db, symbol, ANNOUNCEMENTS_CACHE_LIMIT):
             rows.append({
                 "announcement_id": a.announcement_id, "sec_code": a.sec_code,
                 "sec_name": a.sec_name, "title": a.title,
@@ -71,4 +72,4 @@ async def get_announcements(
             })
     if cache is not None and rows:
         await cache.set(key, rows, ttl=ANNOUNCEMENTS_TTL)
-    return rows
+    return rows[:limit]

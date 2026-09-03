@@ -33,6 +33,7 @@ import re
 import time
 from datetime import date, datetime, timedelta
 from typing import Any, Literal, cast
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -548,14 +549,18 @@ _ANNOUNCEMENT_TAG_RE = re.compile(r"<[^>]+>")
 
 
 def _map_announcement_record(a: dict[str, Any], category: str) -> dict[str, Any]:
-    """Raw cninfo announcement → snake_case 行（去高亮标签、毫秒时间戳转 datetime）。"""
+    """Raw cninfo announcement → snake_case 行（去高亮标签、毫秒时间戳转上海 naive datetime）。"""
     title = a.get("announcementTitle") or ""
     return {
         "announcement_id": str(a["announcementId"]),
         "sec_code": a.get("secCode") or "",
         "sec_name": a.get("secName"),
         "title": _ANNOUNCEMENT_TAG_RE.sub("", title),
-        "announce_time": datetime.fromtimestamp(int(a["announcementTime"]) / 1000),
+        # announcementTime 是 epoch 毫秒 → 先按上海时区解释再取 naive wall-clock，
+        # 与全系统 _today_sh()/调度器时区一致（容器 TZ 未设，直接 fromtimestamp 会落 UTC 语义）。
+        "announce_time": datetime.fromtimestamp(
+            int(a["announcementTime"]) / 1000, tz=ZoneInfo("Asia/Shanghai")
+        ).replace(tzinfo=None),
         "category": category,
         "pdf_url": _ANNOUNCEMENT_PDF_BASE + a["adjunctUrl"] if a.get("adjunctUrl") else None,
     }
