@@ -6,19 +6,24 @@ import asyncio
 import logging
 import random
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
 JITTER_SEC = 30
 
+# 容器内 datetime.now() 是 UTC：交易时段/工作日守卫必须显式按上海时钟判断，
+# 否则盘中任务（资金流轮询、SSE 快照）在 Docker 部署下永远不触发。
+_SH_TZ = ZoneInfo("Asia/Shanghai")
+
 
 def _is_workday() -> bool:
-    return datetime.now().weekday() < 5
+    return datetime.now(_SH_TZ).weekday() < 5
 
 
 def _in_trading_hours() -> bool:
-    """Return True if current time is within 9:25-15:05 (with small buffer)."""
-    now = datetime.now()
+    """Return True if current Shanghai time is within 9:25-15:05 (with small buffer)."""
+    now = datetime.now(_SH_TZ)
     start = now.replace(hour=9, minute=25, second=0, microsecond=0)
     end = now.replace(hour=15, minute=5, second=0, microsecond=0)
     return start <= now <= end
@@ -252,7 +257,7 @@ async def northbound_daily_job() -> None:
 
 
 async def dragon_tiger_daily_job() -> None:
-    """龙虎榜每日个股明细（交易日 18:00 盘后，幂等 upsert 当日）。"""
+    """龙虎榜每日明细（交易日 18:00 盘后；补漏模式——自表内最新交易日起逐日拉齐缺失交易日）。"""
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.services import market_data_service  # noqa: PLC0415
 
@@ -268,7 +273,7 @@ async def dragon_tiger_daily_job() -> None:
 
 
 async def block_trade_daily_job() -> None:
-    """大宗交易每日明细（交易日 17:00 盘后，DO NOTHING 去重，重复采集直接跳过）。"""
+    """大宗交易每日明细（交易日 17:00 盘后；补漏模式逐日拉齐缺失交易日，DO NOTHING 去重）。"""
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.services import market_data_service  # noqa: PLC0415
 

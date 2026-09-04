@@ -285,3 +285,75 @@ def test_map_repurchase_rows_dedupes_intra_batch_duplicates():
     ])
     rows = mds._dedupe_repurchase_rows(mds._map_repurchase_rows(df))
     assert len(rows) == 1 and rows[0]["vol"] == 12074700.0  # 保留末次出现
+
+
+def _fake_client_with_cal(cal_days: list[str]):
+    """带 fetch_trade_cal 的假 TuShare 客户端（记录 fetch_top_list 调用日期）。"""
+
+    class _Fake:
+        top_list_calls: list[str] = []
+
+        async def fetch_trade_cal(self, start_date="", end_date="", is_open="1"):
+            return mds.pd.DataFrame([{"cal_date": d} for d in cal_days])
+
+        async def fetch_top_list(self, trade_date):
+            self.top_list_calls.append(trade_date)
+            return mds.pd.DataFrame()
+
+    return _Fake()
+
+
+@pytest.mark.asyncio
+async def test_open_trading_days_since_ranges_and_caps(monkeypatch):
+    monkeypatch.setattr(mds, "_CATCHUP_LOOKBACK_DAYS", 10)
+    client = _fake_client_with_cal(["20260902", "20260903", "20260904", "20260905"])
+    # last=09-01 → (09-01, today=09-05] 窗口内的交易日全取
+    days = await mds._open_trading_days_since(client, date(2026, 9, 1), date(2026, 9, 5))
+    assert days == [date(2026, 9, 2), date(2026, 9, 3), date(2026, 9, 4), date(2026, 9, 5)]
+    # last 晚于 today → 空（已追平）
+    assert await mds._open_trading_days_since(client, date(2026, 9, 5), date(2026, 9, 5)) == []
+    # last=None（空表）→ 只保留最近 _CATCHUP_LOOKBACK_DAYS 个交易日
+    monkeypatch.setattr(mds, "_CATCHUP_LOOKBACK_DAYS", 3)
+    days = await mds._open_trading_days_since(client, None, date(2026, 9, 5))
+    assert days == [date(2026, 9, 3), date(2026, 9, 4), date(2026, 9, 5)]
+
+
+@pytest.mark.asyncio
+async def test_ingest_dragon_tiger_catchup_pulls_each_missing_day(monkeypatch):
+    client = _fake_client_with_cal(["20260903", "20260904"])
+
+    async def fake_max(db):
+        return date(2026, 9, 2)
+
+    upsert_counts: list[int] = []
+
+    async def fake_upsert(db, rows):
+        upsert_counts.append(len(rows))
+        return len(rows)
+
+    monkeypatch.setattr(mds.market_data_repo, "max_dragon_tiger_date", fake_max)
+    monkeypatch.setattr(mds.market_data_repo, "upsert_dragon_tiger", fake_upsert)
+    monkeypatch.setattr(mds, "_get_tushare", lambda: client)
+
+    result = await mds.ingest_dragon_tiger(db=None)
+    assert result == {"upserted": 0, "days": 2}
+    assert client.top_list_calls == ["20260903", "20260904"]  # 09-03 缺口被补上
+
+
+@pytest.mark.asyncio
+async def test_ingest_dragon_tiger_explicit_date_skips_catchup(monkeypatch):
+    client = _fake_client_with_cal(["20260904"])
+
+    async def unexpected_max(db):  # pragma: no cover — 指定日期时不应触库查 max
+        raise AssertionError("max_dragon_tiger_date should not be called")
+
+    async def fake_upsert(db, rows):
+        return 0
+
+    monkeypatch.setattr(mds.market_data_repo, "max_dragon_tiger_date", unexpected_max)
+    monkeypatch.setattr(mds.market_data_repo, "upsert_dragon_tiger", fake_upsert)
+    monkeypatch.setattr(mds, "_get_tushare", lambda: client)
+
+    result = await mds.ingest_dragon_tiger(db=None, trade_date=date(2026, 9, 4))
+    assert result == {"upserted": 0, "days": 1}
+    assert client.top_list_calls == ["20260904"]

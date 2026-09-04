@@ -421,28 +421,86 @@ def _dedupe_repurchase_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     }.values())
 
 
+_CATCHUP_LOOKBACK_DAYS = 10
+
+
+async def _open_trading_days_since(
+    client: Any, last_collected: date | None, today: date
+) -> list[date]:
+    """(last_collected, today] 内的交易日，升序。
+
+    last_collected 为 None（空表/首次）时从 today-回看窗口 起算，窗口整体不超过
+    _CATCHUP_LOOKBACK_DAYS 个日历日——调度错过的日子逐日补拉，避免"只拉当天、
+    错过即永久缺口 / 当日 18:00 数据未发布则整天丢失"。
+    """
+    start = last_collected + timedelta(days=1) if last_collected else today - timedelta(
+        days=_CATCHUP_LOOKBACK_DAYS
+    )
+    if start > today:
+        return []
+    df = await client.fetch_trade_cal(
+        start_date=start.strftime("%Y%m%d"), end_date=today.strftime("%Y%m%d"), is_open="1"
+    )
+    days = [_d(rec["cal_date"]) for rec in df.to_dict("records") if rec.get("cal_date")]
+    return days[-_CATCHUP_LOOKBACK_DAYS:]
+
+
 async def ingest_dragon_tiger(db: AsyncSession, trade_date: date | None = None) -> dict[str, int]:
-    """盘后采集：指定交易日龙虎榜个股明细（top_list；None=今日上海日期，幂等 upsert）。"""
+    """盘后采集龙虎榜个股明细（top_list，幂等 upsert）。
+
+    指定 trade_date → 只拉当日；None（调度/CLI 缺省）→ 补漏模式：自表内最新
+    交易日起把缺失的交易日逐日拉齐（含当日；当日榜单未发布则下次运行自动重试）。
+    """
     client = _get_tushare()
-    day = trade_date or _today_sh()
-    df = await client.fetch_top_list(day.strftime("%Y%m%d"))
-    upserted = await market_data_repo.upsert_dragon_tiger(db, _map_top_list_rows(df))
-    logger.info("ingest_dragon_tiger trade_date=%s upserted=%s", day, upserted)
-    return {"upserted": upserted}
+    if trade_date is not None:
+        df = await client.fetch_top_list(trade_date.strftime("%Y%m%d"))
+        upserted = await market_data_repo.upsert_dragon_tiger(db, _map_top_list_rows(df))
+        logger.info("ingest_dragon_tiger trade_date=%s upserted=%s", trade_date, upserted)
+        return {"upserted": upserted, "days": 1}
+    last = await market_data_repo.max_dragon_tiger_date(db)
+    days = await _open_trading_days_since(client, last, _today_sh())
+    upserted = 0
+    for day in days:
+        try:
+            df = await client.fetch_top_list(day.strftime("%Y%m%d"))
+        except Exception:
+            logger.warning("dragon_tiger fetch failed for %s", day, exc_info=True)
+            continue
+        upserted += await market_data_repo.upsert_dragon_tiger(db, _map_top_list_rows(df))
+    logger.info(
+        "ingest_dragon_tiger catchup days=%s upserted=%s", [d.isoformat() for d in days], upserted
+    )
+    return {"upserted": upserted, "days": len(days)}
 
 
 async def ingest_block_trades(db: AsyncSession, trade_date: date | None = None) -> dict[str, int]:
-    """盘后采集：指定交易日大宗交易明细（block_trade；None=今日上海日期）。
+    """盘后采集大宗交易明细（block_trade）。
 
     行无稳定业务主键 → DO NOTHING；同批重复行先 Python 端去重（见 _dedupe_block_trade_rows）。
+    指定 trade_date → 只拉当日；None → 补漏模式（同 ingest_dragon_tiger）。
     """
     client = _get_tushare()
-    day = trade_date or _today_sh()
-    df = await client.fetch_block_trade(day.strftime("%Y%m%d"))
-    rows = _dedupe_block_trade_rows(_map_block_trade_rows(df))
-    upserted = await market_data_repo.upsert_block_trades(db, rows)
-    logger.info("ingest_block_trades trade_date=%s upserted=%s", day, upserted)
-    return {"upserted": upserted}
+    if trade_date is not None:
+        df = await client.fetch_block_trade(trade_date.strftime("%Y%m%d"))
+        rows = _dedupe_block_trade_rows(_map_block_trade_rows(df))
+        upserted = await market_data_repo.upsert_block_trades(db, rows)
+        logger.info("ingest_block_trades trade_date=%s upserted=%s", trade_date, upserted)
+        return {"upserted": upserted, "days": 1}
+    last = await market_data_repo.max_block_trade_date(db)
+    days = await _open_trading_days_since(client, last, _today_sh())
+    upserted = 0
+    for day in days:
+        try:
+            df = await client.fetch_block_trade(day.strftime("%Y%m%d"))
+        except Exception:
+            logger.warning("block_trade fetch failed for %s", day, exc_info=True)
+            continue
+        rows = _dedupe_block_trade_rows(_map_block_trade_rows(df))
+        upserted += await market_data_repo.upsert_block_trades(db, rows)
+    logger.info(
+        "ingest_block_trades catchup days=%s upserted=%s", [d.isoformat() for d in days], upserted
+    )
+    return {"upserted": upserted, "days": len(days)}
 
 
 DRAGON_TIGER_CACHE_KEY = "market:dragon-tiger:{date}"
