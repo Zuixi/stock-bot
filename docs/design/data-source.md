@@ -110,6 +110,11 @@
 
 - 行业 `fs=m:90+t:2+f:!50`、概念 `fs=m:90+t:3+f:!50`、地域 `fs=m:90+t:1+f:!50`；`pn=1&pz=100&po=1&np=1&fltt=2&invt=2&fid=f62&fields=f12,f14,f3,f62,f66,f72,f104,f105,f128,f136,f140,f184`，按 `f62` 降序。
 - 字段：`f12` 板块代码（BK1203）、`f14` 名称、`f3` 涨跌幅、`f62` 主力净流入（**元**）、`f66`/`f72` 超大单/大单净额（元）、`f104`/`f105` 上涨/下跌家数、`f184` 主力净占比（%）、`f128`/`f140`/`f136` 主力净流入最大股名称/代码/涨跌幅（与 data.eastmoney.com/bkzj/ 排行页同源同列）。
+
+### 大盘资金流（data.eastmoney.com/zjlx/dpzjlx.html 同源）
+
+- 今日四档：`push2delay/api/qt/ulist.np/get?secids=1.000001,0.399001&fields=f62,f66,f72,f78,f84,f184`——f62 主力、f66 超大、f72 大单、f78 中单、f84 小单（元）、f184 主力净占比（%），沪/深两行由服务端合计。
+- 历史日线：`push2his/api/qt/stock/fflow/daykline/get?klt=101&lmt=120&secid=1.000001&secid2=0.399001&ut=b2884a393a59ad64002292a3e90d46a5`——服务端合成沪深两市；kline 为 CSV 字符串：`日期,主力,小单,中单,大单,超大,占比×5,收盘,涨跌幅,成交额(亿),…`；恒等式 主力=大单+超大单（入库前校验）。当日分钟走势为同族 `fflow/kline/get?klt=1`（未接）。
 - **限频**：盘中调度 mon-fri 9:00-15:55 每 5 分钟（job 内 `_is_workday/_in_trading_hours` 守卫），当日快照 upsert 覆盖；clist 类端点在 push2delay 同构镜像可用（字段/数值一致）。
 
 ### TuShare（token 在 backend/.env `TUSHARE_TOKEN`；多接口全列返回字符串，映射层归一数值）

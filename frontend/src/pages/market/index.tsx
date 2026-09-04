@@ -4,6 +4,7 @@ import {
   DistributionChart,
   SectorHeatmap,
   SectorMoneyflowCard,
+  MarketMoneyflowCard,
   NorthboundCard,
   HotSectors,
   IndustryClassification,
@@ -29,10 +30,13 @@ export default function MarketPage() {
       </Row>
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-        <Col xs={24} lg={12}>
+        <Col xs={24} lg={12} xl={8}>
           <SectorMoneyflowCard />
         </Col>
-        <Col xs={24} lg={12}>
+        <Col xs={24} lg={12} xl={8}>
+          <MarketMoneyflowCard />
+        </Col>
+        <Col xs={24} lg={12} xl={8}>
           <NorthboundCard />
         </Col>
       </Row>

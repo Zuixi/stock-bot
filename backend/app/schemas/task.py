@@ -72,6 +72,7 @@ MarketDataJobType = Literal[
     "northbound",
     "dragon_tiger",
     "block_trades",
+    "market_moneyflow",
     "share_floats",
     "repurchases",
     "announcements",

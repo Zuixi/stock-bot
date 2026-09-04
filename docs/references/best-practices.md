@@ -105,3 +105,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - 接三方行情先 curl 实测定字段与单位再写映射：东财 f62 是元、TuShare block_trade 是万元/万股、north_money 是万元、巨潮 announcementTime 是毫秒——单位/时间戳错一档，UI 就差四个数量级或 1970 年。
 - 定时任务的交易时段/工作日守卫必须显式 ZoneInfo("Asia/Shanghai")：容器默认 UTC，naive datetime.now() 会让盘中任务在真实交易时段静默跳过、却在晚间时段放行——cron 触发正确而 job 体空转，日志只有 executed successfully 没有业务结果行。
 - 复用网站数据先比对页面 HTML 里的实体代码（东财 BK 板块码）：代码一致即同源，排行页的扩展列（最大股/中单小单）多数在同端点 fields 里就有，无需另找接口。
+- 东财 kline 类接口（fflow/daykline 等）返回 CSV 字符串行，数值必须显式 float()；容器内长连接池偶发被服务端断连（RemoteProtocolError），HTTP GET 加一次传输层重试即可消除偶发失败。

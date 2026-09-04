@@ -51,6 +51,24 @@ def upgrade() -> None:
     )
 
     op.create_table(
+        "market_moneyflow_daily",
+        sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
+        sa.Column("trade_date", sa.Date(), nullable=False),
+        sa.Column("main_net", sa.Float(), nullable=True),
+        sa.Column("super_large_net", sa.Float(), nullable=True),
+        sa.Column("large_net", sa.Float(), nullable=True),
+        sa.Column("mid_net", sa.Float(), nullable=True),
+        sa.Column("small_net", sa.Float(), nullable=True),
+        sa.Column("main_ratio", sa.Float(), nullable=True),
+        sa.Column("close", sa.Float(), nullable=True),
+        sa.Column("pct_change", sa.Float(), nullable=True),
+        sa.Column("amount", sa.Float(), nullable=True),
+        sa.Column("source", sa.String(length=32), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("trade_date", name="uq_market_moneyflow_date"),
+    )
+
+    op.create_table(
         "dragon_tiger_entries",
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
         sa.Column("trade_date", sa.Date(), nullable=False),
@@ -174,4 +192,5 @@ def downgrade() -> None:
     op.drop_table("block_trades")
     op.drop_table("northbound_daily")
     op.drop_table("dragon_tiger_entries")
+    op.drop_table("market_moneyflow_daily")
     op.drop_table("sector_moneyflow_snapshots")
