@@ -33,6 +33,7 @@ interface BackendSectorMoneyflowItem {
 interface BackendMarketMoneyflow {
   today: {
     total: {
+      amount: number | null;
       main_net: number | null;
       super_large_net: number | null;
       large_net: number | null;
@@ -193,6 +194,7 @@ export interface MarketMoneyflowMarket {
 export interface MarketMoneyflow {
   today: {
     total: {
+      amount: number | null;
       mainNet: number | null;
       superLargeNet: number | null;
       largeNet: number | null;
@@ -285,6 +287,7 @@ const mapMarketMoneyflow = (b: BackendMarketMoneyflow): MarketMoneyflow => ({
     ? {
         total: b.today.total
           ? {
+              amount: b.today.total.amount,
               mainNet: b.today.total.main_net,
               superLargeNet: b.today.total.super_large_net,
               largeNet: b.today.total.large_net,

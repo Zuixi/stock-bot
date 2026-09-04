@@ -139,7 +139,7 @@ class EastmoneyClient:
             "/api/qt/ulist.np/get",
             {
                 "ut": _EM_UT, "fltt": 2, "invt": 2, "np": 1,
-                "fields": "f12,f14,f62,f66,f72,f78,f84,f184",
+                "fields": "f12,f14,f6,f62,f66,f72,f78,f84,f184",
                 "secids": "1.000001,0.399001",
             },
         )
@@ -150,6 +150,7 @@ class EastmoneyClient:
                 continue
             markets.append({
                 "code": d.get("f12"), "name": d.get("f14"),
+                "amount": _num(d.get("f6")),  # 成交额，元
                 "main_net": _num(d.get("f62")), "super_large_net": _num(d.get("f66")),
                 "large_net": _num(d.get("f72")), "mid_net": _num(d.get("f78")),
                 "small_net": _num(d.get("f84")), "main_ratio": _num(d.get("f184")),
@@ -162,6 +163,7 @@ class EastmoneyClient:
 
         return {
             "total": {
+                "amount": _sum("amount"),  # 成交额，元
                 "main_net": _sum("main_net"), "super_large_net": _sum("super_large_net"),
                 "large_net": _sum("large_net"), "mid_net": _sum("mid_net"),
                 "small_net": _sum("small_net"),
