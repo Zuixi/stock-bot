@@ -36,6 +36,7 @@ class SectorMoneyflowOut(BaseModel):
 
 
 class MarketMoneyflowTotalOut(BaseModel):
+    amount: float | None = None  # 成交额，元
     main_net: float | None = None  # 元
     super_large_net: float | None = None  # 元
     large_net: float | None = None  # 元
