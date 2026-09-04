@@ -594,9 +594,13 @@ class CninfoClient:
         se_date: str,
         category_key: Literal["report", "event"],
         page_size: int = 30,
-        max_pages: int = 5,
+        max_pages: int = 10,
     ) -> list[dict[str, Any]]:
-        """按日期区间（``YYYY-MM-DD~YYYY-MM-DD``）+ 类目分页拉取公告并映射为行。"""
+        """按日期区间（``YYYY-MM-DD~YYYY-MM-DD``）+ 类目分页拉取公告并映射为行。
+
+        max_pages=10 × 30 = 300 条/类目：3 天窗口的"重大事项"类实测可达 ~190 条，
+        5 页（150）会静默截断且轮询永远只取最新页、更早的永不回补。
+        """
         rows: list[dict[str, Any]] = []
         for page in range(1, max_pages + 1):
             data = await self._post_json(
