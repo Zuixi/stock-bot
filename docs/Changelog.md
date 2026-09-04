@@ -316,3 +316,61 @@
 - **审计**：临时库灌入 repo 种子与活库逐行 diff——sw_industry_classes 511 / sw_industry_members 4430 / stock_custom_sw_tags 1439 三表完全一致，全新 docker 部署分类数据与当前显示一致
 - **发现并修复**：data_init 的 overlay 加载被 is_sw_data_loaded 门控——先于 overlay 的老部署升级后 SW 表已有数据、跳过导入、1439 行永不生效；改为加性幂等的 overlay 每次 startup 无条件尝试（日志可观测）
 - 涉及模块：backend/app/services/data_init
+
+## 2026-09-03 - 市场数据面 Task 1 — 7 张数据表模型与迁移
+- 新增市场数据面数据层：板块资金流快照 / 龙虎榜 / 北向资金 / 大宗交易 / 限售解禁 / 股票回购 / 公告快讯 7 个 ORM 模型（`app/models/market_data.py`，注册到 models `__init__`）+ 手写 Alembic 迁移 `9d4e7a2c8b1f`（down_revision `e6f7a8b9c0d1`），含唯一约束去重键与 10 个查询索引
+- 涉及模块：backend/app/models, backend/app/migrations/versions
+
+## 2026-09-03 - 市场数据面 Task 4 — GET /market/global-indices 全球指数卡片
+- 新增 `market_data_service.get_global_index_cards(cache)`：东财 push2delay 实时快照（`_em_code` 对齐 secid→code，60s Redis 共享缓存 `market:global-indices`）+ `index_dailies` 近 30 日 spark + 实时缺失时 EOD 兜底（全球指数行 pre_close=NULL，用相邻收盘逐日差值算涨跌额/幅）→ `GlobalIndexCardOut`（`app/schemas/market_data.py`）经 `app/api/v1/market_data.py` 挂到 `/api/v1/market/global-indices`（子路由不带 prefix、include 时挂 `/market`，与 market.router 共存）；活体验证 9 卡全 realtime、spark=30、二次请求命中缓存
+- 涉及模块：backend/app/services/market_data_service, backend/app/schemas/market_data, backend/app/api/v1/market_data, backend/app/api/v1/__init__
+
+## 2026-09-03 - 市场数据面 Task 5 — 板块资金流盘中采集与读取端点
+- 新增 `market_data_repo`（`upsert_sector_moneyflow` 幂等 upsert 按约束 `uq_sector_moneyflow_dim_code_date`、显式 `updated_at: func.now()` 因 pg on_conflict 不走 ORM onupdate；`list_sector_moneyflow` 按 main_net_inflow DESC NULLS LAST）；`market_data_service.ingest_sector_moneyflow` 拉 industry/concept 两维当日快照（`dict[str,int]` 行数契约），`get_sector_moneyflow` 走 Redis `market:sector-moneyflow:{dim}` TTL 60s；`SectorMoneyflowOut` + `GET /api/v1/market/sector-moneyflow?dimension=&limit=`；scheduler 新增 `sector_moneyflow_poll`（mon-fri 9-15 每 5 分钟，job 内 `_is_workday`/`_in_trading_hours` 守卫）+ CLI `_main` 分支 `sector_moneyflow`；东财 clist 端点 base 由 push2 切至 push2delay（push2 当日开始拒连，delay 域同构可用）
+- 涉及模块：backend/app/repositories/market_data_repo, backend/app/services/market_data_service, backend/app/schemas/market_data, backend/app/api/v1/market_data, backend/app/scheduler/jobs, backend/app/scheduler/runner, backend/app/core/providers/eastmoney_client
+
+## 2026-09-03 - 市场数据面 Task 6 — 北向资金盘后净流入序列
+- 新增 `market_data_repo.upsert_northbound`（幂等 upsert 按约束 `uq_northbound_date`，只刷 `net_amount`、source 首写不变）与 `list_northbound`（近 N 日按 trade_date 升序）；`market_data_service._map_hsgt_rows` 将 moneyflow_hsgt 全字符串列归一为 float|None（万元，NaN/空串兜底），`ingest_northbound` 近 30 日窗口采集，`get_northbound_series` 走 Redis `market:northbound:{days}` TTL 300s；`NorthboundPointOut` + `GET /api/v1/market/northbound?days=`；scheduler 新增 `northbound_daily`（mon-fri 16:10 盘后）+ CLI `_main` 分支 `northbound`；活体验证 23 个交易日入库、二次 ingest 幂等、端点升序返回且命中缓存
+- 涉及模块：backend/app/repositories/market_data_repo, backend/app/services/market_data_service, backend/app/schemas/market_data, backend/app/api/v1/market_data, backend/app/scheduler/jobs, backend/app/scheduler/runner
+
+## 2026-09-03 - 市场数据面 Task 7 — 龙虎榜 + 大宗交易采集与读取
+- 新增 `market_data_repo.upsert_dragon_tiger`（按约束 `uq_dragon_tiger_date_code_reason` DO UPDATE 全部行情列，同批 (date,code,reason) 重复先去重）、`upsert_block_trades`（按约束 `uq_block_trades_dedupe` DO NOTHING——行无稳定业务键）、`max_dragon_tiger_date`/`max_block_trade_date`（读取端点 date 缺省值）、`list_dragon_tiger`（net_amount DESC NULLS LAST）、`list_block_trades`（amount DESC NULLS LAST + `split_part(ts_code,'.',1)` LEFT JOIN stocks 取股票名、symbol 过滤）；`market_data_service` 新增 `_map_top_list_rows`（reason 超 160 字符映射层截断防 DB 报错）、`_map_block_trade_rows`、`_dedupe_block_trade_rows`（同批去重键保留末次，ON CONFLICT 不处理语句内自冲突）、`ingest_dragon_tiger`/`ingest_block_trades`（None=今日上海日期）与 `get_dragon_tiger`/`get_block_trades`（Redis `market:dragon-tiger:{date}` / `market:block-trades:{date}:{symbol}` TTL 300s，缓存全量 100 行按请求切片）；`DragonTigerOut`/`BlockTradeOut` + `GET /api/v1/market/dragon-tiger?date=&limit=`、`GET /api/v1/market/block-trades?date=&symbol=&limit=`（非法 ISO date 返 400）；scheduler 新增 `dragon_tiger_daily`（mon-fri 18:00）、`block_trade_daily`（mon-fri 17:00）+ CLI 分支 `dragon_tiger [yyyymmdd]`、`block_trades [yyyymmdd]`；活体验证 20260902 龙虎榜 77 行/大宗 78 行入库、二次采集幂等（77/0）、两端点返回含 symbol/name 及正确单位（dragon 金额元，大宗 price 元/volume 万股/amount 万元）
+- 涉及模块：backend/app/repositories/market_data_repo, backend/app/services/market_data_service, backend/app/schemas/market_data, backend/app/api/v1/market_data, backend/app/scheduler/jobs, backend/app/scheduler/runner
+
+## 2026-09-03 - 市场数据面 Task 8 — 限售解禁 + 股票回购采集与读取
+- 新增 `market_data_repo.upsert_share_floats`（约束 `uq_share_floats_dedupe` DO NOTHING；ann_date 可 NULL，Postgres 唯一约束不判重 NULL——NULL ann_date 行可能重复入库，属可接受偏差）、`list_share_floats`（float_date BETWEEN 窗口 DESC NULLS LAST + `split_part` LEFT JOIN stocks 取名、symbol 过滤）、`upsert_repurchases`（约束 `uq_stock_repurchases_dedupe` DO UPDATE end_date/exp_date/vol/amount/high_limit/low_limit——进度会修订，同批 (ann_date,ts_code,proc) 先 Python 去重）、`list_repurchases`（ann_date DESC）；`market_data_service` 新增 `_d_opt`（可空日期 NaN/None→None）、`_map_share_float_rows`/`_map_repurchase_rows`（float_share 万股、float_ratio %、vol 股、amount 元全程不换算；proc 映射层截断 String(16)）、`_dedupe_repurchase_rows`、`ingest_share_floats`/`ingest_repurchases`（近 N 日窗口 %Y%m%d，默认 7）与 `get_share_floats`/`get_repurchases`（缺省窗口：解禁 today-30d→today+90d 因解禁是未来事件必须含未来日期、回购 today-30d→today；Redis `market:share-floats:{start}:{end}:{symbol-or-all}` / `market:repurchases:...` TTL 300s，缓存全量 100 行按请求切片）；`ShareFloatOut`/`RepurchaseOut` + `GET /api/v1/market/share-floats?start=&end=&symbol=&limit=`、`GET /api/v1/market/repurchases?...`（非法 ISO 日期返 400）；scheduler 新增 `share_float_daily`（mon-fri 17:30）、`repurchase_daily`（mon-fri 17:40）+ CLI 分支 `share_floats [days]`、`repurchases [days]`；活体验证 解禁 469 行/回购 312 行入库、二次采集幂等（469/0、312/312 DO UPDATE 计 matched）、两端点返回 join name 与正确单位、symbol=002120 过滤与未来 float_date（解禁 09-04）默认窗口即含
+- 涉及模块：backend/app/repositories/market_data_repo, backend/app/services/market_data_service, backend/app/schemas/market_data, backend/app/api/v1/market_data, backend/app/scheduler/jobs, backend/app/scheduler/runner
+
+## 2026-09-03 - 市场数据面 Task 9 — 巨潮公告采集与快讯端点
+- 新增 `CninfoClient`（cninfo hisAnnouncement/query 免 token 公告检索，追加进既有 `cninfo_client.py` 与 webapi 行情 `CnInfoClient` 共存；单例工厂命名 `get_announcement_client` 避开既有 `get_cninfo_client`）：财报/重大事项两类目分页拉取，`announcementTime` 毫秒转上海时区 naive wall-clock datetime（fromtimestamp tz=Asia/Shanghai 后去 tzinfo，避免容器 TZ 未设落 UTC 语义致时间 +8h 漂移）、标题剥 `<em>` 高亮标签、PDF 前缀 static.cninfo.com.cn、column=szse 覆盖沪深；`announcement_service.ingest_announcements` 近 3 日窗口两类目各拉一次 + announcement_id 内存去重 + repo `upsert_announcements`（`uq_announcements_cninfo_id` DO NOTHING）、`get_announcements`（Redis `market:announcements:{symbol|all}` TTL 300s，缓存整页 100 行按请求切片防 limit 进缓存键，announce_time ISO str）；`AnnouncementOut` + `GET /api/v1/market/announcements?symbol=&limit=`；scheduler 新增 `announcements_poll`（每日 8-22 点每 10 分钟——公告含非交易日发布，无 workday/交易时段守卫）+ CLI 分支 `announcements [days]`；活体验证 report 6/event 150 行入库、二次采集幂等（6/0、150/0）、端点标题无 em 标签、pdf_url HEAD 200
+- 涉及模块：backend/app/core/providers/cninfo_client, backend/app/services/announcement_service, backend/app/repositories/market_data_repo, backend/app/schemas/market_data, backend/app/api/v1/market_data, backend/app/scheduler/jobs, backend/app/scheduler/runner
+
+## 2026-09-03 - 市场数据面 Task 10 — market_data.fetch 队列 Worker + 手动触发端点
+- 新增 `MarketDataWorker`（`app/workers/market_data_worker.py`，queue_key `market_data.fetch`）：按 payload `type` 分发 9 类采集（global_index_daily/backfill_global_index/sector_moneyflow/northbound/dragon_tiger/block_trades/share_floats/repurchases/announcements），参数顶层与嵌套 params 均可（`{**payload, **params}` 合并），`_run` 内开 session 且成功路径 commit、未知 type 返 `{"status":"failed"}` 不抛异常；`QUEUES` 注册 `stock_bot.market_data.fetch`、runner 实例化为第 6 个 worker；`POST /api/v1/tasks/fetch-market-data`（`MarketDataFetchRequest`：`type` Literal 9 选 1 + `params: dict|None`）→ `task_service.trigger_fetch_market_data`（复用 `_dispatch_task`）→ 202 `TaskOut`；单测 monkeypatch service 函数 + 模块级 `async_session_factory`（NullSession 假上下文）2 例通过；活体验证 northbound 202→worker `upserted=22`→status completed、非法 type 422（Literal 网关层拦截）、worker 容器无崩溃
+- 涉及模块：backend/app/core/mq, backend/app/workers/market_data_worker, backend/app/workers/runner, backend/app/schemas/task, backend/app/services/task_service, backend/app/api/v1/tasks
+- Review fix 1：`process` 去掉 blanket try/except——service 异常向上传播由 BaseWorker 标记任务 failed（数据源故障不再伪装成 completed），未知 type 在触库前经 `_KNOWN_TYPES`（schema Literal `get_args` 单一事实源）返回 failed dict，`_run` 的 else 降级为防御性分支；新增异常传播单测（共 3 例）+ process docstring 补 9 类 payload keys
+
+## 2026-09-03 - 市场数据面 Task 13 — 板块主力资金流卡 + 北向折线卡替换近似实现
+- 新增 `features/market/components/format.ts`（fmtYi/fmtSignedYi/fmtWanGu/fmtYiGu/fmtNorthYi 五个单位换算格式化器，null/undefined 统一返 "—"）；新增 `SectorMoneyflowCard`（行业/概念 Segmented 切换，`["sector-moneyflow", dimension]` staleTime+refetchInterval 双 60s 盘中轮询，TOP10 主力净流入横向柱图正红负绿，tooltip 带板块涨跌幅/主力净占比，非交易时段无数据展示"暂无资金流数据"空态）；新增 `NorthboundCard`（`["northbound", 30]` staleTime 5min，30 日净流入折线+零轴虚线，当日/近30日累计红绿着色，万元→亿换算）；市场页 Row2 由 CapitalFlowChart+HotSectors 换为 SectorMoneyflowCard+NorthboundCard，Row3 HotSectors 全宽（span=24）；删除近似实现 `CapitalFlowChart.tsx`（grep 确认仅 barrel+市场页引用）；`npm run build` 通过，活栈 `/market` 200，资金流卡 60s 自动刷新经 Network 请求复现（northbound 仅首载一次，符合无 refetchInterval 语义）
+- 涉及模块：frontend/features/market/components, frontend/pages/market
+
+## 2026-09-03 - 市场数据面 Task 14 — 数据面 Tab 区块（龙虎榜/大宗/解禁/回购/公告快讯）
+- 新增 `MarketDataBoard`（antd Tabs 懒挂载 5 pane，首激活才发 useQuery）；`dataFace/` 五组件：`DragonTigerTable`（涨跌幅/净买额 ±红绿+金额加粗，行点击跳个股）、`BlockTradeTable`（成交额万元→亿新增 `fmtWanYi`，买/卖营业部 ellipsis）、`ShareFloatTable`（解禁数量亿股、占总股本%、类型）、`RepurchaseTable`（进度 Tag 实施=blue/完成=green/其他=default、金额元→亿、数量股→万股内联换算）、`AnnouncementFeed`（List 时间+分类 Tag+证简称+PDF 新窗链接，30 条滚动）；统一表格规范 size=small/pagination=false/scroll.y=320/空态文案；顺手清理 SectorMoneyflowCard 遗留的死导入 `fmtYi`；活数据校准两处 rowKey 防撞键（解禁同股多持有人追加 holderName、大宗同股同价同买方追加 volume）；`npm run build` 通过，活栈 `/market` 五 Tab 实数据切换验证通过（大宗 9034.54万→0.90亿换算核对）
+- 涉及模块：frontend/features/market/components, frontend/pages/market
+
+## 2026-09-03 - 市场数据面 Task 15 — 个股详情页相关数据卡（公告/龙虎榜/大宗/解禁/回购）
+- 新增 `features/stock-detail/components/RelatedEvents.tsx`（Card title="相关数据" + Segmented 五视图：公告默认 Tab（时间+标题 PDF 新窗链接）、龙虎榜（fetchDragonTiger(50) 全市场最新日客户端 filter 本股，净买额 ±红绿）、大宗（fmtWanGu/fmtWanYi）、解禁（fmtYiGu/占比%）、回购（进度+fmtYi 金额）；每 Tab 独立 queryKey 且 enabled 门控首激活才请求，staleTime 5min，统一 size=small/pagination=false/空态文案，footer 注明"龙虎榜为全市场最新日筛选本股"数据语义）；接线 `pages/stock-detail/index.tsx`（K线/基础信息 Row 之后、末尾免责声明 Divider 之前插入全宽 Row，symbol 取 `stock.symbol` 规避 useParams 可空类型）；删除 brief 末尾防未用报错的脚手架残留（hidden span + useNavigate import）；`npm run build` 通过，活栈 `/stock/600519` 公告默认 Tab + 五 Tab 空态切换验证、`/stock/002536` 龙虎榜实数据（+4.59亿 红色）验证，零 console 错误
+- 涉及模块：frontend/features/stock-detail/components, frontend/pages/stock-detail
+- Review fix 1：RelatedEvents 大宗/解禁 rowKey 对齐 Task 14 dataFace 实证修复——大宗 `${tradeDate}-${buyer}-${price}` 追加 `-volume`（同股同日同价同买方多笔撞键）、解禁 `${floatDate}-${shareType}` 追加 `-holderName`（同股同日同类型多持有人撞键），照抄 brief 键前先核对既有同数据组件的 rowKey 教训
+
+## 2026-09-03 - 市场数据面收尾 — e2e 用例与文档（Task 16，P1-P10 完成）
+- 计划级总结——2026-09-03 市场数据面：全球市场指数区块（亚洲/美洲 Tab、徽章卡+30日sparkline）、板块主力资金流盘中轮询卡、北向资金折线卡、数据面五类榜单（龙虎榜/大宗/解禁/回购/公告快讯，TuShare+东财+巨潮）、个股相关数据卡；新增 7 表与 `market_data.fetch` 队列。
+- 新增 `frontend/e2e/marketDataFace.spec.ts` 5 用例（全球市场 Tab 与指数卡/全球指数详情/板块资金流行业概念切换/数据面 Tab 表格/个股相关数据卡），数据缺失处按惯例 test.skip 守卫；全量 e2e 22 通过；`docs/design/data-source.md` 补「市场数据面数据源」小节（实测端点/字段/单位/调度限频）。
+- 涉及模块：frontend/e2e, docs/design/data-source.md, docs/references/best-practices.md
+
+## 2026-09-03 - 市场数据面评审修复
+- 修复 RepurchaseTable rowKey 冲突（同日多进度回购行：补 proc 维度），并移除 market.ts 中无消费方的 `fetchSseLatestSnapshots`。
+- 2026-09-04 市场数据面缺陷修复：调度守卫时区改用 Asia/Shanghai（容器 UTC 下盘中资金流轮询与 SSE 快照从未真正触发）；龙虎榜/大宗采集改补漏模式（自表内最新交易日起逐日拉齐缺失交易日，当日未发布自动重试）并补回 09-03 缺口；巨潮公告分页上限 5→10 页（重大事项类 3 天窗口实测 189 条，5 页截断 39 条）。
+- 2026-09-04 资金流对齐东财数据中心板块资金页：新增地域维度（fs=m:90+t:1）与主力净流入最大股（f128/f140/f136），全链路入库到前端悬停展示；龙虎榜/大宗补漏模式顺带在空表上自动回补 9 个交易日历史。
+- 2026-09-04 新增大盘资金流卡（沪深两市合成口径）：今日主力/超大/大/中/小四档净额实时 + 近 30 日主力净流入红绿柱；新表 market_moneyflow_daily，16:20 盘后增量 + 120 日历史回补，东财 fflow/daykline 恒等式入库校验。
+- 2026-09-04 市场页重设计（对齐主流）：涨跌分布加涨跌平衡条与成交额头部、柱色改数值驱动强度渐变（移除桶名字符串匹配）；板块热力图改连续色阶（Finviz 式梯度）+ 浅色块深字 + 点击下钻行业页 + 领涨股 tooltip；大盘资金流接口补实时成交额（f6）。

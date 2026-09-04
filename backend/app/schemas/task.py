@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -62,3 +63,22 @@ class FetchIndustryMetricsRequest(BaseModel):
 class FetchIndustrySecuritiesRequest(BaseModel):
     industry_key: str = "pig"
     backfill_days: int = Field(default=365, ge=1, le=1825)
+
+
+MarketDataJobType = Literal[
+    "global_index_daily",
+    "backfill_global_index",
+    "sector_moneyflow",
+    "northbound",
+    "dragon_tiger",
+    "block_trades",
+    "market_moneyflow",
+    "share_floats",
+    "repurchases",
+    "announcements",
+]
+
+
+class MarketDataFetchRequest(BaseModel):
+    type: MarketDataJobType
+    params: dict[str, Any] | None = None

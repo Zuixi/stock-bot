@@ -13,6 +13,7 @@ from app.schemas.task import (
     FetchIndustrySecuritiesRequest,
     FetchQuotesRequest,
     FetchUniverseRequest,
+    MarketDataFetchRequest,
     RunClusteringRequest,
     TaskOut,
 )
@@ -96,6 +97,16 @@ async def fetch_industry_metrics(req: FetchIndustryMetricsRequest, db: DbDep) ->
 async def fetch_securities(req: FetchIndustrySecuritiesRequest, db: DbDep) -> TaskOut:
     """Trigger an ETF/convertible-bond daily fetch task (TuShare fund/cb daily)."""
     return await task_service.trigger_fetch_securities(db, req)
+
+
+@router.post(
+    "/fetch-market-data",
+    response_model=TaskOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def fetch_market_data(req: MarketDataFetchRequest, db: DbDep) -> TaskOut:
+    """Trigger a market-data fetch task (global index/moneyflow/northbound/etc.)."""
+    return await task_service.trigger_fetch_market_data(db, req)
 
 
 @router.get("/{task_id}", response_model=TaskOut)

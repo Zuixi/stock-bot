@@ -6,19 +6,24 @@ import asyncio
 import logging
 import random
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
 JITTER_SEC = 30
 
+# 容器内 datetime.now() 是 UTC：交易时段/工作日守卫必须显式按上海时钟判断，
+# 否则盘中任务（资金流轮询、SSE 快照）在 Docker 部署下永远不触发。
+_SH_TZ = ZoneInfo("Asia/Shanghai")
+
 
 def _is_workday() -> bool:
-    return datetime.now().weekday() < 5
+    return datetime.now(_SH_TZ).weekday() < 5
 
 
 def _in_trading_hours() -> bool:
-    """Return True if current time is within 9:25-15:05 (with small buffer)."""
-    now = datetime.now()
+    """Return True if current Shanghai time is within 9:25-15:05 (with small buffer)."""
+    now = datetime.now(_SH_TZ)
     start = now.replace(hour=9, minute=25, second=0, microsecond=0)
     end = now.replace(hour=15, minute=5, second=0, microsecond=0)
     return start <= now <= end
@@ -91,7 +96,10 @@ async def _fetch_yesterday_daily_quotes() -> None:
         async with async_session_factory() as db:
             result = await service.ingest_daily_quotes(db, trade_date)
             await db.commit()
-            logger.info("Daily quotes backfill: trade_date=%s upserted=%d", trade_date, result.get("upserted", 0))
+            logger.info(
+                "Daily quotes backfill: trade_date=%s upserted=%d",
+                trade_date, result.get("upserted", 0),
+            )
     except Exception:
         logger.exception("Daily quotes backfill failed for trade_date=%s", trade_date)
 
@@ -110,14 +118,19 @@ async def _fetch_yesterday_daily_basic() -> None:
     try:
         async with async_session_factory() as db:
             if await daily_basic_repo.trade_date_exists(db, yesterday):
-                logger.info("Skipping daily_basic backfill — trade_date=%s already exists", trade_date)
+                logger.info(
+                    "Skipping daily_basic backfill — trade_date=%s already exists", trade_date,
+                )
                 return
 
         service = TuShareIngestService()
         async with async_session_factory() as db:
             result = await service.ingest_daily_basic(db, trade_date)
             await db.commit()
-            logger.info("Daily basic backfill: trade_date=%s upserted=%d", trade_date, result.get("upserted", 0))
+            logger.info(
+                "Daily basic backfill: trade_date=%s upserted=%d",
+                trade_date, result.get("upserted", 0),
+            )
     except Exception:
         logger.exception("Daily basic backfill failed for trade_date=%s", trade_date)
 
@@ -194,3 +207,147 @@ async def securities_refresh_job() -> None:
         )
     except Exception:
         logger.exception("Securities refresh failed")
+
+
+async def global_index_daily_job() -> None:
+    """全球+A股指数日线刷新（每日 17:30，覆盖美盘前一日与亚欧当日）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    logger.info("Global index daily job triggered")
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_global_index_daily(db)
+            await db.commit()
+        logger.info("Global index daily done: %s", result)
+    except Exception:
+        logger.exception("Global index daily job failed")
+
+
+async def sector_moneyflow_job() -> None:
+    """板块资金流盘中轮询（交易日 9:00-15:55 每 5 分钟，job 内交易时段守卫）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday() or not _in_trading_hours():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_sector_moneyflow(db)
+            await db.commit()
+        logger.info("Sector moneyflow poll done: %s", result)
+    except Exception:
+        logger.exception("Sector moneyflow poll failed")
+
+
+async def market_moneyflow_daily_job() -> None:
+    """大盘资金流日线（交易日 16:20 盘后，幂等 upsert 近 10 日窗口）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_market_moneyflow_daily(db)
+            await db.commit()
+        logger.info("Market moneyflow daily done: %s", result)
+    except Exception:
+        logger.exception("Market moneyflow daily job failed")
+
+
+async def northbound_daily_job() -> None:
+    """北向资金每日净流入（交易日 16:10 盘后，幂等 upsert 近 30 日窗口）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_northbound(db)
+            await db.commit()
+        logger.info("Northbound daily done: %s", result)
+    except Exception:
+        logger.exception("Northbound daily job failed")
+
+
+async def dragon_tiger_daily_job() -> None:
+    """龙虎榜每日明细（交易日 18:00 盘后；补漏模式——自表内最新交易日起逐日拉齐缺失交易日）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_dragon_tiger(db)
+            await db.commit()
+        logger.info("Dragon tiger daily done: %s", result)
+    except Exception:
+        logger.exception("Dragon tiger daily job failed")
+
+
+async def block_trade_daily_job() -> None:
+    """大宗交易每日明细（交易日 17:00 盘后；补漏模式逐日拉齐缺失交易日，DO NOTHING 去重）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_block_trades(db)
+            await db.commit()
+        logger.info("Block trade daily done: %s", result)
+    except Exception:
+        logger.exception("Block trade daily job failed")
+
+
+async def share_float_daily_job() -> None:
+    """限售解禁每日计划（交易日 17:30 盘后，近 7 日窗口 DO NOTHING 去重）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_share_floats(db)
+            await db.commit()
+        logger.info("Share float daily done: %s", result)
+    except Exception:
+        logger.exception("Share float daily job failed")
+
+
+async def repurchase_daily_job() -> None:
+    """股票回购每日进度（交易日 17:40 盘后，近 7 日窗口 DO UPDATE 幂等 upsert）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_repurchases(db)
+            await db.commit()
+        logger.info("Repurchase daily done: %s", result)
+    except Exception:
+        logger.exception("Repurchase daily job failed")
+
+
+async def announcements_poll_job() -> None:
+    """巨潮公告轮询（8-22 点每 10 分钟，DO NOTHING 去重近 3 日窗口）。
+
+    公告发布含非交易日/盘后时段 → 无交易时段与工作日守卫。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import announcement_service  # noqa: PLC0415
+
+    try:
+        async with async_session_factory() as db:
+            result = await announcement_service.ingest_announcements(db)
+            await db.commit()
+        logger.info("Announcements poll done: %s", result)
+    except Exception:
+        logger.exception("Announcements poll failed")

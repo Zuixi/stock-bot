@@ -10,10 +10,18 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.scheduler.jobs import (
+    announcements_poll_job,
+    block_trade_daily_job,
     daily_basic_backfill_job,
     daily_quotes_backfill_job,
+    dragon_tiger_daily_job,
+    global_index_daily_job,
     industry_metrics_refresh_job,
+    northbound_daily_job,
+    repurchase_daily_job,
+    sector_moneyflow_job,
     securities_refresh_job,
+    share_float_daily_job,
     sse_post_close_job,
     sse_trade_hours_job,
 )
@@ -126,6 +134,81 @@ def create_scheduler() -> AsyncIOScheduler:
         ),
         id="securities_refresh",
         name="Securities (ETF/CB) refresh",
+        replace_existing=True,
+    )
+
+    # Global + A-share index daily bars: 17:30 daily
+    # (covers prior US session and same-day Asia/Europe; idempotent upsert)
+    scheduler.add_job(
+        global_index_daily_job,
+        CronTrigger(hour=17, minute=30, timezone="Asia/Shanghai"),
+        id="global_index_daily",
+        name="Global index daily refresh",
+        replace_existing=True,
+    )
+
+    # Sector moneyflow intraday poll: Mon-Fri 9:00-15:55 every 5 min
+    # (job itself guards _is_workday/_in_trading_hours)
+    scheduler.add_job(
+        sector_moneyflow_job,
+        CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5", timezone="Asia/Shanghai"),
+        id="sector_moneyflow_poll",
+        name="Sector moneyflow intraday poll",
+        replace_existing=True,
+    )
+
+    # Northbound daily net inflow: Mon-Fri 16:10 post close (idempotent upsert)
+    scheduler.add_job(
+        northbound_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=10, timezone="Asia/Shanghai"),
+        id="northbound_daily",
+        name="Northbound daily net inflow",
+        replace_existing=True,
+    )
+
+    # Block trades: Mon-Fri 17:00 post close (DO NOTHING dedupe)
+    scheduler.add_job(
+        block_trade_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute=0, timezone="Asia/Shanghai"),
+        id="block_trade_daily",
+        name="Block trade daily",
+        replace_existing=True,
+    )
+
+    # Share float (解禁) plans: Mon-Fri 17:30 post close (DO NOTHING dedupe)
+    scheduler.add_job(
+        share_float_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute=30, timezone="Asia/Shanghai"),
+        id="share_float_daily",
+        name="Share float daily",
+        replace_existing=True,
+    )
+
+    # Stock repurchases (回购): Mon-Fri 17:40 post close (DO UPDATE upsert)
+    scheduler.add_job(
+        repurchase_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute=40, timezone="Asia/Shanghai"),
+        id="repurchase_daily",
+        name="Repurchase daily",
+        replace_existing=True,
+    )
+
+    # Dragon tiger entries: Mon-Fri 18:00 post close (idempotent upsert)
+    scheduler.add_job(
+        dragon_tiger_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=18, minute=0, timezone="Asia/Shanghai"),
+        id="dragon_tiger_daily",
+        name="Dragon tiger daily",
+        replace_existing=True,
+    )
+
+    # Cninfo announcements poll: daily 08:00-22:59 every 10 min
+    # (公告含非交易日/盘后发布 → 无工作日/交易时段守卫；DO NOTHING 去重)
+    scheduler.add_job(
+        announcements_poll_job,
+        CronTrigger(hour="8-22", minute="*/10", timezone="Asia/Shanghai"),
+        id="announcements_poll",
+        name="Cninfo announcements poll",
         replace_existing=True,
     )
 

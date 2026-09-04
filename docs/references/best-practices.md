@@ -90,3 +90,20 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - 数值型 tooltip 用「灰标签左 + 右对齐 tabular-nums 数值右」的两列式行布局（flex space-between + min-width），OHLC/涨跌随当日涨跌统一着色、量额中性——横排挤合（"开：x 高：x 低：x"）无对齐基准，是主流行情软件与其余 tooltip 的主要视觉分界。
 - 行业覆盖缺口的合并优先用三方分类接口交叉验证而非纯名称匹配：TuShare index_member_all 有 3000 行上限且不支持按股查询；东财 push2 接口 f127 字段与申万 2021 同名可直接映射（突发批量会被限流，push2delay 镜像 + 0.3s 间隔可绕），特例用同花顺 F10 双源核验；落库走幂等 custom tag 表而非改原始字段。
 - 人工策展数据进 repo 用"overlay 种子文件 + 加性 ON CONFLICT"而非追加进自动再生成的种子（会被下次导出抹掉），并同步补 .gitignore 的 data/* 豁免与 backend/.dockerignore 的 data/* 豁免——漏 dockerignore 会导致镜像内文件缺失、加载器静默返回 0。
+- 手写 Alembic 迁移的 revision ID 在多分支并行开发时是全局命名空间——先 `git log --all -S "<revision>"` 查重再落盘，活库 alembic_version 落在其他分支的 head 上时用临时隔离库验证迁移链而非硬闯活库。
+- 测试夹具按日历日生成序列时用「基准日 + timedelta(days=i)」而非手写 `date(y, m, d+1)`——月份天数溢出抛 ValueError 后若被测代码按设计静默兜底（per-item try/except），失败断言会指向兜底路径（spark 为空）而非夹具根因，排查方向被带偏。
+- 东财 push2/push2delay 主站可用性日内可变（实测当日 push2 上午可用、下午开始 TCP 拒连）——数据源客户端的域名 base 以"当天实测可达"为准切换并留时间戳注释，clist 类端点在 push2delay 同构镜像可用（字段/数值一致），避免盘中轮询任务对不可达域名反复重试静默失败；排查连通性时 host 与容器两侧都要 curl（代理/DNS 差异）。
+- TuShare 部分接口（如 moneyflow_hsgt）全列返回字符串且缺值为 NaN/空串——数值归一（str→float|None）必须在映射层一次完成并对 NaN/空串显式兜底，让 repo/DB 只见规范类型；pg ON CONFLICT DO UPDATE 的 set_ 只列会变化的字段，首写后不变的字段（如 source）留在 values 中即可，避免无谓覆盖。
+- pg ON CONFLICT 不处理同一 INSERT 语句内的自冲突（Postgres 约束检查逐行进行，同批两行撞同一唯一键直接报错）——无稳定业务键的表（如大宗交易 date+code+buyer+seller+price+volume 去重键）采集时先在 Python 端按约束键去重（保留末次）再 DO NOTHING；映射层截断超长字符串列（如 reason String(160)）优先于让 DB 报错，比 DDL 放宽更可控。
+- 事件类数据（解禁/回购）的读取窗口语义由业务性质决定而非对齐 ingest 窗口：解禁 float_date 是未来事件（缺省窗口须含 today+N 未来段），回购按 ann_date 回看——同表两种"默认窗口"方向相反时在 service docstring 写明因果，避免后人"统一"成今日窗口把未来解禁静默滤掉；另外 Postgres 唯一约束不判重 NULL（ann_date 可空的 DO NOTHING 去重存在旁路）属可接受偏差，须在 repo docstring 落字说明而非默默容忍。
+- 实施计划的 brief 说"创建"某文件前先确认它是否已存在：cninfo_client.py 已有 webapi 行情客户端（CnInfoClient/get_cninfo_client），追加公告检索客户端时新类名 CninfoClient + 新工厂 get_announcement_client 与既有命名并存，沿用 brief 的同名工厂会静默 shadow 旧客户端把行情/指数采集换成公告协议。
+- 计划 brief 里的"伪代码调用"以既有代码真实签名为准改写而非照抄（task_service 实际是 trigger_*(db, req) 包 `_dispatch_task(db, task_type, queue_key, payload)`，brief 草稿的 `dispatch_task(task_type=,routing_key=,payload=)` 并不存在）；worker 单测要脱离真库时，把 session 工厂暴露为模块级变量供 monkeypatch 成假 async context manager，且 NullSession 必须带 `async def commit()`——service 被 patch 后虽不触库，成功路径的 commit 照常执行，漏了会在断言前炸 AttributeError。
+- Worker 的 `process` 不要用 blanket try/except 把异常吞成返回 dict：BaseWorker.handle_message 只把「抛异常」翻译成 failed 任务行，正常返回一律标 completed/100——数据源故障是常态，失败语义必须靠异常传播；只有未知 job type 这类「没开工」的错误才适合直接返回 failed dict（触库前拦截）。
+- 前端接真实数据源时 ECharts tooltip/label formatter 里的可空数值必须先判空再 `.toFixed`（板块热力图 `d.changePercent.toFixed(2)` 无守卫页面加载即抛 TypeError，属存量隐患）；替换"近似实现"组件前先 grep 全量引用确认只剩 barrel+单页两处，且轮询语义要区分 `refetchInterval`（盘中定时刷新）与 `staleTime`（仅去抖），漏配会把"60s 自动更新"做成假象。
+- 计划 brief 给定的表格 rowKey 组合键先对活端点跑唯一性校验再落码：Tushare 明细类数据（解禁一股多持有人、大宗同日同股同价同买方多笔）在默认键上必撞 React duplicate key，复合键以「业务键 + 区分度最高且前端已展示的字段」补位（如 +holderName/+volume）而非引入未展示字段。
+- 把为全市场设计的端点复用到个股维度时，客户端 filter 的覆盖边界要在 UI 上写明而非只靠空态：龙虎榜接口无 symbol 参数，个股卡拉 limit=50 最新日再前端过滤，本股不在当日榜即显示"暂无上榜记录"，footer 同步注明"全市场最新日筛选本股"，避免用户把覆盖范围导致的空态误读为数据缺失；另外计划 brief 末尾自带的防未用报错脚手架（hidden span + 死 import）按其收尾指令删除即可，落库前对"这段代码存在的理由"过一遍能直接清掉这类残留。
+- 接三方行情先 curl 实测定字段与单位再写映射：东财 f62 是元、TuShare block_trade 是万元/万股、north_money 是万元、巨潮 announcementTime 是毫秒——单位/时间戳错一档，UI 就差四个数量级或 1970 年。
+- 定时任务的交易时段/工作日守卫必须显式 ZoneInfo("Asia/Shanghai")：容器默认 UTC，naive datetime.now() 会让盘中任务在真实交易时段静默跳过、却在晚间时段放行——cron 触发正确而 job 体空转，日志只有 executed successfully 没有业务结果行。
+- 复用网站数据先比对页面 HTML 里的实体代码（东财 BK 板块码）：代码一致即同源，排行页的扩展列（最大股/中单小单）多数在同端点 fields 里就有，无需另找接口。
+- 东财 kline 类接口（fflow/daykline 等）返回 CSV 字符串行，数值必须显式 float()；容器内长连接池偶发被服务端断连（RemoteProtocolError），HTTP GET 加一次传输层重试即可消除偶发失败。
+- 市场情绪类可视化的三件套是直方图+平衡条+参与度（成交额）：平衡条把千位数量级压成长度比例供前注意感知，连续梯度色阶（0%→灰、极端→深色）优于离散档位——但必须为近零浅色块切换深色文字保对比度。
