@@ -42,6 +42,9 @@ async def upsert_sector_moneyflow(
             "main_net_ratio": r.get("main_net_ratio"),
             "up_count": r.get("up_count"),
             "down_count": r.get("down_count"),
+            "lead_stock_name": r.get("lead_stock_name"),
+            "lead_stock_code": r.get("lead_stock_code"),
+            "lead_stock_pct": r.get("lead_stock_pct"),
         }
         for r in rows
     ]
@@ -59,6 +62,9 @@ async def upsert_sector_moneyflow(
                 "main_net_ratio": pg_insert(SectorMoneyflowSnapshot).excluded.main_net_ratio,
                 "up_count": pg_insert(SectorMoneyflowSnapshot).excluded.up_count,
                 "down_count": pg_insert(SectorMoneyflowSnapshot).excluded.down_count,
+                "lead_stock_name": pg_insert(SectorMoneyflowSnapshot).excluded.lead_stock_name,
+                "lead_stock_code": pg_insert(SectorMoneyflowSnapshot).excluded.lead_stock_code,
+                "lead_stock_pct": pg_insert(SectorMoneyflowSnapshot).excluded.lead_stock_pct,
                 # pg on_conflict 不走 ORM onupdate → 显式刷 updated_at
                 "updated_at": func.now(),
             },

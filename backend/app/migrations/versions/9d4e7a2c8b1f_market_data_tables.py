@@ -35,6 +35,9 @@ def upgrade() -> None:
         sa.Column("main_net_ratio", sa.Float(), nullable=True),
         sa.Column("up_count", sa.Integer(), nullable=True),
         sa.Column("down_count", sa.Integer(), nullable=True),
+        sa.Column("lead_stock_name", sa.String(length=32), nullable=True),
+        sa.Column("lead_stock_code", sa.String(length=12), nullable=True),
+        sa.Column("lead_stock_pct", sa.Float(), nullable=True),
         sa.Column(
             "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),

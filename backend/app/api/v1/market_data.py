@@ -33,7 +33,7 @@ async def get_global_indices(cache: CacheDep) -> list[GlobalIndexCardOut]:
 @router.get("/sector-moneyflow", response_model=list[SectorMoneyflowOut])
 async def get_sector_moneyflow_endpoint(
     cache: CacheDep,
-    dimension: Literal["industry", "concept"] = "industry",
+    dimension: Literal["industry", "concept", "region"] = "industry",
     limit: int = Query(default=15, ge=1, le=100),
 ) -> list[SectorMoneyflowOut]:
     rows = await market_data_service.get_sector_moneyflow(cache, dimension, limit)

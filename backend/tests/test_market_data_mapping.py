@@ -177,8 +177,8 @@ async def test_ingest_sector_moneyflow_uses_today_and_both_dims(monkeypatch):
     monkeypatch.setattr(mds.market_data_repo, "upsert_sector_moneyflow", fake_upsert)
 
     result = await mds.ingest_sector_moneyflow(db=None)
-    assert result == {"industry": 1, "concept": 0}
-    assert set(fetched) == {"industry", "concept"}
+    assert result == {"industry": 1, "concept": 0, "region": 0}
+    assert set(fetched) == {"industry", "concept", "region"}
     assert upserts[0][0] == mds._today_sh() and upserts[0][1] == "industry"
 
 

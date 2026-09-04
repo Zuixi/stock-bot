@@ -245,11 +245,11 @@ SECTOR_MONEYFLOW_CACHE_LIMIT = 100  # 端点 limit 上限（le=100）：缓存�
 
 
 async def ingest_sector_moneyflow(db: AsyncSession) -> dict[str, int]:
-    """盘中轮询：industry/concept 两维当日快照 upsert。"""
+    """盘中轮询：industry/concept/region 三维当日快照 upsert。"""
     em = _get_eastmoney()
     today = _today_sh()
     result: dict[str, int] = {}
-    for dimension in ("industry", "concept"):
+    for dimension in ("industry", "concept", "region"):
         rows = await em.fetch_sector_moneyflow(dimension)
         result[dimension] = await market_data_repo.upsert_sector_moneyflow(
             db, today, dimension, rows
@@ -282,6 +282,8 @@ async def get_sector_moneyflow(
                 "super_large_net": snap.super_large_net, "large_net": snap.large_net,
                 "main_net_ratio": snap.main_net_ratio,
                 "up_count": snap.up_count, "down_count": snap.down_count,
+                "lead_stock_name": snap.lead_stock_name, "lead_stock_code": snap.lead_stock_code,
+                "lead_stock_pct": snap.lead_stock_pct,
             })
     if cache is not None and rows:
         await cache.set(key, rows, ttl=SECTOR_MONEYFLOW_TTL)
