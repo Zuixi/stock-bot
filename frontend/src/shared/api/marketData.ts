@@ -30,6 +30,40 @@ interface BackendSectorMoneyflowItem {
   lead_stock_pct: number | null;
 }
 
+interface BackendMarketMoneyflow {
+  today: {
+    total: {
+      main_net: number | null;
+      super_large_net: number | null;
+      large_net: number | null;
+      mid_net: number | null;
+      small_net: number | null;
+    } | null;
+    markets: Array<{
+      code: string | null;
+      name: string | null;
+      main_net: number | null;
+      super_large_net: number | null;
+      large_net: number | null;
+      mid_net: number | null;
+      small_net: number | null;
+      main_ratio: number | null;
+    }>;
+  } | null;
+  history: Array<{
+    date: string;
+    main_net: number | null;
+    super_large_net: number | null;
+    large_net: number | null;
+    mid_net: number | null;
+    small_net: number | null;
+    main_ratio: number | null;
+    close: number | null;
+    pct_change: number | null;
+    amount: number | null;
+  }>;
+}
+
 interface BackendNorthboundPoint {
   date: string;
   net_amount: number | null;
@@ -132,6 +166,48 @@ export interface NorthboundPoint {
   netAmount: number | null; // 万元
 }
 
+export interface MarketMoneyflowDay {
+  date: string;
+  mainNet: number | null; // 元
+  superLargeNet: number | null;
+  largeNet: number | null;
+  midNet: number | null;
+  smallNet: number | null;
+  mainRatio: number | null; // %
+  close: number | null;
+  pctChange: number | null;
+  amount: number | null; // 元
+}
+
+export interface MarketMoneyflowMarket {
+  code: string | null;
+  name: string | null;
+  mainNet: number | null;
+  superLargeNet: number | null;
+  largeNet: number | null;
+  midNet: number | null;
+  smallNet: number | null;
+  mainRatio: number | null;
+}
+
+export interface MarketMoneyflow {
+  today: {
+    total: {
+      mainNet: number | null;
+      superLargeNet: number | null;
+      largeNet: number | null;
+      midNet: number | null;
+      smallNet: number | null;
+    } | null;
+    markets: MarketMoneyflowMarket[];
+  } | null;
+  history: MarketMoneyflowDay[];
+}
+
+export function fetchMarketMoneyflow(): Promise<MarketMoneyflow> {
+  return apiGet<BackendMarketMoneyflow>("/api/v1/market/market-moneyflow").then(mapMarketMoneyflow);
+}
+
 export interface DragonTigerItem {
   tradeDate: string;
   tsCode: string;
@@ -202,6 +278,44 @@ const mapCard = (b: BackendGlobalIndexCard): GlobalIndexCard => ({
   spark: b.spark,
   updatedAt: b.updated_at,
   source: b.source,
+});
+
+const mapMarketMoneyflow = (b: BackendMarketMoneyflow): MarketMoneyflow => ({
+  today: b.today
+    ? {
+        total: b.today.total
+          ? {
+              mainNet: b.today.total.main_net,
+              superLargeNet: b.today.total.super_large_net,
+              largeNet: b.today.total.large_net,
+              midNet: b.today.total.mid_net,
+              smallNet: b.today.total.small_net,
+            }
+          : null,
+        markets: (b.today.markets ?? []).map((m) => ({
+          code: m.code,
+          name: m.name,
+          mainNet: m.main_net,
+          superLargeNet: m.super_large_net,
+          largeNet: m.large_net,
+          midNet: m.mid_net,
+          smallNet: m.small_net,
+          mainRatio: m.main_ratio,
+        })),
+      }
+    : null,
+  history: (b.history ?? []).map((h) => ({
+    date: h.date,
+    mainNet: h.main_net,
+    superLargeNet: h.super_large_net,
+    largeNet: h.large_net,
+    midNet: h.mid_net,
+    smallNet: h.small_net,
+    mainRatio: h.main_ratio,
+    close: h.close,
+    pctChange: h.pct_change,
+    amount: h.amount,
+  })),
 });
 
 const mapSectorMoneyflow = (b: BackendSectorMoneyflowItem): SectorMoneyflowItem => ({

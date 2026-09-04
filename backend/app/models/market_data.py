@@ -52,6 +52,29 @@ class SectorMoneyflowSnapshot(Base):
     )
 
 
+class MarketMoneyflowDaily(Base):
+    """沪深两市大盘资金流日线（东财 fflow/daykline，沪深双 secid 服务端合成口径）。
+
+    五档恒等式：主力 = 超大单 + 大单；主力+中单+小单 = 0。金额单位：元。
+    """
+
+    __tablename__ = "market_moneyflow_daily"
+    __table_args__ = (UniqueConstraint("trade_date", name="uq_market_moneyflow_date"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    main_net: Mapped[float | None] = mapped_column(Float)  # 元
+    super_large_net: Mapped[float | None] = mapped_column(Float)  # 元
+    large_net: Mapped[float | None] = mapped_column(Float)  # 元
+    mid_net: Mapped[float | None] = mapped_column(Float)  # 元
+    small_net: Mapped[float | None] = mapped_column(Float)  # 元
+    main_ratio: Mapped[float | None] = mapped_column(Float)  # %
+    close: Mapped[float | None] = mapped_column(Float)  # 上证收盘点位
+    pct_change: Mapped[float | None] = mapped_column(Float)  # %
+    amount: Mapped[float | None] = mapped_column(Float)  # 成交额，元（源为亿元，×1e8）
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="em:fflow_daykline")
+
+
 class DragonTigerEntry(Base):
     """龙虎榜个股明细（TuShare top_list）。金额单位：元。"""
 

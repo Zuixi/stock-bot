@@ -14,6 +14,7 @@ from app.schemas.market_data import (
     BlockTradeOut,
     DragonTigerOut,
     GlobalIndexCardOut,
+    MarketMoneyflowOut,
     NorthboundPointOut,
     RepurchaseOut,
     SectorMoneyflowOut,
@@ -123,3 +124,10 @@ async def get_announcements_endpoint(
 
     rows = await announcement_service.get_announcements(cache, symbol, limit)
     return [AnnouncementOut(**r) for r in rows]
+
+
+@router.get("/market-moneyflow", response_model=MarketMoneyflowOut)
+async def get_market_moneyflow(cache: CacheDep) -> MarketMoneyflowOut:
+    """大盘资金流：今日四档实时 + 近 30 日历史（沪深两市合成口径）。"""
+    payload = await market_data_service.get_market_moneyflow(cache)
+    return MarketMoneyflowOut(**payload)

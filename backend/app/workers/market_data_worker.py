@@ -39,6 +39,10 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
             result = await market_data_service.ingest_dragon_tiger(
                 db, trade_date=_opt_date(params.get("trade_date"))
             )
+        elif job == "market_moneyflow":
+            result = await market_data_service.ingest_market_moneyflow_daily(
+                db, days=int(params.get("days", 10))
+            )
         elif job == "block_trades":
             result = await market_data_service.ingest_block_trades(
                 db, trade_date=_opt_date(params.get("trade_date"))

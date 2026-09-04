@@ -35,6 +35,49 @@ class SectorMoneyflowOut(BaseModel):
     lead_stock_pct: float | None = None  # %
 
 
+class MarketMoneyflowTotalOut(BaseModel):
+    main_net: float | None = None  # 元
+    super_large_net: float | None = None  # 元
+    large_net: float | None = None  # 元
+    mid_net: float | None = None  # 元
+    small_net: float | None = None  # 元
+
+
+class MarketMoneyflowMarketOut(BaseModel):
+    code: str | None = None
+    name: str | None = None
+    main_net: float | None = None  # 元
+    super_large_net: float | None = None
+    large_net: float | None = None
+    mid_net: float | None = None
+    small_net: float | None = None
+    main_ratio: float | None = None  # %
+
+
+class MarketMoneyflowDayOut(BaseModel):
+    date: str
+    main_net: float | None = None  # 元
+    super_large_net: float | None = None
+    large_net: float | None = None
+    mid_net: float | None = None
+    small_net: float | None = None
+    main_ratio: float | None = None  # %
+    close: float | None = None
+    pct_change: float | None = None  # %
+    amount: float | None = None  # 元
+
+
+class MarketMoneyflowTodayOut(BaseModel):
+    total: MarketMoneyflowTotalOut
+    markets: list[MarketMoneyflowMarketOut] = Field(default_factory=list)
+
+
+class MarketMoneyflowOut(BaseModel):
+    today: MarketMoneyflowTodayOut | None = None
+    history: list[MarketMoneyflowDayOut] = Field(default_factory=list)
+
+
+
 class NorthboundPointOut(BaseModel):
     date: str
     net_amount: float | None = None  # 万元

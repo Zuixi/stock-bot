@@ -15,6 +15,7 @@ from app.models.market_data import (
     Announcement,
     BlockTrade,
     DragonTigerEntry,
+    MarketMoneyflowDaily,
     NorthboundDaily,
     SectorMoneyflowSnapshot,
     ShareFloat,
@@ -386,3 +387,53 @@ async def list_announcements(
         stmt = stmt.where(Announcement.sec_code == symbol)
     stmt = stmt.order_by(desc(Announcement.announce_time)).limit(limit)
     return list((await db.execute(stmt)).scalars().all())
+
+
+async def upsert_market_moneyflow_daily(db: AsyncSession, rows: list[dict]) -> int:
+    """大盘资金流日线幂等覆盖（历史回补与每日增量共用）。"""
+    if not rows:
+        return 0
+    values = [
+        {
+            "trade_date": r["trade_date"], "main_net": r.get("main_net"),
+            "super_large_net": r.get("super_large_net"), "large_net": r.get("large_net"),
+            "mid_net": r.get("mid_net"), "small_net": r.get("small_net"),
+            "main_ratio": r.get("main_ratio"), "close": r.get("close"),
+            "pct_change": r.get("pct_change"), "amount": r.get("amount"),
+            "source": r.get("source") or "em:fflow_daykline",
+        }
+        for r in rows
+    ]
+    stmt = (
+        pg_insert(MarketMoneyflowDaily)
+        .values(values)
+        .on_conflict_do_update(
+            constraint="uq_market_moneyflow_date",
+            set_={
+                "main_net": pg_insert(MarketMoneyflowDaily).excluded.main_net,
+                "super_large_net": pg_insert(MarketMoneyflowDaily).excluded.super_large_net,
+                "large_net": pg_insert(MarketMoneyflowDaily).excluded.large_net,
+                "mid_net": pg_insert(MarketMoneyflowDaily).excluded.mid_net,
+                "small_net": pg_insert(MarketMoneyflowDaily).excluded.small_net,
+                "main_ratio": pg_insert(MarketMoneyflowDaily).excluded.main_ratio,
+                "close": pg_insert(MarketMoneyflowDaily).excluded.close,
+                "pct_change": pg_insert(MarketMoneyflowDaily).excluded.pct_change,
+                "amount": pg_insert(MarketMoneyflowDaily).excluded.amount,
+            },
+        )
+    )
+    result = cast("CursorResult[Any]", await db.execute(stmt))
+    await db.flush()
+    return int(result.rowcount)
+
+
+async def list_market_moneyflow_daily(db: AsyncSession, days: int) -> list[MarketMoneyflowDaily]:
+    """最近 N 个交易日的大盘资金流日线，升序。"""
+    stmt = (
+        select(MarketMoneyflowDaily)
+        .order_by(MarketMoneyflowDaily.trade_date.desc())
+        .limit(days)
+    )
+    rows = list((await db.execute(stmt)).scalars().all())
+    rows.reverse()
+    return rows

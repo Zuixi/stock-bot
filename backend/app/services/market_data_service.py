@@ -290,6 +290,49 @@ async def get_sector_moneyflow(
     return rows[:limit]
 
 
+MARKET_MONEYFLOW_CACHE_KEY = "market:market-moneyflow"
+MARKET_MONEYFLOW_TTL = 60
+
+
+async def ingest_market_moneyflow_daily(db: AsyncSession, days: int = 10) -> dict[str, int]:
+    """大盘资金流日线（东财 fflow/daykline 沪深合成）幂等 upsert。"""
+    client = _get_eastmoney()
+    rows = await client.fetch_market_moneyflow_daily(days)
+    upserted = await market_data_repo.upsert_market_moneyflow_daily(db, rows)
+    logger.info("ingest_market_moneyflow_daily days=%s upserted=%s", days, upserted)
+    return {"upserted": upserted}
+
+
+async def get_market_moneyflow(cache: Any | None) -> dict[str, Any]:
+    """大盘资金流：今日四档实时（ulist 合计，不落表）+ 近 30 日历史（表内）。"""
+    if cache is not None:
+        cached: dict[str, Any] | None = await cache.get(MARKET_MONEYFLOW_CACHE_KEY)
+        if cached:
+            return cached
+    try:
+        today = await _get_eastmoney().fetch_market_moneyflow_today()
+    except Exception:
+        logger.warning("market moneyflow today fetch failed", exc_info=True)
+        today = None
+    history: list[dict[str, Any]] = []
+    from app.core.database import async_session_factory  # noqa: PLC0415
+
+    async with async_session_factory() as db:
+        for row in await market_data_repo.list_market_moneyflow_daily(db, 30):
+            history.append({
+                "date": row.trade_date.isoformat(), "main_net": row.main_net,
+                "super_large_net": row.super_large_net, "large_net": row.large_net,
+                "mid_net": row.mid_net, "small_net": row.small_net,
+                "main_ratio": row.main_ratio, "close": row.close,
+                "pct_change": row.pct_change, "amount": row.amount,
+            })
+    payload = {"today": today, "history": history}
+    if cache is not None and (history or today):
+        await cache.set(MARKET_MONEYFLOW_CACHE_KEY, payload, ttl=MARKET_MONEYFLOW_TTL)
+    return payload
+
+
+
 def _map_top_list_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
     """top_list → dragon tiger rows（金额元；reason 列 String(160)，超长截断防 DB 报错）。"""
     rows: list[dict[str, Any]] = []
@@ -694,6 +737,10 @@ async def _main() -> None:
             result = await ingest_sector_moneyflow(db)
         elif job == "northbound":
             result = await ingest_northbound(db)
+        elif job == "market_moneyflow":
+            result = await ingest_market_moneyflow_daily(
+                db, days=int(args[1]) if len(args) > 1 else 10
+            )
         elif job == "dragon_tiger":
             result = await ingest_dragon_tiger(db, _d(args[1]) if len(args) > 1 else None)
         elif job == "block_trades":

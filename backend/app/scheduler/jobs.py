@@ -240,6 +240,22 @@ async def sector_moneyflow_job() -> None:
         logger.exception("Sector moneyflow poll failed")
 
 
+async def market_moneyflow_daily_job() -> None:
+    """大盘资金流日线（交易日 16:20 盘后，幂等 upsert 近 10 日窗口）。"""
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_market_moneyflow_daily(db)
+            await db.commit()
+        logger.info("Market moneyflow daily done: %s", result)
+    except Exception:
+        logger.exception("Market moneyflow daily job failed")
+
+
 async def northbound_daily_job() -> None:
     """北向资金每日净流入（交易日 16:10 盘后，幂等 upsert 近 30 日窗口）。"""
     from app.core.database import async_session_factory  # noqa: PLC0415
