@@ -25,6 +25,9 @@ interface BackendSectorMoneyflowItem {
   main_net_ratio: number | null;
   up_count: number | null;
   down_count: number | null;
+  lead_stock_name: string | null;
+  lead_stock_code: string | null;
+  lead_stock_pct: number | null;
 }
 
 interface BackendNorthboundPoint {
@@ -119,6 +122,9 @@ export interface SectorMoneyflowItem {
   mainNetRatio: number | null;
   upCount: number | null;
   downCount: number | null;
+  leadStockName: string | null; // 主力净流入最大股
+  leadStockCode: string | null;
+  leadStockPct: number | null; // %
 }
 
 export interface NorthboundPoint {
@@ -208,6 +214,9 @@ const mapSectorMoneyflow = (b: BackendSectorMoneyflowItem): SectorMoneyflowItem 
   mainNetRatio: b.main_net_ratio,
   upCount: b.up_count,
   downCount: b.down_count,
+  leadStockName: b.lead_stock_name,
+  leadStockCode: b.lead_stock_code,
+  leadStockPct: b.lead_stock_pct,
 });
 
 const mapNorthbound = (b: BackendNorthboundPoint): NorthboundPoint => ({
@@ -278,7 +287,10 @@ export function fetchGlobalIndices(): Promise<GlobalIndexCard[]> {
   return apiGet<BackendGlobalIndexCard[]>("/api/v1/market/global-indices").then((rows) => rows.map(mapCard));
 }
 
-export function fetchSectorMoneyflow(dimension: "industry" | "concept", limit = 15): Promise<SectorMoneyflowItem[]> {
+export function fetchSectorMoneyflow(
+  dimension: "industry" | "concept" | "region",
+  limit = 15,
+): Promise<SectorMoneyflowItem[]> {
   return apiGet<BackendSectorMoneyflowItem[]>("/api/v1/market/sector-moneyflow", { dimension, limit }).then((rows) =>
     rows.map(mapSectorMoneyflow),
   );

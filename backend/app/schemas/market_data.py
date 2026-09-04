@@ -30,6 +30,9 @@ class SectorMoneyflowOut(BaseModel):
     main_net_ratio: float | None = None  # %
     up_count: int | None = None
     down_count: int | None = None
+    lead_stock_name: str | None = None  # 主力净流入最大股
+    lead_stock_code: str | None = None
+    lead_stock_pct: float | None = None  # %
 
 
 class NorthboundPointOut(BaseModel):

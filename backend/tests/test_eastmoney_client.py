@@ -46,7 +46,8 @@ async def test_fetch_sector_moneyflow_maps_fields_yuan():
             "data": {
                 "diff": [
                     {"f12": "BK1203", "f14": "非银金融", "f3": 0.28, "f62": 2151238400.0,
-                     "f66": 1925688320.0, "f72": 225550080.0, "f104": 48, "f105": 26, "f184": 4.15},
+                     "f66": 1925688320.0, "f72": 225550080.0, "f104": 48, "f105": 26, "f184": 4.15,
+                     "f128": "中信证券", "f136": 5.21, "f140": "600030"},
                 ]
             },
         }
@@ -56,7 +57,16 @@ async def test_fetch_sector_moneyflow_maps_fields_yuan():
         "board_code": "BK1203", "board_name": "非银金融", "pct_change": 0.28,
         "main_net_inflow": 2151238400.0, "super_large_net": 1925688320.0, "large_net": 225550080.0,
         "up_count": 48, "down_count": 26, "main_net_ratio": 4.15,
+        "lead_stock_name": "中信证券", "lead_stock_code": "600030", "lead_stock_pct": 5.21,
     }
+
+
+async def test_fetch_sector_moneyflow_region_uses_t1():
+    client = EastmoneyClient()
+    fake = _FakeEM({"get": {"rc": 0, "data": {"diff": []}}})
+    client.__dict__["_get_json"] = fake._get_json
+    await client.fetch_sector_moneyflow("region")
+    assert "m:90+t:1" in fake.calls[0][1]["fs"]
 
 
 async def test_fetch_sector_moneyflow_concept_uses_t3():

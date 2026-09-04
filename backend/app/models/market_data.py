@@ -33,7 +33,7 @@ class SectorMoneyflowSnapshot(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     trade_date: Mapped[date] = mapped_column(Date, nullable=False)
-    dimension: Mapped[str] = mapped_column(String(16), nullable=False)  # industry | concept
+    dimension: Mapped[str] = mapped_column(String(16), nullable=False)  # industry|concept|region
     board_code: Mapped[str] = mapped_column(String(16), nullable=False)
     board_name: Mapped[str | None] = mapped_column(String(32))
     pct_change: Mapped[float | None] = mapped_column(Float)
@@ -43,6 +43,10 @@ class SectorMoneyflowSnapshot(Base):
     main_net_ratio: Mapped[float | None] = mapped_column(Float)  # %
     up_count: Mapped[int | None] = mapped_column(Integer)
     down_count: Mapped[int | None] = mapped_column(Integer)
+    # data.eastmoney.com/bkzj/ 排行页同款"主力净流入最大股"
+    lead_stock_name: Mapped[str | None] = mapped_column(String(32))
+    lead_stock_code: Mapped[str | None] = mapped_column(String(12))
+    lead_stock_pct: Mapped[float | None] = mapped_column(Float)  # %
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

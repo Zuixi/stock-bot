@@ -17,6 +17,8 @@ function buildOption(items: SectorMoneyflowItem[]) {
       value: (i.mainNetInflow ?? 0) / 1e8,
       pct: i.pctChange,
       ratio: i.mainNetRatio,
+      leadName: i.leadStockName,
+      leadPct: i.leadStockPct,
       itemStyle: { color: (i.mainNetInflow ?? 0) >= 0 ? COLORS.up : COLORS.down, borderRadius: 2 },
     }))
     .reverse();
@@ -26,13 +28,25 @@ function buildOption(items: SectorMoneyflowItem[]) {
       trigger: "axis",
       axisPointer: { type: "shadow" },
       formatter: (params: unknown) => {
-        const p = (params as Array<{ name: string; data: { value: number; pct: number | null; ratio: number | null } }>)[0];
+        const p = (
+          params as Array<{
+            name: string;
+            data: {
+              value: number;
+              pct: number | null;
+              ratio: number | null;
+              leadName: string | null;
+              leadPct: number | null;
+            };
+          }>
+        )[0];
         const d = p?.data;
         if (!d) return "";
         return `<div style="font-weight:600">${p.name}</div>` +
           `<div>主力净流入：<b style="color:${d.value >= 0 ? COLORS.up : COLORS.down}">${d.value.toFixed(2)}亿</b></div>` +
           `<div>板块涨跌幅：${d.pct == null ? "—" : `${d.pct.toFixed(2)}%`}</div>` +
-          `<div>主力净占比：${d.ratio == null ? "—" : `${d.ratio.toFixed(2)}%`}</div>`;
+          `<div>主力净占比：${d.ratio == null ? "—" : `${d.ratio.toFixed(2)}%`}</div>` +
+          `<div>主力净流入最大股：${d.leadName ?? "—"}${d.leadPct == null ? "" : `（${d.leadPct > 0 ? "+" : ""}${d.leadPct.toFixed(2)}%）`}</div>`;
       },
     },
     xAxis: { type: "value", axisLabel: { formatter: (v: number) => `${v}亿` }, splitLine: { lineStyle: { color: "#f0f0f0" } } },
@@ -42,7 +56,7 @@ function buildOption(items: SectorMoneyflowItem[]) {
 }
 
 export function SectorMoneyflowCard() {
-  const [dimension, setDimension] = useState<"industry" | "concept">("industry");
+  const [dimension, setDimension] = useState<"industry" | "concept" | "region">("industry");
   const { data = [], isLoading } = useQuery({
     queryKey: ["sector-moneyflow", dimension],
     queryFn: () => fetchSectorMoneyflow(dimension),
@@ -57,10 +71,11 @@ export function SectorMoneyflowCard() {
         <Segmented
           size="small"
           value={dimension}
-          onChange={(v) => setDimension(v as "industry" | "concept")}
+          onChange={(v) => setDimension(v as "industry" | "concept" | "region")}
           options={[
             { label: "行业", value: "industry" },
             { label: "概念", value: "concept" },
+            { label: "地域", value: "region" },
           ]}
         />
       }

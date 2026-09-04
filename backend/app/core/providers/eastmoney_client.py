@@ -80,16 +80,20 @@ class EastmoneyClient:
         ]
 
     async def fetch_sector_moneyflow(self, dimension: str) -> list[dict[str, Any]]:
-        if dimension not in ("industry", "concept"):
-            raise ValueError(f"dimension must be industry|concept, got {dimension}")
-        fs = "m:90+t:2+f:!50" if dimension == "industry" else "m:90+t:3+f:!50"
+        if dimension not in ("industry", "concept", "region"):
+            raise ValueError(f"dimension must be industry|concept|region, got {dimension}")
+        fs = {
+            "industry": "m:90+t:2+f:!50",
+            "concept": "m:90+t:3+f:!50",
+            "region": "m:90+t:1+f:!50",
+        }[dimension]
         data = await self._get_json(
             _CLIST_BASE,
             "/api/qt/clist/get",
             {
                 "pn": 1, "pz": 100, "po": 1, "np": 1, "fltt": 2, "invt": 2,
                 "fid": "f62", "fs": fs,
-                "fields": "f12,f14,f3,f62,f66,f72,f104,f105,f184",
+                "fields": "f12,f14,f3,f62,f66,f72,f104,f105,f128,f136,f140,f184",
             },
         )
         diff = (data.get("data") or {}).get("diff") or []
@@ -104,6 +108,10 @@ class EastmoneyClient:
                 "up_count": d.get("f104"),
                 "down_count": d.get("f105"),
                 "main_net_ratio": _num(d.get("f184")),
+                # data.eastmoney.com/bkzj/ 排行页同款"主力净流入最大股"
+                "lead_stock_name": d.get("f128"),
+                "lead_stock_code": d.get("f140"),
+                "lead_stock_pct": _num(d.get("f136")),
             }
             for d in diff
         ]
