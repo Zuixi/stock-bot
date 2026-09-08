@@ -16,6 +16,7 @@ QUEUES: dict[str, str] = {
     "universe.fetch": "stock_bot.universe.fetch",
     "quotes.fetch": "stock_bot.quotes.fetch",
     "daily_basic.fetch": "stock_bot.daily_basic.fetch",
+    "financial.fetch": "stock_bot.financial.fetch",
     "features.compute": "stock_bot.features.compute",
     "clustering.run": "stock_bot.clustering.run",
     "llm.explain": "stock_bot.llm.explain",

@@ -12,6 +12,7 @@ from app.repositories import task_repo
 from app.schemas.common import PageParams
 from app.schemas.task import (
     FetchDailyBasicRequest,
+    FetchFinancialRequest,
     FetchIndustryMetricsRequest,
     FetchIndustrySecuritiesRequest,
     FetchQuotesRequest,
@@ -73,6 +74,23 @@ async def trigger_fetch_daily_basic(
     payload = req.model_dump(exclude_none=True)
     task = await _dispatch_task(db, "fetch_daily_basic", "daily_basic.fetch", payload)
     logger.info("Dispatched fetch_daily_basic task %s", task.id)
+    return TaskOut.model_validate(task)
+
+
+async def trigger_fetch_financial(
+    db: AsyncSession, req: FetchFinancialRequest
+) -> TaskOut:
+    """Trigger a financial (statements + metrics) fetch for a single stock."""
+    payload = req.model_dump(exclude_none=True)
+    task = await task_repo.create_task(db, "fetch_financial", payload)
+    await publish_message(
+        "financial.fetch",
+        {"task_id": str(task.id), "type": "fetch_financial", "payload": payload},
+    )
+    logger.info(
+        "Dispatched fetch_financial task %s for %s/%s",
+        task.id, req.exchange, req.symbol,
+    )
     return TaskOut.model_validate(task)
 
 
