@@ -328,3 +328,8 @@
 - **前端**：个股详情页新增"估值/财务"Tab（指标卡+ECharts 趋势+三张报表表+估值分位图），数据来源/报告期/质量徽章展示（由子 Agent 并行实现）
 - **注意**：P0 的 outbox 任务投递事务、跨交易所 symbol-only enriched 修复等仍未纳入本次切片；全市场财报回补需先按 `financial-data-dictionary` 做数据源 POC
 - 涉及模块：backend/models, backend/migrations, backend/core/providers/tushare_client, backend/services(financial_ingest/financial_service), backend/repositories/financial_repo, backend/api/v1(financials/tasks), backend/workers, backend/core/mq, frontend/pages/stock-detail, frontend/features/stock-detail, frontend/shared/api
+
+## 2026-09-08 - 全市场财务回填 + 财务表查询索引优化
+- 财务数据改为"自动回填"：新增 `financial_backfill` service 逐批幂等回填缺失财报的标的（共享 FinancialWorker 同源 ingest），scheduler 注册 `financial_backfill` cron（工作日 7-8/15-23 点每 20 分钟），并新增 `python -m app.scheduler.backfill` 一次性全量入口
+- 新增 financial_metrics 两个索引：覆盖索引 `(stock_id, metric_key, report_version_id)` 加速个股财务指标时序读取与排序，`(report_version_id)` 外键索引加速 join 与级联删除；实测个股财务时序查询 ~6ms
+- 涉及模块：backend(scheduler/services/repositories/models migrations), 全市场约 5300 只标的逐步补齐
