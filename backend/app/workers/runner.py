@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from app.workers.daily_basic_worker import DailyBasicWorker
+from app.workers.financial_worker import FinancialWorker
 from app.workers.industry_metrics_worker import IndustryMetricsWorker
 from app.workers.quotes_worker import QuotesWorker
 from app.workers.securities_worker import SecuritiesWorker
@@ -21,6 +22,7 @@ async def main() -> None:
         UniverseWorker(),
         QuotesWorker(),
         DailyBasicWorker(),
+        FinancialWorker(),
         IndustryMetricsWorker(),
         SecuritiesWorker(),
     ]

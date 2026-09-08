@@ -9,6 +9,7 @@ from app.core.exceptions import conflict_response, not_found_response
 from app.schemas.common import PagedResponse, PageParams
 from app.schemas.task import (
     FetchDailyBasicRequest,
+    FetchFinancialRequest,
     FetchIndustryMetricsRequest,
     FetchIndustrySecuritiesRequest,
     FetchQuotesRequest,
@@ -66,6 +67,16 @@ async def fetch_quotes(req: FetchQuotesRequest, db: DbDep) -> TaskOut:
 async def fetch_daily_basic(req: FetchDailyBasicRequest, db: DbDep) -> TaskOut:
     """Trigger a daily_basic fetch task (entire market per trade_date)."""
     return await task_service.trigger_fetch_daily_basic(db, req)
+
+
+@router.post(
+    "/fetch-financial",
+    response_model=TaskOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def fetch_financial(req: FetchFinancialRequest, db: DbDep) -> TaskOut:
+    """Trigger a financial fetch task for a single stock."""
+    return await task_service.trigger_fetch_financial(db, req)
 
 
 @router.post(
