@@ -110,8 +110,10 @@ class FinancialReportVersion(Base):
     )
 
 
-class _StatementFactsBase:
+class _StatementFactsBase(Base):
     """Shared columns for the three standardized statement-fact tables."""
+
+    __abstract__ = True
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     report_version_id: Mapped[int] = mapped_column(
