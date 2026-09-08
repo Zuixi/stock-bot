@@ -172,6 +172,32 @@ async def industry_metrics_refresh_job() -> None:
         logger.exception("Industry metrics refresh failed")
 
 
+async def financial_backfill_job() -> None:
+    """Backfill financial statements for stocks missing them.
+
+    可幂等、可续跑：每次处理一批尚未有财报数据的股票（默认 200 只），
+    通过 FinancialWorker 同源的 ingest 方法直接入库；重复调度会逐批
+    补齐全市场，新上市标的下次运行自动被覆盖。
+    节奏受 TuShare 全局限流（约 0.5s/请求）控制，无需额外限速。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services.financial_backfill import (  # noqa: PLC0415
+        DEFAULT_BATCH_SIZE,
+        backfill_financial_batch,
+    )
+
+    logger.info("Financial backfill job triggered")
+    try:
+        async with async_session_factory() as db:
+            result = await backfill_financial_batch(db, batch_size=DEFAULT_BATCH_SIZE)
+        logger.info(
+            "Financial backfill done: processed=%s failed=%s",
+            result.get("processed"), result.get("failed"),
+        )
+    except Exception:
+        logger.exception("Financial backfill failed")
+
+
 async def securities_refresh_job() -> None:
     """Refresh industry ETF/CB daily bars (17:10 Mon-Fri, after industry_metrics).
 

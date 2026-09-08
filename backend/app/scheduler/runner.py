@@ -12,6 +12,7 @@ from apscheduler.triggers.cron import CronTrigger
 from app.scheduler.jobs import (
     daily_basic_backfill_job,
     daily_quotes_backfill_job,
+    financial_backfill_job,
     industry_metrics_refresh_job,
     securities_refresh_job,
     sse_post_close_job,
@@ -126,6 +127,22 @@ def create_scheduler() -> AsyncIOScheduler:
         ),
         id="securities_refresh",
         name="Securities (ETF/CB) refresh",
+        replace_existing=True,
+    )
+
+    # Financial statements backfill: every 20 min, Mon-Fri, outside trading
+    # hours only (07:00-08:59 + 15:30-23:59). Limited batches drain the whole
+    # market gradually; new listings are picked up automatically.
+    scheduler.add_job(
+        financial_backfill_job,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour="7-8,15-23",
+            minute="0,20,40",
+            timezone="Asia/Shanghai",
+        ),
+        id="financial_backfill",
+        name="Financial statements backfill",
         replace_existing=True,
     )
 
