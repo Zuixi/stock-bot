@@ -101,6 +101,50 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+  # ── 文档一致性（AGENTS.md「自检门禁」的 CI 兜底；信息性，不阻断合并）──
+  docs-consistency:
+    name: "Docs consistency (informational)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Compute base ref
+        id: base
+        run: |
+          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
+            echo "REF=${{ github.event.pull_request.base.sha }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            echo "REF=${{ github.event.before }}"
+          else
+            echo "REF=$(git rev-list --max-parents=0 HEAD)"
+          fi
+        shell: bash
+      - name: Whitespace / conflict markers (hard check)
+        run: |
+          BASE="${{ steps.base.outputs.REF }}"
+          if git diff --check "$BASE"...HEAD; then
+            echo "OK: 无空白/冲突标记错误"
+          else
+            echo "::error::PR/提交 diff 含空白或冲突标记错误"
+            echo "::group::details"
+            git diff --check "$BASE"...HEAD
+            echo "::endgroup::"
+            exit 1
+          fi
+        shell: bash
+      - name: Docs-vs-Changelog heuristic (warning only)
+        run: |
+          BASE="${{ steps.base.outputs.REF }}"
+          MD_CHANGED=$(git diff --name-only "$BASE"...HEAD | grep -E '\.md$' || true)
+          if [ -n "$MD_CHANGED" ] && ! printf '%s\n' "$MD_CHANGED" | grep -q 'docs/Changelog.md'; then
+            echo "::warning::变更涉及 .md 但未触及 docs/Changelog.md，请按 AGENTS 约定补记。变更："
+            printf '%s\n' "$MD_CHANGED"
+          else
+            echo "OK: 无文档变更，或已包含 docs/Changelog.md"
+          fi
+        shell: bash
+
   # ── Integration ──────────────────────────────────────────────
   docker-smoke:
     name: "Docker Compose Smoke Test"
