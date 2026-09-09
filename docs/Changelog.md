@@ -427,5 +427,9 @@
 - 实现基于 JWKS 异步加载与本地公钥缓存（单飞刷新）的 Principal Assertion (RS256) 验签器与 RBAC 权限依赖注入器（CurrentUserDep / OptionalUserDep / require_roles / require_permissions）；全面保护 tasks 触发与取消、行业指标 batch 导入、SSE 历史回补等敏感接口；客户端未签名 X-User-* 伪造头一律严格丢弃；修复前端跨交易所 fallback 仅对 404 降级与股票详情页 error/not-found 状态分流；新增 9 项无 DB 依赖单元与集成测试。
 - 涉及模块：backend/config, backend/core/auth, backend/api/deps, backend/api/v1/tasks, backend/api/v1/industries, backend/api/v1/market, frontend/shared/api, frontend/pages/stock-detail, backend/tests
 
+## 2026-09-09 - 用户标签与自选股服务端化与多用户数据隔离 (Stage 5)
+- 实现多用户业务数据隔离与自选股服务端化：ORM 模型（StockUserTag / UserWatchlist / UserWatchlistItem / Task）增加 `user_id` / `requested_by` 并完成 Alembic 迁移脚本 `5a1b2c3d4e5f`；新增 `watchlists` 路由、改造 `user-tags` 及全局标签端点接入 `CurrentUserDep` 与 `user:{user_id}:*` 缓存隔离；前端对接服务端自选股 API，升级 `useWatchlist` 状态机与标签组件按登录态分流读写，登出全量清理；编写 9 项纯单元与路由隔离测试，验证 100% 通过。
+- 涉及模块：backend/models, backend/migrations, backend/repositories, backend/services, backend/schemas, backend/api/v1(stocks/tags/watchlists/tasks), frontend/shared/api(watchlist/userTags), frontend/features/watchlist, frontend/features/stock-detail, frontend/pages(watchlist/tags/tags-detail), backend/tests
+
 
 

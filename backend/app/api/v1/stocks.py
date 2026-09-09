@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query
 
-from app.api.deps import CacheDep, DbDep
+from app.api.deps import CacheDep, CurrentUserDep, DbDep
 from app.core.exceptions import not_found_response
 from app.schemas.common import PagedResponse, PageParams
 from app.schemas.daily_basic import DailyBasicLatestOut, DailyBasicListResponse
@@ -303,9 +303,15 @@ async def set_sw_tags(
 
 
 @stocks_router.get("/{symbol}/user-tags", response_model=list[dict])
-async def get_user_tags(exchange: str, symbol: str, db: DbDep) -> list[dict]:
-    """Get user-defined custom tags for a stock."""
-    tags = await user_tag_service.get_stock_tags(db, symbol)
+async def get_user_tags(
+    exchange: str,
+    symbol: str,
+    db: DbDep,
+    user: CurrentUserDep,
+) -> list[dict]:
+    """Get user-defined custom tags for a stock belonging to the current user."""
+    assert user.user_id is not None
+    tags = await user_tag_service.get_stock_tags(db, user.user_id, symbol)
     return [t.model_dump(mode="json") for t in tags]
 
 
@@ -315,15 +321,17 @@ async def add_user_tag(
     symbol: str,
     db: DbDep,
     cache: CacheDep,
+    user: CurrentUserDep,
     tag_name: Annotated[str, Body(embed=True)],
 ) -> dict:
-    """Add a user-defined tag to a stock."""
+    """Add a user-defined tag to a stock for the current user."""
+    assert user.user_id is not None
     try:
-        tag = await user_tag_service.add_stock_tag(db, symbol, tag_name)
+        tag = await user_tag_service.add_stock_tag(db, user.user_id, symbol, tag_name)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await db.commit()
-    await cache.delete("tags:all")
+    await cache.delete(f"user:{user.user_id}:tags:all")
     return tag.model_dump(mode="json")
 
 
@@ -334,11 +342,13 @@ async def remove_user_tag(
     tag_name: str,
     db: DbDep,
     cache: CacheDep,
+    user: CurrentUserDep,
 ) -> dict:
-    """Remove a user-defined tag from a stock."""
-    deleted = await user_tag_service.remove_stock_tag(db, symbol, tag_name)
+    """Remove a user-defined tag from a stock for the current user."""
+    assert user.user_id is not None
+    deleted = await user_tag_service.remove_stock_tag(db, user.user_id, symbol, tag_name)
     if not deleted:
         raise HTTPException(status_code=404, detail="Tag not found")
     await db.commit()
-    await cache.delete("tags:all")
+    await cache.delete(f"user:{user.user_id}:tags:all")
     return {"deleted": True}

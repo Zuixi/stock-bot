@@ -17,7 +17,17 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import clusters, financials, industries, market, market_data, stocks, tags, tasks
+from app.api.v1 import (
+    clusters,
+    financials,
+    industries,
+    market,
+    market_data,
+    stocks,
+    tags,
+    tasks,
+    watchlists,
+)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -52,6 +62,9 @@ router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
 
 # User-defined tags
 router.include_router(tags.router, prefix="/tags", tags=["tags"])
+
+# User watchlists
+router.include_router(watchlists.router, prefix="/watchlists", tags=["watchlists"])
 
 # Industry research workbench: /api/v1/industries/...
 router.include_router(industries.router, prefix="/industries", tags=["industry-research"])

@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Button, Input, Space, Spin, Tag, Typography, message } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import { Button, Input, Space, Spin, Tag, Typography, Tooltip, message } from "antd";
+import { PlusOutlined, LockOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -8,6 +8,7 @@ import {
   fetchStockUserTags,
   removeStockUserTag,
 } from "@/shared/api/userTags";
+import { useAuth } from "@/features/auth";
 import type { Exchange } from "@/shared/types";
 
 interface Props {
@@ -20,12 +21,14 @@ const STALE_TIME = 5 * 60 * 1000;
 export function UserTags({ exchange, symbol }: Props) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { user, isAuthenticated } = useAuth();
   const [inputVisible, setInputVisible] = useState(false);
   const [inputValue, setInputValue] = useState("");
 
   const { data: tags = [], isLoading } = useQuery({
-    queryKey: ["stock-user-tags", exchange, symbol],
+    queryKey: ["stock-user-tags", user?.id, exchange, symbol],
     queryFn: () => fetchStockUserTags(exchange, symbol),
+    enabled: Boolean(isAuthenticated && user?.id),
     staleTime: STALE_TIME,
   });
 
@@ -33,9 +36,9 @@ export function UserTags({ exchange, symbol }: Props) {
     mutationFn: (tagName: string) => addStockUserTag(exchange, symbol, tagName),
     onSuccess: async () => {
       await queryClient.invalidateQueries({
-        queryKey: ["stock-user-tags", exchange, symbol],
+        queryKey: ["stock-user-tags", user?.id, exchange, symbol],
       });
-      await queryClient.invalidateQueries({ queryKey: ["all-tags"] });
+      await queryClient.invalidateQueries({ queryKey: ["all-tags", user?.id] });
       message.success("标签已添加");
       setInputValue("");
       setInputVisible(false);
@@ -49,9 +52,9 @@ export function UserTags({ exchange, symbol }: Props) {
     mutationFn: (tagName: string) => removeStockUserTag(exchange, symbol, tagName),
     onSuccess: async () => {
       await queryClient.invalidateQueries({
-        queryKey: ["stock-user-tags", exchange, symbol],
+        queryKey: ["stock-user-tags", user?.id, exchange, symbol],
       });
-      await queryClient.invalidateQueries({ queryKey: ["all-tags"] });
+      await queryClient.invalidateQueries({ queryKey: ["all-tags", user?.id] });
       message.success("标签已删除");
     },
     onError: () => {
@@ -72,6 +75,26 @@ export function UserTags({ exchange, symbol }: Props) {
   const handleTagClick = (tagName: string) => {
     navigate(`/tags/${encodeURIComponent(tagName)}`);
   };
+
+  if (!isAuthenticated) {
+    return (
+      <Space size={4} wrap>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          自定义标签：
+        </Typography.Text>
+        <Tooltip title="请登录后使用与管理个性化标签">
+          <Button
+            type="dashed"
+            size="small"
+            icon={<LockOutlined />}
+            onClick={() => navigate("/login")}
+          >
+            登录后添加标签
+          </Button>
+        </Tooltip>
+      </Space>
+    );
+  }
 
   if (isLoading) return <Spin size="small" />;
 
