@@ -50,4 +50,6 @@ if [ ! -f "$BASELINE" ]; then
   exit 1
 fi
 
-PYTHON="${PYTHON:-python}" "$ROOT/scripts/bench_compare.py" "$BASELINE" "$CURRENT" --threshold "$THRESHOLD"
+# bench_compare.py 经解释器调用而非直接执行：Windows 上创建的文件无执行位，
+# Linux CI checkout 出来直接跑会 Permission denied (exit 126)
+(cd backend && uv run python "$ROOT/scripts/bench_compare.py" "$BASELINE" "$CURRENT" --threshold "$THRESHOLD")
