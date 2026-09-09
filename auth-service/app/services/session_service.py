@@ -48,7 +48,7 @@ class SessionService:
         now = int(time.time())
         expires_at_dt = datetime.now(UTC) + timedelta(seconds=self.session_ttl)
 
-        session_data: dict[str, str] = {
+        session_data: dict[str | bytes, bytes | float | int | str] = {
             "user_id": str(user_id),
             "username": username,
             "roles": json.dumps(roles),

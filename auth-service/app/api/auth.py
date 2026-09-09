@@ -27,7 +27,12 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 def _extract_trace_id(request: Request, x_request_id: str | None = None) -> str:
     """Extract or generate trace ID."""
-    return x_request_id or getattr(request.state, "trace_id", "req-unknown")
+    if x_request_id:
+        return x_request_id
+    state_trace = getattr(request.state, "trace_id", None)
+    if isinstance(state_trace, str):
+        return state_trace
+    return "req-unknown"
 
 
 def _extract_client_meta(request: Request) -> tuple[str | None, str | None]:

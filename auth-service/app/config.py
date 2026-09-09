@@ -1,6 +1,7 @@
 """Configuration settings for Auth Service."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -41,7 +42,7 @@ class Settings(BaseSettings):
     csrf_cookie_name: str = "stockbot_csrf"
     cookie_secure: bool = False
     cookie_httponly: bool = True
-    cookie_samesite: str = "lax"
+    cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     cookie_domain: str | None = None
 
     # JWT & JWKS Assertion

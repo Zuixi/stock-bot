@@ -82,10 +82,10 @@ async def test_auth_full_flow(client: AsyncClient) -> None:
     assert cookies["stockbot_session"] == session_id
     assert cookies["stockbot_csrf"] == csrf_token
 
-    # 5. Access /auth/session with session cookie
+    # 5. Access /auth/session with session header
     sess_resp = await client.get(
         "/auth/session",
-        cookies={"stockbot_session": session_id},
+        headers={"X-Session-Id": session_id},
     )
     assert sess_resp.status_code == 200
     sess_user = sess_resp.json()
@@ -95,7 +95,7 @@ async def test_auth_full_flow(client: AsyncClient) -> None:
     # 6. Access /auth/me alias
     me_resp = await client.get(
         "/auth/me",
-        cookies={"stockbot_session": session_id},
+        headers={"X-Session-Id": session_id},
     )
     assert me_resp.status_code == 200
     assert me_resp.json()["username"] == username
@@ -103,7 +103,7 @@ async def test_auth_full_flow(client: AsyncClient) -> None:
     # 7. Get CSRF token
     csrf_resp = await client.get(
         "/auth/csrf",
-        cookies={"stockbot_session": session_id},
+        headers={"X-Session-Id": session_id},
     )
     assert csrf_resp.status_code == 200
     assert csrf_resp.json()["csrf_token"] == csrf_token
@@ -111,7 +111,7 @@ async def test_auth_full_flow(client: AsyncClient) -> None:
     # 8. List active sessions
     sessions_resp = await client.get(
         "/auth/sessions",
-        cookies={"stockbot_session": session_id},
+        headers={"X-Session-Id": session_id},
     )
     assert sessions_resp.status_code == 200
     sessions_list = sessions_resp.json()
@@ -121,7 +121,7 @@ async def test_auth_full_flow(client: AsyncClient) -> None:
     # 9. Logout
     logout_resp = await client.post(
         "/auth/logout",
-        cookies={"stockbot_session": session_id},
+        headers={"X-Session-Id": session_id},
     )
     assert logout_resp.status_code == 200
     assert "已成功退出" in logout_resp.json()["message"]
@@ -129,7 +129,7 @@ async def test_auth_full_flow(client: AsyncClient) -> None:
     # 10. Verify session is now invalid (401)
     unauth_resp = await client.get(
         "/auth/session",
-        cookies={"stockbot_session": session_id},
+        headers={"X-Session-Id": session_id},
     )
     assert unauth_resp.status_code == 401
     assert unauth_resp.json()["code"] == "AUTH_UNAUTHORIZED"

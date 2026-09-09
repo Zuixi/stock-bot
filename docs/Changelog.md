@@ -410,3 +410,8 @@
 - 完成企业级认证授权与多租户数据隔离体系的 Stage 0 顶层设计：明确 Gateway BFF 与 auth-service 目标拓扑、HttpOnly Session Cookie 与 CSRF 双重防御机制、下游 API 零信任短时 Principal Assertion (RS256) 签名与 JWKS 验签机制、统一 JSON 错误契约 (code/message/details/trace_id)、独立 auth_* 数据模型 (Argon2id / RTR Token Family)、业务模型多用户改造方案 (stock_custom_sw_tags 增加 user_id、自选股服务端化、tasks 增加 requested_by、Redis Key 用户隔离) 与 Stage 0-6 分阶段实施计划。
 - 涉及模块：docs/architecture/authentication-and-gateway, docs/architecture/auth-data-model, plans/2026-09-09-auth-gateway-implementation
 
+## 2026-09-09 - auth-service 独立微服务开发与凭证/JWKS体系 (Stage 1)
+- 实现独立的 `auth-service` 微服务工程体系，构建基于 Argon2id 的安全密码哈希与防暴力锁定、Redis 高性能滑动会话与 DB 持久化同步、CSRF 双重校验、RSA 短时 Principal Assertion JWT 签名与 RFC 7517 JWKS 公钥分发端点，完善了注册、登录、登出、会话查询与多端下线、网关会话内省等接口，提供全链路 100% 通过的离线单元与集成测试套件。
+- 涉及模块：auth-service(core/models/services/schemas/api/migrations/tests), plans, docs
+
+
