@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { lazy, Suspense } from "react";
 import { MainLayout } from "@/app/layouts/MainLayout";
+import { RequireAuth } from "@/features/auth";
 import { Spin } from "antd";
 
 const MarketPage = lazy(() => import("@/pages/market"));
@@ -15,6 +16,7 @@ const TagsPage = lazy(() => import("@/pages/tags"));
 const TagsDetailPage = lazy(() => import("@/pages/tags-detail"));
 const ResearchPage = lazy(() => import("@/pages/research"));
 const ResearchWorkbenchPage = lazy(() => import("@/pages/research-workbench"));
+const LoginPage = lazy(() => import("@/pages/login"));
 
 function PageLoading() {
   return (
@@ -29,6 +31,14 @@ export function AppRouter() {
     <Routes>
       <Route element={<MainLayout />}>
         <Route path="/" element={<Navigate to="/market" replace />} />
+        <Route
+          path="/login"
+          element={
+            <Suspense fallback={<PageLoading />}>
+              <LoginPage />
+            </Suspense>
+          }
+        />
         <Route
           path="/market"
           element={
@@ -105,7 +115,9 @@ export function AppRouter() {
           path="/watchlist"
           element={
             <Suspense fallback={<PageLoading />}>
-              <WatchlistPage />
+              <RequireAuth>
+                <WatchlistPage />
+              </RequireAuth>
             </Suspense>
           }
         />
@@ -113,7 +125,9 @@ export function AppRouter() {
           path="/tags"
           element={
             <Suspense fallback={<PageLoading />}>
-              <TagsPage />
+              <RequireAuth>
+                <TagsPage />
+              </RequireAuth>
             </Suspense>
           }
         />
@@ -121,7 +135,9 @@ export function AppRouter() {
           path="/tags/:tagName"
           element={
             <Suspense fallback={<PageLoading />}>
-              <TagsDetailPage />
+              <RequireAuth>
+                <TagsDetailPage />
+              </RequireAuth>
             </Suspense>
           }
         />
