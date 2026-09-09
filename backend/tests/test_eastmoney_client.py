@@ -19,47 +19,85 @@ class _FakeEM:
 
 async def test_fetch_index_snapshot_parses_and_handles_dash():
     client = EastmoneyClient()
-    client.__dict__["_get_json"] = _FakeEM({
-        "get": {
-            "rc": 0,
-            "data": {
-                "diff": [
-                    {"f2": 64214.48, "f3": -0.17, "f4": -111.16,
-                     "f12": "N225", "f13": 100, "f14": "日经225"},
-                    {"f2": "-", "f3": "-", "f4": "-",
-                     "f12": "KS11", "f13": 100, "f14": "韩国KOSPI"},
-                ]
-            },
+    client.__dict__["_get_json"] = _FakeEM(
+        {
+            "get": {
+                "rc": 0,
+                "data": {
+                    "diff": [
+                        {
+                            "f2": 64214.48,
+                            "f3": -0.17,
+                            "f4": -111.16,
+                            "f12": "N225",
+                            "f13": 100,
+                            "f14": "日经225",
+                        },
+                        {
+                            "f2": "-",
+                            "f3": "-",
+                            "f4": "-",
+                            "f12": "KS11",
+                            "f13": 100,
+                            "f14": "韩国KOSPI",
+                        },
+                    ]
+                },
+            }
         }
-    })._get_json
+    )._get_json
     rows = await client.fetch_index_snapshot(["100.N225", "100.KS11"])
     assert rows[0] == {
-        "code": "N225", "name": "日经225", "price": 64214.48,
-        "pct_change": -0.17, "change": -111.16,
+        "code": "N225",
+        "name": "日经225",
+        "price": 64214.48,
+        "pct_change": -0.17,
+        "change": -111.16,
     }
     assert rows[1]["price"] is None and rows[1]["pct_change"] is None and rows[1]["change"] is None
 
 
 async def test_fetch_sector_moneyflow_maps_fields_yuan():
     client = EastmoneyClient()
-    client.__dict__["_get_json"] = _FakeEM({
-        "get": {
-            "rc": 0,
-            "data": {
-                "diff": [
-                    {"f12": "BK1203", "f14": "非银金融", "f3": 0.28, "f62": 2151238400.0,
-                     "f66": 1925688320.0, "f72": 225550080.0, "f104": 48, "f105": 26, "f184": 4.15,
-                     "f128": "中信证券", "f136": 5.21, "f140": "600030"},
-                ]
-            },
+    client.__dict__["_get_json"] = _FakeEM(
+        {
+            "get": {
+                "rc": 0,
+                "data": {
+                    "diff": [
+                        {
+                            "f12": "BK1203",
+                            "f14": "非银金融",
+                            "f3": 0.28,
+                            "f62": 2151238400.0,
+                            "f66": 1925688320.0,
+                            "f72": 225550080.0,
+                            "f104": 48,
+                            "f105": 26,
+                            "f184": 4.15,
+                            "f128": "中信证券",
+                            "f136": 5.21,
+                            "f140": "600030",
+                        },
+                    ]
+                },
+            }
         }
-    })._get_json
+    )._get_json
     rows = await client.fetch_sector_moneyflow("industry")
     assert rows[0] == {
-        "board_code": "BK1203", "board_name": "非银金融", "pct_change": 0.28,
-        "main_net_inflow": 2151238400.0, "super_large_net": 1925688320.0, "large_net": 225550080.0,
-        "up_count": 48, "down_count": 26, "main_net_ratio": 4.15,
-        "lead_stock_name": "中信证券", "lead_stock_code": "600030", "lead_stock_pct": 5.21,
+        "board_code": "BK1203",
+        "board_name": "非银金融",
+        "pct_change": 0.28,
+        "main_net_inflow": 2151238400.0,
+        "super_large_net": 1925688320.0,
+        "large_net": 225550080.0,
+        "up_count": 48,
+        "down_count": 26,
+        "main_net_ratio": 4.15,
+        "lead_stock_name": "中信证券",
+        "lead_stock_code": "600030",
+        "lead_stock_pct": 5.21,
     }
 
 
@@ -82,19 +120,37 @@ async def test_fetch_sector_moneyflow_concept_uses_t3():
 @pytest.mark.asyncio
 async def test_fetch_market_moneyflow_today_sums_two_markets():
     client = EastmoneyClient()
-    client.__dict__["_get_json"] = _FakeEM({
-        "get": {
-            "rc": 0,
-            "data": {
-                "diff": [
-                    {"f12": "000001", "f14": "上证指数", "f62": -100.0, "f66": -60.0,
-                     "f72": -40.0, "f78": 10.0, "f84": 90.0, "f184": -1.6},
-                    {"f12": "399001", "f14": "深证成指", "f62": -50.0, "f66": "-",
-                     "f72": -50.0, "f78": 5.0, "f84": 45.0, "f184": -0.8},
-                ]
-            },
+    client.__dict__["_get_json"] = _FakeEM(
+        {
+            "get": {
+                "rc": 0,
+                "data": {
+                    "diff": [
+                        {
+                            "f12": "000001",
+                            "f14": "上证指数",
+                            "f62": -100.0,
+                            "f66": -60.0,
+                            "f72": -40.0,
+                            "f78": 10.0,
+                            "f84": 90.0,
+                            "f184": -1.6,
+                        },
+                        {
+                            "f12": "399001",
+                            "f14": "深证成指",
+                            "f62": -50.0,
+                            "f66": "-",
+                            "f72": -50.0,
+                            "f78": 5.0,
+                            "f84": 45.0,
+                            "f184": -0.8,
+                        },
+                    ]
+                },
+            }
         }
-    })._get_json
+    )._get_json
     payload = await client.fetch_market_moneyflow_today()
     assert payload["total"]["main_net"] == -150.0  # 沪+深合计
     assert payload["total"]["large_net"] == -90.0

@@ -225,7 +225,8 @@ def create_scheduler() -> AsyncIOScheduler:
             timezone="Asia/Shanghai",
         ),
         id="financial_backfill",
-        name="Financial statements backfill",        replace_existing=True,
+        name="Financial statements backfill",
+        replace_existing=True,
     )
 
     return scheduler

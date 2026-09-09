@@ -64,12 +64,17 @@ async def get_announcements(
     rows: list[dict[str, Any]] = []
     async with async_session_factory() as db:
         for a in await market_data_repo.list_announcements(db, symbol, ANNOUNCEMENTS_CACHE_LIMIT):
-            rows.append({
-                "announcement_id": a.announcement_id, "sec_code": a.sec_code,
-                "sec_name": a.sec_name, "title": a.title,
-                "announce_time": a.announce_time.isoformat(),
-                "category": a.category, "pdf_url": a.pdf_url,
-            })
+            rows.append(
+                {
+                    "announcement_id": a.announcement_id,
+                    "sec_code": a.sec_code,
+                    "sec_name": a.sec_name,
+                    "title": a.title,
+                    "announce_time": a.announce_time.isoformat(),
+                    "category": a.category,
+                    "pdf_url": a.pdf_url,
+                }
+            )
     if cache is not None and rows:
         await cache.set(key, rows, ttl=ANNOUNCEMENTS_TTL)
     return rows[:limit]

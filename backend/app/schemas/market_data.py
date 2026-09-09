@@ -78,7 +78,6 @@ class MarketMoneyflowOut(BaseModel):
     history: list[MarketMoneyflowDayOut] = Field(default_factory=list)
 
 
-
 class NorthboundPointOut(BaseModel):
     date: str
     net_amount: float | None = None  # 万元
@@ -92,10 +91,10 @@ class DragonTigerOut(BaseModel):
     close: float | None = None
     pct_change: float | None = None
     turnover_rate: float | None = None
-    amount: float | None = None      # 元
-    l_buy: float | None = None       # 元
-    l_sell: float | None = None      # 元
-    l_amount: float | None = None    # 元
+    amount: float | None = None  # 元
+    l_buy: float | None = None  # 元
+    l_sell: float | None = None  # 元
+    l_amount: float | None = None  # 元
     net_amount: float | None = None  # 元
     reason: str
 
@@ -105,7 +104,7 @@ class BlockTradeOut(BaseModel):
     ts_code: str
     symbol: str
     name: str | None = None
-    price: float | None = None   # 元
+    price: float | None = None  # 元
     volume: float | None = None  # 万股
     amount: float | None = None  # 万元
     buyer: str | None = None
@@ -132,7 +131,7 @@ class RepurchaseOut(BaseModel):
     proc: str
     end_date: str | None = None
     exp_date: str | None = None
-    vol: float | None = None     # 股
+    vol: float | None = None  # 股
     amount: float | None = None  # 元
 
 
@@ -142,5 +141,5 @@ class AnnouncementOut(BaseModel):
     sec_name: str | None = None
     title: str
     announce_time: str  # ISO datetime str
-    category: str       # report | event
+    category: str  # report | event
     pdf_url: str | None = None

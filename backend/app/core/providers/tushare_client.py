@@ -415,6 +415,7 @@ class TuShareClient(RateLimitedSyncProvider):
     async def fetch_repurchase(self, start_date: str, end_date: str) -> pd.DataFrame:
         """股票回购（回购明细）。"""
         return await self._query("repurchase", start_date=start_date, end_date=end_date)
+
     # Financial statements APIs
     # ------------------------------------------------------------------
 
@@ -542,6 +543,7 @@ class TuShareClient(RateLimitedSyncProvider):
         if end_date:
             kwargs["end_date"] = end_date
         return await self._query("fina_indicator", fields=fields, **kwargs)
+
 
 # ---------------------------------------------------------------------------
 # Module-level singleton
