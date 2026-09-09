@@ -93,8 +93,10 @@ jobs:
       - name: Resolve base commit
         id: base
         run: |
-          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
-            echo "SHA=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+          # pull_request：与 origin/main 最新比（PR 的 base.sha 是创建时点，可能
+          # 落后于 main 且缺新脚本——PR#4 曾因此 checkout 到无 bench.sh 的老 main）
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "SHA=$(git rev-parse origin/main)" >> "$GITHUB_OUTPUT"
           elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
             echo "SHA=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
           else

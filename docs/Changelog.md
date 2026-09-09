@@ -461,3 +461,8 @@
   - CI `bench-cpu` 重写为**同 runner A/B**：resolve base（PR base.sha → event.before → HEAD~1 兜底）→ A 侧 checkout base + `uv sync` + `--save-baseline`（临时路径）→ B 侧 checkout head + sync + gate；入库 `benchmarks/baseline.json` 降级为本地开发参考
 - **验证**：本地 T1 save 路径覆盖 / T2 正常 A/B（退化 -1.2% 内）/ T3 空基线全新增放行 全绿；CI 待推送后观察
 - 涉及模块：scripts/bench.sh, scripts/bench_compare.py, .github/workflows/ci.yml, plans/2026-09-09-benchmark-tiers.md(决策记录), docs/references/best-practices.md, docs/Changelog.md
+
+## 2026-09-09 - bench-cpu A/B 修复二轮：base 改 origin/main + 空产物兜底
+- **问题**：A/B 首跑 127——PR 的 `base.sha` 是 PR 创建时点的 main（162f576，早于 PR#3 合并），checkout 后连 scripts/bench.sh 都不存在；且 base 的 uv.lock 无 pytest-benchmark 时 importorskip 全 skip，pytest 不产出 JSON 会让 save 的 cp 失败
+- **修复**：base 语义改为 `git rev-parse origin/main`（合并目标最新 head，脚本/依赖齐全，语义也更正确——"PR 合并后 main 性能不得退化"）；bench.sh 在 pytest 无产物输出时补写空 JSON，save/gate 流程不中断
+- 涉及模块：.github/workflows/ci.yml, scripts/bench.sh, docs/Changelog.md

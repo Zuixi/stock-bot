@@ -52,6 +52,13 @@ echo "== CPU 基准套件（mode=$MODE, threshold=$THRESHOLD）=="
 # 注意：pyproject addopts 默认 -m 'not e2e and not bench'，此处命令行 -m bench 覆盖之
 (cd backend && uv run pytest "${PYTEST_ARGS[@]}" --benchmark-json="$CURRENT")
 
+# 全部基准被 importorskip 跳过时（如 base commit 的 lock 尚无 pytest-benchmark）
+# pytest 不产出 JSON，补空产物让 save/gate 流程继续
+if [ ! -s "$CURRENT" ]; then
+  echo "== 无基准数据（全部 skip），写空产物 =="
+  echo '{"benchmarks": [], "created_at": "", "commit_count": 0}' > "$CURRENT"
+fi
+
 case "$MODE" in
   quick)
     echo "✔ quick 冒烟完成（未做门禁）"
