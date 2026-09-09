@@ -106,17 +106,18 @@ jobs:
       - name: A-side baseline (base commit, same runner)
         run: |
           git checkout "${{ steps.base.outputs.SHA }}"
-          uv sync --frozen --extra dev
+          # bench 脚本随本 PR 引入/修改，base 树上可能没有或版本旧——从 head 取回
+          # （pathspec 相对 cwd，故本步骤在仓库根执行）
+          git checkout "${{ github.sha }}" -- scripts/bench.sh scripts/bench_compare.py
+          (cd backend && uv sync --frozen --extra dev)
           BENCH_BASELINE="$RUNNER_TEMP/bench_ab.json" BENCH_CURRENT="$RUNNER_TEMP/bench_a.json" \
-            bash ../scripts/bench.sh --save-baseline
-        working-directory: backend
+            bash scripts/bench.sh --save-baseline
       - name: B-side head + gate
         run: |
           git checkout "${{ github.sha }}"
-          uv sync --frozen --extra dev
+          (cd backend && uv sync --frozen --extra dev)
           BENCH_BASELINE="$RUNNER_TEMP/bench_ab.json" \
-            bash ../scripts/bench.sh --allow-added
-        working-directory: backend
+            bash scripts/bench.sh --allow-added
       - name: Upload benchmark result
         if: always()
         uses: actions/upload-artifact@v4
