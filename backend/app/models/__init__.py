@@ -18,6 +18,15 @@ from app.models.industry_research import (
     IndustryReferencePoint,
     IndustrySignal,
 )
+from app.models.market_data import (  # noqa: F401
+    Announcement,
+    BlockTrade,
+    DragonTigerEntry,
+    NorthboundDaily,
+    SectorMoneyflowSnapshot,
+    ShareFloat,
+    StockRepurchase,
+)
 from app.models.quote import DailyQuote
 from app.models.securities import CbDaily, FundEtfDaily
 from app.models.sse_index_snapshot import SseIndexSnapshot
@@ -47,6 +56,13 @@ __all__ = [
     "IndustryKnowledge",
     "FundEtfDaily",
     "CbDaily",
+    "SectorMoneyflowSnapshot",
+    "DragonTigerEntry",
+    "NorthboundDaily",
+    "BlockTrade",
+    "ShareFloat",
+    "StockRepurchase",
+    "Announcement",
     "FinancialRawRecord",
     "FinancialReportVersion",
     "IncomeStatementFacts",
