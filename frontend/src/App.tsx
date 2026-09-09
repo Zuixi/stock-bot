@@ -6,6 +6,7 @@ import { AppRouter } from "@/app/router";
 import { antdTheme } from "@/app/theme";
 import { AuthProvider } from "@/features/auth";
 import { ApiError } from "@/shared/api/client";
+import { ErrorBoundary } from "@/shared/ui/ErrorBoundary";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,7 +30,9 @@ export default function App() {
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
           <BrowserRouter>
-            <AppRouter />
+            <ErrorBoundary>
+              <AppRouter />
+            </ErrorBoundary>
           </BrowserRouter>
         </AuthProvider>
       </QueryClientProvider>

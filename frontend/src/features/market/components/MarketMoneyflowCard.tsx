@@ -29,7 +29,7 @@ function buildHistoryOption(history: MarketMoneyflowDay[]) {
       formatter: (params: unknown) => {
         const arr = params as Array<{ name: string; data: { value: number; pct: number | null } }>;
         const p = arr?.[0];
-        if (!p) return "";
+        if (!p || p.data?.value == null) return "";
         const color = p.data.value >= 0 ? COLORS.up : COLORS.down;
         return (
           `<div style="font-weight:600">${p.name}</div>` +
