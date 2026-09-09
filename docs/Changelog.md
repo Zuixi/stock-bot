@@ -466,3 +466,8 @@
 - **问题**：A/B 首跑 127——PR 的 `base.sha` 是 PR 创建时点的 main（162f576，早于 PR#3 合并），checkout 后连 scripts/bench.sh 都不存在；且 base 的 uv.lock 无 pytest-benchmark 时 importorskip 全 skip，pytest 不产出 JSON 会让 save 的 cp 失败
 - **修复**：base 语义改为 `git rev-parse origin/main`（合并目标最新 head，脚本/依赖齐全，语义也更正确——"PR 合并后 main 性能不得退化"）；bench.sh 在 pytest 无产物输出时补写空 JSON，save/gate 流程不中断
 - 涉及模块：.github/workflows/ci.yml, scripts/bench.sh, docs/Changelog.md
+
+## 2026-09-09 - bench-cpu A/B 修复三轮：A 侧从 head 取回 bench 脚本
+- **问题**：bench.sh 本身随本 PR 新增，origin/main 上没有——A 侧 checkout base 后 `bash ../scripts/bench.sh` 报 127（前一轮同症状但根因不同：上一轮是 base.sha 太老，这一轮是脚本未入库）
+- **修复**：A 侧 checkout base 后 `git checkout head -- scripts/bench.sh scripts/bench_compare.py` 借回脚本再跑（当前 PR：base 无 tests/benchmarks → 短路空基线 → B 侧全新增放行；未来 PR：A 侧真跑基线）；同时把 git pathspec 操作移回仓库根（pathspec 相对 cwd，backend/ 子目录会解析成 backend/scripts/）
+- 涉及模块：.github/workflows/ci.yml, docs/Changelog.md
