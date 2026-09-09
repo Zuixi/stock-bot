@@ -464,3 +464,7 @@
 ## 2026-09-10 - TradingView 风格明暗双主题基础设施（Stage A）
 - 落实 `docs/design/landing-market-theme.md` §1 配色契约：`theme.ts` 重构为 `buildAntdTheme(mode)` 工厂（dark 走 darkAlgorithm）+ `THEME_COLORS` 双模式色板（up/down 红涨绿跌随主题切换）；新建 `app/styles/theme.css` 双轨 CSS 变量（`:root[data-theme]` + 首帧浅色兜底）；新建 `ThemeContext/ThemeProvider`（localStorage `stockbot-theme` > `prefers-color-scheme`，写 `data-theme` 持久化）；新增 `ThemeToggle` 挂 MainLayout Header；MainLayout/SearchBar/UserMenu 壳层硬编码色全部换 CSS 变量；`shared/ui/EChart` 封装内深合并注入 axisLabel/legend/splitLine/textStyle 主题色（调用方显式设置恒优先）；ChangeText/KlineChart/klineOption 全局件改经 `useTheme().colors` 取具体 hex。业务卡片内部细节留给 Stage C。
 - 涉及模块：frontend/app(theme 新工厂/theme-context 新增/styles 新增/layouts/MainLayout), frontend/shared/ui(EChart/ChangeText/ThemeToggle 新增/kline), frontend/features/search, frontend/features/auth(UserMenu), frontend/main.tsx, frontend/App
+
+## 2026-09-10 - StockBot 品牌宣传页 Landing（Stage B）
+- 落实 `docs/design/landing-market-theme.md` §0-§5：`/` 从重定向 /market 改为公开 lazy Landing 页（独立布局不套 MainLayout，已登录停留此页）；10 区块全量落地——透明吸顶导航（滚动 >24px 加底色+边框，锚点 功能/数据/行业，登录态 CTA）、Hero（「把一个行业，研究透。」+ 信任行 + 纯 CSS accent 渐变装饰）、实时脉搏卡（/market/indices 8 ticker + /market/distribution 涨跌摘要，60s 轮询，失败静默降级占位）、价值三卡、深色产品展示区（纯 CSS+DOM 绘制周期相位条/来源徽章/信号卡，明暗主题恒定）、§5 十行数据覆盖矩阵（统计带 + 免费徽章）、申万行业网格（按个股数 accent 透明度阶梯，失败占位文案）、账号能力三档横条、底部 CTA、页脚（免责声明 + GitHub）。CTA 登录态感知：已登录「进入工作台」→ /market，未登录「免费开始」→ /login（isAuthReady 前隐藏文字防闪现）；颜色全部走 CSS 变量或 useTheme().colors，不引入新依赖。
+- 涉及模块：frontend/app/router, frontend/pages/landing(新增 index/landing.css/useLandingCta/sections×11)

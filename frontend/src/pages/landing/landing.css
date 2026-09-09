@@ -1,0 +1,855 @@
+/*
+ * StockBot 品牌宣传页样式（Stage B）
+ * 契约：docs/design/landing-market-theme.md §1 配色 / §3 区块。
+ * 颜色一律走 Stage A 的 CSS 变量（随 html[data-theme] 切换）；
+ * 唯一例外是 ProductShowcase 深色区——按契约用固定深底保证两种模式下的对比。
+ * 间距 8 的倍数；区块 padding 64-96px；移动端单列。
+ */
+
+html {
+  scroll-behavior: smooth;
+}
+
+.landing-root {
+  background: var(--bg-page);
+  color: var(--text-primary);
+  min-height: 100vh;
+}
+
+.landing-container {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ── 区块通用 ─────────────────────────────────────────── */
+.landing-section {
+  padding: 80px 0;
+  scroll-margin-top: 64px; /* 锚点跳转时为吸顶导航留位 */
+}
+
+.landing-section-head {
+  text-align: center;
+  margin-bottom: 48px;
+}
+
+.landing-section-title {
+  font-size: clamp(24px, 3vw, 34px);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 8px;
+  letter-spacing: 0.5px;
+}
+
+.landing-section-sub {
+  font-size: 15px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* ── 导航 ─────────────────────────────────────────────── */
+.landing-nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  background: transparent;
+  border-bottom: 1px solid transparent;
+  transition:
+    background-color 0.25s ease,
+    border-color 0.25s ease;
+}
+
+.landing-nav--scrolled {
+  background: var(--bg-page);
+  border-bottom-color: var(--border);
+}
+
+.landing-nav-inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 24px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.landing-nav-logo {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--accent);
+  letter-spacing: 0.3px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.landing-nav-links {
+  display: flex;
+  gap: 8px;
+  margin-left: 24px;
+  flex: 1;
+}
+
+.landing-nav-link {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 14px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.landing-nav-link:hover {
+  color: var(--text-primary);
+  background: var(--hover);
+}
+
+.landing-nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Hero ─────────────────────────────────────────────── */
+.landing-hero {
+  position: relative;
+  padding: 160px 0 96px;
+  overflow: hidden;
+  background: var(--bg-page);
+  text-align: center;
+}
+
+/* 纯 CSS 的 accent 渐变装饰（无图片依赖） */
+.landing-hero::before,
+.landing-hero::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  pointer-events: none;
+}
+
+.landing-hero::before {
+  width: 480px;
+  height: 480px;
+  top: -220px;
+  left: -140px;
+  background: radial-gradient(circle, rgba(41, 98, 255, 0.16), transparent 70%);
+}
+
+.landing-hero::after {
+  width: 560px;
+  height: 560px;
+  top: -160px;
+  right: -200px;
+  background: radial-gradient(circle, rgba(41, 98, 255, 0.1), transparent 70%);
+}
+
+.landing-hero-inner {
+  position: relative;
+  z-index: 1;
+}
+
+.landing-hero-h1 {
+  font-size: clamp(32px, 5vw, 56px);
+  font-weight: 800;
+  line-height: 1.15;
+  margin: 0 0 16px;
+  color: var(--text-primary);
+  letter-spacing: 1px;
+}
+
+.landing-hero-sub {
+  font-size: clamp(15px, 2vw, 19px);
+  color: var(--text-secondary);
+  margin: 0 auto 24px;
+  max-width: 640px;
+  line-height: 1.7;
+}
+
+.landing-hero-trust {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 40px;
+}
+
+.landing-hero-trust-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.landing-hero-trust-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.landing-hero-cta-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.landing-hero-secondary-cta {
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 14px;
+  text-decoration: none;
+  background: var(--bg-page);
+  transition:
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+
+a:hover > .landing-hero-secondary-cta {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── 实时脉搏卡 ───────────────────────────────────────── */
+.landing-pulse {
+  margin-top: -48px; /* 与 Hero 底部叠一点，形成卡片浮起感 */
+  position: relative;
+  z-index: 2;
+}
+
+.landing-pulse-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 24px 16px;
+}
+
+.landing-pulse-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.landing-pulse-title {
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.landing-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--up);
+  animation: landing-pulse-blink 2s ease-in-out infinite;
+}
+
+@keyframes landing-pulse-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.landing-pulse-summary {
+  font-size: 13px;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-top: 16px;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.landing-ticker-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.landing-ticker {
+  background: var(--bg-page);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.landing-ticker-name {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.landing-ticker-price {
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  margin-top: 2px;
+}
+
+.landing-ticker-chip {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-top: 6px;
+  color: #ffffff;
+}
+
+/* ── 价值三卡 ─────────────────────────────────────────── */
+.landing-value-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+}
+
+.landing-value-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 32px 24px;
+  transition:
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.landing-value-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.landing-value-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: var(--accent);
+  background: var(--hover);
+  margin-bottom: 16px;
+}
+
+.landing-value-title {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0 0 8px;
+  color: var(--text-primary);
+}
+
+.landing-value-desc {
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* ── 产品展示（固定深色区，契约 §3：light 模式也保持深底保证对比） ── */
+.landing-showcase {
+  background: #0f1117;
+  padding: 88px 0;
+  scroll-margin-top: 64px;
+}
+
+.landing-showcase .landing-section-title {
+  color: #d1d4dc;
+}
+
+.landing-showcase .landing-section-sub {
+  color: #787b86;
+}
+
+.landing-showcase-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 48px;
+  align-items: center;
+}
+
+/* 左侧：纯 CSS 绘制的工作台示意（不截图，主题恒定） */
+.landing-mock {
+  background: #1e222d;
+  border: 1px solid #2a2e39;
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+
+.landing-mock-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.landing-mock-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #d1d4dc;
+}
+
+.landing-mock-live {
+  font-size: 11px;
+  color: #f23645;
+  border: 1px solid rgba(242, 54, 69, 0.4);
+  border-radius: 4px;
+  padding: 1px 8px;
+}
+
+.landing-mock-strip {
+  display: flex;
+  gap: 8px;
+}
+
+.landing-mock-phase {
+  flex: 1;
+  border-radius: 6px;
+  padding: 10px 10px 8px;
+  background: #232837;
+  border: 1px solid #2a2e39;
+}
+
+.landing-mock-phase-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #787b86;
+}
+
+.landing-mock-phase-desc {
+  font-size: 10.5px;
+  color: #565a69;
+  margin-top: 3px;
+}
+
+.landing-mock-phase--active {
+  background: rgba(41, 98, 255, 0.14);
+  border-color: #2962ff;
+}
+
+.landing-mock-phase--active .landing-mock-phase-name {
+  color: #d1d4dc;
+}
+
+.landing-mock-phase--active .landing-mock-phase-desc {
+  color: #787b86;
+}
+
+.landing-mock-badges {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.landing-mock-badge {
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 10px;
+  color: #089981;
+  background: rgba(8, 153, 129, 0.12);
+  border: 1px solid rgba(8, 153, 129, 0.35);
+}
+
+.landing-mock-signal {
+  margin-top: 16px;
+  background: #232837;
+  border: 1px solid #2a2e39;
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.landing-mock-signal-title {
+  font-size: 12px;
+  color: #787b86;
+  margin-bottom: 6px;
+}
+
+.landing-mock-signal-body {
+  font-size: 15px;
+  font-weight: 700;
+  color: #f23645;
+}
+
+.landing-mock-signal-reason {
+  font-size: 11.5px;
+  color: #787b86;
+  margin-top: 6px;
+  line-height: 1.6;
+}
+
+/* 右侧：特性列表 */
+.landing-feature {
+  display: flex;
+  gap: 16px;
+  padding: 20px 0;
+  border-bottom: 1px solid #2a2e39;
+}
+
+.landing-feature:last-child {
+  border-bottom: none;
+}
+
+.landing-feature-num {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  background: #2962ff;
+}
+
+.landing-feature-title {
+  font-size: 15.5px;
+  font-weight: 700;
+  color: #d1d4dc;
+  margin: 0 0 4px;
+}
+
+.landing-feature-desc {
+  font-size: 13px;
+  color: #787b86;
+  margin: 0;
+  line-height: 1.7;
+}
+
+/* ── 数据覆盖矩阵 ─────────────────────────────────────── */
+.landing-stats-band {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 40px;
+}
+
+.landing-stat {
+  text-align: center;
+  padding: 20px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.landing-stat-num {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.landing-stat-label {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.landing-coverage-table {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.landing-coverage-row {
+  display: grid;
+  grid-template-columns: 1.1fr 2.2fr 0.8fr 1fr 0.5fr;
+  gap: 12px;
+  padding: 11px 20px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  align-items: center;
+}
+
+.landing-coverage-row:first-child {
+  border-top: none;
+}
+
+.landing-coverage-row--head {
+  background: var(--bg-elevated);
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.landing-coverage-domain {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.landing-coverage-cell {
+  color: var(--text-secondary);
+}
+
+.landing-free-badge {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--down);
+  border: 1px solid var(--down);
+  border-radius: 4px;
+  padding: 0 8px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+/* ── 行业网格 ─────────────────────────────────────────── */
+.landing-industry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: 10px;
+}
+
+.landing-industry-cell {
+  border-radius: 8px;
+  padding: 14px 12px;
+  min-height: 64px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid var(--border);
+  transition: transform 0.15s ease;
+}
+
+.landing-industry-cell:hover {
+  transform: translateY(-2px);
+}
+
+.landing-industry-name {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.landing-industry-count {
+  font-size: 11px;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+  margin-top: 4px;
+}
+
+.landing-industry-footnote {
+  text-align: center;
+  margin-top: 32px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.landing-industry-footnote a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.landing-industry-footnote a:hover {
+  text-decoration: underline;
+}
+
+.landing-placeholder {
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  padding: 48px 0;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
+
+/* ── 账号能力横条 ─────────────────────────────────────── */
+.landing-perks {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.landing-perk {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 24px;
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 16px;
+  align-items: center;
+}
+
+.landing-perk-tier {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.landing-perk-tier-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.landing-perk-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+  margin-top: 10px;
+}
+
+.landing-perk-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.landing-perk-items {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+/* ── 底部 CTA ─────────────────────────────────────────── */
+.landing-bottom-cta {
+  text-align: center;
+  padding: 96px 0;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+}
+
+.landing-bottom-cta-title {
+  font-size: clamp(22px, 3vw, 32px);
+  font-weight: 800;
+  color: var(--text-primary);
+  margin: 0 0 32px;
+}
+
+/* ── 页脚 ─────────────────────────────────────────────── */
+.landing-footer {
+  border-top: 1px solid var(--border);
+  padding: 32px 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.landing-footer-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.landing-footer a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.landing-footer a:hover {
+  color: var(--text-primary);
+}
+
+/* ── 骨架占位 ─────────────────────────────────────────── */
+.landing-skeleton {
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--bg-panel) 25%, var(--bg-elevated) 50%, var(--bg-panel) 75%);
+  background-size: 200% 100%;
+  animation: landing-skeleton-wave 1.4s ease infinite;
+  border: 1px solid var(--border);
+}
+
+@keyframes landing-skeleton-wave {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* ── 响应式：平板/移动端单列 ──────────────────────────── */
+@media (max-width: 992px) {
+  .landing-ticker-row {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .landing-value-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-showcase-grid {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+
+  .landing-stats-band {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .landing-nav-links {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .landing-section {
+    padding: 64px 0;
+  }
+
+  .landing-hero {
+    padding: 128px 0 80px;
+  }
+
+  .landing-ticker-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .landing-stats-band {
+    grid-template-columns: 1fr;
+  }
+
+  /* 数据矩阵在窄屏改为紧凑两段式：域名单独一行，其余信息折行 */
+  .landing-coverage-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .landing-coverage-row--head {
+    display: none;
+  }
+
+  .landing-coverage-domain {
+    grid-column: 1 / -1;
+  }
+
+  .landing-perk {
+    grid-template-columns: 1fr;
+  }
+}
