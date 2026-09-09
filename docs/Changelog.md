@@ -455,3 +455,8 @@
 - **修复一**：Traefik ≤3.3 与 Docker Engine 29（最低 API 1.44）不兼容导致 Docker provider 协商 v1.24 被拒、路由无法加载——镜像钉至 v3.6.2 并注释勿降级
 - **修复二**：forward-auth 生产路径 lifespan 在 state 未挂 http 属性时访问即崩溃（测试注入路径掩盖）——getattr 兜底修复并新增回归测试
 - 涉及模块：docker-compose(gateway 镜像版本), forward-auth(app lifespan + tests), plans(实跑记录)
+
+## 2026-09-09 - 前端空数据库白屏修复 + 全局 ErrorBoundary
+- **问题**：全新部署（空库）下打开 /market 白屏——ECharts treemap 对内部虚拟节点执行 label 渲染时 `changePercent` 为 undefined，SectorHeatmap formatter 抛 TypeError 导致 React 18 卸载整棵树；且浏览器缓存旧 index.html 使修复不可见
+- **修复**：SectorHeatmap label/tooltip formatter 与两张资金流卡片 tooltip 补空值防御；新增全局 `ErrorBoundary`（路由级兜底，任何子树渲染异常降级为错误卡片而非白屏）；nginx SPA 入口增加 `Cache-Control: no-cache`（assets 仍长缓存，入口每次回源，杜绝发版后浏览器跑旧 bundle）
+- 涉及模块：frontend/features/market/components(SectorHeatmap/MarketMoneyflowCard/SectorMoneyflowCard), frontend/shared/ui(ErrorBoundary 新增), frontend/App, frontend/nginx.conf
