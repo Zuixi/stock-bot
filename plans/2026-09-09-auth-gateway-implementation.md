@@ -135,14 +135,14 @@
 
 ### Stage 5: 前端 React 认证体系与自选股云端化
 
-- [ ] **5.1 认证状态机与 Axios 拦截器**
-  - 新建 `frontend/src/features/auth/store.ts`（Zustand 管理用户会话、登录状态、权限清单）
-  - Axios 拦截器：自动携带 Cookie、为写操作自动读取 `stockbot_csrf` 注入 `X-CSRF-Token`、统一提取 `trace_id`
-  - 401 拦截处理：受保护路由自动重定向至登录页
-- [ ] **5.2 认证相关界面与路由守卫**
-  - 新增 `/login` 登录页与 `/register` 注册页
-  - 顶部导航栏显示当前登录用户信息、角色徽章与退出登录按钮
-  - 实现 `ProtectedRoute` 路由守卫包装器
+- [x] **5.1 认证状态机与统一请求层**
+  - 重构 `frontend/src/shared/api/client.ts`，支持 `credentials: include`、CSRF 单飞并发获取与自动注入、结构化 `ApiError` 提取、401 事件派发与 `skipAuth`
+  - 新建 `frontend/src/shared/api/auth.ts`（封装 login, register, logout, getSession, getCsrf）
+  - 新建 `frontend/src/features/auth/store.ts` & `context.tsx`（Zustand + React Query 管理用户会话、登录状态、角色与权限校验）
+- [x] **5.2 认证相关界面与路由守卫**
+  - 新增 `/login` 登录/注册切换页 (`frontend/src/pages/login/index.tsx`)，支持 Ant Design 5 表单校验与 returnTo 自动跳转
+  - 顶部导航栏 `UserMenu`：展示登录用户信息、角色徽章、退出登录确认弹窗与缓存清理
+  - 实现 `RequireAuth` 路由守卫包装器，支持 authReady 门控防闪烁、权限不足 403 与未登录重定向
 - [ ] **5.3 自选股云端化迁移**
   - 重构 `frontend/src/features/watchlist`：数据源由纯 localStore 切换为 TanStack Query 调取服务端 API
   - 提供初次登录时“将本地未登录自选股一键合并上传至云端”的用户引导提示
