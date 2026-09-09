@@ -93,3 +93,48 @@
 - [AKShare 现货数据文档](https://akshare.akfamily.xyz/data/spot/spot.html) · [AKShare 数据字典（生猪信息专区）](https://akshare.akfamily.xyz/data/index.html)
 - [Tushare Pro](https://tushare.pro/document/2)
 - [博亚和讯（日度生猪市场评论，备用人工源）](https://www.boyar.cn/)
+
+## 七、市场数据面数据源（2026-09-03 实测）
+
+> 服务「市场数据面」功能（全球指数/板块资金流/北向/龙虎榜/大宗/解禁/回购/公告快讯），
+> 实施计划见 [plans/2026-09-03-market-data-face.md](../../plans/2026-09-03-market-data-face.md)。
+> 端点/字段/单位均经容器内 curl 与 TuShare 实测，勿再猜测；调度统一 Asia/Shanghai 时区。
+
+### 东财 push2delay `GET /api/qt/ulist.np/get`（全球+A股指数实时快照）
+
+- 参数：`ut=fa5fd1943c7b386f172d6893dbfba10b&fltt=2&invt=2&np=1&fields=f1,f2,f3,f4,f12,f13,f14&secids=1.000001,0.399001,0.399006,100.HSI,100.N225,100.KS11,100.DJIA,100.SPX,100.NDX`，需 UA Header。
+- 响应 `data.diff[]`：`f2` 最新价（停牌为字符串 `"-"`）、`f3` 涨跌幅、`f4` 涨跌额、`f12` 代码（`N225`）、`f13` 市场、`f14` 名称（`日经225`/`道琼斯`）。
+- **限频/可用性**：push2 主站对 ulist 可能 TCP 拒连（日内可变），必须走 **push2delay** 镜像；前端 60s 轮询，指数日线由 TuShare `index_global` 每日 17:30 回补。
+
+### 东财 push2 `GET /api/qt/clist/get`（板块主力资金流）
+
+- 行业 `fs=m:90+t:2+f:!50`、概念 `fs=m:90+t:3+f:!50`、地域 `fs=m:90+t:1+f:!50`；`pn=1&pz=100&po=1&np=1&fltt=2&invt=2&fid=f62&fields=f12,f14,f3,f62,f66,f72,f104,f105,f128,f136,f140,f184`，按 `f62` 降序。
+- 字段：`f12` 板块代码（BK1203）、`f14` 名称、`f3` 涨跌幅、`f62` 主力净流入（**元**）、`f66`/`f72` 超大单/大单净额（元）、`f104`/`f105` 上涨/下跌家数、`f184` 主力净占比（%）、`f128`/`f140`/`f136` 主力净流入最大股名称/代码/涨跌幅（与 data.eastmoney.com/bkzj/ 排行页同源同列）。
+
+### 大盘资金流（data.eastmoney.com/zjlx/dpzjlx.html 同源）
+
+- 今日四档：`push2delay/api/qt/ulist.np/get?secids=1.000001,0.399001&fields=f62,f66,f72,f78,f84,f184`——f62 主力、f66 超大、f72 大单、f78 中单、f84 小单（元）、f184 主力净占比（%），沪/深两行由服务端合计。
+- 历史日线：`push2his/api/qt/stock/fflow/daykline/get?klt=101&lmt=120&secid=1.000001&secid2=0.399001&ut=b2884a393a59ad64002292a3e90d46a5`——服务端合成沪深两市；kline 为 CSV 字符串：`日期,主力,小单,中单,大单,超大,占比×5,收盘,涨跌幅,成交额(亿),…`；恒等式 主力=大单+超大单（入库前校验）。当日分钟走势为同族 `fflow/kline/get?klt=1`（未接）。
+- **限频**：盘中调度 mon-fri 9:00-15:55 每 5 分钟（job 内 `_is_workday/_in_trading_hours` 守卫），当日快照 upsert 覆盖；clist 类端点在 push2delay 同构镜像可用（字段/数值一致）。
+
+### TuShare（token 在 backend/.env `TUSHARE_TOKEN`；多接口全列返回字符串，映射层归一数值）
+
+| 接口 | 关键列与单位 | 调度（Asia/Shanghai） |
+|---|---|---|
+| `index_global`（ts_code 裸代码，无 A 股） | OHLCV + `pct_chg`/`swing`，`vol` 可 NaN | 每日 17:30 全指数日线幂等 upsert |
+| `moneyflow_hsgt`（北向） | 全列字符串，`north_money` **万元**（实测 hgt+sgt==north_money） | mon-fri 16:10 |
+| `top_list`（龙虎榜） | 金额**元**，`reason` 上榜原因长文本（入库截断 160 字符） | mon-fri 18:00 |
+| `block_trade`（大宗） | `price` 元 / `vol` 万股 / `amount` 万元（实测 price×vol≈amount） | mon-fri 17:00 |
+| `share_float`（解禁） | `float_share` 万股、`float_ratio` %，`ann_date` 可空（唯一约束不判重 NULL） | mon-fri 17:30 |
+| `repurchase`（回购，**接口名不是 share_repurchase**） | `vol` 股、`amount` 元，`proc`∈{实施,完成,...} | mon-fri 17:40 |
+
+### 巨潮 cninfo `POST http://www.cninfo.com.cn/new/hisAnnouncement/query`（公告快讯）
+
+- form 表单：`pageNum/pageSize/column=szse/tabName=fulltext/seDate=YYYY-MM-DD~YYYY-MM-DD/category=<;分隔类目>/isHLtitle=true`；**column=szse 即同时覆盖沪深**（实测 002xxx 与 601xxx 混合返回）。
+- 响应 `announcements[]`：`announcementId`（去重主键）、`secCode/secName`、`announcementTitle`（isHLtitle 时含 `<em>` 高亮需 strip）、`announcementTime`（**毫秒** epoch → 上海时区 wall-clock）、`adjunctUrl`（拼 `http://static.cninfo.com.cn/` 前缀为 PDF）。类目：财报=`category_yjdbg_szsh;category_bndbg_szsh;category_sjdbg_szsh;category_ndbg_szsh;category_yjygjxz_szsh;category_yjkb_szsh`，重大事项=`category_zf_szsh;category_pgjz_szsh;category_gqfpxzcs_szsh;category_lr_gqbl_szsh`。
+- **限频**：每日 8-22 点每 10 分钟轮询（公告含非交易日/盘后发布，无工作日守卫），`announcement_id` DO NOTHING 去重。
+
+### 落库与读取约定
+
+- 7 张表：`sector_moneyflow_snapshots` / `dragon_tiger_entries` / `northbound_daily` / `block_trades` / `share_floats` / `stock_repurchases` / `announcements`；读取端点 Redis 缓存 TTL 300s；手动触发走 `POST /api/v1/tasks/fetch-market-data`（`market_data.fetch` 队列，9 类 payload 二选一）。
+- 单位总原则：接三方行情先 curl 实测定字段与单位再写映射，消费端只做展示分档（详见 [best-practices](../references/best-practices.md)）。

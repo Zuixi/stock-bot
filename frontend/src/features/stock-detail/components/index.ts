@@ -4,3 +4,4 @@ export { FinancialTab } from "./FinancialTab";
 export { ValuationTab } from "./ValuationTab";
 export { CustomSwTags } from "./CustomSwTags";
 export { UserTags } from "./UserTags";
+export { RelatedEvents } from "./RelatedEvents";

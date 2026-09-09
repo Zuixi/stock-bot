@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { ChangeText } from "@/shared/ui";
 import { KlineChart } from "@/shared/ui/kline";
+import { fetchGlobalIndices } from "@/shared/api/marketData";
 import { fetchIndexKline, fetchMarketIndices } from "@/shared/api/market";
 
 export default function IndexDetailPage() {
@@ -16,9 +17,29 @@ export default function IndexDetailPage() {
     staleTime: 5 * 60 * 1000,
   });
 
-  const index = indices.find((idx) => idx.tsCode === tsCode);
+  const { data: globalCards = [], isLoading: isGlobalLoading } = useQuery({
+    queryKey: ["global-indices"],
+    queryFn: fetchGlobalIndices,
+    staleTime: 60 * 1000,
+  });
 
-  if (isLoading) {
+  const found = indices.find((idx) => idx.tsCode === tsCode);
+  const index = found ?? (() => {
+    const card = globalCards.find((c) => c.tsCode === tsCode);
+    if (!card) return undefined;
+    return {
+      code: card.tsCode.split(".")[0],
+      tsCode: card.tsCode,
+      name: card.name,
+      value: card.price ?? 0,
+      change: card.change ?? 0,
+      changePercent: card.pctChange ?? 0,
+      exchange: "Global",
+      asof: card.updatedAt,
+    };
+  })();
+
+  if (isLoading || isGlobalLoading) {
     return (
       <div style={{ display: "flex", justifyContent: "center", padding: "64px 0" }}>
         <Spin size="large" />
