@@ -1,10 +1,6 @@
-# Project Changelog
-项目所有重大更新必须记录在这里，补充在文档最后面，采用如下形式：
-```markdown
-## {{日期}} - {{更新模块}}
-- 一句话总结更新的内容
-- 涉及模块有哪些，不需要列出具体文件，只需要列出模块名
-```
+## 2026-09-09 - API Gateway 选型调研
+- 比较 Docker Compose 场景下 NGINX、Traefik、Kong/APISIX 的动态路由、OIDC/JWT、限流、可观测性、配置复杂度与 Kubernetes 演进适配性，并结合当前 stock_bot 架构给出 Gateway 选择建议。
+- 涉及模块：架构调研、部署、认证、可观测性
 
 ## 2026-05-09 - 数据回填管道完善（APScheduler 定时任务 + 手动触发 API）
 - **问题**：每日增量数据回填未纳入 APScheduler，导致系统只依赖启动时一次性回补；缺失手动触发 daily_basic 回填的 API 端点
@@ -264,7 +260,11 @@
 - **整期成果**：个股/指数两份重复 K 线图合并为共享 `shared/ui/kline/KlineChart`（P1：MA5/10/20/60 显隐、结构化 tooltip、inside+slider 缩放与重置、最新价 markLine、跨年轴标签）；后端打通 adj_factor 懒加载链路（P2：`GET /quotes/daily?adjust=qfq|raw` + `adjust_available` 标记 + BackgroundTasks 幂等单股回补 + `delete_pattern` 缓存失效）；前端复权开关完整接入（P3：因子未就绪禁用+Tooltip 降级，就绪后无缝启用）。净删除两份旧图表组件，e2e 扩至 16 用例
 - **关键架构决策**：① 共享组件契约先冻结——`KlineFetcher = (days, adjust) => Promise<KlineResult>` 作为 Task 1 类型签名发布，shared 层不 import 业务 API，靠 fetcher 回调注入实现依赖倒置，个股/指数页各传一份；② 复权三重缓存防护——缓存 key 追加 `:{adjust}` 维度、qfq 因子不完整不写缓存、回补完成后 `delete_pattern("quote:kline:{exchange}:{symbol}:*")` 兜底，杜绝 qfq 结果污染 raw 缓存与回补后读到陈旧数据；③ `::date` 转型根因——手写 `UPDATE ... FROM (VALUES ...)` 派生表日期字面量被 PG 推断为 text 抛 `date = text`，此类 SQL 类型错误纯函数单测覆盖不到，接线任务以实机验证闭环
 - **收官回归**：backend pytest 19 failed / 125 passed（19 个全为基线 httpx.ConnectError 环境性失败，与 Task 7 记录的失败集一致，零回归）；frontend `npm run build` 通过；playwright 16/16 passed
-- 涉及模块：frontend/shared/ui/kline, frontend/shared/types, frontend/shared/api, frontend/pages/stock-detail, frontend/pages/index-detail, backend/services/quote_service, backend/api/v1/stocks, backend/repositories/quote_repo, backend/core/providers, frontend/e2e
+- 涉及模块：backend/repositories/quote_repo, backend/services/quote_service, backend/api/v1/stocks, frontend/shared/ui/kline, backend/tests
+
+## 2026-09-09 - 微服务认证与授权最佳实践研究
+- 基于 NIST Zero Trust、OWASP API Security、OAuth JWT Access Token/JWK 与 SPIFFE/SPIRE 官方资料，明确 Gateway 与业务服务二次校验、workload identity/mTLS、aud/iss/scope/RBAC 责任边界、token 转发与 exchange/downscoping 原则，并形成 stock_bot（FastAPI、RabbitMQ Worker、Scheduler、Redis、PostgreSQL、Docker Compose）的落地建议。
+- 涉及模块：docs/references/best-practices、backend/api、backend/core、backend/workers、backend/scheduler、docker-compose
 
 ## 2026-09-03 - qfq 跨日死锁修复（K线组件升级最终审查 C1+I1）
 - **问题（C1）**：每日 ingest 以 `adj_factor=None` upsert 新日期行情且 ON CONFLICT SET 无条件覆盖——重灌既有日期会抹掉已回补因子；回补幂等判定 `has_adj_factor`（任一行非空即 skip）与 `get_kline` 可用性口径（区间全部行非空）错位，且 skip 在缓存失效之前 return → 次日起 qfq 永久 `adjust_available=false` 死锁
@@ -405,3 +405,39 @@
 - **修复**：先合并 PR #2 到 main（落 CI 修复+全仓格式/mypy 清理+.env.example），再把 main merge 进 PR #1（解决 10 处冲突，双侧逻辑并集）；新增 Alembic merge 迁移 49741053b341 合并财务/市场数据两条链；ruff format 对齐 PR#1 自有 11 文件
 - 本地验证 ruff/mypy 全绿、pytest 155 passed；PR #1 六项 CI 全绿
 - 涉及模块：backend(migrations/models/scheduler/services/providers/repos), frontend(stock-detail), docs
+
+## 2026-09-09 - 浏览器登录会话安全研究
+- 基于 RFC 9700、RFC 10017（OAuth 2.0 for Browser-Based Applications）、OpenID Connect Core 与 OWASP Session/CSRF Cheat Sheet，形成 stock_bot 的 BFF+HttpOnly 会话、刷新令牌轮换、CSRF 与 Cookie flags 建议。
+- 涉及模块：安全架构、backend、frontend、Docker Compose、docs
+
+- **根因**：根 README.md 长期与实现漂移（仍写 SQLModel / Tailwind+shadcn，实际已迁至 SQLAlchemy 2.0 async + Ant Design 5），且只字未提产品化方向"行业投研工作台"；Docker 部署细节散落且未链接到 build.md，双份 README（中/英）重复漂移
+- **修复**：
+  - 重写根 README.md 为中文唯一权威文档：技术栈/项目结构/API 路由全面对齐当前实现，补充 Docker 部署核心步骤（`cp .env.docker.example backend/.env`、填 TUSHARE_TOKEN、前端预构建说明）并链接 docs/build.md
+  - 收敛双文档：删除 README_zh.md（无任何文件引用）
+  - 补强根 AGENTS.md：新增"部署约定"章节（.env 生成、前端 runtime 预构建、交叉引用一致性规则），关键文档列入 build.md / ARCHITECTURE.md / 投研工作台计划
+  - 校正部署文档与 docker-compose 不一致处：docs/build.md 服务数 7→9（补 scheduler / redis-init）、redis 端口 6379→6380、启动顺序加 scheduler；docs/ARCHITECTURE.md 服务表补 scheduler / redis-init
+- 涉及模块：README.md, README_zh.md(删除), AGENTS.md, docs/build.md, docs/ARCHITECTURE.md
+
+## 2026-09-09 - best-practices 重构（按主题归档 + 去重）
+- 将 112 条扁平沉淀重组为 8 类主题分组并加目录：数据源与采集 / 数据库与性能 / Docker 与部署 / 前端 / 测试与E2E / 架构与分层 / 指标建模与规则引擎 / 工程流程与文档
+- 合并确认重复条目：时区/交易日守卫（UTC vs Asia/Shanghai）两处并一、同表多频指标 freq 仲裁与冲突键两条并一、uv `--extra dev` 冗余提及清理；条目 112→97
+- 保留 `best-practice.md` / `best-practices.md` 两文件合并历史说明；无有效经验丢失（已用关键锚点校验）
+- 涉及模块：docs/references/best-practices.md
+
+## 2026-09-09 - 完成前自检门禁（强档：约定 + 脚本 + pre-commit/CI 兜底）
+- **问题**：best-practices 只是"被动检索"，agent 改完代码不会有机制逼它拿已知错误对照本次 diff；规范类错误有 CI 兜底，业务类（时区/source 优先级/N+1/dockerignore）无兜底
+- **修复（四层强档）**：
+  - AGENTS.md 新增「完成前自检门禁」章节：每次收尾强制 6 步（列改动 → 探测器对照 → 跑 self_review → 文档同步 → 反馈闭环 → 固定格式收尾结论）
+  - best-practices.md 新增「自检探测器映射表」：8 分类 → 关键词，把"对照已知错误"变成可 grep 的机械操作
+  - 新增 `scripts/self_review.sh`：快检（空白/冲突 + 改动文件 ruff + 文档同步告警）+ `--full`（追加 mypy/pytest/tsc）
+  - 接入 `.pre-commit-config.yaml` 本地钩子（每次 commit 强制跑 self_review）
+  - CI 新增 `docs-consistency` job（信息性不阻断）：PR/提交 diff 空白硬检 + 文档未 touch Changelog 告警
+- 涉及模块：AGENTS, docs/references/best-practices, scripts/self_review.sh(新增), .pre-commit-config.yaml, .github/workflows/ci.yml
+
+## 2026-09-09 - pre-commit 扩展：每次 commit 自动跑测试 + 前端类型检查
+- **需求**：每次 commit 前自动跑 test / 格式 / benchmark
+- **现状核实**：后端格式(ruff/ruff-format)+类型(mypy) 原本已在 pre-commit；非 e2e 测试 155 个可无 DB 独立运行(~2.4s)；**前端实际未配置 eslint/prettier**（package.json 无常量依赖亦无 eslint.config，CI 的 "Lint(frontend)" job 实为 `tsc --noEmit`）；仓库无 benchmark 基建
+- **修复**：
+  - pre-commit 新增 `backend-test` 钩子：任何 backend .py 变更即跑 `uv run pytest -m "not e2e" --no-cov`（e2e 仍需 DB，留在 CI）
+  - pre-commit 新增 `frontend-typecheck` 钩子：任何 frontend ts/tsx 变更即跑 `npx tsc --noEmit`（与 CI 一致的既有前端静态校验）
+- 涉及模块：.pre-commit-config.yaml, docs/Changelog.md
