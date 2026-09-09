@@ -111,6 +111,8 @@
 - JSX 表达式间字面空格（`{d.key} {expr}`）在末表达式为空串时会留下尾部空格文本（如 "MA60 "），而 Playwright `getByText` 正则匹配不做首尾 trim——行尾锚定（`/^MA60$/`）必失败；此类断言应放宽为 `\s?` 或在组件侧条件拼接避免悬空空格，卡死时先抓 error-context 快照看实际 DOM 文本再改正则。
 - 测试夹具按日历日生成序列时用"基准日 + timedelta(days=i)"而非手写 `date(y, m, d+1)`——月份天数溢出抛 ValueError 后若被测代码按设计静默兜底（per-item try/except），失败断言会指向兜底路径（spark 为空）而非夹具根因，排查方向被带偏。
 - Worker 单测要脱离真库时，把 session 工厂暴露为模块级变量供 monkeypatch 成假 async context manager，且 NullSession 必须带 `async def commit()`——service 被 patch 后虽不触库，成功路径的 commit 照常执行，漏了会在断言前炸 AttributeError。
+- 性能基准与单测必须 marker 隔离（`bench`）且**基线契约显式化**：合成输入的尺寸/seed 写成测试常量并注释"改动即失基线"，门禁按 median 相对退化而非绝对 ms；微基准（<1ms）rounds 多 median 稳，**大样本基准（>10ms/次）单次抖动可达 7-8%**——控制样本量让各基准处于同一量级（~1-5ms）比调阈值更治本；管道里验证 exit code 要看 `PIPESTATUS`，`cmd | tail` 后 `$?` 是 tail 的。
+- **wall-clock 性能基线绑定硬件，入库基线不能跨机器门禁**：本机生成的 baseline.json 在 CI runner 上全部基准慢 30-50%，相对阈值门禁必假红。CI 硬门禁的标准做法是**同 runner A/B**（同一 job 内先 checkout base commit 跑一遍存临时基线、再 checkout head 对比），入库 baseline.json 只作本机开发参考。配套两个坑：Windows 侧创建的脚本无执行位（git mode 644），Linux CI 直接执行报 exit 126，须经解释器调用；A/B 产物写 $RUNNER_TEMP 而非 tracked 的基线文件，否则 PR 改基线时 `git checkout` 拒切。
 
 ## 六、架构与分层
 

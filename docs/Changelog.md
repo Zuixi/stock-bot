@@ -441,3 +441,33 @@
   - pre-commit 新增 `backend-test` 钩子：任何 backend .py 变更即跑 `uv run pytest -m "not e2e" --no-cov`（e2e 仍需 DB，留在 CI）
   - pre-commit 新增 `frontend-typecheck` 钩子：任何 frontend ts/tsx 变更即跑 `npx tsc --noEmit`（与 CI 一致的既有前端静态校验）
 - 涉及模块：.pre-commit-config.yaml, docs/Changelog.md
+
+## 2026-09-09 - Benchmark Tier 1 落地（Phase A：纯计算域硬门禁）
+- **需求**：按 [plans/2026-09-09-benchmark-tiers.md](../plans/2026-09-09-benchmark-tiers.md) 落地 CPU 基准硬门禁，让纯计算热点回归能被 PR 自动卡住
+- **实现**：
+  - 新增 `backend/tests/benchmarks/` 三个基准：规则引擎周期判定（`evaluate_pig_cycle` 批量 400 样本）、指标 rollup 与源/频率仲裁（`_rollup_monthly_rows` 730 行日频 / `_pick_latest` 冲突裁决）、行情归一化 mapper（`map_daily_rows` 5000 行）；全部无 DB 纯函数，固定 seed=20260909 + 尺寸常量即基线契约
+  - `pytest-benchmark` 入 dev extra（5.3.0；**有意放 dev 而非独立 bench extra**：pytest 收集 tests/benchmarks/ 需要包在场，避免为一个小包拆两套 CI sync；文件内 `pytest.importorskip` 兜底）；pyproject 注册 `bench` marker，addopts 默认 `-m 'not e2e and not bench'`
+  - marker 泄漏修正：pre-commit `backend-test`、CI `backend-test`、`self_review.sh --full` 三处 `-m "not e2e"` → `"not e2e and not bench"`
+  - `scripts/bench.sh`（gate / `--save-baseline` / `--quick` 三模式，`--benchmark-warmup=on` 抗冷启动）+ `scripts/bench_compare.py`（按 median 相对退化判定，阈值默认 12%，新增基准无基线也红）；`benchmarks/baseline.json` 入库、`last.json` 进 .gitignore
+  - CI 新增 `bench-cpu` 硬门禁 job（uv sync --frozen --extra dev → bench.sh，产物 artifact 7 天）；AGENTS/AGENTS(backend) 常用命令与自检门禁第 3 步引用基准脚本
+- **验证**：4 基准 ~5s 跑完；同机三次 gate 全绿（波动 -1.2%~+8.1% < 12%）；临时收紧阈值验证门禁可红（exit 1 + 明细）；大样本基准（13ms/次）抖动 7.5% → 缩到 5000 行后 1.2%
+- 涉及模块：backend/tests/benchmarks(新增), backend/pyproject.toml, backend/uv.lock, scripts/bench.sh(新增), scripts/bench_compare.py(新增), benchmarks/baseline.json(新增), .github/workflows/ci.yml, .pre-commit-config.yaml, scripts/self_review.sh, AGENTS.md, backend/AGENTS.md, .gitignore
+
+## 2026-09-09 - bench-cpu CI 门禁修复：同 runner A/B 基线（跨机器基线不可比）
+- **问题**：PR#4 的 bench-cpu 连续两次失败——第一次 exit 126（Windows 创建的 bench_compare.py 无执行位，Linux 直接执行 Permission denied）；修复执行方式后第二次仍红，4 项基准全部"退化"37-49%，根因是 **wall-clock 基线绑定硬件**：本机 Windows 跑的 baseline.json 对 CI runner 无参照意义，跨机器相对对比必假红
+- **修复**：
+  - `scripts/bench_compare.py` 加 `--allow-added`（新增基准不判失败——A/B 的 base 侧本就没有新基准）
+  - `scripts/bench.sh`：`--allow-added` 透传；`--benchmark-json` 接 `$BENCH_CURRENT`（原硬编码漏改）；base commit 无 `tests/benchmarks/` 时短路写空产物；产物路径支持 `BENCH_BASELINE/BENCH_CURRENT` 环境变量覆盖（CI 指到 `$RUNNER_TEMP`，避免污染 tracked 的 baseline.json 导致 `git checkout` 拒切）
+  - CI `bench-cpu` 重写为**同 runner A/B**：resolve base（PR base.sha → event.before → HEAD~1 兜底）→ A 侧 checkout base + `uv sync` + `--save-baseline`（临时路径）→ B 侧 checkout head + sync + gate；入库 `benchmarks/baseline.json` 降级为本地开发参考
+- **验证**：本地 T1 save 路径覆盖 / T2 正常 A/B（退化 -1.2% 内）/ T3 空基线全新增放行 全绿；CI 待推送后观察
+- 涉及模块：scripts/bench.sh, scripts/bench_compare.py, .github/workflows/ci.yml, plans/2026-09-09-benchmark-tiers.md(决策记录), docs/references/best-practices.md, docs/Changelog.md
+
+## 2026-09-09 - bench-cpu A/B 修复二轮：base 改 origin/main + 空产物兜底
+- **问题**：A/B 首跑 127——PR 的 `base.sha` 是 PR 创建时点的 main（162f576，早于 PR#3 合并），checkout 后连 scripts/bench.sh 都不存在；且 base 的 uv.lock 无 pytest-benchmark 时 importorskip 全 skip，pytest 不产出 JSON 会让 save 的 cp 失败
+- **修复**：base 语义改为 `git rev-parse origin/main`（合并目标最新 head，脚本/依赖齐全，语义也更正确——"PR 合并后 main 性能不得退化"）；bench.sh 在 pytest 无产物输出时补写空 JSON，save/gate 流程不中断
+- 涉及模块：.github/workflows/ci.yml, scripts/bench.sh, docs/Changelog.md
+
+## 2026-09-09 - bench-cpu A/B 修复三轮：A 侧从 head 取回 bench 脚本
+- **问题**：bench.sh 本身随本 PR 新增，origin/main 上没有——A 侧 checkout base 后 `bash ../scripts/bench.sh` 报 127（前一轮同症状但根因不同：上一轮是 base.sha 太老，这一轮是脚本未入库）
+- **修复**：A 侧 checkout base 后 `git checkout head -- scripts/bench.sh scripts/bench_compare.py` 借回脚本再跑（当前 PR：base 无 tests/benchmarks → 短路空基线 → B 侧全新增放行；未来 PR：A 侧真跑基线）；同时把 git pathspec 操作移回仓库根（pathspec 相对 cwd，backend/ 子目录会解析成 backend/scripts/）
+- 涉及模块：.github/workflows/ci.yml, docs/Changelog.md

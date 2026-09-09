@@ -68,7 +68,7 @@ jobs:
       - run: uv run alembic upgrade head
         env:
           DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@localhost:5432/stock_bot_test
-      - run: uv run pytest tests/ -m "not e2e" -v --cov=app --cov-report=xml
+      - run: uv run pytest tests/ -m "not e2e and not bench" -v --cov=app --cov-report=xml
         env:
           DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@localhost:5432/stock_bot_test
           REDIS_URL: redis://localhost:6379/0
@@ -77,6 +77,54 @@ jobs:
         with:
           files: backend/coverage.xml
           flags: backend
+
+  # ── CPU 基准硬门禁（Tier 1，见 plans/2026-09-09-benchmark-tiers.md）──
+  # wall-clock 基线绑定硬件：不得用入库 baseline.json 跨机器对比（本机与
+  # runner 差 30-50%）。这里做同 runner A/B：先跑 base commit 存临时基线，
+  # 再跑 head 对比；新增基准经 --allow-added 放行（base 侧本就没有）。
+  bench-cpu:
+    name: "Bench CPU (Tier1 hard gate)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: astral-sh/setup-uv@v5
+        with: { python-version: "3.13" }
+      - name: Resolve base commit
+        id: base
+        run: |
+          # pull_request：与 origin/main 最新比（PR 的 base.sha 是创建时点，可能
+          # 落后于 main 且缺新脚本——PR#4 曾因此 checkout 到无 bench.sh 的老 main）
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "SHA=$(git rev-parse origin/main)" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            echo "SHA=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+          else
+            # 单 commit 历史兜底：无 parent 时自比（恒绿，仅记录）
+            echo "SHA=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+      - name: A-side baseline (base commit, same runner)
+        run: |
+          git checkout "${{ steps.base.outputs.SHA }}"
+          # bench 脚本随本 PR 引入/修改，base 树上可能没有或版本旧——从 head 取回
+          # （pathspec 相对 cwd，故本步骤在仓库根执行）
+          git checkout "${{ github.sha }}" -- scripts/bench.sh scripts/bench_compare.py
+          (cd backend && uv sync --frozen --extra dev)
+          BENCH_BASELINE="$RUNNER_TEMP/bench_ab.json" BENCH_CURRENT="$RUNNER_TEMP/bench_a.json" \
+            bash scripts/bench.sh --save-baseline
+      - name: B-side head + gate
+        run: |
+          git checkout "${{ github.sha }}"
+          (cd backend && uv sync --frozen --extra dev)
+          BENCH_BASELINE="$RUNNER_TEMP/bench_ab.json" \
+            bash scripts/bench.sh --allow-added
+      - name: Upload benchmark result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-result
+          path: benchmarks/last.json
+          retention-days: 7
 
   # ── Frontend ─────────────────────────────────────────────────
   frontend-lint:
