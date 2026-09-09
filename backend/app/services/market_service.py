@@ -12,15 +12,14 @@ Data sources
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from typing import Any, Literal
+from datetime import date, datetime
+from typing import Any, Literal, cast
 
-from sqlalchemy import func, select, text, union
+from sqlalchemy import Subquery, func, select, text, union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
 from app.core.redis import CacheClient
-from app.models.index_daily import IndexDaily
 from app.models.quote import DailyQuote
 from app.models.stock import Stock
 from app.schemas.stock import StockOut
@@ -73,11 +72,9 @@ _FALLBACK_DISTRIBUTION = [
 # ---------------------------------------------------------------------------
 
 
-async def _latest_trade_date(db: AsyncSession):
+async def _latest_trade_date(db: AsyncSession) -> date | None:
     """Return the most recent trade_date in daily_quotes, or None."""
-    result = await db.execute(
-        select(func.max(DailyQuote.trade_date))
-    )
+    result = await db.execute(select(func.max(DailyQuote.trade_date)))
     return result.scalar_one_or_none()
 
 
@@ -104,7 +101,7 @@ async def list_market_indices(cache: CacheClient | None = None) -> list[dict[str
     if cache:
         cached = await cache.get(cache_key)
         if cached is not None:
-            return cached
+            return cast(list[dict[str, Any]], cached)
 
     from app.repositories import index_repo  # noqa: PLC0415
 
@@ -121,16 +118,18 @@ async def list_market_indices(cache: CacheClient | None = None) -> list[dict[str
             change_pct = round(change / pre_close * 100, 2) if pre_close else 0
             td = row.trade_date
             asof = f"{td.year:04d}-{td.month:02d}-{td.day:02d}T15:00:00Z"
-            results.append({
-                "code": row.ts_code.split(".")[0],
-                "tsCode": row.ts_code,
-                "name": INDEX_NAME_MAP.get(row.ts_code, row.ts_code),
-                "value": round(close, 2),
-                "change": change,
-                "changePercent": change_pct,
-                "exchange": INDEX_EXCHANGE_MAP.get(row.ts_code, ""),
-                "asof": asof,
-            })
+            results.append(
+                {
+                    "code": row.ts_code.split(".")[0],
+                    "tsCode": row.ts_code,
+                    "name": INDEX_NAME_MAP.get(row.ts_code, row.ts_code),
+                    "value": round(close, 2),
+                    "change": change,
+                    "changePercent": change_pct,
+                    "exchange": INDEX_EXCHANGE_MAP.get(row.ts_code, ""),
+                    "asof": asof,
+                }
+            )
         # Preserve the order defined in _TARGET_INDICES
         order = {idx["ts_code"]: i for i, idx in enumerate(_TARGET_INDICES)}
         results.sort(key=lambda r: order.get(r["tsCode"], 999))
@@ -170,20 +169,25 @@ async def _fetch_indices_from_tushare() -> list[dict[str, Any]]:
             trade_date = str(row.get("trade_date", ""))
             asof = (
                 f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}T15:00:00Z"
-                if len(trade_date) == 8 else None
+                if len(trade_date) == 8
+                else None
             )
-            results.append({
-                "code": idx["ts_code"].split(".")[0],
-                "tsCode": idx["ts_code"],
-                "name": idx["name"],
-                "value": round(close, 2),
-                "change": change,
-                "changePercent": change_pct,
-                "exchange": idx["exchange"],
-                "asof": asof,
-            })
+            results.append(
+                {
+                    "code": idx["ts_code"].split(".")[0],
+                    "tsCode": idx["ts_code"],
+                    "name": idx["name"],
+                    "value": round(close, 2),
+                    "change": change,
+                    "changePercent": change_pct,
+                    "exchange": idx["exchange"],
+                    "asof": asof,
+                }
+            )
         except Exception:
-            logger.warning("_fetch_indices_from_tushare: failed for %s", idx["ts_code"], exc_info=True)
+            logger.warning(
+                "_fetch_indices_from_tushare: failed for %s", idx["ts_code"], exc_info=True
+            )
 
     return results
 
@@ -194,7 +198,7 @@ async def get_distribution(cache: CacheClient | None = None) -> list[dict[str, A
     if cache:
         cached = await cache.get(cache_key)
         if cached is not None:
-            return cached
+            return cast(list[dict[str, Any]], cached)
 
     async with async_session_factory() as db:
         latest = await _latest_trade_date(db)
@@ -242,8 +246,17 @@ async def get_distribution(cache: CacheClient | None = None) -> list[dict[str, A
         return _FALLBACK_DISTRIBUTION
 
     ordered_ranges = [
-        "跌停", ">-7%", "-5~-7%", "-3~-5%", "-1~-3%",
-        "0~-1%", "0~1%", "1~3%", "3~5%", ">5%", "涨停",
+        "跌停",
+        ">-7%",
+        "-5~-7%",
+        "-3~-5%",
+        "-1~-3%",
+        "0~-1%",
+        "0~1%",
+        "1~3%",
+        "3~5%",
+        ">5%",
+        "涨停",
     ]
     data = [{"range": r, "count": db_rows.get(r, 0)} for r in ordered_ranges]
     if cache:
@@ -257,7 +270,7 @@ async def get_sectors(cache: CacheClient | None = None) -> list[dict[str, Any]]:
     if cache:
         cached = await cache.get(cache_key)
         if cached is not None:
-            return cached
+            return cast(list[dict[str, Any]], cached)
 
     async with async_session_factory() as db:
         latest = await _latest_trade_date(db)
@@ -297,13 +310,15 @@ async def get_sectors(cache: CacheClient | None = None) -> list[dict[str, Any]]:
 
     sectors: list[dict[str, Any]] = []
     for row in rows:
-        sectors.append({
-            "name": row.industry,
-            "changePercent": round(float(row.avg_change_pct or 0), 2),
-            "totalMarketCap": float(row.total_amount or 0) * 1000,
-            "stockCount": int(row.stock_count),
-            "topStocks": [],
-        })
+        sectors.append(
+            {
+                "name": row.industry,
+                "changePercent": round(float(row.avg_change_pct or 0), 2),
+                "totalMarketCap": float(row.total_amount or 0) * 1000,
+                "stockCount": int(row.stock_count),
+                "topStocks": [],
+            }
+        )
     if cache and sectors:
         await cache.set(cache_key, sectors, _MARKET_CACHE_TTL)
     return sectors
@@ -315,7 +330,7 @@ async def get_capital_flow(cache: CacheClient | None = None) -> list[dict[str, A
     if cache:
         cached = await cache.get(cache_key)
         if cached is not None:
-            return cached
+            return cast(list[dict[str, Any]], cached)
 
     async with async_session_factory() as db:
         latest = await _latest_trade_date(db)
@@ -350,11 +365,13 @@ async def get_capital_flow(cache: CacheClient | None = None) -> list[dict[str, A
     for row in rows:
         inflow = float(row.inflow_raw or 0) / 1e5
         outflow = float(row.outflow_raw or 0) / 1e5
-        flows.append({
-            "name": row.industry,
-            "inflow": round(inflow, 2),
-            "outflow": round(-outflow, 2),
-        })
+        flows.append(
+            {
+                "name": row.industry,
+                "inflow": round(inflow, 2),
+                "outflow": round(-outflow, 2),
+            }
+        )
     if cache and flows:
         await cache.set(cache_key, flows, _MARKET_CACHE_TTL)
     return flows
@@ -372,7 +389,7 @@ async def get_hot_boards(
     if cache:
         cached = await cache.get(cache_key)
         if cached is not None:
-            return cached
+            return cast(list[dict[str, Any]], cached)
 
     group_col = "csrc_desc" if category == "industry" else "province"
 
@@ -416,16 +433,18 @@ async def get_hot_boards(
 
     boards: list[dict[str, Any]] = []
     for row in rows:
-        boards.append({
-            "id": f"{category}-{row.group_name}",
-            "name": row.group_name,
-            "code": "",
-            "changePercent": round(float(row.avg_chg or 0), 2),
-            "upCount": int(row.up_count or 0),
-            "flatCount": int(row.flat_count or 0),
-            "downCount": int(row.down_count or 0),
-            "leaders": [],
-        })
+        boards.append(
+            {
+                "id": f"{category}-{row.group_name}",
+                "name": row.group_name,
+                "code": "",
+                "changePercent": round(float(row.avg_chg or 0), 2),
+                "upCount": int(row.up_count or 0),
+                "flatCount": int(row.flat_count or 0),
+                "downCount": int(row.down_count or 0),
+                "leaders": [],
+            }
+        )
     if cache and boards:
         await cache.set(cache_key, boards, _MARKET_CACHE_TTL)
     return boards
@@ -438,8 +457,8 @@ async def get_hot_boards(
 
 async def get_index_kline(
     ts_code: str,
-    start_date=None,
-    end_date=None,
+    start_date: date | None = None,
+    end_date: date | None = None,
     cache: CacheClient | None = None,
 ) -> list[dict[str, Any]]:
     """Return index daily K-line data from index_dailies table."""
@@ -449,7 +468,7 @@ async def get_index_kline(
     if cache:
         cached = await cache.get(cache_key)
         if cached is not None:
-            return cached
+            return cast(list[dict[str, Any]], cached)
 
     from app.repositories import index_repo  # noqa: PLC0415
 
@@ -483,13 +502,15 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
     """Build the three-level SW industry tree from DB with stock counts.
 
     Returns a nested structure:
-    [{ code, name, stockCount, children: [{ code, name, stockCount, children: [{ code, name, stockCount, symbols }] }] }]
+    [{ code, name, stockCount, children: [
+        { code, name, stockCount, children: [{ code, name, stockCount, symbols }] }
+    ] }]
     """
     cache_key = "market:sw-tree"
     if cache:
         cached = await cache.get(cache_key)
         if cached is not None:
-            return cached
+            return cast(list[dict], cached)
 
     from app.models.sw_industry import (  # noqa: PLC0415
         StockCustomSwTag,
@@ -507,8 +528,9 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
         # Collect L3 symbols from both official members and custom L3 tags
         symbols_by_code: dict[str, set[str]] = {}
         official_l3_symbols = await db.execute(
-            select(SwIndustryMember.industry_code, SwIndustryMember.symbol)
-            .join(Stock, Stock.symbol == SwIndustryMember.symbol)
+            select(SwIndustryMember.industry_code, SwIndustryMember.symbol).join(
+                Stock, Stock.symbol == SwIndustryMember.symbol
+            )
         )
         for row in official_l3_symbols:
             symbols_by_code.setdefault(row.industry_code, set()).add(row.symbol)
@@ -540,22 +562,20 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
             custom_l2_symbols_by_code.setdefault(row.industry_code, set()).add(row.symbol)
 
         # Symbols that do not map to any valid L3 industry should go to "其他"
-        categorized_symbols_subq = (
-            union(
-                select(SwIndustryMember.symbol)
-                .join(
-                    SwIndustryClass,
-                    SwIndustryClass.industry_code == SwIndustryMember.industry_code,
-                )
-                .where(SwIndustryClass.level == 3),
-                select(StockCustomSwTag.symbol)
-                .join(
-                    SwIndustryClass,
-                    SwIndustryClass.industry_code == StockCustomSwTag.industry_code,
-                )
-                .where(SwIndustryClass.level.in_([2, 3])),
-            ).subquery()
-        )
+        categorized_symbols_subq = union(
+            select(SwIndustryMember.symbol)
+            .join(
+                SwIndustryClass,
+                SwIndustryClass.industry_code == SwIndustryMember.industry_code,
+            )
+            .where(SwIndustryClass.level == 3),
+            select(StockCustomSwTag.symbol)
+            .join(
+                SwIndustryClass,
+                SwIndustryClass.industry_code == StockCustomSwTag.industry_code,
+            )
+            .where(SwIndustryClass.level.in_([2, 3])),
+        ).subquery()
         effective_industry = func.coalesce(Stock.industry, Stock.csrc_desc)
         uncategorized_result = await db.execute(
             select(Stock.symbol, effective_industry.label("eff_industry"))
@@ -600,7 +620,9 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
                 "parent_code": cls.parent_code,
                 "children": [],
             }
-            l2_symbol_sets[cls.industry_code] = set(custom_l2_symbols_by_code.get(cls.industry_code, set()))
+            l2_symbol_sets[cls.industry_code] = set(
+                custom_l2_symbols_by_code.get(cls.industry_code, set())
+            )
         elif cls.level == 3:
             l3_symbols = sorted(symbols_by_code.get(cls.industry_code, set()))
             l3_nodes[cls.industry_code] = {
@@ -707,9 +729,7 @@ async def get_sw_level2(level1_code: str, level2_code: str) -> dict | None:
     return {"code": row.industry_code, "name": row.industry_name}
 
 
-async def get_sw_level3(
-    level1_code: str, level2_code: str, level3_code: str
-) -> dict | None:
+async def get_sw_level3(level1_code: str, level2_code: str, level3_code: str) -> dict | None:
     """Check if a level-3 industry code exists under the given level-2."""
     from app.models.sw_industry import SwIndustryClass  # noqa: PLC0415
 
@@ -805,70 +825,96 @@ async def list_symbols_by_level1(level1_code: str) -> list[str]:
                 .subquery()
             )
             uncategorized = (
-                await db.execute(
-                    select(Stock.symbol)
-                    .outerjoin(
-                        categorized_symbols_subq,
-                        categorized_symbols_subq.c.symbol == Stock.symbol,
+                (
+                    await db.execute(
+                        select(Stock.symbol)
+                        .outerjoin(
+                            categorized_symbols_subq,
+                            categorized_symbols_subq.c.symbol == Stock.symbol,
+                        )
+                        .where(categorized_symbols_subq.c.symbol.is_(None))
+                        .order_by(Stock.exchange, Stock.symbol)
                     )
-                    .where(categorized_symbols_subq.c.symbol.is_(None))
-                    .order_by(Stock.exchange, Stock.symbol)
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             return list(uncategorized)
 
         # L1 -> L2 codes -> L3 codes -> members
         l2_codes = (
-            await db.execute(
-                select(SwIndustryClass.industry_code).where(
-                    SwIndustryClass.parent_code == level1_code,
-                    SwIndustryClass.level == 2,
+            (
+                await db.execute(
+                    select(SwIndustryClass.industry_code).where(
+                        SwIndustryClass.parent_code == level1_code,
+                        SwIndustryClass.level == 2,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if not l2_codes:
             return []
         l3_codes = (
-            await db.execute(
-                select(SwIndustryClass.industry_code).where(
-                    SwIndustryClass.parent_code.in_(l2_codes),
-                    SwIndustryClass.level == 3,
+            (
+                await db.execute(
+                    select(SwIndustryClass.industry_code).where(
+                        SwIndustryClass.parent_code.in_(l2_codes),
+                        SwIndustryClass.level == 3,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if not l3_codes:
             return []
         official_symbols = (
-            await db.execute(
-                select(SwIndustryMember.symbol)
-                .join(Stock, Stock.symbol == SwIndustryMember.symbol)
-                .where(
-                    SwIndustryMember.industry_code.in_(l3_codes)
+            (
+                await db.execute(
+                    select(SwIndustryMember.symbol)
+                    .join(Stock, Stock.symbol == SwIndustryMember.symbol)
+                    .where(SwIndustryMember.industry_code.in_(l3_codes))
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         custom_l2_symbols = (
-            await db.execute(
-                select(StockCustomSwTag.symbol)
-                .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
-                .where(StockCustomSwTag.industry_code.in_(l2_codes))
+            (
+                await db.execute(
+                    select(StockCustomSwTag.symbol)
+                    .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
+                    .where(StockCustomSwTag.industry_code.in_(l2_codes))
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         custom_l3_symbols = (
-            await db.execute(
-                select(StockCustomSwTag.symbol)
-                .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
-                .where(StockCustomSwTag.industry_code.in_(l3_codes))
+            (
+                await db.execute(
+                    select(StockCustomSwTag.symbol)
+                    .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
+                    .where(StockCustomSwTag.industry_code.in_(l3_codes))
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         symbol_set = set(official_symbols) | set(custom_l2_symbols) | set(custom_l3_symbols)
         ordered = (
-            await db.execute(
-                select(Stock.symbol)
-                .where(Stock.symbol.in_(symbol_set))
-                .order_by(Stock.exchange, Stock.symbol)
+            (
+                await db.execute(
+                    select(Stock.symbol)
+                    .where(Stock.symbol.in_(symbol_set))
+                    .order_by(Stock.exchange, Stock.symbol)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     return list(ordered)
 
 
@@ -882,46 +928,64 @@ async def list_symbols_by_level2(level1_code: str, level2_code: str) -> list[str
 
     async with async_session_factory() as db:
         l3_codes = (
-            await db.execute(
-                select(SwIndustryClass.industry_code).where(
-                    SwIndustryClass.parent_code == level2_code,
-                    SwIndustryClass.level == 3,
+            (
+                await db.execute(
+                    select(SwIndustryClass.industry_code).where(
+                        SwIndustryClass.parent_code == level2_code,
+                        SwIndustryClass.level == 3,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if not l3_codes:
             return []
         official_symbols = (
-            await db.execute(
-                select(SwIndustryMember.symbol)
-                .join(Stock, Stock.symbol == SwIndustryMember.symbol)
-                .where(
-                    SwIndustryMember.industry_code.in_(l3_codes)
+            (
+                await db.execute(
+                    select(SwIndustryMember.symbol)
+                    .join(Stock, Stock.symbol == SwIndustryMember.symbol)
+                    .where(SwIndustryMember.industry_code.in_(l3_codes))
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         custom_l2_symbols = (
-            await db.execute(
-                select(StockCustomSwTag.symbol)
-                .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
-                .where(StockCustomSwTag.industry_code == level2_code)
+            (
+                await db.execute(
+                    select(StockCustomSwTag.symbol)
+                    .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
+                    .where(StockCustomSwTag.industry_code == level2_code)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         custom_l3_symbols = (
-            await db.execute(
-                select(StockCustomSwTag.symbol)
-                .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
-                .where(StockCustomSwTag.industry_code.in_(l3_codes))
+            (
+                await db.execute(
+                    select(StockCustomSwTag.symbol)
+                    .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
+                    .where(StockCustomSwTag.industry_code.in_(l3_codes))
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         symbol_set = set(official_symbols) | set(custom_l2_symbols) | set(custom_l3_symbols)
         ordered = (
-            await db.execute(
-                select(Stock.symbol)
-                .where(Stock.symbol.in_(symbol_set))
-                .order_by(Stock.exchange, Stock.symbol)
+            (
+                await db.execute(
+                    select(Stock.symbol)
+                    .where(Stock.symbol.in_(symbol_set))
+                    .order_by(Stock.exchange, Stock.symbol)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     return list(ordered)
 
 
@@ -938,40 +1002,48 @@ async def list_symbols_by_industry_codes(l3_codes: list[str]) -> list[str]:
 
     async with async_session_factory() as db:
         official_symbols = (
-            await db.execute(
-                select(SwIndustryMember.symbol)
-                .join(Stock, Stock.symbol == SwIndustryMember.symbol)
-                .where(
-                    SwIndustryMember.industry_code.in_(l3_codes)
+            (
+                await db.execute(
+                    select(SwIndustryMember.symbol)
+                    .join(Stock, Stock.symbol == SwIndustryMember.symbol)
+                    .where(SwIndustryMember.industry_code.in_(l3_codes))
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         custom_symbols = (
-            await db.execute(
-                select(StockCustomSwTag.symbol)
-                .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
-                .where(StockCustomSwTag.industry_code.in_(l3_codes))
+            (
+                await db.execute(
+                    select(StockCustomSwTag.symbol)
+                    .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
+                    .where(StockCustomSwTag.industry_code.in_(l3_codes))
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         symbol_set = set(official_symbols) | set(custom_symbols)
         ordered = (
-            await db.execute(
-                select(Stock.symbol)
-                .where(Stock.symbol.in_(symbol_set))
-                .order_by(Stock.exchange, Stock.symbol)
+            (
+                await db.execute(
+                    select(Stock.symbol)
+                    .where(Stock.symbol.in_(symbol_set))
+                    .order_by(Stock.exchange, Stock.symbol)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     return list(ordered)
 
 
-async def list_symbols_by_level3(
-    level1_code: str, level2_code: str, level3_code: str
-) -> list[str]:
+async def list_symbols_by_level3(level1_code: str, level2_code: str, level3_code: str) -> list[str]:
     """Get all member symbols under a level-3 industry."""
     return await list_symbols_by_industry_codes([level3_code])
 
 
-def _uncategorized_symbols_subquery():
+def _uncategorized_symbols_subquery() -> Subquery:
     """Shared subquery for uncategorized (OTHER) symbols."""
     from app.models.sw_industry import (  # noqa: PLC0415
         StockCustomSwTag,
@@ -995,7 +1067,7 @@ def _uncategorized_symbols_subquery():
     ).subquery()
 
 
-def _effective_industry():
+def _effective_industry() -> Any:
     """COALESCE(industry, csrc_desc) — the best available industry value."""
     return func.coalesce(Stock.industry, Stock.csrc_desc)
 
@@ -1045,9 +1117,7 @@ async def list_symbols_by_other_level2(industry_name: str) -> list[str]:
 async def list_stocks_by_symbols(db: AsyncSession, symbols: list[str]) -> list[StockOut]:
     if not symbols:
         return []
-    rows = (
-        await db.execute(select(Stock).where(Stock.symbol.in_(symbols)))
-    ).scalars().all()
+    rows = (await db.execute(select(Stock).where(Stock.symbol.in_(symbols)))).scalars().all()
     if not rows:
         return []
     stock_by_symbol: dict[str, StockOut] = {}
@@ -1109,7 +1179,8 @@ ORDER BY s.symbol
 
 
 async def get_stocks_enriched_by_symbols(
-    db: AsyncSession, symbols: list[str],
+    db: AsyncSession,
+    symbols: list[str],
 ) -> list[StockEnrichedOut]:
     """Return StockEnrichedOut for each symbol, joining latest price + fundamentals."""
     if not symbols:
@@ -1130,9 +1201,7 @@ async def get_stocks_enriched_by_symbols(
         pc = data.get("prev_close")
         if lp is not None and pc is not None and pc != 0:
             data["change"] = round(float(lp) - float(pc), 4)
-            data["change_percent"] = round(
-                (float(lp) - float(pc)) / float(pc) * 100, 2
-            )
+            data["change_percent"] = round((float(lp) - float(pc)) / float(pc) * 100, 2)
         stock = StockEnrichedOut(**data)
         stock_by_symbol.setdefault(stock.symbol, stock)
 

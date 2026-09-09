@@ -44,7 +44,11 @@ class FinancialWorker(BaseWorker):
 
         logger.info(
             "FinancialWorker task=%s exchange=%s symbol=%s window=[%s,%s]",
-            task_id, exchange, symbol, start_date or "all", end_date or "all",
+            task_id,
+            exchange,
+            symbol,
+            start_date or "all",
+            end_date or "all",
         )
 
         service = FinancialIngestService()

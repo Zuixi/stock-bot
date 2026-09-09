@@ -1,7 +1,7 @@
 """Market endpoints for dashboard data."""
 
 from datetime import date, timedelta
-from typing import Literal
+from typing import Literal, cast
 
 from fastapi import APIRouter, BackgroundTasks, Query
 
@@ -60,7 +60,10 @@ async def get_index_kline(
     if start is None:
         start = date.today() - timedelta(days=365)
     data = await market_service.get_index_kline(
-        ts_code, start_date=start, end_date=end, cache=cache,
+        ts_code,
+        start_date=start,
+        end_date=end,
+        cache=cache,
     )
     name = market_service.INDEX_NAME_MAP.get(ts_code, ts_code)
     return IndexKlineResponse(
@@ -95,7 +98,7 @@ async def get_sw_level1_stocks(level1_code: str, db: DbDep) -> list[StockOut]:
 @router.get("/sw-industry/{level1_code}/{level2_code}/stocks", response_model=list[StockOut])
 async def get_sw_level2_stocks(level1_code: str, level2_code: str, db: DbDep) -> list[StockOut]:
     if level1_code == "OTHER" and level2_code.startswith("OTHER_"):
-        industry_name = level2_code[len("OTHER_"):]
+        industry_name = level2_code[len("OTHER_") :]
         info = await market_service.get_sw_other_level2(industry_name)
         if info is None:
             raise not_found_response("SW OTHER level2", level2_code)
@@ -131,7 +134,8 @@ async def get_sw_level3_stocks(
     response_model=list[StockEnrichedOut],
 )
 async def get_sw_level1_stocks_enriched(
-    level1_code: str, db: DbDep,
+    level1_code: str,
+    db: DbDep,
 ) -> list[StockEnrichedOut]:
     if await market_service.get_sw_level1(level1_code) is None:
         raise not_found_response("SW level1", level1_code)
@@ -144,10 +148,12 @@ async def get_sw_level1_stocks_enriched(
     response_model=list[StockEnrichedOut],
 )
 async def get_sw_level2_stocks_enriched(
-    level1_code: str, level2_code: str, db: DbDep,
+    level1_code: str,
+    level2_code: str,
+    db: DbDep,
 ) -> list[StockEnrichedOut]:
     if level1_code == "OTHER" and level2_code.startswith("OTHER_"):
-        industry_name = level2_code[len("OTHER_"):]
+        industry_name = level2_code[len("OTHER_") :]
         info = await market_service.get_sw_other_level2(industry_name)
         if info is None:
             raise not_found_response("SW OTHER level2", level2_code)
@@ -165,7 +171,10 @@ async def get_sw_level2_stocks_enriched(
     response_model=list[StockEnrichedOut],
 )
 async def get_sw_level3_stocks_enriched(
-    level1_code: str, level2_code: str, level3_code: str, db: DbDep,
+    level1_code: str,
+    level2_code: str,
+    level3_code: str,
+    db: DbDep,
 ) -> list[StockEnrichedOut]:
     if await market_service.get_sw_level3(level1_code, level2_code, level3_code) is None:
         raise not_found_response("SW level3", f"{level1_code}/{level2_code}/{level3_code}")
@@ -186,7 +195,7 @@ async def get_sse_latest_snapshots(db: DbDep, cache: CacheDep) -> list[SseSnapsh
     cache_key = "market:sse-snapshots:latest"
     cached = await cache.get(cache_key)
     if cached is not None:
-        return cached
+        return cast(list[SseSnapshotOut], cached)
 
     from app.repositories import sse_index_repo  # noqa: PLC0415
 
@@ -242,7 +251,9 @@ async def trigger_sse_backfill(
     from app.services import sse_scraper_service  # noqa: PLC0415
 
     background_tasks.add_task(
-        sse_scraper_service.batch_backfill, req.start_date, req.end_date,
+        sse_scraper_service.batch_backfill,
+        req.start_date,
+        req.end_date,
     )
     return BackfillResponse(
         message="Backfill task started",

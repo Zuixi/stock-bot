@@ -29,9 +29,7 @@ async def get_daily_basic(
     return list(result.scalars().all())
 
 
-async def get_latest_daily_basic(
-    db: AsyncSession, stock_id: int
-) -> DailyBasicIndicator | None:
+async def get_latest_daily_basic(db: AsyncSession, stock_id: int) -> DailyBasicIndicator | None:
     """Return the latest daily_basic row for a stock."""
     stmt = (
         select(DailyBasicIndicator)
@@ -45,16 +43,14 @@ async def get_latest_daily_basic(
 
 async def trade_date_exists(db: AsyncSession, trade_date: date) -> bool:
     """Return True if any daily_basic_indicators row exists for the given trade_date."""
-    from sqlalchemy import select, exists
+    from sqlalchemy import exists, select
 
     stmt = select(exists().where(DailyBasicIndicator.trade_date == trade_date))
     result = await db.execute(stmt)
     return result.scalar() is True
 
 
-async def upsert_daily_basics(
-    db: AsyncSession, records: list[DailyBasicIndicator]
-) -> int:
+async def upsert_daily_basics(db: AsyncSession, records: list[DailyBasicIndicator]) -> int:
     """Bulk upsert daily_basic rows; returns rows affected."""
     if not records:
         return 0
@@ -111,4 +107,4 @@ async def upsert_daily_basics(
     )
     result = await db.execute(stmt)
     await db.flush()
-    return result.rowcount
+    return result.rowcount  # type: ignore[attr-defined, no-any-return]

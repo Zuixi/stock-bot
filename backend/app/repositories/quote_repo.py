@@ -14,11 +14,7 @@ async def get_kline(
     start_date: date | None = None,
     end_date: date | None = None,
 ) -> list[DailyQuote]:
-    stmt = (
-        select(DailyQuote)
-        .where(DailyQuote.stock_id == stock_id)
-        .order_by(DailyQuote.trade_date)
-    )
+    stmt = select(DailyQuote).where(DailyQuote.stock_id == stock_id).order_by(DailyQuote.trade_date)
     if start_date:
         stmt = stmt.where(DailyQuote.trade_date >= start_date)
     if end_date:
@@ -125,7 +121,7 @@ async def upsert_quotes(db: AsyncSession, quotes: list[DailyQuote]) -> int:
     )
     result = await db.execute(stmt)
     await db.flush()
-    return result.rowcount
+    return result.rowcount  # type: ignore[attr-defined, no-any-return]
 
 
 async def latest_adj_factor_present(db: AsyncSession, stock_id: int) -> bool:
@@ -154,7 +150,8 @@ async def update_adj_factors(
     values = ", ".join(
         # ::date 显式转型：VALUES 派生表中未定型字面量会被推断为 text，
         # 与 daily_quotes.trade_date(date) 比较时抛 date = text 无操作符错误
-        f"({stock_id}, '{d.isoformat()}'::date, {f})" for d, f in factors
+        f"({stock_id}, '{d.isoformat()}'::date, {f})"
+        for d, f in factors
     )
     stmt = text(
         f"UPDATE daily_quotes AS dq SET adj_factor = v.adj_factor "
@@ -163,4 +160,4 @@ async def update_adj_factors(
     )
     result = await db.execute(stmt)
     await db.flush()
-    return result.rowcount
+    return result.rowcount  # type: ignore[attr-defined, no-any-return]

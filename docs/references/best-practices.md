@@ -94,3 +94,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - 估值历史分位/通道只基于"有效正样本"（排除负 PE/PB 与缺失）计算，否则亏损期的负估值会被误判为极低估值；任何带时间属性的指标入库都要记录 ann_date/end_date/as_of，避免把修订后最新值回填历史造成前视偏差。
 - "按需单只抓取"的数据如果在 UI 可见却无自动补数，会表现为"部分标的空白"的伪 bug；改为与行情一致的全市场自动回填：幂等 upsert + "已有≥1条报告版本即视为已补"的续跑判据 + 调度批处理（分批/续跑/失败单只隔离）三件套，新标的自动被后续批次覆盖。
 - 财务表按 stock_id+metric_key 读时序、并按报告版本 join 时，用 `(stock_id, metric_key, report_version_id)` 覆盖索引一次满足过滤+排序+join，避免 sort 与 hash join；逐只查询在全市场规模下仍在个位数 ms，无需提前物化。
+- uv 的 `[project.optional-dependencies] dev`（ruff/mypy/pytest）默认不随 `uv sync` 安装：CI 与本地都必须显式 `uv sync --extra dev`（或 `uv run --extra dev`），否则 `uv run ruff/mypy` 报 "Failed to spawn"——这会让 Lint/TypeCheck 形同虚设并放行历史欠账；同理 pytest 若依赖真实运行 API，须标 `pytest.mark.e2e` 并在 CI 用 `-m "not e2e"` 避免测试 job 必挂。

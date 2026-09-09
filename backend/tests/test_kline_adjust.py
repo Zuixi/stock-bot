@@ -129,8 +129,13 @@ async def test_get_kline_qfq_incomplete_factors_skips_cache(monkeypatch):
     _patch_kline_source(monkeypatch, rows)
     cache = _FakeCache()
     result = await quote_service.get_kline(
-        None, cache, "Shanghai_Stocks", "600519",
-        date(2026, 1, 1), date(2026, 1, 31), adjust="qfq",
+        None,
+        cache,
+        "Shanghai_Stocks",
+        "600519",
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        adjust="qfq",
     )
     assert result is not None
     assert result.adjust_available is False
@@ -143,8 +148,13 @@ async def test_get_kline_raw_caches_even_without_factors(monkeypatch):
     _patch_kline_source(monkeypatch, rows)
     cache = _FakeCache()
     result = await quote_service.get_kline(
-        None, cache, "Shanghai_Stocks", "600519",
-        date(2026, 1, 1), date(2026, 1, 31), adjust="raw",
+        None,
+        cache,
+        "Shanghai_Stocks",
+        "600519",
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        adjust="raw",
     )
     assert result is not None
     assert result.adjust_available is False  # 因子缺失但 raw 不受影响

@@ -31,18 +31,20 @@ def _article(body: str, title: str = "2026年6月份全国生猪产品数据") -
 
 # ── parse_sow_article：真实快照 ───────────────────────────────────────
 
+
 def test_parse_real_article_snapshot():
     data = parse_sow_article(FIXTURE.read_text(encoding="utf-8"), ARTICLE_URL)
     assert data == {
-        "period": date(2026, 3, 31),      # 标题"3月份"→该月月末（与正文"1季度末"一致）
+        "period": date(2026, 3, 31),  # 标题"3月份"→该月月末（与正文"1季度末"一致）
         "inventory_wan_tou": 3904.0,
-        "mom_pct": -1.5,                  # 环比下降1.5% → 负号
+        "mom_pct": -1.5,  # 环比下降1.5% → 负号
         "article_url": ARTICLE_URL,
-        "article_date": "2026-04-27",     # 原发表日期
+        "article_date": "2026-04-27",  # 原发表日期
     }
 
 
 # ── parse_sow_article：环比符号归一 ──────────────────────────────────
+
 
 def test_mom_negative_verbs():
     for verb in ("下降", "降低", "回落", "降", "跌"):
@@ -68,6 +70,7 @@ def test_mom_missing_keeps_inventory():
 
 
 # ── parse_sow_article：period 兜底链与失败路径 ────────────────────────
+
 
 def test_period_falls_back_to_url_month_without_title_month():
     html = _article("能繁母猪存栏4000万头，环比下降1%。", title="生猪数据（转载）")
@@ -96,13 +99,19 @@ def test_missing_period_returns_none():
 
 # ── find_latest_data_article：栏目列表页发现 ─────────────────────────
 
+
 def test_find_latest_data_article_picks_first_match_and_joins_base():
-    index = """
-      <li><a href="https://pig.caaa.cn/html/pig_rd/pig_hydt/2026/0824/2482.html" class="news_page_list">
-        <div class="news_title_fz ell">陆泳霖：从生猪工业饲料产量看后市行情</div></a></li>
-      <li><a href="/html/pig_rd/pig_hydt/2026/0427/2467.html" class="news_page_list">
-        <div class="news_title_fz ell">2026年3月份全国生猪产品数据</div></a></li>
-    """
+    index = (
+        "\n"
+        '      <li><a href="https://pig.caaa.cn/html/pig_rd/pig_hydt/2026/0824/2482.html" '
+        'class="news_page_list">\n'
+        '        <div class="news_title_fz ell">陆泳霖：从生猪工业饲料产量看后市行情'
+        "</div></a></li>\n"
+        '      <li><a href="/html/pig_rd/pig_hydt/2026/0427/2467.html" class="news_page_list">\n'
+        '        <div class="news_title_fz ell">2026年3月份全国生猪产品数据'
+        "</div></a></li>\n"
+        "    "
+    )
     assert find_latest_data_article(index) == (
         "https://pig.caaa.cn/html/pig_rd/pig_hydt/2026/0427/2467.html"
     )
@@ -113,6 +122,7 @@ def test_find_latest_data_article_returns_none_when_column_missing():
 
 
 # ── 抓取端容错（离线：覆写 _get_text） ────────────────────────────────
+
 
 class _OfflineClient(CaaaClient):
     def __init__(self, pages: dict[str, str] | None = None, error: Exception | None = None):
@@ -152,9 +162,7 @@ async def test_client_discovers_and_parses_article(monkeypatch):
 
 async def test_client_explicit_url_setting_bypasses_discovery(monkeypatch):
     article = FIXTURE.read_text(encoding="utf-8")
-    monkeypatch.setattr(
-        "app.core.providers.caaa_client.settings.caaa_sow_article_url", ARTICLE_URL
-    )
+    monkeypatch.setattr("app.core.providers.caaa_client.settings.caaa_sow_article_url", ARTICLE_URL)
     client = _OfflineClient(pages={ARTICLE_URL: article})
 
     data = await client.fetch_latest_sow_inventory()
@@ -164,6 +172,7 @@ async def test_client_explicit_url_setting_bypasses_discovery(monkeypatch):
 
 
 # ── 服务接线：row 契约 + 覆盖清除 ─────────────────────────────────────
+
 
 class FakeCaaaClient:
     """假协会 client：返回预置 dict / None，或抛错."""
@@ -178,20 +187,31 @@ class FakeCaaaClient:
 
 
 _SOW_DATA = {
-    "period": date(2026, 3, 31), "inventory_wan_tou": 3904.0, "mom_pct": -1.5,
-    "article_url": ARTICLE_URL, "article_date": "2026-04-27",
+    "period": date(2026, 3, 31),
+    "inventory_wan_tou": 3904.0,
+    "mom_pct": -1.5,
+    "article_url": ARTICLE_URL,
+    "article_date": "2026-04-27",
 }
 
 
 async def test_fetch_caaa_sow_row_builds_row_from_registry():
     rows = await _fetch_caaa_sow_row(PIG_INDUSTRY, client=FakeCaaaClient(_SOW_DATA))
     m = PIG_INDUSTRY.metric("sow_inventory")
-    assert rows == [{
-        "industry_key": "pig", "stock_id": 0, "metric_key": "sow_inventory",
-        "source": "caaa", "source_tier": m.tier, "freq": "monthly",
-        "period": date(2026, 3, 31), "value": 3904.0, "unit": m.unit,
-        "extra": {"article_url": ARTICLE_URL, "mom_pct": -1.5},
-    }]
+    assert rows == [
+        {
+            "industry_key": "pig",
+            "stock_id": 0,
+            "metric_key": "sow_inventory",
+            "source": "caaa",
+            "source_tier": m.tier,
+            "freq": "monthly",
+            "period": date(2026, 3, 31),
+            "value": 3904.0,
+            "unit": m.unit,
+            "extra": {"article_url": ARTICLE_URL, "mom_pct": -1.5},
+        }
+    ]
 
 
 async def test_fetch_caaa_sow_row_failure_paths_return_empty():
@@ -205,8 +225,10 @@ def test_caaa_row_puts_sow_into_covered_purge():
     # 从而 covered-purge 清掉其 mock 演示行（registry 源优先级裁决的前提）
     akshare_rows = [{"metric_key": k} for k in ("hog_price", "corn_price", "lh_future_main")]
     caaa_row = {
-        "metric_key": "sow_inventory", "source": "caaa",
-        "period": date(2026, 3, 31), "value": 3904.0,
+        "metric_key": "sow_inventory",
+        "source": "caaa",
+        "period": date(2026, 3, 31),
+        "value": 3904.0,
     }
 
     covered = {r["metric_key"] for r in [*akshare_rows, caaa_row]}

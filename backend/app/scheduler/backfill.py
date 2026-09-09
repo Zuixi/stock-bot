@@ -36,23 +36,28 @@ async def _run(*, batch: int, max_batches: int | None) -> None:
         batch_idx += 1
         logger.info(
             "backfill round=%d processed=%d failed=%d (cumulative processed=%d)",
-            batch_idx, processed, failed, total_processed,
+            batch_idx,
+            processed,
+            failed,
+            total_processed,
         )
         if processed == 0:
             logger.info("No stocks missing financials — backfill complete.")
             break
     logger.info(
         "backfill finished: rounds=%d processed=%d failed=%d",
-        batch_idx, total_processed, total_failed,
+        batch_idx,
+        total_processed,
+        total_failed,
     )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Full-market financial backfill")
-    parser.add_argument("--batch", type=int, default=200,
-                        help="stocks per round (default 200)")
-    parser.add_argument("--max-batches", type=int, default=None,
-                        help="stop after N rounds (default: until done)")
+    parser.add_argument("--batch", type=int, default=200, help="stocks per round (default 200)")
+    parser.add_argument(
+        "--max-batches", type=int, default=None, help="stop after N rounds (default: until done)"
+    )
     args = parser.parse_args()
     asyncio.run(_run(batch=args.batch, max_batches=args.max_batches))
 

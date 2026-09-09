@@ -27,9 +27,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_BATCH_SIZE = 200
 
 
-async def list_stocks_missing_financials(
-    db: AsyncSession, *, limit: int
-) -> list[Stock]:
+async def list_stocks_missing_financials(db: AsyncSession, *, limit: int) -> list[Stock]:
     """Return up to ``limit`` stocks that have no financial report version yet."""
     done: set[int] = set(
         (await db.execute(select(FinancialReportVersion.stock_id).distinct())).scalars()
@@ -59,7 +57,9 @@ async def backfill_financial_batch(
         except Exception as exc:  # noqa: BLE001 — per-stock isolation
             logger.exception(
                 "financial backfill failed for %s/%s: %s",
-                stock.exchange, stock.symbol, exc,
+                stock.exchange,
+                stock.symbol,
+                exc,
             )
             failed.append(f"{stock.exchange}/{stock.symbol}")
             await db.rollback()
@@ -69,7 +69,8 @@ async def backfill_financial_batch(
     count = len(pending)
     logger.info(
         "financial backfill batch: processed=%d failed=%d",
-        count, len(failed),
+        count,
+        len(failed),
     )
     if failed:
         logger.warning("failed stocks: %s", ", ".join(failed))

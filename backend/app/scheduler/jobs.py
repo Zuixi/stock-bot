@@ -70,6 +70,7 @@ async def sse_post_close_job() -> None:
 # Daily data ingestion jobs (TuShare "daily" + "daily_basic" APIs)
 # ------------------------------------------------------------------
 
+
 async def _fetch_yesterday_daily_quotes() -> None:
     """Fetch yesterday's full-market daily quotes and persist to DB."""
     yesterday = date.today() - timedelta(days=1)
@@ -91,7 +92,11 @@ async def _fetch_yesterday_daily_quotes() -> None:
         async with async_session_factory() as db:
             result = await service.ingest_daily_quotes(db, trade_date)
             await db.commit()
-            logger.info("Daily quotes backfill: trade_date=%s upserted=%d", trade_date, result.get("upserted", 0))
+            logger.info(
+                "Daily quotes backfill: trade_date=%s upserted=%d",
+                trade_date,
+                result.get("upserted", 0),
+            )
     except Exception:
         logger.exception("Daily quotes backfill failed for trade_date=%s", trade_date)
 
@@ -110,14 +115,20 @@ async def _fetch_yesterday_daily_basic() -> None:
     try:
         async with async_session_factory() as db:
             if await daily_basic_repo.trade_date_exists(db, yesterday):
-                logger.info("Skipping daily_basic backfill — trade_date=%s already exists", trade_date)
+                logger.info(
+                    "Skipping daily_basic backfill — trade_date=%s already exists", trade_date
+                )
                 return
 
         service = TuShareIngestService()
         async with async_session_factory() as db:
             result = await service.ingest_daily_basic(db, trade_date)
             await db.commit()
-            logger.info("Daily basic backfill: trade_date=%s upserted=%d", trade_date, result.get("upserted", 0))
+            logger.info(
+                "Daily basic backfill: trade_date=%s upserted=%d",
+                trade_date,
+                result.get("upserted", 0),
+            )
     except Exception:
         logger.exception("Daily basic backfill failed for trade_date=%s", trade_date)
 
@@ -154,6 +165,7 @@ async def daily_basic_backfill_job() -> None:
 # Industry research metrics (dual-track: worker via MQ, scheduler direct)
 # ------------------------------------------------------------------
 
+
 async def industry_metrics_refresh_job() -> None:
     """Refresh industry research metrics (17:05 Mon-Fri, after quote backfills)."""
     from app.core.database import async_session_factory  # noqa: PLC0415
@@ -166,7 +178,9 @@ async def industry_metrics_refresh_job() -> None:
             await db.commit()
         logger.info(
             "Industry metrics refresh done: source=%s upserted=%s signal=%s",
-            result.get("source"), result.get("upserted"), result.get("signal"),
+            result.get("source"),
+            result.get("upserted"),
+            result.get("signal"),
         )
     except Exception:
         logger.exception("Industry metrics refresh failed")
@@ -192,7 +206,8 @@ async def financial_backfill_job() -> None:
             result = await backfill_financial_batch(db, batch_size=DEFAULT_BATCH_SIZE)
         logger.info(
             "Financial backfill done: processed=%s failed=%s",
-            result.get("processed"), result.get("failed"),
+            result.get("processed"),
+            result.get("failed"),
         )
     except Exception:
         logger.exception("Financial backfill failed")
@@ -216,7 +231,8 @@ async def securities_refresh_job() -> None:
             await db.commit()
         logger.info(
             "Securities refresh done: etf_upserted=%s cb_upserted=%s",
-            result.get("etf_upserted"), result.get("cb_upserted"),
+            result.get("etf_upserted"),
+            result.get("cb_upserted"),
         )
     except Exception:
         logger.exception("Securities refresh failed")

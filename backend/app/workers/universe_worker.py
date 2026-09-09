@@ -28,7 +28,8 @@ class UniverseWorker(BaseWorker):
                 cache = CacheClient(redis)
 
                 result = await service.ingest_stock_universe(
-                    db, exchange,
+                    db,
+                    exchange,
                     enrich_company=req.include_details,
                 )
 
@@ -39,7 +40,9 @@ class UniverseWorker(BaseWorker):
         except Exception as exc:
             logger.error("TuShare ingest failed: %s", exc, exc_info=True)
             return {
-                "inserted": 0, "skipped": 0,
-                "exchange": exchange, "source": "tushare",
+                "inserted": 0,
+                "skipped": 0,
+                "exchange": exchange,
+                "source": "tushare",
                 "error": str(exc),
             }

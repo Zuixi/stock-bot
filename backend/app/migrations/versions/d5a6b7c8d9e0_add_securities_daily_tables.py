@@ -8,15 +8,15 @@ P5 行情面：行业关联 ETF（TuShare fund_daily）与可转债（cb_daily�
 逐 (ts_code, trade_date) 幂等 upsert，代码清单由 industry registry 下发。
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "d5a6b7c8d9e0"
-down_revision: Union[str, None] = "c9d0e1f2a3b4"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "c9d0e1f2a3b4"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 _DAILY_COLUMNS = [
     sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -42,7 +42,7 @@ _DAILY_COLUMNS = [
 def _create_daily_table(table: str, uq_name: str, idx_name: str) -> None:
     op.create_table(
         table,
-        *_DAILY_COLUMNS,
+        *_DAILY_COLUMNS,  # type: ignore[arg-type]
         sa.UniqueConstraint("ts_code", "trade_date", name=uq_name),
     )
     op.create_index(idx_name, table, ["ts_code", "trade_date"], unique=False)
@@ -52,9 +52,7 @@ def upgrade() -> None:
     _create_daily_table(
         "fund_etf_daily", "uq_fund_etf_daily_code_date", "idx_fund_etf_daily_code_date"
     )
-    _create_daily_table(
-        "cb_daily", "uq_cb_daily_code_date", "idx_cb_daily_code_date"
-    )
+    _create_daily_table("cb_daily", "uq_cb_daily_code_date", "idx_cb_daily_code_date")
 
 
 def downgrade() -> None:

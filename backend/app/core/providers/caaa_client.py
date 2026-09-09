@@ -59,7 +59,9 @@ _TITLE_MONTH_RE = re.compile(r"(20\d{2})\s*年\s*(\d{1,2})\s*月份")
 # 兜底：正文句内"2026年4月末/1季度末能繁母猪存栏…"→对应月末
 _TEXT_MONTH_RE = re.compile(r"(20\d{2})\s*年\s*(\d{1,2})\s*月(?:末|底)")
 _TEXT_QUARTER_RE = re.compile(r"(20\d{2})\s*年\s*([1-4])\s*季度(?:末|底)")
-_PUBLISH_DATE_RE = re.compile(r"(?:原发表日期|发布日期|发布时间)[：:]\s*(20\d{2})-(\d{1,2})-(\d{1,2})")
+_PUBLISH_DATE_RE = re.compile(
+    r"(?:原发表日期|发布日期|发布时间)[：:]\s*(20\d{2})-(\d{1,2})-(\d{1,2})"
+)
 _URL_DATE_RE = re.compile(r"/(20\d{2})/(\d{2})(\d{2})/\d+\.html")
 # 栏目列表页条目：链接与标题（<a …><div class="news_title_fz …">标题</div>…）
 _INDEX_ITEM_RE = re.compile(
@@ -94,7 +96,7 @@ def parse_sow_article(raw_html: str, url: str) -> dict | None:
         return None
 
     # 环比取同一句（到下一个句号）：能繁句后紧跟"环比…%，同比…%"
-    tail = text[sow.end():]
+    tail = text[sow.end() :]
     stop = tail.find("。")
     sentence = tail if stop < 0 else tail[:stop]
     mom_pct: float | None = None
@@ -109,7 +111,7 @@ def parse_sow_article(raw_html: str, url: str) -> dict | None:
     if title_match is not None:
         period = _month_end(int(title_match.group(1)), int(title_match.group(2)))
     if period is None:
-        context = text[max(0, sow.start() - 40): sow.start()]
+        context = text[max(0, sow.start() - 40) : sow.start()]
         text_match = _TEXT_MONTH_RE.search(context)
         if text_match is not None:
             period = _month_end(int(text_match.group(1)), int(text_match.group(2)))
@@ -129,7 +131,9 @@ def parse_sow_article(raw_html: str, url: str) -> dict | None:
     article_date = ""
     publish = _PUBLISH_DATE_RE.search(text)
     if publish is not None:
-        article_date = f"{int(publish.group(1)):04d}-{int(publish.group(2)):02d}-{int(publish.group(3)):02d}"
+        article_date = (
+            f"{int(publish.group(1)):04d}-{int(publish.group(2)):02d}-{int(publish.group(3)):02d}"
+        )
     else:
         url_match = _URL_DATE_RE.search(url)
         if url_match is not None:

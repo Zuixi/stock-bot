@@ -36,6 +36,7 @@ import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.providers.tushare_client import TuShareClient, get_tushare_client
+from app.models.financial import FinancialReportVersion
 from app.models.stock import Stock
 from app.repositories import financial_repo, stock_repo
 from app.services.data_saver import DataSaver
@@ -161,16 +162,16 @@ class FinancialIngestService:
             set(income_map) | set(balance_map) | set(cashflow_map) | set(indicator_map)
         )
 
-        for end_date in end_dates:
+        for period_end in end_dates:
             await self._ingest_period(
                 db,
                 stock=stock,
                 ts_code=ts_code,
-                end_date=end_date,
-                income_rows=income_map.get(end_date, []),
-                balance_rows=balance_map.get(end_date, []),
-                cashflow_rows=cashflow_map.get(end_date, []),
-                indicator_rows=indicator_map.get(end_date, []),
+                end_date=period_end,
+                income_rows=income_map.get(period_end, []),
+                balance_rows=balance_map.get(period_end, []),
+                cashflow_rows=cashflow_map.get(period_end, []),
+                indicator_rows=indicator_map.get(period_end, []),
                 now=now,
             )
 
@@ -195,15 +196,13 @@ class FinancialIngestService:
     ) -> None:
         if df is None or df.empty:
             return
-        await self.saver.save_dataframe(
-            dataset, df, {"ts_code": stock.id}, exchange=stock.exchange
-        )
+        await self.saver.save_dataframe(dataset, df, {"ts_code": stock.id}, exchange=stock.exchange)
         for record in df.to_dict("records"):
             record_builtin = {k: _to_builtin(v) for k, v in record.items()}
             payload_hash = hashlib.sha256(
                 json.dumps(record_builtin, sort_keys=True, default=str).encode()
             ).hexdigest()
-            daily = _parse_date(record.get("end_date"))
+            _parse_date(record.get("end_date"))
             await financial_repo.save_raw_record(
                 db,
                 source="tushare",
@@ -247,8 +246,7 @@ class FinancialIngestService:
             or indicator.get("ann_date")
         )
         f_ann_date = _parse_date(
-            income.get("f_ann_date") or balance.get("f_ann_date")
-            or cashflow.get("f_ann_date")
+            income.get("f_ann_date") or balance.get("f_ann_date") or cashflow.get("f_ann_date")
         )
         update_flag = str(income.get("update_flag") or balance.get("update_flag") or "")
 
@@ -270,15 +268,9 @@ class FinancialIngestService:
             raw_record_id=None,
         )
 
-        await financial_repo.upsert_income_facts(
-            db, version.id, _income_facts(income)
-        )
-        await financial_repo.upsert_balance_facts(
-            db, version.id, _balance_facts(balance)
-        )
-        await financial_repo.upsert_cashflow_facts(
-            db, version.id, _cashflow_facts(cashflow)
-        )
+        await financial_repo.upsert_income_facts(db, version.id, _income_facts(income))
+        await financial_repo.upsert_balance_facts(db, version.id, _balance_facts(balance))
+        await financial_repo.upsert_cashflow_facts(db, version.id, _cashflow_facts(cashflow))
         await self._upsert_metrics_for_period(
             db, stock.id, version.id, income, balance, cashflow, indicator, now
         )
@@ -305,18 +297,52 @@ class FinancialIngestService:
 
         # (metric_key, value, unit, calc_method, quality_status)
         derived: list[tuple[str, float | None, str, str, str]] = [
-            ("gross_margin", _pct(revenue, revenue - operate_cost)
-             if operate_cost is not None else None, "%", "calculated_from_statement", "derived"),
-            ("net_margin", _pct(revenue, n_income_attr), "%", "calculated_from_statement", "derived"),
-            ("debt_to_asset", _pct(total_assets, total_liab), "%", "calculated_from_statement", "derived"),
-            ("roe_calc", _pct(equity, n_income_attr) if equity else None,
-             "%", "calculated_from_statement", "derived"),
-            ("ocf_to_net_profit",
-             (n_cashflow_act / n_income_attr) if (n_cashflow_act is not None and n_income_attr)
-             else None, "ratio", "calculated_from_statement", "derived"),
-            ("equity_multiplier",
-             (total_assets / equity) if (total_assets and equity) else None,
-             "ratio", "calculated_from_statement", "derived"),
+            (
+                "gross_margin",
+                _pct(revenue, revenue - operate_cost)
+                if revenue is not None and operate_cost is not None
+                else None,
+                "%",
+                "calculated_from_statement",
+                "derived",
+            ),
+            (
+                "net_margin",
+                _pct(revenue, n_income_attr),
+                "%",
+                "calculated_from_statement",
+                "derived",
+            ),
+            (
+                "debt_to_asset",
+                _pct(total_assets, total_liab),
+                "%",
+                "calculated_from_statement",
+                "derived",
+            ),
+            (
+                "roe_calc",
+                _pct(equity, n_income_attr) if equity else None,
+                "%",
+                "calculated_from_statement",
+                "derived",
+            ),
+            (
+                "ocf_to_net_profit",
+                (n_cashflow_act / n_income_attr)
+                if (n_cashflow_act is not None and n_income_attr)
+                else None,
+                "ratio",
+                "calculated_from_statement",
+                "derived",
+            ),
+            (
+                "equity_multiplier",
+                (total_assets / equity) if (total_assets and equity) else None,
+                "ratio",
+                "calculated_from_statement",
+                "derived",
+            ),
         ]
         # Provider-reported ratios — these take precedence (same key overwrites
         # the derived value above because upsert runs in list order).
@@ -338,9 +364,16 @@ class FinancialIngestService:
             if value is None or not math.isfinite(value) or not (-999 <= value <= 999):
                 continue
             await financial_repo.upsert_metric(
-                db, stock_id=stock_id, report_version_id=version_id,
-                metric_key=key, value=value, unit=unit, period_type="report",
-                calc_method=method, source="tushare", quality_status=quality,
+                db,
+                stock_id=stock_id,
+                report_version_id=version_id,
+                metric_key=key,
+                value=value,
+                unit=unit,
+                period_type="report",
+                calc_method=method,
+                source="tushare",
+                quality_status=quality,
                 as_of=now,
             )
         for key, src_field, unit, method, quality in provider:
@@ -348,9 +381,16 @@ class FinancialIngestService:
             if value is None:
                 continue
             await financial_repo.upsert_metric(
-                db, stock_id=stock_id, report_version_id=version_id,
-                metric_key=key, value=value, unit=unit, period_type="report",
-                calc_method=method, source="tushare", quality_status=quality,
+                db,
+                stock_id=stock_id,
+                report_version_id=version_id,
+                metric_key=key,
+                value=value,
+                unit=unit,
+                period_type="report",
+                calc_method=method,
+                source="tushare",
+                quality_status=quality,
                 as_of=now,
             )
 

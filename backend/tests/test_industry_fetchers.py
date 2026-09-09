@@ -33,26 +33,34 @@ def _lh_df(rows: list[tuple[str, float]]) -> pd.DataFrame:
 
 def _default_dfs() -> dict[str, pd.DataFrame]:
     return {
-        "fetch_hog_price_trend": _soozhu_df([
-            (PAST2.isoformat(), 20.5),
-            (PAST1.isoformat(), -5.0),   # 现货护栏 0 < v < 100 之外 → 剔除
-            (TODAY.isoformat(), 20.8),
-        ]),
-        "fetch_corn_price": _soozhu_df([
-            (PAST2.isoformat(), 2.41),
-            (PAST1.isoformat(), 2.43),
-            (TODAY.isoformat(), 2.45),
-        ]),
-        "fetch_soybean_meal_price": _soozhu_df([
-            (PAST2.isoformat(), 3.10),
-            (PAST1.isoformat(), 3.12),
-            (TODAY.isoformat(), 3.15),
-        ]),
-        "fetch_lh_future_daily": _lh_df([
-            (PAST1.isoformat(), 999999.0),  # 期货护栏 v < 100000 之外 → 剔除
-            (TODAY.isoformat(), 13500.0),
-            (FUTURE.isoformat(), 14000.0),  # 未来日期 → 剔除
-        ]),
+        "fetch_hog_price_trend": _soozhu_df(
+            [
+                (PAST2.isoformat(), 20.5),
+                (PAST1.isoformat(), -5.0),  # 现货护栏 0 < v < 100 之外 → 剔除
+                (TODAY.isoformat(), 20.8),
+            ]
+        ),
+        "fetch_corn_price": _soozhu_df(
+            [
+                (PAST2.isoformat(), 2.41),
+                (PAST1.isoformat(), 2.43),
+                (TODAY.isoformat(), 2.45),
+            ]
+        ),
+        "fetch_soybean_meal_price": _soozhu_df(
+            [
+                (PAST2.isoformat(), 3.10),
+                (PAST1.isoformat(), 3.12),
+                (TODAY.isoformat(), 3.15),
+            ]
+        ),
+        "fetch_lh_future_daily": _lh_df(
+            [
+                (PAST1.isoformat(), 999999.0),  # 期货护栏 v < 100000 之外 → 剔除
+                (TODAY.isoformat(), 13500.0),
+                (FUTURE.isoformat(), 14000.0),  # 未来日期 → 剔除
+            ]
+        ),
     }
 
 
@@ -113,17 +121,17 @@ async def test_fetch_maps_specs_and_drops_dirty_rows():
     lh = by_key["lh_future_main"][0]
     assert lh["period"] == TODAY and lh["value"] == 13500.0
 
-    assert FUTURE not in {r["period"] for r in rows}   # 未来日期已剔除
-    assert -5.0 not in {r["value"] for r in rows}      # 现货护栏
+    assert FUTURE not in {r["period"] for r in rows}  # 未来日期已剔除
+    assert -5.0 not in {r["value"] for r in rows}  # 现货护栏
     assert 999999.0 not in {r["value"] for r in rows}  # 期货护栏
 
 
 async def test_fetch_isolates_per_metric_failure():
-    rows = await _fetch_akshare_rows(
-        PIG_INDUSTRY, client=FakeClient(fail=("fetch_corn_price",))
-    )
+    rows = await _fetch_akshare_rows(PIG_INDUSTRY, client=FakeClient(fail=("fetch_corn_price",)))
     assert {r["metric_key"] for r in rows} == {
-        "hog_price", "soybean_meal_price", "lh_future_main",
+        "hog_price",
+        "soybean_meal_price",
+        "lh_future_main",
     }, "单指标上游失效不得牵连其他指标"
 
 

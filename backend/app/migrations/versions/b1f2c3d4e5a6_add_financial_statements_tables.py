@@ -5,15 +5,15 @@ Revises: e6f7a8b9c0d1
 Create Date: 2026-09-09 09:00:00.000000
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b1f2c3d4e5a6"
-down_revision: Union[str, None] = "e6f7a8b9c0d1"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "e6f7a8b9c0d1"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -30,14 +30,24 @@ def upgrade() -> None:
         sa.Column("payload", sa.dialects.postgresql.JSONB(), nullable=True),
         sa.Column("payload_hash", sa.String(length=64), nullable=True),
         sa.Column("fetched_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
-            "source", "dataset", "source_record_key", "payload_hash",
+            "source",
+            "dataset",
+            "source_record_key",
+            "payload_hash",
             name="uq_financial_raw_record",
         ),
     )
-    op.create_index("idx_financial_raw_source_dataset", "financial_raw_records", ["source", "dataset"])
+    op.create_index(
+        "idx_financial_raw_source_dataset", "financial_raw_records", ["source", "dataset"]
+    )
     op.create_index("idx_financial_raw_stock", "financial_raw_records", ["stock_id"])
 
     # ── financial_report_versions ──────────────────────────────────────
@@ -55,18 +65,31 @@ def upgrade() -> None:
         sa.Column("source_record_key", sa.String(length=128), nullable=True),
         sa.Column("update_flag", sa.String(length=8), nullable=True),
         sa.Column("currency", sa.String(length=8), server_default="CNY", nullable=False),
-        sa.Column("quality_status", sa.String(length=16), server_default="reported", nullable=False),
+        sa.Column(
+            "quality_status", sa.String(length=16), server_default="reported", nullable=False
+        ),
         sa.Column("as_of", sa.DateTime(timezone=True), nullable=False),
         sa.Column("raw_record_id", sa.Integer(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(["stock_id"], ["stocks.id"], name="fk_fin_report_stock"),
         sa.UniqueConstraint(
-            "stock_id", "end_date", "report_type", "comp_type", "source",
+            "stock_id",
+            "end_date",
+            "report_type",
+            "comp_type",
+            "source",
             name="uq_financial_report_version",
         ),
     )
-    op.create_index("idx_financial_report_stock_date", "financial_report_versions", ["stock_id", "end_date"])
+    op.create_index(
+        "idx_financial_report_stock_date", "financial_report_versions", ["stock_id", "end_date"]
+    )
     op.create_index("idx_financial_report_ann_date", "financial_report_versions", ["ann_date"])
 
     # ── income_statement_facts ─────────────────────────────────────────
@@ -89,8 +112,10 @@ def upgrade() -> None:
         sa.Column("diluted_eps", sa.Numeric(16, 6), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(
-            ["report_version_id"], ["financial_report_versions.id"],
-            name="fk_income_stmt_version", ondelete="CASCADE",
+            ["report_version_id"],
+            ["financial_report_versions.id"],
+            name="fk_income_stmt_version",
+            ondelete="CASCADE",
         ),
         sa.UniqueConstraint("report_version_id", name="uq_income_statement_facts_ver"),
     )
@@ -115,8 +140,10 @@ def upgrade() -> None:
         sa.Column("bond_payable", sa.Numeric(20, 2), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(
-            ["report_version_id"], ["financial_report_versions.id"],
-            name="fk_balance_stmt_version", ondelete="CASCADE",
+            ["report_version_id"],
+            ["financial_report_versions.id"],
+            name="fk_balance_stmt_version",
+            ondelete="CASCADE",
         ),
         sa.UniqueConstraint("report_version_id", name="uq_balance_sheet_facts_ver"),
     )
@@ -136,8 +163,10 @@ def upgrade() -> None:
         sa.Column("c_recp_from_release_sale_sg", sa.Numeric(20, 2), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(
-            ["report_version_id"], ["financial_report_versions.id"],
-            name="fk_cashflow_stmt_version", ondelete="CASCADE",
+            ["report_version_id"],
+            ["financial_report_versions.id"],
+            name="fk_cashflow_stmt_version",
+            ondelete="CASCADE",
         ),
         sa.UniqueConstraint("report_version_id", name="uq_cash_flow_statement_facts_ver"),
     )
@@ -152,18 +181,34 @@ def upgrade() -> None:
         sa.Column("value", sa.Numeric(20, 6), nullable=True),
         sa.Column("unit", sa.String(length=16), nullable=True),
         sa.Column("period_type", sa.String(length=16), nullable=True),
-        sa.Column("calc_method", sa.String(length=32), server_default="reported_by_provider", nullable=False),
+        sa.Column(
+            "calc_method",
+            sa.String(length=32),
+            server_default="reported_by_provider",
+            nullable=False,
+        ),
         sa.Column("source", sa.String(length=64), nullable=False),
-        sa.Column("quality_status", sa.String(length=16), server_default="reported", nullable=False),
+        sa.Column(
+            "quality_status", sa.String(length=16), server_default="reported", nullable=False
+        ),
         sa.Column("as_of", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(
-            ["report_version_id"], ["financial_report_versions.id"],
-            name="fk_financial_metric_version", ondelete="CASCADE",
+            ["report_version_id"],
+            ["financial_report_versions.id"],
+            name="fk_financial_metric_version",
+            ondelete="CASCADE",
         ),
         sa.UniqueConstraint(
-            "stock_id", "report_version_id", "metric_key",
+            "stock_id",
+            "report_version_id",
+            "metric_key",
             name="uq_financial_metric_key",
         ),
         sa.CheckConstraint(
@@ -171,7 +216,9 @@ def upgrade() -> None:
             name="chk_fin_quality_status",
         ),
     )
-    op.create_index("idx_financial_metric_stock_key", "financial_metrics", ["stock_id", "metric_key"])
+    op.create_index(
+        "idx_financial_metric_stock_key", "financial_metrics", ["stock_id", "metric_key"]
+    )
 
 
 def downgrade() -> None:

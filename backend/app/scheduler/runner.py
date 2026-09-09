@@ -176,6 +176,7 @@ async def main() -> None:
         pass
     finally:
         from app.services.sse_scraper_service import close_http_client  # noqa: PLC0415
+
         await close_http_client()
         scheduler.shutdown(wait=False)
         logger.info("Scheduler stopped")

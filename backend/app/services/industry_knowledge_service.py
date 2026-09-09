@@ -47,9 +47,7 @@ def assemble_knowledge(entries: list[tuple[str, dict]]) -> IndustryKnowledgeOut:
     return IndustryKnowledgeOut(org=orgs, principle=principle, mindmap=mindmap)
 
 
-async def get_industry_knowledge(
-    db: AsyncSession, industry_key: str
-) -> IndustryKnowledgeOut:
+async def get_industry_knowledge(db: AsyncSession, industry_key: str) -> IndustryKnowledgeOut:
     """知识库聚合：已知行业无内容 → 空形状 200；未知行业 → UnknownIndustryError(404)。"""
     if get_industry(industry_key) is None:
         raise UnknownIndustryError(f"Industry '{industry_key}' is not configured in registry")

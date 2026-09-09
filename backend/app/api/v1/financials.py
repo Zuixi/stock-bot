@@ -21,7 +21,7 @@ router = APIRouter()
 
 
 @router.get("/{symbol}/financial-summary", response_model=FinancialSummaryOut)
-async def get_financial_summary(exchange: str, symbol: str, db: DbDep):
+async def get_financial_summary(exchange: str, symbol: str, db: DbDep) -> FinancialSummaryOut:
     try:
         return await financial_service.get_financial_summary(db, exchange, symbol)
     except LookupError as e:
@@ -34,7 +34,7 @@ async def get_financial_statements(
     symbol: str,
     db: DbDep,
     period_count: Annotated[int, Query(ge=1, le=40)] = 8,
-):
+) -> FinancialStatementsOut:
     try:
         return await financial_service.get_financial_statements(
             db, exchange, symbol, period_count=period_count
@@ -52,12 +52,10 @@ async def get_financial_metrics_history(
     symbol: str,
     db: DbDep,
     metric_keys: Annotated[str, Query(...)] = "roe,gross_margin,net_margin,debt_to_asset",
-):
+) -> list[MetricHistoryOut]:
     keys = [k.strip() for k in metric_keys.split(",") if k.strip()]
     try:
-        return await financial_service.get_metrics_history(
-            db, exchange, symbol, metric_keys=keys
-        )
+        return await financial_service.get_metrics_history(db, exchange, symbol, metric_keys=keys)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
@@ -69,7 +67,7 @@ async def get_valuation_history(
     db: DbDep,
     metric: str = "pe_ttm",
     range: str = "3y",
-):
+) -> ValuationHistoryOut:
     if range not in ("1y", "3y", "5y"):
         raise HTTPException(status_code=422, detail="range must be one of 1y/3y/5y")
     try:
