@@ -129,18 +129,25 @@ async def upsert_dragon_tiger(db: AsyncSession, rows: list[dict[str, Any]]) -> i
     """
     if not rows:
         return 0
-    deduped = list({
-        (r["trade_date"], r["ts_code"], r["reason"]): r for r in rows
-    }.values())
+    deduped = list({(r["trade_date"], r["ts_code"], r["reason"]): r for r in rows}.values())
     values = [
         {
-            "trade_date": r["trade_date"], "ts_code": r["ts_code"],
-            "name": r.get("name"), "close": r.get("close"), "pct_change": r.get("pct_change"),
-            "turnover_rate": r.get("turnover_rate"), "amount": r.get("amount"),
-            "l_buy": r.get("l_buy"), "l_sell": r.get("l_sell"), "l_amount": r.get("l_amount"),
-            "net_amount": r.get("net_amount"), "net_rate": r.get("net_rate"),
-            "amount_rate": r.get("amount_rate"), "float_values": r.get("float_values"),
-            "reason": r["reason"], "source": "tushare:top_list",
+            "trade_date": r["trade_date"],
+            "ts_code": r["ts_code"],
+            "name": r.get("name"),
+            "close": r.get("close"),
+            "pct_change": r.get("pct_change"),
+            "turnover_rate": r.get("turnover_rate"),
+            "amount": r.get("amount"),
+            "l_buy": r.get("l_buy"),
+            "l_sell": r.get("l_sell"),
+            "l_amount": r.get("l_amount"),
+            "net_amount": r.get("net_amount"),
+            "net_rate": r.get("net_rate"),
+            "amount_rate": r.get("amount_rate"),
+            "float_values": r.get("float_values"),
+            "reason": r["reason"],
+            "source": "tushare:top_list",
         }
         for r in deduped
     ]
@@ -197,9 +204,14 @@ async def upsert_block_trades(db: AsyncSession, rows: list[dict[str, Any]]) -> i
         return 0
     values = [
         {
-            "trade_date": r["trade_date"], "ts_code": r["ts_code"],
-            "price": r.get("price"), "volume": r.get("volume"), "amount": r.get("amount"),
-            "buyer": r.get("buyer"), "seller": r.get("seller"), "source": "tushare:block_trade",
+            "trade_date": r["trade_date"],
+            "ts_code": r["ts_code"],
+            "price": r.get("price"),
+            "volume": r.get("volume"),
+            "amount": r.get("amount"),
+            "buyer": r.get("buyer"),
+            "seller": r.get("seller"),
+            "source": "tushare:block_trade",
         }
         for r in rows
     ]
@@ -236,12 +248,19 @@ async def list_block_trades(
     stmt = stmt.order_by(BlockTrade.amount.desc().nulls_last()).limit(limit)
     rows: list[dict] = []
     for trade, stock_name in (await db.execute(stmt)).all():
-        rows.append({
-            "trade_date": trade.trade_date.isoformat(), "ts_code": trade.ts_code,
-            "symbol": trade.ts_code.split(".")[0], "name": stock_name,
-            "price": trade.price, "volume": trade.volume, "amount": trade.amount,
-            "buyer": trade.buyer, "seller": trade.seller,
-        })
+        rows.append(
+            {
+                "trade_date": trade.trade_date.isoformat(),
+                "ts_code": trade.ts_code,
+                "symbol": trade.ts_code.split(".")[0],
+                "name": stock_name,
+                "price": trade.price,
+                "volume": trade.volume,
+                "amount": trade.amount,
+                "buyer": trade.buyer,
+                "seller": trade.seller,
+            }
+        )
     return rows
 
 
@@ -254,9 +273,13 @@ async def upsert_share_floats(db: AsyncSession, rows: list[dict[str, Any]]) -> i
         return 0
     values = [
         {
-            "ann_date": r.get("ann_date"), "float_date": r["float_date"], "ts_code": r["ts_code"],
-            "float_share": r.get("float_share"), "float_ratio": r.get("float_ratio"),
-            "holder_name": r.get("holder_name"), "share_type": r.get("share_type"),
+            "ann_date": r.get("ann_date"),
+            "float_date": r["float_date"],
+            "ts_code": r["ts_code"],
+            "float_share": r.get("float_share"),
+            "float_ratio": r.get("float_ratio"),
+            "holder_name": r.get("holder_name"),
+            "share_type": r.get("share_type"),
             "source": "tushare:share_float",
         }
         for r in rows
@@ -287,13 +310,19 @@ async def list_share_floats(
     stmt = stmt.order_by(nullslast(desc(ShareFloat.float_date))).limit(limit)
     rows: list[dict] = []
     for sf, stock_name in (await db.execute(stmt)).all():
-        rows.append({
-            "ann_date": sf.ann_date.isoformat() if sf.ann_date else None,
-            "float_date": sf.float_date.isoformat(), "ts_code": sf.ts_code,
-            "symbol": sf.ts_code.split(".")[0], "name": stock_name,
-            "float_share": sf.float_share, "float_ratio": sf.float_ratio,
-            "holder_name": sf.holder_name, "share_type": sf.share_type,
-        })
+        rows.append(
+            {
+                "ann_date": sf.ann_date.isoformat() if sf.ann_date else None,
+                "float_date": sf.float_date.isoformat(),
+                "ts_code": sf.ts_code,
+                "symbol": sf.ts_code.split(".")[0],
+                "name": stock_name,
+                "float_share": sf.float_share,
+                "float_ratio": sf.float_ratio,
+                "holder_name": sf.holder_name,
+                "share_type": sf.share_type,
+            }
+        )
     return rows
 
 
@@ -304,15 +333,18 @@ async def upsert_repurchases(db: AsyncSession, rows: list[dict[str, Any]]) -> in
     """
     if not rows:
         return 0
-    deduped = list({
-        (r["ann_date"], r["ts_code"], r["proc"]): r for r in rows
-    }.values())
+    deduped = list({(r["ann_date"], r["ts_code"], r["proc"]): r for r in rows}.values())
     values = [
         {
-            "ann_date": r["ann_date"], "ts_code": r["ts_code"],
-            "end_date": r.get("end_date"), "proc": r["proc"], "exp_date": r.get("exp_date"),
-            "vol": r.get("vol"), "amount": r.get("amount"),
-            "high_limit": r.get("high_limit"), "low_limit": r.get("low_limit"),
+            "ann_date": r["ann_date"],
+            "ts_code": r["ts_code"],
+            "end_date": r.get("end_date"),
+            "proc": r["proc"],
+            "exp_date": r.get("exp_date"),
+            "vol": r.get("vol"),
+            "amount": r.get("amount"),
+            "high_limit": r.get("high_limit"),
+            "low_limit": r.get("low_limit"),
             "source": "tushare:repurchase",
         }
         for r in deduped
@@ -353,13 +385,19 @@ async def list_repurchases(
     stmt = stmt.order_by(nullslast(desc(StockRepurchase.ann_date))).limit(limit)
     rows: list[dict] = []
     for rp, stock_name in (await db.execute(stmt)).all():
-        rows.append({
-            "ann_date": rp.ann_date.isoformat(), "ts_code": rp.ts_code,
-            "symbol": rp.ts_code.split(".")[0], "name": stock_name,
-            "proc": rp.proc, "end_date": rp.end_date.isoformat() if rp.end_date else None,
-            "exp_date": rp.exp_date.isoformat() if rp.exp_date else None,
-            "vol": rp.vol, "amount": rp.amount,
-        })
+        rows.append(
+            {
+                "ann_date": rp.ann_date.isoformat(),
+                "ts_code": rp.ts_code,
+                "symbol": rp.ts_code.split(".")[0],
+                "name": stock_name,
+                "proc": rp.proc,
+                "end_date": rp.end_date.isoformat() if rp.end_date else None,
+                "exp_date": rp.exp_date.isoformat() if rp.exp_date else None,
+                "vol": rp.vol,
+                "amount": rp.amount,
+            }
+        )
     return rows
 
 
@@ -395,11 +433,16 @@ async def upsert_market_moneyflow_daily(db: AsyncSession, rows: list[dict]) -> i
         return 0
     values = [
         {
-            "trade_date": r["trade_date"], "main_net": r.get("main_net"),
-            "super_large_net": r.get("super_large_net"), "large_net": r.get("large_net"),
-            "mid_net": r.get("mid_net"), "small_net": r.get("small_net"),
-            "main_ratio": r.get("main_ratio"), "close": r.get("close"),
-            "pct_change": r.get("pct_change"), "amount": r.get("amount"),
+            "trade_date": r["trade_date"],
+            "main_net": r.get("main_net"),
+            "super_large_net": r.get("super_large_net"),
+            "large_net": r.get("large_net"),
+            "mid_net": r.get("mid_net"),
+            "small_net": r.get("small_net"),
+            "main_ratio": r.get("main_ratio"),
+            "close": r.get("close"),
+            "pct_change": r.get("pct_change"),
+            "amount": r.get("amount"),
             "source": r.get("source") or "em:fflow_daykline",
         }
         for r in rows
@@ -429,11 +472,7 @@ async def upsert_market_moneyflow_daily(db: AsyncSession, rows: list[dict]) -> i
 
 async def list_market_moneyflow_daily(db: AsyncSession, days: int) -> list[MarketMoneyflowDaily]:
     """最近 N 个交易日的大盘资金流日线，升序。"""
-    stmt = (
-        select(MarketMoneyflowDaily)
-        .order_by(MarketMoneyflowDaily.trade_date.desc())
-        .limit(days)
-    )
+    stmt = select(MarketMoneyflowDaily).order_by(MarketMoneyflowDaily.trade_date.desc()).limit(days)
     rows = list((await db.execute(stmt)).scalars().all())
     rows.reverse()
     return rows

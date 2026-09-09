@@ -78,7 +78,10 @@ class EastmoneyClient:
             _SNAPSHOT_BASE,
             "/api/qt/ulist.np/get",
             {
-                "ut": _EM_UT, "fltt": 2, "invt": 2, "np": 1,
+                "ut": _EM_UT,
+                "fltt": 2,
+                "invt": 2,
+                "np": 1,
                 "fields": "f2,f3,f4,f12,f13,f14",
                 "secids": ",".join(secids),
             },
@@ -107,8 +110,14 @@ class EastmoneyClient:
             _CLIST_BASE,
             "/api/qt/clist/get",
             {
-                "pn": 1, "pz": 100, "po": 1, "np": 1, "fltt": 2, "invt": 2,
-                "fid": "f62", "fs": fs,
+                "pn": 1,
+                "pz": 100,
+                "po": 1,
+                "np": 1,
+                "fltt": 2,
+                "invt": 2,
+                "fid": "f62",
+                "fs": fs,
                 "fields": "f12,f14,f3,f62,f66,f72,f104,f105,f128,f136,f140,f184",
             },
         )
@@ -138,7 +147,10 @@ class EastmoneyClient:
             _SNAPSHOT_BASE,
             "/api/qt/ulist.np/get",
             {
-                "ut": _EM_UT, "fltt": 2, "invt": 2, "np": 1,
+                "ut": _EM_UT,
+                "fltt": 2,
+                "invt": 2,
+                "np": 1,
                 "fields": "f12,f14,f6,f62,f66,f72,f78,f84,f184",
                 "secids": "1.000001,0.399001",
             },
@@ -148,13 +160,19 @@ class EastmoneyClient:
         for d in diff:
             if _num(d.get("f62")) is None:
                 continue
-            markets.append({
-                "code": d.get("f12"), "name": d.get("f14"),
-                "amount": _num(d.get("f6")),  # 成交额，元
-                "main_net": _num(d.get("f62")), "super_large_net": _num(d.get("f66")),
-                "large_net": _num(d.get("f72")), "mid_net": _num(d.get("f78")),
-                "small_net": _num(d.get("f84")), "main_ratio": _num(d.get("f184")),
-            })
+            markets.append(
+                {
+                    "code": d.get("f12"),
+                    "name": d.get("f14"),
+                    "amount": _num(d.get("f6")),  # 成交额，元
+                    "main_net": _num(d.get("f62")),
+                    "super_large_net": _num(d.get("f66")),
+                    "large_net": _num(d.get("f72")),
+                    "mid_net": _num(d.get("f78")),
+                    "small_net": _num(d.get("f84")),
+                    "main_ratio": _num(d.get("f184")),
+                }
+            )
 
         def _sum(field: str) -> float | None:
             if not markets:
@@ -164,8 +182,10 @@ class EastmoneyClient:
         return {
             "total": {
                 "amount": _sum("amount"),  # 成交额，元
-                "main_net": _sum("main_net"), "super_large_net": _sum("super_large_net"),
-                "large_net": _sum("large_net"), "mid_net": _sum("mid_net"),
+                "main_net": _sum("main_net"),
+                "super_large_net": _sum("super_large_net"),
+                "large_net": _sum("large_net"),
+                "mid_net": _sum("mid_net"),
                 "small_net": _sum("small_net"),
             },
             "markets": markets,
@@ -181,10 +201,13 @@ class EastmoneyClient:
             _HIS_BASE,
             "/api/qt/stock/fflow/daykline/get",
             {
-                "lmt": days, "klt": 101, "ut": _HIS_UT,
+                "lmt": days,
+                "klt": 101,
+                "ut": _HIS_UT,
                 "fields1": "f1,f2,f3,f7",
                 "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
-                "secid": "1.000001", "secid2": "0.399001",
+                "secid": "1.000001",
+                "secid2": "0.399001",
             },
         )
         klines = (data.get("data") or {}).get("klines") or []
@@ -200,13 +223,20 @@ class EastmoneyClient:
                     logger.warning("fflow daykline identity broken, skip: %s", p[0])
                     continue
             amount = _kf(p[13])
-            rows.append({
-                "trade_date": datetime.strptime(p[0], "%Y-%m-%d").date(),
-                "main_net": main_net, "small_net": _kf(p[2]), "mid_net": _kf(p[3]),
-                "large_net": large_net, "super_large_net": super_net,
-                "main_ratio": _kf(p[6]), "close": _kf(p[11]), "pct_change": _kf(p[12]),
-                "amount": amount * 1e8 if amount is not None else None,  # 源为亿元
-            })
+            rows.append(
+                {
+                    "trade_date": datetime.strptime(p[0], "%Y-%m-%d").date(),
+                    "main_net": main_net,
+                    "small_net": _kf(p[2]),
+                    "mid_net": _kf(p[3]),
+                    "large_net": large_net,
+                    "super_large_net": super_net,
+                    "main_ratio": _kf(p[6]),
+                    "close": _kf(p[11]),
+                    "pct_change": _kf(p[12]),
+                    "amount": amount * 1e8 if amount is not None else None,  # 源为亿元
+                }
+            )
         return rows
 
 

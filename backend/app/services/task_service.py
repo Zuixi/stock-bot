@@ -115,9 +115,7 @@ async def trigger_fetch_securities(
     return TaskOut.model_validate(task)
 
 
-async def trigger_fetch_market_data(
-    db: AsyncSession, req: MarketDataFetchRequest
-) -> TaskOut:
+async def trigger_fetch_market_data(db: AsyncSession, req: MarketDataFetchRequest) -> TaskOut:
     """Trigger a market-data ingest task (worker dispatches by req.type)."""
     payload = {"type": req.type, **(req.params or {})}
     task = await _dispatch_task(db, "fetch_market_data", "market_data.fetch", payload)
@@ -125,9 +123,7 @@ async def trigger_fetch_market_data(
     return TaskOut.model_validate(task)
 
 
-async def get_task(
-    db: AsyncSession, cache: CacheClient, task_id: uuid.UUID
-) -> TaskOut | None:
+async def get_task(db: AsyncSession, cache: CacheClient, task_id: uuid.UUID) -> TaskOut | None:
     cache_key = f"task:status:{task_id}"
     cached = await cache.get(cache_key)
     if cached:

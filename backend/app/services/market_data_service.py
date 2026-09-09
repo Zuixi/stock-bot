@@ -28,40 +28,76 @@ _SH = ZoneInfo("Asia/Shanghai")
 
 GLOBAL_INDICES: list[dict[str, str]] = [
     {
-        "ts_code": "000001.SH", "name": "上证指数", "market": "CN",
-        "region": "asia", "em_secid": "1.000001", "source": "index_daily",
+        "ts_code": "000001.SH",
+        "name": "上证指数",
+        "market": "CN",
+        "region": "asia",
+        "em_secid": "1.000001",
+        "source": "index_daily",
     },
     {
-        "ts_code": "399001.SZ", "name": "深证成指", "market": "CN",
-        "region": "asia", "em_secid": "0.399001", "source": "index_daily",
+        "ts_code": "399001.SZ",
+        "name": "深证成指",
+        "market": "CN",
+        "region": "asia",
+        "em_secid": "0.399001",
+        "source": "index_daily",
     },
     {
-        "ts_code": "399006.SZ", "name": "创业板指", "market": "CN",
-        "region": "asia", "em_secid": "0.399006", "source": "index_daily",
+        "ts_code": "399006.SZ",
+        "name": "创业板指",
+        "market": "CN",
+        "region": "asia",
+        "em_secid": "0.399006",
+        "source": "index_daily",
     },
     {
-        "ts_code": "HSI", "name": "恒生指数", "market": "HK",
-        "region": "asia", "em_secid": "100.HSI", "source": "index_global",
+        "ts_code": "HSI",
+        "name": "恒生指数",
+        "market": "HK",
+        "region": "asia",
+        "em_secid": "100.HSI",
+        "source": "index_global",
     },
     {
-        "ts_code": "N225", "name": "日经225", "market": "JP",
-        "region": "asia", "em_secid": "100.N225", "source": "index_global",
+        "ts_code": "N225",
+        "name": "日经225",
+        "market": "JP",
+        "region": "asia",
+        "em_secid": "100.N225",
+        "source": "index_global",
     },
     {
-        "ts_code": "KS11", "name": "韩国KOSPI", "market": "KR",
-        "region": "asia", "em_secid": "100.KS11", "source": "index_global",
+        "ts_code": "KS11",
+        "name": "韩国KOSPI",
+        "market": "KR",
+        "region": "asia",
+        "em_secid": "100.KS11",
+        "source": "index_global",
     },
     {
-        "ts_code": "DJI", "name": "道琼斯", "market": "US",
-        "region": "americas", "em_secid": "100.DJIA", "source": "index_global",
+        "ts_code": "DJI",
+        "name": "道琼斯",
+        "market": "US",
+        "region": "americas",
+        "em_secid": "100.DJIA",
+        "source": "index_global",
     },
     {
-        "ts_code": "SPX", "name": "标普500", "market": "US",
-        "region": "americas", "em_secid": "100.SPX", "source": "index_global",
+        "ts_code": "SPX",
+        "name": "标普500",
+        "market": "US",
+        "region": "americas",
+        "em_secid": "100.SPX",
+        "source": "index_global",
     },
     {
-        "ts_code": "IXIC", "name": "纳斯达克", "market": "US",
-        "region": "americas", "em_secid": "100.NDX", "source": "index_global",
+        "ts_code": "IXIC",
+        "name": "纳斯达克",
+        "market": "US",
+        "region": "americas",
+        "em_secid": "100.NDX",
+        "source": "index_global",
     },
 ]
 
@@ -208,27 +244,43 @@ async def get_global_index_cards(cache: CacheClient | None = None) -> list[dict[
             q = quotes.get(_em_code(g["em_secid"]))
             now = datetime.now(_SH).isoformat(timespec="seconds")
             if q and q.get("price") is not None:
-                cards.append({
-                    "ts_code": g["ts_code"], "name": q.get("name") or g["name"],
-                    "market": g["market"], "region": g["region"],
-                    "price": q["price"], "change": q.get("change"),
-                    "pct_change": q.get("pct_change"),
-                    "spark": spark, "updated_at": now, "source": "realtime",
-                })
+                cards.append(
+                    {
+                        "ts_code": g["ts_code"],
+                        "name": q.get("name") or g["name"],
+                        "market": g["market"],
+                        "region": g["region"],
+                        "price": q["price"],
+                        "change": q.get("change"),
+                        "pct_change": q.get("pct_change"),
+                        "spark": spark,
+                        "updated_at": now,
+                        "source": "realtime",
+                    }
+                )
             else:
                 # 全球指数行 pre_close 为 NULL → 用相邻收盘价逐日差值算涨跌
                 prev = spark[-2] if len(spark) >= 2 else None
                 change = (
                     round(last_close - prev, 2)
-                    if (last_close is not None and prev is not None) else None
+                    if (last_close is not None and prev is not None)
+                    else None
                 )
                 pct = round(change / prev * 100, 2) if (change is not None and prev) else None
-                cards.append({
-                    "ts_code": g["ts_code"], "name": g["name"],
-                    "market": g["market"], "region": g["region"],
-                    "price": last_close, "change": change, "pct_change": pct,
-                    "spark": spark, "updated_at": now, "source": "eod",
-                })
+                cards.append(
+                    {
+                        "ts_code": g["ts_code"],
+                        "name": g["name"],
+                        "market": g["market"],
+                        "region": g["region"],
+                        "price": last_close,
+                        "change": change,
+                        "pct_change": pct,
+                        "spark": spark,
+                        "updated_at": now,
+                        "source": "eod",
+                    }
+                )
 
     if cache is not None and any(c["price"] is not None for c in cards):
         await cache.set(GLOBAL_INDICES_CACHE_KEY, cards, ttl=GLOBAL_INDICES_TTL)
@@ -276,15 +328,22 @@ async def get_sector_moneyflow(
         for snap in await market_data_repo.list_sector_moneyflow(
             db, _today_sh(), dimension, SECTOR_MONEYFLOW_CACHE_LIMIT
         ):
-            rows.append({
-                "board_code": snap.board_code, "board_name": snap.board_name,
-                "pct_change": snap.pct_change, "main_net_inflow": snap.main_net_inflow,
-                "super_large_net": snap.super_large_net, "large_net": snap.large_net,
-                "main_net_ratio": snap.main_net_ratio,
-                "up_count": snap.up_count, "down_count": snap.down_count,
-                "lead_stock_name": snap.lead_stock_name, "lead_stock_code": snap.lead_stock_code,
-                "lead_stock_pct": snap.lead_stock_pct,
-            })
+            rows.append(
+                {
+                    "board_code": snap.board_code,
+                    "board_name": snap.board_name,
+                    "pct_change": snap.pct_change,
+                    "main_net_inflow": snap.main_net_inflow,
+                    "super_large_net": snap.super_large_net,
+                    "large_net": snap.large_net,
+                    "main_net_ratio": snap.main_net_ratio,
+                    "up_count": snap.up_count,
+                    "down_count": snap.down_count,
+                    "lead_stock_name": snap.lead_stock_name,
+                    "lead_stock_code": snap.lead_stock_code,
+                    "lead_stock_pct": snap.lead_stock_pct,
+                }
+            )
     if cache is not None and rows:
         await cache.set(key, rows, ttl=SECTOR_MONEYFLOW_TTL)
     return rows[:limit]
@@ -319,36 +378,50 @@ async def get_market_moneyflow(cache: Any | None) -> dict[str, Any]:
 
     async with async_session_factory() as db:
         for row in await market_data_repo.list_market_moneyflow_daily(db, 30):
-            history.append({
-                "date": row.trade_date.isoformat(), "main_net": row.main_net,
-                "super_large_net": row.super_large_net, "large_net": row.large_net,
-                "mid_net": row.mid_net, "small_net": row.small_net,
-                "main_ratio": row.main_ratio, "close": row.close,
-                "pct_change": row.pct_change, "amount": row.amount,
-            })
+            history.append(
+                {
+                    "date": row.trade_date.isoformat(),
+                    "main_net": row.main_net,
+                    "super_large_net": row.super_large_net,
+                    "large_net": row.large_net,
+                    "mid_net": row.mid_net,
+                    "small_net": row.small_net,
+                    "main_ratio": row.main_ratio,
+                    "close": row.close,
+                    "pct_change": row.pct_change,
+                    "amount": row.amount,
+                }
+            )
     payload = {"today": today, "history": history}
     if cache is not None and (history or today):
         await cache.set(MARKET_MONEYFLOW_CACHE_KEY, payload, ttl=MARKET_MONEYFLOW_TTL)
     return payload
 
 
-
 def _map_top_list_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
     """top_list → dragon tiger rows（金额元；reason 列 String(160)，超长截断防 DB 报错）。"""
     rows: list[dict[str, Any]] = []
     for rec in df.to_dict("records"):
-        rows.append({
-            "trade_date": _d(rec["trade_date"]), "ts_code": rec["ts_code"],
-            "symbol": rec["ts_code"].split(".")[0],
-            "name": rec.get("name"), "close": _f(rec.get("close")),
-            "pct_change": _f(rec.get("pct_change")), "turnover_rate": _f(rec.get("turnover_rate")),
-            "amount": _f(rec.get("amount")),
-            "l_buy": _f(rec.get("l_buy")), "l_sell": _f(rec.get("l_sell")),
-            "l_amount": _f(rec.get("l_amount")), "net_amount": _f(rec.get("net_amount")),
-            "net_rate": _f(rec.get("net_rate")), "amount_rate": _f(rec.get("amount_rate")),
-            "float_values": _f(rec.get("float_values")),
-            "reason": str(rec.get("reason") or "")[:160],
-        })
+        rows.append(
+            {
+                "trade_date": _d(rec["trade_date"]),
+                "ts_code": rec["ts_code"],
+                "symbol": rec["ts_code"].split(".")[0],
+                "name": rec.get("name"),
+                "close": _f(rec.get("close")),
+                "pct_change": _f(rec.get("pct_change")),
+                "turnover_rate": _f(rec.get("turnover_rate")),
+                "amount": _f(rec.get("amount")),
+                "l_buy": _f(rec.get("l_buy")),
+                "l_sell": _f(rec.get("l_sell")),
+                "l_amount": _f(rec.get("l_amount")),
+                "net_amount": _f(rec.get("net_amount")),
+                "net_rate": _f(rec.get("net_rate")),
+                "amount_rate": _f(rec.get("amount_rate")),
+                "float_values": _f(rec.get("float_values")),
+                "reason": str(rec.get("reason") or "")[:160],
+            }
+        )
     return rows
 
 
@@ -356,12 +429,18 @@ def _map_block_trade_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
     """block_trade → block trade rows（price 元 / vol 万股 / amount 万元）。"""
     rows: list[dict[str, Any]] = []
     for rec in df.to_dict("records"):
-        rows.append({
-            "trade_date": _d(rec["trade_date"]), "ts_code": rec["ts_code"],
-            "symbol": rec["ts_code"].split(".")[0],
-            "price": _f(rec.get("price")), "volume": _f(rec.get("vol")),
-            "amount": _f(rec.get("amount")), "buyer": rec.get("buyer"), "seller": rec.get("seller"),
-        })
+        rows.append(
+            {
+                "trade_date": _d(rec["trade_date"]),
+                "ts_code": rec["ts_code"],
+                "symbol": rec["ts_code"].split(".")[0],
+                "price": _f(rec.get("price")),
+                "volume": _f(rec.get("vol")),
+                "amount": _f(rec.get("amount")),
+                "buyer": rec.get("buyer"),
+                "seller": rec.get("seller"),
+            }
+        )
     return rows
 
 
@@ -432,12 +511,18 @@ def _map_share_float_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
     """share_float → share float rows（float_share 万股 / float_ratio %；ann_date 可空）。"""
     rows: list[dict[str, Any]] = []
     for rec in df.to_dict("records"):
-        rows.append({
-            "ann_date": _d_opt(rec.get("ann_date")), "float_date": _d(rec["float_date"]),
-            "ts_code": rec["ts_code"], "symbol": rec["ts_code"].split(".")[0],
-            "float_share": _f(rec.get("float_share")), "float_ratio": _f(rec.get("float_ratio")),
-            "holder_name": rec.get("holder_name"), "share_type": rec.get("share_type"),
-        })
+        rows.append(
+            {
+                "ann_date": _d_opt(rec.get("ann_date")),
+                "float_date": _d(rec["float_date"]),
+                "ts_code": rec["ts_code"],
+                "symbol": rec["ts_code"].split(".")[0],
+                "float_share": _f(rec.get("float_share")),
+                "float_ratio": _f(rec.get("float_ratio")),
+                "holder_name": rec.get("holder_name"),
+                "share_type": rec.get("share_type"),
+            }
+        )
     return rows
 
 
@@ -445,14 +530,20 @@ def _map_repurchase_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
     """repurchase → repurchase rows（vol 股 / amount 元；exp_date 常为 NaN → None）。"""
     rows: list[dict[str, Any]] = []
     for rec in df.to_dict("records"):
-        rows.append({
-            "ann_date": _d(rec["ann_date"]), "ts_code": rec["ts_code"],
-            "symbol": rec["ts_code"].split(".")[0],
-            "end_date": _d_opt(rec.get("end_date")), "proc": str(rec.get("proc") or "")[:16],
-            "exp_date": _d_opt(rec.get("exp_date")),
-            "vol": _f(rec.get("vol")), "amount": _f(rec.get("amount")),
-            "high_limit": _f(rec.get("high_limit")), "low_limit": _f(rec.get("low_limit")),
-        })
+        rows.append(
+            {
+                "ann_date": _d(rec["ann_date"]),
+                "ts_code": rec["ts_code"],
+                "symbol": rec["ts_code"].split(".")[0],
+                "end_date": _d_opt(rec.get("end_date")),
+                "proc": str(rec.get("proc") or "")[:16],
+                "exp_date": _d_opt(rec.get("exp_date")),
+                "vol": _f(rec.get("vol")),
+                "amount": _f(rec.get("amount")),
+                "high_limit": _f(rec.get("high_limit")),
+                "low_limit": _f(rec.get("low_limit")),
+            }
+        )
     return rows
 
 
@@ -461,9 +552,7 @@ def _dedupe_repurchase_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     ON CONFLICT 只处理与既有行的冲突、不处理同批 INSERT 内自冲突，须先在 Python 端去重。
     """
-    return list({
-        (r["ann_date"], r["ts_code"], r["proc"]): r for r in rows
-    }.values())
+    return list({(r["ann_date"], r["ts_code"], r["proc"]): r for r in rows}.values())
 
 
 _CATCHUP_LOOKBACK_DAYS = 10
@@ -478,8 +567,10 @@ async def _open_trading_days_since(
     _CATCHUP_LOOKBACK_DAYS 个日历日——调度错过的日子逐日补拉，避免"只拉当天、
     错过即永久缺口 / 当日 18:00 数据未发布则整天丢失"。
     """
-    start = last_collected + timedelta(days=1) if last_collected else today - timedelta(
-        days=_CATCHUP_LOOKBACK_DAYS
+    start = (
+        last_collected + timedelta(days=1)
+        if last_collected
+        else today - timedelta(days=_CATCHUP_LOOKBACK_DAYS)
     )
     if start > today:
         return []
@@ -572,16 +663,24 @@ async def get_dragon_tiger(
             if cached:
                 rows_cached: list[dict[str, Any]] = cached
                 return rows_cached[:limit]
-        for t in await market_data_repo.list_dragon_tiger(
-            db, effective, DRAGON_TIGER_CACHE_LIMIT
-        ):
-            rows.append({
-                "trade_date": t.trade_date.isoformat(), "ts_code": t.ts_code,
-                "symbol": t.ts_code.split(".")[0], "name": t.name, "close": t.close,
-                "pct_change": t.pct_change, "turnover_rate": t.turnover_rate, "amount": t.amount,
-                "l_buy": t.l_buy, "l_sell": t.l_sell, "l_amount": t.l_amount,
-                "net_amount": t.net_amount, "reason": t.reason,
-            })
+        for t in await market_data_repo.list_dragon_tiger(db, effective, DRAGON_TIGER_CACHE_LIMIT):
+            rows.append(
+                {
+                    "trade_date": t.trade_date.isoformat(),
+                    "ts_code": t.ts_code,
+                    "symbol": t.ts_code.split(".")[0],
+                    "name": t.name,
+                    "close": t.close,
+                    "pct_change": t.pct_change,
+                    "turnover_rate": t.turnover_rate,
+                    "amount": t.amount,
+                    "l_buy": t.l_buy,
+                    "l_sell": t.l_sell,
+                    "l_amount": t.l_amount,
+                    "net_amount": t.net_amount,
+                    "reason": t.reason,
+                }
+            )
     if cache is not None and rows:
         await cache.set(key, rows, ttl=DRAGON_TIGER_TTL)
     return rows[:limit]
