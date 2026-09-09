@@ -431,5 +431,9 @@
 - 实现多用户业务数据隔离与自选股服务端化：ORM 模型（StockUserTag / UserWatchlist / UserWatchlistItem / Task）增加 `user_id` / `requested_by` 并完成 Alembic 迁移脚本 `5a1b2c3d4e5f`；新增 `watchlists` 路由、改造 `user-tags` 及全局标签端点接入 `CurrentUserDep` 与 `user:{user_id}:*` 缓存隔离；前端对接服务端自选股 API，升级 `useWatchlist` 状态机与标签组件按登录态分流读写，登出全量清理；编写 9 项纯单元与路由隔离测试，验证 100% 通过。
 - 涉及模块：backend/models, backend/migrations, backend/repositories, backend/services, backend/schemas, backend/api/v1(stocks/tags/watchlists/tasks), frontend/shared/api(watchlist/userTags), frontend/features/watchlist, frontend/features/stock-detail, frontend/pages(watchlist/tags/tags-detail), backend/tests
 
+## 2026-09-09 - CI/CD 自动化门禁扩展与端到端测试覆盖 (Stage 6)
+- 扩展 `.github/workflows/ci.yml` 引入 `auth-service` 的 Lint、TypeCheck 与 Test 门禁 job，并更新 `docker-smoke` 支持在 Traefik 网关（端口 80）下验证前端、API 及 `/auth` 接口全链路连通性；扩展 `.github/workflows/cd.yml` 增加 `auth-service` 多架构镜像构建推送；新增前端 Playwright E2E 认证与多用户隔离测试套件（`auth.spec.ts` 与 `userIsolation.spec.ts`）；完成全系统各微服务本地全量验证与阶段性实施计划收官。
+- 涉及模块：.github/workflows/ci.yml, .github/workflows/cd.yml, frontend/e2e, plans, docs
+
 
 

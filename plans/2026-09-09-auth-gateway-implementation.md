@@ -24,11 +24,11 @@
 | :--- | :--- | :--- | :---: |
 | **Stage 0** | 架构拓扑、安全契约、数据模型与追踪计划设计 | 架构与数据模型设计文档、实施计划 | **[x] 已完成** |
 | **Stage 1** | auth-service 独立微服务开发与凭证/JWKS体系 | auth-service 微服务、Alembic 迁移、Argon2id、Redis Session、JWKS 端点 | **[x] 已完成** |
-| **Stage 2** | API Gateway / BFF 会话代理与 CSRF 拦截 | Gateway 配置/代码、Cookie-Session 转换、Principal Assertion 签名 | **[x] 已完成 (Stage 3 编排)** |
+| **Stage 2** | API Gateway / BFF 会话代理与 CSRF 拦截 | Gateway 配置/代码、Cookie-Session 转换、Principal Assertion 签名 | **[x] 已完成** |
 | **Stage 3** | Stock API 接入 JWKS 本地验签与统一错误契约 | 验签依赖注入、零信任未签名头过滤、全局统一 Error/Trace 中间件 | **[x] 已完成** |
 | **Stage 4** | 业务数据归属改造（自选股/标签/任务/缓存隔离与零信任保护） | 验签与权限保护矩阵、Alembic 迁移、自选股服务端 API、标签 user_id 隔离 | **[x] 已完成** |
 | **Stage 5** | 前端认证状态机、路由守卫与自选股云端化 | Auth Store、登录/注册/个人中心 UI、CSRF 自动注入、自选股云同步 | **[x] 已完成** |
-| **Stage 6** | 多容器 Compose 编排、全链路集成测试与红蓝验收 | docker-compose.yml 扩展、E2E 测试套件、渗透/越权对抗测试 | [ ] 待开始 |
+| **Stage 6** | 多容器 Compose 编排、全链路集成测试与红蓝验收 | docker-compose.yml 扩展、E2E 测试套件、渗透/越权对抗测试 | **[x] 已完成** |
 
 ---
 
@@ -81,7 +81,7 @@
 
 ---
 
-### Stage 2: API Gateway / BFF 会话代理与断言签名
+### Stage 2: API Gateway / BFF 会话代理与断言签名（已完成）
 
 - [x] **2.1 Gateway 基础设施与容器拓扑配置 (Stage 3)**
   - 建立 Traefik API Gateway 静态配置 (`gateway/traefik.yml`：entryPoints web:80/traefik:8080, docker/file providers, JSON 日志与 Prometheus 指标)
@@ -90,13 +90,13 @@
   - 完成外部端口收敛：移除 `api:8000` 与 `frontend:3000` 外部端口直接暴露，仅由 Gateway 80/8080 统筹入口
   - 配置路由分发规则与 Traefik labels（`/*` -> frontend, `/auth/*` & `/.well-known/jwks.json` -> auth-service, `/api/*` -> api，tasks 写接口挂载独立 rateLimit 中间件）
   - 新增 `.env.docker.example` 环境变量配置模板与 `backend/docker-compose.yml` 容错适配
-- [ ] **2.2 Cookie 解析与会话中间件**
+- [x] **2.2 Cookie 解析与会话中间件**
   - 从入站请求提取 `stockbot_session` Cookie
   - 高速校验 Redis 中的 Session 状态与有效性；若无效则对受保护接口返回 `401 AUTH_UNAUTHORIZED`
-- [ ] **2.3 CSRF 防御拦截中间件**
+- [x] **2.3 CSRF 防御拦截中间件**
   - 对非幂等方法（POST/PUT/DELETE/PATCH）提取并校验 `X-CSRF-Token` 请求头与 Session 绑定值
   - 检查 Origin / Referer 合法性
-- [ ] **2.4 短时 Principal Assertion JWT 签名注入**
+- [x] **2.4 短时 Principal Assertion JWT 签名注入**
   - 对通过鉴权的请求，使用 Gateway/Auth 私钥签发短时 JWT（TTL: 60s）
   - 注入 `X-Principal-Assertion` 请求头并转发至下游 Stock API
   - 过滤并强制剥离客户端可能伪造的任何 `X-User-*` 头部
@@ -156,19 +156,20 @@
 
 ---
 
-### Stage 6: 多容器编排、全链路集成测试与验收
+### Stage 6: 多容器编排、全链路集成测试与验收（已完成）
 
-- [ ] **6.1 Docker Compose 编排集成**
+- [x] **6.1 Docker Compose 编排集成与 CI/CD 自动化门禁**
   - 完善 `docker-compose.yml`，编排 gateway, auth-service, backend, frontend, workers, postgres, redis, rabbitmq
-  - 配置容器间内部 DNS 与网络隔离
-- [ ] **6.2 自动化测试与越权对抗验证**
-  - 编写端到端认证测试（注册 -> 登录 -> 获取 Cookie -> 访问自选股 -> 登出）
+  - 配置容器间内部 DNS 与网络隔离，收敛外部端口至 Gateway:80/8080
+  - 扩展 `.github/workflows/ci.yml` 与 `cd.yml`，增加 auth-service 门禁 job、多架构构建及网关烟雾测试
+- [x] **6.2 自动化测试与越权对抗验证**
+  - 编写端到端认证与用户隔离 Playwright 测试套件（`frontend/e2e/auth.spec.ts` 与 `frontend/e2e/userIsolation.spec.ts`）
   - 编写安全对抗测试用例：
     - 伪造未签名 `X-User-Id` 越权攻击验证（必须 401/403 拦截）
     - 篡改 CSRF Token 伪造写请求验证（必须 403 拦截）
     - 横向越权读取其他用户自定义标签与自选股验证（必须数据隔离）
     - Refresh Token 重放攻击触发全家族吊销验证
-- [ ] **6.3 文档更新与经验沉淀**
+- [x] **6.3 文档更新与经验沉淀**
   - 更新 `docs/references/best-practices.md`
   - 记录 `docs/Changelog.md`
 

@@ -78,6 +78,73 @@ jobs:
           files: backend/coverage.xml
           flags: backend
 
+  # ── Auth Service ─────────────────────────────────────────────
+  auth-service-lint:
+    name: "Lint (auth-service)"
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: auth-service } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { python-version: "3.13" }
+      - run: uv sync --frozen --extra dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  auth-service-typecheck:
+    name: "Type Check (auth-service)"
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: auth-service } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { python-version: "3.13" }
+      - run: uv sync --frozen --extra dev
+      - run: uv run mypy app/
+
+  auth-service-test:
+    name: "Test (auth-service)"
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: auth-service } }
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: auth_user
+          POSTGRES_PASSWORD: auth_pass
+          POSTGRES_DB: stock_bot_auth_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { python-version: "3.13" }
+      - run: uv sync --frozen --extra dev
+      - run: uv run alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://auth_user:auth_pass@localhost:5432/stock_bot_auth_test
+      - run: uv run pytest tests/ -v --cov=app --cov-report=xml
+        env:
+          DATABASE_URL: postgresql+asyncpg://auth_user:auth_pass@localhost:5432/stock_bot_auth_test
+          REDIS_URL: redis://localhost:6379/0
+      - uses: codecov/codecov-action@v5
+        if: github.event_name == 'pull_request'
+        with:
+          files: auth-service/coverage.xml
+          flags: auth-service
+
   # ── Frontend ─────────────────────────────────────────────────
   frontend-lint:
     name: "Lint (frontend)"
@@ -105,17 +172,25 @@ jobs:
   docker-smoke:
     name: "Docker Compose Smoke Test"
     runs-on: ubuntu-latest
-    needs: [backend-test, frontend-build]
+    needs: [backend-test, auth-service-test, frontend-build]
     steps:
       - uses: actions/checkout@v4
       - name: Prepare backend env (compose references gitignored .env)
-        run: cp backend/.env.example backend/.env
+        run: |
+          cp backend/.env.example backend/.env
+          cp .env.docker.example .env 2>/dev/null || true
       - name: Build and start services
         run: docker compose up -d --build --wait
-      - name: Verify health
+      - name: Verify health via gateway (port 80)
         run: |
-          curl -f http://localhost:8000/health
-          curl -f http://localhost:3000/ | head -1
+          # 验证前端首页
+          curl -f http://localhost:80/ | head -1
+          # 验证后端 API 接口连通性
+          curl -f http://localhost:80/api/v1/exchanges
+          # 验证 auth-service 接口连通性
+          curl -f http://localhost:80/auth/health/live
+          curl -f http://localhost:80/auth/csrf
+          curl -f http://localhost:80/.well-known/jwks.json
       - name: Teardown
         if: always()
         run: docker compose down -v
