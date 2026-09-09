@@ -61,8 +61,45 @@ def test_principal_assertion_sign_and_verify() -> None:
     assert payload["roles"] == roles
     assert payload["permissions"] == permissions
     assert payload["session_id"] == session_id
-    assert payload["iss"] == "stock-auth-service"
-    assert payload["aud"] == "stock-api"
+    assert payload["exp"] > payload["iat"]
+    assert payload["jti"].startswith("ast_")
+
+
+def test_assertion_cross_service_contract() -> None:
+    """Assertion payload/header contract must match backend verifier expectations.
+
+    Backend (backend/app/config.py) defaults: AUTH_ISSUER="stock-bot-auth",
+    AUTH_AUDIENCE="urn:stock-bot:api". This test pins the shared contract so the
+    two services cannot drift apart again.
+    """
+    token = key_manager.sign_assertion(
+        user_id="usr_contract",
+        username="contract_user",
+        roles=["trader"],
+        permissions=["stocks:read", "watchlists:write"],
+        session_id="sess_contract_001",
+        ttl=60,
+    )
+
+    # Header must carry kid for backend JWKS key selection
+    header = jwt.get_unverified_header(token)
+    assert header.get("kid"), "assertion header must contain kid"
+    assert header.get("alg") == "RS256"
+
+    payload = jwt.decode(token, options={"verify_signature": False})
+
+    # Issuer / audience aligned with backend defaults
+    assert payload["iss"] == "stock-bot-auth"
+    assert payload["aud"] == "urn:stock-bot:api"
+
+    # Full claim set required by backend Principal construction
+    assert payload["sub"] == "usr_contract"
+    assert payload["session_id"] == "sess_contract_001"
+    assert payload["username"] == "contract_user"
+    assert payload["roles"] == ["trader"]
+    assert payload["permissions"] == ["stocks:read", "watchlists:write"]
+    assert isinstance(payload["iat"], int)
+    assert isinstance(payload["exp"], int)
     assert payload["exp"] > payload["iat"]
     assert payload["jti"].startswith("ast_")
 

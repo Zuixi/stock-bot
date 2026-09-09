@@ -73,6 +73,6 @@ async def test_internal_session_introspect_and_assertion(client: AsyncClient) ->
     payload = key_manager.verify_assertion(ass_data["assertion_token"])
     assert payload["username"] == username
     assert payload["session_id"] == session_id
-    assert payload["iss"] == "stock-auth-service"
-    assert payload["aud"] == "stock-api"
+    assert payload["iss"] == "stock-bot-auth"
+    assert payload["aud"] == "urn:stock-bot:api"
     assert "stocks:read" in payload["permissions"]

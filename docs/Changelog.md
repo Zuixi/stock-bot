@@ -437,3 +437,7 @@
 
 
 
+
+## 2026-09-09 - P0 评审修复：forward-auth 断言注入与 JWT 契约统一
+- 修复 Traefik 未向 backend 注入身份断言导致登录后受保护 API 全部 401 的 P0 缺陷：新建 `forward-auth` sidecar（会话 Cookie 换取短时 Principal Assertion、CSRF 强制、匿名放行、fail-closed 503），新增 `strip-assertion` 防伪造中间件并接线 `api`/`api-tasks` 路由；统一 auth-service 与 backend 的 JWT iss/aud 默认契约（`stock-bot-auth` / `urn:stock-bot:api`）并在 compose 显式对齐，新增两端交叉契约测试与 CI 注册→登录→受保护接口 401/200 闭环 smoke。
+- 涉及模块：forward-auth(新建), gateway/dynamic, docker-compose.yml, .env.docker.example, auth-service/config, backend/tests, auth-service/tests, .github/workflows/ci.yml, docs, plans

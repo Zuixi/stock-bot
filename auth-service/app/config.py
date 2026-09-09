@@ -46,8 +46,10 @@ class Settings(BaseSettings):
     cookie_domain: str | None = None
 
     # JWT & JWKS Assertion
-    jwt_issuer: str = "stock-auth-service"
-    jwt_audience: str = "stock-api"
+    # Defaults MUST stay aligned with backend Settings.auth_issuer / auth_audience
+    # (see backend/app/config.py) — cross-service Principal Assertion contract.
+    jwt_issuer: str = "stock-bot-auth"
+    jwt_audience: str = "urn:stock-bot:api"
     jwt_kid: str = "auth-key-2026-01"
     jwt_algorithm: str = "RS256"
     assertion_ttl: int = 60  # 60s short-lived assertion token

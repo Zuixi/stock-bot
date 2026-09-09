@@ -171,9 +171,9 @@ X-Request-Id: req-6e5428a2-1bf3-4f9e-a89e-2dc9f3a9e661
 
 ```json
 {
-  "iss": "stock-auth-service",
+  "iss": "stock-bot-auth",
   "sub": "usr_9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
-  "aud": "stock-api",
+  "aud": "urn:stock-bot:api",
   "session_id": "sess_8f7e6d5c4b3a210f",
   "username": "trader_jack",
   "roles": ["trader", "researcher"],
@@ -184,8 +184,8 @@ X-Request-Id: req-6e5428a2-1bf3-4f9e-a89e-2dc9f3a9e661
 }
 ```
 
-- **`iss`**：固定为 `stock-auth-service`。
-- **`aud`**：目标服务标识，如 `stock-api`。
+- **`iss`**：固定为 `stock-bot-auth`（auth-service `JWT_ISSUER` 默认值，与 backend `AUTH_ISSUER` 默认值一致）。
+- **`aud`**：固定为 `urn:stock-bot:api`（auth-service `JWT_AUDIENCE` 默认值，与 backend `AUTH_AUDIENCE` 默认值一致）。
 - **`sub`**：统一用户 ID（UUIDv4 格式带 `usr_` 前缀）。
 - **`exp`**：超短有效期，**默认 60 秒**（时钟容忍度 leeway: 5 秒），从根本上消除 Token 泄露长期有效的风险。
 - **`jti`**：断言唯一标识，用于防重放与追踪。
@@ -218,6 +218,80 @@ async def get_current_user(request: Request) -> PrincipalContext:
         )
     return await verify_principal_assertion(assertion_token)
 ```
+
+### 4.4 Principal Assertion 契约（Gateway 实装：forward-auth sidecar）
+
+#### 4.4.1 Claims 契约表
+
+断言由 auth-service `KeyManager.sign_assertion`（RS256）签发，backend `AssertionVerifier` 验签。
+两端默认值必须一致（已由交叉契约测试 `auth-service/tests/test_jwt_signer.py::test_assertion_cross_service_contract`
+与 `backend/tests/test_auth_guard.py::test_cross_service_assertion_contract` 锁定）：
+
+| Claim | 类型 | 必选 | 说明 |
+| :--- | :--- | :---: | :--- |
+| `iss` | string | 是 | 发行方，默认 `stock-bot-auth`（env: `JWT_ISSUER` / `AUTH_ISSUER`） |
+| `sub` | string | 是 | 用户 ID（UUID），backend 据此做数据归属隔离 |
+| `aud` | string | 是 | 受众，默认 `urn:stock-bot:api`（env: `JWT_AUDIENCE` / `AUTH_AUDIENCE`） |
+| `session_id` | string | 是 | 来源会话 ID，支持服务端会话吊销联动 |
+| `username` | string | 是 | 登录名（展示用） |
+| `roles` | string[] | 是 | 角色列表（如 `trader` / `admin`），backend `require_roles` 消费 |
+| `permissions` | string[] | 是 | 权限列表（如 `watchlists:write`），backend `require_permissions` 消费 |
+| `iat` / `exp` | int | 是 | 签发时间 / 过期时间（默认 TTL 60s，leeway 5s） |
+| `jti` | string | 是 | 断言唯一 ID（`ast_` 前缀），防重放与链路追踪 |
+
+JWT Header 必须携带 `kid`（如 `auth-key-2026-01`），backend JWKS 客户端按 `kid` 选钥。
+
+#### 4.4.2 forward-auth sidecar 流程（文字版）
+
+forward-auth（`forward-auth/`，FastAPI + httpx，端口 9000）是 Traefik 的 forwardAuth
+后端，把「不透明会话 Cookie」转换为「签名断言请求头」：
+
+```
+Browser ── Cookie: stockbot_session ──> Traefik
+                                        │ ① strip-assertion（剥掉客户端伪造断言头）
+                                        │ ② forwardAuth GET http://forward-auth:9000/verify
+                                        │      （ Traefik v3 固定以 GET 调用，
+                                        │        原始方法经 X-Forwarded-Method 传递 ）
+                                        ▼
+                                 forward-auth /verify
+   ①解析 Cookie：无 session ──> 200 匿名放行（不加断言头，auth-service 零调用）
+   ②有 session：查内存 TTL 缓存（session_id -> assertion，TTL 25s，asyncio 锁防并发穿透）
+   ③缓存未命中：POST auth-service /internal/principal/assertion
+        header: X-Internal-Token: ${INTERNAL_API_TOKEN}（空则不发送）
+        body:   {"session_id": ...}
+        非 200 / 连接失败 ──> 对已有会话 Cookie 的请求 fail closed 返回 503
+   ④原始方法 ∈ {POST,PUT,PATCH,DELETE}（读 X-Forwarded-Method）：
+        POST auth-service /internal/session/introspect
+        body: {"session_id":..., "csrf_token": <X-CSRF-Token>}
+        csrf_valid != true ──> 403 {"code":"AUTH_CSRF_FAILED",...}
+   ⑤成功 ──> 200 + 响应头 X-Principal-Assertion: <JWT>
+                                        │
+                                        ▼ ③ Traefik authResponseHeaders 将断言头
+                                        │    复制到上游请求（其余响应头丢弃）
+                                  backend (Stock API)
+                                   JWKS 本地验签 X-Principal-Assertion
+```
+
+配置项（env）：`AUTH_SERVICE_URL`（默认 `http://auth-service:8001`）、
+`INTERNAL_API_TOKEN`（默认空 = 不发送）、`ASSERTION_CACHE_TTL`（默认 25s）。
+
+#### 4.4.3 strip-assertion 防伪造说明
+
+`strip-assertion` 中间件（见 `gateway/dynamic/middlewares.yml`）
+置于 forward-auth **之前**，通过 `headers.customRequestHeaders` 把
+`X-Principal-Assertion` 置为空串（Traefik 语义：空值 = 删除该请求头）。
+若不剥离，客户端可自带伪造断言头直连网关；虽然 backend 会验签使其无法伪造身份，
+剥离后可保证「断言只可能来自 forward-auth 管线」，并将无效签名攻击挡在业务服务之外。
+
+#### 4.4.4 authResponseHeaders 与 trustForwardHeader
+
+- **authResponseHeaders: [X-Principal-Assertion]**：Traefik 默认把 forwardAuth 的响应
+  当作纯决策结果（2xx 放行 / 非 2xx 拒绝），**不会**把任何响应头透传给上游；
+  显式声明 `authResponseHeaders` 后，Traefik 仅把列出的响应头复制到上游请求，其余丢弃。
+- **trustForwardHeader: false（有意为之）**：Traefik v3 固定以 GET 调用 forward-auth，
+  原始方法/路径经 `X-Forwarded-Method` / `X-Forwarded-Uri` 传递。若开启 trust，
+  这两个头的**客户端原值**会被透传（可伪造 `X-Forwarded-Method: GET` 绕过 CSRF 强制）；
+  关闭后 Traefik 用真实原始请求覆写这两个头，forward-auth 的方法判定不可伪造。
 
 ---
 
