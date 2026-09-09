@@ -15,6 +15,7 @@ class TaskOut(BaseModel):
     payload: dict | None
     result: dict | None
     error: str | None
+    requested_by: uuid.UUID | None = None
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime

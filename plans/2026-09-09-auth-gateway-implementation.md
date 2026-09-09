@@ -24,10 +24,10 @@
 | :--- | :--- | :--- | :---: |
 | **Stage 0** | 架构拓扑、安全契约、数据模型与追踪计划设计 | 架构与数据模型设计文档、实施计划 | **[x] 已完成** |
 | **Stage 1** | auth-service 独立微服务开发与凭证/JWKS体系 | auth-service 微服务、Alembic 迁移、Argon2id、Redis Session、JWKS 端点 | **[x] 已完成** |
-| **Stage 2** | API Gateway / BFF 会话代理与 CSRF 拦截 | Gateway 配置/代码、Cookie-Session 转换、Principal Assertion 签名 | [ ] 待开始 |
+| **Stage 2** | API Gateway / BFF 会话代理与 CSRF 拦截 | Gateway 配置/代码、Cookie-Session 转换、Principal Assertion 签名 | **[x] 已完成 (Stage 3 编排)** |
 | **Stage 3** | Stock API 接入 JWKS 本地验签与统一错误契约 | 验签依赖注入、零信任未签名头过滤、全局统一 Error/Trace 中间件 | **[x] 已完成** |
-| **Stage 4** | 业务数据归属改造（自选股/标签/任务/缓存隔离与零信任保护） | 验签与权限保护矩阵、Alembic 迁移、自选股服务端 API、标签 user_id 隔离 | **[x] 核心完成** |
-| **Stage 5** | 前端认证状态机、路由守卫与自选股云端化 | Auth Store、登录/注册/个人中心 UI、CSRF 自动注入、自选股云同步 | [ ] 待开始 |
+| **Stage 4** | 业务数据归属改造（自选股/标签/任务/缓存隔离与零信任保护） | 验签与权限保护矩阵、Alembic 迁移、自选股服务端 API、标签 user_id 隔离 | **[x] 已完成** |
+| **Stage 5** | 前端认证状态机、路由守卫与自选股云端化 | Auth Store、登录/注册/个人中心 UI、CSRF 自动注入、自选股云同步 | **[x] 已完成** |
 | **Stage 6** | 多容器 Compose 编排、全链路集成测试与红蓝验收 | docker-compose.yml 扩展、E2E 测试套件、渗透/越权对抗测试 | [ ] 待开始 |
 
 ---
@@ -121,25 +121,25 @@
 
 ---
 
-### Stage 4: 业务数据模型多用户归属与自选股服务端化
+### Stage 4: 业务数据模型多用户归属与自选股服务端化（已完成）
 
-- [ ] **4.1 数据库迁移 (Alembic)**
-  - `stock_custom_sw_tags` 增加 `user_id` 列，更新唯一约束为 `(user_id, symbol, industry_code)`
+- [x] **4.1 数据库迁移 (Alembic)**
+  - `stock_user_tags` 增加 `user_id` 列，更新唯一约束为 `(user_id, symbol, tag_name)`
   - 新增 `user_watchlists` 与 `user_watchlist_items` 表
   - `tasks` 表增加 `requested_by` (UUID, nullable)
-- [ ] **4.2 自选股服务端 API 实现**
+- [x] **4.2 自选股服务端 API 实现**
   - 新增 `app/api/v1/watchlists.py` 路由
-  - 实现 `GET /api/v1/user/watchlists`、`POST /api/v1/user/watchlists/items`、`DELETE /api/v1/user/watchlists/items/{symbol}`
+  - 实现 `GET /api/v1/watchlists`、`POST /api/v1/watchlists/items`、`DELETE /api/v1/watchlists/items/{symbol}`、`PUT /api/v1/watchlists/items/reorder`
   - 数据操作自动绑定当前 `principal.user_id`
-- [ ] **4.3 自定义标签按用户隔离改造**
-  - 改造 `app/services/market_service.py` 与 `sw_industry` 仓库，所有自定义标签查询与更新均按 `user_id` 过滤
-- [ ] **4.4 任务审计与 Redis 缓存 Key 隔离**
+- [x] **4.3 自定义标签按用户隔离改造**
+  - 改造 `app/services/user_tag_service.py` 与标签全局端点，所有自定义标签查询与更新均按 `user_id` 过滤
+- [x] **4.4 任务审计与 Redis 缓存 Key 隔离**
   - 任务触发写入 `requested_by = principal.user_id`
-  - 用户私有缓存统一前缀 `cache:user:{user_id}:*`
+  - 用户私有缓存统一前缀 `user:{user_id}:*`
 
 ---
 
-### Stage 5: 前端 React 认证体系与自选股云端化
+### Stage 5: 前端 React 认证体系与自选股云端化（已完成）
 
 - [x] **5.1 认证状态机与统一请求层**
   - 重构 `frontend/src/shared/api/client.ts`，支持 `credentials: include`、CSRF 单飞并发获取与自动注入、结构化 `ApiError` 提取、401 事件派发与 `skipAuth`
@@ -149,9 +149,10 @@
   - 新增 `/login` 登录/注册切换页 (`frontend/src/pages/login/index.tsx`)，支持 Ant Design 5 表单校验与 returnTo 自动跳转
   - 顶部导航栏 `UserMenu`：展示登录用户信息、角色徽章、退出登录确认弹窗与缓存清理
   - 实现 `RequireAuth` 路由守卫包装器，支持 authReady 门控防闪烁、权限不足 403 与未登录重定向
-- [ ] **5.3 自选股云端化迁移**
-  - 重构 `frontend/src/features/watchlist`：数据源由纯 localStore 切换为 TanStack Query 调取服务端 API
-  - 提供初次登录时“将本地未登录自选股一键合并上传至云端”的用户引导提示
+- [x] **5.3 自选股云端化迁移**
+  - 新建 `frontend/src/shared/api/watchlist.ts` 对接服务端自选股 API
+  - 重构 `frontend/src/features/watchlist`（`store.ts` + `useWatchlist.ts`）：数据源由纯 localStore 升级为 TanStack Query 调取服务端 API 与本地降级，登出全量清理
+  - 更新自选股页面 `frontend/src/pages/watchlist/index.tsx`、`WatchlistTable.tsx` 与股票详情页 `UserTags.tsx` 支持按登录态隔离读写展示
 
 ---
 

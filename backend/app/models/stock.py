@@ -1,10 +1,11 @@
 """Stock and StockHistory ORM models."""
 
+import uuid
 from datetime import date, datetime
 from typing import Literal
 
 from sqlalchemy import CheckConstraint, DateTime, Index, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -13,16 +14,18 @@ ExchangeName = Literal["Shanghai_Stocks", "Shenzen_Stocks", "Beijing_Stocks"]
 
 
 class StockUserTag(Base):
-    """User-defined custom tags for stocks (many-to-many, free-form text)."""
+    """User-defined custom tags for stocks (many-to-many, free-form text, user isolated)."""
 
     __tablename__ = "stock_user_tags"
     __table_args__ = (
-        UniqueConstraint("symbol", "tag_name", name="uq_stock_user_tag"),
+        UniqueConstraint("user_id", "symbol", "tag_name", name="uq_stock_user_tag"),
+        Index("idx_user_tag_user_id", "user_id"),
         Index("idx_user_tag_symbol", "symbol"),
         Index("idx_user_tag_name", "tag_name"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     symbol: Mapped[str] = mapped_column(nullable=False)
     tag_name: Mapped[str] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

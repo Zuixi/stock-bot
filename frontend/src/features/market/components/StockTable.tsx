@@ -3,7 +3,7 @@ import { StarOutlined, StarFilled } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { ChangeText, NumberText } from "@/shared/ui";
-import { useWatchlistStore } from "@/features/watchlist/store";
+import { useWatchlist } from "@/features/watchlist/useWatchlist";
 import type { StockRecord } from "@/shared/types";
 import { EXCHANGE_LABELS } from "@/shared/types";
 import type { ColumnsType, TableProps } from "antd/es/table";
@@ -22,7 +22,7 @@ interface Props {
 
 export function StockTable({ data, total, current, pageSize, loading, onChange, sortBy, sortOrder }: Props) {
   const navigate = useNavigate();
-  const { items, toggle } = useWatchlistStore();
+  const { items, toggle } = useWatchlist();
   const [paginationState, setPaginationState] = useState<{ current: number; pageSize: number }>({
     current: current ?? 1,
     pageSize: pageSize ?? 20,

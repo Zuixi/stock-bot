@@ -1,8 +1,8 @@
-import { Typography, Tag, Button, Space, Descriptions, Tooltip } from "antd";
+import { Typography, Tag, Button, Space, Descriptions } from "antd";
 import { StarOutlined, StarFilled } from "@ant-design/icons";
 import { ChangeText, NumberText } from "@/shared/ui";
 import { EXCHANGE_LABELS } from "@/shared/types";
-import { useWatchlistStore } from "@/features/watchlist/store";
+import { useWatchlist } from "@/features/watchlist/useWatchlist";
 import type { StockRecord } from "@/shared/types";
 
 interface Props {
@@ -10,7 +10,7 @@ interface Props {
 }
 
 export function StockHeader({ stock }: Props) {
-  const { items, toggle } = useWatchlistStore();
+  const { items, toggle, isMutating } = useWatchlist();
   const isWatched = items.includes(stock.symbol);
 
   return (
@@ -66,6 +66,7 @@ export function StockHeader({ stock }: Props) {
       <Button
         type={isWatched ? "primary" : "default"}
         icon={isWatched ? <StarFilled /> : <StarOutlined />}
+        loading={isMutating}
         onClick={() => toggle(stock.symbol)}
       >
         {isWatched ? "已自选" : "加入自选"}
