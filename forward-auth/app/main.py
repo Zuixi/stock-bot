@@ -151,12 +151,13 @@ def create_app(http_client: httpx.AsyncClient | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-        if app.state.http is None:
+        # 生产路径 http_client=None 时 state 上没有 http 属性，必须用 getattr 兜底
+        if getattr(app.state, "http", None) is None:
             app.state.http = app_state_http or httpx.AsyncClient(
                 timeout=settings.http_timeout_seconds
             )
         yield
-        if app.state.owns_http_client and app.state.http is not None:
+        if app.state.owns_http_client and getattr(app.state, "http", None) is not None:
             await app.state.http.aclose()
             app.state.http = None
 

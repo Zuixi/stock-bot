@@ -275,3 +275,29 @@
   ```bash
   docker compose build && docker compose up -d
   ```
+
+---
+
+## 本地 Docker Compose 实跑验证（2026-09-09，E2E 全绿）
+
+评审修复完成后在本机 Docker（Engine 29.1.2 / Desktop 4.54）执行 `docker compose up -d --build`，经 Gateway（localhost:80）完成全链路认证闭环实测：
+
+| # | 场景 | 结果 |
+|---|---|---|
+| 1 | `GET /`（frontend 经网关） | 200 |
+| 2 | `GET /api/v1/exchanges`（公开 API） | 200 |
+| 3 | `GET /auth/health/live`、`/.well-known/jwks.json` | 200 |
+| 4 | `GET /auth/csrf` → `POST /auth/register`（double-submit） | 201 |
+| 5 | `POST /auth/login` | 200，响应体仅含 user+expires_in，无凭据字段 |
+| 6 | 带 Cookie `GET /api/v1/watchlists` | **200**（forward-auth 断言注入 + backend JWKS 验签全链打通） |
+| 7 | 匿名 `GET /api/v1/watchlists` | 401 |
+| 8 | 写请求无 `X-CSRF-Token` | 403 |
+| 9 | 写请求带 CSRF → 自选股写入 | 201，记录正确归属 `user_id` |
+| 10 | 直连 `api:8000` / `frontend:3000` | 均被阻断（端口收敛生效） |
+
+### 实跑暴露并当场修复的两个问题
+
+1. **Traefik ≤3.3 与 Docker Engine 29 不兼容**：Engine 29 将最低 API 提升至 1.44，Traefik Docker provider 协商到 v1.24 被 daemon 拒绝（表现为空 "Error response from daemon"），容器 labels 路由全部无法加载。修复：镜像钉至 `v3.6.2`（compose 已加注释说明勿降级）。
+2. **forward-auth 生产路径启动即崩溃**：lifespan 在 state 未挂 `http` 属性前直接访问 `app.state.http`，测试因注入 `http_client` 而掩盖。修复：`getattr` 兜底，并新增回归测试 `test_production_lifespan_without_injected_client`（12 项测试全过）。
+
+环境注意事项（本机特有，非仓库问题）：Windows 端口保留区拦截 5433 → 实跑时用 override 文件将 postgres 宿主机端口临时换为 15433；主仓库旧版固定 `container_name` 容器需先移除（仅容器记录，数据卷不受影响）。

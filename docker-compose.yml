@@ -8,7 +8,10 @@ services:
 
   # ---- api gateway ----
   gateway:
-    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/traefik:v3.1
+    # v3.6.2+：Docker Engine 29 将最低 API 提升至 1.44，Traefik ≤3.3 的 Docker
+    # provider 协商到 v1.24 被 daemon 拒绝（空 "Error response from daemon"），
+    # 容器 labels 路由全部无法加载。v3.6.x 已修复版本协商，勿降回旧版。
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/traefik:v3.6.2
     container_name: gateway
     restart: unless-stopped
     ports:
