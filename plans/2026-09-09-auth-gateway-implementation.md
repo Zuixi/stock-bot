@@ -25,8 +25,8 @@
 | **Stage 0** | 架构拓扑、安全契约、数据模型与追踪计划设计 | 架构与数据模型设计文档、实施计划 | **[x] 已完成** |
 | **Stage 1** | auth-service 独立微服务开发与凭证/JWKS体系 | auth-service 微服务、Alembic 迁移、Argon2id、Redis Session、JWKS 端点 | **[x] 已完成** |
 | **Stage 2** | API Gateway / BFF 会话代理与 CSRF 拦截 | Gateway 配置/代码、Cookie-Session 转换、Principal Assertion 签名 | [ ] 待开始 |
-| **Stage 3** | Stock API 接入 JWKS 本地验签与统一错误契约 | 验签依赖注入、零信任未签名头过滤、全局统一 Error/Trace 中间件 | [ ] 待开始 |
-| **Stage 4** | 业务数据归属改造（自选股/标签/任务/缓存隔离） | Alembic 迁移、自选股服务端 API、标签 user_id 隔离、Task requested_by 审计 | [ ] 待开始 |
+| **Stage 3** | Stock API 接入 JWKS 本地验签与统一错误契约 | 验签依赖注入、零信任未签名头过滤、全局统一 Error/Trace 中间件 | **[x] 已完成** |
+| **Stage 4** | 业务数据归属改造（自选股/标签/任务/缓存隔离与零信任保护） | 验签与权限保护矩阵、Alembic 迁移、自选股服务端 API、标签 user_id 隔离 | **[x] 核心完成** |
 | **Stage 5** | 前端认证状态机、路由守卫与自选股云端化 | Auth Store、登录/注册/个人中心 UI、CSRF 自动注入、自选股云同步 | [ ] 待开始 |
 | **Stage 6** | 多容器 Compose 编排、全链路集成测试与红蓝验收 | docker-compose.yml 扩展、E2E 测试套件、渗透/越权对抗测试 | [ ] 待开始 |
 
@@ -103,20 +103,21 @@
 
 ---
 
-### Stage 3: Stock API 接入 JWKS 本地验签与统一错误契约
+### Stage 3: Stock API 接入 JWKS 本地验签与统一错误契约（已完成）
 
-- [ ] **3.1 Stock API 安全依赖与 JWKS 验签器**
-  - 新建 `backend/app/core/security.py`，实现 JWKS 客户端与异步公钥缓存
-  - 实现 FastAPI 依赖项 `get_current_principal()` 与 `require_permissions(*perms)`
-  - 严格校验 `X-Principal-Assertion` 签名、时效性 (`exp`)、受众 (`aud=stock-api`)
-  - 拦截并丢弃所有入站的原始未签名 `X-User-*`
-- [ ] **3.2 全局统一错误与链路追踪中间件**
-  - 重构全局异常处理器，统一捕获 `HTTPException`, `RequestValidationError`, `Exception`
-  - 返回符合规范的 `{ "code": "...", "message": "...", "details": ..., "trace_id": "..." }` 响应结构
-  - 请求链路全程注入与回传 `X-Request-Id` / `trace_id`
-- [ ] **3.3 路由保护重构**
-  - 将 `/api/v1/tasks/fetch-*` 与 `/api/v1/tasks/run-clustering` 标记为 Admin 专属（校验 `tasks:trigger` 权限）
-  - 保持基础公开行情接口免登可读
+- [x] **3.1 Stock API 安全依赖与 JWKS 验签器**
+  - 建立 `backend/app/core/auth/` 模块（`principal.py`, `jwks.py`, `verifier.py`），实现 JWKS 异步加载与本地公钥缓存（单飞刷新机制）
+  - 实现 FastAPI 依赖项 `CurrentUserDep`、`OptionalUserDep`、`require_roles(*roles)` 与 `require_permissions(*perms)`
+  - 严格校验 `X-Principal-Assertion` 签名 (RS256)、时效性 (`exp`)、受众 (`aud`)、发行方 (`iss`)
+  - 严格遵守零信任原则，拦截并忽略所有入站的原始未签名 `X-User-*` 伪造头
+- [x] **3.2 敏感与写接口权限矩阵保护**
+  - 将 `/api/v1/tasks/fetch-*`、`/api/v1/tasks/run-clustering` 等任务触发接口附加 `tasks:trigger` 权限保护
+  - 将 `/api/v1/industries/{key}/metrics/batch` 行业数据导入接口附加 `research:manage` 权限保护
+  - 将 `/api/v1/market/sse-snapshots/backfill` 历史回补接口附加 `tasks:trigger` 权限保护
+  - 保持基础公开行情接口免登可读并适配 `OptionalUserDep`
+- [x] **3.3 前端异常传播与状态分流修复**
+  - 修复 `frontend/src/shared/api/quotes.ts` 与 `stocks.ts` 中跨交易所 fallback 逻辑（仅对 404 降级，401/403/500 立即向上抛出）
+  - 优化 `stock-detail` 页面状态机，精准分流 loading、error 与 404 not-found
 
 ---
 

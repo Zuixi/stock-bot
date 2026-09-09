@@ -423,4 +423,9 @@
 - 引入 Traefik v3 API Gateway 作为整站统一流量入口，配置 JSON 结构化日志、Prometheus 监控指标与动态中间件（Security Headers、Rate Limit、Compression）；重构根 `docker-compose.yml` 容器编排体系，新增 `auth-db`、`migrate-auth` 与 `auth-service` 微服务，收敛下线 `api:8000` 与 `frontend:3000` 的宿主机端口暴露，实现基于 Traefik labels 的动态路由分发与 tasks 任务触发写限流保护，并提供 `.env.docker.example` 容器配置模板。
 - 涉及模块：gateway, docker-compose.yml, auth-service, backend/docker-compose.yml, .env.docker.example, plans, docs
 
+## 2026-09-09 - Stock API 零信任身份断言验签与权限矩阵保护 (Stage 4)
+- 实现基于 JWKS 异步加载与本地公钥缓存（单飞刷新）的 Principal Assertion (RS256) 验签器与 RBAC 权限依赖注入器（CurrentUserDep / OptionalUserDep / require_roles / require_permissions）；全面保护 tasks 触发与取消、行业指标 batch 导入、SSE 历史回补等敏感接口；客户端未签名 X-User-* 伪造头一律严格丢弃；修复前端跨交易所 fallback 仅对 404 降级与股票详情页 error/not-found 状态分流；新增 9 项无 DB 依赖单元与集成测试。
+- 涉及模块：backend/config, backend/core/auth, backend/api/deps, backend/api/v1/tasks, backend/api/v1/industries, backend/api/v1/market, frontend/shared/api, frontend/pages/stock-detail, backend/tests
+
+
 

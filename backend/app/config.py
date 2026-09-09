@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     # Shenwan industry classification XLS data directory
     sw_data_dir: str = ""
 
+    # Auth & Zero Trust JWKS Assertion
+    auth_enabled: bool = True
+    auth_jwks_url: str = "http://auth-service:8001/.well-known/jwks.json"
+    auth_issuer: str = "stock-bot-auth"
+    auth_audience: str = "urn:stock-bot:api"
+    auth_jwks_cache_ttl: int = 3600  # seconds
+    auth_leeway: int = 5  # seconds
+    auth_public_key_pem: str | None = None  # optional static public key for testing/offline mode
+
     # CORS — accepts comma-separated string or JSON array string
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
