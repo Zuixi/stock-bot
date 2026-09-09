@@ -460,3 +460,7 @@
 - **问题**：全新部署（空库）下打开 /market 白屏——ECharts treemap 对内部虚拟节点执行 label 渲染时 `changePercent` 为 undefined，SectorHeatmap formatter 抛 TypeError 导致 React 18 卸载整棵树；且浏览器缓存旧 index.html 使修复不可见
 - **修复**：SectorHeatmap label/tooltip formatter 与两张资金流卡片 tooltip 补空值防御；新增全局 `ErrorBoundary`（路由级兜底，任何子树渲染异常降级为错误卡片而非白屏）；nginx SPA 入口增加 `Cache-Control: no-cache`（assets 仍长缓存，入口每次回源，杜绝发版后浏览器跑旧 bundle）
 - 涉及模块：frontend/features/market/components(SectorHeatmap/MarketMoneyflowCard/SectorMoneyflowCard), frontend/shared/ui(ErrorBoundary 新增), frontend/App, frontend/nginx.conf
+
+## 2026-09-10 - TradingView 风格明暗双主题基础设施（Stage A）
+- 落实 `docs/design/landing-market-theme.md` §1 配色契约：`theme.ts` 重构为 `buildAntdTheme(mode)` 工厂（dark 走 darkAlgorithm）+ `THEME_COLORS` 双模式色板（up/down 红涨绿跌随主题切换）；新建 `app/styles/theme.css` 双轨 CSS 变量（`:root[data-theme]` + 首帧浅色兜底）；新建 `ThemeContext/ThemeProvider`（localStorage `stockbot-theme` > `prefers-color-scheme`，写 `data-theme` 持久化）；新增 `ThemeToggle` 挂 MainLayout Header；MainLayout/SearchBar/UserMenu 壳层硬编码色全部换 CSS 变量；`shared/ui/EChart` 封装内深合并注入 axisLabel/legend/splitLine/textStyle 主题色（调用方显式设置恒优先）；ChangeText/KlineChart/klineOption 全局件改经 `useTheme().colors` 取具体 hex。业务卡片内部细节留给 Stage C。
+- 涉及模块：frontend/app(theme 新工厂/theme-context 新增/styles 新增/layouts/MainLayout), frontend/shared/ui(EChart/ChangeText/ThemeToggle 新增/kline), frontend/features/search, frontend/features/auth(UserMenu), frontend/main.tsx, frontend/App

@@ -36,6 +36,8 @@
 - 接入第三方数据源必须"先实机验证、再写适配器"：公开文档的函数名/参数/返回形状常滞后甚至失效（本次生意社 `futures_spot_sys` 文档在、实跑已因页面改版抛 AttributeError），应把验证结论（日期、包版本、列名、窗口）固化进客户端注释与表驱动规格，并用纯单测锁死"fetcher 写入的 source 名 ⊆ registry 声明"——错名会让源优先级裁决永远匹配不到真实行。
 - Agent 指令文件（AGENTS.md/CLAUDE.md）必须保持单一事实来源：CLAUDE.md 用 symlink 或一行转发指向 AGENTS.md 而非拷贝；同类沉淀文档不可并存近似命名（best-practice.md vs best-practices.md 曾同时被更新导致经验分裂）；AGENTS.md 中的命令必须实跑验证后再写入（本次发现 ruff/mypy 需 `uv run --extra dev`、frontend eslint 需先 `npm install`）。
 
+- 明暗双主题基础设施应双轨并行：DOM/CSS 走 `:root[data-theme]` CSS 变量、AntD 走 `buildAntdTheme(mode)` 工厂消费同名色值、ECharts 等 canvas 场景（不吃 CSS var）一律经 `useTheme().colors` 取当前模式具体 hex；主题注入用「defaults 深合并、调用方显式设置恒优先」保证零破坏，并在 `:root` 留浅色兜底避免首帧闪白。
+
 以下条目合并自 docs/references/best-practice.md（2026-09-03，两文件合一）：
 
 - Python 需要使用 Type Hinting / Type Checking / Annotations / Decorators 等技术手段，来提高代码的健壮性和可读性，多使用 Compose 而不是 Extension。

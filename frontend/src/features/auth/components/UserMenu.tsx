@@ -62,7 +62,7 @@ export function UserMenu() {
       label: (
         <div style={{ padding: "4px 0" }}>
           <Typography.Text strong>{user.display_name || user.username}</Typography.Text>
-          <div style={{ fontSize: 12, color: "#888" }}>{user.email}</div>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{user.email}</div>
           <div style={{ marginTop: 4, display: "flex", gap: 4, flexWrap: "wrap" }}>
             {user.is_superuser && (
               <Tag color="volcano" icon={<CrownOutlined />}>
@@ -95,7 +95,7 @@ export function UserMenu() {
     <Dropdown menu={{ items: menuItems }} placement="bottomRight" arrow>
       <Space style={{ cursor: "pointer", userSelect: "none" }}>
         <Avatar
-          style={{ backgroundColor: user.is_superuser ? "#f5222d" : "#1677ff" }}
+          style={{ backgroundColor: user.is_superuser ? "var(--up)" : "var(--accent)" }}
           icon={<UserOutlined />}
         />
         <Typography.Text style={{ maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
