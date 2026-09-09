@@ -83,8 +83,13 @@
 
 ### Stage 2: API Gateway / BFF 会话代理与断言签名
 
-- [ ] **2.1 Gateway 基础设施配置**
-  - 配置网关路由分发规则（`/*` -> Frontend, `/auth/*` -> auth-service, `/api/*` -> Stock API）
+- [x] **2.1 Gateway 基础设施与容器拓扑配置 (Stage 3)**
+  - 建立 Traefik API Gateway 静态配置 (`gateway/traefik.yml`：entryPoints web:80/traefik:8080, docker/file providers, JSON 日志与 Prometheus 指标)
+  - 建立 Traefik 动态中间件配置 (`gateway/dynamic/middlewares.yml`：security headers, rateLimit, compress, stripPrefix)
+  - 改造根 `docker-compose.yml`：编排 `gateway`, `auth-service`, `auth-db`, `migrate-auth`, `api`, `frontend` 等容器
+  - 完成外部端口收敛：移除 `api:8000` 与 `frontend:3000` 外部端口直接暴露，仅由 Gateway 80/8080 统筹入口
+  - 配置路由分发规则与 Traefik labels（`/*` -> frontend, `/auth/*` & `/.well-known/jwks.json` -> auth-service, `/api/*` -> api，tasks 写接口挂载独立 rateLimit 中间件）
+  - 新增 `.env.docker.example` 环境变量配置模板与 `backend/docker-compose.yml` 容错适配
 - [ ] **2.2 Cookie 解析与会话中间件**
   - 从入站请求提取 `stockbot_session` Cookie
   - 高速校验 Redis 中的 Session 状态与有效性；若无效则对受保护接口返回 `401 AUTH_UNAUTHORIZED`

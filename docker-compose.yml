@@ -1,9 +1,29 @@
 x-backend-build: &backend-build
   context: ./backend
 
+x-auth-build: &auth-build
+  context: ./auth-service
+
 services:
 
-  # ---- infrastructure ----
+  # ---- api gateway ----
+  gateway:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/traefik:v3.1
+    container_name: gateway
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./gateway/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./gateway/dynamic:/etc/traefik/dynamic:ro
+    depends_on:
+      - frontend
+      - api
+      - auth-service
+
+  # ---- infrastructure: databases & brokers ----
   postgres:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/quay.io/sclorg/postgresql-15-c9s:latest
     environment:
@@ -16,6 +36,23 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/pgsql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -p 5432"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  auth-db:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/quay.io/sclorg/postgresql-15-c9s:latest
+    environment:
+      POSTGRESQL_USER: auth_user
+      POSTGRESQL_PASSWORD: auth_pass
+      POSTGRESQL_DATABASE: stock_bot_auth
+    container_name: auth_db
+    restart: unless-stopped
+    volumes:
+      - auth_postgres_data:/var/lib/pgsql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -p 5432"]
       interval: 5s
@@ -67,12 +104,14 @@ services:
       timeout: 5s
       retries: 5
 
-  # ---- one-shot migration ----
+  # ---- one-shot migrations ----
   migrate:
     image: stock-bot-backend:local
     build:
       <<: *backend-build
-    env_file: ./backend/.env
+    env_file:
+      - path: ./backend/.env
+        required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@postgres:5432/stock_bot
       REDIS_URL: redis://redis:6379/0
@@ -84,14 +123,60 @@ services:
     command: ["alembic", "upgrade", "head"]
     restart: "no"
 
+  migrate-auth:
+    image: stock-bot-auth-service:local
+    build:
+      <<: *auth-build
+    environment:
+      DATABASE_URL: postgresql+asyncpg://auth_user:auth_pass@auth-db:5432/stock_bot_auth
+      REDIS_URL: redis://redis:6379/0
+    container_name: migrate_auth
+    depends_on:
+      auth-db:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  # ---- auth microservice ----
+  auth-service:
+    image: stock-bot-auth-service:local
+    build:
+      <<: *auth-build
+    container_name: auth_service
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://auth_user:auth_pass@auth-db:5432/stock_bot_auth
+      REDIS_URL: redis://redis:6379/0
+      APP_ENV: production
+    depends_on:
+      auth-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate-auth:
+        condition: service_completed_successfully
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.auth.rule=PathPrefix(`/auth`) || PathPrefix(`/.well-known/jwks.json`)"
+      - "traefik.http.routers.auth.entrypoints=web"
+      - "traefik.http.routers.auth.priority=20"
+      - "traefik.http.routers.auth.middlewares=sec-headers@file,auth-ratelimit@file"
+      - "traefik.http.services.auth.loadbalancer.server.port=8001"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health/live')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
   # ---- backend api ----
   api:
     image: stock-bot-backend:local
     build:
       <<: *backend-build
-    ports:
-      - "8000:8000"
-    env_file: ./backend/.env
+    env_file:
+      - path: ./backend/.env
+        required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@postgres:5432/stock_bot
       REDIS_URL: redis://redis:6379/0
@@ -113,6 +198,18 @@ services:
         condition: service_completed_successfully
     volumes:
       - ./docs/references/sw/SwClass:/app/data/sw:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.routers.api.priority=10"
+      - "traefik.http.routers.api.middlewares=sec-headers@file,api-ratelimit@file"
+      - "traefik.http.services.api.loadbalancer.server.port=8000"
+      - "traefik.http.routers.api-tasks.rule=PathPrefix(`/api/v1/tasks/fetch-`) || PathPrefix(`/api/v1/tasks/run-clustering`)"
+      - "traefik.http.routers.api-tasks.entrypoints=web"
+      - "traefik.http.routers.api-tasks.priority=30"
+      - "traefik.http.routers.api-tasks.middlewares=sec-headers@file,tasks-ratelimit@file"
+      - "traefik.http.routers.api-tasks.service=api"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 10s
@@ -125,7 +222,9 @@ services:
     image: stock-bot-backend:local
     build:
       <<: *backend-build
-    env_file: ./backend/.env
+    env_file:
+      - path: ./backend/.env
+        required: false
     container_name: worker
     restart: unless-stopped
     environment:
@@ -153,7 +252,9 @@ services:
     image: stock-bot-backend:local
     build:
       <<: *backend-build
-    env_file: ./backend/.env
+    env_file:
+      - path: ./backend/.env
+        required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@postgres:5432/stock_bot
       REDIS_URL: redis://redis:6379/0
@@ -176,13 +277,19 @@ services:
       target: runtime
     container_name: frontend
     restart: unless-stopped
-    ports:
-      - "3000:80"
     depends_on:
       api:
         condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.frontend.entrypoints=web"
+      - "traefik.http.routers.frontend.priority=1"
+      - "traefik.http.routers.frontend.middlewares=sec-headers@file"
+      - "traefik.http.services.frontend.loadbalancer.server.port=80"
 
 volumes:
   postgres_data:
+  auth_postgres_data:
   redis_data:
   rabbitmq_data:

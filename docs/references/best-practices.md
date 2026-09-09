@@ -117,3 +117,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - uv 的 `[project.optional-dependencies] dev`（ruff/mypy/pytest）默认不随 `uv sync` 安装：CI 与本地都必须显式 `uv sync --extra dev`（或 `uv run --extra dev`），否则 `uv run ruff/mypy` 报 "Failed to spawn"——这会让 Lint/TypeCheck 形同虚设并放行历史欠账；同理 pytest 若依赖真实运行 API，须标 `pytest.mark.e2e` 并在 CI 用 `-m "not e2e"` 避免测试 job 必挂。
 - 多分支并行各自新增 Alembic 迁移、随后合并时，会产生两个 head 导致 `alembic upgrade head` 报 "Multiple head revisions"——在合并点新增一个 `down_revision=(链Ahead, 链Bhead)` 的空 merge 迁移（alembic merge <revA> <revB>）线性化两条链，否则 DB 迁移/CI Test job 必挂；此类 merge 迁移需 ruff-clean（去掉未用 import）。
 - 认证微服务与安全凭据设计应采用"Argon2id 密码哈希 + Redis 滑动会话 / DB 快照持久化 + 短时 RS256 非对称断言签名 + 公钥 JWKS 规范分发"的完整分层，且会话与主业务库严格物理隔离以保障身份系统的独立性与高可用。
+- 微服务拓扑演进中，API Gateway（如 Traefik）应作为唯一暴露的外部流量入口，下游业务 API 与前端容器必须收敛宿主机端口映射改为内网通信，并结合静态/动态中间件分层配置（Security Headers、Rate Limit、Compression）与 labels 声明式路由实现安全防护与任务防洪。
