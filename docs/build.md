@@ -50,11 +50,11 @@ docker compose up --build -d
 
 ### 启动流程说明
 
-`docker-compose.yml` 编排了 7 个服务，按依赖关系自动启动：
+`docker-compose.yml` 编排了 9 个服务，按依赖关系自动启动：
 
-1. **基础设施层**：`postgres`、`redis`、`rabbitmq` 并行启动，等待健康检查通过
+1. **基础设施层**：`postgres`、`redis`（含一次性 `redis-init` 修正数据卷权限）、`rabbitmq` 并行启动，等待健康检查通过
 2. **数据库迁移**：`migrate` 容器运行 `alembic upgrade head`，创建/更新表结构后退出
-3. **应用层**：`api`（FastAPI）和 `worker`（RabbitMQ 消费者）在迁移完成后启动
+3. **应用层**：`api`（FastAPI）、`worker`（RabbitMQ 消费者）、`scheduler`（APScheduler 定时采集）在迁移完成后启动
 4. **前端层**：`frontend`（nginx）在 API 健康检查通过后启动
 
 ### 服务端口
@@ -64,7 +64,7 @@ docker compose up --build -d
 | frontend | http://localhost:3000 | Web 前端 + API 反向代理 |
 | api | http://localhost:8000 | FastAPI 后端（含 /docs Swagger UI） |
 | postgres | localhost:5433 | PostgreSQL（映射到 5433 避免冲突） |
-| redis | localhost:6379 | Redis 缓存 |
+| redis | localhost:6380 | Redis 缓存（映射到 6380 避免冲突） |
 | rabbitmq | localhost:5672 / 15672 | RabbitMQ（15672 为管理面板） |
 
 ### 分步构建
