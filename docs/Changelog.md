@@ -419,4 +419,8 @@
 - 实现独立的 `auth-service` 微服务工程体系，构建基于 Argon2id 的安全密码哈希与防暴力锁定、Redis 高性能滑动会话与 DB 持久化同步、CSRF 双重校验、RSA 短时 Principal Assertion JWT 签名与 RFC 7517 JWKS 公钥分发端点，完善了注册、登录、登出、会话查询与多端下线、网关会话内省等接口，提供全链路 100% 通过的离线单元与集成测试套件。
 - 涉及模块：auth-service(core/models/services/schemas/api/migrations/tests), plans, docs
 
+## 2026-09-09 - 引入 Traefik API Gateway 并完成容器拓扑与端口收敛 (Stage 3)
+- 引入 Traefik v3 API Gateway 作为整站统一流量入口，配置 JSON 结构化日志、Prometheus 监控指标与动态中间件（Security Headers、Rate Limit、Compression）；重构根 `docker-compose.yml` 容器编排体系，新增 `auth-db`、`migrate-auth` 与 `auth-service` 微服务，收敛下线 `api:8000` 与 `frontend:3000` 的宿主机端口暴露，实现基于 Traefik labels 的动态路由分发与 tasks 任务触发写限流保护，并提供 `.env.docker.example` 容器配置模板。
+- 涉及模块：gateway, docker-compose.yml, auth-service, backend/docker-compose.yml, .env.docker.example, plans, docs
+
 

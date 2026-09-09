@@ -36,6 +36,7 @@ ENV/
 .env
 .env.*
 !.env.example
+!.env.docker.example
 
 # Config (keep samples, ignore real secrets)
 src/config/*.yaml

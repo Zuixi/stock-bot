@@ -1,0 +1,62 @@
+# ==============================================================================
+# Traefik Dynamic Configuration — Middlewares
+# ==============================================================================
+
+http:
+  middlewares:
+    # --------------------------------------------------------------------------
+    # Security Headers
+    # --------------------------------------------------------------------------
+    sec-headers:
+      headers:
+        browserXssFilter: true
+        contentTypeNosniff: true
+        frameDeny: true
+        customFrameOptionsValue: "DENY"
+        sslRedirect: false
+        customResponseHeaders:
+          X-Robots-Tag: "noindex, nofollow, nosnippet, noarchive"
+          X-Content-Type-Options: "nosniff"
+          X-XSS-Protection: "1; mode=block"
+
+    # --------------------------------------------------------------------------
+    # General API Rate Limiting
+    # --------------------------------------------------------------------------
+    api-ratelimit:
+      rateLimit:
+        average: 100
+        burst: 50
+        period: 1s
+
+    # --------------------------------------------------------------------------
+    # Auth Service Rate Limiting (Brute-force protection)
+    # --------------------------------------------------------------------------
+    auth-ratelimit:
+      rateLimit:
+        average: 20
+        burst: 10
+        period: 1s
+
+    # --------------------------------------------------------------------------
+    # Tasks Trigger Write Rate Limiting (Worker protection)
+    # --------------------------------------------------------------------------
+    tasks-ratelimit:
+      rateLimit:
+        average: 5
+        burst: 5
+        period: 1m
+
+    # --------------------------------------------------------------------------
+    # Path Prefix Stripping Middleware
+    # --------------------------------------------------------------------------
+    strip-api-prefix:
+      stripPrefix:
+        prefixes:
+          - "/api"
+        forceSlash: false
+
+    # --------------------------------------------------------------------------
+    # Compression (Gzip / Brotli)
+    # --------------------------------------------------------------------------
+    compress-middleware:
+      compress: {}
