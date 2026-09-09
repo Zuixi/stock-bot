@@ -41,6 +41,8 @@ test.describe("市场数据面", () => {
 
   test("板块资金流：行业/概念切换", async ({ page }) => {
     await page.goto("/market");
+    // Stage C：资金流卡移入「资金流向」分类 Tab
+    await page.getByRole("tab", { name: "资金流向" }).click();
     const card = page.locator(".ant-card").filter({ hasText: "板块主力资金流" });
     await expect15s(card).toBeVisible();
     await card.locator(".ant-segmented-item").filter({ hasText: "概念" }).click();
@@ -51,6 +53,8 @@ test.describe("市场数据面", () => {
 
   test("数据面：Tab 表格", async ({ page }) => {
     await page.goto("/market");
+    // Stage C：数据面迁移至同名分类 Tab 下（先切顶层 Tab 再点内层龙虎榜）
+    await page.getByRole("tab", { name: "数据面" }).click();
     await page.getByRole("tab", { name: "龙虎榜", exact: true }).click();
     const board = page.locator(".ant-card").filter({ hasText: "数据面" });
     await expect15s(board.locator("thead th").filter({ hasText: "上榜原因" })).toBeVisible();

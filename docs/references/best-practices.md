@@ -127,3 +127,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - 认证接口安全评审修复应遵循"凭据最小暴露"原则：登录响应体绝不回传 session_id/csrf_token（只经 Set-Cookie 下发）、会话识别只认 HttpOnly Cookie 不留 Header 旁路（如 X-Session-Id）、登录/注册等匿名写接口也要强制 CSRF double-submit（先 GET /auth/csrf 再回显 Header）、内部端点用共享密钥（X-Internal-Token，非空即 hmac 常数时间强制）收口，并以"APP_ENV=production 必须 COOKIE_SECURE=true"类模型级校验 fail-fast 防生产误配。
 - 基础设施安全收敛应遵循"默认不可达 + 会话寿命有界 + 日志不可信输入剔除"三原则：中间件凭据绝不使用 guest 类默认值且端口不映射宿主机（按需 docker exec 访问）；滑动续期会话必须叠加绝对过期上限（如 7 天）防止无限续命；审计日志只记录哈希后的会话标识（SHA-256），且仅当显式声明信任反代（trust_forwarded_for）时才解析 X-Forwarded-For，否则客户端可伪造该头污染审计 IP。
 - 公开宣传页（Landing）不得被后端状态拖垮：所有公开 API 消费都要「加载骨架 + 失败静默降级占位文案」双兜底，且登录态 CTA 在 isAuthReady 之前隐藏文字（保留按钮位），防止错标签闪现与布局跳动；登录态只读复用 auth store selector，不改 auth 模块。
+- 页面级 Tab 化重组时，既有 ECharts 卡从裸 ReactECharts 迁到共享 EChart 封装要连「onEvents 透传」一起补齐（treemap 点击导航依赖它），且 option 构建纯函数必须把 colors 收为参数而非闭包静态色——否则明暗切换后图表仍是旧主题色；渐变/色阶端点从主题色推导（bgPanel→up/down）后，近零浅块的深色文字阈值类（nameDark）改挂 textPrimary/textSecondary 即可两种模式自然成立，无需按模式分支。

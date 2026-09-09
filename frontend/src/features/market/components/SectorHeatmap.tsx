@@ -1,20 +1,23 @@
-import ReactECharts from "echarts-for-react";
 import { Card, Spin } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { fetchSectors } from "@/shared/api/market";
 import { hexLerp } from "./DistributionChart";
+import { EChart } from "@/shared/ui/EChart";
+import { useTheme } from "@/app/theme-context";
+import type { ThemePalette } from "@/app/theme";
 
 const STALE_TIME = 5 * 60 * 1000;
 
-/** 连续色阶：0%→灰，±5%→深绿/深红（Finviz 式梯度，替代离散 5 档）。 */
-function heatColor(pct: number): string {
+/** 连续色阶：0%→中性，±5%→深红/深绿（Finviz 式梯度，端点色随主题，Stage C） */
+function heatColor(pct: number, c: ThemePalette): string {
   const t = Math.min(1, Math.abs(pct) / 5);
-  return pct >= 0 ? hexLerp("#d1d5db", "#dc2626", t) : hexLerp("#d1d5db", "#16a34a", t);
+  return pct >= 0 ? hexLerp(c.border, c.up, t) : hexLerp(c.border, c.down, t);
 }
 
 export function SectorHeatmap() {
   const navigate = useNavigate();
+  const { colors } = useTheme();
   const { data = [], isLoading } = useQuery({
     queryKey: ["market-sectors"],
     queryFn: fetchSectors,
@@ -57,15 +60,15 @@ export function SectorHeatmap() {
             // 空库时 ECharts 会对内部虚拟节点执行一次 label 渲染，字段可能缺失
             if (!d || d.changePercent == null || d.name == null) return "";
             const sign = d.changePercent > 0 ? "+" : "";
-            // 浅色块（|涨跌|<0.8%）用深字保证对比度
+            // 近中性浅块（|涨跌|<0.8%）用主题主文本色保证对比度；暗色下中性块为深色，同色自然成立
             const cls = Math.abs(d.changePercent) < 0.8 ? "Dark" : "";
             return `{name${cls}|${d.name}}\n{val${cls}|${sign}${d.changePercent.toFixed(2)}%}`;
           },
           rich: {
             name: { fontSize: 13, color: "#fff", lineHeight: 20 },
             val: { fontSize: 11, color: "rgba(255,255,255,0.85)", lineHeight: 18 },
-            nameDark: { fontSize: 13, color: "#374151", lineHeight: 20 },
-            valDark: { fontSize: 11, color: "#6b7280", lineHeight: 18 },
+            nameDark: { fontSize: 13, color: colors.textPrimary, lineHeight: 20 },
+            valDark: { fontSize: 11, color: colors.textSecondary, lineHeight: 18 },
           },
         },
         data: data.map((s) => ({
@@ -74,7 +77,7 @@ export function SectorHeatmap() {
           changePercent: s.changePercent,
           stockCount: s.stockCount,
           topStocks: s.topStocks,
-          itemStyle: { color: heatColor(s.changePercent) },
+          itemStyle: { color: heatColor(s.changePercent, colors) },
         })),
       },
     ],
@@ -87,20 +90,21 @@ export function SectorHeatmap() {
       extra={
         <span
           onClick={() => navigate("/market/hot-sectors/industry")}
-          style={{ fontSize: 12, color: "#1677ff", cursor: "pointer" }}
+          style={{ fontSize: 12, color: colors.accent, cursor: "pointer" }}
         >
           查看全部 ›
         </span>
       }
     >
       <Spin spinning={isLoading}>
-        <ReactECharts
+        <EChart
           option={option}
-          style={{ height: 300 }}
+          height={300}
           onEvents={{
-            click: (params: { data?: { name?: string } }) => {
-              if (params.data?.name) {
-                navigate(`/market/hot-sectors/industry?board=${encodeURIComponent(params.data.name)}`);
+            click: (params: unknown) => {
+              const data = (params as { data?: { name?: string } }).data;
+              if (data?.name) {
+                navigate(`/market/hot-sectors/industry?board=${encodeURIComponent(data.name)}`);
               }
             },
           }}

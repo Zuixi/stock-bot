@@ -8,7 +8,7 @@ import {
   type AnnouncementItem, type BlockTradeItem, type DragonTigerItem,
   type RepurchaseItem, type ShareFloatItem,
 } from "@/shared/api/marketData";
-import { COLORS } from "@/app/theme";
+import { useTheme } from "@/app/theme-context";
 import { fmtSignedYi, fmtWanGu, fmtYi, fmtYiGu, fmtWanYi } from "@/features/market/components/format";
 
 const STALE_TIME = 5 * 60 * 1000;
@@ -25,6 +25,7 @@ const KIND_OPTIONS = [
 ] as const;
 
 export function RelatedEvents({ symbol }: { symbol: string }) {
+  const { colors } = useTheme();
   const [kind, setKind] = useState<Kind>("announcements");
 
   const ann = useQuery({
@@ -56,7 +57,7 @@ export function RelatedEvents({ symbol }: { symbol: string }) {
   const dragonCols: ColumnsType<DragonTigerItem> = [
     { title: "日期", dataIndex: "tradeDate", width: 100, render: (v: string) => <span style={NUM_FONT}>{v}</span> },
     { title: "净买额", dataIndex: "netAmount", width: 100, align: "right",
-      render: (_, r) => <span style={{ ...NUM_FONT, color: (r.netAmount ?? 0) > 0 ? COLORS.up : COLORS.down }}>{fmtSignedYi(r.netAmount)}</span> },
+      render: (_, r) => <span style={{ ...NUM_FONT, color: (r.netAmount ?? 0) > 0 ? colors.up : colors.down }}>{fmtSignedYi(r.netAmount)}</span> },
     { title: "上榜原因", dataIndex: "reason", ellipsis: true, render: (_, r) => <Typography.Text type="secondary" style={{ fontSize: 12 }}>{r.reason}</Typography.Text> },
   ];
   const blockCols: ColumnsType<BlockTradeItem> = [

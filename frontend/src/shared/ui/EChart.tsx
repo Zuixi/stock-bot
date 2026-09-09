@@ -7,6 +7,8 @@ interface Props {
   height?: number;
   /** 迷你图等无交互场景关闭 tooltip/动画 */
   silent?: boolean;
+  /** echarts 事件绑定（如 treemap click），透传给 echarts-for-react */
+  onEvents?: Record<string, (params: unknown) => void>;
 }
 
 /** 深合并：defaults <- option，option 恒优先；数组按元素位置逐项合并（长度以 option 为准） */
@@ -55,6 +57,8 @@ function withChartTheme(option: Record<string, unknown>, c: ThemePalette): Recor
   const yAxis = toAxisArray(option.yAxis);
 
   const defaults: Record<string, unknown> = {
+    // 暗色下透出卡片底色（契约 §4：卡片 --bg-panel 底）
+    backgroundColor: "transparent",
     textStyle: { color: c.textSecondary },
     legend: { textStyle: { color: c.textSecondary } },
   };
@@ -71,7 +75,7 @@ function withChartTheme(option: Record<string, unknown>, c: ThemePalette): Recor
 }
 
 /** ECharts 统一封装：统一交互默认值，避免每个图表重复 echarts.init 样板。 */
-export function EChart({ option, height = 300, silent = false }: Props) {
+export function EChart({ option, height = 300, silent = false, onEvents }: Props) {
   const { colors } = useTheme();
   const themed = withChartTheme(option, colors);
   const finalOption = silent
@@ -82,6 +86,7 @@ export function EChart({ option, height = 300, silent = false }: Props) {
       option={finalOption}
       notMerge
       lazyUpdate
+      onEvents={onEvents}
       style={{ height, width: "100%" }}
       opts={{ renderer: "canvas" }}
     />
