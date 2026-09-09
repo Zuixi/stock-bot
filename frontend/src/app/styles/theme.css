@@ -1,0 +1,57 @@
+/*
+ * 明暗双主题 CSS 变量（Stage A 基础设施）
+ * 契约：docs/design/landing-market-theme.md §1（TradingView 实测配色）
+ * data-theme 由 ThemeProvider 写到 <html> 上；AntD token 侧由 buildAntdTheme 消费同名色值。
+ */
+
+/* 兜底：首帧 data-theme 尚未挂上时按浅色渲染，避免变量未定义闪白 */
+:root {
+  --bg-page: #ffffff;
+  --bg-panel: #f8f9fd;
+  --bg-elevated: #ffffff;
+  --border: #e0e3eb;
+  --text-primary: #131722;
+  --text-secondary: #6a6d78;
+  --accent: #2962ff;
+  --up: #f5222d;
+  --down: #22c55e;
+  --hover: rgba(41, 98, 255, 0.06);
+  color-scheme: light;
+}
+
+:root[data-theme="light"] {
+  --bg-page: #ffffff;
+  --bg-panel: #f8f9fd;
+  --bg-elevated: #ffffff;
+  --border: #e0e3eb;
+  --text-primary: #131722;
+  --text-secondary: #6a6d78;
+  --accent: #2962ff;
+  --up: #f5222d;
+  --down: #22c55e;
+  --hover: rgba(41, 98, 255, 0.06);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg-page: #131722;
+  --bg-panel: #1e222d;
+  --bg-elevated: #232837;
+  --border: #2a2e39;
+  --text-primary: #d1d4dc;
+  --text-secondary: #787b86;
+  --accent: #2962ff;
+  --up: #f23645;
+  --down: #089981;
+  --hover: rgba(41, 98, 255, 0.12);
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-page);
+  color: var(--text-primary);
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}

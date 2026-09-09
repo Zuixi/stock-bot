@@ -3,6 +3,7 @@ import { AimOutlined } from "@ant-design/icons";
 import { Button, Card, Empty, Segmented, Space, Spin, Tooltip as AntTooltip } from "antd";
 import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTheme } from "@/app/theme-context";
 import type { AdjustMode, KLinePoint } from "@/shared/types";
 import { buildKlineOption } from "./klineOption";
 import {
@@ -24,6 +25,7 @@ export interface KlineChartProps {
 }
 
 export function KlineChart({ title, queryKey, fetcher, showAdjust = false }: KlineChartProps) {
+  const { colors } = useTheme();
   const [freq, setFreq] = useState<KlineFreq>("day");
   const [adjust, setAdjust] = useState<AdjustMode>(showAdjust ? "qfq" : "raw");
   const [visibleMas, setVisibleMas] = useState<MaKey[]>(DEFAULT_VISIBLE_MAS);
@@ -47,8 +49,8 @@ export function KlineChart({ title, queryKey, fetcher, showAdjust = false }: Kli
   }, [points]);
 
   const option = useMemo(
-    () => buildKlineOption({ points, maSeries, visibleMas }),
-    [points, maSeries, visibleMas],
+    () => buildKlineOption({ points, maSeries, visibleMas, colors }),
+    [points, maSeries, visibleMas, colors],
   );
 
   const resetZoom = () =>
@@ -117,7 +119,7 @@ export function KlineChart({ title, queryKey, fetcher, showAdjust = false }: Kli
                     onClick={() =>
                       setVisibleMas((prev) => (on ? prev.filter((k) => k !== d.key) : [...prev, d.key]))
                     }
-                    style={{ color: on ? d.color : "#9ca3af", cursor: "pointer", userSelect: "none" }}
+                    style={{ color: on ? d.color : colors.flat, cursor: "pointer", userSelect: "none" }}
                   >
                     {d.key} {on ? (v == null ? "--" : v.toFixed(2)) : ""}
                   </span>
