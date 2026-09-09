@@ -68,7 +68,7 @@ jobs:
       - run: uv run alembic upgrade head
         env:
           DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@localhost:5432/stock_bot_test
-      - run: uv run pytest tests/ -m "not e2e" -v --cov=app --cov-report=xml
+      - run: uv run pytest tests/ -m "not e2e and not bench" -v --cov=app --cov-report=xml
         env:
           DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@localhost:5432/stock_bot_test
           REDIS_URL: redis://localhost:6379/0
@@ -77,6 +77,26 @@ jobs:
         with:
           files: backend/coverage.xml
           flags: backend
+
+  # ── CPU 基准硬门禁（Tier 1，见 plans/2026-09-09-benchmark-tiers.md）──
+  bench-cpu:
+    name: "Bench CPU (Tier1 hard gate)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { python-version: "3.13" }
+      - run: uv sync --frozen --extra dev
+        working-directory: backend
+      - name: Run benchmarks vs committed baseline
+        run: bash scripts/bench.sh
+      - name: Upload benchmark result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-result
+          path: benchmarks/last.json
+          retention-days: 7
 
   # ── Frontend ─────────────────────────────────────────────────
   frontend-lint:
