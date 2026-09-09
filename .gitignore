@@ -19,6 +19,9 @@ dist/
 test-results/
 playwright-report/
 
+# pytest-benchmark 每次运行的临时产物（baseline.json 入库，last.json 不入库）
+benchmarks/last.json
+
 # Python
 __pycache__/
 *.py[cod]

@@ -45,10 +45,10 @@ repos:
         language: system
         pass_filenames: false
         files: ^frontend/.*\.(ts|tsx)$
-      # ── 每次 commit 前自动跑：后端非 e2e 单测（无 DB 依赖，~4s）
+      # ── 每次 commit 前自动跑：后端非 e2e 单测（无 DB 依赖，~4s；排除 bench 基准）──
       - id: backend-test
-        name: backend pytest (not e2e)
-        entry: bash -c 'cd backend && uv run pytest -m "not e2e" -q --no-cov'
+        name: backend pytest (not e2e, not bench)
+        entry: bash -c 'cd backend && uv run pytest -m "not e2e and not bench" -q --no-cov'
         language: system
         pass_filenames: false
         files: ^backend/.*\.py$

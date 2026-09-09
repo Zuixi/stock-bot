@@ -57,8 +57,8 @@ fi
 if [ "$FULL" = 1 ]; then
   echo; echo "== [4/4] 全量门禁 (--full) =="
   [ -n "$PY" ] && { echo "  mypy app/ ..."; (cd backend && uv run mypy app)  || fail "mypy 未通过"; }
-  echo "  pytest (not e2e) ..."
-  (cd backend && uv run pytest -m "not e2e" -q) || fail "后端测试未通过"
+  echo "  pytest (not e2e, not bench) ..."
+  (cd backend && uv run pytest -m "not e2e and not bench" -q --no-cov) || fail "后端测试未通过"
   TS=$(ts_files)
   if [ -n "$TS" ]; then
     echo "  tsc --noEmit ..."

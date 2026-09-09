@@ -28,6 +28,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
+    "pytest-benchmark>=4.0.0",
     "ruff>=0.3.0",
     "mypy>=1.8.0",
     "types-redis>=4.6.0",
@@ -58,7 +59,8 @@ plugins = ["pydantic.mypy"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-v --cov=app --cov-report=term-missing"
+addopts = "-v --cov=app --cov-report=term-missing -m 'not e2e and not bench'"
 markers = [
     "e2e: 全链路测试 — 需要 docker compose 栈在运行（api+worker+rabbitmq），离线时用 -m 'not e2e' 跳过",
+    "bench: CPU/性能基准 — 用 pytest-benchmark 跑，CI bench-cpu 硬门禁；常规测试用 -m 'not bench' 排除",
 ]
