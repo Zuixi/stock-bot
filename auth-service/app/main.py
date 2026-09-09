@@ -49,11 +49,11 @@ def create_app() -> FastAPI:
 
     # 2. Request Trace ID & Logging Middleware
     @app.middleware("http")
-    async def trace_id_middleware(request: Request, call_next) -> Response:  # type: ignore[no-untyped-def]
+    async def trace_id_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
         trace_id = request.headers.get("X-Request-Id") or f"req-{uuid.uuid4()}"
         request.state.trace_id = trace_id
 
-        response = await call_next(request)
+        response: Response = await call_next(request)
         response.headers["X-Request-Id"] = trace_id
         return response
 

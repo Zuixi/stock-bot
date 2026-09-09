@@ -23,7 +23,7 @@
 | 阶段 | 核心任务 | 交付物 | 状态 |
 | :--- | :--- | :--- | :---: |
 | **Stage 0** | 架构拓扑、安全契约、数据模型与追踪计划设计 | 架构与数据模型设计文档、实施计划 | **[x] 已完成** |
-| **Stage 1** | auth-service 独立微服务开发与凭证/JWKS体系 | auth-service 微服务、Alembic 迁移、Argon2id、Redis Session、JWKS 端点 | [ ] 待开始 |
+| **Stage 1** | auth-service 独立微服务开发与凭证/JWKS体系 | auth-service 微服务、Alembic 迁移、Argon2id、Redis Session、JWKS 端点 | **[x] 已完成** |
 | **Stage 2** | API Gateway / BFF 会话代理与 CSRF 拦截 | Gateway 配置/代码、Cookie-Session 转换、Principal Assertion 签名 | [ ] 待开始 |
 | **Stage 3** | Stock API 接入 JWKS 本地验签与统一错误契约 | 验签依赖注入、零信任未签名头过滤、全局统一 Error/Trace 中间件 | [ ] 待开始 |
 | **Stage 4** | 业务数据归属改造（自选股/标签/任务/缓存隔离） | Alembic 迁移、自选股服务端 API、标签 user_id 隔离、Task requested_by 审计 | [ ] 待开始 |
@@ -53,29 +53,31 @@
 
 ---
 
-### Stage 1: auth-service 独立微服务构建
+### Stage 1: auth-service 独立微服务构建（已完成）
 
-- [ ] **1.1 项目脚手架与依赖配置**
-  - 新建 `auth_service/` 目录结构（FastAPI、SQLAlchemy 2.0 async、alembic、argon2-cffi、cryptography、pyjwt、redis、pydantic v2）
-  - 数据库配置与独立会话池（`auth_service/core/database.py`）
-  - Redis 客户端配置（`auth_service/core/redis.py`）
-- [ ] **1.2 数据库模型与 Alembic 初始迁移**
+- [x] **1.1 项目脚手架与依赖配置**
+  - 新建 `auth-service/` 目录结构（FastAPI、SQLAlchemy 2.0 async、alembic、argon2-cffi、cryptography、pyjwt、redis、pydantic v2）
+  - 数据库配置与独立会话池（`auth-service/app/core/database.py`）
+  - Redis 客户端配置（`auth-service/app/core/redis.py`）
+- [x] **1.2 数据库模型与 Alembic 初始迁移**
   - 编写 ORM 模型：`AuthUser`, `AuthCredential`, `AuthRole`, `AuthPermission`, `AuthUserRole`, `AuthSession`, `AuthRefreshTokenFamily`, `AuthAuditEvent`
-  - 生成并执行初始化迁移脚本，预置默认角色 (`admin`, `researcher`, `trader`, `viewer`) 与基础权限项
-- [ ] **1.3 核心密码学与安全服务**
-  - 实现 Argon2id 密码哈希与校验器 (`auth_service/core/security/password.py`)
-  - 实现 RSA/ECDSA 秘钥对生成、轮换与 JWKS 导出 (`auth_service/core/security/keys.py`)
-  - 实现 Redis Session 管理器（创建、查询、续期、下线、多端销毁）
-- [ ] **1.4 认证与权限 API 路由实现**
+  - 生成并执行初始化迁移脚本，预置默认角色 (`admin`, `researcher`, `analyst`, `trader`, `operator`, `viewer`) 与基础权限项
+- [x] **1.3 核心密码学与安全服务**
+  - 实现 Argon2id 密码哈希与校验器 (`auth-service/app/core/crypto.py`)
+  - 实现 RSA 秘钥对管理与 JWKS 导出、短时断言签名 (`auth-service/app/core/jwt_signer.py`)
+  - 实现 Redis Session 管理器（创建、查询、续期、下线、多端销毁、DB 快照同步）
+- [x] **1.4 认证与权限 API 路由实现**
   - `POST /auth/register`：用户注册（参数校验、防重、默认角色分配、审计日志）
   - `POST /auth/login`：用户登录（密码比对、失败计数锁定、会话写入 Redis/DB、签发 HttpOnly Cookie）
   - `POST /auth/logout`：登出并销毁会话
-  - `GET /auth/me`：获取当前登录用户信息与权限列表
-  - `GET /auth/.well-known/jwks.json`：分发公钥集供网关和下游服务验签
+  - `GET /auth/session` / `GET /auth/me`：获取当前登录用户信息与权限列表
+  - `GET /auth/csrf`：获取或刷新 CSRF 令牌
   - `GET /auth/sessions` & `DELETE /auth/sessions/{id}`：会话列表与远程下线
-  - `GET/POST /auth/admin/*`：管理员用户与角色分配端点
-- [ ] **1.5 纯单元与集成测试套件**
-  - 编写密码哈希参数单测、Session 轮换单测、JWKS 导出有效性单测、RBAC 权限检查单测
+  - `POST /internal/session/introspect` & `POST /internal/principal/assertion`：网关内网会话内省与断言签名
+  - `GET /health/live` & `GET /health/ready`：微服务就绪与存活探针
+  - `GET /.well-known/jwks.json` & `GET /auth/jwks.json`：分发公钥集供网关和下游服务验签
+- [x] **1.5 纯单元与集成测试套件**
+  - 编写密码哈希参数单测、Session 轮换单测、JWKS 导出有效性单测、RBAC 权限检查单测、HTTP 路由全链路测试（16 项离线测试 100% 通过）
 
 ---
 

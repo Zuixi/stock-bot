@@ -55,6 +55,7 @@ data/*
 .claude/**
 ## Build artifacts (test coverage / TS incremental build — regenerated locally)
 backend/.coverage
+auth-service/.coverage
 frontend/tsconfig.tsbuildinfo
 !**/data/sw_custom_tags_seed.sql
 
