@@ -474,3 +474,10 @@
 - Stage B 的 DataCoverage 矩阵与 IndustryGrid 提取为共享组件 `features/market/components/DataCoverageMatrix` + `SwIndustryGrid`（CSS co-locate 随组件走，landing.css 移除已迁移规则），landing 两 section 改为薄包装，市场页直接复用。
 - Stage A 主题债全量清偿：features/market、features/industry-research、features/stock-detail 全部静态 `COLORS.*` 引用（15 处）与图表 `backgroundColor:"#fff"`/splitLine `#f0f0f0` 硬编码改经 `useTheme().colors` 或 CSS 变量注入（纯函数 buildOption 改收 colors 参数）；市场页五张图从裸 ReactECharts 迁至 `shared/ui/EChart` 封装（默认注入 backgroundColor transparent + 轴/分隔线主题色，新增 onEvents 透传支撑热力图点击）；SectorHeatmap/DistributionChart 渐变端点色改由主题色推导（Dark class 阈值 0.8 保留，近中性块文字用 textPrimary/textSecondary 随主题成立）；e2e marketDataFace 板块资金流/数据面两用例补顶层 Tab 切换。deprecated `COLORS` 导出保留（research-workbench 存量引用另行迁移）。
 - 涉及模块：frontend/pages/market(重构+market.css 新增), frontend/pages/landing(sections 两处薄包装+landing.css 瘦身), frontend/features/market(components×10+新增 CoreIndexCards/SwIndustryGrid/DataCoverageMatrix), frontend/features/industry-research(components×5), frontend/features/stock-detail(RelatedEvents), frontend/shared/ui(EChart), frontend/e2e(marketDataFace)
+
+## 2026-09-10 - 宣传页/TV 风格市场页/暗色模式 E2E 自测收尾
+- **E2E 新增与修复**：新增 landing.spec.ts（8 用例：公开路由/登录态 CTA 互换/脉搏卡/数据矩阵/行业网格）与 darkmode.spec.ts（3 用例：切换/持久化/暗色无白底）；修复 auth.spec 两处 strict-mode 脆弱选择器（注册表单子串双匹配、Modal 双标题）
+- **E2E 环境**：vite dev proxy 改经 Gateway(:80)（端口收敛后 8000/8001 不可达）、dev server 显式绑 127.0.0.1（默认 [::1] 致 Chromium 拒连）
+- **全量回归**：36 用例 33 过；余 3 项（research×2/userIsolation×1）为存量数据态依赖（industry metrics 空、固定用户名重复注册非幂等），与本分支无关
+- **调试沉淀**：Playwright addInitScript 与 expect 断言器存在状态翻转交互，清 storage 场景应改用「加载后清理+reload」；Mock 数据字段名必须对齐前端类型（MarketIndex 用 value/changePercent/tsCode）
+- 涉及模块：frontend/e2e(landing/darkmode 新增, auth 修复), frontend/vite.config

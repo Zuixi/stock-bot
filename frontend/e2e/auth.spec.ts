@@ -60,8 +60,10 @@ test.describe("认证微服务与前端会话状态机", () => {
     await expect(registerButton).toBeVisible();
 
     // 触发注册表单校验
+    // 注：AntD Tabs 隐藏面板仍挂载，登录 Tab 的「请输入用户名或邮箱」也在 DOM 中，
+    // 子串「请输入用户名」会双匹配——用精确匹配限定注册表单的提示
     await registerButton.click();
-    await expect(page.getByText("请输入用户名")).toBeVisible();
+    await expect(page.getByText("请输入用户名", { exact: true })).toBeVisible();
     await expect(page.getByText("请输入邮箱地址")).toBeVisible();
   });
 
@@ -153,10 +155,10 @@ test.describe("认证微服务与前端会话状态机", () => {
     await expect(logoutMenuItem).toBeVisible();
     await logoutMenuItem.click();
 
-    // 校验 Ant Design 确认弹窗
+    // 校验 Ant Design 确认弹窗（自定义 modal-title 处于 hidden 态，锚定 confirm-title）
     const confirmModal = page.locator(".ant-modal");
     await expect(confirmModal).toBeVisible();
-    await expect(confirmModal.getByText("确认退出登录")).toBeVisible();
+    await expect(confirmModal.locator(".ant-modal-confirm-title")).toHaveText("确认退出登录");
 
     // 点击确认退出
     const confirmOkButton = confirmModal.getByRole("button", { name: "退 出" });
