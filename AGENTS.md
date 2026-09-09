@@ -16,7 +16,8 @@ stock bot 能够查看当前市场行情，股票类别，每个分类的具体�
 - 根目录 `src/` + `tests/` + 根 `pyproject.toml` 为早期 CLI 原型遗留，主项目在 `backend/` 与 `frontend/`
 
 ## 常用命令
-- 后端（backend/ 下，uv 管理）：测试 `uv run pytest`；lint/类型检查 `uv run --extra dev ruff check .`、`uv run --extra dev mypy app`
+- 后端（backend/ 下，uv 管理）：测试 `uv run pytest`（默认 addopts 已排除 e2e 与 bench）；lint/类型检查 `uv run --extra dev ruff check .`、`uv run --extra dev mypy app`
+- 性能基准（Tier 1 硬门禁，[plans/2026-09-09-benchmark-tiers.md](./plans/2026-09-09-benchmark-tiers.md)）：`bash scripts/bench.sh`（对比基线门禁，CI bench-cpu 同款）/ `--save-baseline`（基线契约变更后刷新 benchmarks/baseline.json 并随 PR 入库）/ `--quick`（本地冒烟）
 - 前端（frontend/ 下，npm 管理）：`npm install`（首次）、`npm run lint`、`npm run build`
 - 整体构建启动：`docker compose build && docker compose up -d`
 
@@ -41,7 +42,7 @@ stock bot 能够查看当前市场行情，股票类别，每个分类的具体�
 
 1. **列出改动**：`git status --porcelain` + `git diff --stat`，明确本次改动范围
 2. **对照已知错误**：用 [best-practices.md](./docs/references/best-practices.md) 顶部的「自检探测器映射表」对 `git diff` 做 grep，命中关键词即复核对应分类条目，确认未重复已沉淀的错误
-3. **跑客观门禁**：`bash scripts/self_review.sh`（默认快检：空白/冲突标记 + 改动文件 ruff + 文档同步告警）；后端或前端改动较多且环境就绪时加 `--full`（追加 mypy / pytest / tsc）
+3. **跑客观门禁**：`bash scripts/self_review.sh`（默认快检：空白/冲突标记 + 改动文件 ruff + 文档同步告警）；后端或前端改动较多且环境就绪时加 `--full`（追加 mypy / pytest / tsc，pytest 自动排除 e2e 与 bench）。改了基准对象（规则引擎/rollup/归一化 mapper 等 Tier 1 纯计算热点）或基线契约时，另跑 `bash scripts/bench.sh` 确认性能门禁绿
 4. **查文档同步**：涉及 `.md` 改动时确认 `docs/Changelog.md` 已补记，交叉引用（端口/服务名/表名/`metric_key`）一致
 5. **反馈闭环**：自检中发现的重复或新教训，按分类追加进 best-practices.md 对应章节
 6. **固定格式收尾**：结束语输出 `自检：改动 N 处 / 探测器命中 M / 门禁 ✓|✘ / Changelog ✓|✘`
