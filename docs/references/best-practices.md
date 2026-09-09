@@ -118,3 +118,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - 多分支并行各自新增 Alembic 迁移、随后合并时，会产生两个 head 导致 `alembic upgrade head` 报 "Multiple head revisions"——在合并点新增一个 `down_revision=(链Ahead, 链Bhead)` 的空 merge 迁移（alembic merge <revA> <revB>）线性化两条链，否则 DB 迁移/CI Test job 必挂；此类 merge 迁移需 ruff-clean（去掉未用 import）。
 - 认证微服务与安全凭据设计应采用"Argon2id 密码哈希 + Redis 滑动会话 / DB 快照持久化 + 短时 RS256 非对称断言签名 + 公钥 JWKS 规范分发"的完整分层，且会话与主业务库严格物理隔离以保障身份系统的独立性与高可用。
 - 微服务拓扑演进中，API Gateway（如 Traefik）应作为唯一暴露的外部流量入口，下游业务 API 与前端容器必须收敛宿主机端口映射改为内网通信，并结合静态/动态中间件分层配置（Security Headers、Rate Limit、Compression）与 labels 声明式路由实现安全防护与任务防洪。
+- 下游微服务践行零信任安全原则：用户身份与权限必须严格源自经过非对称签名（RS256）并经本地 JWKS 验签的断言载荷，任何未经签名的入站 `X-User-*` 请求头必须强制丢弃以杜绝伪造越权；同时前端跨节点/跨交易所 fallback 必须严格限定在 404 Not Found 状态码，避免将 401/403/500 等关键鉴权与系统错误静默吞没。

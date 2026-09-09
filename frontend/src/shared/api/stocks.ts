@@ -1,4 +1,4 @@
-import { apiGet } from "./client";
+import { ApiError, apiGet } from "./client";
 import type { Exchange, StockRecord, SwChainNode } from "@/shared/types";
 
 interface BackendPagedResponse<T> {
@@ -183,8 +183,11 @@ export async function fetchStockBySymbol(symbol: string): Promise<StockRecord | 
     try {
       const item = await apiGet<BackendStock>(`/api/v1/exchanges/${exchange}/stocks/${symbol}`);
       return mapBackendStock(item);
-    } catch {
-      // try next exchange
+    } catch (err) {
+      if (err instanceof ApiError && err.status !== 404) {
+        throw err;
+      }
+      // try next exchange on 404
     }
   }
   return null;
@@ -197,8 +200,11 @@ export async function fetchStockEnrichedBySymbol(symbol: string): Promise<StockR
         `/api/v1/exchanges/${exchange}/stocks/${symbol}/enriched`
       );
       return mapBackendStockEnriched(item);
-    } catch {
-      // try next exchange
+    } catch (err) {
+      if (err instanceof ApiError && err.status !== 404) {
+        throw err;
+      }
+      // try next exchange on 404
     }
   }
   return null;

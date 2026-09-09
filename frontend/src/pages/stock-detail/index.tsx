@@ -45,7 +45,7 @@ export default function StockDetailPage() {
   const { symbol } = useParams<{ symbol: string }>();
   const navigate = useNavigate();
 
-  const { data: stock, isLoading } = useQuery({
+  const { data: stock, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["stock-detail", symbol],
     queryFn: async () => (symbol ? fetchStockEnrichedBySymbol(symbol) : null),
     enabled: Boolean(symbol),
@@ -56,6 +56,25 @@ export default function StockDetailPage() {
       <div style={{ display: "flex", justifyContent: "center", padding: "64px 0" }}>
         <Spin size="large" />
       </div>
+    );
+  }
+
+  if (isError) {
+    const errorMsg = error instanceof Error ? error.message : "获取个股数据失败";
+    return (
+      <Result
+        status="error"
+        title="加载失败"
+        subTitle={errorMsg}
+        extra={[
+          <Button key="retry" type="primary" onClick={() => refetch()}>
+            重试
+          </Button>,
+          <Button key="back" onClick={() => navigate("/market")}>
+            返回市场
+          </Button>,
+        ]}
+      />
     );
   }
 
