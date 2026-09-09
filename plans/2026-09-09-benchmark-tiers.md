@@ -85,5 +85,6 @@ scripts/
 
 1. **Tier 2 本轮不做**：Phase A 只落地 Tier 1（纯计算硬门禁）；Tier 2（k6 API 软门禁）留 Phase C。
 2. **硬门禁首选 pytest-benchmark**（wall-clock + median 相对退化 + 宽容差 12%）；CodSpeed 指令数留 Phase B 切换。
-3. **ASV 暂不引入**（Phase B 再评估）；Phase A 用入库 baseline.json + bench_compare.py 相对对比。
-4. **偏差说明**：pytest-benchmark 放 **dev extra** 而非独立 bench extra——pytest 收集 `tests/benchmarks/` 目录需要包在场（收集先于 marker 过滤），放 dev 免去为一个小包维护两套 CI sync；测试文件内 `pytest.importorskip` 兜底未装环境。
+3. **ASV 暂不引入**（Phase B 再评估）。
+4. **偏差一**：pytest-benchmark 放 **dev extra** 而非独立 bench extra——pytest 收集 `tests/benchmarks/` 目录需要包在场（收集先于 marker 过滤），放 dev 免去为一个小包维护两套 CI sync；测试文件内 `pytest.importorskip` 兜底未装环境。
+5. **偏差二（CI 实测修正）**：wall-clock 基线绑定硬件——本机跑的 baseline.json 在 CI runner 上全员慢 37-49%，跨机器对比必假红。CI 门禁改为**同 runner A/B**（先 checkout base commit 跑一遍存临时基线，再 checkout head 对比）；入库 `benchmarks/baseline.json` 降级为本地开发参考。首次引入基准的 PR 经 `--allow-added` 放行（base 侧本就没有新基准）。另两处实测坑：Windows 创建的 .py 无执行位，CI 直接执行报 126（改经 `uv run python` 调用）；>10ms/次的大样本基准单次抖动 7-8%，样本缩到 1-5ms 量级后 <1.2%。

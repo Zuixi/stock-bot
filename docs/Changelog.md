@@ -452,3 +452,12 @@
   - CI 新增 `bench-cpu` 硬门禁 job（uv sync --frozen --extra dev → bench.sh，产物 artifact 7 天）；AGENTS/AGENTS(backend) 常用命令与自检门禁第 3 步引用基准脚本
 - **验证**：4 基准 ~5s 跑完；同机三次 gate 全绿（波动 -1.2%~+8.1% < 12%）；临时收紧阈值验证门禁可红（exit 1 + 明细）；大样本基准（13ms/次）抖动 7.5% → 缩到 5000 行后 1.2%
 - 涉及模块：backend/tests/benchmarks(新增), backend/pyproject.toml, backend/uv.lock, scripts/bench.sh(新增), scripts/bench_compare.py(新增), benchmarks/baseline.json(新增), .github/workflows/ci.yml, .pre-commit-config.yaml, scripts/self_review.sh, AGENTS.md, backend/AGENTS.md, .gitignore
+
+## 2026-09-09 - bench-cpu CI 门禁修复：同 runner A/B 基线（跨机器基线不可比）
+- **问题**：PR#4 的 bench-cpu 连续两次失败——第一次 exit 126（Windows 创建的 bench_compare.py 无执行位，Linux 直接执行 Permission denied）；修复执行方式后第二次仍红，4 项基准全部"退化"37-49%，根因是 **wall-clock 基线绑定硬件**：本机 Windows 跑的 baseline.json 对 CI runner 无参照意义，跨机器相对对比必假红
+- **修复**：
+  - `scripts/bench_compare.py` 加 `--allow-added`（新增基准不判失败——A/B 的 base 侧本就没有新基准）
+  - `scripts/bench.sh`：`--allow-added` 透传；`--benchmark-json` 接 `$BENCH_CURRENT`（原硬编码漏改）；base commit 无 `tests/benchmarks/` 时短路写空产物；产物路径支持 `BENCH_BASELINE/BENCH_CURRENT` 环境变量覆盖（CI 指到 `$RUNNER_TEMP`，避免污染 tracked 的 baseline.json 导致 `git checkout` 拒切）
+  - CI `bench-cpu` 重写为**同 runner A/B**：resolve base（PR base.sha → event.before → HEAD~1 兜底）→ A 侧 checkout base + `uv sync` + `--save-baseline`（临时路径）→ B 侧 checkout head + sync + gate；入库 `benchmarks/baseline.json` 降级为本地开发参考
+- **验证**：本地 T1 save 路径覆盖 / T2 正常 A/B（退化 -1.2% 内）/ T3 空基线全新增放行 全绿；CI 待推送后观察
+- 涉及模块：scripts/bench.sh, scripts/bench_compare.py, .github/workflows/ci.yml, plans/2026-09-09-benchmark-tiers.md(决策记录), docs/references/best-practices.md, docs/Changelog.md
