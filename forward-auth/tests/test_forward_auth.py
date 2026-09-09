@@ -245,3 +245,18 @@ async def test_healthz(monkeypatch: pytest.MonkeyPatch, calls: list[httpx.Reques
         resp = await ac.get("/healthz")
     assert resp.status_code == 200
     assert resp.text == "ok"
+
+
+async def test_production_lifespan_without_injected_client() -> None:
+    """生产路径回归：不注入 http_client 时 lifespan 不得崩溃。
+
+    真实 compose 实跑曾暴露：lifespan 在 state 未挂 http 属性前直接访问
+    ``app.state.http``，导致生产启动即 AttributeError 崩溃（测试注入路径掩盖）。
+    """
+    app = create_app()  # http_client=None，与容器内生产行为一致
+    async with app.router.lifespan_context(app):
+        assert app.state.http is not None
+        client_ref = app.state.http
+    # 关闭后置空
+    assert app.state.http is None
+    await client_ref.aclose()  # lifespan 已负责 aclose，此处幂等兜底

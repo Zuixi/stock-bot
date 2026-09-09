@@ -449,3 +449,9 @@
 ## 2026-09-09 - P1/P2 评审修复：基建暴露面收敛、会话绝对上限与审计脱敏
 - 落实最后一批评审修复：RabbitMQ 替换 guest/guest 默认凭据并移除 5672/15672 宿主机映射（migrate/api/worker 的 RABBITMQ_URL 统一引用新变量）；Traefik dashboard 8080 端口不再映射宿主机；nginx 仅保留 /health 透传、不再公开后端 docs/redoc/openapi.json；auth-service CORS 默认列表移除 8000/8001 端口项；会话引入 7 天绝对过期上限（超限强制登出语义）；审计事件 payload 中明文 session_id 改为 SHA-256 哈希；X-Forwarded-For 仅在 trust_forwarded_for 开启时解析（默认不信任）；Vite 开发代理补全 /auth 与 /.well-known；补存量标签认领策略与暴力破解双层防护文档。
 - 涉及模块：docker-compose.yml, .env.docker.example, backend/.env.example, frontend/vite.config.ts, frontend/nginx.conf, auth-service(config, api/auth, services, tests), docs/architecture, plans
+
+## 2026-09-09 - 本地 Docker Compose 实跑验证（P7 认证闭环 E2E）
+- **实跑结果**：全栈经 Traefik Gateway 完成认证闭环实测 10 项场景全绿——公开路由 200、注册/登录 CSRF double-submit 正常、登录响应体无凭据、带 Cookie 访问受保护接口 200（forward-auth 断言注入 + backend JWKS 验签全链打通）、匿名 401、写请求无 CSRF 403、自选股写入正确归属 user_id、api:8000 与 frontend:3000 直连被阻断
+- **修复一**：Traefik ≤3.3 与 Docker Engine 29（最低 API 1.44）不兼容导致 Docker provider 协商 v1.24 被拒、路由无法加载——镜像钉至 v3.6.2 并注释勿降级
+- **修复二**：forward-auth 生产路径 lifespan 在 state 未挂 http 属性时访问即崩溃（测试注入路径掩盖）——getattr 兜底修复并新增回归测试
+- 涉及模块：docker-compose(gateway 镜像版本), forward-auth(app lifespan + tests), plans(实跑记录)
