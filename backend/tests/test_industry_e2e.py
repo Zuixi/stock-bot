@@ -22,9 +22,7 @@ from httpx import AsyncClient
 
 pytestmark = pytest.mark.e2e
 
-FRONTEND_BASE_URL = os.environ.get(
-    "FRONTEND_BASE_URL", "http://localhost:3000"
-)
+FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:3000")
 TASK_POLL_TIMEOUT = 30.0
 PHASES = {"prosperity", "recession", "depression", "recovery"}
 SIGNALS = {"买入", "卖出", "关注", "空仓"}
@@ -52,11 +50,10 @@ async def _trigger_industry_ingest(client: AsyncClient, payload: dict) -> dict:
 
 # ── 任务生命周期（竞态回归） ─────────────────────────────────────────
 
+
 async def test_ingest_task_lifecycle_completes(client: AsyncClient):
     """单次触发必须走完 pending → running → completed，不得卡在 pending。"""
-    task = await _trigger_industry_ingest(
-        client, {"industry_key": "pig", "source": "mock"}
-    )
+    task = await _trigger_industry_ingest(client, {"industry_key": "pig", "source": "mock"})
     assert task["finished_at"] is not None
     result = task["result"]
     assert result["source"] == "mock"
@@ -88,13 +85,14 @@ async def test_back_to_back_triggers_all_complete(client: AsyncClient):
 
 # ── 读端点契约 ───────────────────────────────────────────────────────
 
+
 async def test_latest_prefers_registry_freq_and_recent_period(client: AsyncClient):
     resp = await client.get("/api/v1/industries/pig/metrics/latest")
     assert resp.status_code == 200
     by_key = {m["metric_key"]: m for m in resp.json()}
 
     hog = by_key["hog_price"]
-    assert hog["freq"] == "daily"          # 注册频率获胜，未来月末的 monthly 行不得胜出
+    assert hog["freq"] == "daily"  # 注册频率获胜，未来月末的 monthly 行不得胜出
     assert hog["period"] <= date.today().isoformat()
     assert isinstance(hog["value"], float)
     assert hog["delta"] is not None and hog["delta"]["label"] == "日环比"
@@ -131,9 +129,7 @@ async def test_dashboard_contract(client: AsyncClient):
 
 
 async def test_history_limit_and_month_end_dual_freq(client: AsyncClient):
-    resp = await client.get(
-        "/api/v1/industries/pig/metrics/hog_price/history?limit=5"
-    )
+    resp = await client.get("/api/v1/industries/pig/metrics/hog_price/history?limit=5")
     assert resp.status_code == 200
     body = resp.json()
     points = body["points"]
@@ -142,9 +138,7 @@ async def test_history_limit_and_month_end_dual_freq(client: AsyncClient):
 
     # 频率覆写：日度指标存在月度 rollup 行（月末双频共存 = freq 约束修复的直接证据）
     monthly = (
-        await client.get(
-            "/api/v1/industries/pig/metrics/hog_price/history?limit=500&freq=monthly"
-        )
+        await client.get("/api/v1/industries/pig/metrics/hog_price/history?limit=500&freq=monthly")
     ).json()["points"]
     assert len(monthly) >= 12
     assert all(p["freq"] == "monthly" for p in monthly)
@@ -152,6 +146,7 @@ async def test_history_limit_and_month_end_dual_freq(client: AsyncClient):
 
 
 # ── 导入白名单 ───────────────────────────────────────────────────────
+
 
 async def test_batch_import_whitelist(client: AsyncClient):
     period = date.today().replace(day=1).isoformat()  # 本月 1 号，避开月末双频样本
@@ -184,6 +179,7 @@ async def test_batch_import_whitelist(client: AsyncClient):
 
 # ── ingest 幂等 ─────────────────────────────────────────────────────
 
+
 async def test_ingest_idempotent(client: AsyncClient):
     async def _daily_count() -> int:
         points = (
@@ -194,14 +190,13 @@ async def test_ingest_idempotent(client: AsyncClient):
         return len(points)
 
     before = await _daily_count()
-    await _trigger_industry_ingest(
-        client, {"industry_key": "pig", "source": "mock"}
-    )
+    await _trigger_industry_ingest(client, {"industry_key": "pig", "source": "mock"})
     after = await _daily_count()
     assert after == before, "重跑 ingest 不得增删数据点"
 
 
 # ── 标的分析（P5）：成分股对比 + 头均市值派生 ────────────────────────
+
 
 async def _pig_member_stocks(client: AsyncClient) -> list[dict]:
     """动态解析生猪养殖 L3 成分股（sw_l3_codes → tree 定位路径 → enriched 含 id/total_mv）。"""
@@ -220,9 +215,7 @@ async def _pig_member_stocks(client: AsyncClient) -> list[dict]:
     path = find_path(tree)
     assert path is not None, f"tree 中未找到 {l3_codes}（registry sw_l3_codes 与库内分类不一致？）"
     l1, l2, l3 = path
-    stocks = (
-        await client.get(f"/api/v1/market/sw-industry/{l1}/{l2}/{l3}/stocks/enriched")
-    ).json()
+    stocks = (await client.get(f"/api/v1/market/sw-industry/{l1}/{l2}/{l3}/stocks/enriched")).json()
     assert stocks, "生猪养殖成分股不得为空"
     return stocks
 
@@ -232,7 +225,8 @@ async def test_companies_endpoint_with_company_metrics(client: AsyncClient):
     stocks = await _pig_member_stocks(client)
     picks = sorted(
         (s for s in stocks if s.get("total_mv")),  # daily_basic 有市值才可派生头均市值
-        key=lambda s: s["total_mv"], reverse=True,
+        key=lambda s: s["total_mv"],
+        reverse=True,
     )[:2]
     assert len(picks) == 2, "需要 ≥2 只有 daily_basic 市值的成分股（牧原/温氏等）"
 
@@ -245,20 +239,24 @@ async def test_companies_endpoint_with_company_metrics(client: AsyncClient):
     items = []
     for s in picks:
         for period in hog_periods:
-            items.append({
-                "metric_key": "company.hogs_sold_monthly",
-                "period": period.isoformat(),
-                "value": 500.0,
+            items.append(
+                {
+                    "metric_key": "company.hogs_sold_monthly",
+                    "period": period.isoformat(),
+                    "value": 500.0,
+                    "stock_id": s["id"],
+                    "source": "manual",
+                }
+            )
+        items.append(
+            {
+                "metric_key": "company.cost_complete",
+                "period": cost_period.isoformat(),
+                "value": 13.2,
                 "stock_id": s["id"],
                 "source": "manual",
-            })
-        items.append({
-            "metric_key": "company.cost_complete",
-            "period": cost_period.isoformat(),
-            "value": 13.2,
-            "stock_id": s["id"],
-            "source": "manual",
-        })
+            }
+        )
     resp = await client.post(
         "/api/v1/industries/pig/metrics/batch",
         json={"items": items, "recompute_derived": True},
@@ -308,6 +306,7 @@ def _last_n_month_ends(n: int, today: date | None = None) -> list[date]:
 
 # ── 行情面（P5）：ETF/可转债日线管道 ────────────────────────────────
 
+
 async def _trigger_securities_fetch(client: AsyncClient) -> dict:
     """POST fetch-securities → 轮询到终态 → 返回任务 dict（TuShare 实拉）。"""
     resp = await client.post("/api/v1/tasks/fetch-securities", json={"industry_key": "pig"})
@@ -345,7 +344,11 @@ async def test_securities_fetch_and_series(client: AsyncClient):
     assert code["latest"]["close"] > 0
     # 涨跌幅 = close vs pre_close（后端算好，供表格直接渲染）
     if code["latest"]["pre_close"]:
-        expected = (code["latest"]["close"] - code["latest"]["pre_close"]) / code["latest"]["pre_close"] * 100
+        expected = (
+            (code["latest"]["close"] - code["latest"]["pre_close"])
+            / code["latest"]["pre_close"]
+            * 100
+        )
         assert abs(code["change_pct"] - round(expected, 2)) < 0.01
 
     # 可转债：registry 有在市转债则断言序列；无则断言空 codes 形状（源无关分支）
@@ -415,18 +418,14 @@ async def _l3_stocks(client: AsyncClient, industry_key: str) -> list[dict]:
     path = find_path(tree)
     assert path is not None, f"tree 中未找到 {l3_codes}"
     l1, l2, l3 = path
-    stocks = (
-        await client.get(f"/api/v1/market/sw-industry/{l1}/{l2}/{l3}/stocks/enriched")
-    ).json()
+    stocks = (await client.get(f"/api/v1/market/sw-industry/{l1}/{l2}/{l3}/stocks/enriched")).json()
     assert stocks, f"{industry_key} 成分股不得为空"
     return stocks
 
 
 async def test_broiler_mock_ingest_generalization(client: AsyncClient):
     """fetch-industry-metrics {broiler} → completed；列表双行业 + 信号字段 + dashboard 可读。"""
-    task = await _trigger_industry_ingest(
-        client, {"industry_key": "broiler", "source": "mock"}
-    )
+    task = await _trigger_industry_ingest(client, {"industry_key": "broiler", "source": "mock"})
     result = task["result"]
     assert result["upserted"] >= 90  # 2 指标 × 45 天日度序列
 
@@ -466,6 +465,7 @@ async def test_broiler_sw_codes_disjoint_pig_companies_unaffected(client: AsyncC
 
 
 # ── 前端烟雾（栈未含 frontend 时跳过） ──────────────────────────────
+
 
 async def test_frontend_serves_and_proxies_api():
     try:

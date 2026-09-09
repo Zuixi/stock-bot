@@ -9,10 +9,10 @@ from app.core.exceptions import not_found_response
 from app.schemas.cluster import (
     ClusterDistributionOut,
     ClusterExplanationOut,
-    ClusterMemberOut,
     ClusteringRunOut,
+    ClusterMemberOut,
 )
-from app.schemas.common import PageParams, PagedResponse
+from app.schemas.common import PagedResponse, PageParams
 from app.services import cluster_service
 
 router = APIRouter()

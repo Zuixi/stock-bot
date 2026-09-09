@@ -19,7 +19,7 @@ PIG_ORG_PAYLOADS: list[dict] = [
         "group": "官方",
         "tier": "official",
         "desc": "产能最终基准：能繁母猪存栏（月度环比）、规模以上屠宰量；"
-                "全国农产品批发市场价格信息系统的猪肉批发价为官方价格口径",
+        "全国农产品批发市场价格信息系统的猪肉批发价为官方价格口径",
         "urls": ["http://www.moa.gov.cn"],
     },
     {
@@ -56,7 +56,7 @@ PIG_ORG_PAYLOADS: list[dict] = [
         "group": "协会",
         "tier": "official",
         "desc": "每月转载五部门“全国生猪产品数据”（能繁环比等），HTML 规范易解析，"
-                "为本项目协会自动采集源（pig.caaa.cn）",
+        "为本项目协会自动采集源（pig.caaa.cn）",
         "urls": ["https://pig.caaa.cn"],
     },
     {
@@ -79,7 +79,7 @@ PIG_ORG_PAYLOADS: list[dict] = [
         "group": "数据平台",
         "tier": "highfreq",
         "desc": "股票行情/估值（daily_basic）、ETF（fund_daily）与可转债（cb_daily）日线，"
-                "标的分析与行情面数据管道",
+        "标的分析与行情面数据管道",
         "urls": ["https://tushare.pro"],
     },
     {
@@ -116,7 +116,7 @@ PIG_ORG_PAYLOADS: list[dict] = [
         "group": "期货",
         "tier": "official",
         "desc": "2021-01 上市；主力连续反映市场对未来供需的预期，与现货的价差（基差）"
-                "是周期情绪温度计",
+        "是周期情绪温度计",
         "urls": ["http://www.dce.com.cn"],
     },
 ]
@@ -191,14 +191,18 @@ def build_pig_knowledge_rows() -> list[dict]:
     """猪智投知识库种子行（industry_knowledge 直插形状，迁移与单测共用）。"""
     rows: list[dict] = []
     for i, payload in enumerate(PIG_ORG_PAYLOADS):
-        rows.append({
-            "industry_key": "pig",
-            "kind": "org",
-            "payload": payload,
-            "sort": _GROUP_ORDER.get(payload["group"], 9) * 100 + i,
-        })
-    rows.append({"industry_key": "pig", "kind": "principle",
-                 "payload": PIG_PRINCIPLE_PAYLOAD, "sort": 1000})
-    rows.append({"industry_key": "pig", "kind": "mindmap",
-                 "payload": PIG_MINDMAP_PAYLOAD, "sort": 1000})
+        rows.append(
+            {
+                "industry_key": "pig",
+                "kind": "org",
+                "payload": payload,
+                "sort": _GROUP_ORDER.get(payload["group"], 9) * 100 + i,
+            }
+        )
+    rows.append(
+        {"industry_key": "pig", "kind": "principle", "payload": PIG_PRINCIPLE_PAYLOAD, "sort": 1000}
+    )
+    rows.append(
+        {"industry_key": "pig", "kind": "mindmap", "payload": PIG_MINDMAP_PAYLOAD, "sort": 1000}
+    )
     return rows

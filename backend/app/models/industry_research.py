@@ -38,7 +38,12 @@ class IndustryMetric(Base):
     __tablename__ = "industry_metrics"
     __table_args__ = (
         UniqueConstraint(
-            "industry_key", "stock_id", "metric_key", "source", "freq", "period",
+            "industry_key",
+            "stock_id",
+            "metric_key",
+            "source",
+            "freq",
+            "period",
             name="uq_industry_metrics_key",
         ),
         Index("idx_industry_metrics_lookup", "industry_key", "metric_key", "period"),
@@ -47,9 +52,7 @@ class IndustryMetric(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     industry_key: Mapped[str] = mapped_column(String(32), nullable=False)
-    stock_id: Mapped[int] = mapped_column(
-        nullable=False, default=0, server_default="0"
-    )
+    stock_id: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     metric_key: Mapped[str] = mapped_column(String(64), nullable=False)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="mock")
     # official / highfreq / calc / manual / derived
@@ -59,9 +62,7 @@ class IndustryMetric(Base):
     value: Mapped[float | None] = mapped_column(Numeric(18, 4))
     unit: Mapped[str | None] = mapped_column(String(16))
     extra: Mapped[dict | None] = mapped_column(JSONB)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class IndustryReferencePoint(Base):
@@ -74,12 +75,17 @@ class IndustryReferencePoint(Base):
     __tablename__ = "industry_reference_points"
     __table_args__ = (
         UniqueConstraint(
-            "industry_key", "metric_key", "label", "effective_from",
+            "industry_key",
+            "metric_key",
+            "label",
+            "effective_from",
             name="uq_industry_reference_points",
         ),
         Index(
             "idx_industry_reference_lookup",
-            "industry_key", "metric_key", "effective_from",
+            "industry_key",
+            "metric_key",
+            "effective_from",
         ),
     )
 
@@ -90,9 +96,7 @@ class IndustryReferencePoint(Base):
     value: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
     effective_from: Mapped[date] = mapped_column(Date, nullable=False)
     note: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class IndustrySignal(Base):
@@ -112,9 +116,7 @@ class IndustrySignal(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     basis: Mapped[dict | None] = mapped_column(JSONB)
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class IndustryKnowledge(Base):
@@ -126,9 +128,7 @@ class IndustryKnowledge(Base):
     """
 
     __tablename__ = "industry_knowledge"
-    __table_args__ = (
-        Index("idx_industry_knowledge_lookup", "industry_key", "kind", "sort"),
-    )
+    __table_args__ = (Index("idx_industry_knowledge_lookup", "industry_key", "kind", "sort"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     industry_key: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -136,6 +136,4 @@ class IndustryKnowledge(Base):
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     sort: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

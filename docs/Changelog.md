@@ -316,3 +316,30 @@
 - **审计**：临时库灌入 repo 种子与活库逐行 diff——sw_industry_classes 511 / sw_industry_members 4430 / stock_custom_sw_tags 1439 三表完全一致，全新 docker 部署分类数据与当前显示一致
 - **发现并修复**：data_init 的 overlay 加载被 is_sw_data_loaded 门控——先于 overlay 的老部署升级后 SW 表已有数据、跳过导入、1439 行永不生效；改为加性幂等的 overlay 每次 startup 无条件尝试（日志可观测）
 - 涉及模块：backend/app/services/data_init
+
+## 2026-09-09 - P1 财务数据底座 + 估值分位（行业投研工作台前置能力）
+- **背景**：按 `plans/industry-research-workbench.md` P1（财务与估值底座），当前系统只有日频行情/`daily_basic`，无三大报表与财务指标
+- **新增（后端）**：
+  - 六张财务表（`financial_raw_records` / `financial_report_versions` / `income_statement_facts` / `balance_sheet_facts` / `cash_flow_statement_facts` / `financial_metrics`），报告版本带 end_date/report_type/comp_type/ann_date/source/update_flag/quality_status，派生指标带 calc_method+quality；迁移 `b1f2c3d4e5a6`
+  - TuShare Provider 新增 `fetch_income` / `fetch_balance_sheet` / `fetch_cash_flow` / `fetch_financial_indicator`
+  - `FinancialIngestService`（拉取→raw JSONL+DB→报告版本→facts→派生指标），`FinancialWorker` + `financial.fetch` 队列 + `POST /tasks/fetch-financial`
+  - 财务 API（`financial-summary` / `financial-statements` / `financial-metrics/history`）、估值历史分位 API（`valuation-history`，基于 daily_basic，按 1y/3y/5y 正样本计算分位）
+- **派生指标口径**：折让比/费用率/负债率/杜邦拆解为 `calculated_from_statement`（derived），ROE/毛利率/同比等优先取 TuShare `fina_indicator` 的 `reported_by_provider` 值，缺失显示空而非 0；负值/缺失从估值分位样本中排除
+- **前端**：个股详情页新增"估值/财务"Tab（指标卡+ECharts 趋势+三张报表表+估值分位图），数据来源/报告期/质量徽章展示（由子 Agent 并行实现）
+- **注意**：P0 的 outbox 任务投递事务、跨交易所 symbol-only enriched 修复等仍未纳入本次切片；全市场财报回补需先按 `financial-data-dictionary` 做数据源 POC
+- 涉及模块：backend/models, backend/migrations, backend/core/providers/tushare_client, backend/services(financial_ingest/financial_service), backend/repositories/financial_repo, backend/api/v1(financials/tasks), backend/workers, backend/core/mq, frontend/pages/stock-detail, frontend/features/stock-detail, frontend/shared/api
+
+## 2026-09-08 - 全市场财务回填 + 财务表查询索引优化
+- 财务数据改为"自动回填"：新增 `financial_backfill` service 逐批幂等回填缺失财报的标的（共享 FinancialWorker 同源 ingest），scheduler 注册 `financial_backfill` cron（工作日 7-8/15-23 点每 20 分钟），并新增 `python -m app.scheduler.backfill` 一次性全量入口
+- 新增 financial_metrics 两个索引：覆盖索引 `(stock_id, metric_key, report_version_id)` 加速个股财务指标时序读取与排序，`(report_version_id)` 外键索引加速 join 与级联删除；实测个股财务时序查询 ~6ms
+- 涉及模块：backend(scheduler/services/repositories/models migrations), 全市场约 5300 只标的逐步补齐
+
+## 2026-09-08 - 后端 CI 债务清理（并入财务 PR）
+- **根因**：CI 的 `uv run` 未带 `--extra dev`，导致 ruff/mypy/pytest 从未真正安装 → 后端 Lint/TypeCheck 形同虚设，存量 92 文件格式分叉、mypy 115 错累计到 main
+- **修复**：
+  - ci.yml 三个后端 job 的依赖安装统一加 `--extra dev`；Test job 的 alembic 步骤补 `DATABASE_URL` 指向 `stock_bot_test`；pytest 改 `-m "not e2e"`
+  - 全仓 `ruff format` 对齐（141 文件）+ 全部 115 个 mypy 错误清零（历史欠账+财务新代码）
+  - 修复 2 个真 bug：`task_repo` 缺 `func` import（count_tasks 运行时 NameError）、`financial_ingest` 缺 FinancialReportVersion import
+  - `test_health`/`test_stocks` 标记为 e2e（依赖真实运行 API），CI 只跑非 e2e（本地 125 passed）
+- 涉及模块：backend(全仓 lint/type/test), 顶层 CI 配置, backend/services(task/financial_ingest), backend/repositories/task_repo, backend/tests
+

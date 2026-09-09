@@ -381,6 +381,135 @@ class TuShareClient(RateLimitedSyncProvider):
             kwargs["ts_code"] = ts_code
         return await self._query("stk_limit", **kwargs)
 
+    # ------------------------------------------------------------------
+    # Financial statements APIs
+    # ------------------------------------------------------------------
+
+    async def fetch_income(
+        self,
+        *,
+        ts_code: str = "",
+        period: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        report_type: str = "",
+        fields: str = (
+            "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,"
+            "total_revenue,revenue,operate_cost,operate_profit,total_profit,"
+            "n_income,n_income_attr_p,deduct_n_income,basic_eps,diluted_eps,"
+            "sell_exp,admin_exp,fin_exp,rd_exp"
+        ),
+    ) -> pd.DataFrame:
+        """Fetch income statement rows.
+
+        See: docs/references/tushare/利润表.md
+        """
+        kwargs: dict[str, str] = {}
+        if ts_code:
+            kwargs["ts_code"] = ts_code
+        if period:
+            kwargs["period"] = period
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        if report_type:
+            kwargs["report_type"] = report_type
+        return await self._query("income", fields=fields, **kwargs)
+
+    async def fetch_balance_sheet(
+        self,
+        *,
+        ts_code: str = "",
+        period: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        report_type: str = "",
+        fields: str = (
+            "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,"
+            "total_assets,total_liab,total_hldr_eqy_exc_min_int,"
+            "total_hldr_eqy_inc_min_int,money_cap,accounts_receiv,inventories,"
+            "fix_assets,intan_assets,st_borrow,lt_borrow,st_note_payable,bond_payable"
+        ),
+    ) -> pd.DataFrame:
+        """Fetch balance sheet rows.
+
+        See: docs/references/tushare/资产负债表.md
+        """
+        kwargs: dict[str, str] = {}
+        if ts_code:
+            kwargs["ts_code"] = ts_code
+        if period:
+            kwargs["period"] = period
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        if report_type:
+            kwargs["report_type"] = report_type
+        return await self._query("balancesheet", fields=fields, **kwargs)
+
+    async def fetch_cash_flow(
+        self,
+        *,
+        ts_code: str = "",
+        period: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        report_type: str = "",
+        fields: str = (
+            "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,"
+            "n_cashflow_act,n_cashflow_inv_act,n_cashflow_fin_act,"
+            "c_cash_equ_end_period,c_paid_goods_s,c_paid_to_for_empl,"
+            "c_paid_for_taxes,c_recp_from_release_sale_sg"
+        ),
+    ) -> pd.DataFrame:
+        """Fetch cash flow statement rows.
+
+        See: docs/references/tushare/现金流量表.md
+        """
+        kwargs: dict[str, str] = {}
+        if ts_code:
+            kwargs["ts_code"] = ts_code
+        if period:
+            kwargs["period"] = period
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        if report_type:
+            kwargs["report_type"] = report_type
+        return await self._query("cashflow", fields=fields, **kwargs)
+
+    async def fetch_financial_indicator(
+        self,
+        *,
+        ts_code: str = "",
+        period: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        fields: str = (
+            "ts_code,ann_date,end_date,roe,roe_dt,grossprofit_margin,"
+            "netprofit_margin,debt_to_assets,current_ratio,quick_ratio,"
+            "bps,ocfps,eps,or_yoy,netprofit_yoy,dt_netprofit_yoy,"
+            "ar_turn,ca_turn,fa_turn,assets_turn,equity_multi"
+        ),
+    ) -> pd.DataFrame:
+        """Fetch financial indicator ratios (ROE, margins, growth, turnover).
+
+        See: docs/references/tushare/财务指标.md
+        """
+        kwargs: dict[str, str] = {}
+        if ts_code:
+            kwargs["ts_code"] = ts_code
+        if period:
+            kwargs["period"] = period
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        return await self._query("fina_indicator", fields=fields, **kwargs)
+
 
 # ---------------------------------------------------------------------------
 # Module-level singleton

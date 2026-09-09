@@ -4,16 +4,14 @@ Tests connect to the API's DATABASE_URL pointing to stock_bot_test,
 so all queries run against the isolated test database.
 """
 
-import pytest
+import os
+
 import pytest_asyncio
 from httpx import AsyncClient
 
-import os
-
 # Point to the real test database (same as what the running API uses)
 TEST_DATABASE_URL = os.environ.get(
-    "TEST_DATABASE_URL",
-    "postgresql+asyncpg://stock_user:stock_pass@localhost:5432/stock_bot_test"
+    "TEST_DATABASE_URL", "postgresql+asyncpg://stock_user:stock_pass@localhost:5432/stock_bot_test"
 )
 
 # API runs inside Docker; use host.docker.internal to reach host port 8000

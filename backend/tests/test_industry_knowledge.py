@@ -95,14 +95,16 @@ def test_assemble_empty_and_malformed_rows_tolerated():
     assert empty.org == [] and empty.principle is None and empty.mindmap is None
 
     # 脏行（形状不合法/非 dict）跳过不抛穿；principle/mindmap 只取首行
-    out = assemble_knowledge([
-        ("org", {"name": "X", "group": "官方", "tier": "official"}),
-        ("org", {"name": "坏行", "group": "官方"}),            # 缺 tier → 跳过
-        ("org", "not-a-dict"),                                  # 非 dict → 跳过
-        ("principle", {"title": "t", "items": ["a"]}),
-        ("principle", {"title": "t2", "items": ["b"]}),         # 第二条不覆盖
-        ("mindmap", {"name": "树", "children": []}),
-    ])
+    out = assemble_knowledge(
+        [
+            ("org", {"name": "X", "group": "官方", "tier": "official"}),
+            ("org", {"name": "坏行", "group": "官方"}),  # 缺 tier → 跳过
+            ("org", "not-a-dict"),  # 非 dict → 跳过
+            ("principle", {"title": "t", "items": ["a"]}),
+            ("principle", {"title": "t2", "items": ["b"]}),  # 第二条不覆盖
+            ("mindmap", {"name": "树", "children": []}),
+        ]
+    )
     assert [o.name for o in out.org] == ["X"]
     assert out.principle is not None and out.principle.title == "t"
     assert out.mindmap is not None and out.mindmap["name"] == "树"

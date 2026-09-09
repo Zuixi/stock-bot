@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import desc, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +18,7 @@ _ETF_UQ = "uq_fund_etf_daily_code_date"
 _CB_UQ = "uq_cb_daily_code_date"
 
 
-async def _upsert_daily(db: AsyncSession, model, uq_name: str, rows: list[dict]) -> int:
+async def _upsert_daily(db: AsyncSession, model: type[Any], uq_name: str, rows: list[dict]) -> int:
     """Idempotent bulk upsert of daily rows. Returns affected row count."""
     if not rows:
         return 0
@@ -34,7 +36,7 @@ async def _upsert_daily(db: AsyncSession, model, uq_name: str, rows: list[dict])
         },
     )
     result = await db.execute(stmt)
-    return result.rowcount or 0
+    return result.rowcount or 0  # type: ignore[attr-defined]
 
 
 async def upsert_fund_etf_daily(db: AsyncSession, rows: list[dict]) -> int:
@@ -45,13 +47,12 @@ async def upsert_cb_daily(db: AsyncSession, rows: list[dict]) -> int:
     return await _upsert_daily(db, CbDaily, _CB_UQ, rows)
 
 
-async def get_daily_series(db: AsyncSession, model, ts_code: str, limit: int = 90) -> list:
+async def get_daily_series(
+    db: AsyncSession, model: type[Any], ts_code: str, limit: int = 90
+) -> list:
     """Ascending latest-N daily rows for one code."""
     stmt = (
-        select(model)
-        .where(model.ts_code == ts_code)
-        .order_by(desc(model.trade_date))
-        .limit(limit)
+        select(model).where(model.ts_code == ts_code).order_by(desc(model.trade_date)).limit(limit)
     )
     result = await db.execute(stmt)
     return list(reversed(result.scalars().all()))
