@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """相对基线对比：读 pytest-benchmark JSON（--benchmark-json 产物），按 median（P50）判退化。
 
-用法: python scripts/bench_compare.py <baseline.json> <current.json> [--threshold 0.12]
+用法: python scripts/bench_compare.py <baseline.json> <current.json> [--threshold 0.12] [--allow-added]
 
 - 任一基准 median 相对退化 > threshold → 打印明细并 exit 1（硬门禁）。
-- 本次新增、基线没有的基准 → exit 1（新基准必须随 PR 带基线入库，跑 bench.sh --save-baseline）。
+- 本次新增、基线没有的基准 → 默认 exit 1（本地 gate：新基准须随 PR 刷新基线）；
+  传 --allow-added 时降级为提示不失败（CI A/B 对比用——base 侧本就没有新基准）。
 - 基线有、本次没跑的基准 → 忽略（套件删减不应误报）。
 
 只用标准库；阈值默认 0.12（Phase A wall-clock 宽容差抗 runner 抖动，
@@ -29,6 +30,11 @@ def main() -> int:
     parser.add_argument("baseline", type=Path)
     parser.add_argument("current", type=Path)
     parser.add_argument("--threshold", type=float, default=0.12)
+    parser.add_argument(
+        "--allow-added",
+        action="store_true",
+        help="新增基准不判失败（CI A/B 模式：base commit 上本来就没有新基准）",
+    )
     args = parser.parse_args()
 
     base = load_medians(args.baseline)
@@ -55,6 +61,10 @@ def main() -> int:
             print(f"  ✘ {name}: {b:.6f}s → {c:.6f}s ({delta:+.1%})")
         return 1
     if added:
+        if args.allow_added:
+            print(f"\n⚠ {len(added)} 项基准为新增（--allow-added，不计失败）")
+            print(f"\n✔ 存量基准全部在阈值 {args.threshold:.0%} 内")
+            return 0
         print(f"\n✘ {len(added)} 项基准不在基线中 —— 新基准须随 PR 刷新基线：")
         for name in added:
             print(f"  • {name}")

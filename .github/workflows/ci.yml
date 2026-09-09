@@ -79,17 +79,42 @@ jobs:
           flags: backend
 
   # ── CPU 基准硬门禁（Tier 1，见 plans/2026-09-09-benchmark-tiers.md）──
+  # wall-clock 基线绑定硬件：不得用入库 baseline.json 跨机器对比（本机与
+  # runner 差 30-50%）。这里做同 runner A/B：先跑 base commit 存临时基线，
+  # 再跑 head 对比；新增基准经 --allow-added 放行（base 侧本就没有）。
   bench-cpu:
     name: "Bench CPU (Tier1 hard gate)"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - uses: astral-sh/setup-uv@v5
         with: { python-version: "3.13" }
-      - run: uv sync --frozen --extra dev
+      - name: Resolve base commit
+        id: base
+        run: |
+          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
+            echo "SHA=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            echo "SHA=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+          else
+            # 单 commit 历史兜底：无 parent 时自比（恒绿，仅记录）
+            echo "SHA=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+      - name: A-side baseline (base commit, same runner)
+        run: |
+          git checkout "${{ steps.base.outputs.SHA }}"
+          uv sync --frozen --extra dev
+          BENCH_BASELINE="$RUNNER_TEMP/bench_ab.json" BENCH_CURRENT="$RUNNER_TEMP/bench_a.json" \
+            bash ../scripts/bench.sh --save-baseline
         working-directory: backend
-      - name: Run benchmarks vs committed baseline
-        run: bash scripts/bench.sh
+      - name: B-side head + gate
+        run: |
+          git checkout "${{ github.sha }}"
+          uv sync --frozen --extra dev
+          BENCH_BASELINE="$RUNNER_TEMP/bench_ab.json" \
+            bash ../scripts/bench.sh --allow-added
+        working-directory: backend
       - name: Upload benchmark result
         if: always()
         uses: actions/upload-artifact@v4
