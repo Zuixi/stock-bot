@@ -22,6 +22,7 @@ services:
       - frontend
       - api
       - auth-service
+      - forward-auth
 
   # ---- infrastructure: databases & brokers ----
   postgres:
@@ -148,6 +149,10 @@ services:
       DATABASE_URL: postgresql+asyncpg://auth_user:auth_pass@auth-db:5432/stock_bot_auth
       REDIS_URL: redis://redis:6379/0
       APP_ENV: production
+      # Principal Assertion JWT contract — must match backend AUTH_ISSUER/AUTH_AUDIENCE
+      JWT_ISSUER: ${JWT_ISSUER:-stock-bot-auth}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-urn:stock-bot:api}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
     depends_on:
       auth-db:
         condition: service_healthy
@@ -169,6 +174,26 @@ services:
       retries: 5
       start_period: 15s
 
+  # ---- forward-auth sidecar (session -> assertion injection + CSRF enforcement) ----
+  forward-auth:
+    image: stock-bot-forward-auth:local
+    build:
+      context: ./forward-auth
+    container_name: forward_auth
+    restart: unless-stopped
+    environment:
+      AUTH_SERVICE_URL: http://auth-service:8001
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
+      ASSERTION_CACHE_TTL: ${ASSERTION_CACHE_TTL:-25}
+    depends_on:
+      - auth-service
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9000/healthz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
   # ---- backend api ----
   api:
     image: stock-bot-backend:local
@@ -182,6 +207,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       SW_DATA_DIR: /app/data/sw
+      # Principal Assertion verification contract — must match auth-service JWT_ISSUER/AUDIENCE
+      AUTH_ISSUER: ${JWT_ISSUER:-stock-bot-auth}
+      AUTH_AUDIENCE: ${JWT_AUDIENCE:-urn:stock-bot:api}
+      AUTH_JWKS_URL: http://auth-service:8001/.well-known/jwks.json
     dns:
       - 8.8.8.8
       - 223.5.5.5
@@ -203,12 +232,12 @@ services:
       - "traefik.http.routers.api.rule=PathPrefix(`/api`)"
       - "traefik.http.routers.api.entrypoints=web"
       - "traefik.http.routers.api.priority=10"
-      - "traefik.http.routers.api.middlewares=sec-headers@file,api-ratelimit@file"
+      - "traefik.http.routers.api.middlewares=strip-assertion@file,sec-headers@file,api-ratelimit@file,forward-auth@file"
       - "traefik.http.services.api.loadbalancer.server.port=8000"
       - "traefik.http.routers.api-tasks.rule=PathPrefix(`/api/v1/tasks/fetch-`) || PathPrefix(`/api/v1/tasks/run-clustering`)"
       - "traefik.http.routers.api-tasks.entrypoints=web"
       - "traefik.http.routers.api-tasks.priority=30"
-      - "traefik.http.routers.api-tasks.middlewares=sec-headers@file,tasks-ratelimit@file"
+      - "traefik.http.routers.api-tasks.middlewares=strip-assertion@file,sec-headers@file,tasks-ratelimit@file,forward-auth@file"
       - "traefik.http.routers.api-tasks.service=api"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]

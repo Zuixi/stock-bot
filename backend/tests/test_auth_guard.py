@@ -8,7 +8,7 @@ import jwt
 import pytest
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import rsa
-from fastapi import APIRouter, FastAPI, status
+from fastapi import APIRouter, FastAPI, HTTPException, status
 from httpx import ASGITransport, AsyncClient
 
 from app.api.deps import (
@@ -184,7 +184,7 @@ def test_principal_model_methods() -> None:
 
 @pytest.mark.asyncio
 async def test_verifier_valid_token(
-    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str]
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
 ) -> None:
     """Valid RS256 token generates authenticated Principal."""
     priv, _, kid = rsa_key_pair
@@ -207,7 +207,7 @@ async def test_verifier_valid_token(
 
 @pytest.mark.asyncio
 async def test_verifier_expired_token(
-    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str]
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
 ) -> None:
     """Expired assertion token raises 401."""
     priv, _, kid = rsa_key_pair
@@ -230,6 +230,57 @@ async def test_verifier_wrong_signature() -> None:
 
     with pytest.raises(Exception):
         await verifier.verify_token(token)
+
+
+@pytest.mark.asyncio
+async def test_cross_service_assertion_contract(
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
+) -> None:
+    """Cross-service contract: auth-service claim structure must verify on backend.
+
+    Builds a JWT by hand with EXACTLY the claim structure produced by
+    auth-service KeyManager.sign_assertion (iss="stock-bot-auth",
+    aud="urn:stock-bot:api", claims sub/session_id/username/roles/permissions/
+    iat/exp/jti, header kid) and verifies it with the backend verifier.
+    Tampering with iss or aud must fail.
+    """
+    priv, pub, kid = rsa_key_pair
+    jwks_client.set_static_key(kid, pub)
+
+    now = int(time.time())
+    payload = {
+        "iss": "stock-bot-auth",
+        "sub": "usr_cross_001",
+        "aud": "urn:stock-bot:api",
+        "session_id": "sess_cross_001",
+        "username": "cross_user",
+        "roles": ["trader"],
+        "permissions": ["stocks:read", "watchlists:write"],
+        "iat": now,
+        "exp": now + 60,
+        "jti": "ast_cross001",
+    }
+    token = jwt.encode(payload, priv, algorithm="RS256", headers={"kid": kid, "typ": "JWT"})
+
+    principal = await verifier.verify_token(token)
+    assert principal.is_authenticated
+    assert principal.user_id == "usr_cross_001"
+    assert principal.username == "cross_user"
+    assert principal.session_id == "sess_cross_001"
+    assert principal.roles == ["trader"]
+    assert "watchlists:write" in principal.permissions
+
+    # Tampered issuer must be rejected
+    bad_issuer = dict(payload, iss="https://evil.example.com")
+    tampered = jwt.encode(bad_issuer, priv, algorithm="RS256", headers={"kid": kid})
+    with pytest.raises(HTTPException):
+        await verifier.verify_token(tampered)
+
+    # Tampered audience must be rejected
+    bad_audience = dict(payload, aud="urn:evil:api")
+    tampered = jwt.encode(bad_audience, priv, algorithm="RS256", headers={"kid": kid})
+    with pytest.raises(HTTPException):
+        await verifier.verify_token(tampered)
 
 
 # ── Integration Tests: HTTP Auth Guards ─────────────────────────────────────
@@ -351,9 +402,7 @@ async def test_rbac_permissions_guard(
         assert res_forbidden.status_code == status.HTTP_403_FORBIDDEN
 
         # Token with tasks:trigger permission -> 200
-        tasks_token = make_test_jwt(
-            priv, kid, roles=["operator"], permissions=["tasks:trigger"]
-        )
+        tasks_token = make_test_jwt(priv, kid, roles=["operator"], permissions=["tasks:trigger"])
         res_tasks_ok = await client.post(
             "/guard-test/tasks-trigger",
             headers={"Authorization": f"Bearer {tasks_token}"},

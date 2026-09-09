@@ -175,6 +175,29 @@
 
 ---
 
+## 评审修复 P0（2026-09-09，feature/p7-auth-gateway）
+
+评审发现两个 P0 缺陷并修复：① Traefik 未把用户身份断言注入给 backend，登录后所有受保护 API 401；② auth-service 与 backend 的 JWT issuer/audience 默认值不一致（`stock-auth-service`/`stock-api` vs `stock-bot-auth`/`urn:stock-bot:api`）。
+
+- [x] **P0.1 统一 JWT 契约**
+  - `auth-service/app/config.py`：`jwt_issuer` 默认 `stock-bot-auth`、`jwt_audience` 默认 `urn:stock-bot:api`（与 backend 默认对齐）
+  - `docker-compose.yml`：auth-service 显式注入 `JWT_ISSUER`/`JWT_AUDIENCE`；api 显式注入 `AUTH_ISSUER`/`AUTH_AUDIENCE`/`AUTH_JWKS_URL`（引用同一组 `${JWT_*}` 变量）
+  - `.env.docker.example`：更新 `JWT_ISSUER`，新增 `JWT_AUDIENCE` 与 `INTERNAL_API_TOKEN`
+  - 新增交叉契约测试：`auth-service/tests/test_jwt_signer.py::test_assertion_cross_service_contract` 与 `backend/tests/test_auth_guard.py::test_cross_service_assertion_contract`（同 claim 结构手签 JWT 过 backend 验签；篡改 iss/aud 必须失败）
+- [x] **P0.2 新建 forward-auth sidecar（断言注入 + CSRF 强制）**
+  - 新增 `forward-auth/`（FastAPI + httpx，端口 9000）：`POST /verify` 解析 `stockbot_session` Cookie → 内存 TTL 缓存（25s，锁防穿透）→ auth-service `/internal/principal/assertion` 换取断言（非 200/连接失败对已有会话 fail closed 503）→ 非幂等方法经 `/internal/session/introspect` 强制 CSRF（失败 403 `AUTH_CSRF_FAILED`）→ 成功置 `X-Principal-Assertion` 响应头；匿名（无 Cookie）直接放行；`GET /healthz` 健康探针
+  - 注意：Traefik v3 forwardAuth 固定以 GET 调用 /verify，原始方法经 `X-Forwarded-Method` 读取（11 项离线测试全覆盖）
+- [x] **P0.3 Traefik 接线**
+  - `gateway/dynamic/middlewares.yml`：新增 `strip-assertion`（customRequestHeaders 置空剥除客户端伪造断言头，置于链首）与 `forward-auth`（authResponseHeaders: [X-Principal-Assertion]）
+  - **有意偏离**：`trustForwardHeader: false`——若为 true，客户端可伪造 `X-Forwarded-Method: GET` 绕过 CSRF 强制；关闭后 Traefik 用真实原始方法覆写该头（理由已沉淀至架构文档 4.4.4）
+  - `docker-compose.yml`：新增 forward-auth 服务（无宿主机端口、healthcheck /healthz）；`api` 与 `api-tasks` 路由中间件链加 `strip-assertion@file` 与 `forward-auth@file`；gateway depends_on 增加 forward-auth
+- [x] **P0.4 CI 登录闭环 smoke**
+  - `.github/workflows/ci.yml` docker-smoke job 新增：注册 → GET /auth/csrf → 登录（cookie jar）→ `GET /api/v1/watchlists` 必须登录态 200 → 未登录访问必须 401
+- [x] **P0.5 文档**
+  - `docs/architecture/authentication-and-gateway.md` 新增「4.4 Principal Assertion 契约」：claims 表、默认 iss/aud、forward-auth 流程、strip-assertion 与 authResponseHeaders/trustForwardHeader 说明；4.2 节 iss/aud 示例同步更新为新契约
+
+---
+
 ## 质量门禁与验证命令
 
 - **后端 Lint & Typecheck**:
