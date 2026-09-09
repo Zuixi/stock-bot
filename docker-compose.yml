@@ -13,7 +13,8 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-      - "8080:8080"
+      # dashboard (8080) 不再映射宿主机：仅内网可达；
+      # 需要访问时用 `docker exec` 或临时 `docker compose exec` 端口转发，勿长期对外暴露
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./gateway/traefik.yml:/etc/traefik/traefik.yml:ro
@@ -89,12 +90,11 @@ services:
 
   rabbitmq:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/rabbitmq:4.2.2-management-alpine
-    ports:
-      - "5672:5672"
-      - "15672:15672"
+    # AMQP 5672 / 管理 UI 15672 均不映射宿主机：仅 compose 内网使用；
+    # 管理界面按需经 `docker exec rabbitmq rabbitmqctl` 或临时端口转发访问
     environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-stockbot}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-stockbot_pass}
     container_name: rabbitmq
     restart: unless-stopped
     volumes:
@@ -116,7 +116,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@postgres:5432/stock_bot
       REDIS_URL: redis://redis:6379/0
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-stockbot}:${RABBITMQ_DEFAULT_PASS:-stockbot_pass}@rabbitmq:5672/
     container_name: migrate
     depends_on:
       postgres:
@@ -159,6 +159,9 @@ services:
       JWT_PUBLIC_KEY_PEM: ${AUTH_JWT_PUBLIC_KEY_PEM:-}
       # 生产必须 true（配合 HTTPS）；APP_ENV=production 时 auth-service 启动强校验
       COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      # 仅当 auth-service 部署在可信反代（Traefik）之后时解析 X-Forwarded-For；
+      # 直连/本地开发应设 false，避免客户端伪造该头污染审计 IP
+      TRUST_FORWARDED_FOR: ${AUTH_TRUST_FORWARDED_FOR:-true}
     depends_on:
       auth-db:
         condition: service_healthy
@@ -211,7 +214,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@postgres:5432/stock_bot
       REDIS_URL: redis://redis:6379/0
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-stockbot}:${RABBITMQ_DEFAULT_PASS:-stockbot_pass}@rabbitmq:5672/
       SW_DATA_DIR: /app/data/sw
       # Principal Assertion verification contract — must match auth-service JWT_ISSUER/AUDIENCE
       AUTH_ISSUER: ${JWT_ISSUER:-stock-bot-auth}
@@ -265,7 +268,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@postgres:5432/stock_bot
       REDIS_URL: redis://redis:6379/0
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-stockbot}:${RABBITMQ_DEFAULT_PASS:-stockbot_pass}@rabbitmq:5672/
     dns:
       - 8.8.8.8
       - 223.5.5.5

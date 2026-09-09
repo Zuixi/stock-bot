@@ -273,3 +273,50 @@ async def test_x_session_id_header_bypass_removed(client: AsyncClient) -> None:
     resp = await client.get("/auth/session", headers={"X-Session-Id": session_id})
     assert resp.status_code == 401
     assert resp.json()["code"] == "AUTH_UNAUTHORIZED"
+
+
+class _FakeRequest:
+    """Minimal stand-in for starlette Request (only what _extract_client_meta touches)."""
+
+    def __init__(self, headers: dict[str, str], client_host: str | None) -> None:
+        from types import SimpleNamespace
+
+        self.headers = headers
+        self.client = SimpleNamespace(host=client_host) if client_host else None
+
+
+def test_extract_client_meta_trust_forwarded_for_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """X-Forwarded-For is honored only when settings.trust_forwarded_for is enabled."""
+    from app.api.auth import _extract_client_meta
+    from app.config import settings
+
+    request = _FakeRequest(
+        headers={"X-Forwarded-For": "198.51.100.7, 10.0.0.1"},
+        client_host="203.0.113.9",
+    )
+
+    # Behind a trusted proxy: first hop of X-Forwarded-For wins
+    monkeypatch.setattr(settings, "trust_forwarded_for", True)
+    ip, _ = _extract_client_meta(request)
+    assert ip == "198.51.100.7"
+
+    # Direct exposure: spoofable header must be ignored, socket peer used instead
+    monkeypatch.setattr(settings, "trust_forwarded_for", False)
+    ip, _ = _extract_client_meta(request)
+    assert ip == "203.0.113.9"
+
+
+def test_extract_client_meta_no_forwarded_header_falls_back_to_peer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without X-Forwarded-For present, peer address is used in both modes."""
+    from app.api.auth import _extract_client_meta
+    from app.config import settings
+
+    request = _FakeRequest(headers={}, client_host="192.0.2.55")
+    for trusted in (True, False):
+        monkeypatch.setattr(settings, "trust_forwarded_for", trusted)
+        ip, _ = _extract_client_meta(request)
+        assert ip == "192.0.2.55"

@@ -445,3 +445,7 @@
 ## 2026-09-09 - P1 安全加固：凭据收敛、CSRF 强制与生产安全配置
 - 落实安全评审 P1 项：登录响应体不再返回 session_id/csrf_token（凭据仅经 Set-Cookie 下发）；移除 X-Session-Id Header 旁路（会话识别仅认 Cookie）；auth-service 对 register/login 强制匿名 double-submit CSRF、logout 升级为会话绑定校验（失败 403 AUTH_CSRF_FAILED）；/internal/* 新增 X-Internal-Token 共享密钥校验（非空即强制，401 拒绝）；JWT 密钥支持经环境变量持久化注入并在 APP_ENV=production 时对 COOKIE_SECURE=false 启动 fail-fast；前端类型同步、CI smoke 补注册 CSRF 步骤、架构文档 3.3/4.5/4.6 与计划文档更新。
 - 涉及模块：auth-service(api/auth, api/internal, config, schemas, tests), frontend/shared/api/auth.ts, docker-compose.yml, .env.docker.example, .github/workflows/ci.yml, docs, plans
+
+## 2026-09-09 - P1/P2 评审修复：基建暴露面收敛、会话绝对上限与审计脱敏
+- 落实最后一批评审修复：RabbitMQ 替换 guest/guest 默认凭据并移除 5672/15672 宿主机映射（migrate/api/worker 的 RABBITMQ_URL 统一引用新变量）；Traefik dashboard 8080 端口不再映射宿主机；nginx 仅保留 /health 透传、不再公开后端 docs/redoc/openapi.json；auth-service CORS 默认列表移除 8000/8001 端口项；会话引入 7 天绝对过期上限（超限强制登出语义）；审计事件 payload 中明文 session_id 改为 SHA-256 哈希；X-Forwarded-For 仅在 trust_forwarded_for 开启时解析（默认不信任）；Vite 开发代理补全 /auth 与 /.well-known；补存量标签认领策略与暴力破解双层防护文档。
+- 涉及模块：docker-compose.yml, .env.docker.example, backend/.env.example, frontend/vite.config.ts, frontend/nginx.conf, auth-service(config, api/auth, services, tests), docs/architecture, plans

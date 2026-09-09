@@ -330,6 +330,26 @@ auth-service 的 `/internal/session/introspect` 与 `/internal/principal/asserti
   会话 Cookie。本地开发/CI 保持 `APP_ENV=development` + `AUTH_COOKIE_SECURE=false`
   （Gateway 当前仅暴露 80 明文入口，Secure Cookie 在无 TLS 部署下会被浏览器丢弃）。
 
+### 4.7 暴力破解防护（双层纵深）
+
+登录/注册等认证面当前由**双层防护**覆盖：
+
+1. **网关层（按 IP 限流）**：Traefik `auth-ratelimit@file` 中间件作用于全部
+   `/auth` 路由，令牌桶参数 `average: 20`、`burst: 10`、`period: 1s`——
+   即单个来源 IP 稳态 20 req/s、瞬时突发不超过 10 个请求，超出即被网关
+   直接以 429 拒绝，攻击流量无法抵达 auth-service。
+2. **应用层（账号级失败锁定）**：auth-service 对每个账号维护
+   `failed_attempts` 计数（见 `app/services/auth_service.py`）：**同一账号
+   连续密码验证失败达到 5 次，账户状态置为 `locked`，锁定 15 分钟**
+   （`locked_until = NOW() + 15min`），锁定期内即使密码正确也返回 401；
+   锁定窗口自然过期后计数清零自动解锁，密码验证成功同样清零计数。
+   每次失败均写入 `auth_audit_events` 供事后追溯。
+
+两层正交叠加：网关层压制单 IP 的高速喷洒，应用层阻断分布式低频爆破
+对同一账号的定点尝试。后续演进可再叠加**按用户名维度**的限流
+（如 auth-service 内对 `username_or_email` 做滑动窗口计数），进一步收敛
+撞库攻击面。
+
 ---
 
 ## 5. 统一错误响应契约 (Unified Error Contract)

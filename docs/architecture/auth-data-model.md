@@ -465,3 +465,70 @@ class Task(Base):
 **缓存失效契约**：
 - 用户更新自选股时，精准清除 `cache:user:{user_id}:watchlists`；
 - 用户打标签时，不仅清除 `cache:user:{user_id}:tags:{symbol}`，还需失效该用户维度的聚合行业统计。
+
+---
+
+## 6. 存量标签归属与认领策略（迁移 `5a1b2c3d4e5f`）
+
+### 6.1 迁移行为回顾
+
+`backend/app/migrations/versions/5a1b2c3d4e5f_add_user_ownership_and_watchlists.py`
+为 `stock_user_tags` 增加 `user_id UUID NOT NULL` 列。由于存量行没有归属用户，
+迁移采用**固定服务端默认值回填**（非 `gen_random_uuid()` 随机生成）：
+
+```sql
+ALTER TABLE stock_user_tags
+    ADD COLUMN user_id UUID NOT NULL
+    DEFAULT '00000000-0000-0000-0000-000000000000'::uuid;  -- 全零 UUID（nil UUID）
+ALTER TABLE stock_user_tags ALTER COLUMN user_id DROP DEFAULT;  -- 回填后移除默认值
+```
+
+即：**所有迁移前已存在的标签，其 `user_id` 一律为全零 UUID
+`00000000-0000-0000-0000-000000000000`**（同一固定值，非每行随机）。
+
+### 6.2 全零 UUID 的语义：幽灵/系统迁移用户
+
+- 全零 UUID 属于"幽灵/系统迁移用户"——它不对应 `auth_users` 表中任何真实账号，
+  仅作为存量数据的占位归属，避免 NOT NULL 约束下的回填失败。
+- 对所有真实用户**不可见**：查询路径均以当前登录用户的 `user_id` 过滤
+  （路由层注入 Principal + 缓存键 `user:{user_id}:*` 命名空间），
+  没有任何真实会话会以全零 UUID 查询，因此存量标签不会泄漏给任何用户，
+  也不会出现在任何用户界面上。
+- 请勿在 `auth_users` 中创建 id 为全零 UUID 的账号来"接管"这批数据。
+
+### 6.3 管理员认领 SQL 模板
+
+若业务上需要把某批存量标签划归某个真实用户（如管理员代运营账号），在**业务库**
+（stock_bot 主库，非 auth 库）执行：
+
+```sql
+-- :admin_uuid  = 目标用户的 auth_users.id（UUID）
+-- :legacy_uuid = 全零 UUID 00000000-0000-0000-0000-000000000000
+-- 可选追加 AND symbol = ... / tag_name = ... 限定认领范围
+UPDATE stock_user_tags
+SET user_id = :admin_uuid
+WHERE user_id = :legacy_uuid;
+```
+
+**注意事项**：
+
+1. **唯一约束冲突**：表上有 `(user_id, symbol, tag_name)` 唯一约束
+   （`uq_stock_user_tag`）。若目标用户已存在相同 `(symbol, tag_name)` 的标签，
+   UPDATE 会整批失败。先排查冲突：
+   ```sql
+   SELECT t.symbol, t.tag_name
+   FROM stock_user_tags t
+   WHERE t.user_id = :legacy_uuid
+     AND EXISTS (
+       SELECT 1 FROM stock_user_tags e
+       WHERE e.user_id = :admin_uuid
+         AND e.symbol = t.symbol AND e.tag_name = t.tag_name
+     );
+   ```
+   冲突行需人工决定去重方向（删除存量或删除目标用户同名行）后再认领。
+2. **事务执行**：认领语句包在事务中执行，确认影响行数符合预期后再提交。
+3. **缓存失效**：认领后目标用户的 Redis 业务缓存
+   （`cache:user:{admin_uuid}:tags:*` 及其用户维度聚合统计）需要清除或等待自然过期，
+   否则用户可能短暂看不到新认领的标签。
+4. **审计留痕**：认领属于数据归属变更，建议记录操作人、时间与影响行数，
+   便于追溯。

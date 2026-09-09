@@ -8,7 +8,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.crypto import generate_csrf_token, verify_csrf_token
+from app.core.crypto import generate_csrf_token, hash_token, verify_csrf_token
 from app.core.database import get_db
 from app.core.redis import get_redis
 from app.schemas.auth import (
@@ -59,10 +59,17 @@ def _extract_trace_id(request: Request, x_request_id: str | None = None) -> str:
 
 
 def _extract_client_meta(request: Request) -> tuple[str | None, str | None]:
-    """Extract client IP and user agent."""
+    """Extract client IP and user agent.
+
+    X-Forwarded-For is only honored when ``settings.trust_forwarded_for`` is
+    enabled (deployment behind a trusted reverse proxy such as Traefik);
+    otherwise the socket peer address is used, since a client-supplied
+    X-Forwarded-For header would be spoofable and poison audit trails.
+    """
     ip = request.client.host if request.client else None
-    if forwarded := request.headers.get("X-Forwarded-For"):
-        ip = forwarded.split(",")[0].strip()
+    if settings.trust_forwarded_for:
+        if forwarded := request.headers.get("X-Forwarded-For"):
+            ip = forwarded.split(",")[0].strip()
     ua = request.headers.get("User-Agent")
     return ip, ua
 
@@ -222,7 +229,7 @@ async def logout(
                 ip_address=ip,
                 user_agent=ua,
                 trace_id=trace_id,
-                payload={"session_id": stockbot_session},
+                payload={"session_id_hash": hash_token(stockbot_session)},
             )
 
     _clear_auth_cookies(response)

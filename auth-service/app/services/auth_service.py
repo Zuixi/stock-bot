@@ -9,7 +9,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.crypto import hash_password, verify_and_update_password
+from app.core.crypto import hash_password, hash_token, verify_and_update_password
 from app.models.rbac import AuthRolePermission, AuthUserRole
 from app.models.user import AuthCredential, AuthUser
 from app.schemas.auth import UserLoginRequest, UserOut, UserRegisterRequest
@@ -294,7 +294,7 @@ class AuthService:
             ip_address=ip_address,
             user_agent=user_agent,
             trace_id=trace_id,
-            payload={"session_id": session_id},
+            payload={"session_id_hash": hash_token(session_id)},
         )
 
         user_out = UserOut(

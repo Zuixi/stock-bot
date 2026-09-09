@@ -38,12 +38,20 @@ class Settings(BaseSettings):
 
     # Session & Cookie
     session_ttl: int = 86400  # 24 hours
+    # 会话绝对过期上限（7 天）：滑动续期不能无限延长会话寿命，
+    # 距创建超过该时长后 get_session 强制登出语义（删除会话）
+    absolute_session_ttl: int = 604800
     session_cookie_name: str = "stockbot_session"
     csrf_cookie_name: str = "stockbot_csrf"
     cookie_secure: bool = False
     cookie_httponly: bool = True
     cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     cookie_domain: str | None = None
+
+    # 是否信任 X-Forwarded-For 解析客户端真实 IP。
+    # 仅当部署在可信反代（Traefik/Nginx）之后时开启；
+    # 直连暴露时必须保持 False，否则客户端可伪造该头污染审计 IP。
+    trust_forwarded_for: bool = False
 
     # Service-to-service token guarding /internal/* endpoints (X-Internal-Token).
     # Empty by default = not enforced (local dev / tests); REQUIRED in production.
@@ -72,17 +80,13 @@ class Settings(BaseSettings):
     jwt_private_key_pem: str | None = None
     jwt_public_key_pem: str | None = None
 
-    # CORS
+    # CORS — 仅允许前端实际部署源；后端/认证服务自身端口不列入
     cors_origins: list[str] = [
         "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:80",
-        "http://localhost:8000",
-        "http://localhost:8001",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
-        "http://127.0.0.1:8000",
-        "http://127.0.0.1:8001",
     ]
 
 

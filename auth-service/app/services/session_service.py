@@ -118,6 +118,19 @@ class SessionService:
 
         if extend_ttl:
             now = int(time.time())
+            created_at = int(raw_data.get("created_at", 0))
+            # Absolute lifetime cap: sliding TTL must not extend a session forever.
+            # Past the cap we enforce logout semantics (delete Redis keys); the DB
+            # snapshot is reconciled by the revoke flow / natural expiry.
+            if created_at and now - created_at >= settings.absolute_session_ttl:
+                user_id_raw = raw_data.get("user_id")
+                pipeline = self.redis.pipeline()
+                pipeline.delete(session_key)
+                if user_id_raw:
+                    pipeline.srem(self._user_sessions_key(user_id_raw), session_id)
+                await pipeline.execute()
+                return None
+
             pipeline = self.redis.pipeline()
             pipeline.hset(session_key, "last_seen_at", str(now))
             pipeline.expire(session_key, self.session_ttl)

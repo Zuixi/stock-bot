@@ -1,10 +1,12 @@
 """Unit tests for SessionService lifecycle and Redis synchronization."""
 
+import time
 import uuid
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.user import AuthUser
 from app.services.session_service import SessionService
 from tests.conftest import FakeRedis
@@ -118,3 +120,82 @@ async def test_revoke_all_user_sessions(db_session: AsyncSession, fake_redis: Fa
     assert await session_service.get_session(sess1) is None
     assert await session_service.get_session(sess2) is None
     assert await session_service.get_session(sess3) is None
+
+
+@pytest.mark.asyncio
+async def test_absolute_session_ttl_expires(
+    db_session: AsyncSession,
+    fake_redis: FakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sessions older than absolute_session_ttl must be force-logged-out (logout semantics)."""
+    monkeypatch.setattr(settings, "absolute_session_ttl", 3600)  # 1h cap for test speed
+    session_service = SessionService(fake_redis)
+
+    user = AuthUser(
+        id=uuid.uuid4(),
+        username="absolute_ttl_user",
+        email="absolute_ttl@example.com",
+        status="active",
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    session_id, _, _ = await session_service.create_session(
+        db_session,
+        user.id,
+        user.username,
+        ["viewer"],
+        ["stocks:read"],
+    )
+
+    # Backdate created_at beyond the absolute cap (created 2h ago, cap is 1h)
+    stale_ts = int(time.time()) - 7200
+    await fake_redis.hset(f"session:{session_id}", "created_at", str(stale_ts))
+
+    # get_session must return None (logout semantics)...
+    assert await session_service.get_session(session_id) is None
+    # ...delete the session hash...
+    assert await fake_redis.hgetall(f"session:{session_id}") == {}
+    # ...and remove the session from the user's session index.
+    assert session_id not in await fake_redis.smembers(f"user_sessions:{user.id}")
+
+    # introspect (forward-auth fast path) must report inactive as well
+    intro = await session_service.introspect_session(session_id)
+    assert intro["active"] is False
+
+
+@pytest.mark.asyncio
+async def test_absolute_session_ttl_not_reached_still_renews(
+    db_session: AsyncSession,
+    fake_redis: FakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A young session keeps sliding-renewal semantics (no forced logout)."""
+    monkeypatch.setattr(settings, "absolute_session_ttl", 3600)
+    session_service = SessionService(fake_redis)
+
+    user = AuthUser(
+        id=uuid.uuid4(),
+        username="fresh_session_user",
+        email="fresh_session@example.com",
+        status="active",
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    session_id, _, _ = await session_service.create_session(
+        db_session,
+        user.id,
+        user.username,
+        ["viewer"],
+        ["stocks:read"],
+    )
+
+    sess = await session_service.get_session(session_id)
+    assert sess is not None
+    assert sess["user_id"] == str(user.id)
+
+    # Sliding renewal advanced last_seen_at and the session stays indexed
+    assert sess["last_seen_at"] >= sess["created_at"]
+    assert session_id in await fake_redis.smembers(f"user_sessions:{user.id}")
