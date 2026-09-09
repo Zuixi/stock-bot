@@ -14,11 +14,7 @@ async def get_kline(
     start_date: date | None = None,
     end_date: date | None = None,
 ) -> list[IndexDaily]:
-    stmt = (
-        select(IndexDaily)
-        .where(IndexDaily.ts_code == ts_code)
-        .order_by(IndexDaily.trade_date)
-    )
+    stmt = select(IndexDaily).where(IndexDaily.ts_code == ts_code).order_by(IndexDaily.trade_date)
     if start_date:
         stmt = stmt.where(IndexDaily.trade_date >= start_date)
     if end_date:
@@ -46,13 +42,9 @@ async def get_latest(
         .group_by(IndexDaily.ts_code)
         .subquery()
     )
-    stmt = (
-        select(IndexDaily)
-        .join(
-            subq,
-            (IndexDaily.ts_code == subq.c.ts_code)
-            & (IndexDaily.trade_date == subq.c.max_date),
-        )
+    stmt = select(IndexDaily).join(
+        subq,
+        (IndexDaily.ts_code == subq.c.ts_code) & (IndexDaily.trade_date == subq.c.max_date),
     )
     result = await db.execute(stmt)
     return list(result.scalars().all())
@@ -112,4 +104,4 @@ async def upsert_index_dailies(db: AsyncSession, rows: list[IndexDaily]) -> int:
     )
     result = await db.execute(stmt)
     await db.flush()
-    return result.rowcount
+    return result.rowcount  # type: ignore[attr-defined, no-any-return]

@@ -68,7 +68,9 @@ def _to_builtin(value: Any) -> Any:
     return str(value)
 
 
-def merge_detail_into_record(record: dict[str, Any], detail: dict[str, Any] | None) -> dict[str, Any]:
+def merge_detail_into_record(
+    record: dict[str, Any], detail: dict[str, Any] | None
+) -> dict[str, Any]:
     if not detail:
         return record
     merged = dict(record)

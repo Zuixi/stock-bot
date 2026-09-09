@@ -1,7 +1,8 @@
 """Parse Shenwan industry classification from local XLS/XLSX files.
 
 Data sources:
-- SwClassCode_2021.xls: three-level industry tree (行业代码, 一级行业名称, 二级行业名称, 三级行业名称)
+- SwClassCode_2021.xls: three-level industry tree
+  (行业代码, 一级行业名称, 二级行业名称, 三级行业名称)
 - 最新个股行业分类.xlsx: stock-to-L3 industry mapping (交易所, 行业代码, 股票代码, ...)
 """
 
@@ -69,12 +70,14 @@ def parse_sw_classes(filepath: str | Path) -> list[SwClassRow]:
             industry_name = l1_name
             parent_code = None
 
-        results.append(SwClassRow(
-            industry_code=raw_code,
-            level=level,
-            industry_name=industry_name,
-            parent_code=parent_code,
-        ))
+        results.append(
+            SwClassRow(
+                industry_code=raw_code,
+                level=level,
+                industry_name=industry_name,
+                parent_code=parent_code,
+            )
+        )
 
     logger.info(
         "Parsed %d SW classification nodes (L1=%d, L2=%d, L3=%d)",
@@ -112,12 +115,14 @@ def parse_sw_members(filepath: str | Path) -> list[SwMemberRow]:
 
         symbol = stock_code.split(".")[0] if "." in stock_code else stock_code
 
-        results.append(SwMemberRow(
-            industry_code=industry_code,
-            stock_code=stock_code,
-            symbol=symbol,
-            stock_name=stock_name,
-        ))
+        results.append(
+            SwMemberRow(
+                industry_code=industry_code,
+                stock_code=stock_code,
+                symbol=symbol,
+                stock_name=stock_name,
+            )
+        )
 
     wb.close()
     logger.info("Parsed %d A-share SW industry member mappings", len(results))

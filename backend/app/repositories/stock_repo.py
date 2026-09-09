@@ -1,5 +1,7 @@
 """Stock repository: CRUD + filtering — all symbol lookups require exchange."""
 
+from typing import cast
+
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,9 +35,7 @@ async def list_stocks(
     return list(rows), total
 
 
-async def get_stock_by_symbol(
-    db: AsyncSession, exchange: str, symbol: str
-) -> Stock | None:
+async def get_stock_by_symbol(db: AsyncSession, exchange: str, symbol: str) -> Stock | None:
     """Fetch a stock by (exchange, symbol) — both are required for correctness."""
     result = await db.execute(
         select(Stock).where(Stock.exchange == exchange, Stock.symbol == symbol)
@@ -69,7 +69,9 @@ async def list_categories(
     if exchange:
         stmt = stmt.where(Stock.exchange == exchange)
     result = await db.execute(stmt)
-    return [(row.exchange, row.category, row.count) for row in result]
+    return [
+        (cast(str, row.exchange), cast(str, row.category), cast(int, row.count)) for row in result
+    ]
 
 
 async def upsert_stock(db: AsyncSession, stock: Stock) -> Stock:
@@ -113,7 +115,7 @@ async def upsert_stock(db: AsyncSession, stock: Stock) -> Stock:
     result = await db.execute(stmt)
     await db.flush()
     row = result.fetchone()
-    return row[0]
+    return row[0]  # type: ignore[index, no-any-return]
 
 
 async def insert_stock_history(db: AsyncSession, record: StockHistory) -> None:

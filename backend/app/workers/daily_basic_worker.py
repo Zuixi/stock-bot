@@ -51,7 +51,9 @@ class DailyBasicWorker(BaseWorker):
 
         logger.info(
             "DailyBasicWorker task=%s start=%s end=%s",
-            task_id, start_date, end_date,
+            task_id,
+            start_date,
+            end_date,
         )
 
         service = TuShareIngestService()
@@ -68,9 +70,7 @@ class DailyBasicWorker(BaseWorker):
                     total_upserted += result.get("upserted", 0)
                     total_saved += result.get("saved", 0)
                 except Exception as exc:
-                    logger.warning(
-                        "DailyBasicWorker: failed for trade_date=%s: %s", td, exc
-                    )
+                    logger.warning("DailyBasicWorker: failed for trade_date=%s: %s", td, exc)
                     failed_dates.append(td)
 
         summary: dict = {

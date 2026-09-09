@@ -46,6 +46,13 @@ class FetchDailyBasicRequest(BaseModel):
     end_date: str | None = None
 
 
+class FetchFinancialRequest(BaseModel):
+    exchange: str
+    symbol: str
+    start_date: str | None = None
+    end_date: str | None = None
+
+
 class RunClusteringRequest(BaseModel):
     algorithm: str = "kmeans"
     n_clusters: int = 10

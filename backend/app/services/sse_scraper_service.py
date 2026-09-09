@@ -14,6 +14,7 @@ import random
 import re
 import time
 from datetime import date, datetime, timedelta
+from typing import Any, cast
 
 import httpx
 
@@ -39,18 +40,18 @@ FIELD_NAMES = ("prev_close", "open", "high", "low", "last", "chg_rate", "code", 
 MAX_RETRIES = 3
 
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",  # noqa: E501
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",  # noqa: E501
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",  # noqa: E501
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",  # noqa: E501
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",  # noqa: E501
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0",  # noqa: E501
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",  # noqa: E501
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",  # noqa: E501
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:126.0) Gecko/20100101 Firefox/126.0",
     "Mozilla/5.0 (X11; Linux x86_64; rv:126.0) Gecko/20100101 Firefox/126.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",  # noqa: E501
 ]
 
 # Trading hours for A-shares
@@ -84,6 +85,7 @@ async def close_http_client() -> None:
 # jQuery callback & JSONP helpers
 # ---------------------------------------------------------------------------
 
+
 def _generate_callback() -> str:
     rand_str = str(random.random())
     combined = JQUERY_VERSION + rand_str
@@ -91,11 +93,11 @@ def _generate_callback() -> str:
     return f"jQuery{digits_only}"
 
 
-def _parse_jsonp(text: str) -> dict:
+def _parse_jsonp(text: str) -> dict[str, Any]:
     match = re.search(r"jQuery[\d_]+\((.+)\)$", text, re.DOTALL)
     if not match:
         raise ValueError(f"Cannot parse JSONP response: {text[:200]}")
-    return json.loads(match.group(1))
+    return cast(dict[str, Any], json.loads(match.group(1)))
 
 
 def _build_headers() -> dict[str, str]:
@@ -112,6 +114,7 @@ def _build_headers() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # Core fetch
 # ---------------------------------------------------------------------------
+
 
 async def fetch_snapshot(
     timestamp_ms: int | None = None,
@@ -132,7 +135,7 @@ async def fetch_snapshot(
         timestamp_ms = int(time.time() * 1000)
 
     callback = _generate_callback()
-    params = {
+    params: dict[str, str | int] = {
         "callback": callback,
         "select": SELECT_FIELDS,
         "_": timestamp_ms,
@@ -143,7 +146,9 @@ async def fetch_snapshot(
     last_exc: BaseException | None = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            logger.info("SSE snapshot request (attempt %d/%d) ts=%d", attempt, MAX_RETRIES, timestamp_ms)
+            logger.info(
+                "SSE snapshot request (attempt %d/%d) ts=%d", attempt, MAX_RETRIES, timestamp_ms
+            )
             resp = await client.get(url, params=params, headers=_build_headers())
             resp.raise_for_status()
 
@@ -161,18 +166,20 @@ async def fetch_snapshot(
                 if len(item) < len(FIELD_NAMES):
                     continue
                 mapped = dict(zip(FIELD_NAMES, item))
-                records.append({
-                    "code": str(mapped["code"]),
-                    "name": str(mapped["name"]),
-                    "trade_date": td,
-                    "collect_time": ct,
-                    "prev_close": mapped["prev_close"],
-                    "open": mapped["open"],
-                    "high": mapped["high"],
-                    "low": mapped["low"],
-                    "last": mapped["last"],
-                    "chg_rate": mapped["chg_rate"],
-                })
+                records.append(
+                    {
+                        "code": str(mapped["code"]),
+                        "name": str(mapped["name"]),
+                        "trade_date": td,
+                        "collect_time": ct,
+                        "prev_close": mapped["prev_close"],
+                        "open": mapped["open"],
+                        "high": mapped["high"],
+                        "low": mapped["low"],
+                        "last": mapped["last"],
+                        "chg_rate": mapped["chg_rate"],
+                    }
+                )
 
             logger.info("Fetched %d index snapshots", len(records))
             return records
@@ -180,7 +187,7 @@ async def fetch_snapshot(
         except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
             last_exc = exc
             if attempt < MAX_RETRIES:
-                wait = 2 ** attempt + random.uniform(0, 1)
+                wait = 2**attempt + random.uniform(0, 1)
                 logger.warning("SSE request failed: %s — retrying in %.1fs", exc, wait)
                 await asyncio.sleep(wait)
             else:
@@ -192,6 +199,7 @@ async def fetch_snapshot(
 # ---------------------------------------------------------------------------
 # Fetch + persist
 # ---------------------------------------------------------------------------
+
 
 async def fetch_and_save(timestamp_ms: int | None = None) -> int:
     """Fetch the current (or historical) snapshot and save to DB.
@@ -213,6 +221,7 @@ async def fetch_and_save(timestamp_ms: int | None = None) -> int:
 # ---------------------------------------------------------------------------
 # Historical backfill
 # ---------------------------------------------------------------------------
+
 
 def _trading_days(start: date, end: date) -> list[date]:
     """Return weekdays between *start* and *end* (inclusive)."""
@@ -252,7 +261,8 @@ async def batch_backfill(start_date: date, end_date: date) -> int:
 
     logger.info(
         "Starting backfill: %d trading days, ~%d data points",
-        len(days), total_points,
+        len(days),
+        total_points,
     )
 
     for day_idx, day in enumerate(days, 1):
@@ -273,7 +283,10 @@ async def batch_backfill(start_date: date, end_date: date) -> int:
                     total_saved += count
                     logger.info(
                         "  [%s %s] saved %d rows (total: %d)",
-                        day, ct.strftime("%H:%M"), count, total_saved,
+                        day,
+                        ct.strftime("%H:%M"),
+                        count,
+                        total_saved,
                     )
                 else:
                     logger.info("  [%s %s] no data", day, ct.strftime("%H:%M"))

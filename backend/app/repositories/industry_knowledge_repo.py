@@ -13,9 +13,7 @@ async def list_knowledge(db: AsyncSession, industry_key: str) -> list[IndustryKn
     stmt = (
         select(IndustryKnowledge)
         .where(IndustryKnowledge.industry_key == industry_key)
-        .order_by(
-            IndustryKnowledge.kind, IndustryKnowledge.sort, IndustryKnowledge.id
-        )
+        .order_by(IndustryKnowledge.kind, IndustryKnowledge.sort, IndustryKnowledge.id)
     )
     result = await db.execute(stmt)
     return list(result.scalars().all())

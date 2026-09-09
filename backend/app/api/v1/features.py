@@ -19,7 +19,12 @@ async def get_radar(
     cache: CacheDep,
     window_days: int = Query(default=60, description="Feature window in trading days"),
 ) -> RadarChartData:
-    result = await feature_service.get_radar_data(db, cache, symbol, window_days)
+    result = await feature_service.get_radar_data(
+        db,
+        cache,
+        symbol,
+        window_days,  # type: ignore[arg-type]  # legacy unmounted router
+    )
     if result is None:
         raise not_found_response("Feature", symbol)
     return result
@@ -35,7 +40,12 @@ async def get_feature_history(
     end: date | None = Query(None),
 ) -> list[StockFeatureOut]:
     result = await feature_service.get_feature_history(
-        db, cache, symbol, window_days, start, end
+        db,
+        cache,
+        symbol,
+        window_days,  # type: ignore[arg-type]  # legacy unmounted router
+        start,  # type: ignore[arg-type]  # legacy unmounted router
+        end,
     )
     if result is None:
         raise not_found_response("Stock", symbol)

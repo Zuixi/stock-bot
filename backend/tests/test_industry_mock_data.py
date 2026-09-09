@@ -27,9 +27,7 @@ def test_mock_month_end_rows_legally_coexist_across_freqs():
     rows = build_pig_mock_points("pig", months=37)
     freqs_by_key: dict[tuple[str, str, object], set[str]] = {}
     for r in rows:
-        freqs_by_key.setdefault(
-            (r["metric_key"], r["source"], r["period"]), set()
-        ).add(r["freq"])
+        freqs_by_key.setdefault((r["metric_key"], r["source"], r["period"]), set()).add(r["freq"])
 
     crosses = {k: fs for k, fs in freqs_by_key.items() if len(fs) > 1}
     assert crosses, "expected month-end rows to appear under both daily and monthly freq"
@@ -55,15 +53,9 @@ def test_wobble_series_exact_length_and_last_point():
 
 def test_mock_points_respects_months_window():
     rows = build_pig_mock_points("pig", months=12)
-    monthly = [
-        r for r in rows
-        if r["metric_key"] == "hog_price" and r["freq"] == "monthly"
-    ]
+    monthly = [r for r in rows if r["metric_key"] == "hog_price" and r["freq"] == "monthly"]
     assert len(monthly) == 12
-    daily = [
-        r for r in rows
-        if r["metric_key"] == "hog_price" and r["freq"] == "daily"
-    ]
+    daily = [r for r in rows if r["metric_key"] == "hog_price" and r["freq"] == "daily"]
     assert len(daily) <= 45
 
 

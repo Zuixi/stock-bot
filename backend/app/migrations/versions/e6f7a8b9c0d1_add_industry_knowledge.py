@@ -11,7 +11,7 @@ P6 知识库：行业知识内容表（机构图谱 / 数据权威性原则 / �
 故迁移 import app 内容模块与既有运行方式一致）。
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
@@ -20,9 +20,9 @@ from sqlalchemy.dialects.postgresql import JSONB
 from app.services.industry_knowledge_seed import build_pig_knowledge_rows
 
 revision: str = "e6f7a8b9c0d1"
-down_revision: Union[str, None] = "d5a6b7c8d9e0"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "d5a6b7c8d9e0"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

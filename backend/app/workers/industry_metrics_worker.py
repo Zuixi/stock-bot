@@ -35,7 +35,10 @@ class IndustryMetricsWorker(BaseWorker):
 
         logger.info(
             "IndustryMetricsWorker task=%s industry=%s source=%s months=%s",
-            task_id, industry_key, source or "default", months,
+            task_id,
+            industry_key,
+            source or "default",
+            months,
         )
 
         async with async_session_factory() as db:

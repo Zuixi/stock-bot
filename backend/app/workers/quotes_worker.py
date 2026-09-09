@@ -78,7 +78,10 @@ class QuotesWorker(BaseWorker):
 
         logger.info(
             "QuotesWorker task=%s exchange=%s start=%s end=%s",
-            task_id, exchange, start_date, end_date,
+            task_id,
+            exchange,
+            start_date,
+            end_date,
         )
 
         service = TuShareIngestService()
@@ -95,9 +98,7 @@ class QuotesWorker(BaseWorker):
                     total_upserted += result.get("upserted", 0)
                     total_saved += result.get("saved", 0)
                 except Exception as exc:
-                    logger.warning(
-                        "QuotesWorker: failed for trade_date=%s: %s", td, exc
-                    )
+                    logger.warning("QuotesWorker: failed for trade_date=%s: %s", td, exc)
                     failed_dates.append(td)
 
         summary: dict = {

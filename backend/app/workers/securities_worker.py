@@ -34,7 +34,9 @@ class SecuritiesWorker(BaseWorker):
 
         logger.info(
             "SecuritiesWorker task=%s industry=%s backfill_days=%s",
-            task_id, industry_key, backfill_days,
+            task_id,
+            industry_key,
+            backfill_days,
         )
 
         async with async_session_factory() as db:

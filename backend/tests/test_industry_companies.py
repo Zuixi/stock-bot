@@ -60,14 +60,21 @@ def test_same_month_duplicate_takes_latest():
 def test_columns_fixed_head_plus_registry_company_metrics():
     cols = _company_columns(PIG_INDUSTRY)
     assert [c.key for c in cols[:6]] == [
-        "symbol", "name", "latest_price", "total_mv_yi", "pe_ttm", "pb",
+        "symbol",
+        "name",
+        "latest_price",
+        "total_mv_yi",
+        "pe_ttm",
+        "pb",
     ]
     assert [c.label for c in cols[:6]] == ["代码", "名称", "最新价", "总市值(亿)", "PE(TTM)", "PB"]
     assert cols[0].numeric is False and cols[2].numeric is True
 
     metric_cols = {c.key: c for c in cols[6:]}
     assert set(metric_cols) == {
-        "company.hogs_sold_monthly", "company.cost_complete", "mcap_per_head",
+        "company.hogs_sold_monthly",
+        "company.cost_complete",
+        "mcap_per_head",
     }
     assert metric_cols["company.hogs_sold_monthly"].unit == "万头"
     assert metric_cols["company.cost_complete"].unit == "元/kg"
@@ -96,21 +103,43 @@ def test_pig_sw_l3_code_is_breeding_not_forestry():
 
 
 def test_batch_preserves_company_stock_id():
-    rows, unknown, rejected = _prepare_batch_rows(PIG_INDUSTRY, [
-        {"metric_key": "company.hogs_sold_monthly", "period": date(2026, 8, 31),
-         "value": 600.0, "stock_id": 1},
-        {"metric_key": "company.hogs_sold_monthly", "period": date(2026, 8, 31),
-         "value": 30.0, "stock_id": 12345},
-        {"metric_key": "company.hogs_sold_monthly", "period": date(2026, 8, 31),
-         "value": 30.0},  # 未携带 stock_id → 行业级 0（既有语义）
-    ])
+    rows, unknown, rejected = _prepare_batch_rows(
+        PIG_INDUSTRY,
+        [
+            {
+                "metric_key": "company.hogs_sold_monthly",
+                "period": date(2026, 8, 31),
+                "value": 600.0,
+                "stock_id": 1,
+            },
+            {
+                "metric_key": "company.hogs_sold_monthly",
+                "period": date(2026, 8, 31),
+                "value": 30.0,
+                "stock_id": 12345,
+            },
+            {
+                "metric_key": "company.hogs_sold_monthly",
+                "period": date(2026, 8, 31),
+                "value": 30.0,
+            },  # 未携带 stock_id → 行业级 0（既有语义）
+        ],
+    )
     assert not unknown and not rejected
     assert [r["stock_id"] for r in rows] == [1, 12345, 0]
 
 
 def test_batch_company_source_tier_from_registry():
-    rows, _, _ = _prepare_batch_rows(PIG_INDUSTRY, [
-        {"metric_key": "mcap_per_head", "period": date(2026, 8, 31),
-         "value": 2500.0, "stock_id": 1, "source": "manual"},  # 派生指标也走人工通道校验
-    ])
+    rows, _, _ = _prepare_batch_rows(
+        PIG_INDUSTRY,
+        [
+            {
+                "metric_key": "mcap_per_head",
+                "period": date(2026, 8, 31),
+                "value": 2500.0,
+                "stock_id": 1,
+                "source": "manual",
+            },  # 派生指标也走人工通道校验
+        ],
+    )
     assert rows[0]["source_tier"] == PIG_INDUSTRY.metric("mcap_per_head").tier

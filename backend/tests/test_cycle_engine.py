@@ -8,7 +8,9 @@ from app.services.cycle_engine import CycleInput, evaluate_pig_cycle
 
 def _inp(**kw) -> CycleInput:
     base = dict(
-        ratio=7.5, price=16.0, cost=15.0,
+        ratio=7.5,
+        price=16.0,
+        cost=15.0,
         sow_mom_series=[-0.5, -0.4, -0.3],
         ratio_series=[7.0, 7.2, 7.4, 7.5],
     )
@@ -42,9 +44,7 @@ class TestPhase:
         assert out.signal == "关注"
 
     def test_ratio_falling_after_high_is_recession(self):
-        out = evaluate_pig_cycle(
-            _inp(sow_mom_series=[0.3, 0.4], ratio_series=[8.8, 8.6, 8.4, 7.6])
-        )
+        out = evaluate_pig_cycle(_inp(sow_mom_series=[0.3, 0.4], ratio_series=[8.8, 8.6, 8.4, 7.6]))
         assert out.phase == "recession"
 
     def test_missing_everything_defaults_to_depression(self):
@@ -87,10 +87,18 @@ class TestHelpers:
     def test_count_consecutive_negative_all_positive(self):
         assert ce.count_consecutive_negative([0.1, 0.2]) == 0
 
-    @pytest.mark.parametrize("value,expected", [
-        (4.9, "一级预警"), (5.0, "一级预警"), (5.1, "二级预警"),
-        (6.0, "二级预警"), (6.1, "正常"), (9.0, "正常"), (9.01, "过度上涨"),
-    ])
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (4.9, "一级预警"),
+            (5.0, "一级预警"),
+            (5.1, "二级预警"),
+            (6.0, "二级预警"),
+            (6.1, "正常"),
+            (9.0, "正常"),
+            (9.01, "过度上涨"),
+        ],
+    )
     def test_band_label_boundaries(self, value, expected):
         from app.services.industry_registry import PIG_INDUSTRY
 

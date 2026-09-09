@@ -8,12 +8,24 @@ from app.services.industry_registry import PIG_INDUSTRY
 
 def test_batch_accepts_manual_and_rejects_provider_sources():
     items = [
-        {"metric_key": "industry_cost_avg", "period": date(2026, 8, 31), "value": 13.5,
-         "source": "manual"},
-        {"metric_key": "industry_cost_avg", "period": date(2026, 8, 31), "value": 13.5,
-         "source": "akshare_soozhu"},  # 采集适配器专属 source，人工通道不得伪造
-        {"metric_key": "sow_inventory", "period": date(2026, 6, 30), "value": 4038.0,
-         "source": "stats_gov"},  # 统计局 CSV 导入通道
+        {
+            "metric_key": "industry_cost_avg",
+            "period": date(2026, 8, 31),
+            "value": 13.5,
+            "source": "manual",
+        },
+        {
+            "metric_key": "industry_cost_avg",
+            "period": date(2026, 8, 31),
+            "value": 13.5,
+            "source": "akshare_soozhu",
+        },  # 采集适配器专属 source，人工通道不得伪造
+        {
+            "metric_key": "sow_inventory",
+            "period": date(2026, 6, 30),
+            "value": 4038.0,
+            "source": "stats_gov",
+        },  # 统计局 CSV 导入通道
         {"metric_key": "nope", "period": date(2026, 8, 31), "value": 1.0},
     ]
     rows, unknown, rejected = _prepare_batch_rows(PIG_INDUSTRY, items)
@@ -23,10 +35,17 @@ def test_batch_accepts_manual_and_rejects_provider_sources():
 
 
 def test_batch_source_tier_always_from_registry():
-    rows, _, _ = _prepare_batch_rows(PIG_INDUSTRY, [
-        {"metric_key": "sow_inventory", "period": date(2026, 6, 30), "value": 4038.0,
-         "source": "stats_gov"},
-    ])
+    rows, _, _ = _prepare_batch_rows(
+        PIG_INDUSTRY,
+        [
+            {
+                "metric_key": "sow_inventory",
+                "period": date(2026, 6, 30),
+                "value": 4038.0,
+                "source": "stats_gov",
+            },
+        ],
+    )
     assert rows[0]["source_tier"] == PIG_INDUSTRY.metric("sow_inventory").tier
 
 

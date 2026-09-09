@@ -5,16 +5,16 @@ Revises: a6b7c8d9e0f1
 Create Date: 2026-08-31 10:00:00.000000
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision: str = "b8c9d0e1f2a3"
-down_revision: Union[str, None] = "a6b7c8d9e0f1"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "a6b7c8d9e0f1"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -40,7 +40,11 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
-            "industry_key", "stock_id", "metric_key", "source", "period",
+            "industry_key",
+            "stock_id",
+            "metric_key",
+            "source",
+            "period",
             name="uq_industry_metrics_key",
         ),
     )
@@ -74,7 +78,10 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
-            "industry_key", "metric_key", "label", "effective_from",
+            "industry_key",
+            "metric_key",
+            "label",
+            "effective_from",
             name="uq_industry_reference_points",
         ),
     )

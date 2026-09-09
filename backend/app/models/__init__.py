@@ -3,6 +3,14 @@
 from app.models.cluster import ClusterExplanation, ClusteringMember, ClusteringRun
 from app.models.daily_basic import DailyBasicIndicator
 from app.models.feature import StockFeature
+from app.models.financial import (
+    BalanceSheetFacts,
+    CashFlowStatementFacts,
+    FinancialMetric,
+    FinancialRawRecord,
+    FinancialReportVersion,
+    IncomeStatementFacts,
+)
 from app.models.index_daily import IndexDaily
 from app.models.industry_research import (
     IndustryKnowledge,
@@ -55,4 +63,10 @@ __all__ = [
     "ShareFloat",
     "StockRepurchase",
     "Announcement",
+    "FinancialRawRecord",
+    "FinancialReportVersion",
+    "IncomeStatementFacts",
+    "BalanceSheetFacts",
+    "CashFlowStatementFacts",
+    "FinancialMetric",
 ]
