@@ -122,3 +122,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - 多用户业务数据归属设计应采用“模型与索引显式绑定 user_id + 路由层注入当前登录 Principal + 缓存键用户命名空间（`user:{user_id}:*`）隔离 + 前端 React Query 动态以 `user?.id` 门控并于登出时全量清理”的四层联动防护，彻底阻断横向越权与多端缓存串扰。
 - 在微服务与 API Gateway 架构中，CI/CD 流水线应将微服务专属门禁（Lint/TypeCheck/Test）与统一网关烟雾测试（仅通过 Gateway:80 外部入口验证各路由分发连通性）结合，配合前端 E2E 隔离断言，形成从代码静态分析到黑盒流量路由的完整自动化质量屏障。
 - 跨服务 JWT 契约（iss/aud/claims）绝不能靠口头约定：auth-service 与 backend 各自写一条交叉契约测试锁定同一 claim 结构与默认值（篡改即失败）；Traefik forwardAuth 永远以 GET 调用鉴权子请求且 trustForwardHeader=true 会透传客户端可伪造的 X-Forwarded-Method（可绕过 CSRF 方法判定），因此该开关必须为 false 让 Traefik 用真实原始方法覆写，同时用 strip-assertion（customRequestHeaders 置空=删除）在链首剥除客户端伪造的断言头。
+- 认证接口安全评审修复应遵循"凭据最小暴露"原则：登录响应体绝不回传 session_id/csrf_token（只经 Set-Cookie 下发）、会话识别只认 HttpOnly Cookie 不留 Header 旁路（如 X-Session-Id）、登录/注册等匿名写接口也要强制 CSRF double-submit（先 GET /auth/csrf 再回显 Header）、内部端点用共享密钥（X-Internal-Token，非空即 hmac 常数时间强制）收口，并以"APP_ENV=production 必须 COOKIE_SECURE=true"类模型级校验 fail-fast 防生产误配。

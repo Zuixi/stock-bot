@@ -148,11 +148,17 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://auth_user:auth_pass@auth-db:5432/stock_bot_auth
       REDIS_URL: redis://redis:6379/0
-      APP_ENV: production
+      APP_ENV: ${APP_ENV:-development}
       # Principal Assertion JWT contract — must match backend AUTH_ISSUER/AUTH_AUDIENCE
       JWT_ISSUER: ${JWT_ISSUER:-stock-bot-auth}
       JWT_AUDIENCE: ${JWT_AUDIENCE:-urn:stock-bot:api}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
+      # JWT 密钥持久化：生产必填（AUTH_JWT_PRIVATE_KEY_PEM/AUTH_JWT_PUBLIC_KEY_PEM 同源密钥对）；
+      # 留空则启动时自动生成 RSA 密钥对（重启轮换会导致已签发断言全部失效）
+      JWT_PRIVATE_KEY_PEM: ${AUTH_JWT_PRIVATE_KEY_PEM:-}
+      JWT_PUBLIC_KEY_PEM: ${AUTH_JWT_PUBLIC_KEY_PEM:-}
+      # 生产必须 true（配合 HTTPS）；APP_ENV=production 时 auth-service 启动强校验
+      COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
     depends_on:
       auth-db:
         condition: service_healthy

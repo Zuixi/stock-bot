@@ -191,10 +191,11 @@ jobs:
           curl -f http://localhost:80/auth/health/live
           curl -f http://localhost:80/auth/csrf
           curl -f http://localhost:80/.well-known/jwks.json
-      - name: Auth login closed-loop smoke (register -> csrf -> login -> protected API)
+      - name: Auth login closed-loop smoke (csrf -> register -> csrf -> login -> protected API)
         run: |
-          # 注册→CSRF→登录→受保护接口闭环
-          curl -sf -c /tmp/jar -X POST http://localhost/auth/register -H 'Content-Type: application/json' -d '{"username":"smokeuser","email":"smoke@example.com","password":"SmokePass123!","display_name":"Smoke"}'
+          # 匿名写操作（注册/登录）均需先 GET /auth/csrf 做 double-submit CSRF
+          CSRF=$(curl -sf -c /tmp/jar -b /tmp/jar http://localhost/auth/csrf | python3 -c 'import sys,json;print(json.load(sys.stdin)["csrf_token"])')
+          curl -sf -c /tmp/jar -b /tmp/jar -X POST http://localhost/auth/register -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"username":"smokeuser","email":"smoke@example.com","password":"SmokePass123!","display_name":"Smoke"}'
           CSRF=$(curl -sf -c /tmp/jar -b /tmp/jar http://localhost/auth/csrf | python3 -c 'import sys,json;print(json.load(sys.stdin)["csrf_token"])')
           curl -sf -c /tmp/jar -b /tmp/jar -X POST http://localhost/auth/login -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"username_or_email":"smokeuser","password":"SmokePass123!"}'
           curl -sf -b /tmp/jar http://localhost/api/v1/watchlists | head -c 200   # 必须登录态 200

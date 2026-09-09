@@ -1,6 +1,6 @@
 # 股票数据分析系统 - 认证微服务与 API Gateway 架构设计
 
-> 文档版本：1.0 | 实施阶段：Stage 0 | 生效日期：2026-09-09  
+> 文档版本：1.1 | 实施阶段：P1 安全加固 | 生效日期：2026-09-09  
 > 目标系统：stock_bot 认证与安全访问控制体系（Gateway + Auth Microservice + Stock API）
 
 ---
@@ -117,34 +117,45 @@ Set-Cookie: stockbot_csrf=c_1a2b3c4d5e6f7a8b9c0d; Path=/; Domain=.example.com; S
   - `HttpOnly: false`：允许前端 JavaScript 读取此 Cookie 值，并在发起非幂等请求时提取并放入请求头 `X-CSRF-Token`。
   - `Secure: true`、`SameSite: Lax`。
 
-### 3.3 CSRF 双重提交与校验流程
+### 3.3 CSRF 三层防御与校验流程
+
+CSRF 防护按「认证面 → 会话面 → 网关面」三层纵深实施：
+
+1. **匿名 double-submit（登录/注册等认证面）**：`POST /auth/login`、`POST /auth/register` 由 auth-service 直接强制校验——客户端必须先 `GET /auth/csrf` 拿到 `stockbot_csrf` Cookie + token，再以 `X-CSRF-Token` Header 回显；两者都存在且常数时间相等才放行，否则 `403 AUTH_CSRF_FAILED`。
+2. **会话绑定校验（auth-service 写接口）**：`/auth/logout`、`DELETE /auth/sessions/{id}` 等携带会话的写操作，服务端将 Header 与 Session 内绑定 CSRF Token 常数时间比对（无有效会话的登出仅清 Cookie，跳过校验）。
+3. **forward-auth 网关强制（业务 API 面）**：见 4.4.2——对非幂等方法经 `/internal/session/introspect` 校验 `csrf_valid`，失败 403 拒绝。
+
+前端 `client.ts` 对所有非 GET 请求自动从 Cookie 读取 token 并注入 `X-CSRF-Token`（缺失时单飞请求 `/auth/csrf` 预热），登录/注册/登出调用均不豁免，因此上层业务代码无需感知该协议。
 
 ```
 [Browser Client]                      [API Gateway]                     [Auth / Stock API]
        │                                     │                                  │
-       │ 1. 登录成功 POST /auth/login         │                                  │
-       │ ──────────────────────────────────> │ 校验账号密码/生成 Session           │
-       │                                     │ 写入 Redis: sess_id -> user_id   │
-       │ 2. 返回 Set-Cookie                   │                                  │
-       │    (stockbot_session, stockbot_csrf)│                                  │
-       │ <────────────────────────────────── │                                  │
+       │ 0. 预取 CSRF token                   │                                  │
+       │ GET /auth/csrf ──────────────────────────────────────────────────────> │ 匿名签发
+       │ <── Set-Cookie: stockbot_csrf ──────│                                  │
+       │ 1. 登录 POST /auth/login             │                                  │
+       │    X-CSRF-Token + Cookie ───────────────────────────────────────────> │ double-submit 校验
+       │                                     │                                  │ 校验账号密码/生成 Session
+       │                                     │                                  │ 写入 Redis: sess_id -> user_id
+       │ 2. 返回 Set-Cookie + JSON body       │                                  │
+       │    (stockbot_session, stockbot_csrf)│   ⚠ 响应体不含 session_id/csrf_token，
+       │ <────────────────────────────────── │     凭据仅经 Set-Cookie 下发        │
        │                                     │                                  │
        │ 3. 发起写操作 (POST/PUT/DELETE)      │                                  │
        │    Headers:                         │                                  │
        │      Cookie: stockbot_session=...   │                                  │
        │      X-CSRF-Token: c_1a2b...        │                                  │
        │ ──────────────────────────────────> │ 4. CSRF 校验：                    │
-       │                                     │    - 检查 Origin / Referer       │
-       │                                     │    - 比对 X-CSRF-Token           │
-       │                                     │      与 Session 绑定的 CSRF Token│
-       │                                     │    - 若失败：403 AUTH_CSRF_INVALID│
+       │                                     │    - forward-auth 会话绑定比对     │
+       │                                     │    - 若失败：403 AUTH_CSRF_FAILED │
        │                                     │ 5. 生成短时 Principal Assertion  │
        │                                     │ ─────────────────────────────────> 6. 处理业务
 ```
 
 **CSRF 豁免规则**：
 - 安全幂等方法：`GET`, `HEAD`, `OPTIONS`, `TRACE` 豁免 CSRF 头部校验（但依然受 SameSite Cookie 保护）。
-- 公开免登接口（如 `POST /auth/login`, `POST /auth/register`）不校验 `X-CSRF-Token`，但受 Gateway IP 速率限制与 CAPTCHA/防暴力破解机制保护。
+- 公开免登接口（`POST /auth/login`, `POST /auth/register`）自 P1 加固起**不再豁免**：由 auth-service 强制匿名 double-submit（先 `GET /auth/csrf`），并受 Gateway IP 速率限制与 CAPTCHA/防暴力破解机制保护。
+- 会话识别仅认 `stockbot_session` Cookie；历史 `X-Session-Id` Header 旁路已移除（P1-4）。
 
 ---
 
@@ -293,6 +304,32 @@ Browser ── Cookie: stockbot_session ──> Traefik
   这两个头的**客户端原值**会被透传（可伪造 `X-Forwarded-Method: GET` 绕过 CSRF 强制）；
   关闭后 Traefik 用真实原始请求覆写这两个头，forward-auth 的方法判定不可伪造。
 
+### 4.5 /internal/* 服务间令牌（X-Internal-Token）
+
+auth-service 的 `/internal/session/introspect` 与 `/internal/principal/assertion`
+只应被 forward-auth（内网）调用，绝不能暴露给公网终端用户。除网络隔离外，
+自 P1 加固起增加共享密钥校验：
+
+- 配置：`INTERNAL_API_TOKEN`（auth-service 与 forward-auth 从同一 compose 变量注入）。
+- 行为：非空时，请求头 `X-Internal-Token` 必须与配置值 `hmac.compare_digest` 相等，
+  否则 `401 AUTH_UNAUTHORIZED`（router 级 dependency，覆盖全部 /internal 路由）；
+  为空时（本地开发/测试默认）不校验，保持零配置可启动。
+- forward-auth 侧早已实现：`_internal_headers()` 在 token 非空时自动附带该请求头。
+
+### 4.6 生产密钥持久化与 Secure Cookie（fail-fast）
+
+- **JWT 密钥持久化**：Principal Assertion 的 RS256 密钥对支持经
+  `JWT_PRIVATE_KEY_PEM` / `JWT_PUBLIC_KEY_PEM`（compose 引用
+  `AUTH_JWT_PRIVATE_KEY_PEM` / `AUTH_JWT_PUBLIC_KEY_PEM`）注入。
+  **生产必填**——留空则启动时自动生成 RSA 密钥对，容器重启即轮换，
+  已签发断言全部失效（backend JWKS 缓存刷新前表现为 401）。
+  密钥用 `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048` 生成，
+  公钥经 `openssl pkey -in private.pem -pubout` 导出，两端必须同源配对。
+- **Secure Cookie fail-fast**：`APP_ENV=production` 时 `COOKIE_SECURE` 必须为
+  `true`（config.py `field_validator` 启动即抛错），防止生产误用明文 HTTP 下发
+  会话 Cookie。本地开发/CI 保持 `APP_ENV=development` + `AUTH_COOKIE_SECURE=false`
+  （Gateway 当前仅暴露 80 明文入口，Secure Cookie 在无 TLS 部署下会被浏览器丢弃）。
+
 ---
 
 ## 5. 统一错误响应契约 (Unified Error Contract)
@@ -331,7 +368,7 @@ Browser ── Cookie: stockbot_session ──> Traefik
 | **401 Unauthorized** | `AUTH_SESSION_EXPIRED` | 会话已过期，前端应引导刷新或重新登录 |
 | **401 Unauthorized** | `AUTH_INVALID_CREDENTIALS` | 用户名或密码错误、账户已被锁定 |
 | **403 Forbidden** | `AUTH_FORBIDDEN` | 用户已登录但权限不足（如非 Admin 用户触发 Task 回填） |
-| **403 Forbidden** | `AUTH_CSRF_INVALID` | CSRF Token 缺失、格式错误或与会话不匹配 |
+| **403 Forbidden** | `AUTH_CSRF_FAILED` | CSRF Token 缺失、格式错误或与会话不匹配（含登录/注册匿名 double-submit 失败） |
 | **404 Not Found** | `RESOURCE_NOT_FOUND` | 请求的股票代码、行业分类、自选列表不存在 |
 | **409 Conflict** | `RESOURCE_ALREADY_EXISTS` | 注册用户名冲突、自选股已存在、标签重复绑定 |
 | **422 Unprocessable** | `VALIDATION_ERROR` | Pydantic Schema 字段业务校验失败（返回字段级 details） |
@@ -354,8 +391,8 @@ Browser ── Cookie: stockbot_session ──> Traefik
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
 | **`/api/v1/health`** | GET | Public | Stock API | 无 | 否 | 服务存活健康检查 |
 | **`/auth/jwks.json`** | GET | Public | Auth Service | 无 | 否 | 公钥集分发（供 Gateway/API 验签） |
-| **`/auth/login`** | POST | Public | Auth Service | 无 | 否 | 用户名密码登录，签发会话 Cookie |
-| **`/auth/register`** | POST | Public | Auth Service | 无 | 否 | 新用户注册 |
+| **`/auth/login`** | POST | Public | Auth Service | 无 | **是**(匿名 double-submit) | 用户名密码登录，签发会话 Cookie（响应体不含凭据） |
+| **`/auth/register`** | POST | Public | Auth Service | 无 | **是**(匿名 double-submit) | 新用户注册 |
 | **`/auth/logout`** | POST | Protected | Auth Service | 已登录 | **是** | 销毁当前会话，清除 Cookie |
 | **`/auth/me`** | GET | Protected | Auth Service | 已登录 | 否 | 获取当前登录用户画像与权限清单 |
 | **`/auth/sessions`** | GET | Protected | Auth Service | 已登录 | 否 | 查看当前用户活跃设备与会话列表 |

@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -44,6 +44,22 @@ class Settings(BaseSettings):
     cookie_httponly: bool = True
     cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     cookie_domain: str | None = None
+
+    # Service-to-service token guarding /internal/* endpoints (X-Internal-Token).
+    # Empty by default = not enforced (local dev / tests); REQUIRED in production.
+    internal_api_token: str = ""
+
+    @field_validator("cookie_secure")
+    @classmethod
+    def require_secure_cookies_in_production(cls, v: bool, info: ValidationInfo) -> bool:
+        """Fail fast on insecure production configs (cookies must ride HTTPS)."""
+        app_env = info.data.get("app_env", "development")
+        if app_env == "production" and not v:
+            raise ValueError(
+                "COOKIE_SECURE must be true when APP_ENV=production (HTTPS required); "
+                "set AUTH_COOKIE_SECURE=true or deploy behind TLS"
+            )
+        return v
 
     # JWT & JWKS Assertion
     # Defaults MUST stay aligned with backend Settings.auth_issuer / auth_audience
