@@ -1,0 +1,32 @@
+/*
+ * 行情中心页样式（Stage C，契约 docs/design/landing-market-theme.md §4）
+ * 卡片规范：--bg-panel 底、1px --border、8px 圆角；颜色一律走 CSS 变量随明暗切换。
+ */
+
+.market-page-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+/* 顶部分类 Tab（TV 风）：大字号 + 底部分隔线 */
+.market-page > .ant-tabs {
+  margin-bottom: 4px;
+}
+
+.market-page > .ant-tabs .ant-tabs-nav {
+  margin-bottom: 16px;
+}
+
+.market-page > .ant-tabs .ant-tabs-tab {
+  font-size: 15px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+/* 卡片阵列统一 8px 圆角（覆盖全局 token 的 6px） */
+.market-page .ant-card {
+  border-radius: 8px;
+}

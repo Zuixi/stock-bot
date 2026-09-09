@@ -1,4 +1,6 @@
 export { GlobalMarketBoard } from "./GlobalMarketBoard";
+export { GlobalIndexCardView } from "./GlobalIndexCardView";
+export { CoreIndexCards } from "./CoreIndexCards";
 export { DistributionChart } from "./DistributionChart";
 export { SectorHeatmap } from "./SectorHeatmap";
 export { SectorMoneyflowCard } from "./SectorMoneyflowCard";
@@ -7,3 +9,5 @@ export { NorthboundCard } from "./NorthboundCard";
 export { HotSectors } from "./HotSectors";
 export { IndustryClassification } from "./IndustryClassification";
 export { MarketDataBoard } from "./MarketDataBoard";
+export { SwIndustryGrid } from "./SwIndustryGrid";
+export { DataCoverageMatrix } from "./DataCoverageMatrix";
