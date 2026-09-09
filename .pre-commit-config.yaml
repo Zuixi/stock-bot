@@ -28,3 +28,27 @@ repos:
       - id: check-toml
       - id: check-merge-conflict
       - id: detect-private-key
+
+  # ── 项目自检门禁（AGENTS.md「完成前自检门禁」的 commit 级兜底）──
+  - repo: local
+    hooks:
+      - id: self-review
+        name: self-review (scripts/self_review.sh)
+        entry: bash scripts/self_review.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+      # ── 每次 commit 前自动跑：前端类型检查（仓库无 eslint/prettier，前端静态校验 = tsc，与 CI 一致）
+      - id: frontend-typecheck
+        name: frontend tsc --noEmit
+        entry: bash -c 'cd frontend && npx tsc --noEmit'
+        language: system
+        pass_filenames: false
+        files: ^frontend/.*\.(ts|tsx)$
+      # ── 每次 commit 前自动跑：后端非 e2e 单测（无 DB 依赖，~4s）
+      - id: backend-test
+        name: backend pytest (not e2e)
+        entry: bash -c 'cd backend && uv run pytest -m "not e2e" -q --no-cov'
+        language: system
+        pass_filenames: false
+        files: ^backend/.*\.py$
