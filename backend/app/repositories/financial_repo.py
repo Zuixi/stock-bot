@@ -18,10 +18,10 @@ from app.models.financial import (
     IncomeStatementFacts,
 )
 
-
 # ---------------------------------------------------------------------------
 # Raw records
 # ---------------------------------------------------------------------------
+
 
 async def save_raw_record(
     db: AsyncSession,
@@ -60,14 +60,14 @@ async def save_raw_record(
     if raw_id is not None:
         return FinancialRawRecord(id=raw_id)
     # Already exists — fetch the existing row to obtain its id.
-    stmt = (
+    existing_stmt = (
         select(FinancialRawRecord)
         .where(FinancialRawRecord.source == source)
         .where(FinancialRawRecord.dataset == dataset)
         .where(FinancialRawRecord.source_record_key == source_record_key)
         .where(FinancialRawRecord.payload_hash == payload_hash)
     )
-    existing = (await db.execute(stmt)).scalar_one_or_none()
+    existing = (await db.execute(existing_stmt)).scalar_one_or_none()
     if existing is None:
         raise RuntimeError("raw record missing after conflict-no-op")
     return existing
@@ -76,6 +76,7 @@ async def save_raw_record(
 # ---------------------------------------------------------------------------
 # Report versions
 # ---------------------------------------------------------------------------
+
 
 async def upsert_report_version(
     db: AsyncSession,
@@ -137,6 +138,7 @@ async def upsert_report_version(
 # Statement facts
 # ---------------------------------------------------------------------------
 
+
 async def upsert_income_facts(
     db: AsyncSession, report_version_id: int, facts: dict[str, Any]
 ) -> None:
@@ -146,7 +148,11 @@ async def upsert_income_facts(
         .values(**facts)
         .on_conflict_do_update(
             constraint="uq_income_statement_facts_ver",
-            set_={k: getattr(insert(IncomeStatementFacts).excluded, k) for k in facts if k != "report_version_id"},
+            set_={
+                k: getattr(insert(IncomeStatementFacts).excluded, k)
+                for k in facts
+                if k != "report_version_id"
+            },
         )
     )
     await db.execute(stmt)
@@ -162,7 +168,11 @@ async def upsert_balance_facts(
         .values(**facts)
         .on_conflict_do_update(
             constraint="uq_balance_sheet_facts_ver",
-            set_={k: getattr(insert(BalanceSheetFacts).excluded, k) for k in facts if k != "report_version_id"},
+            set_={
+                k: getattr(insert(BalanceSheetFacts).excluded, k)
+                for k in facts
+                if k != "report_version_id"
+            },
         )
     )
     await db.execute(stmt)
@@ -178,7 +188,11 @@ async def upsert_cashflow_facts(
         .values(**facts)
         .on_conflict_do_update(
             constraint="uq_cash_flow_statement_facts_ver",
-            set_={k: getattr(insert(CashFlowStatementFacts).excluded, k) for k in facts if k != "report_version_id"},
+            set_={
+                k: getattr(insert(CashFlowStatementFacts).excluded, k)
+                for k in facts
+                if k != "report_version_id"
+            },
         )
     )
     await db.execute(stmt)
@@ -188,6 +202,7 @@ async def upsert_cashflow_facts(
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
+
 
 async def upsert_metric(
     db: AsyncSession,
@@ -241,6 +256,7 @@ async def upsert_metric(
 # Queries
 # ---------------------------------------------------------------------------
 
+
 async def list_report_versions(
     db: AsyncSession,
     stock_id: int,
@@ -279,9 +295,7 @@ async def get_latest_report_version(
 async def get_report_version(
     db: AsyncSession, report_version_id: int
 ) -> FinancialReportVersion | None:
-    stmt = select(FinancialReportVersion).where(
-        FinancialReportVersion.id == report_version_id
-    )
+    stmt = select(FinancialReportVersion).where(FinancialReportVersion.id == report_version_id)
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
@@ -347,4 +361,5 @@ async def list_metrics_series(
     )
     if metric_keys:
         stmt = stmt.where(FinancialMetric.metric_key.in_(metric_keys))
-    return list((await db.execute(stmt)).all())
+    result = await db.execute(stmt)
+    return [(metric, end_date) for metric, end_date in result.all()]

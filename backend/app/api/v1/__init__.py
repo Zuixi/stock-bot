@@ -1,18 +1,18 @@
 """API v1 router assembly — RESTful resource hierarchy.
 
-    /api/v1/exchanges
-    /api/v1/exchanges/categories
+/api/v1/exchanges
+/api/v1/exchanges/categories
 
-    /api/v1/exchanges/{exchange}/stocks
-        GET  /
-        GET  /{symbol}
-        GET  /{symbol}/quotes/daily
-        GET  /{symbol}/quotes/latest
-        GET  /{symbol}/features
-        GET  /{symbol}/features/radar
+/api/v1/exchanges/{exchange}/stocks
+    GET  /
+    GET  /{symbol}
+    GET  /{symbol}/quotes/daily
+    GET  /{symbol}/quotes/latest
+    GET  /{symbol}/features
+    GET  /{symbol}/features/radar
 
-    /api/v1/clusters/...
-    /api/v1/tasks/...
+/api/v1/clusters/...
+/api/v1/tasks/...
 """
 
 from fastapi import APIRouter

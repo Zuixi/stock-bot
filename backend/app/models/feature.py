@@ -14,9 +14,7 @@ class StockFeature(Base):
 
     __tablename__ = "stock_features"
     __table_args__ = (
-        UniqueConstraint(
-            "stock_id", "asof_date", "window_days", name="uq_stock_features_key"
-        ),
+        UniqueConstraint("stock_id", "asof_date", "window_days", name="uq_stock_features_key"),
         Index("idx_stock_features_stock_date", "stock_id", "asof_date"),
         Index("idx_stock_features_window", "asof_date", "window_days"),
         # Partitioning is managed externally. Do NOT put postgresql_partition_by here.
@@ -49,6 +47,4 @@ class StockFeature(Base):
     # Extensible additional features
     extra: Mapped[dict | None] = mapped_column(JSONB)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

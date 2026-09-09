@@ -1,14 +1,14 @@
 """Industry research workbench endpoints.
 
-    /api/v1/industries
-        GET   /                                已产品化行业列表（含指标覆盖度）
-        GET   /{key}/dashboard                 看板聚合（指标带/速览/趋势/周期/信号/仓位）
-        GET   /{key}/metrics/latest            全部指标最新值（源优先级裁决 + 预警标签）
-        GET   /{key}/metrics/{metric_key}/history
-        GET   /{key}/companies                 成分股对比表（行情/估值 + 公司指标，registry 列）
-        GET   /{key}/securities                行情面标的日线（type=etf|cb，registry 代码清单）
-        GET   /{key}/knowledge                 知识库（机构图谱/权威性原则/思维导图，内容表 seed）
-        POST  /{key}/metrics/batch             人工/CSV 导入通道（幂等 upsert）
+/api/v1/industries
+    GET   /                                已产品化行业列表（含指标覆盖度）
+    GET   /{key}/dashboard                 看板聚合（指标带/速览/趋势/周期/信号/仓位）
+    GET   /{key}/metrics/latest            全部指标最新值（源优先级裁决 + 预警标签）
+    GET   /{key}/metrics/{metric_key}/history
+    GET   /{key}/companies                 成分股对比表（行情/估值 + 公司指标，registry 列）
+    GET   /{key}/securities                行情面标的日线（type=etf|cb，registry 代码清单）
+    GET   /{key}/knowledge                 知识库（机构图谱/权威性原则/思维导图，内容表 seed）
+    POST  /{key}/metrics/batch             人工/CSV 导入通道（幂等 upsert）
 """
 
 from typing import Literal
@@ -54,7 +54,9 @@ async def get_dashboard(industry_key: str, db: DbDep, cache: CacheDep) -> Dashbo
 async def get_latest_metrics(
     industry_key: str,
     db: DbDep,
-    group: str | None = Query(None, description="Filter by display group (strip/quick/supply/cost)"),
+    group: str | None = Query(
+        None, description="Filter by display group (strip/quick/supply/cost)"
+    ),
 ) -> list[MetricLatestOut]:
     try:
         return await service.get_latest_metrics(db, industry_key, group=group)
@@ -126,7 +128,8 @@ async def batch_upsert_metrics(
     """Manual/CSV import channel (idempotent)."""
     try:
         result = await service.batch_upsert_metrics(
-            db, industry_key,
+            db,
+            industry_key,
             [item.model_dump() for item in req.items],
             recompute_derived=req.recompute_derived,
         )

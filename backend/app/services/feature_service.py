@@ -40,10 +40,7 @@ async def get_radar_data(
     if feature is None:
         return None
 
-    axes = [
-        RadarAxis(name=label, value=getattr(feature, field))
-        for field, label in _RADAR_AXES
-    ]
+    axes = [RadarAxis(name=label, value=getattr(feature, field)) for field, label in _RADAR_AXES]
     out = RadarChartData(
         symbol=symbol,
         name=stock.name,

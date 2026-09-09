@@ -64,9 +64,8 @@ class TestGenericMockBuilder:
         assert chick[-1]["value"] == base  # 末点精确等于基准值（日/月口径一致性约定）
 
     def test_deterministic_rerun(self):
-        assert (
-            build_generic_mock_points(reg.BROILER_INDUSTRY)
-            == build_generic_mock_points(reg.BROILER_INDUSTRY)
+        assert build_generic_mock_points(reg.BROILER_INDUSTRY) == build_generic_mock_points(
+            reg.BROILER_INDUSTRY
         )
 
     def test_pig_not_affected_by_generic_builder(self):

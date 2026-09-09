@@ -18,18 +18,18 @@ PHASE_DEPRESSION = "depression"
 PHASE_RECOVERY = "recovery"
 
 # 猪粮比预警档（与 registry 中 hog_corn_ratio 的 warn_bands 对齐）
-RATIO_LEVEL1 = 5.0   # 一级预警（深度亏损）
-RATIO_LEVEL2 = 6.0   # 二级预警
+RATIO_LEVEL1 = 5.0  # 一级预警（深度亏损）
+RATIO_LEVEL2 = 6.0  # 二级预警
 RATIO_OVERHEAT = 9.0  # 过度上涨
 
 
 @dataclass
 class CycleInput:
-    ratio: float | None = None                 # 猪粮比
-    price: float | None = None                 # 生猪均价
-    cost: float | None = None                  # 行业平均完全成本
+    ratio: float | None = None  # 猪粮比
+    price: float | None = None  # 生猪均价
+    cost: float | None = None  # 行业平均完全成本
     sow_mom_series: list[float] = field(default_factory=list)  # 能繁环比（旧→新）
-    ratio_series: list[float] = field(default_factory=list)    # 猪粮比序列（旧→新）
+    ratio_series: list[float] = field(default_factory=list)  # 猪粮比序列（旧→新）
 
 
 @dataclass
@@ -52,9 +52,7 @@ def count_consecutive_negative(series: list[float]) -> int:
     return n
 
 
-def evaluate_pig_cycle(
-    inp: CycleInput, cfg: reg.IndustryConfig | None = None
-) -> CycleOutput:
+def evaluate_pig_cycle(inp: CycleInput, cfg: reg.IndustryConfig | None = None) -> CycleOutput:
     """规则本体保持猪周期口径（猪粮比/能繁去化/盈亏平衡）；``cfg`` 仅驱动
     预警档（registry warn_bands）与仓位模板——第二行业（如 broiler demo）传入
     自身配置即可复用整套判定链，缺省仍为生猪。"""

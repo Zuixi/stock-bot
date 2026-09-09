@@ -53,7 +53,11 @@ class RateLimitedSyncProvider:
                 self.handle_error(api_name, exc)
                 logger.warning(
                     "%s %s attempt %d/%d failed: %s",
-                    type(self).__name__, api_name, attempt, self.max_retries, exc,
+                    type(self).__name__,
+                    api_name,
+                    attempt,
+                    self.max_retries,
+                    exc,
                 )
                 if attempt < self.max_retries:
                     time.sleep(self.retry_backoff_seconds)

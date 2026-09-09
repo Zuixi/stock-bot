@@ -1,6 +1,8 @@
 """Stock service: list, search, and exchange metadata."""
 
 import logging
+from collections.abc import Callable
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,7 +70,10 @@ async def get_stock(
 
 
 async def get_stock_enriched(
-    db: AsyncSession, cache: CacheClient, exchange: str, symbol: str,
+    db: AsyncSession,
+    cache: CacheClient,
+    exchange: str,
+    symbol: str,
 ) -> StockEnrichedOut | None:
     """Single stock with latest quote + daily_basic enriched."""
     cache_key = f"stock:enriched:{exchange}:{symbol}"
@@ -85,9 +90,7 @@ async def get_stock_enriched(
     if not enriched_list:
         return None
     out = enriched_list[0]
-    out.sw_chain = [
-        SwChainNode(**node) for node in await get_sw_chain_by_symbol(db, symbol)
-    ]
+    out.sw_chain = [SwChainNode(**node) for node in await get_sw_chain_by_symbol(db, symbol)]
     await cache.set(cache_key, out.model_dump(mode="json"), ttl=300)
     return out
 
@@ -113,7 +116,10 @@ async def list_stocks_enriched(
     if params.sort_by:
         # ── Sort path: fetch all → enrich all → sort → paginate ──
         all_stocks, total = await stock_repo.list_stocks(
-            db, params, offset=0, limit=10_000,
+            db,
+            params,
+            offset=0,
+            limit=10_000,
         )
         if not all_stocks:
             return [], 0
@@ -140,7 +146,10 @@ async def list_stocks_enriched(
 
     # ── Fast path: paginate first, enrich only the page ──
     stocks, total = await stock_repo.list_stocks(
-        db, params, offset=page_params.offset, limit=page_params.page_size,
+        db,
+        params,
+        offset=page_params.offset,
+        limit=page_params.page_size,
     )
     if not stocks:
         return [], 0
@@ -149,19 +158,19 @@ async def list_stocks_enriched(
     enriched_list = await get_stocks_enriched_by_symbols(db, symbols)
     enriched_map = {e.symbol: e for e in enriched_list}
 
-    items: list[StockEnrichedOut] = []
+    fast_items: list[StockEnrichedOut] = []
     for s in stocks:
         enriched = enriched_map.get(s.symbol)
         if enriched:
-            items.append(enriched)
+            fast_items.append(enriched)
         else:
             base = StockOut.model_validate(s)
-            items.append(StockEnrichedOut(**base.model_dump()))
+            fast_items.append(StockEnrichedOut(**base.model_dump()))
 
-    return items, total
+    return fast_items, total
 
 
-def _sort_key_for(field: str, reverse: bool):
+def _sort_key_for(field: str, reverse: bool) -> Callable[[StockEnrichedOut], Any]:
     """Return a sort key function for the given StockEnrichedOut field."""
     field_map = {
         "latestPrice": lambda s: (s.latest_price is None, s.latest_price or 0),

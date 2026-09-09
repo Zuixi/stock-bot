@@ -28,7 +28,6 @@ from sqlalchemy import (
     Index,
     Numeric,
     String,
-    Text,
     UniqueConstraint,
     func,
 )
@@ -49,7 +48,10 @@ class FinancialRawRecord(Base):
     __tablename__ = "financial_raw_records"
     __table_args__ = (
         UniqueConstraint(
-            "source", "dataset", "source_record_key", "payload_hash",
+            "source",
+            "dataset",
+            "source_record_key",
+            "payload_hash",
             name="uq_financial_raw_record",
         ),
         Index("idx_financial_raw_source_dataset", "source", "dataset"),
@@ -57,7 +59,7 @@ class FinancialRawRecord(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    source: Mapped[str] = mapped_column(String(64), nullable=False)   # tushare / akshare ...
+    source: Mapped[str] = mapped_column(String(64), nullable=False)  # tushare / akshare ...
     dataset: Mapped[str] = mapped_column(String(64), nullable=False)  # income / fina_indicator ...
     stock_id: Mapped[int | None] = mapped_column(nullable=True)
     ts_code: Mapped[str | None] = mapped_column(String(24))
@@ -65,12 +67,8 @@ class FinancialRawRecord(Base):
     source_record_key: Mapped[str | None] = mapped_column(String(128))
     payload: Mapped[dict | None] = mapped_column(JSONB)
     payload_hash: Mapped[str | None] = mapped_column(String(64))
-    fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class FinancialReportVersion(Base):
@@ -81,7 +79,11 @@ class FinancialReportVersion(Base):
         # One row per report publication. `update_flag`/`comp_type` let revised
         # reports and consolidated vs parent statements coexist.
         UniqueConstraint(
-            "stock_id", "end_date", "report_type", "comp_type", "source",
+            "stock_id",
+            "end_date",
+            "report_type",
+            "comp_type",
+            "source",
             name="uq_financial_report_version",
         ),
         Index("idx_financial_report_stock_date", "stock_id", "end_date"),
@@ -93,9 +95,11 @@ class FinancialReportVersion(Base):
     ts_code: Mapped[str | None] = mapped_column(String(24))
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     report_type: Mapped[str] = mapped_column(String(4), nullable=False)
-    ann_date: Mapped[date | None] = mapped_column(Date)   # report announcement date
+    ann_date: Mapped[date | None] = mapped_column(Date)  # report announcement date
     f_ann_date: Mapped[date | None] = mapped_column(Date)  # factual announcement date
-    comp_type: Mapped[str] = mapped_column(String(8), nullable=False, server_default="1")  # 1=consolidated
+    comp_type: Mapped[str] = mapped_column(
+        String(8), nullable=False, server_default="1"
+    )  # 1=consolidated
     source: Mapped[str] = mapped_column(String(64), nullable=False)
     source_record_key: Mapped[str | None] = mapped_column(String(128))
     update_flag: Mapped[str | None] = mapped_column(String(8))  # 1=new, 2=revised revision
@@ -105,9 +109,7 @@ class FinancialReportVersion(Base):
     )
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     raw_record_id: Mapped[int | None] = mapped_column(nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class _StatementFactsBase(Base):
@@ -126,9 +128,7 @@ class IncomeStatementFacts(_StatementFactsBase):
     """Standardized income statement — amounts in CNY yuan."""
 
     __tablename__ = "income_statement_facts"
-    __table_args__ = (
-        UniqueConstraint("report_version_id", name="uq_income_statement_facts_ver"),
-    )
+    __table_args__ = (UniqueConstraint("report_version_id", name="uq_income_statement_facts_ver"),)
 
     revenue: Mapped[float | None] = mapped_column(Numeric(20, 2))
     operate_cost: Mapped[float | None] = mapped_column(Numeric(20, 2))
@@ -149,9 +149,7 @@ class BalanceSheetFacts(_StatementFactsBase):
     """Standardized balance sheet — amounts in CNY yuan."""
 
     __tablename__ = "balance_sheet_facts"
-    __table_args__ = (
-        UniqueConstraint("report_version_id", name="uq_balance_sheet_facts_ver"),
-    )
+    __table_args__ = (UniqueConstraint("report_version_id", name="uq_balance_sheet_facts_ver"),)
 
     total_assets: Mapped[float | None] = mapped_column(Numeric(20, 2))
     total_liab: Mapped[float | None] = mapped_column(Numeric(20, 2))
@@ -192,7 +190,9 @@ class FinancialMetric(Base):
     __tablename__ = "financial_metrics"
     __table_args__ = (
         UniqueConstraint(
-            "stock_id", "report_version_id", "metric_key",
+            "stock_id",
+            "report_version_id",
+            "metric_key",
             name="uq_financial_metric_key",
         ),
         Index("idx_financial_metric_stock_key", "stock_id", "metric_key"),
@@ -208,7 +208,9 @@ class FinancialMetric(Base):
     metric_key: Mapped[str] = mapped_column(String(64), nullable=False)
     value: Mapped[float | None] = mapped_column(Numeric(20, 6))
     unit: Mapped[str | None] = mapped_column(String(16))
-    period_type: Mapped[str | None] = mapped_column(String(16))  # report / cumulative / ttm / quarter
+    period_type: Mapped[str | None] = mapped_column(
+        String(16)
+    )  # report / cumulative / ttm / quarter
     calc_method: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default="reported_by_provider"
     )
@@ -217,6 +219,4 @@ class FinancialMetric(Base):
         String(16), nullable=False, server_default="reported"
     )
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

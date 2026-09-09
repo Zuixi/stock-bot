@@ -1,10 +1,10 @@
 """Cluster repository: runs, members, explanations."""
 
 import uuid
+from typing import cast
 
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.models.cluster import ClusterExplanation, ClusteringMember, ClusteringRun
 from app.models.stock import Stock
@@ -26,9 +26,7 @@ async def get_default_run(db: AsyncSession) -> ClusteringRun | None:
     return result.scalar_one_or_none()
 
 
-async def get_cluster_distribution(
-    db: AsyncSession, run_id: uuid.UUID
-) -> list[tuple[int, int]]:
+async def get_cluster_distribution(db: AsyncSession, run_id: uuid.UUID) -> list[tuple[int, int]]:
     """Returns [(cluster_label, count), ...] ordered by cluster_label."""
     stmt = (
         select(ClusteringMember.cluster_label, func.count().label("count"))
@@ -37,7 +35,7 @@ async def get_cluster_distribution(
         .order_by(ClusteringMember.cluster_label)
     )
     result = await db.execute(stmt)
-    return [(row.cluster_label, row.count) for row in result]
+    return [(cast(int, row.cluster_label), cast(int, row.count)) for row in result]
 
 
 async def get_cluster_members(
@@ -85,9 +83,7 @@ async def get_cluster_members(
     return rows, total
 
 
-async def list_explanations(
-    db: AsyncSession, run_id: uuid.UUID
-) -> list[ClusterExplanation]:
+async def list_explanations(db: AsyncSession, run_id: uuid.UUID) -> list[ClusterExplanation]:
     stmt = (
         select(ClusterExplanation)
         .where(ClusterExplanation.run_id == run_id)

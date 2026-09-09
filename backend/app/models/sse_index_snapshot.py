@@ -29,6 +29,4 @@ class SseIndexSnapshot(Base):
     low: Mapped[float | None] = mapped_column(Numeric(12, 4))
     last: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
     chg_rate: Mapped[float | None] = mapped_column(Numeric(8, 4))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

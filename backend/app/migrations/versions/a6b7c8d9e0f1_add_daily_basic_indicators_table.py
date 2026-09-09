@@ -5,15 +5,15 @@ Revises: f5a6b7c8d9e0
 Create Date: 2026-05-08 17:00:00.000000
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "a6b7c8d9e0f1"
-down_revision: Union[str, None] = "f5a6b7c8d9e0"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "f5a6b7c8d9e0"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -51,9 +51,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "stock_id", "trade_date", name="uq_daily_basic_stock_date"
-        ),
+        sa.UniqueConstraint("stock_id", "trade_date", name="uq_daily_basic_stock_date"),
     )
     op.create_index(
         "idx_daily_basic_stock_date",

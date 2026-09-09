@@ -381,7 +381,6 @@ class TuShareClient(RateLimitedSyncProvider):
             kwargs["ts_code"] = ts_code
         return await self._query("stk_limit", **kwargs)
 
-
     # ------------------------------------------------------------------
     # Financial statements APIs
     # ------------------------------------------------------------------

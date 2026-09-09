@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.financial import FinancialMetric, FinancialReportVersion
+from app.models.stock import Stock
 from app.repositories import daily_basic_repo, financial_repo, stock_repo
 from app.schemas.financial import (
     BalanceSheetOut,
@@ -17,6 +17,7 @@ from app.schemas.financial import (
     FinancialSummaryOut,
     IncomeStatementOut,
     MetricHistoryOut,
+    MetricHistoryPoint,
     MetricValueOut,
     ReportPeriodOut,
     ValuationHistoryOut,
@@ -38,13 +39,20 @@ _VALUATION_METRICS = {
 
 # Description of key metrics surfaced in the summary (order matters for UI).
 SUMMARY_KEYS = [
-    "roe", "gross_margin", "net_margin", "debt_to_asset",
-    "current_ratio", "ocf_to_net_profit", "revenue_yoy", "profit_yoy",
-    "eps", "bps",
+    "roe",
+    "gross_margin",
+    "net_margin",
+    "debt_to_asset",
+    "current_ratio",
+    "ocf_to_net_profit",
+    "revenue_yoy",
+    "profit_yoy",
+    "eps",
+    "bps",
 ]
 
 
-async def _resolve_stock(db: AsyncSession, exchange: str, symbol: str):
+async def _resolve_stock(db: AsyncSession, exchange: str, symbol: str) -> Stock:
     stock = await stock_repo.get_stock_by_symbol(db, exchange, symbol)
     if stock is None:
         raise LookupError(f"Stock not found: {exchange}/{symbol}")
@@ -60,10 +68,7 @@ async def get_financial_summary(
         return FinancialSummaryOut(exchange=exchange, symbol=symbol, name=stock.name)
 
     metrics = await financial_repo.list_metrics(db, stock.id)
-    version_metrics = {
-        m.metric_key: m for m in metrics
-        if m.report_version_id == version.id
-    }
+    version_metrics = {m.metric_key: m for m in metrics if m.report_version_id == version.id}
 
     metric_out: dict[str, MetricValueOut] = {}
     for key in SUMMARY_KEYS:
@@ -119,35 +124,61 @@ async def get_financial_statements(
                 IncomeStatementOut(
                     period=version.end_date,
                     revenue=float(income.revenue) if income.revenue is not None else None,
-                    operate_cost=float(income.operate_cost) if income.operate_cost is not None else None,
-                    operate_profit=float(income.operate_profit) if income.operate_profit is not None else None,
-                    total_profit=float(income.total_profit) if income.total_profit is not None else None,
+                    operate_cost=float(income.operate_cost)
+                    if income.operate_cost is not None
+                    else None,
+                    operate_profit=float(income.operate_profit)
+                    if income.operate_profit is not None
+                    else None,
+                    total_profit=float(income.total_profit)
+                    if income.total_profit is not None
+                    else None,
                     n_income=float(income.n_income) if income.n_income is not None else None,
-                    n_income_attr_p=float(income.n_income_attr_p) if income.n_income_attr_p is not None else None,
-                    deduct_n_income=float(income.deduct_n_income) if income.deduct_n_income is not None else None,
+                    n_income_attr_p=float(income.n_income_attr_p)
+                    if income.n_income_attr_p is not None
+                    else None,
+                    deduct_n_income=float(income.deduct_n_income)
+                    if income.deduct_n_income is not None
+                    else None,
                     sell_exp=float(income.sell_exp) if income.sell_exp is not None else None,
                     admin_exp=float(income.admin_exp) if income.admin_exp is not None else None,
                     fin_exp=float(income.fin_exp) if income.fin_exp is not None else None,
                     rd_exp=float(income.rd_exp) if income.rd_exp is not None else None,
                     basic_eps=float(income.basic_eps) if income.basic_eps is not None else None,
-                    diluted_eps=float(income.diluted_eps) if income.diluted_eps is not None else None,
+                    diluted_eps=float(income.diluted_eps)
+                    if income.diluted_eps is not None
+                    else None,
                 )
             )
         if balance is not None:
             out.balance_sheet.append(
                 BalanceSheetOut(
                     period=version.end_date,
-                    total_assets=float(balance.total_assets) if balance.total_assets is not None else None,
-                    total_liab=float(balance.total_liab) if balance.total_liab is not None else None,
+                    total_assets=float(balance.total_assets)
+                    if balance.total_assets is not None
+                    else None,
+                    total_liab=float(balance.total_liab)
+                    if balance.total_liab is not None
+                    else None,
                     total_hldr_eqy_exc_min_int=float(balance.total_hldr_eqy_exc_min_int)
-                    if balance.total_hldr_eqy_exc_min_int is not None else None,
+                    if balance.total_hldr_eqy_exc_min_int is not None
+                    else None,
                     total_hldr_eqy_inc_min_int=float(balance.total_hldr_eqy_inc_min_int)
-                    if balance.total_hldr_eqy_inc_min_int is not None else None,
+                    if balance.total_hldr_eqy_inc_min_int is not None
+                    else None,
                     money_cap=float(balance.money_cap) if balance.money_cap is not None else None,
-                    accounts_receiv=float(balance.accounts_receiv) if balance.accounts_receiv is not None else None,
-                    inventories=float(balance.inventories) if balance.inventories is not None else None,
-                    fix_assets=float(balance.fix_assets) if balance.fix_assets is not None else None,
-                    intan_assets=float(balance.intan_assets) if balance.intan_assets is not None else None,
+                    accounts_receiv=float(balance.accounts_receiv)
+                    if balance.accounts_receiv is not None
+                    else None,
+                    inventories=float(balance.inventories)
+                    if balance.inventories is not None
+                    else None,
+                    fix_assets=float(balance.fix_assets)
+                    if balance.fix_assets is not None
+                    else None,
+                    intan_assets=float(balance.intan_assets)
+                    if balance.intan_assets is not None
+                    else None,
                     st_borrow=float(balance.st_borrow) if balance.st_borrow is not None else None,
                     lt_borrow=float(balance.lt_borrow) if balance.lt_borrow is not None else None,
                 )
@@ -156,13 +187,18 @@ async def get_financial_statements(
             out.cash_flow.append(
                 CashFlowOut(
                     period=version.end_date,
-                    n_cashflow_act=float(cashflow.n_cashflow_act) if cashflow.n_cashflow_act is not None else None,
+                    n_cashflow_act=float(cashflow.n_cashflow_act)
+                    if cashflow.n_cashflow_act is not None
+                    else None,
                     n_cashflow_inv_act=float(cashflow.n_cashflow_inv_act)
-                    if cashflow.n_cashflow_inv_act is not None else None,
+                    if cashflow.n_cashflow_inv_act is not None
+                    else None,
                     n_cashflow_fin_act=float(cashflow.n_cashflow_fin_act)
-                    if cashflow.n_cashflow_fin_act is not None else None,
+                    if cashflow.n_cashflow_fin_act is not None
+                    else None,
                     c_cash_equ_end_period=float(cashflow.c_cash_equ_end_period)
-                    if cashflow.c_cash_equ_end_period is not None else None,
+                    if cashflow.c_cash_equ_end_period is not None
+                    else None,
                 )
             )
     return out
@@ -184,17 +220,19 @@ async def get_metrics_history(
         out = by_key.setdefault(
             metric.metric_key,
             MetricHistoryOut(
-                exchange=exchange, symbol=symbol,
-                metric_key=metric.metric_key, unit=metric.unit,
+                exchange=exchange,
+                symbol=symbol,
+                metric_key=metric.metric_key,
+                unit=metric.unit,
             ),
         )
         out.points.append(
-            {
-                "period": end_date,
-                "value": float(metric.value),
-                "unit": metric.unit,
-                "quality": metric.quality_status,
-            }
+            MetricHistoryPoint(
+                period=end_date,
+                value=float(metric.value),
+                unit=metric.unit,
+                quality=metric.quality_status,
+            )
         )
     return list(by_key.values())
 
@@ -254,7 +292,7 @@ async def get_valuation_history(
         )
 
     current = valid[-1][1] if valid else None
-    current_pct = percentiles.get(range_)
+    percentiles.get(range_)
 
     return ValuationHistoryOut(
         exchange=exchange,

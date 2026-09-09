@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from typing import cast
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.stock import Stock, StockUserTag
@@ -16,12 +17,16 @@ logger = logging.getLogger(__name__)
 async def get_stock_tags(db: AsyncSession, symbol: str) -> list[UserTagOut]:
     """Return all user-defined tags for a stock."""
     rows = (
-        await db.execute(
-            select(StockUserTag)
-            .where(StockUserTag.symbol == symbol)
-            .order_by(StockUserTag.tag_name)
+        (
+            await db.execute(
+                select(StockUserTag)
+                .where(StockUserTag.symbol == symbol)
+                .order_by(StockUserTag.tag_name)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [UserTagOut.model_validate(r) for r in rows]
 
 
@@ -61,7 +66,7 @@ async def remove_stock_tag(db: AsyncSession, symbol: str, tag_name: str) -> bool
         )
     )
     await db.flush()
-    return result.rowcount > 0
+    return cast(CursorResult, result).rowcount > 0
 
 
 async def list_all_tags(db: AsyncSession) -> list[TagSummary]:
@@ -82,11 +87,15 @@ async def list_all_tags(db: AsyncSession) -> list[TagSummary]:
 async def get_stocks_by_tag(db: AsyncSession, tag_name: str) -> list[StockOut]:
     """Return all stocks that have the given tag."""
     rows = (
-        await db.execute(
-            select(Stock)
-            .join(StockUserTag, StockUserTag.symbol == Stock.symbol)
-            .where(StockUserTag.tag_name == tag_name)
-            .order_by(Stock.symbol)
+        (
+            await db.execute(
+                select(Stock)
+                .join(StockUserTag, StockUserTag.symbol == Stock.symbol)
+                .where(StockUserTag.tag_name == tag_name)
+                .order_by(Stock.symbol)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [StockOut.model_validate(r) for r in rows]

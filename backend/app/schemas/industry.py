@@ -102,7 +102,7 @@ class IndustrySummaryOut(BaseModel):
     coverage: dict[str, bool]
     last_period: date | None = None
     # 列表卡片状态行（P6）：最新信号（从未 ingest 评估过的行业为全 None）
-    phase: str | None = None       # 周期阶段 key（prosperity/recession/depression/recovery）
+    phase: str | None = None  # 周期阶段 key（prosperity/recession/depression/recovery）
     signal_type: str | None = None  # 买入/卖出/关注/空仓
     signal_date: date | None = None
 
@@ -147,25 +147,26 @@ class MetricBatchResponse(BaseModel):
 
 # ── 标的分析（P5）：成分股对比表 ───────────────────────────────────────
 
+
 class CompanyColumnOut(BaseModel):
     """对比表列定义：固定行情列 + registry 下发的公司指标列（前端零改动扩展）。"""
 
-    key: str                     # 行取值键：固定列同名字段，公司指标列读 row.metrics[key]
+    key: str  # 行取值键：固定列同名字段，公司指标列读 row.metrics[key]
     label: str
     unit: str | None = None
-    numeric: bool = True         # 前端右对齐 + 排序
-    tier: str | None = None      # 公司指标列的数据源层级徽章
+    numeric: bool = True  # 前端右对齐 + 排序
+    tier: str | None = None  # 公司指标列的数据源层级徽章
 
 
 class CompanyRowOut(BaseModel):
     symbol: str
     name: str
     latest_price: float | None = None
-    total_mv_yi: float | None = None   # 亿元（daily_basic.total_mv 万元 / 1e4）
+    total_mv_yi: float | None = None  # 亿元（daily_basic.total_mv 万元 / 1e4）
     pe_ttm: float | None = None
     pb: float | None = None
     has_company_data: bool = False
-    metrics: dict[str, float | None] = {}   # metric_key → latest 公司指标值（含 mcap_per_head）
+    metrics: dict[str, float | None] = {}  # metric_key → latest 公司指标值（含 mcap_per_head）
 
 
 class IndustryCompaniesOut(BaseModel):
@@ -175,6 +176,7 @@ class IndustryCompaniesOut(BaseModel):
 
 
 # ── 行情面（P5）：ETF / 可转债日线 ────────────────────────────────────
+
 
 class SecurityDailyPointOut(BaseModel):
     """一天的 OHLCV（TuShare fund_daily/cb_daily 原样口径，volume 手/张、amount 千元）。"""
@@ -206,12 +208,13 @@ class IndustrySecuritiesOut(BaseModel):
 
 # ── 知识库（P6）：机构图谱 / 权威性原则 / 思维导图 ─────────────────────
 
+
 class KnowledgeOrgOut(BaseModel):
     """机构条目：分组 + 权威性徽章 tier（复用 official/highfreq/calc/manual 五级）。"""
 
     name: str
-    group: str            # 官方 | 协会 | 数据平台 | 期货
-    tier: str             # official | highfreq | calc | manual
+    group: str  # 官方 | 协会 | 数据平台 | 期货
+    tier: str  # official | highfreq | calc | manual
     desc: str = ""
     urls: list[str] = []
 
