@@ -405,3 +405,8 @@
 - **修复**：先合并 PR #2 到 main（落 CI 修复+全仓格式/mypy 清理+.env.example），再把 main merge 进 PR #1（解决 10 处冲突，双侧逻辑并集）；新增 Alembic merge 迁移 49741053b341 合并财务/市场数据两条链；ruff format 对齐 PR#1 自有 11 文件
 - 本地验证 ruff/mypy 全绿、pytest 155 passed；PR #1 六项 CI 全绿
 - 涉及模块：backend(migrations/models/scheduler/services/providers/repos), frontend(stock-detail), docs
+
+## 2026-09-09 - 认证微服务、Gateway 与数据归属架构设计 (Stage 0)
+- 完成企业级认证授权与多租户数据隔离体系的 Stage 0 顶层设计：明确 Gateway BFF 与 auth-service 目标拓扑、HttpOnly Session Cookie 与 CSRF 双重防御机制、下游 API 零信任短时 Principal Assertion (RS256) 签名与 JWKS 验签机制、统一 JSON 错误契约 (code/message/details/trace_id)、独立 auth_* 数据模型 (Argon2id / RTR Token Family)、业务模型多用户改造方案 (stock_custom_sw_tags 增加 user_id、自选股服务端化、tasks 增加 requested_by、Redis Key 用户隔离) 与 Stage 0-6 分阶段实施计划。
+- 涉及模块：docs/architecture/authentication-and-gateway, docs/architecture/auth-data-model, plans/2026-09-09-auth-gateway-implementation
+
