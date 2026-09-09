@@ -1,8 +1,11 @@
 """Internal microservice API endpoints for API Gateway."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import hmac
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from redis.asyncio import Redis
 
+from app.config import settings
 from app.core.jwt_signer import key_manager
 from app.core.redis import get_redis
 from app.schemas.internal import (
@@ -13,7 +16,30 @@ from app.schemas.internal import (
 )
 from app.services.session_service import SessionService
 
-router = APIRouter(prefix="/internal", tags=["Internal"])
+
+async def require_internal_token(request: Request) -> None:
+    """Guard /internal/* service-to-service endpoints with a shared secret.
+
+    When ``settings.internal_api_token`` is configured (non-empty), callers must
+    present a matching ``X-Internal-Token`` header (constant-time comparison).
+    Empty token = enforcement disabled (local dev / tests).
+    """
+    expected = settings.internal_api_token
+    if not expected:
+        return
+    supplied = request.headers.get("X-Internal-Token")
+    if not supplied or not hmac.compare_digest(expected, supplied):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_UNAUTHORIZED", "message": "内部服务令牌缺失或无效"},
+        )
+
+
+router = APIRouter(
+    prefix="/internal",
+    tags=["Internal"],
+    dependencies=[Depends(require_internal_token)],
+)
 
 
 @router.post(

@@ -198,6 +198,31 @@
 
 ---
 
+## 评审修复 P1（2026-09-09，feature/p7-auth-gateway）
+
+针对 P0 之后的安全评审结论，修复 6 项 P1 缺陷（P1-3/4/5/6/7/9）：
+
+- [x] **P1.3 登录响应体去除凭据**
+  - `AuthResponse` 仅保留 `user` + `expires_in`；`session_id`/`csrf_token` 只经 Set-Cookie 下发，不再出现在 JSON body（`auth-service/app/schemas/auth.py`、`app/api/auth.py`）
+  - 前端 `AuthResponseData` 类型同步删字段；登录页/features/auth 本就未消费这两个字段，`client.ts` CSRF 注入只依赖 Cookie，无回归
+- [x] **P1.4 移除 X-Session-Id Header 旁路**
+  - logout、/session(/me)、/csrf、/sessions、/sessions/{id} 五个外部端点删除 `x_session_id` Header 参数与 fallback，会话识别仅认 `stockbot_session` Cookie；全仓 grep 确认前端从未发送该 Header
+- [x] **P1.5 服务端 CSRF 强制（认证面）**
+  - 新增 `_require_csrf_double_submit` 依赖：register/login 强制「先 GET /auth/csrf → Cookie + X-CSRF-Token Header 常数时间比对」，失败 `403 AUTH_CSRF_FAILED`
+  - logout 升级为会话绑定校验（`crypto.verify_csrf_token`）；无有效会话的登出仅清 Cookie 跳过校验
+  - 前端 `client.ts` 对非 GET 自动注入 token（login/register/logout 均未 skipCsrf），CI smoke 补「注册前先取 CSRF」步骤
+- [x] **P1.7 /internal/* 服务间令牌**
+  - `INTERNAL_API_TOKEN` 非空时，/internal 路由（router 级 dependency）要求 `X-Internal-Token` 相等（hmac.compare_digest），否则 401；为空（本地/测试默认）不校验。forward-auth 侧上批已实现发送，compose 同一变量注入，无需改动
+- [x] **P1.6/P1.9 JWT 密钥持久化与 Secure Cookie fail-fast**
+  - compose：auth-service 注入 `JWT_PRIVATE_KEY_PEM`/`JWT_PUBLIC_KEY_PEM`（引用 `AUTH_JWT_*_PEM`）、`COOKIE_SECURE`（引用 `AUTH_COOKIE_SECURE`）、`APP_ENV`（`${APP_ENV:-development}`，替换原硬编码 production）
+  - `.env.docker.example` 新增密钥对与 Secure 配置项（注释含 openssl 生成方法）；**有意将模板 `APP_ENV` 从 production 调整为 development**——新 fail-fast 校验下 production+Secure=false 无法启动，且 Gateway 仅暴露 80 明文入口（无 TLS 时浏览器会丢弃 Secure Cookie），生产部署需置 production + HTTPS + AUTH_COOKIE_SECURE=true
+  - config.py 新增 `field_validator("cookie_secure")`：`app_env=production` 且 `cookie_secure=False` 启动即抛错
+- [x] **P1.x 测试与文档**
+  - 新增/改造 13 个用例：CSRF 403（缺失/不匹配）、double-submit 200、logout CSRF、X-Session-Id 旁路移除、internal token 三态、config fail-fast（`tests/test_api_auth.py`、`test_api_internal.py`、`test_config.py` 新建）
+  - 架构文档 3.3 改为「CSRF 三层防御」，新增 4.5（internal token）/4.6（生产密钥与 Secure），错误码对齐 `AUTH_CSRF_FAILED`，路由矩阵 login/register 标注 double-submit
+
+---
+
 ## 质量门禁与验证命令
 
 - **后端 Lint & Typecheck**:

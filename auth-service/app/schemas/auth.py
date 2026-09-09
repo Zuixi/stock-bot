@@ -76,11 +76,13 @@ class SessionOut(BaseModel):
 
 
 class AuthResponse(BaseModel):
-    """Authentication success response (used when returning JSON tokens/payloads)."""
+    """Authentication success response.
+
+    Session/CSRF credentials are intentionally NOT part of the body — they are
+    delivered exclusively via HttpOnly / JS-readable Set-Cookie headers.
+    """
 
     user: UserOut
-    session_id: str
-    csrf_token: str
     expires_in: int
 
 

@@ -27,8 +27,6 @@ export interface UserRegisterPayload {
 
 export interface AuthResponseData {
   user: UserProfile;
-  session_id: string;
-  csrf_token: string;
   expires_in: number;
 }
 
