@@ -37,8 +37,7 @@ class AkShareClient(RateLimitedSyncProvider):
             import akshare as ak  # noqa: PLC0415
         except ImportError as exc:  # pragma: no cover - depends on env
             raise RuntimeError(
-                "akshare is not installed. Run `uv add akshare` or keep "
-                "INDUSTRY_DATA_SOURCE=mock."
+                "akshare is not installed. Run `uv add akshare` or keep INDUSTRY_DATA_SOURCE=mock."
             ) from exc
         self._ak = ak
 

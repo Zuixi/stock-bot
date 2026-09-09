@@ -10,13 +10,13 @@ import calendar
 import logging
 from dataclasses import asdict
 from datetime import date
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.redis import CacheClient
-from app.models.industry_research import IndustryReferencePoint
+from app.models.industry_research import IndustryMetric, IndustryReferencePoint, IndustrySignal
 from app.repositories import daily_basic_repo
 from app.repositories import industry_metric_repo as repo
 from app.schemas.industry import (
@@ -117,24 +117,32 @@ async def _fetch_akshare_rows(
                 if not 0 < value < value_max:
                     logger.warning(
                         "AKShare %s out-of-range value %s @ %s (row skipped)",
-                        metric_key, value, period,
+                        metric_key,
+                        value,
+                        period,
                     )
                     continue
-                rows.append({
-                    "industry_key": cfg.key, "stock_id": 0, "metric_key": m.key,
-                    "source": source, "source_tier": m.tier, "freq": "daily",
-                    "period": period, "value": value, "unit": m.unit or None,
-                    "extra": None,
-                })
+                rows.append(
+                    {
+                        "industry_key": cfg.key,
+                        "stock_id": 0,
+                        "metric_key": m.key,
+                        "source": source,
+                        "source_tier": m.tier,
+                        "freq": "daily",
+                        "period": period,
+                        "value": value,
+                        "unit": m.unit or None,
+                        "extra": None,
+                    }
+                )
         except Exception as exc:
             logger.warning("AKShare %s fetch failed (skipped): %s", metric_key, exc)
 
     return rows
 
 
-async def _fetch_caaa_sow_row(
-    cfg: IndustryConfig, client: CaaaClient | None = None
-) -> list[dict]:
+async def _fetch_caaa_sow_row(cfg: IndustryConfig, client: CaaaClient | None = None) -> list[dict]:
     """中国畜牧业协会（pig.caaa.cn）能繁母猪存栏 → 单行 metric row.
 
     协会行业动态栏目月度转载五部委数据，正文正则解析（见 ``caaa_client``）；
@@ -157,13 +165,20 @@ async def _fetch_caaa_sow_row(
     if data is None:
         return []
 
-    return [{
-        "industry_key": cfg.key, "stock_id": 0, "metric_key": "sow_inventory",
-        "source": "caaa", "source_tier": m.tier, "freq": "monthly",
-        "period": data["period"], "value": data["inventory_wan_tou"],
-        "unit": m.unit or None,
-        "extra": {"article_url": data["article_url"], "mom_pct": data.get("mom_pct")},
-    }]
+    return [
+        {
+            "industry_key": cfg.key,
+            "stock_id": 0,
+            "metric_key": "sow_inventory",
+            "source": "caaa",
+            "source_tier": m.tier,
+            "freq": "monthly",
+            "period": data["period"],
+            "value": data["inventory_wan_tou"],
+            "unit": m.unit or None,
+            "extra": {"article_url": data["article_url"], "mom_pct": data.get("mom_pct")},
+        }
+    ]
 
 
 # ── Ingest ────────────────────────────────────────────────────────────
@@ -251,18 +266,26 @@ def _month_end(d: date) -> date:
     return date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
 
 
-def _rollup_monthly_rows(cfg: IndustryConfig, m: MetricDef, rows: list) -> list[dict]:
+def _rollup_monthly_rows(
+    cfg: IndustryConfig, m: MetricDef, rows: list[IndustryMetric]
+) -> list[dict]:
     """每日度序列 → 月度行：每月最后一个非空日度值，period=月末，source 原样保留。"""
-    by_key: dict[tuple[str, date], object] = {}
+    by_key: dict[tuple[str, date], IndustryMetric] = {}
     for r in rows:  # rows 为升序
         if r.value is None:
             continue
         by_key[(r.source, _month_end(r.period))] = r
     return [
         {
-            "industry_key": cfg.key, "stock_id": 0, "metric_key": m.key,
-            "source": source, "source_tier": m.tier, "freq": "monthly",
-            "period": period, "value": float(r.value), "unit": m.unit or None,
+            "industry_key": cfg.key,
+            "stock_id": 0,
+            "metric_key": m.key,
+            "source": source,
+            "source_tier": m.tier,
+            "freq": "monthly",
+            "period": period,
+            "value": float(cast(float, r.value)),
+            "unit": m.unit or None,
             "extra": {"rollup": "last_daily"},
         }
         for (source, period), r in sorted(by_key.items())
@@ -270,6 +293,7 @@ def _rollup_monthly_rows(cfg: IndustryConfig, m: MetricDef, rows: list) -> list[
 
 
 # ── 头均市值派生（纯函数，离线单测锁定） ─────────────────────────────
+
 
 def _month_key(d: date) -> tuple[int, int]:
     return (d.year, d.month)
@@ -324,13 +348,23 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
     derived: list[dict] = []
 
     def _row(
-        m: MetricDef, freq: str, period: date, value: float,
-        stock_id: int = 0, extra: dict | None = None,
+        m: MetricDef,
+        freq: str,
+        period: date,
+        value: float,
+        stock_id: int = 0,
+        extra: dict | None = None,
     ) -> dict:
         return {
-            "industry_key": cfg.key, "stock_id": stock_id, "metric_key": m.key,
-            "source": "derived", "source_tier": TIER_DERIVED, "freq": freq,
-            "period": period, "value": round(value, 4), "unit": m.unit or None,
+            "industry_key": cfg.key,
+            "stock_id": stock_id,
+            "metric_key": m.key,
+            "source": "derived",
+            "source_tier": TIER_DERIVED,
+            "freq": freq,
+            "period": period,
+            "value": round(value, 4),
+            "unit": m.unit or None,
             "extra": extra,
         }
 
@@ -340,12 +374,16 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
         for freq in ("daily", "monthly"):
             hogs = {
                 r.period: float(r.value)
-                for r in await repo.get_metric_history(db, cfg.key, "hog_price", limit=400, freq=freq)
+                for r in await repo.get_metric_history(
+                    db, cfg.key, "hog_price", limit=400, freq=freq
+                )
                 if r.value is not None
             }
             corns = {
                 r.period: float(r.value)
-                for r in await repo.get_metric_history(db, cfg.key, "corn_price", limit=400, freq=freq)
+                for r in await repo.get_metric_history(
+                    db, cfg.key, "corn_price", limit=400, freq=freq
+                )
                 if r.value is not None
             }
             for period in sorted(set(hogs) & set(corns)):
@@ -356,7 +394,10 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
     mom_def = cfg.metric("sow_inventory_mom")
     if mom_def is not None:
         sow_rows = [
-            r for r in await repo.get_metric_history(db, cfg.key, "sow_inventory", limit=240, freq="monthly")
+            r
+            for r in await repo.get_metric_history(
+                db, cfg.key, "sow_inventory", limit=240, freq="monthly"
+            )
             if r.value is not None
         ]
         # 同一 period 可能多源共存（真实源 ingest 后又重跑 mock 演示）：按 registry 源
@@ -367,13 +408,19 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
         for r in sow_rows:
             by_period.setdefault(r.period, []).append(r)
         sow = [
-            p for p in (_pick_row(sow_def, rows) for rows in by_period.values())
-            if p is not None
+            p for p in (_pick_row(sow_def, rows) for rows in by_period.values()) if p is not None
         ]
         for prev, cur in zip(sow, sow[1:], strict=False):
             if prev.value:
                 derived.append(
-                    _row(mom_def, "monthly", cur.period, (float(cur.value) - float(prev.value)) / float(prev.value) * 100)
+                    _row(
+                        mom_def,
+                        "monthly",
+                        cur.period,
+                        (float(cast(float, cur.value)) - float(prev.value))
+                        / float(prev.value)
+                        * 100,
+                    )
                 )
 
     # 头均市值 = 最新总市值 / 年化出栏（公司级派生，stock_id>0；source_tier 取 registry 的 calc）
@@ -396,36 +443,45 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
             basic = await daily_basic_repo.get_latest_daily_basic(db, stock_id)
             if basic is None or basic.total_mv is None:
                 continue  # 无估值行（新股/未回补）只跳过该公司，不牵连其他
-            derived.append({
-                "industry_key": cfg.key, "stock_id": stock_id,
-                "metric_key": mcap_def.key, "source": "derived",
-                "source_tier": mcap_def.tier, "freq": mcap_def.freq,
-                "period": date.today(), "value": round(float(basic.total_mv) / annual, 2),
-                "unit": mcap_def.unit or None,
-                "extra": {
-                    "annualized": not _hogs_ttm_ready(points),
-                    "annual_hogs_wan": round(annual, 2),
-                },
-            })
+            derived.append(
+                {
+                    "industry_key": cfg.key,
+                    "stock_id": stock_id,
+                    "metric_key": mcap_def.key,
+                    "source": "derived",
+                    "source_tier": mcap_def.tier,
+                    "freq": mcap_def.freq,
+                    "period": date.today(),
+                    "value": round(float(basic.total_mv) / annual, 2),
+                    "unit": mcap_def.unit or None,
+                    "extra": {
+                        "annualized": not _hogs_ttm_ready(points),
+                        "annual_hogs_wan": round(annual, 2),
+                    },
+                }
+            )
 
     total += await repo.upsert_metrics(db, derived)
     return total
 
 
-async def evaluate_and_store_signal(db: AsyncSession, cfg: IndustryConfig):
+async def evaluate_and_store_signal(db: AsyncSession, cfg: IndustryConfig) -> IndustrySignal:
     """Build snapshot from latest rows → rules engine → persist (idempotent per day)."""
     inp = await _build_cycle_input(db, cfg)
     out = cycle_engine.evaluate_pig_cycle(inp, cfg)
 
-    return await repo.upsert_signal(db, {
-        "industry_key": cfg.key,
-        "phase": out.phase,
-        "signal_type": out.signal,
-        "positions": [asdict(s) for s in out.positions],
-        "reason": "；".join(out.reasons),
-        "basis": out.basis,
-        "effective_date": date.today(),
-    })
+    return await repo.upsert_signal(
+        db,
+        {
+            "industry_key": cfg.key,
+            "phase": out.phase,
+            "signal_type": out.signal,
+            "positions": [asdict(s) for s in out.positions],
+            "reason": "；".join(out.reasons),
+            "basis": out.basis,
+            "effective_date": date.today(),
+        },
+    )
 
 
 async def _build_cycle_input(db: AsyncSession, cfg: IndustryConfig) -> cycle_engine.CycleInput:
@@ -436,12 +492,16 @@ async def _build_cycle_input(db: AsyncSession, cfg: IndustryConfig) -> cycle_eng
     cost_row = _pick_latest(cfg, grouped, "industry_cost_avg")
     sow_mom = [
         float(r.value)
-        for r in await repo.get_metric_history(db, cfg.key, "sow_inventory_mom", limit=12, freq="monthly")
+        for r in await repo.get_metric_history(
+            db, cfg.key, "sow_inventory_mom", limit=12, freq="monthly"
+        )
         if r.value is not None
     ]
     ratio_series = [
         float(r.value)
-        for r in await repo.get_metric_history(db, cfg.key, "hog_corn_ratio", limit=30, freq="daily")
+        for r in await repo.get_metric_history(
+            db, cfg.key, "hog_corn_ratio", limit=30, freq="daily"
+        )
         if r.value is not None
     ]
     return cycle_engine.CycleInput(
@@ -455,7 +515,8 @@ async def _build_cycle_input(db: AsyncSession, cfg: IndustryConfig) -> cycle_eng
 
 # ── Query side ────────────────────────────────────────────────────────
 
-def _pick_row(m: MetricDef | None, rows: list):
+
+def _pick_row(m: MetricDef | None, rows: list[IndustryMetric]) -> IndustryMetric | None:
     """latest 行集合（按 source/freq 分组去重后）→ registry 源优先级裁决，兜底最新 period。"""
     if m is None or not rows:
         return None
@@ -468,7 +529,7 @@ def _pick_row(m: MetricDef | None, rows: list):
     return max(rows, key=lambda r: r.period)
 
 
-def _pick_latest(cfg: IndustryConfig, grouped: dict, metric_key: str):
+def _pick_latest(cfg: IndustryConfig, grouped: dict, metric_key: str) -> IndustryMetric | None:
     return _pick_row(cfg.metric(metric_key), grouped.get(metric_key, []))
 
 
@@ -477,7 +538,10 @@ async def _build_metric_latest(
 ) -> MetricLatestOut:
     row = _pick_latest(cfg, grouped, m.key)
     out = MetricLatestOut(
-        metric_key=m.key, name=m.name, unit=m.unit, tier=m.tier,
+        metric_key=m.key,
+        name=m.name,
+        unit=m.unit,
+        tier=m.tier,
         description=m.description,
     )
     if row is None:
@@ -489,12 +553,23 @@ async def _build_metric_latest(
     out.period = row.period
 
     if out.value is not None:
-        label = {"daily": "日环比", "weekly": "周环比", "monthly": "月环比",
-                 "quarterly": "季环比", "yearly": "年同比"}.get(row.freq, "环比")
+        label = {
+            "daily": "日环比",
+            "weekly": "周环比",
+            "monthly": "月环比",
+            "quarterly": "季环比",
+            "yearly": "年同比",
+        }.get(row.freq, "环比")
         out.delta = await _delta_of(db, cfg.key, m, row, label)
         if m.warn_bands:
-            band = next((b for b in sorted(m.warn_bands, key=lambda b: (b.upper is None, b.upper or 0))
-                         if b.upper is None or out.value <= b.upper), None)
+            band = next(
+                (
+                    b
+                    for b in sorted(m.warn_bands, key=lambda b: (b.upper is None, b.upper or 0))
+                    if b.upper is None or out.value <= b.upper
+                ),
+                None,
+            )
             if band is not None:
                 out.warn = band.label
                 out.warn_severity = band.severity
@@ -508,18 +583,14 @@ async def _build_metric_latest(
 
 
 async def _delta_of(
-    db: AsyncSession, industry_key: str, m: MetricDef, row, label: str
+    db: AsyncSession, industry_key: str, m: MetricDef, row: IndustryMetric, label: str
 ) -> MetricDelta | None:
     if row.value is None:
         return None
     series = await repo.get_metric_history(
         db, industry_key, m.key, limit=2, freq=row.freq, source=row.source
     )
-    if (
-        len(series) < 2
-        or series[-1].period != row.period
-        or not series[0].value
-    ):
+    if len(series) < 2 or series[-1].period != row.period or not series[0].value:
         return MetricDelta(pct=None, direction="flat", label=label)
     pct = (float(row.value) - float(series[0].value)) / float(series[0].value) * 100
     direction = "up" if pct > 0 else "down" if pct < 0 else "flat"
@@ -533,8 +604,7 @@ async def get_latest_metrics(
     grouped = await repo.latest_rows_by_metric(db, cfg.key)
     metrics = cfg.metrics if group is None else [m for m in cfg.metrics if m.group == group]
     return [
-        await _build_metric_latest(db, cfg, m, grouped, with_spark=group is None)
-        for m in metrics
+        await _build_metric_latest(db, cfg, m, grouped, with_spark=group is None) for m in metrics
     ]
 
 
@@ -554,16 +624,25 @@ async def get_metric_history(
         db, industry_key, metric_key, limit=limit, freq=freq or m.freq, source=source
     )
     return MetricHistoryOut(
-        metric_key=m.key, name=m.name, unit=m.unit, freq=freq or m.freq, tier=m.tier,
+        metric_key=m.key,
+        name=m.name,
+        unit=m.unit,
+        freq=freq or m.freq,
+        tier=m.tier,
         points=[
-            MetricHistoryPointOut(period=r.period, value=float(r.value) if r.value is not None else None,
-                                  source=r.source, freq=r.freq)
+            MetricHistoryPointOut(
+                period=r.period,
+                value=float(r.value) if r.value is not None else None,
+                source=r.source,
+                freq=r.freq,
+            )
             for r in rows
         ],
     )
 
 
 # ── 标的分析（P5）：成分股对比 ────────────────────────────────────────
+
 
 def _company_columns(cfg: IndustryConfig) -> list[CompanyColumnOut]:
     """对比表列定义：固定行情/估值列 + registry company 分组指标列（纯函数，单测锁定）。
@@ -580,13 +659,12 @@ def _company_columns(cfg: IndustryConfig) -> list[CompanyColumnOut]:
     ]
     return fixed + [
         CompanyColumnOut(key=m.key, label=m.name, unit=m.unit or None, tier=m.tier)
-        for m in cfg.metrics if m.group == "company"
+        for m in cfg.metrics
+        if m.group == "company"
     ]
 
 
-async def get_industry_companies(
-    db: AsyncSession, industry_key: str
-) -> IndustryCompaniesOut:
+async def get_industry_companies(db: AsyncSession, industry_key: str) -> IndustryCompaniesOut:
     """成分股对比表：sw_l3_codes 成员 + enriched 行情/估值 + 公司指标 latest。"""
     from app.services import market_service  # noqa: PLC0415 （函数级导入，避免模块环）
 
@@ -603,18 +681,24 @@ async def get_industry_companies(
         for m in company_defs:
             row = _pick_row(m, grouped.get((e.id, m.key), []))
             metrics[m.key] = float(row.value) if row is not None and row.value is not None else None
-        rows.append(CompanyRowOut(
-            symbol=e.symbol, name=e.name,
-            latest_price=e.latest_price,
-            total_mv_yi=round(e.total_mv / 1e4, 2) if e.total_mv is not None else None,
-            pe_ttm=e.pe_ttm, pb=e.pb,
-            has_company_data=any(v is not None for v in metrics.values()),
-            metrics=metrics,
-        ))
+        rows.append(
+            CompanyRowOut(
+                symbol=e.symbol,
+                name=e.name,
+                latest_price=e.latest_price,
+                total_mv_yi=round(e.total_mv / 1e4, 2) if e.total_mv is not None else None,
+                pe_ttm=e.pe_ttm,
+                pb=e.pb,
+                has_company_data=any(v is not None for v in metrics.values()),
+                metrics=metrics,
+            )
+        )
 
     return IndustryCompaniesOut(
         industry=IndustryBriefOut(
-            key=cfg.key, name=cfg.name, description=cfg.description,
+            key=cfg.key,
+            name=cfg.name,
+            description=cfg.description,
             sw_l3_codes=cfg.sw_l3_codes,
         ),
         columns=_company_columns(cfg),
@@ -631,17 +715,21 @@ async def list_industries(db: AsyncSession) -> list[IndustrySummaryOut]:
         # 列表卡片状态行（P6）：最新信号行带出周期阶段/信号/生效日期。
         # 逐行业一次查询即可（N=行业数，个位数）；从未 ingest 的行业 signal 为 None。
         signal = await repo.latest_signal(db, cfg.key)
-        summaries.append(IndustrySummaryOut(
-            key=cfg.key, name=cfg.name, description=cfg.description,
-            sw_l3_codes=cfg.sw_l3_codes,
-            metric_total=len(cfg.metrics),
-            metric_with_data=sum(coverage.values()),
-            coverage=coverage,
-            last_period=max(periods) if periods else None,
-            phase=signal.phase if signal else None,
-            signal_type=signal.signal_type if signal else None,
-            signal_date=signal.effective_date if signal else None,
-        ))
+        summaries.append(
+            IndustrySummaryOut(
+                key=cfg.key,
+                name=cfg.name,
+                description=cfg.description,
+                sw_l3_codes=cfg.sw_l3_codes,
+                metric_total=len(cfg.metrics),
+                metric_with_data=sum(coverage.values()),
+                coverage=coverage,
+                last_period=max(periods) if periods else None,
+                phase=signal.phase if signal else None,
+                signal_type=signal.signal_type if signal else None,
+                signal_date=signal.effective_date if signal else None,
+            )
+        )
     return summaries
 
 
@@ -653,10 +741,10 @@ def get_all_industries() -> list[IndustryConfig]:
 
 # ── Dashboard aggregate ───────────────────────────────────────────────
 
-def _signal_out(row) -> SignalOut:
+
+def _signal_out(row: IndustrySignal) -> SignalOut:
     positions = [
-        PositionSliceOut(**p) for p in (row.positions or [])
-        if isinstance(p, dict) and "name" in p
+        PositionSliceOut(**p) for p in (row.positions or []) if isinstance(p, dict) and "name" in p
     ]
     return SignalOut(
         signal_type=row.signal_type,
@@ -667,9 +755,7 @@ def _signal_out(row) -> SignalOut:
     )
 
 
-async def get_dashboard(
-    db: AsyncSession, cache: CacheClient, industry_key: str
-) -> DashboardOut:
+async def get_dashboard(db: AsyncSession, cache: CacheClient, industry_key: str) -> DashboardOut:
     cfg = _require_industry(industry_key)
     cache_key = f"industry:{industry_key}:dashboard"
     cached = await cache.get(cache_key)
@@ -677,8 +763,12 @@ async def get_dashboard(
         return DashboardOut(**cached)
 
     grouped = await repo.latest_rows_by_metric(db, cfg.key)
-    strip = [await _build_metric_latest(db, cfg, m, grouped, with_spark=True) for m in cfg.strip_metrics]
-    quick = [await _build_metric_latest(db, cfg, m, grouped, with_spark=False) for m in cfg.quick_metrics]
+    strip = [
+        await _build_metric_latest(db, cfg, m, grouped, with_spark=True) for m in cfg.strip_metrics
+    ]
+    quick = [
+        await _build_metric_latest(db, cfg, m, grouped, with_spark=False) for m in cfg.quick_metrics
+    ]
 
     trends: dict[str, TrendSeriesOut] = {}
     trends["price_vs_cost"] = await _trend_two_series(
@@ -708,8 +798,9 @@ async def get_dashboard(
     signal_history = [_signal_out(r) for r in history_rows]
 
     dashboard = DashboardOut(
-        industry=IndustryBriefOut(key=cfg.key, name=cfg.name, description=cfg.description,
-                                  sw_l3_codes=cfg.sw_l3_codes),
+        industry=IndustryBriefOut(
+            key=cfg.key, name=cfg.name, description=cfg.description, sw_l3_codes=cfg.sw_l3_codes
+        ),
         as_of=date.today(),
         data_source=settings.industry_data_source,
         strip=strip,
@@ -724,8 +815,13 @@ async def get_dashboard(
 
 
 async def _trend_two_series(
-    db: AsyncSession, cfg: IndustryConfig,
-    key_a: str, label_a: str, key_b: str, label_b: str, limit: int,
+    db: AsyncSession,
+    cfg: IndustryConfig,
+    key_a: str,
+    label_a: str,
+    key_b: str,
+    label_b: str,
+    limit: int,
 ) -> TrendSeriesOut:
     rows_a = await repo.get_metric_history(db, cfg.key, key_a, limit=limit, freq="monthly")
     rows_b = await repo.get_metric_history(db, cfg.key, key_b, limit=limit, freq="monthly")
@@ -744,10 +840,14 @@ async def _trend_one_series(
     db: AsyncSession, cfg: IndustryConfig, metric_key: str, limit: int
 ) -> TrendSeriesOut:
     rows = await repo.get_metric_history(db, cfg.key, metric_key, limit=limit, freq="monthly")
+    md = cfg.metric(metric_key)
     return TrendSeriesOut(
         periods=[r.period for r in rows],
-        series={cfg.metric(metric_key).name if cfg.metric(metric_key) else metric_key:
-                [float(r.value) if r.value is not None else None for r in rows]},
+        series={
+            md.name if md else metric_key: [
+                float(r.value) if r.value is not None else None for r in rows
+            ]
+        },
     )
 
 
@@ -759,7 +859,9 @@ async def _applicable_reference(
     if point is None:
         return None
     return ReferenceOut(
-        label=point.label, value=float(point.value), note=point.note,
+        label=point.label,
+        value=float(point.value),
+        note=point.note,
         effective_from=point.effective_from,
     )
 
@@ -785,18 +887,20 @@ def _prepare_batch_rows(
         if source not in IMPORT_ALLOWED_SOURCES:
             rejected.append(f"{m.key}:{source}")
             continue
-        rows.append({
-            "industry_key": cfg.key,
-            "stock_id": item.get("stock_id") or 0,
-            "metric_key": m.key,
-            "source": source,
-            "source_tier": m.tier,
-            "freq": item.get("freq") or m.freq,
-            "period": item["period"],
-            "value": item["value"],
-            "unit": item.get("unit") or m.unit or None,
-            "extra": None,
-        })
+        rows.append(
+            {
+                "industry_key": cfg.key,
+                "stock_id": item.get("stock_id") or 0,
+                "metric_key": m.key,
+                "source": source,
+                "source_tier": m.tier,
+                "freq": item.get("freq") or m.freq,
+                "period": item["period"],
+                "value": item["value"],
+                "unit": item.get("unit") or m.unit or None,
+                "extra": None,
+            }
+        )
     return rows, sorted(set(skipped)), sorted(set(rejected))
 
 
@@ -812,6 +916,8 @@ async def batch_upsert_metrics(
         derived = await _compute_derived_metrics(db, cfg)
         await evaluate_and_store_signal(db, cfg)
     return {
-        "upserted": upserted, "derived_upserted": derived,
-        "skipped_unknown_metric": skipped, "skipped_invalid_source": rejected,
+        "upserted": upserted,
+        "derived_upserted": derived,
+        "skipped_unknown_metric": skipped,
+        "skipped_invalid_source": rejected,
     }

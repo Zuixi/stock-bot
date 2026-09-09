@@ -12,6 +12,7 @@ from app.repositories import task_repo
 from app.schemas.common import PageParams
 from app.schemas.task import (
     FetchDailyBasicRequest,
+    FetchFinancialRequest,
     FetchIndustryMetricsRequest,
     FetchIndustrySecuritiesRequest,
     FetchQuotesRequest,
@@ -24,9 +25,7 @@ from app.schemas.task import (
 logger = logging.getLogger(__name__)
 
 
-async def _dispatch_task(
-    db: AsyncSession, task_type: str, queue_key: str, payload: dict
-) -> Task:
+async def _dispatch_task(db: AsyncSession, task_type: str, queue_key: str, payload: dict) -> Task:
     """创建任务行 → 先提交、后发消息。
 
     提交必须先于 publish：worker 消费到消息时任务行必须已可见，
@@ -41,35 +40,27 @@ async def _dispatch_task(
             {"task_id": str(task.id), "type": task_type, "payload": payload},
         )
     except Exception as exc:
-        await task_repo.update_task_status(
-            db, task.id, "failed", error=f"publish failed: {exc}"
-        )
+        await task_repo.update_task_status(db, task.id, "failed", error=f"publish failed: {exc}")
         await db.commit()
         raise
     return task
 
 
-async def trigger_fetch_universe(
-    db: AsyncSession, req: FetchUniverseRequest
-) -> TaskOut:
+async def trigger_fetch_universe(db: AsyncSession, req: FetchUniverseRequest) -> TaskOut:
     payload = req.model_dump(exclude_none=True)
     task = await _dispatch_task(db, "fetch_universe", "universe.fetch", payload)
     logger.info("Dispatched fetch_universe task %s for exchange=%s", task.id, req.exchange)
     return TaskOut.model_validate(task)
 
 
-async def trigger_fetch_quotes(
-    db: AsyncSession, req: FetchQuotesRequest
-) -> TaskOut:
+async def trigger_fetch_quotes(db: AsyncSession, req: FetchQuotesRequest) -> TaskOut:
     payload = req.model_dump(exclude_none=True)
     task = await _dispatch_task(db, "fetch_quotes", "quotes.fetch", payload)
     logger.info("Dispatched fetch_quotes task %s", task.id)
     return TaskOut.model_validate(task)
 
 
-async def trigger_fetch_daily_basic(
-    db: AsyncSession, req: FetchDailyBasicRequest
-) -> TaskOut:
+async def trigger_fetch_daily_basic(db: AsyncSession, req: FetchDailyBasicRequest) -> TaskOut:
     """Trigger a daily_basic fetch task (entire market per trade_date)."""
     payload = req.model_dump(exclude_none=True)
     task = await _dispatch_task(db, "fetch_daily_basic", "daily_basic.fetch", payload)
@@ -77,9 +68,24 @@ async def trigger_fetch_daily_basic(
     return TaskOut.model_validate(task)
 
 
-async def trigger_clustering(
-    db: AsyncSession, req: RunClusteringRequest
-) -> TaskOut:
+async def trigger_fetch_financial(db: AsyncSession, req: FetchFinancialRequest) -> TaskOut:
+    """Trigger a financial (statements + metrics) fetch for a single stock."""
+    payload = req.model_dump(exclude_none=True)
+    task = await task_repo.create_task(db, "fetch_financial", payload)
+    await publish_message(
+        "financial.fetch",
+        {"task_id": str(task.id), "type": "fetch_financial", "payload": payload},
+    )
+    logger.info(
+        "Dispatched fetch_financial task %s for %s/%s",
+        task.id,
+        req.exchange,
+        req.symbol,
+    )
+    return TaskOut.model_validate(task)
+
+
+async def trigger_clustering(db: AsyncSession, req: RunClusteringRequest) -> TaskOut:
     payload = req.model_dump(exclude_none=True)
     task = await _dispatch_task(db, "run_clustering", "clustering.run", payload)
     logger.info("Dispatched clustering task %s, algorithm=%s", task.id, req.algorithm)
@@ -90,12 +96,8 @@ async def trigger_fetch_industry_metrics(
     db: AsyncSession, req: FetchIndustryMetricsRequest
 ) -> TaskOut:
     payload = req.model_dump(exclude_none=True)
-    task = await _dispatch_task(
-        db, "fetch_industry_metrics", "industry_metrics.fetch", payload
-    )
-    logger.info(
-        "Dispatched fetch_industry_metrics task %s, industry=%s", task.id, req.industry_key
-    )
+    task = await _dispatch_task(db, "fetch_industry_metrics", "industry_metrics.fetch", payload)
+    logger.info("Dispatched fetch_industry_metrics task %s, industry=%s", task.id, req.industry_key)
     return TaskOut.model_validate(task)
 
 
@@ -106,7 +108,9 @@ async def trigger_fetch_securities(
     task = await _dispatch_task(db, "fetch_securities", "securities.fetch", payload)
     logger.info(
         "Dispatched fetch_securities task %s, industry=%s backfill_days=%s",
-        task.id, req.industry_key, req.backfill_days,
+        task.id,
+        req.industry_key,
+        req.backfill_days,
     )
     return TaskOut.model_validate(task)
 
@@ -160,9 +164,7 @@ async def list_tasks(
     return [TaskOut.model_validate(t) for t in tasks], total
 
 
-async def cancel_task(
-    db: AsyncSession, cache: CacheClient, task_id: uuid.UUID
-) -> bool:
+async def cancel_task(db: AsyncSession, cache: CacheClient, task_id: uuid.UUID) -> bool:
     """Cancel a task if it is still pending or running. Returns True on success."""
     task = await task_repo.get_task(db, task_id)
     if task is None:

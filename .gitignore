@@ -35,6 +35,7 @@ ENV/
 # Environment & secrets
 .env
 .env.*
+!.env.example
 
 # Config (keep samples, ignore real secrets)
 src/config/*.yaml

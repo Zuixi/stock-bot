@@ -107,3 +107,8 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - 复用网站数据先比对页面 HTML 里的实体代码（东财 BK 板块码）：代码一致即同源，排行页的扩展列（最大股/中单小单）多数在同端点 fields 里就有，无需另找接口。
 - 东财 kline 类接口（fflow/daykline 等）返回 CSV 字符串行，数值必须显式 float()；容器内长连接池偶发被服务端断连（RemoteProtocolError），HTTP GET 加一次传输层重试即可消除偶发失败。
 - 市场情绪类可视化的三件套是直方图+平衡条+参与度（成交额）：平衡条把千位数量级压成长度比例供前注意感知，连续梯度色阶（0%→灰、极端→深色）优于离散档位——但必须为近零浅色块切换深色文字保对比度。
+- 财务三类数据必须按"原始事实/标准化事实/派生指标"三层分表，并以"报告版本父表（stock+end_date+report_type+comp_type+source+ann_date+update_flag）"承载多源与修订，禁止塞进 `(stock_id, trade_date)` 的日频宽表；派生指标必须带 `calc_method`（reported/calculated/derived）与 `quality_status`，缺失显示空而非 0，且 TuShare 已提供的权威值（如 or_yoy/netprofit_yoy）不应被自算值覆盖。
+- 估值历史分位/通道只基于"有效正样本"（排除负 PE/PB 与缺失）计算，否则亏损期的负估值会被误判为极低估值；任何带时间属性的指标入库都要记录 ann_date/end_date/as_of，避免把修订后最新值回填历史造成前视偏差。
+- "按需单只抓取"的数据如果在 UI 可见却无自动补数，会表现为"部分标的空白"的伪 bug；改为与行情一致的全市场自动回填：幂等 upsert + "已有≥1条报告版本即视为已补"的续跑判据 + 调度批处理（分批/续跑/失败单只隔离）三件套，新标的自动被后续批次覆盖。
+- 财务表按 stock_id+metric_key 读时序、并按报告版本 join 时，用 `(stock_id, metric_key, report_version_id)` 覆盖索引一次满足过滤+排序+join，避免 sort 与 hash join；逐只查询在全市场规模下仍在个位数 ms，无需提前物化。
+- uv 的 `[project.optional-dependencies] dev`（ruff/mypy/pytest）默认不随 `uv sync` 安装：CI 与本地都必须显式 `uv sync --extra dev`（或 `uv run --extra dev`），否则 `uv run ruff/mypy` 报 "Failed to spawn"——这会让 Lint/TypeCheck 形同虚设并放行历史欠账；同理 pytest 若依赖真实运行 API，须标 `pytest.mark.e2e` 并在 CI 用 `-m "not e2e"` 避免测试 job 必挂。

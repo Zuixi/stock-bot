@@ -1,5 +1,7 @@
 """Application configuration loaded from environment variables."""
 
+from typing import cast
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -56,7 +58,8 @@ class Settings(BaseSettings):
         try:
             # Try JSON array first
             import json
-            return json.loads(v)
+
+            return cast(list[str], json.loads(v))
         except (json.JSONDecodeError, TypeError):
             # Fall back to comma-separated
             return [origin.strip() for origin in v.split(",") if origin.strip()]

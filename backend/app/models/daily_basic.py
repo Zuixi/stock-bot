@@ -18,7 +18,8 @@ class DailyBasicIndicator(Base):
     __tablename__ = "daily_basic_indicators"
     __table_args__ = (
         UniqueConstraint(
-            "stock_id", "trade_date",
+            "stock_id",
+            "trade_date",
             name="uq_daily_basic_stock_date",
         ),
         Index("idx_daily_basic_stock_date", "stock_id", "trade_date"),
@@ -57,6 +58,4 @@ class DailyBasicIndicator(Base):
     circ_mv: Mapped[float | None] = mapped_column(Numeric(20, 2))
 
     source: Mapped[str | None] = mapped_column(String(64))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

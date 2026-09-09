@@ -1,8 +1,8 @@
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { Typography, Result, Button, Divider, Row, Col, Spin, Breadcrumb } from "antd";
+import { Typography, Result, Button, Divider, Row, Col, Spin, Breadcrumb, Tabs } from "antd";
 import type { BreadcrumbProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { StockHeader, FundamentalCards, CustomSwTags, UserTags, RelatedEvents } from "@/features/stock-detail/components";
+import { StockHeader, FundamentalCards, CustomSwTags, UserTags, RelatedEvents, FinancialTab, ValuationTab } from "@/features/stock-detail/components";
 import { KlineChart } from "@/shared/ui/kline";
 import { fetchKlineBySymbol } from "@/shared/api/quotes";
 import { fetchStockEnrichedBySymbol } from "@/shared/api/stocks";
@@ -87,19 +87,27 @@ export default function StockDetailPage() {
 
       <Divider style={{ margin: "16px 0" }} />
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={14}>
-          <KlineChart
-            title="历史行情"
-            queryKey={`stock-kline-${stock.symbol}`}
-            fetcher={(days, adjust) => fetchKlineBySymbol(stock.symbol, days, adjust)}
-            showAdjust
-          />
-        </Col>
-        <Col xs={24} lg={10}>
-          <FundamentalCards stock={stock} />
-        </Col>
-      </Row>
+      <Tabs
+        defaultActiveKey="overview"
+        items={[
+          {
+            key: "overview",
+            label: "概览",
+            children: (
+              <>
+                <Row gutter={[16, 16]}>
+                  <Col xs={24} lg={14}>
+                    <KlineChart
+                      title="历史行情"
+                      queryKey={`stock-kline-${stock.symbol}`}
+                      fetcher={(days, adjust) => fetchKlineBySymbol(stock.symbol, days, adjust)}
+                      showAdjust
+                    />
+                  </Col>
+                  <Col xs={24} lg={10}>
+                    <FundamentalCards stock={stock} />
+                  </Col>
+                </Row>
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col span={24}>
@@ -108,10 +116,24 @@ export default function StockDetailPage() {
       </Row>
 
       <Divider style={{ margin: "16px 0" }} />
-
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        本页数据仅供参考，不构成投资建议。数据来源可能存在延迟，请以交易所实时数据为准。
-      </Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  本页数据仅供参考，不构成投资建议。数据来源可能存在延迟，请以交易所实时数据为准。
+                </Typography.Text>
+              </>
+            ),
+          },
+          {
+            key: "valuation",
+            label: "估值",
+            children: <ValuationTab exchange={stock.exchange} symbol={stock.symbol} />,
+          },
+          {
+            key: "financial",
+            label: "财务",
+            children: <FinancialTab exchange={stock.exchange} symbol={stock.symbol} />,
+          },
+        ]}
+      />
     </div>
   );
 }
