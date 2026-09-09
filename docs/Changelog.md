@@ -399,3 +399,9 @@
   - 修复 2 个真 bug：`task_repo` 缺 `func` import（count_tasks 运行时 NameError）、`financial_ingest` 缺 FinancialReportVersion import
   - `test_health`/`test_stocks` 标记为 e2e（依赖真实运行 API），CI 只跑非 e2e（本地 125 passed）
 - 涉及模块：backend(全仓 lint/type/test), 顶层 CI 配置, backend/services(task/financial_ingest), backend/repositories/task_repo, backend/tests
+
+## 2026-09-09 - feat/market-data-face PR CI 修复（合并 main 落债务清理 + Alembic merge 迁移）
+- **根因**：PR #1 基于旧 main，CI 跑的是坏管道（dev group 未装→Lint/TypeCheck spawn 失败；alembic 无 DATABASE_URL）；债务清理此前锁在 PR #2，未落 main
+- **修复**：先合并 PR #2 到 main（落 CI 修复+全仓格式/mypy 清理+.env.example），再把 main merge 进 PR #1（解决 10 处冲突，双侧逻辑并集）；新增 Alembic merge 迁移 49741053b341 合并财务/市场数据两条链；ruff format 对齐 PR#1 自有 11 文件
+- 本地验证 ruff/mypy 全绿、pytest 155 passed；PR #1 六项 CI 全绿
+- 涉及模块：backend(migrations/models/scheduler/services/providers/repos), frontend(stock-detail), docs

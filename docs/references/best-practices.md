@@ -112,3 +112,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - "按需单只抓取"的数据如果在 UI 可见却无自动补数，会表现为"部分标的空白"的伪 bug；改为与行情一致的全市场自动回填：幂等 upsert + "已有≥1条报告版本即视为已补"的续跑判据 + 调度批处理（分批/续跑/失败单只隔离）三件套，新标的自动被后续批次覆盖。
 - 财务表按 stock_id+metric_key 读时序、并按报告版本 join 时，用 `(stock_id, metric_key, report_version_id)` 覆盖索引一次满足过滤+排序+join，避免 sort 与 hash join；逐只查询在全市场规模下仍在个位数 ms，无需提前物化。
 - uv 的 `[project.optional-dependencies] dev`（ruff/mypy/pytest）默认不随 `uv sync` 安装：CI 与本地都必须显式 `uv sync --extra dev`（或 `uv run --extra dev`），否则 `uv run ruff/mypy` 报 "Failed to spawn"——这会让 Lint/TypeCheck 形同虚设并放行历史欠账；同理 pytest 若依赖真实运行 API，须标 `pytest.mark.e2e` 并在 CI 用 `-m "not e2e"` 避免测试 job 必挂。
+- 多分支并行各自新增 Alembic 迁移、随后合并时，会产生两个 head 导致 `alembic upgrade head` 报 "Multiple head revisions"——在合并点新增一个 `down_revision=(链Ahead, 链Bhead)` 的空 merge 迁移（alembic merge <revA> <revB>）线性化两条链，否则 DB 迁移/CI Test job 必挂；此类 merge 迁移需 ruff-clean（去掉未用 import）。
