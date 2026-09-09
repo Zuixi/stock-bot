@@ -51,6 +51,7 @@ def create_app() -> FastAPI:
             logger.warning("RabbitMQ unavailable — async tasks will queue locally: %s", e)
 
         from app.services.data_init import maybe_seed_on_startup  # noqa: PLC0415
+
         await maybe_seed_on_startup()
 
         logger.info("Stock Bot API started (env=%s)", settings.app_env)

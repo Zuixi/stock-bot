@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with: { python-version: "3.13" }
-      - run: uv sync --frozen
+      - run: uv sync --frozen --extra dev
       - run: uv run ruff check app/ tests/
       - run: uv run ruff format --check app/ tests/
 
@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with: { python-version: "3.13" }
-      - run: uv sync --frozen
+      - run: uv sync --frozen --extra dev
       - run: uv run mypy app/
 
   backend-test:
@@ -64,9 +64,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with: { python-version: "3.13" }
-      - run: uv sync --frozen
+      - run: uv sync --frozen --extra dev
       - run: uv run alembic upgrade head
-      - run: uv run pytest tests/ -v --cov=app --cov-report=xml
+        env:
+          DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@localhost:5432/stock_bot_test
+      - run: uv run pytest tests/ -m "not e2e" -v --cov=app --cov-report=xml
         env:
           DATABASE_URL: postgresql+asyncpg://stock_user:stock_pass@localhost:5432/stock_bot_test
           REDIS_URL: redis://localhost:6379/0
@@ -106,6 +108,8 @@ jobs:
     needs: [backend-test, frontend-build]
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare backend env (compose references gitignored .env)
+        run: cp backend/.env.example backend/.env
       - name: Build and start services
         run: docker compose up -d --build --wait
       - name: Verify health

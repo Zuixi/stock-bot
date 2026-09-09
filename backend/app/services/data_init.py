@@ -11,11 +11,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, timedelta
+from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
 
 from app.core.database import async_session_factory
 from app.models.stock import Stock
+
+if TYPE_CHECKING:
+    from app.services.tushare_ingest import TuShareIngestService
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +146,7 @@ def _chunked(items: list[dict], size: int) -> list[list[dict]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
-async def _ensure_trailing_three_year_daily_quotes(service) -> None:
+async def _ensure_trailing_three_year_daily_quotes(service: TuShareIngestService) -> None:
     today = date.today()
     async with async_session_factory() as db:
         missing = await service.list_stocks_missing_daily_coverage(
@@ -185,7 +189,7 @@ async def _ensure_trailing_three_year_daily_quotes(service) -> None:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         batch_upserted = 0
         for result in results:
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 failed += 1
                 logger.warning("data_init: stock backfill task failed: %s", result)
                 continue
@@ -209,7 +213,7 @@ async def _ensure_trailing_three_year_daily_quotes(service) -> None:
     )
 
 
-async def _ensure_trailing_one_year_daily_basic(service) -> None:
+async def _ensure_trailing_one_year_daily_basic(service: TuShareIngestService) -> None:
     """Backfill daily_basic_indicators for trailing 1 year by trade_date.
 
     TuShare daily_basic supports trade_date-based batch fetch (entire market
@@ -239,15 +243,16 @@ async def _ensure_trailing_one_year_daily_basic(service) -> None:
 
     # Check which dates are already covered (sample a few to detect gap)
     async with async_session_factory() as db:
-        from sqlalchemy import select, func
+        from sqlalchemy import select
+
         from app.models.daily_basic import DailyBasicIndicator
 
-        result = await db.execute(
-            select(DailyBasicIndicator.trade_date).distinct()
-        )
+        result = await db.execute(select(DailyBasicIndicator.trade_date).distinct())
         existing_dates = {d for (d,) in result.all()}
 
-    missing_dates = [td for td in trade_dates if _dt.strptime(td, "%Y%m%d").date() not in existing_dates]
+    missing_dates = [
+        td for td in trade_dates if _dt.strptime(td, "%Y%m%d").date() not in existing_dates
+    ]
 
     if not missing_dates:
         logger.info("data_init: daily_basic already covers trailing 1 year")
@@ -255,7 +260,8 @@ async def _ensure_trailing_one_year_daily_basic(service) -> None:
 
     logger.info(
         "data_init: %d trade dates need daily_basic backfill (out of %d total)",
-        len(missing_dates), len(trade_dates),
+        len(missing_dates),
+        len(trade_dates),
     )
 
     # Process dates concurrently, respecting TuShare rate limits.
@@ -279,10 +285,11 @@ async def _ensure_trailing_one_year_daily_basic(service) -> None:
         batch_upserted = 0
         batch_failed = 0
         for r in results:
-            if isinstance(r, Exception):
+            if isinstance(r, BaseException):
                 batch_failed += 1
                 logger.warning(
-                    "data_init: daily_basic backfill task failed: %s", r,
+                    "data_init: daily_basic backfill task failed: %s",
+                    r,
                 )
             else:
                 batch_upserted += r[0]
@@ -301,5 +308,8 @@ async def _ensure_trailing_one_year_daily_basic(service) -> None:
     logger.info(
         "data_init: daily_basic trailing 1-year backfill complete "
         "(dates=%d, upserted=%d, saved=%d, failed=%d)",
-        len(missing_dates), total_upserted, total_saved, failed,
+        len(missing_dates),
+        total_upserted,
+        total_saved,
+        failed,
     )

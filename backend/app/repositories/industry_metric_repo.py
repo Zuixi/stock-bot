@@ -32,18 +32,22 @@ async def upsert_metrics(db: AsyncSession, rows: list[dict]) -> int:
         },
     )
     result = await db.execute(stmt)
-    return result.rowcount or 0
+    return result.rowcount or 0  # type: ignore[attr-defined]
 
 
-async def latest_rows_by_metric(db: AsyncSession, industry_key: str) -> dict[str, list[IndustryMetric]]:
+async def latest_rows_by_metric(
+    db: AsyncSession, industry_key: str
+) -> dict[str, list[IndustryMetric]]:
     """Latest row per (metric_key, source, freq) —DISTINCT ON over a small keyed table."""
     stmt = (
         select(IndustryMetric)
         .where(IndustryMetric.industry_key == industry_key, IndustryMetric.stock_id == 0)
         .distinct(IndustryMetric.metric_key, IndustryMetric.source, IndustryMetric.freq)
         .order_by(
-            IndustryMetric.metric_key, IndustryMetric.source,
-            IndustryMetric.freq, desc(IndustryMetric.period),
+            IndustryMetric.metric_key,
+            IndustryMetric.source,
+            IndustryMetric.freq,
+            desc(IndustryMetric.period),
         )
     )
     result = await db.execute(stmt)
@@ -81,6 +85,7 @@ async def get_metric_history(
 
 
 # ── 公司级指标（标的分析，P5）：stock_id > 0 ─────────────────────────
+
 
 async def get_company_metric_history(
     db: AsyncSession,
@@ -120,12 +125,17 @@ async def latest_company_rows(
             IndustryMetric.stock_id > 0,
         )
         .distinct(
-            IndustryMetric.stock_id, IndustryMetric.metric_key,
-            IndustryMetric.source, IndustryMetric.freq,
+            IndustryMetric.stock_id,
+            IndustryMetric.metric_key,
+            IndustryMetric.source,
+            IndustryMetric.freq,
         )
         .order_by(
-            IndustryMetric.stock_id, IndustryMetric.metric_key,
-            IndustryMetric.source, IndustryMetric.freq, desc(IndustryMetric.period),
+            IndustryMetric.stock_id,
+            IndustryMetric.metric_key,
+            IndustryMetric.source,
+            IndustryMetric.freq,
+            desc(IndustryMetric.period),
         )
     )
     result = await db.execute(stmt)
@@ -136,6 +146,7 @@ async def latest_company_rows(
 
 
 # ── Reference points ──────────────────────────────────────────────────
+
 
 async def list_reference_points(
     db: AsyncSession, industry_key: str, metric_key: str
@@ -161,7 +172,7 @@ async def upsert_reference_points(db: AsyncSession, rows: list[dict]) -> int:
         set_={"value": stmt.excluded.value, "note": stmt.excluded.note},
     )
     result = await db.execute(stmt)
-    return result.rowcount or 0
+    return result.rowcount or 0  # type: ignore[attr-defined]
 
 
 def applicable_reference(
@@ -175,9 +186,10 @@ def applicable_reference(
 
 # ── Signals ───────────────────────────────────────────────────────────
 
+
 async def upsert_signal(db: AsyncSession, row: dict) -> IndustrySignal:
     stmt = pg_insert(IndustrySignal).values(row)
-    stmt = stmt.on_conflict_do_update(
+    returning_stmt = stmt.on_conflict_do_update(
         constraint="uq_industry_signals_date",
         set_={
             "phase": stmt.excluded.phase,
@@ -187,8 +199,8 @@ async def upsert_signal(db: AsyncSession, row: dict) -> IndustrySignal:
             "basis": stmt.excluded.basis,
         },
     ).returning(IndustrySignal)
-    result = await db.execute(stmt)
-    return result.scalar_one()
+    result = await db.execute(returning_stmt)
+    return result.scalar_one()  # type: ignore[no-any-return]
 
 
 async def latest_signal(db: AsyncSession, industry_key: str) -> IndustrySignal | None:
@@ -221,7 +233,8 @@ async def delete_rows_by_source(
     sources: list[str],
     metric_keys: list[str] | None = None,
 ) -> int:
-    """Purge rows of the given sources once a real source has landed (mock never masquerades as data).
+    """Purge rows of the given sources once a real source has landed
+    (mock never masquerades as data).
 
     ``metric_keys`` 给定时仅清除这些指标（按覆盖清除：未覆盖指标保留 mock 演示行）。
     """
@@ -235,4 +248,4 @@ async def delete_rows_by_source(
     if metric_keys is not None:
         stmt = stmt.where(IndustryMetric.metric_key.in_(metric_keys))
     result = await db.execute(stmt)
-    return result.rowcount or 0
+    return result.rowcount or 0  # type: ignore[attr-defined]

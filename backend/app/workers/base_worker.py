@@ -6,7 +6,6 @@ import logging
 import uuid
 from abc import ABC, abstractmethod
 
-import aio_pika
 from aio_pika.abc import AbstractIncomingMessage
 
 from app.core.database import async_session_factory
@@ -37,10 +36,7 @@ class BaseWorker(ABC):
 
             async with async_session_factory() as db:
                 try:
-                    if (
-                        await task_repo.update_task_status(db, task_id, "running")
-                        is None
-                    ):
+                    if await task_repo.update_task_status(db, task_id, "running") is None:
                         logger.warning(
                             "Task %s row not found when marking running — "
                             "stale message or producer committed after publish",
@@ -59,9 +55,7 @@ class BaseWorker(ABC):
                     logger.exception("Task %s failed: %s", task_id, e)
                     await db.rollback()
                     async with async_session_factory() as err_db:
-                        await task_repo.update_task_status(
-                            err_db, task_id, "failed", error=str(e)
-                        )
+                        await task_repo.update_task_status(err_db, task_id, "failed", error=str(e))
                         await err_db.commit()
 
     async def run(self) -> None:

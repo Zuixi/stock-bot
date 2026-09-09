@@ -58,17 +58,21 @@ async def export_sw_to_sql(dest: Path | None = None) -> Path:
 
     async with async_session_factory() as db:
         classes = (
-            await db.execute(
-                select(SwIndustryClass).order_by(SwIndustryClass.industry_code)
-            )
-        ).scalars().all()
+            (await db.execute(select(SwIndustryClass).order_by(SwIndustryClass.industry_code)))
+            .scalars()
+            .all()
+        )
         members = (
-            await db.execute(
-                select(SwIndustryMember).order_by(
-                    SwIndustryMember.industry_code, SwIndustryMember.stock_code
+            (
+                await db.execute(
+                    select(SwIndustryMember).order_by(
+                        SwIndustryMember.industry_code, SwIndustryMember.stock_code
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     if not classes:
         raise RuntimeError("No SW classification data in DB to export")
@@ -95,26 +99,21 @@ async def export_sw_to_sql(dest: Path | None = None) -> Path:
         for cls in batch:
             pc = f"'{cls.parent_code}'" if cls.parent_code else "NULL"
             value_lines.append(
-                f"  ('{cls.industry_code}', {cls.level}, "
-                f"'{_sql_escape(cls.industry_name)}', {pc})"
+                f"  ('{cls.industry_code}', {cls.level}, '{_sql_escape(cls.industry_name)}', {pc})"
             )
         lines.append(",\n".join(value_lines) + ";")
         lines.append("")
 
     # --- members ---
     for i in range(0, len(members), batch_size):
-        batch = members[i : i + batch_size]
+        member_batch = members[i : i + batch_size]
         lines.append(
-            "INSERT INTO sw_industry_members "
-            "(industry_code, stock_code, symbol, stock_name) VALUES"
+            "INSERT INTO sw_industry_members (industry_code, stock_code, symbol, stock_name) VALUES"
         )
         value_lines = []
-        for m in batch:
+        for m in member_batch:
             name = _sql_escape(m.stock_name) if m.stock_name else ""
-            value_lines.append(
-                f"  ('{m.industry_code}', '{m.stock_code}', "
-                f"'{m.symbol}', '{name}')"
-            )
+            value_lines.append(f"  ('{m.industry_code}', '{m.stock_code}', '{m.symbol}', '{name}')")
         lines.append(",\n".join(value_lines) + ";")
         lines.append("")
 
@@ -146,12 +145,8 @@ async def import_sw_from_sql(src: Path | None = None) -> dict[str, int]:
                 await db.execute(text(stmt))
         await db.commit()
 
-        class_count = (
-            await db.execute(select(SwIndustryClass.id))
-        ).scalars().all()
-        member_count = (
-            await db.execute(select(SwIndustryMember.id))
-        ).scalars().all()
+        class_count = (await db.execute(select(SwIndustryClass.id))).scalars().all()
+        member_count = (await db.execute(select(SwIndustryMember.id))).scalars().all()
 
     result = {"classes": len(class_count), "members": len(member_count)}
     logger.info("Imported SW data from SQL seed: %s", result)
@@ -320,9 +315,5 @@ async def import_all() -> dict[str, int]:
 async def is_sw_data_loaded() -> bool:
     """Check if SW classification data already exists in DB."""
     async with async_session_factory() as db:
-        count = (
-            await db.execute(
-                select(SwIndustryClass.id).limit(1)
-            )
-        ).scalar_one_or_none()
+        count = (await db.execute(select(SwIndustryClass.id).limit(1))).scalar_one_or_none()
     return count is not None

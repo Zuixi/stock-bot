@@ -47,9 +47,7 @@ class DataSaver:
                 2026-04-17/
                   SSE_20260417_153012.jsonl
         """
-        return await asyncio.to_thread(
-            self._save_sync, api_name, df, params, exchange=exchange
-        )
+        return await asyncio.to_thread(self._save_sync, api_name, df, params, exchange=exchange)
 
     def _save_sync(
         self,
@@ -78,19 +76,14 @@ class DataSaver:
             "record_count": len(df),
         }
 
-        fd, tmp_path_str = tempfile.mkstemp(
-            dir=str(directory), prefix=f".{tag}_", suffix=".tmp"
-        )
+        fd, tmp_path_str = tempfile.mkstemp(dir=str(directory), prefix=f".{tag}_", suffix=".tmp")
         tmp_path = Path(tmp_path_str)
         try:
             with open(fd, "w", encoding="utf-8") as fh:
                 fh.write(json.dumps(meta, ensure_ascii=False) + "\n")
                 for record in df.to_dict("records"):
                     fh.write(
-                        json.dumps(
-                            _serialize_row(record), ensure_ascii=False, default=str
-                        )
-                        + "\n"
+                        json.dumps(_serialize_row(record), ensure_ascii=False, default=str) + "\n"
                     )
             tmp_path.replace(target)
         except BaseException:
@@ -99,7 +92,10 @@ class DataSaver:
 
         logger.info(
             "Saved %d rows to %s (api=%s, exchange=%s)",
-            len(df), target, api_name, exchange,
+            len(df),
+            target,
+            api_name,
+            exchange,
         )
         return target
 

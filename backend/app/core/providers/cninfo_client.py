@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import time
 from datetime import date, timedelta
 from typing import Any
@@ -77,6 +76,7 @@ _INDEX_NAME_FALLBACK: dict[str, str] = {
 # mcode generation
 # ---------------------------------------------------------------------------
 
+
 def _generate_mcode() -> str:
     """Pure-Python equivalent of the JS ``missjson(String(Math.floor(Date.now()/1000)))`` call.
 
@@ -92,9 +92,12 @@ def _generate_mcode() -> str:
     i = 0
     length = len(data)
     while i < length:
-        c1 = data[i]; i += 1
-        c2 = data[i] if i < length else None; i += 1
-        c3 = data[i] if i < length else None; i += 1
+        c1 = data[i]
+        i += 1
+        c2 = data[i] if i < length else None
+        i += 1
+        c3 = data[i] if i < length else None
+        i += 1
 
         e1 = c1 >> 2
         e2 = ((c1 & 3) << 4) | ((c2 >> 4) if c2 is not None else 0)
@@ -115,6 +118,7 @@ def _generate_mcode() -> str:
 # ---------------------------------------------------------------------------
 # Response parsers
 # ---------------------------------------------------------------------------
+
 
 def _safe_float(v: Any) -> float | None:
     try:
@@ -175,6 +179,7 @@ def _parse_index_record(record: dict[str, Any]) -> dict[str, Any]:
     for fmt in ("%Y-%m-%d", "%Y%m%d"):
         try:
             from datetime import datetime  # noqa: PLC0415
+
             trade_date = datetime.strptime(raw_date, fmt).date()
             break
         except ValueError:
@@ -229,6 +234,7 @@ def _map_exchange_name(raw: str) -> str:
 # CnInfoClient
 # ---------------------------------------------------------------------------
 
+
 class CnInfoClient:
     """Async HTTP client for the CNINFO WebAPI.
 
@@ -268,7 +274,7 @@ class CnInfoClient:
         self._token: str = token or os.environ.get("CNINFO_TOKEN", "")
         self._client: httpx.AsyncClient | None = None
 
-    async def __aenter__(self) -> "CnInfoClient":
+    async def __aenter__(self) -> CnInfoClient:
         await self._ensure_client()
         return self
 
@@ -295,9 +301,7 @@ class CnInfoClient:
         """Return token param dict if a token is configured."""
         return {"access_token": self._token} if self._token else {}
 
-    async def _get_index(
-        self, endpoint: str, params: dict[str, str]
-    ) -> list[dict[str, Any]]:
+    async def _get_index(self, endpoint: str, params: dict[str, str]) -> list[dict[str, Any]]:
         """Generic GET helper for /api/index/* endpoints."""
         client = await self._ensure_client()
         url = f"{_CNINFO_INDEX_URL}/{endpoint}"
@@ -307,9 +311,7 @@ class CnInfoClient:
             response.raise_for_status()
             body = response.json()
         except httpx.HTTPStatusError as exc:
-            logger.warning(
-                "cninfo %s HTTP error status=%s", endpoint, exc.response.status_code
-            )
+            logger.warning("cninfo %s HTTP error status=%s", endpoint, exc.response.status_code)
             return []
         except Exception as exc:
             logger.warning("cninfo %s request failed: %s", endpoint, exc)
@@ -322,7 +324,9 @@ class CnInfoClient:
                 logger.warning(
                     "cninfo %s auth error (code=%s): %s. "
                     "Set CNINFO_TOKEN env var. Register at https://webapi.cninfo.com.cn",
-                    endpoint, result_code, msg,
+                    endpoint,
+                    result_code,
+                    msg,
                 )
             else:
                 logger.warning("cninfo %s error code=%s msg=%s", endpoint, result_code, msg)
@@ -426,9 +430,7 @@ class CnInfoClient:
     # Stock quote API — p_sysapi1015
     # ------------------------------------------------------------------
 
-    async def get_daily_quote(
-        self, symbol: str, trade_date: date
-    ) -> dict[str, Any] | None:
+    async def get_daily_quote(self, symbol: str, trade_date: date) -> dict[str, Any] | None:
         """Fetch a single stock's OHLCV for one trading day via ``p_sysapi1015``.
 
         Returns a normalised dict or ``None`` if the date is a non-trading day,
@@ -441,21 +443,23 @@ class CnInfoClient:
         if self._token:
             form_data["token"] = self._token
         try:
-            response = await client.post(
-                url, data=form_data, headers=self._headers()
-            )
+            response = await client.post(url, data=form_data, headers=self._headers())
             response.raise_for_status()
             body = response.json()
         except httpx.HTTPStatusError as exc:
             logger.warning(
                 "cninfo p_sysapi1015 HTTP error symbol=%s date=%s status=%s",
-                symbol, tdate, exc.response.status_code,
+                symbol,
+                tdate,
+                exc.response.status_code,
             )
             return None
         except Exception as exc:
             logger.warning(
                 "cninfo p_sysapi1015 request failed symbol=%s date=%s: %s",
-                symbol, tdate, exc,
+                symbol,
+                tdate,
+                exc,
             )
             return None
 
@@ -466,12 +470,16 @@ class CnInfoClient:
                 logger.warning(
                     "cninfo p_sysapi1015 auth error (code=%s): %s. "
                     "Set CNINFO_TOKEN env var. Register at https://webapi.cninfo.com.cn",
-                    result_code, msg,
+                    result_code,
+                    msg,
                 )
             else:
                 logger.warning(
                     "cninfo p_sysapi1015 non-200 symbol=%s date=%s code=%s msg=%s",
-                    symbol, tdate, result_code, msg,
+                    symbol,
+                    tdate,
+                    result_code,
+                    msg,
                 )
             return None
 

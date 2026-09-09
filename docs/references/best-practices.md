@@ -90,3 +90,8 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - 数值型 tooltip 用「灰标签左 + 右对齐 tabular-nums 数值右」的两列式行布局（flex space-between + min-width），OHLC/涨跌随当日涨跌统一着色、量额中性——横排挤合（"开：x 高：x 低：x"）无对齐基准，是主流行情软件与其余 tooltip 的主要视觉分界。
 - 行业覆盖缺口的合并优先用三方分类接口交叉验证而非纯名称匹配：TuShare index_member_all 有 3000 行上限且不支持按股查询；东财 push2 接口 f127 字段与申万 2021 同名可直接映射（突发批量会被限流，push2delay 镜像 + 0.3s 间隔可绕），特例用同花顺 F10 双源核验；落库走幂等 custom tag 表而非改原始字段。
 - 人工策展数据进 repo 用"overlay 种子文件 + 加性 ON CONFLICT"而非追加进自动再生成的种子（会被下次导出抹掉），并同步补 .gitignore 的 data/* 豁免与 backend/.dockerignore 的 data/* 豁免——漏 dockerignore 会导致镜像内文件缺失、加载器静默返回 0。
+- 财务三类数据必须按"原始事实/标准化事实/派生指标"三层分表，并以"报告版本父表（stock+end_date+report_type+comp_type+source+ann_date+update_flag）"承载多源与修订，禁止塞进 `(stock_id, trade_date)` 的日频宽表；派生指标必须带 `calc_method`（reported/calculated/derived）与 `quality_status`，缺失显示空而非 0，且 TuShare 已提供的权威值（如 or_yoy/netprofit_yoy）不应被自算值覆盖。
+- 估值历史分位/通道只基于"有效正样本"（排除负 PE/PB 与缺失）计算，否则亏损期的负估值会被误判为极低估值；任何带时间属性的指标入库都要记录 ann_date/end_date/as_of，避免把修订后最新值回填历史造成前视偏差。
+- "按需单只抓取"的数据如果在 UI 可见却无自动补数，会表现为"部分标的空白"的伪 bug；改为与行情一致的全市场自动回填：幂等 upsert + "已有≥1条报告版本即视为已补"的续跑判据 + 调度批处理（分批/续跑/失败单只隔离）三件套，新标的自动被后续批次覆盖。
+- 财务表按 stock_id+metric_key 读时序、并按报告版本 join 时，用 `(stock_id, metric_key, report_version_id)` 覆盖索引一次满足过滤+排序+join，避免 sort 与 hash join；逐只查询在全市场规模下仍在个位数 ms，无需提前物化。
+- uv 的 `[project.optional-dependencies] dev`（ruff/mypy/pytest）默认不随 `uv sync` 安装：CI 与本地都必须显式 `uv sync --extra dev`（或 `uv run --extra dev`），否则 `uv run ruff/mypy` 报 "Failed to spawn"——这会让 Lint/TypeCheck 形同虚设并放行历史欠账；同理 pytest 若依赖真实运行 API，须标 `pytest.mark.e2e` 并在 CI 用 `-m "not e2e"` 避免测试 job 必挂。

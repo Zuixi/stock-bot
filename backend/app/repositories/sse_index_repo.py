@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +32,7 @@ async def bulk_upsert_snapshots(db: AsyncSession, rows: list[dict]) -> int:
     )
     result = await db.execute(stmt)
     await db.flush()
-    return result.rowcount
+    return result.rowcount  # type: ignore[attr-defined, no-any-return]
 
 
 async def get_latest_snapshots(
@@ -46,12 +46,12 @@ async def get_latest_snapshots(
     )
     if codes:
         subq = subq.where(SseIndexSnapshot.code.in_(codes))
-    subq = subq.group_by(SseIndexSnapshot.code).subquery()
+    latest = subq.group_by(SseIndexSnapshot.code).subquery()
 
     stmt = select(SseIndexSnapshot).join(
-        subq,
-        (SseIndexSnapshot.code == subq.c.code)
-        & (SseIndexSnapshot.collect_time == subq.c.max_time),
+        latest,
+        (SseIndexSnapshot.code == latest.c.code)
+        & (SseIndexSnapshot.collect_time == latest.c.max_time),
     )
     result = await db.execute(stmt)
     return list(result.scalars().all())
@@ -90,14 +90,14 @@ async def get_daily_summary(
         subq = subq.where(SseIndexSnapshot.trade_date >= start_date)
     if end_date:
         subq = subq.where(SseIndexSnapshot.trade_date <= end_date)
-    subq = subq.group_by(SseIndexSnapshot.code, SseIndexSnapshot.trade_date).subquery()
+    latest = subq.group_by(SseIndexSnapshot.code, SseIndexSnapshot.trade_date).subquery()
 
     stmt = (
         select(SseIndexSnapshot)
         .join(
-            subq,
-            (SseIndexSnapshot.code == subq.c.code)
-            & (SseIndexSnapshot.collect_time == subq.c.max_time),
+            latest,
+            (SseIndexSnapshot.code == latest.c.code)
+            & (SseIndexSnapshot.collect_time == latest.c.max_time),
         )
         .order_by(SseIndexSnapshot.trade_date.desc())
     )

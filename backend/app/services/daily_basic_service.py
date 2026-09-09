@@ -1,7 +1,7 @@
 """Daily basic service: fetch fundamental indicators with caching."""
 
 import logging
-from datetime import date, datetime
+from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,13 +35,9 @@ async def get_daily_basic_history(
     if cached:
         return DailyBasicListResponse(**cached)
 
-    rows = await daily_basic_repo.get_daily_basic(
-        db, stock.id, start_date, end_date
-    )
+    rows = await daily_basic_repo.get_daily_basic(db, stock.id, start_date, end_date)
     data = [DailyBasicOut.model_validate(r) for r in rows]
-    response = DailyBasicListResponse(
-        symbol=symbol, name=stock.name, exchange=exchange, data=data
-    )
+    response = DailyBasicListResponse(symbol=symbol, name=stock.name, exchange=exchange, data=data)
     await cache.set(cache_key, response.model_dump(mode="json"), ttl=600)
     return response
 

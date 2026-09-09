@@ -20,7 +20,13 @@ async def get_kline(
     start: date | None = Query(None, description="Start date (YYYY-MM-DD)"),
     end: date | None = Query(None, description="End date (YYYY-MM-DD)"),
 ) -> KlineResponse:
-    result = await quote_service.get_kline(db, cache, symbol, start, end)
+    result = await quote_service.get_kline(
+        db,
+        cache,
+        symbol,
+        start,  # type: ignore[arg-type]  # legacy unmounted router
+        end,
+    )
     if result is None:
         raise not_found_response("Stock", symbol)
     return result
@@ -32,7 +38,9 @@ async def get_latest_quote(
     db: DbDep,
     cache: CacheDep,
 ) -> LatestQuoteOut:
-    result = await quote_service.get_latest_quote(db, cache, symbol)
+    result = await quote_service.get_latest_quote(  # type: ignore[call-arg]  # legacy unmounted router
+        db, cache, symbol
+    )
     if result is None:
         raise not_found_response("Quote", symbol)
     return result

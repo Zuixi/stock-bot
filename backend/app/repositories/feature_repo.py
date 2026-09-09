@@ -79,9 +79,13 @@ async def upsert_features(db: AsyncSession, features: list[StockFeature]) -> int
         .values(values)
         .on_conflict_do_update(
             constraint="uq_stock_features_key",
-            set_={k: insert(StockFeature).excluded[k] for k in values[0] if k not in ("stock_id", "asof_date", "window_days")},
+            set_={
+                k: insert(StockFeature).excluded[k]
+                for k in values[0]
+                if k not in ("stock_id", "asof_date", "window_days")
+            },
         )
     )
     result = await db.execute(stmt)
     await db.flush()
-    return result.rowcount
+    return result.rowcount  # type: ignore[attr-defined, no-any-return]

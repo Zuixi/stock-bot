@@ -1,7 +1,7 @@
 """Cluster service: runs, distribution, members, explanations."""
 
-import uuid
 import logging
+import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,8 +11,8 @@ from app.schemas.cluster import (
     ClusterDistributionItem,
     ClusterDistributionOut,
     ClusterExplanationOut,
-    ClusterMemberOut,
     ClusteringRunOut,
+    ClusterMemberOut,
 )
 from app.schemas.common import PageParams
 

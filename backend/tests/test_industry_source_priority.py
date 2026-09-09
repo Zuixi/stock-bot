@@ -9,8 +9,13 @@ from app.services.industry_registry import PIG_INDUSTRY
 
 def _row(metric_key, source, period, freq="daily"):
     return IndustryMetric(
-        industry_key="pig", stock_id=0, metric_key=metric_key,
-        source=source, freq=freq, period=period, value=1.0,
+        industry_key="pig",
+        stock_id=0,
+        metric_key=metric_key,
+        source=source,
+        freq=freq,
+        period=period,
+        value=1.0,
     )
 
 

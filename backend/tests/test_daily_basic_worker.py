@@ -1,7 +1,5 @@
 """Test QUEUES completeness and DailyBasicWorker integration."""
 
-import pytest
-
 from app.core.mq import QUEUES
 
 
@@ -26,9 +24,7 @@ class TestQueuesDict:
         """Every queue_name must equal 'stock_bot.' + queue_key."""
         for key, name in QUEUES.items():
             expected = f"stock_bot.{key}"
-            assert name == expected, (
-                f"QUEUES[{key!r}] = {name!r}, expected {expected!r}"
-            )
+            assert name == expected, f"QUEUES[{key!r}] = {name!r}, expected {expected!r}"
 
 
 class TestDailyBasicWorkerInstantiation:

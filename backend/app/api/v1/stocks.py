@@ -8,15 +8,15 @@ and per-exchange stock resources under ``/api/v1/exchanges/{exchange}/stocks``.
 from datetime import date
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query
 
 from app.api.deps import CacheDep, DbDep
 from app.core.exceptions import not_found_response
-from app.schemas.common import PageParams, PagedResponse
+from app.schemas.common import PagedResponse, PageParams
 from app.schemas.daily_basic import DailyBasicLatestOut, DailyBasicListResponse
 from app.schemas.feature import RadarChartData, StockFeatureOut
 from app.schemas.quote import KlineResponse, LatestQuoteOut
-from app.schemas.stock import StockEnrichedOut, StockOut, StockListParams
+from app.schemas.stock import StockEnrichedOut, StockListParams, StockOut
 from app.services import (
     daily_basic_service,
     feature_service,
@@ -31,6 +31,7 @@ stocks_router = APIRouter()
 
 
 # ── /api/v1/exchanges ────────────────────────────────────────────────────────
+
 
 @router.get("", response_model=list[dict])
 def list_exchanges() -> list[dict]:
@@ -64,8 +65,11 @@ async def list_stocks_all_exchanges(
 ) -> PagedResponse[StockOut]:
     """List stocks across all exchanges (optionally filtered by exchange)."""
     params = StockListParams(
-        exchange=exchange, category=category, keyword=keyword,
-        sort_by=sort_by, sort_order=sort_order,
+        exchange=exchange,
+        category=category,
+        keyword=keyword,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
     page_params = PageParams(page=page, page_size=page_size)
     items, total = await stock_service.list_stocks(db, cache, params, page_params)
@@ -85,17 +89,24 @@ async def list_stocks_all_exchanges_enriched(
 ) -> PagedResponse[StockEnrichedOut]:
     """List stocks across all exchanges with latest quote + daily_basic enriched."""
     params = StockListParams(
-        exchange=exchange, category=category, keyword=keyword,
-        sort_by=sort_by, sort_order=sort_order,
+        exchange=exchange,
+        category=category,
+        keyword=keyword,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
     page_params = PageParams(page=page, page_size=page_size)
     items, total = await stock_service.list_stocks_enriched(
-        db, None, params, page_params,
+        db,
+        None,  # type: ignore[arg-type]  # cache 参数未被该路径使用，保持端点不含缓存依赖
+        params,
+        page_params,
     )
     return PagedResponse.build(items=items, total=total, params=page_params)
 
 
 # ── /api/v1/exchanges/{exchange}/stocks ──────────────────────────────────────
+
 
 @stocks_router.get("", response_model=PagedResponse[StockOut])
 async def list_stocks(
@@ -107,9 +118,7 @@ async def list_stocks(
     page: int = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 20,
 ) -> PagedResponse[StockOut]:
-    params = StockListParams(
-        exchange=exchange, category=category, keyword=keyword
-    )
+    params = StockListParams(exchange=exchange, category=category, keyword=keyword)
     page_params = PageParams(page=page, page_size=page_size)
     items, total = await stock_service.list_stocks(db, cache, params, page_params)
     return PagedResponse.build(items=items, total=total, params=page_params)
@@ -143,6 +152,7 @@ async def get_stock_enriched(
 
 # ── /api/v1/exchanges/{exchange}/stocks/{symbol}/quotes ──────────────────────
 
+
 @stocks_router.get("/{symbol}/quotes/daily", response_model=KlineResponse)
 async def get_kline(
     exchange: str,
@@ -154,9 +164,7 @@ async def get_kline(
     end: date | None = None,
     adjust: Literal["raw", "qfq"] = "raw",
 ) -> KlineResponse:
-    result = await quote_service.get_kline(
-        db, cache, exchange, symbol, start, end, adjust=adjust
-    )
+    result = await quote_service.get_kline(db, cache, exchange, symbol, start, end, adjust=adjust)
     if result is None:
         raise not_found_response("Stock", f"{exchange}/{symbol}")
     if not result.adjust_available:
@@ -182,8 +190,10 @@ async def get_latest_quote(
 
 # ── /api/v1/exchanges/{exchange}/stocks/{symbol}/daily-basic ────────────────
 
+
 @stocks_router.get(
-    "/{symbol}/daily-basic", response_model=DailyBasicListResponse,
+    "/{symbol}/daily-basic",
+    response_model=DailyBasicListResponse,
 )
 async def get_daily_basic_history(
     exchange: str,
@@ -194,7 +204,12 @@ async def get_daily_basic_history(
     end: date | None = None,
 ) -> DailyBasicListResponse:
     result = await daily_basic_service.get_daily_basic_history(
-        db, cache, exchange, symbol, start, end,
+        db,
+        cache,
+        exchange,
+        symbol,
+        start,
+        end,
     )
     if result is None:
         raise not_found_response("Stock", f"{exchange}/{symbol}")
@@ -202,7 +217,8 @@ async def get_daily_basic_history(
 
 
 @stocks_router.get(
-    "/{symbol}/daily-basic/latest", response_model=DailyBasicLatestOut,
+    "/{symbol}/daily-basic/latest",
+    response_model=DailyBasicLatestOut,
 )
 async def get_latest_daily_basic(
     exchange: str,
@@ -211,7 +227,10 @@ async def get_latest_daily_basic(
     cache: CacheDep,
 ) -> DailyBasicLatestOut:
     result = await daily_basic_service.get_latest_daily_basic(
-        db, cache, exchange, symbol,
+        db,
+        cache,
+        exchange,
+        symbol,
     )
     if result is None:
         raise not_found_response("DailyBasic", f"{exchange}/{symbol}")
@@ -219,6 +238,7 @@ async def get_latest_daily_basic(
 
 
 # ── /api/v1/exchanges/{exchange}/stocks/{symbol}/features ───────────────────
+
 
 @stocks_router.get("/{symbol}/features", response_model=list[StockFeatureOut])
 async def get_feature_history(
@@ -246,15 +266,14 @@ async def get_radar(
     cache: CacheDep,
     window_days: Annotated[int, Query(description="Feature window in trading days")] = 60,
 ) -> RadarChartData:
-    result = await feature_service.get_radar_data(
-        db, cache, exchange, symbol, window_days
-    )
+    result = await feature_service.get_radar_data(db, cache, exchange, symbol, window_days)
     if result is None:
         raise not_found_response("Feature", f"{exchange}/{symbol}")
     return result
 
 
 # ── /api/v1/exchanges/{exchange}/stocks/{symbol}/sw-tags ─────────────────────
+
 
 @stocks_router.get("/{symbol}/sw-tags", response_model=list[dict])
 async def get_sw_tags(exchange: str, symbol: str, db: DbDep) -> list[dict]:
@@ -281,6 +300,7 @@ async def set_sw_tags(
 
 
 # ── /api/v1/exchanges/{exchange}/stocks/{symbol}/user-tags ─────────────────────
+
 
 @stocks_router.get("/{symbol}/user-tags", response_model=list[dict])
 async def get_user_tags(exchange: str, symbol: str, db: DbDep) -> list[dict]:

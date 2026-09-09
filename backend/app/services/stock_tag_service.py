@@ -41,21 +41,23 @@ async def set_custom_sw_tags(
     """Replace all custom SW tags for *symbol*. Returns the new tag list."""
     if industry_codes:
         valid = (
-            await db.execute(
-                select(SwIndustryClass.industry_code).where(
-                    SwIndustryClass.industry_code.in_(industry_codes),
-                    SwIndustryClass.level.in_([2, 3]),
+            (
+                await db.execute(
+                    select(SwIndustryClass.industry_code).where(
+                        SwIndustryClass.industry_code.in_(industry_codes),
+                        SwIndustryClass.level.in_([2, 3]),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         valid_set = set(valid)
         invalid = [c for c in industry_codes if c not in valid_set]
         if invalid:
             raise ValueError(f"Invalid or non-L2/L3 industry codes: {invalid}")
 
-    await db.execute(
-        delete(StockCustomSwTag).where(StockCustomSwTag.symbol == symbol)
-    )
+    await db.execute(delete(StockCustomSwTag).where(StockCustomSwTag.symbol == symbol))
 
     for code in dict.fromkeys(industry_codes):
         db.add(StockCustomSwTag(symbol=symbol, industry_code=code))

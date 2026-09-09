@@ -3,6 +3,7 @@
 import json
 import logging
 from datetime import UTC, datetime
+from typing import cast
 
 import aio_pika
 from aio_pika import ExchangeType, Message
@@ -16,6 +17,7 @@ QUEUES: dict[str, str] = {
     "universe.fetch": "stock_bot.universe.fetch",
     "quotes.fetch": "stock_bot.quotes.fetch",
     "daily_basic.fetch": "stock_bot.daily_basic.fetch",
+    "financial.fetch": "stock_bot.financial.fetch",
     "features.compute": "stock_bot.features.compute",
     "clustering.run": "stock_bot.clustering.run",
     "llm.explain": "stock_bot.llm.explain",
@@ -38,18 +40,19 @@ async def get_mq_channel() -> AbstractRobustChannel:
     global _channel
     conn = await get_mq_connection()
     if _channel is None or _channel.is_closed:
-        _channel = await conn.channel()
-        await _channel.set_qos(prefetch_count=10)
-        exchange = await _channel.declare_exchange(
+        ch = cast(AbstractRobustChannel, await conn.channel())
+        _channel = ch
+        await ch.set_qos(prefetch_count=10)
+        exchange = await ch.declare_exchange(
             settings.rabbitmq_exchange,
             ExchangeType.TOPIC,
             durable=True,
         )
         for queue_name in QUEUES.values():
-            queue = await _channel.declare_queue(queue_name, durable=True)
+            queue = await ch.declare_queue(queue_name, durable=True)
             routing_key = queue_name.replace("stock_bot.", "")
             await queue.bind(exchange, routing_key=routing_key)
-    return _channel
+    return cast(AbstractRobustChannel, _channel)
 
 
 async def close_mq_connection() -> None:

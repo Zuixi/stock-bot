@@ -34,6 +34,4 @@ class DailyQuote(Base):
     amount: Mapped[float | None] = mapped_column(Numeric(20, 2))
     adj_factor: Mapped[float | None] = mapped_column(Numeric(12, 6), default=1.0)
     source: Mapped[str | None]
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

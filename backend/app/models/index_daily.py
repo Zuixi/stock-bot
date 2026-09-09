@@ -28,6 +28,4 @@ class IndexDaily(Base):
     pre_close: Mapped[float | None] = mapped_column(Numeric(12, 4))
     volume: Mapped[float | None] = mapped_column(Numeric(20, 2))
     amount: Mapped[float | None] = mapped_column(Numeric(20, 2))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -39,9 +39,15 @@ def test_securities_names_covers_exactly_registered_codes():
 def _raw(**overrides) -> dict:
     """模拟 DataFrame.to_dict('records') 的行（TuShare 字段名）。"""
     row = {
-        "ts_code": "159865.SZ", "trade_date": "20260901",
-        "open": 0.548, "high": 0.561, "low": 0.547, "close": 0.557,
-        "pre_close": 0.548, "vol": 5527101.90, "amount": 307480.61,
+        "ts_code": "159865.SZ",
+        "trade_date": "20260901",
+        "open": 0.548,
+        "high": 0.561,
+        "low": 0.547,
+        "close": 0.557,
+        "pre_close": 0.548,
+        "vol": 5527101.90,
+        "amount": 307480.61,
     }
     row.update(overrides)
     return row
@@ -58,19 +64,31 @@ def test_map_daily_rows_parses_tushare_fields():
 
 
 def test_map_daily_rows_skips_malformed_and_nonpositive():
-    rows = map_daily_rows([
-        _raw(ts_code="127045.SZ", open=119.5, high=120.4, low=119.5, close=120.05,
-             pre_close=119.77, vol=136443.9, amount=16373.48),
-        _raw(ts_code="BAD.SZ", trade_date="not-a-date"),  # 日期不可解析
-        _raw(ts_code="ZERO.SZ", close=0.0),               # close<=0 脏行
-    ])
+    rows = map_daily_rows(
+        [
+            _raw(
+                ts_code="127045.SZ",
+                open=119.5,
+                high=120.4,
+                low=119.5,
+                close=120.05,
+                pre_close=119.77,
+                vol=136443.9,
+                amount=16373.48,
+            ),
+            _raw(ts_code="BAD.SZ", trade_date="not-a-date"),  # 日期不可解析
+            _raw(ts_code="ZERO.SZ", close=0.0),  # close<=0 脏行
+        ]
+    )
     assert len(rows) == 1 and rows[0]["ts_code"] == "127045.SZ"
 
 
 def test_map_daily_rows_tolerates_missing_optionals():
-    rows = map_daily_rows([
-        {"ts_code": "127049.SZ", "trade_date": "20260901", "close": 100.0},
-    ])
+    rows = map_daily_rows(
+        [
+            {"ts_code": "127049.SZ", "trade_date": "20260901", "close": 100.0},
+        ]
+    )
     assert rows[0]["volume"] is None and rows[0]["pre_close"] is None
 
 
@@ -80,21 +98,30 @@ def test_map_daily_rows_tolerates_missing_optionals():
 def _orm_row(day: str, close: float, pre_close: float | None) -> SimpleNamespace:
     return SimpleNamespace(
         trade_date=__import__("datetime").date.fromisoformat(day),
-        open=None, high=None, low=None, close=close,
-        pre_close=pre_close, volume=1000.0, amount=None,
+        open=None,
+        high=None,
+        low=None,
+        close=close,
+        pre_close=pre_close,
+        volume=1000.0,
+        amount=None,
     )
 
 
 def test_build_code_series_latest_change_pct_and_spark_source():
-    out = build_code_series("159865.SZ", "国泰中证畜牧养殖ETF", [
-        _orm_row("2026-08-31", 0.548, 0.551),
-        _orm_row("2026-09-01", 0.557, 0.548),
-        _orm_row("2026-09-02", 0.548, 0.557),
-    ])
+    out = build_code_series(
+        "159865.SZ",
+        "国泰中证畜牧养殖ETF",
+        [
+            _orm_row("2026-08-31", 0.548, 0.551),
+            _orm_row("2026-09-01", 0.557, 0.548),
+            _orm_row("2026-09-02", 0.548, 0.557),
+        ],
+    )
     assert out.ts_code == "159865.SZ"
     assert str(out.latest.trade_date) == "2026-09-02"
     assert out.change_pct == round((0.548 - 0.557) / 0.557 * 100, 2)  # close vs pre_close
-    assert [p.close for p in out.series] == [0.548, 0.557, 0.548]     # 升序（sparkline 输入）
+    assert [p.close for p in out.series] == [0.548, 0.557, 0.548]  # 升序（sparkline 输入）
 
 
 def test_build_code_series_empty_rows_has_no_latest():
@@ -118,10 +145,21 @@ async def test_ingest_passes_db_to_upsert_and_reports_errors(monkeypatch):
 
     class _FakeClient:
         async def fetch_fund_daily(self, ts_code, start_date, end_date):
-            return pd.DataFrame([{
-                "ts_code": ts_code, "trade_date": "20260901", "open": 0.5, "high": 0.6,
-                "low": 0.5, "close": 0.55, "pre_close": 0.54, "vol": 100.0, "amount": 55.0,
-            }])
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": ts_code,
+                        "trade_date": "20260901",
+                        "open": 0.5,
+                        "high": 0.6,
+                        "low": 0.5,
+                        "close": 0.55,
+                        "pre_close": 0.54,
+                        "vol": 100.0,
+                        "amount": 55.0,
+                    }
+                ]
+            )
 
         async def fetch_cb_daily(self, ts_code, start_date, end_date):
             raise RuntimeError("permission denied")  # 模拟单代码失败
