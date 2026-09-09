@@ -223,6 +223,37 @@
 
 ---
 
+## 评审修复 P2（2026-09-09，feature/p7-auth-gateway）
+
+针对前两批（P0/P1）之后的安全评审结论，修复 2 项 P1 基建遗留（P1-8/P1-10）与 8 项 P2 纵深缺陷（P2-11 ~ P2-18）：
+
+- [x] **P1.8 RabbitMQ 替换 guest/guest 并收敛端口**
+  - `docker-compose.yml`：rabbitmq 凭据改为 `${RABBITMQ_DEFAULT_USER:-stockbot}` / `${RABBITMQ_DEFAULT_PASS:-stockbot_pass}`；删除 5672/15672 宿主机映射（管理 UI 按需 docker exec 或临时端口转发访问）；migrate/api/worker 三处 `RABBITMQ_URL` 统一引用同组变量
+  - `.env.docker.example` 新增凭据变量（注释生产必改）并更新 URL 示例；`backend/.env.example` localhost 场景同步 stockbot/stockbot_pass
+- [x] **P1.10 Vite 开发代理补全**
+  - `frontend/vite.config.ts` server.proxy 新增 `/auth` 与 `/.well-known` → `http://localhost:8001`，本地开发登录/会话/JWKS 与生产网关同源形态一致（Cookie 域与 CSRF 正常工作）
+- [x] **P2.11 会话绝对过期上限**
+  - auth-service `config.py` 新增 `absolute_session_ttl=604800`（7 天）；`SessionService.get_session` 滑动续期前检查 `now - created_at >= absolute_session_ttl`，超限则删除 `session:{id}`、从 `user_sessions:{user_id}` srem 并返回 None（登出语义；DB 快照由 revoke 流程/自然过期兜底）——滑动 TTL 不再能无限续命
+  - 测试：超期会话返回 None 且 Redis key/set 成员被清理、introspect 报 inactive；未超期会话正常续期（`tests/test_session_service.py`）
+- [x] **P2.12 审计事件脱敏 session_id**
+  - 全仓 grep `record_audit_event`：`auth.logout` 与 `auth.login.success` payload 中的明文 `session_id` 改为 `session_id_hash = hash_token(session_id)`（SHA-256）；`auth_sessions.id` 列为运营必需保留明文，不动
+- [x] **P2.13 X-Forwarded-For 信任边界**
+  - auth-service `config.py` 新增 `trust_forwarded_for: bool = False`（默认不信任）；`_extract_client_meta` 仅在该开关开启时解析 XFF，否则取 socket 对端地址——客户端无法再伪造该头污染审计 IP
+  - compose auth-service 注入 `TRUST_FORWARDED_FOR=${AUTH_TRUST_FORWARDED_FOR:-true}`（Traefik 在前的部署形态）；`.env.docker.example` 新增该变量及直连部署必须置 false 的注释
+  - 测试：monkeypatch 两种取值验证 `tests/test_api_auth.py::test_extract_client_meta_*`
+- [x] **P2.14 存量标签迁移归属策略文档**
+  - 确认迁移 `5a1b2c3d4e5f` 以 server_default 全零 UUID（非随机 UUID）回填 `stock_user_tags.user_id`；`docs/architecture/auth-data-model.md` 新增「存量标签归属与认领策略」：幽灵/系统迁移用户语义、对真实用户不可见的隔离原理、管理员认领 SQL 模板与唯一约束冲突排查/事务/缓存失效注意事项
+- [x] **P2.15 Traefik dashboard 端口收敛**
+  - compose gateway 删除 `8080:8080` 宿主机映射（dashboard 仅内网可达）；`.env.docker.example` `GATEWAY_DASHBOARD_PORT` 注释更新为仅内网/按需映射
+- [x] **P2.16 nginx 收敛后端文档暴露**
+  - `frontend/nginx.conf` 删除 docs/redoc/openapi.json 透传，仅保留 `location = /health` 健康探针——生产后端 API 文档不再公开
+- [x] **P2.17 CORS 收敛**
+  - auth-service `cors_origins` 默认列表移除 8000/8001 端口项，仅保留前端源（3000/5173/80 及对应 127.0.0.1）；`.env.docker.example` `CORS_ORIGINS` 移除 `http://localhost:8080`；backend 默认值本已最小，不动
+- [x] **P2.18 暴力破解防护文档**
+  - `docs/architecture/authentication-and-gateway.md` 新增 4.7「暴力破解防护（双层纵深）」：Traefik auth-ratelimit（按 IP average 20 / burst 10 / period 1s）+ auth-service 账号级失败锁定（`failed_attempts >= 5` 锁定 15 分钟、过期/成功登录自动解锁），并标注后续可叠加按用户名维度限流
+
+---
+
 ## 质量门禁与验证命令
 
 - **后端 Lint & Typecheck**:
