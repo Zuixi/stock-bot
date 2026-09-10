@@ -1,7 +1,13 @@
+## 2026-09-11 - 首页公开化 Phase 1（D7 修订）：暗色涨跌色达标卡片表面，门禁统一
+- **问题**：`SectionCard` 内 `DeltaText`/`DataRow` 实际渲染在 `--bg-panel #1e222d`；暗色 `--up #f23645`(4.08:1) / `--down #089981`(4.45:1) 对卡片面不达 WCAG AA（对 `--bg-page #131722` 的 4.59/5.01 达标掩盖了该缺陷）。原 D7「暗色已达标故不动」是在错误表面（`--bg-page`）上测得，予以推翻
+- **修复**：暗色 `--up #f2555a`（bg-page 5.30 / bg-panel 4.71）、`--down #0aa088`（bg-page 5.45 / bg-panel 4.84），同步 `:root[data-theme="dark"]` 与 `theme.ts` `THEME_COLORS.dark`；`:root` 兜底块保持浅色不变
+- **门禁**：移除 `check-design-tokens.mjs` 内的暗色例外，`check:design` 对 fallback/light/dark 三块 × `--bg-page`/`--bg-panel` 两表面统一断言 ≥ 4.5，12 项全 PASS、exit 0
+- 涉及模块：frontend/src/app/styles/theme.css, frontend/src/app/theme.ts, frontend/scripts/check-design-tokens.mjs, docs/design/landing-market-theme.md
+
 ## 2026-09-11 - 首页公开化 Phase 1（D1 复核补漏）：设计令牌门禁接入 CI + 覆盖卡片表面
 - **问题**：`npm run check:design` 只存在于 package.json，无任何自动化路径调用，改色破坏 AA 或 `theme.ts`/`theme.css` 失同步时 CI/lint/build 全绿；且原脚本只对 `--bg-page` 校验，漏掉 DataRow/DeltaText 实际所在的 `SectionCard` 表面（`--bg-panel`）
 - **修复**：CI `frontend-lint` job 在 `npm ci` 后新增 `npm run check:design` 硬门禁步骤；脚本对 light/fallback 同时校验 `--bg-page` 与 `--bg-panel` 对比度 ≥ 4.5
-- **发现（待决）**：暗色 `--up #f23645`(4.08:1) / `--down #089981`(4.45:1) 对 `--bg-panel #1e222d` 不达 AA；暗色为契约冻结的 TradingView 实测值，本轮未改色，脚本对暗色暂只校验 `--bg-page` 并在注释登记，待色值决策
+- **发现（已由 D7 修订销项）**：暗色 `--up #f23645`(4.08:1) / `--down #089981`(4.45:1) 对 `--bg-panel #1e222d` 不达 AA；本条目当时未改暗色、暂只校验 `--bg-page`，随后按 D7 修订改为暗色换值并统一两表面校验（见上一条）
 - 涉及模块：.github/workflows/ci.yml, frontend/scripts/check-design-tokens.mjs, docs/references/best-practices.md
 
 ## 2026-09-11 - 首页公开化 Phase 1：enriched 排序路径加 Redis 缓存（公开流量防护）
@@ -17,7 +23,7 @@
 
 ## 2026-09-11 - 首页公开化 Phase 1：涨跌色 WCAG AA 修复 + 设计令牌门禁
 - **问题**：浅色模式 `--up #f5222d` / `--down #22c55e` 对 `--bg-page #ffffff` 对比度仅 4.08:1 / 2.28:1，均低于 WCAG AA 的 4.5:1
-- **修复**：浅色涨跌色改为 `--up #c62828`（5.62:1）/ `--down #0a7d5f`（5.11:1），同步三处声明（`:root` 首帧兜底块、`:root[data-theme="light"]`、`theme.ts` `THEME_COLORS.light`）；暗色与 `flat`/`hover` 不动
+- **修复**：浅色涨跌色改为 `--up #c62828`（5.62:1）/ `--down #0a7d5f`（5.11:1），同步三处声明（`:root` 首帧兜底块、`:root[data-theme="light"]`、`theme.ts` `THEME_COLORS.light`）；`flat`/`hover` 不动。暗色当轮未动，后经 D7 修订换值（见上）——原判据只测了 `--bg-page`，未覆盖 `SectionCard` 的 `--bg-panel`
 - **门禁**：新增 `frontend/scripts/check-design-tokens.mjs` 与 `npm run check:design`，校验三块 `--up`/`--down` 对比度 ≥ 4.5 且 `theme.ts` 同名值一致；任何改色先跑它
 - 涉及模块：frontend/src/app/styles/theme.css, frontend/src/app/theme.ts, frontend/scripts, docs/design/landing-market-theme.md
 
