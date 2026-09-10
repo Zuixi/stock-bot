@@ -18,6 +18,54 @@ const MOCK_SESSION_ANON = (page: import("@playwright/test").Page) =>
     })
   );
 
+interface MockRankingItem {
+  symbol: string;
+  name: string;
+  exchange?: string;
+  close?: number | null;
+  pct_chg?: number | null;
+  amount?: number | null;
+  volume?: number | null;
+  turnover_rate?: number | null;
+  total_mv?: number | null;
+}
+
+/** `/market/rankings` 每种榜单类型的确定样本（含一条缺失涨跌幅的行，锁 DeltaText 契约）。 */
+const MOCK_RANKING_ITEMS: Record<string, MockRankingItem[]> = {
+  gainers: [
+    { symbol: "600519", name: "贵州茅台", exchange: "Shanghai_Stocks", close: 1500, pct_chg: 9.99, amount: 987_654, volume: 1000, turnover_rate: 1.2, total_mv: 1e7 },
+    // 服务端 SQL 已过滤 pct_chg IS NOT NULL；此行使前端守卫移除后仍渲染 `--`（而非被丢弃/回退 0.00%）
+    { symbol: "300750", name: "宁德时代", exchange: "Shenzen_Stocks", close: 250.5, pct_chg: null, amount: 1_234_567, volume: 2000, turnover_rate: 2.5, total_mv: 2e7 },
+  ],
+  losers: [
+    { symbol: "688496", name: "*ST清越", exchange: "Shanghai_Stocks", close: 0.73, pct_chg: -19.78, amount: 100, volume: 10, turnover_rate: 3.1, total_mv: 1e5 },
+  ],
+  amount: [
+    { symbol: "300308", name: "中际旭创", exchange: "Shenzen_Stocks", close: 908.9, pct_chg: 0.72, amount: 18_420_917.48, volume: 500_000, turnover_rate: 4.4, total_mv: 3e7 },
+    { symbol: "300750", name: "宁德时代", exchange: "Shenzen_Stocks", close: 250.5, pct_chg: null, amount: 1_234_567, volume: 2000, turnover_rate: 2.5, total_mv: 2e7 },
+  ],
+  turnover_rate: [
+    { symbol: "301699", name: "N洛轴股份", exchange: "Shenzen_Stocks", close: 31.99, pct_chg: 101.44, amount: 1_840_767.56, volume: 560_829, turnover_rate: 80.1971, total_mv: 2_316_076 },
+  ],
+};
+
+/** 按 `type` 参数返回对应榜单的 `/market/rankings` mock，`as_of` 固定为 2026-09-09。 */
+async function mockRankings(page: import("@playwright/test").Page) {
+  await page.route("**/api/v1/market/rankings*", (route) => {
+    const type = new URL(route.request().url()).searchParams.get("type") ?? "gainers";
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        as_of: "2026-09-09",
+        is_latest_trading_day: false,
+        type,
+        items: MOCK_RANKING_ITEMS[type] ?? [],
+      }),
+    });
+  });
+}
+
 test.describe("公开行情台首页", () => {
   test("首页可匿名访问：返回 200 且 H1 可见", async ({ page }) => {
     await MOCK_SESSION_ANON(page);
@@ -248,11 +296,13 @@ test.describe("公开行情台首页 · 收口（Task 1.10）", () => {
     expect(dataDenied).toEqual([]);
     // 防假绿：确实发出了行情数据请求（否则空集合会平凡通过）
     expect(seen.some((u) => u.includes("/api/v1/market/"))).toBe(true);
-    expect(seen.some((u) => u.includes("/api/v1/exchanges/"))).toBe(true);
+    // 榜单已切到 /market/rankings（首页不再调用 /exchanges，故以新端点做防假绿锚点）
+    expect(seen.some((u) => u.includes("/api/v1/market/rankings"))).toBe(true);
   });
 
   test("单源故障不白屏：sectors 挂掉，邻区与右列照常", async ({ page }) => {
     await MOCK_SESSION_ANON(page);
+    await mockRankings(page);
     await page.route("**/api/v1/market/sectors*", (route) => route.abort());
     await page.goto("/");
 
@@ -380,61 +430,39 @@ test.describe("公开行情台首页 · 板块区（Task 1.7）", () => {
   });
 });
 
-test.describe("公开行情台首页 · 榜单区（Task 1.6）", () => {
+test.describe("公开行情台首页 · 榜单区（Task 1.6 / 2.7）", () => {
   test.beforeEach(async ({ page }) => {
     await MOCK_SESSION_ANON(page);
+    await mockRankings(page);
   });
 
-  test("榜单区：三个 Tab 默认涨幅榜有数据", async ({ page }) => {
+  test("榜单区：四个 Tab、默认涨幅榜有数据且显示数据截至", async ({ page }) => {
     await page.goto("/#rankings");
     const section = page.getByTestId("section-rankings");
-    await expect(section.getByRole("tab", { name: "涨幅榜" })).toBeVisible();
-    await expect(section.getByRole("tab", { name: "跌幅榜" })).toBeVisible();
-    await expect(section.getByRole("tab", { name: "成交额榜" })).toBeVisible();
-    await expect(section.locator(".datarow").first()).toBeVisible({ timeout: 15000 });
-  });
-
-  test("榜单剔除 null 涨幅行，缺失涨跌幅仍渲染 --（绝不渲染 0.00%）", async ({ page }) => {
-    // 契约 §DeltaText：ChangePercent 缺失（次新股无行情）时必须显示 "--"
-    await page.route("**/api/v1/exchanges/stocks/enriched*", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          items: [
-            {
-              symbol: "300750",
-              name: "宁德时代",
-              latest_price: 250.5,
-              change_percent: null,
-              amount: 1_234_567,
-            },
-            {
-              symbol: "600519",
-              name: "贵州茅台",
-              latest_price: 1500,
-              change_percent: 1.23,
-              amount: 987_654,
-            },
-          ],
-          total: 2,
-          page: 1,
-          page_size: 10,
-        }),
-      })
-    );
-
-    await page.goto("/#rankings");
-    const section = page.getByTestId("section-rankings");
-
-    // 涨幅榜按 changePercent 排序：null（次新股无行情）行被前端剔除，不占榜首
+    for (const name of ["涨幅榜", "跌幅榜", "成交额榜", "换手率榜"]) {
+      await expect(section.getByRole("tab", { name })).toBeVisible();
+    }
     await expect(section.locator(".datarow", { hasText: "贵州茅台" })).toBeVisible({
       timeout: 15000,
     });
-    await expect(section.locator(".datarow", { hasText: "宁德时代" })).toHaveCount(0);
+    // as_of 诚实展示（数据截至 2026-09-09）
+    await expect(section.getByText(/数据截至\s*9月9日/)).toBeVisible();
+  });
 
-    // DeltaText 缺失值契约改在不受排序过滤影响的成交额榜断言（该行 amount 非空，故仍渲染）
-    await section.getByRole("tab", { name: "成交额榜" }).click();
+  test("换手率榜：切 Tab 呈现换手率口径数据", async ({ page }) => {
+    await page.goto("/#rankings");
+    const section = page.getByTestId("section-rankings");
+    await section.getByRole("tab", { name: "换手率榜" }).click();
+    await expect(section.locator(".datarow", { hasText: "N洛轴股份" })).toBeVisible({
+      timeout: 15000,
+    });
+  });
+
+  test("缺失涨跌幅渲染 --（不重启 0.00%），前端不再剔除 null 行", async ({ page }) => {
+    // Ruling T：/market/rankings SQL 已 pct_chg IS NOT NULL，客户端守卫移除；
+    // 契约仅剩「真缺失 → DeltaText 渲染 --」，不再有客户端过滤层。
+    await page.goto("/#rankings");
+    const section = page.getByTestId("section-rankings");
     const nullRow = section.locator(".datarow", { hasText: "宁德时代" });
     await expect(nullRow).toBeVisible({ timeout: 15000 });
     await expect(nullRow.locator(".delta")).toHaveText("--");
@@ -442,20 +470,6 @@ test.describe("公开行情台首页 · 榜单区（Task 1.6）", () => {
   });
 
   test("接口降级独立：脉搏区两条查询全失败不影响榜单区渲染", async ({ page }) => {
-    await page.route("**/api/v1/exchanges/stocks/enriched*", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          items: [
-            { symbol: "600519", name: "贵州茅台", latest_price: 1500, change_percent: 1.23, amount: 987_654 },
-          ],
-          total: 1,
-          page: 1,
-          page_size: 10,
-        }),
-      })
-    );
     await page.route("**/api/v1/market/global-indices", (route) => route.abort());
     await page.route("**/api/v1/market/distribution", (route) => route.abort());
 

@@ -31,6 +31,36 @@ export interface HotBoardItem {
 
 export type HotBoardCategory = "industry" | "concept" | "region";
 
+// ---------------------------------------------------------------------------
+// 公开榜单（Task 2.7，切到专用 /market/rankings 端点）
+// ---------------------------------------------------------------------------
+
+export type RankingType = "gainers" | "losers" | "amount" | "turnover_rate" | "volume";
+
+export interface RankingItem {
+  symbol: string;
+  name: string;
+  exchange?: string | null;
+  close?: number | null;
+  pct_chg?: number | null;
+  /** 成交额，TuShare 原生 千元（与 StockEnrichedOut.amount 同口径，消费端 ×1000 → 元）。 */
+  amount?: number | null;
+  volume?: number | null;
+  turnover_rate?: number | null;
+  total_mv?: number | null;
+}
+
+export interface RankingResponse {
+  as_of: string;
+  is_latest_trading_day: boolean;
+  type: RankingType;
+  items: RankingItem[];
+}
+
+export function fetchRankings(type: RankingType, limit = 10): Promise<RankingResponse> {
+  return apiGet<RankingResponse>(`/api/v1/market/rankings?type=${type}&limit=${limit}`);
+}
+
 interface IndexKlineResponse {
   ts_code: string;
   name: string;
