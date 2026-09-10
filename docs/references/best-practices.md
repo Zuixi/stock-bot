@@ -168,6 +168,7 @@
 - 清理废弃 mock 文件前应先全局检索引用并在删除后执行一次完整构建回归，避免隐式动态依赖遗漏；类似的，实施计划 brief 末尾自带的防未用报错脚手架（hidden span + 死 import）按其收尾指令删除即可，落库前对"这段代码存在的理由"过一遍能直接清掉这类残留。
 - 手写 Alembic 迁移的 revision ID 在多分支并行开发时是全局命名空间——先 `git log --all -S "<revision>"` 查重再落盘，活库 alembic_version 落在其他分支的 head 上时用临时隔离库验证迁移链而非硬闯活库。
 - 计划 brief 说"创建"某文件前先确认它是否已存在：cninfo_client.py 已有 webapi 行情客户端（CnInfoClient/get_cninfo_client），追加公告检索客户端时新类名 + 新工厂与既有命名并存，沿用 brief 的同名工厂会静默 shadow 旧客户端把行情/指数采集换成公告协议；brief 里的"伪代码调用"以既有代码真实签名为准改写而非照抄（task_service 实际是 `trigger_*(db, req)` 包 `_dispatch_task(db, task_type, queue_key, payload)`，brief 草稿的 `dispatch_task(task_type=,routing_key=,payload=)` 并不存在）。
+- 决策类文档落字必须"实测证据 + 删除范围 + 替代定位"三件套：计划里承诺的目标（如 SEO/静态可索引落地路径）可能与已上线配置（网关整站 `X-Robots-Tag: noindex`）直接冲突，此时先跑黑盒探针实测配置并以事实为准，再把决策连同原始 header 输出、被删除的目标清单、以及易被误删的相邻项定位（页脚署名是给用户的合规署名而非 SEO）一并写死——否则后人会按旧计划文本隐式复活已删目标，或把非 SEO 项当 SEO 一起删掉。
 - 新产品模块（如行业投研工作台）落地前，先用单文件 HTML + CDN ECharts 做高保真交互原型验证信息架构与布局（结论先行、证据下钻、数据源权威性分级徽章），再迁移为 React 组件，可大幅降低前端返工成本；原型视觉应贴近真实技术栈（antd v5）而非另起炉灶。
 
 ---

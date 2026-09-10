@@ -1,3 +1,9 @@
+## 2026-09-11 - 首页公开化 Phase 0：noindex / SEO 决策记录
+- **核实**：`curl -sI` 实测 `http://127.0.0.1:80/`（frontend 路由，200）与 `/api/v1/market/distribution`（HEAD 405 / GET 200）均返回 `X-Robots-Tag: noindex, nofollow, nosnippet, noarchive`；四条 router（frontend/api/auth/api-tasks）均挂载 `sec-headers@file`，中间件定义在 `gateway/dynamic/middlewares.yml:35-45`
+- **决策**：维持整站 `noindex`（理由：公开再分发行情数据有条款约束 + Vite SPA 难索引、投入产出不成比例）；本计划删除一切 SEO /「静态可索引落地路径」目标；页脚数据来源署名（Task 13）保留，定位为面向用户的合规署名而非 SEO
+- **复核**：`api-ratelimit` 的 `burst(50) < average(100)` 仅记录为「待用户确认是否有意为之」，未改网关配置
+- 涉及模块：plans/2026-09-11-public-market-homepage（§0.5.1、风险 ⑦）, docs/references/best-practices（八）
+
 ## 2026-09-11 - 首页公开化 Phase 0：数据语义核实（北向/指数覆盖/分区状态）
 - **问题**：公开行情首页的三个前置事实未定，直接决定北向模块形态、指数条数据源与 Phase 2 索引方案
 - **核实**：
