@@ -15,3 +15,4 @@ export { SwIndustryGrid } from "./SwIndustryGrid";
 export { DataCoverageMatrix } from "./DataCoverageMatrix";
 export { RankingMatrix } from "./RankingMatrix";
 export { SectorFlow } from "./SectorFlow";
+export { MoneySentiment } from "./MoneySentiment";
