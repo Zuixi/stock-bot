@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Query
 from app.api.deps import CacheDep, DbDep, require_permissions
 from app.core.exceptions import not_found_response
 from app.schemas.quote import IndexDailyOut, IndexKlineResponse
+from app.schemas.ranking import RankingResponseOut, RankingType
 from app.schemas.sse_index import (
     BackfillRequest,
     BackfillResponse,
@@ -29,6 +30,17 @@ async def list_market_indices(cache: CacheDep) -> list[dict]:
 @router.get("/distribution", response_model=list[dict])
 async def get_distribution(cache: CacheDep) -> list[dict]:
     return await market_service.get_distribution(cache=cache)
+
+
+@router.get("/rankings", response_model=RankingResponseOut)
+async def get_rankings(
+    cache: CacheDep,
+    db: DbDep,
+    type: RankingType = Query(default="gainers"),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> RankingResponseOut:
+    """公开榜单。口径 T+1，见响应 as_of。"""
+    return await market_service.get_rankings(db, cache, type, limit)
 
 
 @router.get("/sectors", response_model=list[dict])
