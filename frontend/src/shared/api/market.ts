@@ -87,6 +87,31 @@ export function fetchSectors(): Promise<SectorSummary[]> {
   return apiGet<SectorSummary[]>("/api/v1/market/sectors");
 }
 
+// ---------------------------------------------------------------------------
+// 申万一级行业行情聚合（Task 3.1 / 3.2）
+// ---------------------------------------------------------------------------
+
+export interface SwPerformanceItem {
+  code: string;
+  name: string;
+  /** 当日有行情（pct_chg 非空）的成员数。 */
+  member_count: number;
+  avg_pct_chg: number;
+  /** 成交额，TuShare 原生 千元（消费端 ×1000 → 元，与 rankings/StockEnrichedOut 同口径）。 */
+  total_amount: number;
+  up_count: number;
+  down_count: number;
+}
+
+export interface SwPerformanceResponse {
+  as_of: string;
+  items: SwPerformanceItem[];
+}
+
+export function fetchSwPerformance(): Promise<SwPerformanceResponse> {
+  return apiGet<SwPerformanceResponse>("/api/v1/market/sw-industry/performance?limit=31");
+}
+
 export function fetchCapitalFlow(): Promise<CapitalFlowItem[]> {
   return apiGet<CapitalFlowItem[]>("/api/v1/market/capital-flow");
 }

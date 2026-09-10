@@ -195,6 +195,17 @@ const MOCK_SECTORS = [
   { name: "水力发电", changePercent: 1.68, totalMarketCap: 5.68e9, stockCount: 20, topStocks: [] },
 ];
 
+/** 申万一级行业聚合样本（`/market/sw-industry/performance`，按 avg_pct_chg 降序）。 */
+const MOCK_SW_PERFORMANCE = {
+  as_of: "2026-09-09",
+  items: [
+    { code: "740000", name: "煤炭", member_count: 35, avg_pct_chg: 3.1976, total_amount: 19_192_573.42, up_count: 31, down_count: 3 },
+    { code: "240000", name: "有色金属", member_count: 123, avg_pct_chg: 1.1206, total_amount: 111_001_612.82, up_count: 82, down_count: 41 },
+    { code: "110000", name: "农林牧渔", member_count: 95, avg_pct_chg: 1.086, total_amount: 56_845_137.39, up_count: 46, down_count: 45 },
+    { code: "720000", name: "传媒", member_count: 128, avg_pct_chg: -2.7725, total_amount: 52_286_998.35, up_count: 13, down_count: 115 },
+  ],
+};
+
 const MOCK_CAPITAL_FLOW = [
   { name: "元器件", inflow: 1509.75, outflow: -724.07 },
   { name: "半导体", inflow: 443.88, outflow: -1357.9 },
@@ -300,9 +311,11 @@ test.describe("公开行情台首页 · 收口（Task 1.10）", () => {
     expect(seen.some((u) => u.includes("/api/v1/market/rankings"))).toBe(true);
   });
 
-  test("单源故障不白屏：sectors 挂掉，邻区与右列照常", async ({ page }) => {
+  test("单源故障不白屏：行业源挂掉，邻区与右列照常", async ({ page }) => {
     await MOCK_SESSION_ANON(page);
     await mockRankings(page);
+    // 左列申万源与其 CSRC 回退源同时挂掉（右列资金流仍走真实/独立路由）
+    await page.route("**/api/v1/market/sw-industry/performance*", (route) => route.abort());
     await page.route("**/api/v1/market/sectors*", (route) => route.abort());
     await page.goto("/");
 
@@ -393,9 +406,12 @@ test.describe("公开行情台首页 · 资金区（Task 1.8）", () => {
   });
 });
 
-test.describe("公开行情台首页 · 板块区（Task 1.7）", () => {
+test.describe("公开行情台首页 · 板块区（Task 1.7 / 3.2）", () => {
   test.beforeEach(async ({ page }) => {
     await MOCK_SESSION_ANON(page);
+    await page.route("**/api/v1/market/sw-industry/performance*", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_SW_PERFORMANCE) })
+    );
     await page.route("**/api/v1/market/sectors", (route) =>
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_SECTORS) })
     );
@@ -404,22 +420,42 @@ test.describe("公开行情台首页 · 板块区（Task 1.7）", () => {
     );
   });
 
-  test("板块区：行业涨跌 + 资金流 + 口径标注", async ({ page }) => {
+  test("板块区：申万一级行业涨跌 + 资金流 + 口径标注", async ({ page }) => {
     await page.goto("/#sectors");
     const section = page.getByTestId("section-sectors");
     await expect(section).toBeVisible();
-    // 口径必须显式可见：左列证监会（临时口径），右列近似资金流口径（非真实主力净流入）
-    await expect(section.getByText("行业口径：证监会")).toBeVisible();
+    // 口径必须显式可见且与实际数据源一致：左列申万一级，右列近似资金流口径
+    await expect(section.getByText("行业口径：申万一级")).toBeVisible();
     await expect(section.getByText("近似口径")).toBeVisible();
-    // 左列行业涨跌（复用 DataRow/DeltaText）
-    await expect(section.locator(".datarow", { hasText: "船舶" })).toBeVisible({ timeout: 15000 });
-    await expect(section.locator(".datarow", { hasText: "船舶" }).locator(".delta")).toHaveText("+4.46%");
+    // 「申万版即将上线」占位文案必须删除
+    await expect(section.getByText("申万版即将上线")).toHaveCount(0);
+    // 左列申万一级行业（复用 DataRow/DeltaText，含成员数小字）
+    const coal = section.locator(".datarow", { hasText: "煤炭" });
+    await expect(coal).toBeVisible({ timeout: 15000 });
+    await expect(coal.locator(".delta")).toHaveText("+3.20%");
+    await expect(coal.getByText("35只")).toBeVisible();
     // 右列资金流净额（净流入/净流出）
     await expect(section.getByText(/净流入|净流出/).first()).toBeVisible({ timeout: 15000 });
   });
 
-  test("板块区两列独立降级：sectors 挂掉不牵连资金流列", async ({ page }) => {
-    // 后注册优先：覆盖 beforeEach 的 sectors mock，资金流仍返回
+  test("申万请求失败：回退证监会口径，并把标注如实切回证监会", async ({ page }) => {
+    // 后注册优先：覆盖 beforeEach 的申万 mock
+    await page.route("**/api/v1/market/sw-industry/performance*", (route) => route.abort());
+    await page.goto("/#sectors");
+    const section = page.getByTestId("section-sectors");
+    // 标注必须跟实际展示的数据源一致，绝不静默错标
+    await expect(section.getByText("行业口径：证监会")).toBeVisible({ timeout: 15000 });
+    await expect(section.getByText("行业口径：申万一级")).toHaveCount(0);
+    // 回退到 CSRC 数据（船舶）
+    await expect(section.locator(".datarow", { hasText: "船舶" })).toBeVisible({ timeout: 15000 });
+    await expect(section.locator(".datarow", { hasText: "船舶" }).locator(".delta")).toHaveText("+4.46%");
+    // 右列独立存活
+    await expect(section.getByText(/净流入|净流出/).first()).toBeVisible({ timeout: 15000 });
+  });
+
+  test("板块区两列独立降级：行业源全挂不牵连资金流列", async ({ page }) => {
+    // 后注册优先：申万与其回退源同时挂掉，资金流仍返回
+    await page.route("**/api/v1/market/sw-industry/performance*", (route) => route.abort());
     await page.route("**/api/v1/market/sectors", (route) => route.abort());
     await page.goto("/#sectors");
     const section = page.getByTestId("section-sectors");
