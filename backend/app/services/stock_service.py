@@ -114,6 +114,19 @@ async def list_stocks_enriched(
     from app.services.market_service import get_stocks_enriched_by_symbols  # noqa: PLC0415
 
     if params.sort_by:
+        # ── 公开首页防护：排序路径开销大（全市场 + LATERAL + Python sort），
+        #    必须走 Redis 缓存；客户端 staleTime 不算防护。TTL 60s（日频数据）。──
+        # 关键：key 必须带上全部影响结果的过滤维度（category/keyword），
+        # 否则带不同筛选的排序请求会互相污染（对照上方 list_stocks 的 key 口径）。
+        cache_key = (
+            f"stocks:enriched:sort:{params.exchange or 'all'}:{params.category or 'all'}:"
+            f"{params.keyword or ''}:{params.sort_by}:{params.sort_order}:"
+            f"{page_params.offset}:{page_params.page_size}"
+        )
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return [StockEnrichedOut(**s) for s in cached["items"]], cached["total"]
+
         # ── Sort path: fetch all → enrich all → sort → paginate ──
         all_stocks, total = await stock_repo.list_stocks(
             db,
@@ -142,7 +155,13 @@ async def list_stocks_enriched(
         items.sort(key=key, reverse=reverse)
 
         # Paginate
-        return items[page_params.offset : page_params.offset + page_params.page_size], total
+        page_items = items[page_params.offset : page_params.offset + page_params.page_size]
+        await cache.set(
+            cache_key,
+            {"items": [i.model_dump(mode="json") for i in page_items], "total": total},
+            ttl=60,
+        )
+        return page_items, total
 
     # ── Fast path: paginate first, enrich only the page ──
     stocks, total = await stock_repo.list_stocks(

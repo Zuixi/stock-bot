@@ -1,3 +1,9 @@
+## 2026-09-11 - 首页公开化 Phase 1：enriched 排序路径加 Redis 缓存（公开流量防护）
+- **问题**：`/api/v1/exchanges/stocks/enriched` 公开可达，带 `sort_by` 时每次请求都走「全市场查询 + LATERAL + Python 排序」且完全无缓存，匿名流量可打满 DB
+- **修复**：`list_stocks_enriched` 排序分支前置 Redis 缓存（key `stocks:enriched:sort:{exchange}:{category}:{keyword}:{sort_by}:{sort_order}:{offset}:{page_size}`，TTL 60s），命中直接反序列化返回，不再触库；key 含全部过滤维度，避免不同筛选互串
+- **连带修复**：端点原本以 `cache=None` 调用（注释称缓存参数未被使用），导致缓存无法生效；改为注入 `CacheDep` 传入真实 `CacheClient`，让防护真正短路
+- 涉及模块：backend/app/services/stock_service.py, backend/app/api/v1/stocks.py, backend/tests/test_stock_sort_cache.py
+
 ## 2026-09-11 - 首页公开化 Phase 1：共享 UI 原语 DeltaText / DataRow / SectionCard
 - 新增 `frontend/src/shared/ui/` 三个行情区块基础件：`DeltaText({value, suffix?})`（正 `+`/负 `−`/零无符号/缺失 `--`，消费 `--up`/`--down` CSS 变量随主题切换）、`DataRow({logo?, title, ticker?, value?, unit?, href?, delta?})`、`SectionCard({id?, title, moreHref?, moreText?, children})`；签名由后续所有行情区块消费，不得改动
 - 三个组件与类型经 `shared/ui/index.ts` 桶文件导出；新增 `frontend/e2e/public-homepage.spec.ts` 最小冒烟（`/` 返回 200 且 H1 可见）
