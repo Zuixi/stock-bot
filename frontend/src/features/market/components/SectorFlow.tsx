@@ -2,6 +2,8 @@ import { Skeleton } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchCapitalFlow, fetchSectors, fetchSwPerformance } from "@/shared/api/market";
 import { DataRow } from "@/shared/ui";
+import { BreadthBar } from "./BreadthBar";
+import { fmtAmountParts } from "./format";
 import "./SectorFlow.css";
 
 const STALE_TIME = 60_000;
@@ -18,11 +20,11 @@ function flowNet(inflow: number, outflow: number): { net: number; label: string 
 /**
  * 首页板块区：左列申万一级行业行情、右列板块资金流，两列各自独立查询与降级。
  *
- * 左列走 `/market/sw-industry/performance`（申万一级口径）。**口径诚实**：请求失败
- * 时回退 `/market/sectors`（证监会口径），并把标注如实切回「证监会」——标注永远
- * 指向实际展示的数据源，绝不静默错标。右列 `/market/capital-flow` 是按「上涨股
- * 成交额 / 下跌股成交额」聚合的**近似口径**，非主力资金真实净流入
- * （`/market/sector-moneyflow` 当前返回空数组，无法支撑该列）。
+ * 左列走 `/market/sw-industry/performance`（申万一级口径），行内含涨跌家数比例条
+ * （`BreadthBar`）。**口径诚实**：请求失败时回退 `/market/sectors`（证监会口径），
+ * 并把标注如实切回「证监会」——标注永远指向实际展示的数据源，绝不静默错标。
+ * 右列 `/market/capital-flow` 是按「上涨股成交额 / 下跌股成交额」聚合的**近似口径**，
+ * 非主力资金真实净流入（`/market/sector-moneyflow` 当前返回空数组，无法支撑该列）。
  * 外层由首页 `<SectionCard id="sectors">` 提供卡片壳与标题。
  */
 export function SectorFlow() {
@@ -71,14 +73,27 @@ export function SectorFlow() {
           ) : usingCsrc ? (
             csrcRows.map((s) => <DataRow key={s.name} title={s.name} delta={s.changePercent} />)
           ) : (
-            swRows.map((s) => (
-              <DataRow
-                key={s.code}
-                title={s.name}
-                ticker={`${s.member_count}只`}
-                delta={s.avg_pct_chg}
-              />
-            ))
+            swRows.map((s) => {
+              const amount = fmtAmountParts(s.total_amount);
+              return (
+                <div className="sector-flow__industry" key={s.code}>
+                  <DataRow
+                    title={s.name}
+                    // member_count 是「当日有行情（pct_chg 非空）的成员数」，不是静态成分总数
+                    ticker={`当日有行情 ${s.member_count}只`}
+                    value={amount.value}
+                    unit={amount.unit}
+                    valuePlaceholder="--"
+                    delta={s.avg_pct_chg}
+                  />
+                  <BreadthBar
+                    up={s.up_count}
+                    down={s.down_count}
+                    label={`${s.name} 涨${s.up_count} · 跌${s.down_count}`}
+                  />
+                </div>
+              );
+            })
           )}
         </div>
 

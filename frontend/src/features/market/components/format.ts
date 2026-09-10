@@ -19,6 +19,18 @@ export const fmtNorthYi = (v: number | null | undefined): string =>
   v == null ? DASH : `${v > 0 ? "+" : ""}${(v / 1e4).toFixed(2)}亿`;
 
 /**
+ * TuShare 原生 `amount`（千元）→ 元 → 亿元，拆成 `DataRow` 的 value/unit 两段。
+ * 缺失返回 `{}`，由消费方（如 `DataRow valuePlaceholder="--"`）决定占位符；
+ * 绝不回退 0.00。
+ */
+export function fmtAmountParts(
+  amountQian: number | null | undefined,
+): { value?: string; unit?: string } {
+  if (amountQian == null) return {};
+  return { value: ((amountQian * 1e3) / 1e8).toFixed(2), unit: "亿元" };
+}
+
+/**
  * 相对时间（Intl.RelativeTimeFormat("zh")）：如「2小时前」「3天前」。
  * 解析失败返回 `--`，绝不回退成「刚刚」（缺失语义与零值不同）。
  */

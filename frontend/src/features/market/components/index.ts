@@ -4,6 +4,8 @@ export { CoreIndexCards } from "./CoreIndexCards";
 export { DistributionChart } from "./DistributionChart";
 export { DistributionBars } from "./DistributionBars";
 export type { DistributionBucket } from "./DistributionBars";
+export { BreadthBar } from "./BreadthBar";
+export type { BreadthBarProps } from "./BreadthBar";
 export { SectorHeatmap } from "./SectorHeatmap";
 export { SectorMoneyflowCard } from "./SectorMoneyflowCard";
 export { MarketMoneyflowCard } from "./MarketMoneyflowCard";

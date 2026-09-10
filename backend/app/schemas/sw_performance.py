@@ -13,7 +13,11 @@ class SwPerformanceItemOut(BaseModel):
     # ``daily_quotes.amount`` is TuShare-native 千元; ``sum()`` inherits that unit and is
     # passed through raw to match ``StockEnrichedOut.amount`` / rankings. Consumers apply
     # the existing x1000 -> 元 conversion. Unit is 千元, not 元.
-    total_amount: float
+    #
+    # Nullable: ``sum(amount)`` is NULL when none of a group's quoted members have an
+    # amount, and this is an anonymous endpoint — a non-optional field would raise a
+    # Pydantic ValidationError (500). Degrade to NULL and let the UI render ``--``.
+    total_amount: float | None = None
     up_count: int
     down_count: int
 
