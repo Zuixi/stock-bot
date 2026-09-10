@@ -1,3 +1,9 @@
+## 2026-09-11 - 首页公开化 Phase 1：涨跌色 WCAG AA 修复 + 设计令牌门禁
+- **问题**：浅色模式 `--up #f5222d` / `--down #22c55e` 对 `--bg-page #ffffff` 对比度仅 4.08:1 / 2.28:1，均低于 WCAG AA 的 4.5:1
+- **修复**：浅色涨跌色改为 `--up #c62828`（5.62:1）/ `--down #0a7d5f`（5.11:1），同步三处声明（`:root` 首帧兜底块、`:root[data-theme="light"]`、`theme.ts` `THEME_COLORS.light`）；暗色与 `flat`/`hover` 不动
+- **门禁**：新增 `frontend/scripts/check-design-tokens.mjs` 与 `npm run check:design`，校验三块 `--up`/`--down` 对比度 ≥ 4.5 且 `theme.ts` 同名值一致；任何改色先跑它
+- 涉及模块：frontend/src/app/styles/theme.css, frontend/src/app/theme.ts, frontend/scripts, docs/design/landing-market-theme.md
+
 ## 2026-09-11 - 首页公开化 Phase 0：noindex / SEO 决策记录
 - **核实**：`curl -sI` 实测 `http://127.0.0.1:80/`（frontend 路由，200）与 `/api/v1/market/distribution`（HEAD 405 / GET 200）均返回 `X-Robots-Tag: noindex, nofollow, nosnippet, noarchive`；四条 router（frontend/api/auth/api-tasks）均挂载 `sec-headers@file`，中间件定义在 `gateway/dynamic/middlewares.yml:35-45`
 - **决策**：维持整站 `noindex`（理由：公开再分发行情数据有条款约束 + Vite SPA 难索引、投入产出不成比例）；本计划删除一切 SEO /「静态可索引落地路径」目标；页脚数据来源署名（Task 13）保留，定位为面向用户的合规署名而非 SEO

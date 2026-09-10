@@ -23,9 +23,11 @@ CSS 变量挂在 `html[data-theme='light'|'dark']` 上，`src/app/theme.ts` 消�
 | `--text-primary` | #131722 | #d1d4dc |
 | `--text-secondary` | #6a6d78 | #787b86 |
 | `--accent` | #2962ff | #2962ff |
-| `--up`（A股红涨） | #f5222d | #f23645 |
-| `--down`（绿跌） | #22c55e | #089981 |
+| `--up`（A股红涨） | #c62828 | #f23645 |
+| `--down`（绿跌） | #0a7d5f | #089981 |
 | `--hover` | rgba(41,98,255,.06) | rgba(41,98,255,.12) |
+
+> 浅色 `--up`/`--down` 已按 WCAG AA（对 `--bg-page` 对比度 ≥ 4.5）调整：原 `#f5222d`/`#22c55e` 仅 4.08:1 / 2.28:1。暗色值不变。门禁：`frontend && npm run check:design`（同时校验 `:root` 兜底块、light、dark 三处及 `theme.ts` 一致性）。
 
 暗色判定优先级：localStorage `stockbot-theme` > `prefers-color-scheme`。切换按钮（太阳/月亮 icon）放 **MainLayout Header 右侧 + Landing 导航右侧**。ECharts 统一走 `shared/ui/EChart` 封装，从 ThemeContext 读 axis/text/splitLine 颜色。
 
