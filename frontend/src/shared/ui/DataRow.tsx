@@ -10,10 +10,26 @@ export interface DataRowProps {
   unit?: string;
   href?: string;
   delta?: number | null;
+  /**
+   * 数值缺失时的占位符（如 `--`）。省略则不渲染数值槽——纯涨跌幅行（无 value）
+   * 保持原样；需要「缺失显示 `--`」的数值消费方显式传入。
+   */
+  valuePlaceholder?: string;
 }
 
 /** 标准数据行：左标识/名称，右数值/涨跌幅；有 `href` 时整行可点。 */
-export function DataRow({ logo, title, ticker, value, unit, href, delta }: DataRowProps) {
+export function DataRow({
+  logo,
+  title,
+  ticker,
+  value,
+  unit,
+  href,
+  delta,
+  valuePlaceholder,
+}: DataRowProps) {
+  const hasValue = value !== undefined && value !== "";
+  const displayValue = hasValue ? value : valuePlaceholder;
   const body = (
     <>
       <span className="datarow__id">
@@ -24,10 +40,10 @@ export function DataRow({ logo, title, ticker, value, unit, href, delta }: DataR
         </span>
       </span>
       <span className="datarow__val">
-        {value !== undefined && (
+        {displayValue !== undefined && (
           <span className="datarow__price">
-            {value}
-            {unit ? <span className="datarow__unit"> {unit}</span> : null}
+            {displayValue}
+            {hasValue && unit ? <span className="datarow__unit"> {unit}</span> : null}
           </span>
         )}
         <DeltaText value={delta} />

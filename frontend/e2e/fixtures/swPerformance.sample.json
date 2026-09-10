@@ -1,0 +1,284 @@
+{
+  "as_of": "2026-09-09",
+  "items": [
+    {
+      "code": "740000",
+      "name": "煤炭",
+      "member_count": 35,
+      "avg_pct_chg": 3.197577142857143,
+      "total_amount": 19192573.42,
+      "up_count": 31,
+      "down_count": 3
+    },
+    {
+      "code": "240000",
+      "name": "有色金属",
+      "member_count": 123,
+      "avg_pct_chg": 1.1205772357723578,
+      "total_amount": 111001612.82,
+      "up_count": 82,
+      "down_count": 41
+    },
+    {
+      "code": "110000",
+      "name": "农林牧渔",
+      "member_count": 95,
+      "avg_pct_chg": 1.0859831578947368,
+      "total_amount": 56845137.39,
+      "up_count": 46,
+      "down_count": 45
+    },
+    {
+      "code": "650000",
+      "name": "国防军工",
+      "member_count": 104,
+      "avg_pct_chg": 1.0813201923076923,
+      "total_amount": 52972511.78,
+      "up_count": 73,
+      "down_count": 26
+    },
+    {
+      "code": "410000",
+      "name": "公用事业",
+      "member_count": 116,
+      "avg_pct_chg": 1.057935344827586,
+      "total_amount": 34964831.82,
+      "up_count": 89,
+      "down_count": 22
+    },
+    {
+      "code": "230000",
+      "name": "钢铁",
+      "member_count": 44,
+      "avg_pct_chg": 0.6752363636363636,
+      "total_amount": 7748467.92,
+      "up_count": 32,
+      "down_count": 7
+    },
+    {
+      "code": "420000",
+      "name": "交通运输",
+      "member_count": 107,
+      "avg_pct_chg": 0.3633672897196262,
+      "total_amount": 22407599.38,
+      "up_count": 52,
+      "down_count": 44
+    },
+    {
+      "code": "730000",
+      "name": "通信",
+      "member_count": 95,
+      "avg_pct_chg": 0.23271368421052632,
+      "total_amount": 146027159.03,
+      "up_count": 37,
+      "down_count": 56
+    },
+    {
+      "code": "480000",
+      "name": "银行",
+      "member_count": 40,
+      "avg_pct_chg": 0.17744,
+      "total_amount": 19008451.56,
+      "up_count": 21,
+      "down_count": 15
+    },
+    {
+      "code": "630000",
+      "name": "电力设备",
+      "member_count": 259,
+      "avg_pct_chg": 0.025857142857142856,
+      "total_amount": 100742310.72,
+      "up_count": 98,
+      "down_count": 155
+    },
+    {
+      "code": "220000",
+      "name": "基础化工",
+      "member_count": 320,
+      "avg_pct_chg": 0.0202825,
+      "total_amount": 115955035.91,
+      "up_count": 138,
+      "down_count": 176
+    },
+    {
+      "code": "450000",
+      "name": "商贸零售",
+      "member_count": 93,
+      "avg_pct_chg": -0.1000010752688172,
+      "total_amount": 23607790.51,
+      "up_count": 28,
+      "down_count": 61
+    },
+    {
+      "code": "270000",
+      "name": "电子",
+      "member_count": 318,
+      "avg_pct_chg": -0.10326037735849057,
+      "total_amount": 286453419.44,
+      "up_count": 118,
+      "down_count": 196
+    },
+    {
+      "code": "750000",
+      "name": "石油石化",
+      "member_count": 45,
+      "avg_pct_chg": -0.23397333333333334,
+      "total_amount": 17141921.29,
+      "up_count": 21,
+      "down_count": 24
+    },
+    {
+      "code": "510000",
+      "name": "综合",
+      "member_count": 22,
+      "avg_pct_chg": -0.2572590909090909,
+      "total_amount": 5196376.58,
+      "up_count": 9,
+      "down_count": 13
+    },
+    {
+      "code": "640000",
+      "name": "机械设备",
+      "member_count": 321,
+      "avg_pct_chg": -0.2948292834890966,
+      "total_amount": 104572796.47,
+      "up_count": 110,
+      "down_count": 206
+    },
+    {
+      "code": "620000",
+      "name": "建筑装饰",
+      "member_count": 111,
+      "avg_pct_chg": -0.3686045045045045,
+      "total_amount": 18886951.18,
+      "up_count": 37,
+      "down_count": 72
+    },
+    {
+      "code": "280000",
+      "name": "汽车",
+      "member_count": 205,
+      "avg_pct_chg": -0.3948839024390244,
+      "total_amount": 40064990.64,
+      "up_count": 59,
+      "down_count": 140
+    },
+    {
+      "code": "760000",
+      "name": "环保",
+      "member_count": 100,
+      "avg_pct_chg": -0.414437,
+      "total_amount": 10793049.45,
+      "up_count": 28,
+      "down_count": 66
+    },
+    {
+      "code": "360000",
+      "name": "轻工制造",
+      "member_count": 124,
+      "avg_pct_chg": -0.44562983870967743,
+      "total_amount": 17321157.45,
+      "up_count": 40,
+      "down_count": 81
+    },
+    {
+      "code": "490000",
+      "name": "非银金融",
+      "member_count": 74,
+      "avg_pct_chg": -0.5498702702702702,
+      "total_amount": 28070300.48,
+      "up_count": 19,
+      "down_count": 51
+    },
+    {
+      "code": "610000",
+      "name": "建筑材料",
+      "member_count": 60,
+      "avg_pct_chg": -0.567285,
+      "total_amount": 5919323.6,
+      "up_count": 17,
+      "down_count": 42
+    },
+    {
+      "code": "770000",
+      "name": "美容护理",
+      "member_count": 28,
+      "avg_pct_chg": -0.6741071428571429,
+      "total_amount": 3817623.04,
+      "up_count": 6,
+      "down_count": 22
+    },
+    {
+      "code": "460000",
+      "name": "社会服务",
+      "member_count": 64,
+      "avg_pct_chg": -0.705778125,
+      "total_amount": 13138549.89,
+      "up_count": 14,
+      "down_count": 50
+    },
+    {
+      "code": "350000",
+      "name": "纺织服饰",
+      "member_count": 97,
+      "avg_pct_chg": -0.7133268041237113,
+      "total_amount": 9714216.69,
+      "up_count": 25,
+      "down_count": 69
+    },
+    {
+      "code": "330000",
+      "name": "家用电器",
+      "member_count": 77,
+      "avg_pct_chg": -0.854038961038961,
+      "total_amount": 22026803.0,
+      "up_count": 23,
+      "down_count": 54
+    },
+    {
+      "code": "370000",
+      "name": "医药生物",
+      "member_count": 371,
+      "avg_pct_chg": -1.229821832884097,
+      "total_amount": 83376660.55,
+      "up_count": 53,
+      "down_count": 316
+    },
+    {
+      "code": "340000",
+      "name": "食品饮料",
+      "member_count": 111,
+      "avg_pct_chg": -1.2625612612612613,
+      "total_amount": 27830721.73,
+      "up_count": 12,
+      "down_count": 98
+    },
+    {
+      "code": "430000",
+      "name": "房地产",
+      "member_count": 110,
+      "avg_pct_chg": -1.3735872727272727,
+      "total_amount": 22539605.01,
+      "up_count": 18,
+      "down_count": 87
+    },
+    {
+      "code": "710000",
+      "name": "计算机",
+      "member_count": 261,
+      "avg_pct_chg": -1.5786969348659003,
+      "total_amount": 66099453.16,
+      "up_count": 27,
+      "down_count": 233
+    },
+    {
+      "code": "720000",
+      "name": "传媒",
+      "member_count": 128,
+      "avg_pct_chg": -2.77245234375,
+      "total_amount": 52286998.35,
+      "up_count": 13,
+      "down_count": 115
+    }
+  ]
+}

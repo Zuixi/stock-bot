@@ -1,0 +1,16 @@
+/* 行业涨跌家数双向比例条：上涨红、下跌绿（走 CSS 变量，随主题切换）。 */
+.breadth-bar {
+  display: flex;
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.breadth-bar__up {
+  background: var(--up);
+}
+
+.breadth-bar__down {
+  background: var(--down);
+}

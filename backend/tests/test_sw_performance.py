@@ -54,6 +54,25 @@ def test_sw_performance_schema_roundtrip() -> None:
     assert dumped["items"][0]["code"] == "110000"
 
 
+def test_sw_performance_total_amount_nullable() -> None:
+    """``sum(amount)`` can be NULL; a non-optional field would 500 the anonymous endpoint."""
+    out = SwPerformanceResponseOut(
+        as_of=date(2026, 9, 9),
+        items=[
+            {
+                "code": "110000",
+                "name": "农林牧渔",
+                "member_count": 10,
+                "avg_pct_chg": 1.23,
+                "total_amount": None,
+                "up_count": 6,
+                "down_count": 4,
+            }
+        ],
+    )
+    assert out.items[0].total_amount is None
+
+
 class RecordingCache:
     def __init__(self) -> None:
         self.store: dict[str, object] = {}

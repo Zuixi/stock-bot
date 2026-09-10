@@ -1,0 +1,162 @@
+{
+  "gainers": {
+    "as_of": "2026-09-09",
+    "is_latest_trading_day": false,
+    "type": "gainers",
+    "items": [
+      {
+        "symbol": "301699",
+        "name": "N洛轴股份",
+        "exchange": "Shenzen_Stocks",
+        "close": 31.99,
+        "pct_chg": 101.4484,
+        "amount": 1840767.56,
+        "volume": 560829.0,
+        "turnover_rate": 80.1971,
+        "total_mv": 2316076.0
+      },
+      {
+        "symbol": "920268",
+        "name": "N百迈科",
+        "exchange": "Beijing_Stocks",
+        "close": 26.88,
+        "pct_chg": 57.193,
+        "amount": 270402.18,
+        "volume": 94898.0,
+        "turnover_rate": 65.6819,
+        "total_mv": 145689.6
+      },
+      {
+        "symbol": "300913",
+        "name": "兆龙互连",
+        "exchange": "Shenzen_Stocks",
+        "close": 41.08,
+        "pct_chg": 14.7166,
+        "amount": 1733800.81,
+        "volume": 421777.0,
+        "turnover_rate": 14.755,
+        "total_mv": 1408144.76
+      }
+    ]
+  },
+  "losers": {
+    "as_of": "2026-09-09",
+    "is_latest_trading_day": false,
+    "type": "losers",
+    "items": [
+      {
+        "symbol": "688496",
+        "name": "*ST清越",
+        "exchange": "Shanghai_Stocks",
+        "close": 0.73,
+        "pct_chg": -19.7802,
+        "amount": 19100.43,
+        "volume": 233719.0,
+        "turnover_rate": 9.8224,
+        "total_mv": 32850.0
+      },
+      {
+        "symbol": "920021",
+        "name": "流金科技",
+        "exchange": "Beijing_Stocks",
+        "close": 8.05,
+        "pct_chg": -10.2564,
+        "amount": 349320.05,
+        "volume": 420090.0,
+        "turnover_rate": 16.9696,
+        "total_mv": 248744.99
+      },
+      {
+        "symbol": "603123",
+        "name": "翠微股份",
+        "exchange": "Shanghai_Stocks",
+        "close": 11.05,
+        "pct_chg": -10.0163,
+        "amount": 973388.12,
+        "volume": 862136.0,
+        "turnover_rate": 13.2174,
+        "total_mv": 882603.94
+      }
+    ]
+  },
+  "amount": {
+    "as_of": "2026-09-09",
+    "is_latest_trading_day": false,
+    "type": "amount",
+    "items": [
+      {
+        "symbol": "300308",
+        "name": "中际旭创",
+        "exchange": "Shenzen_Stocks",
+        "close": 908.9,
+        "pct_chg": 0.7236,
+        "amount": 18420917.48,
+        "volume": 201100.0,
+        "turnover_rate": 1.8118,
+        "total_mv": 107060207.27
+      },
+      {
+        "symbol": "002384",
+        "name": "东山精密",
+        "exchange": "Shenzen_Stocks",
+        "close": 196.06,
+        "pct_chg": 5.1711,
+        "amount": 16160062.79,
+        "volume": 834032.0,
+        "turnover_rate": 6.0162,
+        "total_mv": 35910496.65
+      },
+      {
+        "symbol": "600487",
+        "name": "亨通光电",
+        "exchange": "Shanghai_Stocks",
+        "close": 66.62,
+        "pct_chg": 5.5617,
+        "amount": 14492707.43,
+        "volume": 2184007.0,
+        "turnover_rate": 8.9011,
+        "total_mv": 16431105.5
+      }
+    ]
+  },
+  "turnover_rate": {
+    "as_of": "2026-09-09",
+    "is_latest_trading_day": false,
+    "type": "turnover_rate",
+    "items": [
+      {
+        "symbol": "301699",
+        "name": "N洛轴股份",
+        "exchange": "Shenzen_Stocks",
+        "close": 31.99,
+        "pct_chg": 101.4484,
+        "amount": 1840767.56,
+        "volume": 560829.0,
+        "turnover_rate": 80.1971,
+        "total_mv": 2316076.0
+      },
+      {
+        "symbol": "920268",
+        "name": "N百迈科",
+        "exchange": "Beijing_Stocks",
+        "close": 26.88,
+        "pct_chg": 57.193,
+        "amount": 270402.18,
+        "volume": 94898.0,
+        "turnover_rate": 65.6819,
+        "total_mv": 145689.6
+      },
+      {
+        "symbol": "920071",
+        "name": "金钛股份",
+        "exchange": "Beijing_Stocks",
+        "close": 26.39,
+        "pct_chg": 5.56,
+        "amount": 400039.83,
+        "volume": 154563.0,
+        "turnover_rate": 49.0678,
+        "total_mv": 672945.0
+      }
+    ]
+  }
+}

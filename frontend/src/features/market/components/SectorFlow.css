@@ -102,6 +102,26 @@
   color: var(--text-secondary);
 }
 
+/* ── 左列：申万行业行 + 涨跌家数比例条 ─────────────────── */
+.sector-flow__industry {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sector-flow__industry:last-child {
+  border-bottom: none;
+}
+
+/* 行内比例条已承担分隔，DataRow 自身下边框在本容器内去掉避免双线 */
+.sector-flow__industry .datarow {
+  border-bottom: none;
+  padding-bottom: 2px;
+}
+
+.sector-flow__industry .breadth-bar {
+  margin-top: 2px;
+}
+
 @media (max-width: 768px) {
   .sector-flow__cols {
     grid-template-columns: 1fr;

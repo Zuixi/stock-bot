@@ -128,6 +128,7 @@
 - 分桶统计的两侧集合必须对称且穷尽：上涨桶漏掉 `0~1%`、下跌桶含 `0~-1%` 会让「上涨家数」静默少一桶（实测 954 vs 1903），且不会报错——用 E2E 断言「逐桶家数求和 == 上涨 + 下跌 == 全部分桶总和」把漏桶钉死；公开首页多区块重组时每个区块各自包 `SectionCard` 并各自降级（骨架/占位文案），用「一个端点 abort + 邻区正常」的用例锁定单点失败不牵连邻区。
 - 按可空字段排序的榜单接口，服务端排序键若把 null 排在前面（`(is None, value)` 再 `reverse=True` 时 None 反成首位），首屏会被无数据行霸占——前端消费榜单类接口应按当前排序维度过滤不可排序行（多取一批再截断 top-N），且把 `--` 缺失值契约的 E2E 挪到不受该过滤影响的维度上断言，避免「修了置顶」却「删了契约覆盖」；空数组必须走不可用占位而非渲染成 0/0。
 - UI 上的**口径标注必须与实际数据源同源联动**：数据源切换/回退时标注要一起切（申万一级请求失败回退证监会数据，就把标签同步改回「行业口径：证监会」），绝不静默错标；`retry: 0` 让回退即时而非指数退避期间口径悬空。反面是**客户端 workaround 要写清存在条件、并在服务端修好后退役**：服务端 SQL 已 `pct_chg IS NOT NULL` 后，前端重复的 null 过滤层应删除（只保留真缺失渲染 `--` 的展示契约），临时 API 封装须 grep 零引用再删——但删除会改变 E2E 的请求锚点（首页不再调 `/exchanges/*`），同步把「防假绿」断言换成新端点，别让旧断言在删除后仍靠巧合通过。
+- 共享行组件的「缺失值占位」要显式开关而非默认填充：`DataRow` 有纯涨跌幅行（不传 `value`，省略数值槽才是对的），若把「`value===undefined` 一律渲染 `--`」写死进组件，这些行会凭空多出一个 `--`；正确做法是加可选 `valuePlaceholder` 让数值消费方显式 opt-in，同时**数值槽与单位一起判存在**（`hasValue && unit`），避免 `--` 后跟悬空的「亿元」。
 
 ## 五、测试与 E2E
 
@@ -140,6 +141,7 @@
 - 性能基准与单测必须 marker 隔离（`bench`）且**基线契约显式化**：合成输入的尺寸/seed 写成测试常量并注释"改动即失基线"，门禁按 median 相对退化而非绝对 ms；微基准（<1ms）rounds 多 median 稳，**大样本基准（>10ms/次）单次抖动可达 7-8%**——控制样本量让各基准处于同一量级（~1-5ms）比调阈值更治本；管道里验证 exit code 要看 `PIPESTATUS`，`cmd | tail` 后 `$?` 是 tail 的。
 - **wall-clock 性能基线绑定硬件，入库基线不能跨机器门禁**：本机生成的 baseline.json 在 CI runner 上全部基准慢 30-50%，相对阈值门禁必假红。CI 硬门禁的标准做法是**同 runner A/B**（同一 job 内先 checkout base commit 跑一遍存临时基线、再 checkout head 对比），入库 baseline.json 只作本机开发参考。配套两个坑：Windows 侧创建的脚本无执行位（git mode 644），Linux CI 直接执行报 exit 126，须经解释器调用；A/B 产物写 $RUNNER_TEMP 而非 tracked 的基线文件，否则 PR 改基线时 `git checkout` 拒切。
 - 免登录公开页的「零 401」与「单源降级」要用真断言锁定，不能只做冒烟：收集全链路响应时须显式豁免登录态探测端点（匿名 `/auth/session` 返回 401 是"未登录"语义而非越权，与数据接口 401 性质不同），同时断言**确实发出了行情请求**以防"空集合平凡通过"的假绿；降级侧每块独立 query + 独立空/错态，abort 单个源后除故障列自身占位外，同卡另一列与所有邻区都必须仍可见。
+- 前端 e2e 手写 mock 载荷只能锁住前端自己的假设：后端字段改名时后端单测/`tsc`/mock e2e 会全绿，而真机上页面渲染 `undefined`/`--`。解法是**mock 与后端契约同源**——把容器内实抓的真实响应落成 committed fixture，前端 mock 读它、后端再加一条读同一批 fixture 的 `@pytest.mark.e2e` 契约测试断言实际发出的 key 集（顶层 + 条目）与之完全一致，改名即转红；注意这仍**不证明活链路**（dev 代理指向旧镜像时 mock 是必需的），活链路验证要等分支部署，须如实披露。配套：同一模块级 Redis 池在 function-scoped event loop 下跨 test 复用会报 "attached to a different loop"，autouse dispose fixture 除 `engine.dispose()` 外还要 `await close_redis_pool()`。
 - 多个 `@pytest.mark.e2e` 用例共用模块级 SQLAlchemy async engine 时，pytest-asyncio 的 function-scoped 事件循环会让上一用例遗留的池化连接在新循环里被复用，抛 `RuntimeError: Event loop is closed`（表现为随机某个用例失败，非断言失败）；在 autouse fixture 里 `await engine.dispose()` 按用例收尾即可，不必改全局 loop scope。
 
 ## 六、架构与分层

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 
 /**
@@ -7,7 +8,8 @@ import { expect, test } from "@playwright/test";
  * 本文件按 Task 递进锁定契约：
  * - 1.4 导航锚点齐全 + 榜单区块骨架挂载
  * - 1.5 脉搏区（指数条 / 涨跌分布柱 / 家数汇总）与 11 桶完整性
- * - 1.6 榜单三 Tab 与 DeltaText 缺失值 `--` 契约
+ * - 1.6/2.7 榜单四 Tab 与 DeltaText 缺失值 `--` 契约
+ * - 3.2 板块区申万一级口径 + CSRC 回退
  */
 const MOCK_SESSION_ANON = (page: import("@playwright/test").Page) =>
   page.route("**/auth/session", (route) =>
@@ -18,10 +20,15 @@ const MOCK_SESSION_ANON = (page: import("@playwright/test").Page) =>
     })
   );
 
-interface MockRankingItem {
+/**
+ * 榜单/申万 mock 的载荷来自**真实端点快照**（`fixtures/*.sample.json`，容器内实抓）。
+ * backend/tests/test_market_contract.py 锁同一批文件的 key set —— 后端字段改名会
+ * 先让后端契约测试转红，mock 不会与后端契约静默漂移。
+ */
+interface RankingSampleItem {
   symbol: string;
   name: string;
-  exchange?: string;
+  exchange?: string | null;
   close?: number | null;
   pct_chg?: number | null;
   amount?: number | null;
@@ -30,38 +37,47 @@ interface MockRankingItem {
   total_mv?: number | null;
 }
 
-/** `/market/rankings` 每种榜单类型的确定样本（含一条缺失涨跌幅的行，锁 DeltaText 契约）。 */
-const MOCK_RANKING_ITEMS: Record<string, MockRankingItem[]> = {
-  gainers: [
-    { symbol: "600519", name: "贵州茅台", exchange: "Shanghai_Stocks", close: 1500, pct_chg: 9.99, amount: 987_654, volume: 1000, turnover_rate: 1.2, total_mv: 1e7 },
-    // 服务端 SQL 已过滤 pct_chg IS NOT NULL；此行使前端守卫移除后仍渲染 `--`（而非被丢弃/回退 0.00%）
-    { symbol: "300750", name: "宁德时代", exchange: "Shenzen_Stocks", close: 250.5, pct_chg: null, amount: 1_234_567, volume: 2000, turnover_rate: 2.5, total_mv: 2e7 },
-  ],
-  losers: [
-    { symbol: "688496", name: "*ST清越", exchange: "Shanghai_Stocks", close: 0.73, pct_chg: -19.78, amount: 100, volume: 10, turnover_rate: 3.1, total_mv: 1e5 },
-  ],
-  amount: [
-    { symbol: "300308", name: "中际旭创", exchange: "Shenzen_Stocks", close: 908.9, pct_chg: 0.72, amount: 18_420_917.48, volume: 500_000, turnover_rate: 4.4, total_mv: 3e7 },
-    { symbol: "300750", name: "宁德时代", exchange: "Shenzen_Stocks", close: 250.5, pct_chg: null, amount: 1_234_567, volume: 2000, turnover_rate: 2.5, total_mv: 2e7 },
-  ],
-  turnover_rate: [
-    { symbol: "301699", name: "N洛轴股份", exchange: "Shenzen_Stocks", close: 31.99, pct_chg: 101.44, amount: 1_840_767.56, volume: 560_829, turnover_rate: 80.1971, total_mv: 2_316_076 },
-  ],
+interface RankingSampleResponse {
+  as_of: string;
+  is_latest_trading_day: boolean;
+  type: string;
+  items: RankingSampleItem[];
+}
+
+const RANKINGS_SAMPLE = JSON.parse(
+  readFileSync(new URL("./fixtures/rankings.sample.json", import.meta.url), "utf8"),
+) as Record<string, RankingSampleResponse>;
+
+const SW_PERFORMANCE_SAMPLE = JSON.parse(
+  readFileSync(new URL("./fixtures/swPerformance.sample.json", import.meta.url), "utf8"),
+) as {
+  as_of: string;
+  items: {
+    code: string;
+    name: string;
+    member_count: number;
+    avg_pct_chg: number;
+    total_amount: number | null;
+    up_count: number;
+    down_count: number;
+  }[];
 };
 
-/** 按 `type` 参数返回对应榜单的 `/market/rankings` mock，`as_of` 固定为 2026-09-09。 */
-async function mockRankings(page: import("@playwright/test").Page) {
+/**
+ * 按 `type` 参数返回对应榜单的真实快照。`transform` 仅用于构造真实端点不可能返回的
+ * 缺失值行（`pct_chg IS NOT NULL` 已过滤），value 的 key 形状仍取自快照。
+ */
+async function mockRankings(
+  page: import("@playwright/test").Page,
+  transform?: (sample: RankingSampleResponse) => RankingSampleResponse,
+) {
   await page.route("**/api/v1/market/rankings*", (route) => {
     const type = new URL(route.request().url()).searchParams.get("type") ?? "gainers";
+    const sample = RANKINGS_SAMPLE[type] ?? RANKINGS_SAMPLE.gainers;
     return route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({
-        as_of: "2026-09-09",
-        is_latest_trading_day: false,
-        type,
-        items: MOCK_RANKING_ITEMS[type] ?? [],
-      }),
+      body: JSON.stringify(transform ? transform(sample) : sample),
     });
   });
 }
@@ -195,16 +211,8 @@ const MOCK_SECTORS = [
   { name: "水力发电", changePercent: 1.68, totalMarketCap: 5.68e9, stockCount: 20, topStocks: [] },
 ];
 
-/** 申万一级行业聚合样本（`/market/sw-industry/performance`，按 avg_pct_chg 降序）。 */
-const MOCK_SW_PERFORMANCE = {
-  as_of: "2026-09-09",
-  items: [
-    { code: "740000", name: "煤炭", member_count: 35, avg_pct_chg: 3.1976, total_amount: 19_192_573.42, up_count: 31, down_count: 3 },
-    { code: "240000", name: "有色金属", member_count: 123, avg_pct_chg: 1.1206, total_amount: 111_001_612.82, up_count: 82, down_count: 41 },
-    { code: "110000", name: "农林牧渔", member_count: 95, avg_pct_chg: 1.086, total_amount: 56_845_137.39, up_count: 46, down_count: 45 },
-    { code: "720000", name: "传媒", member_count: 128, avg_pct_chg: -2.7725, total_amount: 52_286_998.35, up_count: 13, down_count: 115 },
-  ],
-};
+/** 申万一级行业聚合 mock 使用真实端点快照（见文件头 fixtures 说明）。 */
+const MOCK_SW_PERFORMANCE = SW_PERFORMANCE_SAMPLE;
 
 const MOCK_CAPITAL_FLOW = [
   { name: "元器件", inflow: 1509.75, outflow: -724.07 },
@@ -429,11 +437,20 @@ test.describe("公开行情台首页 · 板块区（Task 1.7 / 3.2）", () => {
     await expect(section.getByText("近似口径")).toBeVisible();
     // 「申万版即将上线」占位文案必须删除
     await expect(section.getByText("申万版即将上线")).toHaveCount(0);
-    // 左列申万一级行业（复用 DataRow/DeltaText，含成员数小字）
+    // 左列申万一级行业（复用 DataRow/DeltaText）：行业名 + 当日有行情成员数 + 成交额 + 涨跌幅
     const coal = section.locator(".datarow", { hasText: "煤炭" });
     await expect(coal).toBeVisible({ timeout: 15000 });
     await expect(coal.locator(".delta")).toHaveText("+3.20%");
-    await expect(coal.getByText("35只")).toBeVisible();
+    // member_count 是「当日有行情的成员数」，标注必须诚实（非静态成分总数）
+    await expect(coal.getByText("当日有行情 35只")).toBeVisible();
+    // 成交额：千元 → 元 → 亿元（19192573.42 千元 ≈ 191.93 亿元）
+    await expect(coal.locator(".datarow__price")).toContainText("191.93");
+    // 涨跌家数比例条：煤炭 涨31 / 跌3
+    const bars = section.locator(".breadth-bar");
+    await expect(bars).toHaveCount(8);
+    const coalBar = section.locator(".sector-flow__industry", { hasText: "煤炭" }).locator(".breadth-bar");
+    await expect(coalBar).toBeVisible();
+    await expect(coalBar).toHaveAttribute("title", /涨31 · 跌3/);
     // 右列资金流净额（净流入/净流出）
     await expect(section.getByText(/净流入|净流出/).first()).toBeVisible({ timeout: 15000 });
   });
@@ -478,10 +495,10 @@ test.describe("公开行情台首页 · 榜单区（Task 1.6 / 2.7）", () => {
     for (const name of ["涨幅榜", "跌幅榜", "成交额榜", "换手率榜"]) {
       await expect(section.getByRole("tab", { name })).toBeVisible();
     }
-    await expect(section.locator(".datarow", { hasText: "贵州茅台" })).toBeVisible({
+    await expect(section.locator(".datarow", { hasText: "N洛轴股份" })).toBeVisible({
       timeout: 15000,
     });
-    // as_of 诚实展示（数据截至 2026-09-09）
+    // as_of 诚实展示（数据截至 2026-09-09，来自真实快照）
     await expect(section.getByText(/数据截至\s*9月9日/)).toBeVisible();
   });
 
@@ -494,14 +511,21 @@ test.describe("公开行情台首页 · 榜单区（Task 1.6 / 2.7）", () => {
     });
   });
 
-  test("缺失涨跌幅渲染 --（不重启 0.00%），前端不再剔除 null 行", async ({ page }) => {
+  test("缺失涨跌幅/价格渲染 --（不回退 0.00%），前端不再剔除 null 行", async ({ page }) => {
     // Ruling T：/market/rankings SQL 已 pct_chg IS NOT NULL，客户端守卫移除；
-    // 契约仅剩「真缺失 → DeltaText 渲染 --」，不再有客户端过滤层。
+    // 契约仅剩「真缺失 → `--`」。真实端点不会返回 null 行（已 ledger），故在快照
+    // 基础上注入缺失值以锁定展示契约（key 形状仍来自 fixture）。
+    await mockRankings(page, (sample) => ({
+      ...sample,
+      items: [{ ...sample.items[0], pct_chg: null, close: null }],
+    }));
     await page.goto("/#rankings");
     const section = page.getByTestId("section-rankings");
-    const nullRow = section.locator(".datarow", { hasText: "宁德时代" });
+    const nullRow = section.locator(".datarow").first();
     await expect(nullRow).toBeVisible({ timeout: 15000 });
     await expect(nullRow.locator(".delta")).toHaveText("--");
+    // 数值槽同样走 `--`，不留空白
+    await expect(nullRow.locator(".datarow__price")).toHaveText("--");
     await expect(section.getByText("0.00%")).toHaveCount(0);
   });
 
