@@ -9,6 +9,11 @@ Marked ``e2e`` (needs the real DB + FastAPI app). Default addopts exclude it; ru
 container-side (host has no DB route), e.g.::
 
     uv run pytest tests/test_market_contract.py -v -m e2e
+
+Fixture resolution is **lazy** and skips when the frontend tree is absent: pytest
+imports a module to read its ``pytestmark`` before ``-m`` deselection applies, so a
+module-level path lookup that raised would turn a backend-only ``uv run pytest`` into a
+collection error.
 """
 
 import json
@@ -36,21 +41,28 @@ async def _dispose_engine_after_test() -> AsyncGenerator[None, None]:
     await engine.dispose()
     await close_redis_pool()
 
-# Single source of truth: the same files the frontend e2e mocks read. Walk up from
-# this file so the path resolves whether the repo is checked out as-is on the host or
-# bind-mounted at a container path.
-def _fixtures_dir() -> Path:
+
+def _fixtures_dir() -> Path | None:
+    """Locate ``frontend/e2e/fixtures`` above this file, or ``None`` if absent.
+
+    Resolved at test time (not import time) so a backend-only checkout still imports
+    and collects this module cleanly.
+    """
     for parent in Path(__file__).resolve().parents:
         candidate = parent / "frontend" / "e2e" / "fixtures"
         if candidate.is_dir():
             return candidate
-    raise RuntimeError("frontend/e2e/fixtures not found above this test")
-
-FIXTURES_DIR = _fixtures_dir()
+    return None
 
 
 def _load(name: str) -> dict:
-    return json.loads((FIXTURES_DIR / name).read_text(encoding="utf-8"))
+    fixtures_dir = _fixtures_dir()
+    if fixtures_dir is None:
+        pytest.skip("frontend/e2e/fixtures not present (backend-only checkout)")
+    path = fixtures_dir / name
+    if not path.is_file():
+        pytest.skip(f"fixture {name} not present (backend-only checkout)")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 @pytest.mark.asyncio
