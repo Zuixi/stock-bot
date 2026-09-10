@@ -16,3 +16,6 @@ export { DataCoverageMatrix } from "./DataCoverageMatrix";
 export { RankingMatrix } from "./RankingMatrix";
 export { SectorFlow } from "./SectorFlow";
 export { MoneySentiment } from "./MoneySentiment";
+export { MarketNewsFeed } from "./MarketNewsFeed";
+export { AnnouncementFeed } from "./dataFace/AnnouncementFeed";
+export type { AnnouncementFeedProps } from "./dataFace/AnnouncementFeed";
