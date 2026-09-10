@@ -79,11 +79,7 @@ class JwksClient:
             now = time.time()
             if not force and self._keys and (now - self._last_fetched_at < self.cache_ttl):
                 return self._keys
-            if (
-                force
-                and (now - self._last_fetched_at < self._min_refresh_interval)
-                and self._keys
-            ):
+            if force and (now - self._last_fetched_at < self._min_refresh_interval) and self._keys:
                 return self._keys
 
             target_url = self.jwks_url
