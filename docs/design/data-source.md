@@ -152,7 +152,7 @@
 
 | 接口 | 用途 | 结论 | 实测证据（2026-09-11，见下方原文） |
 |---|---|---|---|
-| `disclosure_date` | 财报披露计划 | **可用（无日期区间参数，见坑）** | `end_date=20260630`（报告期）→ 5561 行；`pre_date=20260831` → 164 行；`actual_date=20260829` → 765 行；传 `start_date/end_date` 区间 → **0 行** |
+| `disclosure_date` | 财报披露计划 | **可用（区间过滤见坑）** | `end_date=20260630`（报告期）→ 5561 行；`pre_date=20260831` → 164 行；`actual_date=20260829` → 765 行；传 `start_date/end_date` 组合 → **0 行** |
 | `dividend` | 分红送股 | **可用** | `ts_code=600519.SH` → 89 行，含 `div_proc/record_date/ex_date/pay_date`（本次只按单票探，未探全市场区间语义） |
 | `new_share` | IPO 新股 | **可用** | `start_date=20260801&end_date=20260911` → 26 行，含 `ipo_date/price/pe/funds/ballot` |
 | `trade_cal` | 交易日历 | **可用** | `exchange=SSE` 2026 全年 → 365 行；`is_open=0` 9 月 → 9 行（非交易日单列可按 `is_open` 过滤） |
@@ -161,7 +161,19 @@
 | `major_news` | 长篇通讯 | **积分不足** | 同上 |
 | `cctv_news` | 新闻联播文字稿 | **积分不足** | 同上 |
 
-### 不可用接口的探针原文（逐字，仅 3 个新闻源）
+**可用接口返回列名（`df.columns`，逐字抄自实测输出，供 Phase 4/5 写字段映射）：**
+
+| 接口 | 返回列 |
+|---|---|
+| `disclosure_date` | `ts_code, ann_date, end_date, pre_date, actual_date` |
+| `dividend` | `ts_code, end_date, ann_date, div_proc, stk_div, stk_bo_rate, stk_co_rate, cash_div, cash_div_tax, record_date, ex_date, pay_date, div_listdate, imp_ann_date` |
+| `new_share` | `ts_code, sub_code, name, ipo_date, issue_date, amount, market_amount, price, pe, limit_amount, funds, ballot` |
+| `trade_cal` | `exchange, cal_date, is_open, pretrade_date` |
+| `eco_cal` | `date, time, currency, country, event, value, pre_value, fore_value` |
+
+### 不可用接口的上游返回文案（逐字，仅 3 个新闻源）
+
+> 脚本 `[RAW]` 行打印为 `Exception: <文案>`；下表为去掉该 Python 异常类名前缀后的上游原文。
 
 ```
 news:       抱歉，您没有接口(news)访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
@@ -172,15 +184,17 @@ cctv_news:  抱歉，您没有接口(cctv_news)访问权限，权限的具体详
 三者为**权限不足（积分档未开）**，不是接口不存在、也不是网络不可达——接口名有效，
 上游以权限文案明确拒绝；同 token 下其余 5 个接口正常返回，网络本身可达。
 
-### 坑：`disclosure_date` 没有日期区间过滤
+### 坑：`disclosure_date` 的日期区间过滤待确认
 
-该接口签名只有 `ts_code` / `end_date`（**报告期**，非自然日区间）/ `pre_date`（预约披露日，单日）/
-`actual_date`（实际披露日，单日）。传任务书初稿的 `start_date + end_date` 组合会**静默返回 0 行**
-（不报错），极易误判成「接口不可用」。实测对照：
+该接口可用参数为 `ts_code` / `end_date`（**报告期**，如 `20260630`）/ `pre_date`（预约披露日，单日）/
+`actual_date`（实际披露日，单日）。任务书初稿的 `start_date + end_date` 组合实测**返回 0 行且不报错**，
+极易误判成「接口不可用」；0 行的原因**疑为区间参数不被支持**（已补单传 `end_date` 对照仍为 0，
+但未单传 `start_date` 对照，故此处只作推断，不作定论）。实测对照：
 
 | 传参 | 行数 | 含义 |
 |---|---|---|
-| `start_date=20260901, end_date=20260930` | 0 | 日期区间不被支持，静默空结果 |
+| `start_date=20260901, end_date=20260930` | 0 | 实测该参数组合返回 0 行，疑因区间参数不被支持 |
+| `end_date=20260930`（单传） | 0 | 单传亦为 0，说明 `end_date` 是报告期过滤而非自然日区间 |
 | `end_date=20260630` | 5561 | 该报告期（2026 半年报）全部披露计划 |
 | `ts_code=600519.SH, end_date=20260630` | 1 | 单票该报告期计划 |
 | `pre_date=20260831` | 164 | 当日预约披露的股票 |

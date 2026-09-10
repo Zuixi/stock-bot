@@ -21,6 +21,7 @@ from app.core.providers.tushare_client import get_tushare_client  # noqa: E402
 
 # (api, kwargs, purpose) — keep exactly the 8 interfaces from the task brief.
 PROBES: list[tuple[str, dict[str, str], str]] = [
+    # NOTE: 区间参数不受支持，0 行属预期，见 data-source.md §八
     ("disclosure_date", {"start_date": "20260901", "end_date": "20260930"}, "财报披露计划"),
     ("dividend", {"ts_code": "600519.SH"}, "分红送股"),
     ("new_share", {"start_date": "20260801", "end_date": "20260911"}, "IPO 新股"),
