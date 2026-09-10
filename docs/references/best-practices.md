@@ -71,6 +71,7 @@
 - 涨跌幅/前收这类含公司行为的派生字段必须用数据源原生值（按 trade_date 重拉权威源），不得在库内用 `LAG(close)` 现算：除权日的参考前收是除权后价，窗口函数恰在除权日算错且无声。补历史数据要"重拉权威源 + 逐行对拍"，并把该理由写进函数 docstring 防后人"优化"。
 - 给行情表新增字段时，落地点至少四处（模型、每个 ORM 构造点、repo 的 INSERT values、`on_conflict_do_update` 的 `set_`），漏任一处都不报错——INSERT 侧静默丢列、冲突侧静默留 NULL。用"mock 捕获落库对象 + 断言编译后 SQL 含 `excluded.<col>`"的单测锁死，比实机抽查行数更早暴露。
 - SQLAlchemy `text()` 的绑定参数只能承载**值**，列名与排序方向（`ORDER BY :col :dir`）无法参数化——排序维度必须从文件内硬编码白名单 f-string 插值，并保证任何用户输入都在到达字符串前被白名单校验拦下（校验即天然防注入）；同时 Postgres `ORDER BY x DESC` 默认 NULLS FIRST，可空排序列不显式加 `IS NOT NULL` 会让"涨幅榜"以 NULL 行领跑，榜单类查询必须在 SQL 内过滤坏行，而不是留给前端补。
+- 字段量纲注释必须与**存储单位**逐字一致：TuShare `amount` 存的是千元、`daily_basic` 市值是万元，注释写错单位比不写更危险——下游 mapper 会照错注释再乘错一档（10³ 级偏差），而透传单测只断言"原值透传"抓不到；不确定时标注来源口径（如"TuShare 原生千元，消费端 ×1000"）而非猜一个。
 
 ## 三、Docker 与部署
 
@@ -150,7 +151,7 @@
 - 多分层微服务认证必须把 Gateway 当作性能/路由层而不是唯一安全边界：业务服务仍需独立校验 JWT 的签名、iss、aud、exp/nbf 并执行对象/属性/功能级授权；服务间另用 workload identity（优先 mTLS）鉴别调用方，禁止仅凭内网、Docker network 或可伪造的 `X-User-*` 请求头建立信任。用户 access token 只在其目标资源服务链路内转发，跨服务使用 audience 限定、scope 下缩的 token exchange；异步 MQ 消息不携带 bearer token，改由服务身份认证并在任务记录中保存最小化 actor/audit 元数据。
 - 小型 Docker Compose 系统选 API Gateway 时，应先按当前的服务发现、认证与限流需求收敛运维面：优先选择能直接读取容器元数据且无需额外控制面依赖的方案，同时让 FastAPI 保留 JWT 签名、iss/aud/exp/nbf 与对象级授权校验，避免把网关误当成唯一安全边界。
 - 同一份数据出现在产品多个页面时必须**单一同源**（同一 API/同一 service）：landing 曾走旧的 `/market/indices`（读 index_dailies 盘后日线）而市场页走 `/market/global-indices`（东财实时快照），"每 60 秒自动刷新"轮询的却是盘后库表，EOD vs realtime 口径差被用户当作数据错误上报。新增展示面时先审现有链路能否复用，口径差异要在 UI 上如实标注（如"盘后为准"），"实时"文案不得配非实时数据源；同源化时把两端测试断言（E2E mock 端点/载荷形状、单测注册表条数）一起同步，注册表扩容类断言优先锁"集合"而非只锁"个数"。
-- 多个公开端点共用的"数据截至日"必须收敛为单一 resolver（含缓存与 TTL），否则各端点各自 `max(trade_date)` 会口径漂移、`as_of` 互相打架；把 `datetime.date` 放进 JSON 序列化的 `CacheClient` 时必须存 `isoformat()` 字符串并在读出侧 `date.fromisoformat` 兜底——直接存 `date` 依赖 `json.dumps(default=str)` 的隐式转换，读回是 str 而类型标注说 date，迟早出隐性类型错。
+- 跨端点共享的取值（如"数据截至日"）应收敛为**单一实现**（`max(trade_date)` 只写一处，其余调用方薄委托），但缓存是调用方各自选择的路径而非实现本身：不要为了"统一"给所有调用方强加缓存，也不要让薄委托顺手改掉老调用方的行为。空源降级责任在**使用层**：需要兜底语义的端点捕获实现抛出的异常并返回自洽空载荷（公开首页块绝不能因空库 500），只有确需该值的调用方才让异常穿透。把 `datetime.date` 放进 JSON 序列化的 `CacheClient` 时必须存 `isoformat()` 字符串并在读出侧 `date.fromisoformat` 兜底——直接存 `date` 依赖 `json.dumps(default=str)` 的隐式转换，读回是 str 而类型标注说 date，迟早出隐性类型错。
 
 ## 七、指标建模与规则引擎
 

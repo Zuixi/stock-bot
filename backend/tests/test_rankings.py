@@ -123,3 +123,46 @@ async def test_get_rankings_computes_and_sets_cache(monkeypatch) -> None:
 async def test_get_rankings_rejects_unknown_type() -> None:
     with pytest.raises(ValueError, match="unknown ranking type"):
         await market_service.get_rankings(_FakeDb([]), None, "amplitude", 5)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_get_rankings_degrades_on_empty_db(monkeypatch) -> None:
+    """Empty daily_quotes must return an empty payload, not propagate ValueError (500)."""
+
+    async def _empty(_db, _cache=None):
+        raise ValueError("daily_quotes is empty — run ingest first")
+
+    monkeypatch.setattr(market_service, "get_latest_trade_date", _empty)
+    cache = RecordingCache()
+    db = _FakeDb([])
+
+    out = await market_service.get_rankings(db, cache, "gainers", 10)  # type: ignore[arg-type]
+
+    assert out.items == []
+    assert out.is_latest_trading_day is False
+    assert out.as_of == market_service.last_weekday(date.today())
+    assert db.calls == []
+    assert cache.set_calls == [], "empty fallback must not be cached (recover immediately)"
+
+
+@pytest.mark.asyncio
+async def test_latest_trade_date_helper_delegates_uncached(monkeypatch) -> None:
+    """The four dashboard readers keep using the uncached thin delegate."""
+    seen: list[object] = []
+
+    async def _fake(_db, _cache=None):
+        seen.append(_cache)
+        return date(2026, 9, 9)
+
+    monkeypatch.setattr(market_service, "get_latest_trade_date", _fake)
+    assert await market_service._latest_trade_date(_FakeDb([])) == date(2026, 9, 9)  # type: ignore[arg-type]
+    assert seen == [None], "siblings must not acquire a cache dependency"
+
+
+@pytest.mark.asyncio
+async def test_latest_trade_date_helper_returns_none_on_empty(monkeypatch) -> None:
+    async def _empty(_db, _cache=None):
+        raise ValueError("empty")
+
+    monkeypatch.setattr(market_service, "get_latest_trade_date", _empty)
+    assert await market_service._latest_trade_date(_FakeDb([])) is None  # type: ignore[arg-type]
