@@ -90,3 +90,28 @@ async def test_upsert_quotes_carries_pct_chg_in_values_and_on_conflict() -> None
     # The SET side uses excluded.*; without it the conflict path keeps the old NULL.
     assert "pre_close = excluded.pre_close" in sql
     assert "pct_chg = excluded.pct_chg" in sql
+
+
+@pytest.mark.asyncio
+async def test_update_pct_chg_for_date_is_update_only() -> None:
+    """Backfill must reconcile existing rows: UPDATE, never INSERT, no LAG derivation."""
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=SimpleNamespace(rowcount=2))
+
+    updated = await quote_repo.update_pct_chg_for_date(
+        db, date(2026, 9, 10), [(1, 10.0, 5.0), (2, 20.0, -1.5)]
+    )
+
+    assert updated == 2
+    stmt = db.execute.await_args.args[0]
+    sql = str(stmt.compile(dialect=postgresql.dialect()))
+    assert sql.lstrip().upper().startswith("UPDATE")
+    assert "pre_close" in sql and "pct_chg" in sql
+    assert "INSERT" not in sql.upper()
+    assert "LAG" not in sql.upper()
+    # One VALUES-join statement, not per-row executemany (asyncpg returns -1 there).
+    assert "VALUES" in sql.upper()
+
+    empty_db = AsyncMock()
+    assert await quote_repo.update_pct_chg_for_date(empty_db, date(2026, 9, 10), []) == 0
+    empty_db.execute.assert_not_awaited()
