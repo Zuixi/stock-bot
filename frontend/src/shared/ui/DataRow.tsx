@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { DeltaText } from "./DeltaText";
 import "./DataRow.css";
 
@@ -8,6 +9,7 @@ export interface DataRowProps {
   ticker?: string;
   value?: string;
   unit?: string;
+  /** 应用内路由（如 `/stock/600519`）；用 router Link 导航，避免整页刷新 */
   href?: string;
   delta?: number | null;
   /**
@@ -51,9 +53,9 @@ export function DataRow({
     </>
   );
   return href ? (
-    <a className="datarow" href={href}>
+    <Link className="datarow" to={href}>
       {body}
-    </a>
+    </Link>
   ) : (
     <div className="datarow">{body}</div>
   );

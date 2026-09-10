@@ -193,7 +193,7 @@ test.describe("公开行情台首页 · 脉搏区（Task 1.5）", () => {
     );
     await page.goto("/#pulse");
     const pulse = page.getByTestId("section-pulse");
-    await expect(pulse.getByText("今日涨跌分布暂不可用")).toBeVisible({ timeout: 15000 });
+    await expect(pulse.getByText("当日涨跌分布暂不可用")).toBeVisible({ timeout: 15000 });
     await expect(pulse.locator(".distribution-bars")).toHaveCount(0);
     await expect(pulse.locator(".landing-pulse-summary b")).toHaveCount(0);
   });
@@ -384,6 +384,18 @@ test.describe("公开行情台首页 · 快讯区（Task 1.9）", () => {
     await expect(section.getByText("关于向特定对象发行股票的公告")).toBeVisible({ timeout: 15000 });
     await expect(section.getByText("2026 年半年度报告")).toHaveCount(0);
   });
+
+  test("快讯区降级：接口故障走错误占位，不谎报「暂无公告快讯」", async ({ page }) => {
+    // 后注册优先：覆盖 beforeEach 的 200 mock
+    await page.route("**/api/v1/market/announcements*", (route) => route.abort());
+    await page.goto("/#news");
+    const section = page.getByTestId("section-news");
+    // 口径诚实：故障与「确实没有公告」是两种语义，不得共用空态文案
+    await expect(section.getByText("公告快讯暂不可用，请稍后重试")).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(section.getByText("暂无公告快讯")).toHaveCount(0);
+  });
 });
 
 test.describe("公开行情台首页 · 资金区（Task 1.8）", () => {
@@ -400,6 +412,8 @@ test.describe("公开行情台首页 · 资金区（Task 1.8）", () => {
     await expect(section).toBeVisible();
     await expect(section.getByText("大盘资金流", { exact: true })).toBeVisible({ timeout: 15000 });
     await expect(section.getByText("今日主力净流入")).toBeVisible();
+    // 资金块与其余四块同为「SectionCard 壳内纯内容」，不得再嵌一层 Card（卡中卡）
+    await expect(section.locator(".ant-card")).toHaveCount(0);
     // 北向数据源断流（northbound_daily 无行），资金区不得渲染北向卡或以本地序列替补
     await expect(section.getByText("北向")).toHaveCount(0);
   });
@@ -435,6 +449,8 @@ test.describe("公开行情台首页 · 板块区（Task 1.7 / 3.2）", () => {
     // 口径必须显式可见且与实际数据源一致：左列申万一级，右列近似资金流口径
     await expect(section.getByText("行业口径：申万一级")).toBeVisible();
     await expect(section.getByText("近似口径")).toBeVisible();
+    // T+1 行业行情必须标注数据截止日（与榜单同款措辞，来自真实快照 as_of=2026-09-09）
+    await expect(section.getByText(/数据截至\s*9月9日/)).toBeVisible();
     // 「申万版即将上线」占位文案必须删除
     await expect(section.getByText("申万版即将上线")).toHaveCount(0);
     // 左列申万一级行业（复用 DataRow/DeltaText）：行业名 + 当日有行情成员数 + 成交额 + 涨跌幅

@@ -4,20 +4,12 @@ import { fetchGlobalIndices } from "@/shared/api/marketData";
 import type { GlobalIndexCard } from "@/shared/api/marketData";
 import { DistributionBars } from "@/features/market/components/DistributionBars";
 import type { DistributionBucket } from "@/features/market/components/DistributionBars";
+import { pickCoreIndices } from "@/features/market/components/coreIndices";
 import { useTheme } from "@/app/theme-context";
 
 const REFRESH_MS = 60_000;
 
-/** 优先展示的 A 股核心指数（接口缺谁就顺位补齐，恒定 8 格） */
-const PREFERRED_TS_CODES = [
-  "000001.SH", // 上证指数
-  "399001.SZ", // 深证成指
-  "399006.SZ", // 创业板指
-  "000300.SH", // 沪深300
-  "000905.SH", // 中证500
-  "000688.SH", // 科创50
-];
-
+/** 恒定 8 格：优先核心 6 码，缺谁用任意市场的其余指数顺位补齐（共享选择器） */
 const TICKER_COUNT = 8;
 
 /**
@@ -32,14 +24,6 @@ function directionOf(range: string): DistributionBucket["direction"] {
   if (UP_RANGES.includes(range)) return "up";
   if (DOWN_RANGES.includes(range)) return "down";
   return "flat";
-}
-
-function pickIndices(list: GlobalIndexCard[]): GlobalIndexCard[] {
-  const preferred = PREFERRED_TS_CODES
-    .map((code) => list.find((i) => i.tsCode === code))
-    .filter((i): i is GlobalIndexCard => !!i);
-  const rest = list.filter((i) => !PREFERRED_TS_CODES.includes(i.tsCode));
-  return [...preferred, ...rest].slice(0, TICKER_COUNT);
 }
 
 function formatPrice(value: number): string {
@@ -99,7 +83,7 @@ export function MarketPulse() {
     refetchInterval: REFRESH_MS,
   });
 
-  const indices = indicesQuery.data ? pickIndices(indicesQuery.data) : [];
+  const indices = indicesQuery.data ? pickCoreIndices(indicesQuery.data, TICKER_COUNT) : [];
 
   const dist = distQuery.data ?? [];
   // 空数组不是「全平盘」而是「分布不可用」——缺失与零值语义不同，不能渲染成 上涨 0 · 下跌 0
@@ -124,18 +108,22 @@ export function MarketPulse() {
       {indicesQuery.isLoading ? (
         <TickerSkeletons />
       ) : indices.length > 0 ? (
-        <div className="landing-ticker-row">
-          {indices.map((idx) => (
-            <Ticker key={idx.tsCode} index={idx} />
-          ))}
-        </div>
+        <>
+          <div className="landing-ticker-row">
+            {indices.map((idx) => (
+              <Ticker key={idx.tsCode} index={idx} />
+            ))}
+          </div>
+          {/* 「实时 + 60s 刷新」只描述指数条；下方分布是当日收盘（T+1）口径 */}
+          <div className="landing-pulse-caption">指数实时快照 · 每 60 秒自动刷新</div>
+        </>
       ) : (
         <div className="landing-placeholder">行情数据暂不可用，请稍后重试</div>
       )}
 
       {buckets.length > 0 ? (
         <div className="landing-pulse-dist">
-          <div className="landing-pulse-dist-title">今日涨跌分布</div>
+          <div className="landing-pulse-dist-title">当日涨跌分布（日度 / T+1）</div>
           <DistributionBars buckets={buckets} />
         </div>
       ) : null}
@@ -144,7 +132,7 @@ export function MarketPulse() {
         <span>
           {up != null && down != null ? (
             <>
-              今日 A 股：上涨{" "}
+              当日 A 股（T+1）：上涨{" "}
               <b style={{ color: colors.up, fontVariantNumeric: "tabular-nums" }}>
                 {up.toLocaleString()}
               </b>{" "}
@@ -154,12 +142,12 @@ export function MarketPulse() {
               </b>
             </>
           ) : distQuery.isLoading ? (
-            "正在汇总今日涨跌分布…"
+            "正在汇总当日涨跌分布…"
           ) : (
-            "今日涨跌分布暂不可用"
+            "当日涨跌分布暂不可用"
           )}
         </span>
-        <span>每 60 秒自动刷新 · 数据来源：东财实时快照，与市场页同源</span>
+        <span>涨跌分布为当日收盘口径（T+1），与市场页同源</span>
       </div>
     </div>
   );

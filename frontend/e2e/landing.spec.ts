@@ -68,8 +68,10 @@ test.describe("宣传页路由与品牌", () => {
   test("未登录：/ 不再跳转 /market（停留宣传页）", async ({ page }) => {
     await MOCK_SESSION_ANON(page);
     await page.goto("/");
-    await page.waitForTimeout(800);
-    await expect(page).toHaveURL("/");
+    // 以 network-idle 为界（而非固定 sleep）：若发生重定向，导航请求已在 idle 前发出。
+    // 固定 800ms 会让更慢的重定向漏网，故改为有界等待 + 稳定 URL 断言。
+    await page.waitForLoadState("networkidle");
+    expect(new URL(page.url()).pathname).toBe("/");
   });
 
   test("已登录：/ 停留宣传页且 CTA 换成「进入工作台」", async ({ page }) => {
@@ -79,6 +81,9 @@ test.describe("宣传页路由与品牌", () => {
     const cta = page.getByTestId("landing-cta");
     await expect(cta).toBeVisible();
     await expect(cta).toContainText("进入工作台");
+    // 已登录不得再出现「登录」入口：CTA 已切「进入工作台」，旧实现旁边仍无条件渲染
+    // 登录按钮，导致同一导航栏同时给出登录与进入工作台两个互斥动作。
+    await expect(page.getByRole("button", { name: "登录" })).toHaveCount(0);
     // Hero 与底部 CTA 同步
     await expect(page.getByTestId("landing-cta-hero")).toContainText("进入工作台");
     // 点击进入工作台
@@ -149,6 +154,9 @@ test.describe("宣传页数据区块", () => {
     await expect(page.getByText("A股行情").first()).toBeVisible();
     await expect(page.getByText("行业产能指标").first()).toBeVisible();
     await expect(page.getByText("财务三表").first()).toBeVisible();
+    // 北向 `northbound_daily` 零行、首页已整卡移除：矩阵不得再宣称其「免费/已覆盖」
+    await expect(page.locator(".dc-planned-badge")).toHaveText("规划中");
+    await expect(page.getByText("已上线数据域")).toBeVisible();
   });
 
   test("申万行业网格渲染并带个股数提示", async ({ page }) => {

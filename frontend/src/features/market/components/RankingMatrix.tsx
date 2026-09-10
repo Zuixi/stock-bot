@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { DataRow, SectionCard } from "@/shared/ui";
 import { fetchRankings } from "@/shared/api/market";
 import type { RankingType } from "@/shared/api/market";
-import { fmtAmountParts } from "./format";
+import { fmtAmountParts, formatCnDate } from "./format";
 
 interface RankingTab {
   key: RankingType;
@@ -19,12 +19,6 @@ const TABS: RankingTab[] = [
 ];
 
 const TOP_N = 10;
-
-/** `as_of`（YYYY-MM-DD）→ 「9月9日」样式。 */
-function formatCnDate(iso: string): string {
-  const [, month, day] = iso.split("-");
-  return month && day ? `${Number(month)}月${Number(day)}日` : iso;
-}
 
 /**
  * 首页榜单矩阵：四 Tab 切换，数据源为 `GET /market/rankings`（服务端按
@@ -52,9 +46,7 @@ export function RankingMatrix() {
         items={TABS.map((t) => ({ key: t.key, label: t.label }))}
       />
       {data?.as_of ? (
-        <div className="ranking__asof" style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-          数据截至 {formatCnDate(data.as_of)}
-        </div>
+        <div className="section-card__asof">数据截至 {formatCnDate(data.as_of)}</div>
       ) : null}
       {isLoading ? (
         <Skeleton active paragraph={{ rows: 6 }} />

@@ -32,12 +32,30 @@ export function AnnouncementFeed({
   maxRows,
   timeMode = "absolute",
 }: AnnouncementFeedProps) {
-  const { data = [], isLoading } = useQuery({
+  const { data = [], isLoading, isError } = useQuery({
     // category 只做客户端过滤，故 key 不含 category：首页两个 Tab 共享一次请求
     queryKey: ["announcements", fetchLimit],
     queryFn: () => fetchAnnouncements(undefined, fetchLimit),
     staleTime: 5 * 60 * 1000,
   });
+
+  // 口径诚实：接口故障 ≠「确实没有公告」。故障走独立错误占位，绝不落回空态文案
+  // （否则公开区块会在数据源宕机时对外宣称「无新闻」）。
+  if (isError) {
+    return (
+      <div
+        className="announcement-feed__error"
+        style={{
+          padding: "24px 0",
+          textAlign: "center",
+          color: "var(--text-secondary)",
+          fontSize: 13,
+        }}
+      >
+        公告快讯暂不可用，请稍后重试
+      </div>
+    );
+  }
 
   const rows = (category ? data.filter((a) => a.category === category) : data).slice(
     0,

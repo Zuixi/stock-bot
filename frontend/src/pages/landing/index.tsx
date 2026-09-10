@@ -1,4 +1,3 @@
-import { Skeleton } from "antd";
 import "./landing.css";
 import { SectionCard } from "@/shared/ui";
 import { RankingMatrix } from "@/features/market/components/RankingMatrix";
@@ -16,17 +15,13 @@ import { AccountPerks } from "./sections/AccountPerks";
 import { BottomCTA } from "./sections/BottomCTA";
 import { LandingFooter } from "./sections/LandingFooter";
 
-/** 未填充行情区块的骨架屏占位（每个空 SectionCard 显式挂 children） */
-function SectionSkeleton() {
-  return <Skeleton active paragraph={{ rows: 4 }} />;
-}
-
 /**
  * StockBot 公开行情台首页（免登录，独立布局不套 MainLayout，契约 §2/§3）。
  *
  * 产品决策「免登录行情为主」：区块序列为紧凑 Hero → 脉搏/榜单/板块/资金/日历/快讯，
  * 营销区（ValueProps/ProductShowcase）压缩到行情台之后，数据覆盖与行业网格留在尾部。
- * 行情区块逐个 Task 填充，未填充者以骨架屏独立降级。
+ * 行情区块逐个 Task 填充，未填充者以显式文案独立降级（不用永久骨架屏——无文案的
+ * 持续 shimmer 会被读成页面卡死）。
  */
 export default function LandingPage() {
   return (
@@ -49,7 +44,7 @@ export default function LandingPage() {
               <MoneySentiment />
             </SectionCard>
             <SectionCard id="calendar" title="日历">
-              <SectionSkeleton />
+              <div className="landing-placeholder">日历即将上线</div>
             </SectionCard>
             <SectionCard id="news" title="快讯">
               <MarketNewsFeed />
