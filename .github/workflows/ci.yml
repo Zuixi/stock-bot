@@ -202,6 +202,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "22", cache: "npm", cache-dependency-path: frontend/package-lock.json }
       - run: npm ci
+      # 设计令牌硬门禁：涨跌色对比度（bg-page + bg-panel）≥ 4.5 且 theme.ts↔theme.css 一致
+      - run: npm run check:design
       - run: npx tsc --noEmit
 
   frontend-build:

@@ -1,3 +1,9 @@
+## 2026-09-11 - 首页公开化 Phase 1（D1 复核补漏）：设计令牌门禁接入 CI + 覆盖卡片表面
+- **问题**：`npm run check:design` 只存在于 package.json，无任何自动化路径调用，改色破坏 AA 或 `theme.ts`/`theme.css` 失同步时 CI/lint/build 全绿；且原脚本只对 `--bg-page` 校验，漏掉 DataRow/DeltaText 实际所在的 `SectionCard` 表面（`--bg-panel`）
+- **修复**：CI `frontend-lint` job 在 `npm ci` 后新增 `npm run check:design` 硬门禁步骤；脚本对 light/fallback 同时校验 `--bg-page` 与 `--bg-panel` 对比度 ≥ 4.5
+- **发现（待决）**：暗色 `--up #f23645`(4.08:1) / `--down #089981`(4.45:1) 对 `--bg-panel #1e222d` 不达 AA；暗色为契约冻结的 TradingView 实测值，本轮未改色，脚本对暗色暂只校验 `--bg-page` 并在注释登记，待色值决策
+- 涉及模块：.github/workflows/ci.yml, frontend/scripts/check-design-tokens.mjs, docs/references/best-practices.md
+
 ## 2026-09-11 - 首页公开化 Phase 1：enriched 排序路径加 Redis 缓存（公开流量防护）
 - **问题**：`/api/v1/exchanges/stocks/enriched` 公开可达，带 `sort_by` 时每次请求都走「全市场查询 + LATERAL + Python 排序」且完全无缓存，匿名流量可打满 DB
 - **修复**：`list_stocks_enriched` 排序分支前置 Redis 缓存（key `stocks:enriched:sort:{exchange}:{category}:{keyword}:{sort_by}:{sort_order}:{offset}:{page_size}`，TTL 60s），命中直接反序列化返回，不再触库；key 含全部过滤维度，避免不同筛选互串
