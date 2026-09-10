@@ -19,6 +19,7 @@ collection error.
 import json
 from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -55,7 +56,7 @@ def _fixtures_dir() -> Path | None:
     return None
 
 
-def _load(name: str) -> dict:
+def _load(name: str) -> dict[str, Any]:
     fixtures_dir = _fixtures_dir()
     if fixtures_dir is None:
         pytest.skip("frontend/e2e/fixtures not present (backend-only checkout)")

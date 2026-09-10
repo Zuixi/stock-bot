@@ -75,6 +75,38 @@ async def test_get_latest_trade_date_cache_hit_skips_db() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_latest_trade_date_non_str_cache_falls_through_to_db() -> None:
+    """A non-string cached value must not be ``cast`` through as a ``date``.
+
+    ``cast`` is a runtime no-op, so trusting a non-str payload would leak e.g. an
+    int/None/float to callers that then ``.strftime`` or compare it as a date.
+    """
+    cache = RecordingCache()
+    cache.store["market:latest_trade_date"] = 1778544000  # int payload, not a date
+    db = _FakeDb(date(2026, 9, 10))
+
+    out = await get_latest_trade_date(db, cache)  # type: ignore[arg-type]
+
+    assert out == date(2026, 9, 10)
+    assert db.execute_calls == 1
+    # re-resolved value overwrites the bad cache entry
+    assert cache.store["market:latest_trade_date"] == "2026-09-10"
+
+
+@pytest.mark.asyncio
+async def test_get_latest_trade_date_malformed_str_cache_falls_through_to_db() -> None:
+    cache = RecordingCache()
+    cache.store["market:latest_trade_date"] = "not-a-date"
+    db = _FakeDb(date(2026, 9, 10))
+
+    out = await get_latest_trade_date(db, cache)  # type: ignore[arg-type]
+
+    assert out == date(2026, 9, 10)
+    assert db.execute_calls == 1
+    assert cache.store["market:latest_trade_date"] == "2026-09-10"
+
+
+@pytest.mark.asyncio
 async def test_get_latest_trade_date_empty_table_raises() -> None:
     db = _FakeDb(None)
 

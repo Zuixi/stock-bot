@@ -33,6 +33,19 @@ def test_quote_rank_sql_filters_null_pct_chg() -> None:
         assert "pct_chg IS NOT NULL" in str(stmt)
 
 
+def test_quote_rank_sql_has_stock_id_tiebreak() -> None:
+    # Deterministic order: equal sort values must not shuffle between identical calls.
+    for stmt in market_service._QUOTE_RANK_SQL.values():
+        assert str(stmt).count("q.stock_id ASC") == 1  # inner top-N
+        assert str(stmt).count("t.stock_id ASC") == 1  # outer re-imposed order
+
+
+def test_turnover_rank_sql_has_stock_id_tiebreak() -> None:
+    sql = str(market_service._TURNOVER_RANK_SQL)
+    assert "b.stock_id ASC" in sql
+    assert "t.stock_id ASC" in sql
+
+
 class RecordingCache:
     def __init__(self) -> None:
         self.store: dict[str, object] = {}

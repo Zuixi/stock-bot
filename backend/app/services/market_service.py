@@ -120,12 +120,19 @@ async def get_latest_trade_date(db: AsyncSession, cache: CacheClient | None = No
 
     Redis-cached for 5 minutes under ``market:latest_trade_date``. Ruling Q:
     ``CacheClient`` JSON-serializes, so the cached value is an ISO string and is
-    parsed back with ``date.fromisoformat``.
+    parsed back with ``date.fromisoformat``. A non-string (or unparseable) cached
+    value is treated as a cache miss and re-resolved from the DB — ``cast`` would
+    be a runtime no-op and could leak a non-``date`` straight to callers.
     """
     if cache:
         cached = await cache.get(_LATEST_TRADE_DATE_CACHE_KEY)
-        if cached is not None:
-            return date.fromisoformat(cached) if isinstance(cached, str) else cast(date, cached)
+        if isinstance(cached, str):
+            try:
+                return date.fromisoformat(cached)
+            except ValueError:
+                # Corrupt cache payload — fall through and re-resolve from the DB
+                # (then overwrite the cache below) rather than trusting it.
+                pass
 
     result = await db.execute(select(func.max(DailyQuote.trade_date)))
     as_of = result.scalar_one_or_none()
@@ -522,14 +529,17 @@ def _build_quote_rank_sql(order_col: str, order_dir: str) -> TextClause:
     Ruling P: the ``pct_chg IS NOT NULL`` filter must stay — Postgres sorts
     DESC as NULLS FIRST, so without it the 涨幅榜 leads with unrankable rows.
     The outer ``ORDER BY`` re-imposes the order after the enrichment JOIN so the
-    join can never reshuffle the locked top-N.
+    join can never reshuffle the locked top-N. Both ORDER BYs carry a
+    ``stock_id ASC`` tiebreak: without it, rows with equal sort values (e.g. all
+    zero-volume 成交额 rows, many 涨停 ties) have no stable order and the top-N
+    selection / response order can shuffle between identical calls.
     """
     return text(f"""
         WITH topn AS (
             SELECT q.stock_id, q.close, q.pct_chg, q.amount, q.volume
             FROM daily_quotes q
             WHERE q.trade_date = :as_of AND q.pct_chg IS NOT NULL
-            ORDER BY q.{order_col} {order_dir}
+            ORDER BY q.{order_col} {order_dir}, q.stock_id ASC
             LIMIT :limit
         )
         SELECT s.symbol, s.name, s.exchange, t.close, t.pct_chg, t.amount, t.volume,
@@ -538,7 +548,7 @@ def _build_quote_rank_sql(order_col: str, order_dir: str) -> TextClause:
         JOIN stocks s ON s.id = t.stock_id
         LEFT JOIN daily_basic_indicators b
                ON b.stock_id = t.stock_id AND b.trade_date = :as_of
-        ORDER BY t.{order_col} {order_dir}
+        ORDER BY t.{order_col} {order_dir}, t.stock_id ASC
     """)
 
 
@@ -549,12 +559,14 @@ _QUOTE_RANK_SQL: dict[str, TextClause] = {
 }
 
 # turnover_rate lives in daily_basic_indicators, so it needs its own top-N CTE.
+# ``stock_id ASC`` tiebreak mirrors _build_quote_rank_sql — equal turnover_rate
+# rows must not shuffle between identical calls.
 _TURNOVER_RANK_SQL = text("""
     WITH topn AS (
         SELECT b.stock_id, b.turnover_rate, b.total_mv
         FROM daily_basic_indicators b
         WHERE b.trade_date = :as_of AND b.turnover_rate IS NOT NULL
-        ORDER BY b.turnover_rate DESC
+        ORDER BY b.turnover_rate DESC, b.stock_id ASC
         LIMIT :limit
     )
     SELECT s.symbol, s.name, s.exchange, q.close, q.pct_chg, q.amount, q.volume,
@@ -562,7 +574,7 @@ _TURNOVER_RANK_SQL = text("""
     FROM topn t
     JOIN stocks s ON s.id = t.stock_id
     LEFT JOIN daily_quotes q ON q.stock_id = t.stock_id AND q.trade_date = :as_of
-    ORDER BY t.turnover_rate DESC
+    ORDER BY t.turnover_rate DESC, t.stock_id ASC
 """)
 
 
