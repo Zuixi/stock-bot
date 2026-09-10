@@ -1,0 +1,49 @@
+.datarow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  text-decoration: none;
+  color: inherit;
+}
+.datarow:last-child {
+  border-bottom: none;
+}
+.datarow__id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.datarow__names {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.datarow__title {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.datarow__ticker {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+.datarow__val {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.datarow__price {
+  font-size: 14px;
+}
+.datarow__unit {
+  font-size: 11px;
+  color: var(--text-secondary);
+}

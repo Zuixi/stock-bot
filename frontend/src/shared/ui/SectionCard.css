@@ -1,0 +1,22 @@
+.section-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+.section-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.section-card__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.section-card__more {
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+}

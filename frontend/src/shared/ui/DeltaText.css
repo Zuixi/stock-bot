@@ -1,0 +1,13 @@
+.delta {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.delta--up {
+  color: var(--up);
+}
+.delta--down {
+  color: var(--down);
+}
+.delta--flat {
+  color: var(--text-secondary);
+}

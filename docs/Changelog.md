@@ -1,3 +1,8 @@
+## 2026-09-11 - 首页公开化 Phase 1：共享 UI 原语 DeltaText / DataRow / SectionCard
+- 新增 `frontend/src/shared/ui/` 三个行情区块基础件：`DeltaText({value, suffix?})`（正 `+`/负 `−`/零无符号/缺失 `--`，消费 `--up`/`--down` CSS 变量随主题切换）、`DataRow({logo?, title, ticker?, value?, unit?, href?, delta?})`、`SectionCard({id?, title, moreHref?, moreText?, children})`；签名由后续所有行情区块消费，不得改动
+- 三个组件与类型经 `shared/ui/index.ts` 桶文件导出；新增 `frontend/e2e/public-homepage.spec.ts` 最小冒烟（`/` 返回 200 且 H1 可见）
+- 涉及模块：frontend/src/shared/ui, frontend/e2e
+
 ## 2026-09-11 - 首页公开化 Phase 1：涨跌色 WCAG AA 修复 + 设计令牌门禁
 - **问题**：浅色模式 `--up #f5222d` / `--down #22c55e` 对 `--bg-page #ffffff` 对比度仅 4.08:1 / 2.28:1，均低于 WCAG AA 的 4.5:1
 - **修复**：浅色涨跌色改为 `--up #c62828`（5.62:1）/ `--down #0a7d5f`（5.11:1），同步三处声明（`:root` 首帧兜底块、`:root[data-theme="light"]`、`theme.ts` `THEME_COLORS.light`）；暗色与 `flat`/`hover` 不动
