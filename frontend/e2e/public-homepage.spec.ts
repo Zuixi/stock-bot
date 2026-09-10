@@ -159,6 +159,54 @@ const MOCK_CAPITAL_FLOW = [
   { name: "汽车配件", inflow: 164.78, outflow: -243.14 },
 ];
 
+const MOCK_MONEYFLOW = {
+  today: {
+    total: {
+      amount: 1_647_147_829_484.9,
+      main_net: -31_581_126_656,
+      super_large_net: -16_085_057_536,
+      large_net: -15_496_069_120,
+      mid_net: 2_024_771_584,
+      small_net: 29_556_350_976,
+    },
+    markets: [
+      { code: "000001", name: "上证指数", main_net: -15_583_944_704, super_large_net: -7_581_204_480, large_net: -8_002_740_224, mid_net: 1_721_257_984, small_net: 13_862_682_624, main_ratio: -2 },
+    ],
+  },
+  history: [
+    { date: "2026-09-10", main_net: -20_000_000_000, super_large_net: -9e9, large_net: -1.1e10, mid_net: 1e9, small_net: 1.9e10, main_ratio: -1.2, close: 3900, pct_change: -0.5, amount: 1.5e12 },
+    { date: "2026-09-11", main_net: -31_581_126_656, super_large_net: -1.6e10, large_net: -1.5e10, mid_net: 2e9, small_net: 2.9e10, main_ratio: -2, close: 3951, pct_change: 0.28, amount: 1.6e12 },
+  ],
+};
+
+test.describe("公开行情台首页 · 资金区（Task 1.8）", () => {
+  test.beforeEach(async ({ page }) => {
+    await MOCK_SESSION_ANON(page);
+    await page.route("**/api/v1/market/market-moneyflow", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_MONEYFLOW) })
+    );
+  });
+
+  test("资金区：大盘资金流卡片可见（无北向卡）", async ({ page }) => {
+    await page.goto("/#money");
+    const section = page.getByTestId("section-money");
+    await expect(section).toBeVisible();
+    await expect(section.getByText("大盘资金流", { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(section.getByText("今日主力净流入")).toBeVisible();
+    // 北向数据源断流（northbound_daily 无行），资金区不得渲染北向卡或以本地序列替补
+    await expect(section.getByText("北向")).toHaveCount(0);
+  });
+
+  test("资金区降级：接口挂掉显示占位，不白屏", async ({ page }) => {
+    await page.route("**/api/v1/market/market-moneyflow", (route) => route.abort());
+    await page.goto("/#money");
+    await expect(page.getByTestId("section-money")).toBeVisible();
+    // 卡壳仍在、走占位文案，不整区白屏
+    await expect(page.getByTestId("section-money").getByText("大盘资金流", { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("section-money").getByText("暂无大盘资金流数据（盘后自动更新）")).toBeVisible();
+  });
+});
+
 test.describe("公开行情台首页 · 板块区（Task 1.7）", () => {
   test.beforeEach(async ({ page }) => {
     await MOCK_SESSION_ANON(page);
