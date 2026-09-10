@@ -33,7 +33,7 @@ _PLAN_CASES = [
         "daily_quotes",
         "SELECT stock_id FROM daily_quotes "
         "WHERE trade_date = (SELECT max(trade_date) FROM daily_quotes) "
-        "AND pct_chg IS NOT NULL ORDER BY pct_chg DESC LIMIT 20",
+        "AND pct_chg IS NOT NULL ORDER BY pct_chg DESC, stock_id ASC LIMIT 20",
     ),
     (
         "amount",
@@ -41,7 +41,7 @@ _PLAN_CASES = [
         "daily_quotes",
         "SELECT stock_id FROM daily_quotes "
         "WHERE trade_date = (SELECT max(trade_date) FROM daily_quotes) "
-        "AND pct_chg IS NOT NULL ORDER BY amount DESC LIMIT 20",
+        "AND pct_chg IS NOT NULL ORDER BY amount DESC, stock_id ASC LIMIT 20",
     ),
     (
         "turnover_rate",
@@ -49,7 +49,7 @@ _PLAN_CASES = [
         "daily_basic_indicators",
         "SELECT stock_id FROM daily_basic_indicators "
         "WHERE trade_date = (SELECT max(trade_date) FROM daily_quotes) "
-        "AND turnover_rate IS NOT NULL ORDER BY turnover_rate DESC LIMIT 20",
+        "AND turnover_rate IS NOT NULL ORDER BY turnover_rate DESC, stock_id ASC LIMIT 20",
     ),
 ]
 
