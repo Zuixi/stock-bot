@@ -1,3 +1,11 @@
+## 2026-09-11 - 首页公开化 Phase 1：免登录行情台 IA 重排（Task 1.4–1.6）
+- **背景**：产品决策「免登录行情为主」——行情区块是首页主内容，营销区压缩到行情台之后；导航锚点从「功能/数据/行业」改为「脉搏/榜单/板块/资金/快讯」（`#pulse/#rankings/#sectors/#money/#news`）
+- **Task 1.4**：`Hero` 压缩为 `CompactHero`（保留 H1/信任行/CTA，实测高 232px ≤ 240px 目标，大图与次 CTA 移除），`index.tsx` 区块序列改为 紧凑 Hero → 脉搏/榜单/板块/资金/日历/快讯 → ValueProps/ProductShowcase → DataCoverage/IndustryGrid/AccountPerks/BottomCTA；未填充行情区块以 `<SectionCard>` + AntD `Skeleton` 显式骨架挂载
+- **Task 1.5**：新增 `features/market/components/DistributionBars`（横向双向柱，与 `/market` DistributionChart 同 11 桶口径），`MarketPulse` 包进 `<SectionCard id="pulse">` 并加 `.index-ticker` 锚；**修复分桶漏桶**：`UP_RANGES` 补 `0~1%` 使两侧对称穷尽（实测上涨由 954 → 1,903，不再静默丢掉 949 只），失败降级文案去掉「注册后」改为「行情数据暂不可用，请稍后重试」
+- **Task 1.6**：新增 `shared/api/stocks.ts#fetchStockRanking`（走 Task 1.3 已缓存的 `/api/v1/exchanges/stocks/enriched` 排序端点）与 `features/market/components/RankingMatrix`（涨幅/跌幅/成交额三 Tab；换手率榜后端未支持，Phase 2 Task 2.7 补）；缺失涨跌幅经 `DeltaText` 渲染 `--`
+- **测试**：`public-homepage.spec.ts` 扩至 7 例（含「上涨+下跌 == 11 桶总和」「null 渲染 `--` 不渲染 0.00%」「脉搏区失败不影响榜单区」）；`landing.spec.ts` 分桶期望随口径修正 134 → 234；landing 7 + darkmode 3 + public-homepage 7 全绿
+- 涉及模块：frontend/src/pages/landing, frontend/src/features/market/components, frontend/src/shared/api/stocks.ts, frontend/e2e
+
 ## 2026-09-11 - 首页公开化 Phase 1（D7 修订）：暗色涨跌色达标卡片表面，门禁统一
 - **问题**：`SectionCard` 内 `DeltaText`/`DataRow` 实际渲染在 `--bg-panel #1e222d`；暗色 `--up #f23645`(4.08:1) / `--down #089981`(4.45:1) 对卡片面不达 WCAG AA（对 `--bg-page #131722` 的 4.59/5.01 达标掩盖了该缺陷）。原 D7「暗色已达标故不动」是在错误表面（`--bg-page`）上测得，予以推翻
 - **修复**：暗色 `--up #f2555a`（bg-page 5.30 / bg-panel 4.71）、`--down #0aa088`（bg-page 5.45 / bg-panel 4.84），同步 `:root[data-theme="dark"]` 与 `theme.ts` `THEME_COLORS.dark`；`:root` 兜底块保持浅色不变

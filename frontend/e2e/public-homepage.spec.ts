@@ -112,3 +112,81 @@ test.describe("公开行情台首页 · 脉搏区（Task 1.5）", () => {
     expect(sum).toBe(MOCK_DIST_UP + MOCK_DIST_DOWN);
   });
 });
+
+test.describe("公开行情台首页 · 榜单区（Task 1.6）", () => {
+  test.beforeEach(async ({ page }) => {
+    await MOCK_SESSION_ANON(page);
+  });
+
+  test("榜单区：三个 Tab 默认涨幅榜有数据", async ({ page }) => {
+    await page.goto("/#rankings");
+    const section = page.getByTestId("section-rankings");
+    await expect(section.getByRole("tab", { name: "涨幅榜" })).toBeVisible();
+    await expect(section.getByRole("tab", { name: "跌幅榜" })).toBeVisible();
+    await expect(section.getByRole("tab", { name: "成交额榜" })).toBeVisible();
+    await expect(section.locator(".datarow").first()).toBeVisible({ timeout: 15000 });
+  });
+
+  test("榜单缺失涨跌幅渲染 --，绝不渲染 0.00%", async ({ page }) => {
+    // 契约 §DeltaText：ChangePercent 缺失（次新股无行情）时必须显示 "--"
+    await page.route("**/api/v1/exchanges/stocks/enriched*", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [
+            {
+              symbol: "300750",
+              name: "宁德时代",
+              latest_price: 250.5,
+              change_percent: null,
+              amount: 1_234_567,
+            },
+            {
+              symbol: "600519",
+              name: "贵州茅台",
+              latest_price: 1500,
+              change_percent: 1.23,
+              amount: 987_654,
+            },
+          ],
+          total: 2,
+          page: 1,
+          page_size: 10,
+        }),
+      })
+    );
+
+    await page.goto("/#rankings");
+    const section = page.getByTestId("section-rankings");
+    const nullRow = section.locator(".datarow", { hasText: "宁德时代" });
+    await expect(nullRow).toBeVisible({ timeout: 15000 });
+    await expect(nullRow.locator(".delta")).toHaveText("--");
+    await expect(section.getByText("0.00%")).toHaveCount(0);
+  });
+
+  test("接口降级独立：脉搏区两条查询全失败不影响榜单区渲染", async ({ page }) => {
+    await page.route("**/api/v1/exchanges/stocks/enriched*", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [
+            { symbol: "600519", name: "贵州茅台", latest_price: 1500, change_percent: 1.23, amount: 987_654 },
+          ],
+          total: 1,
+          page: 1,
+          page_size: 10,
+        }),
+      })
+    );
+    await page.route("**/api/v1/market/global-indices", (route) => route.abort());
+    await page.route("**/api/v1/market/distribution", (route) => route.abort());
+
+    await page.goto("/#rankings");
+    await expect(page.getByTestId("section-pulse")).toBeVisible();
+    await expect(
+      page.getByTestId("section-rankings").locator(".datarow").first()
+    ).toBeVisible({ timeout: 15000 });
+  });
+});

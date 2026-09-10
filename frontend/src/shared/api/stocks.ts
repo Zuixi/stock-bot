@@ -178,6 +178,46 @@ export async function fetchStocksMergedEnriched(params: {
   };
 }
 
+// ---------------------------------------------------------------------------
+// 首页榜单（临时路径：复用 Task 1.3 已缓存的 enriched 排序端点）
+// Phase 2 Task 2.7 切换到 /api/v1/market/rankings 后此封装随之替换。
+// ---------------------------------------------------------------------------
+
+export interface RankingRow {
+  symbol: string;
+  name: string;
+  latestPrice: number | null;
+  changePercent: number | null;
+  /** 成交额（元）——后端 TuShare 千元口径已换算 */
+  amount: number | null;
+}
+
+/** 榜单排序维度：仅限后端 `_sort_key_for` 已支持的字段。换手率榜 Phase 2 上线。 */
+export type RankingSortBy = "changePercent" | "turnover";
+
+/**
+ * 跨交易所榜单查询（服务端 60s Redis 缓存 + 客户端 staleTime 双保险）。
+ *
+ * 服务端按全市场 enrich 后 Python 排序，开销大；调用方应保证低频。
+ */
+export async function fetchStockRanking(
+  sortBy: RankingSortBy,
+  order: "desc" | "asc",
+  limit = 10,
+): Promise<RankingRow[]> {
+  const response = await apiGet<BackendPagedResponse<BackendStockEnriched>>(
+    "/api/v1/exchanges/stocks/enriched",
+    { sort_by: sortBy, sort_order: order, page: 1, page_size: limit }
+  );
+  return response.items.map((item) => ({
+    symbol: item.symbol,
+    name: item.name,
+    latestPrice: item.latest_price ?? null,
+    changePercent: item.change_percent ?? null,
+    amount: item.amount == null ? null : item.amount * 1e3,
+  }));
+}
+
 export async function fetchStockBySymbol(symbol: string): Promise<StockRecord | null> {
   for (const exchange of EXCHANGES) {
     try {
