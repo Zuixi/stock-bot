@@ -2,6 +2,8 @@ export { GlobalMarketBoard } from "./GlobalMarketBoard";
 export { GlobalIndexCardView } from "./GlobalIndexCardView";
 export { CoreIndexCards } from "./CoreIndexCards";
 export { DistributionChart } from "./DistributionChart";
+export { DistributionBars } from "./DistributionBars";
+export type { DistributionBucket } from "./DistributionBars";
 export { SectorHeatmap } from "./SectorHeatmap";
 export { SectorMoneyflowCard } from "./SectorMoneyflowCard";
 export { MarketMoneyflowCard } from "./MarketMoneyflowCard";

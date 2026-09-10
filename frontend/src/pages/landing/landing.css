@@ -258,7 +258,7 @@ a:hover > .landing-hero-secondary-cta {
 
 /* ── 行情台（公开区块纵列，锚点跳转留吸顶导航位） ───────── */
 .landing-market {
-  padding: 8px 0 48px;
+  padding: 24px 0 48px;
 }
 
 .landing-market-inner {
@@ -271,51 +271,17 @@ a:hover > .landing-hero-secondary-cta {
   scroll-margin-top: 80px;
 }
 
-/* ── 实时脉搏卡 ───────────────────────────────────────── */
-.landing-pulse {
-  margin-top: -48px; /* 与 Hero 底部叠一点，形成卡片浮起感 */
-  position: relative;
-  z-index: 2;
-}
-
-.landing-pulse-card {
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 20px 24px 16px;
-}
-
-.landing-pulse-head {
+/* ── 实时脉搏（卡片壳由 SectionCard 提供） ─────────────── */
+.landing-pulse-body {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
+  flex-direction: column;
+  gap: 16px;
 }
 
-.landing-pulse-title {
-  font-size: 13px;
+.landing-pulse-dist-title {
+  font-size: 12.5px;
   color: var(--text-secondary);
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.landing-pulse-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--up);
-  animation: landing-pulse-blink 2s ease-in-out infinite;
-}
-
-@keyframes landing-pulse-blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
+  margin-bottom: 8px;
 }
 
 .landing-pulse-summary {

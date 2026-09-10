@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchDistribution } from "@/shared/api/market";
 import { fetchGlobalIndices } from "@/shared/api/marketData";
 import type { GlobalIndexCard } from "@/shared/api/marketData";
+import { DistributionBars } from "@/features/market/components";
+import type { DistributionBucket } from "@/features/market/components";
 import { useTheme } from "@/app/theme-context";
 
 const REFRESH_MS = 60_000;
@@ -18,9 +20,19 @@ const PREFERRED_TS_CODES = [
 
 const TICKER_COUNT = 8;
 
-/** 与市场页 DistributionChart 同一套分桶口径，保证宣传页与工作台数字一致 */
-const UP_RANGES = ["1~3%", "3~5%", ">5%", "涨停"];
-const DOWN_RANGES = ["0~-1%", "-1~-3%", "-3~-5%", "-5~-7%", ">-7%", "跌停"];
+/**
+ * 与市场页 DistributionChart 同一套分桶口径，保证宣传页与工作台数字一致。
+ * 两侧必须对称且穷尽 11 桶：`0~1%` 归上涨、`0~-1%` 归下跌——旧实现漏掉 `0~1%`，
+ * 会把该桶 900+ 只个股从「上涨」家数里静默丢掉。
+ */
+const UP_RANGES = ["0~1%", "1~3%", "3~5%", ">5%", "涨停"];
+const DOWN_RANGES = ["跌停", ">-7%", "-5~-7%", "-3~-5%", "-1~-3%", "0~-1%"];
+
+function directionOf(range: string): DistributionBucket["direction"] {
+  if (UP_RANGES.includes(range)) return "up";
+  if (DOWN_RANGES.includes(range)) return "down";
+  return "flat";
+}
 
 function pickIndices(list: GlobalIndexCard[]): GlobalIndexCard[] {
   const preferred = PREFERRED_TS_CODES
@@ -42,7 +54,7 @@ function Ticker({ index }: { index: GlobalIndexCard }) {
   const color = pct == null || pct === 0 ? colors.flat : pct > 0 ? colors.up : colors.down;
 
   return (
-    <div className="landing-ticker">
+    <div className="landing-ticker index-ticker">
       <div className="landing-ticker-name" title={index.name}>
         {index.name}
       </div>
@@ -66,7 +78,12 @@ function TickerSkeletons() {
   );
 }
 
-/** 实时脉搏卡：公开指数 + 涨跌分布摘要，60s 轮询；失败静默降级为占位文案 */
+/**
+ * 实时脉搏卡内容：公开指数 8 格 + 涨跌分布柱 + 家数汇总，60s 轮询。
+ *
+ * 免登录可读；指数与分布两条查询各自降级，任一失败不影响另一块，也不抛到页面级
+ * ErrorBoundary。外层由首页 `<SectionCard id="pulse">` 提供卡片壳与标题。
+ */
 export function MarketPulse() {
   const { colors } = useTheme();
 
@@ -84,62 +101,61 @@ export function MarketPulse() {
 
   const indices = indicesQuery.data ? pickIndices(indicesQuery.data) : [];
 
-  const up = distQuery.data
-    ? distQuery.data.filter((d) => UP_RANGES.includes(d.range)).reduce((s, d) => s + d.count, 0)
-    : null;
-  const down =
-    distQuery.data != null
-      ? distQuery.data
-          .filter((d) => DOWN_RANGES.includes(d.range))
-          .reduce((s, d) => s + d.count, 0)
-      : null;
+  const buckets: DistributionBucket[] = (distQuery.data ?? []).map((d) => ({
+    label: d.range,
+    count: d.count,
+    direction: directionOf(d.range),
+  }));
+
+  const sumOf = (ranges: string[]) =>
+    (distQuery.data ?? [])
+      .filter((d) => ranges.includes(d.range))
+      .reduce((s, d) => s + d.count, 0);
+
+  const up = distQuery.data ? sumOf(UP_RANGES) : null;
+  const down = distQuery.data ? sumOf(DOWN_RANGES) : null;
 
   return (
-    <div className="landing-pulse">
-      <div className="landing-container">
-        <div className="landing-pulse-card">
-          <div className="landing-pulse-head">
-            <span className="landing-pulse-title">
-              <span className="landing-pulse-dot" />
-              实时市场脉搏
-            </span>
-            <span className="landing-pulse-title">每 60 秒自动刷新</span>
-          </div>
-
-          {indicesQuery.isLoading ? (
-            <TickerSkeletons />
-          ) : indices.length > 0 ? (
-            <div className="landing-ticker-row">
-              {indices.map((idx) => (
-                <Ticker key={idx.tsCode} index={idx} />
-              ))}
-            </div>
-          ) : (
-            <div className="landing-placeholder">行情数据暂不可用，注册后可在工作台查看完整行情</div>
-          )}
-
-          <div className="landing-pulse-summary">
-            <span>
-              {up != null && down != null ? (
-                <>
-                  今日 A 股：上涨{" "}
-                  <b style={{ color: colors.up, fontVariantNumeric: "tabular-nums" }}>
-                    {up.toLocaleString()}
-                  </b>{" "}
-                  · 下跌{" "}
-                  <b style={{ color: colors.down, fontVariantNumeric: "tabular-nums" }}>
-                    {down.toLocaleString()}
-                  </b>
-                </>
-              ) : indicesQuery.isLoading ? (
-                "正在汇总今日涨跌分布…"
-              ) : (
-                "今日涨跌分布暂不可用"
-              )}
-            </span>
-            <span>数据来源：东财实时快照，与市场页同源</span>
-          </div>
+    <div className="landing-pulse-body">
+      {indicesQuery.isLoading ? (
+        <TickerSkeletons />
+      ) : indices.length > 0 ? (
+        <div className="landing-ticker-row">
+          {indices.map((idx) => (
+            <Ticker key={idx.tsCode} index={idx} />
+          ))}
         </div>
+      ) : (
+        <div className="landing-placeholder">行情数据暂不可用，请稍后重试</div>
+      )}
+
+      {buckets.length > 0 ? (
+        <div className="landing-pulse-dist">
+          <div className="landing-pulse-dist-title">今日涨跌分布</div>
+          <DistributionBars buckets={buckets} />
+        </div>
+      ) : null}
+
+      <div className="landing-pulse-summary">
+        <span>
+          {up != null && down != null ? (
+            <>
+              今日 A 股：上涨{" "}
+              <b style={{ color: colors.up, fontVariantNumeric: "tabular-nums" }}>
+                {up.toLocaleString()}
+              </b>{" "}
+              · 下跌{" "}
+              <b style={{ color: colors.down, fontVariantNumeric: "tabular-nums" }}>
+                {down.toLocaleString()}
+              </b>
+            </>
+          ) : distQuery.isLoading ? (
+            "正在汇总今日涨跌分布…"
+          ) : (
+            "今日涨跌分布暂不可用"
+          )}
+        </span>
+        <span>每 60 秒自动刷新 · 数据来源：东财实时快照，与市场页同源</span>
       </div>
     </div>
   );
