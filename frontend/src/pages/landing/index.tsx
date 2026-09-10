@@ -4,6 +4,7 @@ import { SectionCard } from "@/shared/ui";
 import { RankingMatrix } from "@/features/market/components/RankingMatrix";
 import { SectorFlow } from "@/features/market/components/SectorFlow";
 import { MoneySentiment } from "@/features/market/components/MoneySentiment";
+import { MarketNewsFeed } from "@/features/market/components/MarketNewsFeed";
 import { LandingNav } from "./sections/LandingNav";
 import { CompactHero } from "./sections/CompactHero";
 import { MarketPulse } from "./sections/MarketPulse";
@@ -51,7 +52,7 @@ export default function LandingPage() {
               <SectionSkeleton />
             </SectionCard>
             <SectionCard id="news" title="快讯">
-              <SectionSkeleton />
+              <MarketNewsFeed />
             </SectionCard>
           </div>
         </section>

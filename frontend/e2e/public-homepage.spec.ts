@@ -179,6 +179,47 @@ const MOCK_MONEYFLOW = {
   ],
 };
 
+const ANNOUNCE_NOW = new Date();
+const TWO_HOURS_AGO = new Date(ANNOUNCE_NOW.getTime() - 2 * 3600 * 1000).toISOString();
+const THREE_HOURS_AGO = new Date(ANNOUNCE_NOW.getTime() - 3 * 3600 * 1000).toISOString();
+
+const MOCK_ANNOUNCEMENTS = [
+  { announcement_id: "a1", sec_code: "600519", sec_name: "贵州茅台", title: "2026 年半年度报告", announce_time: TWO_HOURS_AGO, category: "report", pdf_url: "http://example.com/a1.pdf" },
+  { announcement_id: "a2", sec_code: "000001", sec_name: "平安银行", title: "2026 年第三季度报告", announce_time: THREE_HOURS_AGO, category: "report", pdf_url: "http://example.com/a2.pdf" },
+  { announcement_id: "a3", sec_code: "300750", sec_name: "宁德时代", title: "关于向特定对象发行股票的公告", announce_time: TWO_HOURS_AGO, category: "event", pdf_url: "http://example.com/a3.pdf" },
+  { announcement_id: "a4", sec_code: "601318", sec_name: "中国平安", title: "关于回购股份进展的公告", announce_time: THREE_HOURS_AGO, category: "event", pdf_url: "http://example.com/a4.pdf" },
+];
+
+test.describe("公开行情台首页 · 快讯区（Task 1.9）", () => {
+  test.beforeEach(async ({ page }) => {
+    await MOCK_SESSION_ANON(page);
+    await page.route("**/api/v1/market/announcements*", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_ANNOUNCEMENTS) })
+    );
+  });
+
+  test("快讯区：公告 Tab 可见且有条目", async ({ page }) => {
+    await page.goto("/#news");
+    const section = page.getByTestId("section-news");
+    await expect(section).toBeVisible();
+    await expect(section.getByRole("tab", { name: /财报|公告/ }).first()).toBeVisible();
+    await expect(section.getByRole("tab", { name: "重大事项" })).toBeVisible();
+    // 默认财报页：只呈现 report 条目，带相对时间与来源署名
+    await expect(section.getByText("2026 年半年度报告")).toBeVisible({ timeout: 15000 });
+    await expect(section.getByText("2小时前")).toBeVisible();
+    await expect(section.getByText("巨潮").first()).toBeVisible();
+    await expect(section.getByText("关于向特定对象发行股票的公告")).toHaveCount(0);
+  });
+
+  test("快讯区：切到重大事项 Tab 呈现 event 条目", async ({ page }) => {
+    await page.goto("/#news");
+    const section = page.getByTestId("section-news");
+    await section.getByRole("tab", { name: "重大事项" }).click();
+    await expect(section.getByText("关于向特定对象发行股票的公告")).toBeVisible({ timeout: 15000 });
+    await expect(section.getByText("2026 年半年度报告")).toHaveCount(0);
+  });
+});
+
 test.describe("公开行情台首页 · 资金区（Task 1.8）", () => {
   test.beforeEach(async ({ page }) => {
     await MOCK_SESSION_ANON(page);
