@@ -1,3 +1,11 @@
+## 2026-09-11 - 首页公开化 Phase 1 收口：板块/资金/快讯三块 + 零 401 与降级门禁（Task 1.7–1.10）
+- **Task 1.7 板块区**：新增 `features/market/components/SectorFlow`（左列 `/market/sectors` 证监会口径、右列 `/market/capital-flow` 近似口径双向条）；`/market/sector-moneyflow` 实测返回 `[]` 无法支撑资金列，改走可用源并在 UI 标注「近似口径：涨/跌股成交额估算，非主力净流入」；两列独立查询独立降级
+- **Task 1.8 资金区**：新增 `MoneySentiment` 复用 `MarketMoneyflowCard`（`/market/market-moneyflow`）；**北向卡整卡移除**——`northbound_daily` 无数据行（非仅滞后），不以本地序列替补
+- **Task 1.9 快讯区**：新增 `MarketNewsFeed`（财报公告/重大事项两 Tab，各 10 条），复用并导出 `dataFace/AnnouncementFeed`（增 category/limit/timeMode 可选 props + `format.fmtRelativeTime`）；零新数据源（TuShare 新闻接口积分门槛），不做伪新闻流
+- **Task 1.10 收口**：页脚加「数据来源：TuShare · 东方财富 · 巨潮资讯网 · 上海证券交易所」；免登录行情文案纠偏（移除行业树「注册后查看」、账号能力区「注册即解锁全部投研能力」与注册档「猪周期工作台完整能力」，仅个性化——自选/标签/同步/提醒——保留在注册档）；新增 e2e 硬门禁——匿名全链路除 `/auth/session` 探测外零 401/403（并断言确发出行情请求防假绿）、单源/全源 abort 不白屏
+- 测试：public-homepage 8 → 20，合计 30/30（landing 7 + darkmode 3）全绿
+- 涉及模块：frontend/src/features/market/components/{SectorFlow, MoneySentiment, MarketNewsFeed, dataFace/AnnouncementFeed, format.ts}, frontend/src/pages/landing, frontend/e2e/public-homepage.spec.ts
+
 ## 2026-09-11 - 首页公开化 Phase 1（D2 复审修复）：榜单剔除 null 行 + 脉搏区表面收口
 - **榜单**：涨幅/跌幅榜（及成交额榜）按当前排序维度剔除 null 行再截断 top-10（多取 20 条），修掉后端 desc 把无行情次新股排到榜首、涨幅榜首屏两行 `--` 的问题；`--` 缺失值契约改在不受过滤影响的成交额榜断言（Task 2.7 切 `/market/rankings` 后 SQL 已 `pct_chg IS NOT NULL`，此守卫为保险）
 - **脉搏区**：分布返回 `[]` 不再渲染成 `上涨 0 · 下跌 0`，改走「今日涨跌分布暂不可用」占位；分布柱家数补千分位与汇总行统一；`MarketPulse`/`index.tsx` 改直连模块路径，避免 barrel 把 ECharts 视图拖进匿名首页 chunk

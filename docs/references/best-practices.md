@@ -132,6 +132,7 @@
 - Worker 单测要脱离真库时，把 session 工厂暴露为模块级变量供 monkeypatch 成假 async context manager，且 NullSession 必须带 `async def commit()`——service 被 patch 后虽不触库，成功路径的 commit 照常执行，漏了会在断言前炸 AttributeError。
 - 性能基准与单测必须 marker 隔离（`bench`）且**基线契约显式化**：合成输入的尺寸/seed 写成测试常量并注释"改动即失基线"，门禁按 median 相对退化而非绝对 ms；微基准（<1ms）rounds 多 median 稳，**大样本基准（>10ms/次）单次抖动可达 7-8%**——控制样本量让各基准处于同一量级（~1-5ms）比调阈值更治本；管道里验证 exit code 要看 `PIPESTATUS`，`cmd | tail` 后 `$?` 是 tail 的。
 - **wall-clock 性能基线绑定硬件，入库基线不能跨机器门禁**：本机生成的 baseline.json 在 CI runner 上全部基准慢 30-50%，相对阈值门禁必假红。CI 硬门禁的标准做法是**同 runner A/B**（同一 job 内先 checkout base commit 跑一遍存临时基线、再 checkout head 对比），入库 baseline.json 只作本机开发参考。配套两个坑：Windows 侧创建的脚本无执行位（git mode 644），Linux CI 直接执行报 exit 126，须经解释器调用；A/B 产物写 $RUNNER_TEMP 而非 tracked 的基线文件，否则 PR 改基线时 `git checkout` 拒切。
+- 免登录公开页的「零 401」与「单源降级」要用真断言锁定，不能只做冒烟：收集全链路响应时须显式豁免登录态探测端点（匿名 `/auth/session` 返回 401 是"未登录"语义而非越权，与数据接口 401 性质不同），同时断言**确实发出了行情请求**以防"空集合平凡通过"的假绿；降级侧每块独立 query + 独立空/错态，abort 单个源后除故障列自身占位外，同卡另一列与所有邻区都必须仍可见。
 
 ## 六、架构与分层
 

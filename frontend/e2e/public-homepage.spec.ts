@@ -190,6 +190,101 @@ const MOCK_ANNOUNCEMENTS = [
   { announcement_id: "a4", sec_code: "601318", sec_name: "中国平安", title: "关于回购股份进展的公告", announce_time: THREE_HOURS_AGO, category: "event", pdf_url: "http://example.com/a4.pdf" },
 ];
 
+test.describe("公开行情台首页 · 收口（Task 1.10）", () => {
+  test("页脚含数据来源署名", async ({ page }) => {
+    await MOCK_SESSION_ANON(page);
+    await page.goto("/");
+    const footer = page.locator(".landing-footer");
+    await expect(footer.getByText("数据来源")).toBeVisible();
+    await expect(footer).toContainText("TuShare");
+    await expect(footer).toContainText("巨潮资讯网");
+  });
+
+  test("降级文案不再把行业树/行情与注册绑定", async ({ page }) => {
+    await MOCK_SESSION_ANON(page);
+    await page.route("**/api/v1/market/sw-industry/tree", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "[]" })
+    );
+    await page.goto("/");
+    const fallback = page.locator(".sw-fallback");
+    await expect(fallback).toBeVisible({ timeout: 15000 });
+    // 免登录即可看行情/行业树——降级文案不得再出现「注册后…查看」
+    await expect(fallback).not.toContainText("注册");
+    await expect(fallback).toContainText("申万 31 个一级行业");
+  });
+
+  test("账号能力区不再宣称注册才解锁全部投研能力", async ({ page }) => {
+    await MOCK_SESSION_ANON(page);
+    await page.goto("/");
+    const perks = page.locator(".landing-section", { hasText: "现在能用什么" });
+    await expect(perks).toBeVisible();
+    // 游客档位必须含行情能力，且不把全部投研能力/工作台挂在注册上（仅个性化可注册）
+    await expect(perks).toContainText("免注册");
+    await expect(perks).not.toContainText("解锁全部投研能力");
+    await expect(perks).not.toContainText("工作台完整能力");
+  });
+
+  test("未登录全链路零 401/403（行情数据接口不允许 401，仅会话探测豁免）", async ({ page }) => {
+    const denied: { url: string; status: number }[] = [];
+    const seen: string[] = [];
+    page.on("response", (r) => {
+      seen.push(r.url());
+      const status = r.status();
+      if (status === 401 || status === 403) denied.push({ url: r.url(), status });
+    });
+    await page.context().clearCookies();
+    await page.goto("/");
+    await page.waitForLoadState("networkidle");
+
+    // 非白屏：五个行情区块壳全部就位
+    for (const id of ["pulse", "rankings", "sectors", "money", "news"]) {
+      await expect(page.getByTestId(`section-${id}`)).toBeVisible();
+    }
+
+    // 403 一处都不允许（行情接口不设权限门）
+    expect(denied.filter((d) => d.status === 403)).toEqual([]);
+    // 401 仅允许会话探测 /auth/session；行情数据接口必须匿名可达
+    const dataDenied = denied.filter((d) => !/\/auth\/session/.test(d.url));
+    expect(dataDenied).toEqual([]);
+    // 防假绿：确实发出了行情数据请求（否则空集合会平凡通过）
+    expect(seen.some((u) => u.includes("/api/v1/market/"))).toBe(true);
+    expect(seen.some((u) => u.includes("/api/v1/exchanges/"))).toBe(true);
+  });
+
+  test("单源故障不白屏：sectors 挂掉，邻区与右列照常", async ({ page }) => {
+    await MOCK_SESSION_ANON(page);
+    await page.route("**/api/v1/market/sectors*", (route) => route.abort());
+    await page.goto("/");
+
+    const sectors = page.getByTestId("section-sectors");
+    await expect(sectors).toBeVisible();
+    // 故障列自身降级
+    await expect(sectors.getByText("行业涨跌暂不可用")).toBeVisible({ timeout: 15000 });
+    // 同卡右列（资金流）独立存活
+    await expect(sectors.getByText(/净流入|净流出/).first()).toBeVisible({ timeout: 15000 });
+
+    // 邻区照常
+    await expect(page.getByTestId("section-pulse")).toBeVisible();
+    await expect(page.getByTestId("section-money")).toBeVisible();
+    await expect(page.getByTestId("section-news")).toBeVisible();
+    const rankings = page.getByTestId("section-rankings");
+    await expect(rankings).toBeVisible();
+    await expect(rankings.locator(".datarow").first()).toBeVisible({ timeout: 15000 });
+  });
+
+  test("全行情源故障仍不白屏：区块壳与品牌区可见", async ({ page }) => {
+    await MOCK_SESSION_ANON(page);
+    await page.route("**/api/v1/market/**", (route) => route.abort());
+    await page.route("**/api/v1/exchanges/**", (route) => route.abort());
+    await page.goto("/");
+
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    for (const id of ["pulse", "rankings", "sectors", "money", "news"]) {
+      await expect(page.getByTestId(`section-${id}`)).toBeVisible();
+    }
+  });
+});
+
 test.describe("公开行情台首页 · 快讯区（Task 1.9）", () => {
   test.beforeEach(async ({ page }) => {
     await MOCK_SESSION_ANON(page);
