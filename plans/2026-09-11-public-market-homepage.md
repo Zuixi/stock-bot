@@ -68,8 +68,28 @@
 | `/market/indices`、`/distribution`、`/sectors`、`/capital-flow`、`/hot-boards` | ✅ `CacheDep` 注入 + Redis 300s（`market_service.py` `_MARKET_CACHE_TTL`） | ✅ |
 | `/market/global-indices` | ✅ 60s | ✅ |
 | **`/exchanges/stocks/enriched?sort_by=`（Phase 1 临时榜单路径）** | ❌ **排序分支无任何缓存** | ❌ 每次请求全市场 LATERAL + Python sort |
-| 网关限流 | `api-ratelimit: average 100 / burst 50 / 1s`（每 IP） | `burst < average` 疑似笔误，需复核 |
-| **整站 SEO** | `sec-headers` 给所有响应（含 frontend 路由）打 `X-Robots-Tag: noindex, nofollow, nosnippet, noarchive` | **当前整站拒绝收录**——SEO 目标与网关现状矛盾，需决策 |
+| 网关限流 | `api-ratelimit: average 100 / burst 50 / 1s`（每 IP，`gateway/dynamic/middlewares.yml:50-54`） | `burst < average` 疑似笔误，**待用户确认是否有意为之**；本计划不改配置（见 0.5.1） |
+| **整站 SEO** | `sec-headers` 给所有响应（含 frontend 路由）打 `X-Robots-Tag: noindex, nofollow, nosnippet, noarchive`（**2026-09-11 实测确认**，见 0.5.1） | **决策：维持整站 noindex**；本计划删除一切 SEO /「静态可索引落地路径」目标 |
+
+#### 0.5.1 noindex / SEO 决策落字（2026-09-11 实测）
+
+**实测**（`curl -sI`，Traefik 网关主机端口 80）：
+
+| 探测 | 状态 | `X-Robots-Tag` |
+|---|---|---|
+| `HEAD http://127.0.0.1:80/`（frontend 路由） | `200 OK` | `noindex, nofollow, nosnippet, noarchive` |
+| `HEAD http://127.0.0.1:80/api/v1/market/distribution`（api 路由） | `405 Method Not Allowed`（`Allow: GET`；HEAD 未放行但响应头仍被网关打标）；改用 `GET` 复测 → `200 OK` | `noindex, nofollow, nosnippet, noarchive` |
+
+frontend / api / auth / api-tasks 四条 router 均挂载 `sec-headers@file`（`docker-compose.yml:329 / :247 / :180 / :252`）；中间件定义见 `gateway/dynamic/middlewares.yml:35-45`。**结论：与评审一致——全站响应被网关打上 `noindex`，不存在任何可索引落地路径。**
+
+> **决策（2026-09-11）：维持整站 `noindex`。**
+> 理由：(a) 公开再分发行情数据（TuShare/东财/巨潮）有条款约束，暂不希望被搜索引擎收录；(b) Vite SPA 本就难以索引，SEO 投入产出不成比例。
+>
+> **本计划删除一切「静态可索引落地路径 / SEO」目标**——后续阅读者不得再隐式加回（包括但不限于为榜单/日历新建静态可索引路由、robots.txt、SEO meta）。若将来确需收录，须先显式解除或限定 `sec-headers` 的打标范围并另行评审。
+>
+> **页脚数据来源署名（Task 13）仍执行**：那是给用户看的合规署名，不是给爬虫的 SEO 手段；后续既不因「SEO 已取消」删除它，也不把它当 SEO 成果保留。
+
+**限流复核（仅记录，不改配置）**：`api-ratelimit: average 100 / burst 50 / period 1s` 中 `burst < average`，读起来像笔误。但同文件 `auth-ratelimit` 为 20/10（同样 `burst < average`）、`tasks-ratelimit` 为 5/5（相等），三处均为 `burst <= average`，可能是有意约定而非孤例笔误。网关行为变更属部署决策，**待用户确认是否有意为之**；本 Task 不修改 `gateway/` 与 `docker-compose.yml`。
 
 ---
 
@@ -192,7 +212,7 @@ market_calendar_events(id, event_type, event_date DATE, symbol NULL,
 | ④ | `daily_quotes` 分区状态未确认（注释称外部分区） | **已核实 2026-09-11（Task 0.2）：未分区。** `SELECT relname, relkind FROM pg_class WHERE relname LIKE 'daily_quotes%'` → `daily_quotes \| r`（普通表，非分区表 `p`）；`SELECT count(*) FROM pg_partitioned_table WHERE partrelid = 'daily_quotes'::regclass` → `0`。（brief 原查询用 `relid`，PG15 实际列为 `partrelid`，已修正。）**处置**：Task 14 用普通复合索引。另注：现表已有 `uq_daily_quotes_stock_date UNIQUE (stock_id, trade_date)`（btree），迁移前先确认是否已够用再决定是否新建 |
 | ⑤ | 日历/新闻数据源未验证（Web 核实被拦） | Phase 0 spike；不可用则 Phase 4/5 裁剪 |
 | ⑥ | Tier 2 API 基准**从未实施**（`scripts/` 仅 Tier 1 的 bench.sh） | Phase 2 验收用 `EXPLAIN` 索引断言测试替代，不引用不存在的门禁 |
-| ⑦ | 整站 `X-Robots-Tag: noindex`，SEO 目标与之矛盾；且公开再分发行情数据有条款约束 | Phase 0 决策：默认维持 noindex；若要 SEO 需显式解除并限定范围 + 页脚数据署名 |
+| ⑦ | 整站 `X-Robots-Tag: noindex`，SEO 目标与之矛盾；且公开再分发行情数据有条款约束 | **已决（2026-09-11，Task 0.3）：实测确认全站 noindex，维持之；SEO /「静态可索引落地路径」目标从本计划删除**（见 §0.5.1）。页脚数据署名（Task 13）保留，但定位为面向用户的合规署名、非 SEO |
 | ⑧ | stacked PR 不跑 CI；Alembic 多 head | D9 |
 | ⑨ | 首页与 `/market` 双份实现 | 原则 2 + 复用审计 + e2e |
 | ⑩ | 个股 T+1，无盘中实时 | 原则 4：`as_of` 标注；实时个股源不在本计划 |
@@ -221,7 +241,7 @@ market_calendar_events(id, event_type, event_date DATE, symbol NULL,
 
 1. 数据行唯一版式：左（logo + 名称 + 灰底 ticker 胶囊）｜右（价格大字 + 涨跌小字，右对齐 `tabular-nums`），单位小字降级（`977.99 usd`）
 2. 卡片固定三段式：标题行 → 内容 → `See all X ›`
-3. 锚文本短、链接描述完整 + URL 语义化（SEO/无障碍双赢；前提是有可索引页面，见风险 ⑦）
+3. 锚文本短、链接描述完整 + URL 语义化（**只为无障碍收益**；SEO 已出局、无可索引页面，见 §0.5.1 决策）
 4. 横滑卡列右缘 48px 圆形箭头；占比条多色分段配图例
 5. 缺失显示占位而非 0；每区块独立降级
 6. 未知项：mega menu 二级 hover 惰性渲染未进 a11y 树（仅完整展开 Products 一组）；暗色为手动改写 `data-theme` 验证
