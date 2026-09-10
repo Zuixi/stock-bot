@@ -8,19 +8,37 @@ from app.services import market_data_service as mds
 
 
 def test_global_indices_registry_shape():
-    assert len(mds.GLOBAL_INDICES) == 9
+    assert len(mds.GLOBAL_INDICES) == 14
     asia = [g for g in mds.GLOBAL_INDICES if g["region"] == "asia"]
     americas = [g for g in mds.GLOBAL_INDICES if g["region"] == "americas"]
     assert [g["ts_code"] for g in asia] == [
         "000001.SH",
         "399001.SZ",
         "399006.SZ",
+        "000300.SH",
+        "000905.SH",
+        "000688.SH",
+        "000016.SH",
+        "899050.BJ",
         "HSI",
         "N225",
         "KS11",
     ]
     assert [g["ts_code"] for g in americas] == ["DJI", "SPX", "IXIC"]
     assert {g["em_secid"] for g in americas} == {"100.DJIA", "100.SPX", "100.NDX"}
+    # A 股宽基全部走 TuShare 日线回补 + 东财实时 secid
+    cn = [g for g in asia if g["market"] == "CN"]
+    assert {g["source"] for g in cn} == {"index_daily"}
+    assert {g["em_secid"] for g in cn} == {
+        "1.000001",
+        "0.399001",
+        "0.399006",
+        "1.000300",
+        "1.000905",
+        "1.000688",
+        "1.000016",
+        "0.899050",
+    }
 
 
 def test_map_index_global_row_nan_vol_to_none():
@@ -211,7 +229,7 @@ async def test_get_global_index_cards_merges_realtime_and_spark(monkeypatch):
 
     cards = await mds.get_global_index_cards(cache=_FakeCache())
     by_code = {c["ts_code"]: c for c in cards}
-    assert len(cards) == 9
+    assert len(cards) == 14
     assert by_code["N225"]["price"] == 64214.48 and by_code["N225"]["source"] == "realtime"
     assert len(by_code["N225"]["spark"]) == 30  # 35 行裁到 30
     # KS11 实时缺失 → 用日线最后一根 close 兜底（pre_close 为 NULL，逐 close 差值算涨跌）

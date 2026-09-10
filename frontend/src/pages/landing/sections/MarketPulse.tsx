@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchDistribution, fetchMarketIndices } from "@/shared/api/market";
+import { fetchDistribution } from "@/shared/api/market";
+import { fetchGlobalIndices } from "@/shared/api/marketData";
+import type { GlobalIndexCard } from "@/shared/api/marketData";
 import { useTheme } from "@/app/theme-context";
-import type { MarketIndex } from "@/shared/types";
 
 const REFRESH_MS = 60_000;
 
@@ -21,10 +22,10 @@ const TICKER_COUNT = 8;
 const UP_RANGES = ["1~3%", "3~5%", ">5%", "涨停"];
 const DOWN_RANGES = ["0~-1%", "-1~-3%", "-3~-5%", "-5~-7%", ">-7%", "跌停"];
 
-function pickIndices(list: MarketIndex[]): MarketIndex[] {
+function pickIndices(list: GlobalIndexCard[]): GlobalIndexCard[] {
   const preferred = PREFERRED_TS_CODES
     .map((code) => list.find((i) => i.tsCode === code))
-    .filter((i): i is MarketIndex => !!i);
+    .filter((i): i is GlobalIndexCard => !!i);
   const rest = list.filter((i) => !PREFERRED_TS_CODES.includes(i.tsCode));
   return [...preferred, ...rest].slice(0, TICKER_COUNT);
 }
@@ -33,9 +34,9 @@ function formatPrice(value: number): string {
   return value.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function Ticker({ index }: { index: MarketIndex }) {
+function Ticker({ index }: { index: GlobalIndexCard }) {
   const { colors } = useTheme();
-  const pct = index.changePercent;
+  const pct = index.pctChange ?? 0;
   const color = pct > 0 ? colors.up : pct < 0 ? colors.down : colors.flat;
   const sign = pct > 0 ? "+" : "";
 
@@ -44,7 +45,9 @@ function Ticker({ index }: { index: MarketIndex }) {
       <div className="landing-ticker-name" title={index.name}>
         {index.name}
       </div>
-      <div className="landing-ticker-price">{formatPrice(index.value)}</div>
+      <div className="landing-ticker-price">
+        {index.price != null ? formatPrice(index.price) : "--"}
+      </div>
       <span className="landing-ticker-chip" style={{ background: color }}>
         {sign}
         {pct.toFixed(2)}%
@@ -68,8 +71,8 @@ export function MarketPulse() {
   const { colors } = useTheme();
 
   const indicesQuery = useQuery({
-    queryKey: ["market-indices"],
-    queryFn: fetchMarketIndices,
+    queryKey: ["global-indices"],
+    queryFn: fetchGlobalIndices,
     refetchInterval: REFRESH_MS,
   });
 
@@ -108,7 +111,7 @@ export function MarketPulse() {
           ) : indices.length > 0 ? (
             <div className="landing-ticker-row">
               {indices.map((idx) => (
-                <Ticker key={idx.tsCode ?? idx.code} index={idx} />
+                <Ticker key={idx.tsCode} index={idx} />
               ))}
             </div>
           ) : (
@@ -134,7 +137,7 @@ export function MarketPulse() {
                 "今日涨跌分布暂不可用"
               )}
             </span>
-            <span>数据来源：TuShare / 东财，盘后为准</span>
+            <span>数据来源：东财实时快照，与市场页同源</span>
           </div>
         </div>
       </div>
