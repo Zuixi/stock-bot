@@ -491,3 +491,10 @@
   - 单测同步：registry shape / cards 合并断言 9 → 14，新增 A 股 em_secid 集合锁定
 - **验证**：tsc ✓、ruff ✓、mapping 18 测试 ✓、gateway 实测 14 条（8 CN 全 realtime）
 - 涉及模块：frontend/src/pages/landing/sections/MarketPulse.tsx, frontend/e2e/landing.spec.ts, backend/app/services/market_data_service.py, backend/tests/test_market_data_mapping.py
+
+## 2026-09-11 - 申万 custom-tag overlay 导入修复（"其他"分类 1497→61 只回落）
+- **问题**：用户实测宣传页行业网格出现"其他 1497 只"分类。诊断链：tree API 的"其他"= 未命中申万 L3 成分与自定义标签的股票兜底聚合（market_service.get_sw_industry_tree）→ 库里 stock_custom_sw_tags 为 0 行 → 2026-09-03 的 OTHER→SW merge（1439 行）在 P7 重建数据库后从未导入
+- **根因**：`import_custom_tags_from_sql` 按 `;` 切分且把以 `--` 开头的块整块跳过——seed 文件是「9 行注释头 + 单条 1439 行 VALUES INSERT（行内无分号，仅末尾一个分号）」，切分后首块恰好 = 注释头+完整 INSERT，以 `--` 开头被整体丢弃，导入恒为 0 行（api 日志 "Imported custom-tag overlay: 0 rows" 安静存在了两天）；seed 文件本身格式正确（40ff00c 入库即无分号），问题纯在解析器
+- **修复**：解析重构为 `_split_sql_statements`（先剥离注释行再按分号切分，纯函数可单测）+ 修正 seed 头行分号 + 新增 tests/test_sw_seed_import.py 3 用例锁定畸形输入行为
+- **验证**：api 重建后 data_init 自动导入 1439 行；清 `market:sw-tree` 缓存后 tree API "其他"= 61 只（残余为确无申万映射股票，兜底保留），5560 只全可见
+- 涉及模块：backend/app/services/sw_industry_service.py, backend/data/sw_custom_tags_seed.sql, backend/tests/test_sw_seed_import.py(新增)

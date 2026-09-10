@@ -128,6 +128,22 @@ async def export_sw_to_sql(dest: Path | None = None) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def _split_sql_statements(sql: str) -> list[str]:
+    """Strip ``--`` comment lines, then split the remainder on ``;``.
+
+    注释行必须先剥离再切分：seed 文件常见「注释头 + 巨型 INSERT」，直接 split
+    后首块以 ``--`` 开头，若整块跳过会连 INSERT 一起丢掉（曾致 custom-tag
+    overlay 导入恒为 0 行）。
+    """
+    body = "\n".join(ln for ln in sql.splitlines() if not ln.strip().startswith("--"))
+    return [stmt.strip() for stmt in body.split(";") if stmt.strip()]
+
+
+async def _execute_sql_script(db: AsyncSession, sql: str) -> None:
+    for stmt in _split_sql_statements(sql):
+        await db.execute(text(stmt))
+
+
 async def import_sw_from_sql(src: Path | None = None) -> dict[str, int]:
     """Import SW data from a pre-generated SQL seed file."""
     src = src or SW_SQL_FILE
@@ -139,10 +155,7 @@ async def import_sw_from_sql(src: Path | None = None) -> dict[str, int]:
         return {"classes": 0, "members": 0}
 
     async with async_session_factory() as db:
-        for statement in sql.split(";"):
-            stmt = statement.strip()
-            if stmt and not stmt.startswith("--"):
-                await db.execute(text(stmt))
+        await _execute_sql_script(db, sql)
         await db.commit()
 
         class_count = (await db.execute(select(SwIndustryClass.id))).scalars().all()
@@ -167,10 +180,7 @@ async def import_custom_tags_from_sql(src: Path | None = None) -> int:
         return 0
 
     async with async_session_factory() as db:
-        for statement in sql.split(";"):
-            stmt = statement.strip()
-            if stmt and not stmt.startswith("--"):
-                await db.execute(text(stmt))
+        await _execute_sql_script(db, sql)
         await db.commit()
         count = len((await db.execute(select(StockCustomSwTag.id))).scalars().all())
 
