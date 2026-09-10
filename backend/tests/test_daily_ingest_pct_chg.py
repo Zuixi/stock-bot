@@ -65,11 +65,65 @@ async def test_daily_ingest_maps_pct_chg_and_pre_close(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_upsert_quotes_carries_pct_chg_in_values_and_on_conflict() -> None:
-    """Both the insert values and the ON CONFLICT SET must carry the new columns.
+async def test_per_stock_daily_ingest_maps_pct_chg_and_pre_close(monkeypatch) -> None:
+    """Second construction site (``ingest_daily_quotes_for_stock``) must also carry both.
 
-    Missing either one drops the field silently: a plain column omission on
-    INSERT, or a no-op re-ingest clobbering an existing value on conflict.
+    Guards against dropping the kwargs from only the per-stock path — the
+    by-trade-date test above would stay green.
+    """
+    captured: list[SimpleNamespace] = []
+
+    async def _upsert(_db, quotes):
+        captured.extend(quotes)
+        return len(quotes)
+
+    monkeypatch.setattr("app.repositories.quote_repo.upsert_quotes", _upsert)
+
+    df = pd.DataFrame(
+        [
+            {
+                "ts_code": "600000.SH",
+                "trade_date": "20260909",
+                "open": 10.0,
+                "high": 11.0,
+                "low": 9.9,
+                "close": 10.5,
+                "pre_close": 10.0,
+                "change": 0.5,
+                "pct_chg": 5.0,
+                "vol": 1000.0,
+                "amount": 10500.0,
+            },
+        ]
+    )
+
+    client = AsyncMock()
+    client.fetch_daily = AsyncMock(return_value=df)
+    service = TuShareIngestService(client=client, data_saver=AsyncMock())
+
+    await service.ingest_daily_quotes_for_stock(
+        AsyncMock(),
+        stock_id=7,
+        exchange="Shanghai_Stocks",
+        symbol="600000",
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 9, 10),
+    )
+
+    assert len(captured) == 1
+    assert captured[0].stock_id == 7
+    assert captured[0].pct_chg == 5.0
+    assert captured[0].pre_close == 10.0
+
+
+@pytest.mark.asyncio
+async def test_upsert_quotes_carries_pct_chg_in_values_and_on_conflict() -> None:
+    """Both the INSERT column list and the ON CONFLICT SET must carry the columns.
+
+    Asserting the whole SQL string is not enough: ``excluded.pre_close`` in the
+    SET clause alone satisfies a naive ``"pre_close" in sql`` check, so dropping
+    the VALUES-dict entry would still "pass" while the INSERT path writes NULL.
+    Split on ``ON CONFLICT`` and check the two halves separately.
     """
     db = AsyncMock()
     db.execute = AsyncMock(return_value=SimpleNamespace(rowcount=1))
@@ -85,11 +139,14 @@ async def test_upsert_quotes_carries_pct_chg_in_values_and_on_conflict() -> None
 
     stmt = db.execute.await_args.args[0]
     sql = str(stmt.compile(dialect=postgresql.dialect()))
-    assert "pre_close" in sql
-    assert "pct_chg" in sql
-    # The SET side uses excluded.*; without it the conflict path keeps the old NULL.
-    assert "pre_close = excluded.pre_close" in sql
-    assert "pct_chg = excluded.pct_chg" in sql
+    assert "ON CONFLICT" in sql
+    insert_sql, conflict_sql = sql.split("ON CONFLICT", 1)
+    # INSERT column list must include the columns themselves...
+    assert "pre_close" in insert_sql
+    assert "pct_chg" in insert_sql
+    # ...and the conflict path must overwrite from the incoming (excluded) values.
+    assert "pre_close = excluded.pre_close" in conflict_sql
+    assert "pct_chg = excluded.pct_chg" in conflict_sql
 
 
 @pytest.mark.asyncio

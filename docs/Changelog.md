@@ -4,7 +4,8 @@
 - **Task 2.3**：新增 `scripts/backfill_pct_chg.py`（`--years`/`--limit`/`--start-date`/`--end-date`，幂等）与 `quote_repo.update_pct_chg_for_date`（`sa.Values` + Core `UPDATE ... FROM (VALUES ...)` 单语句，仅 UPDATE 不 INSERT）；**只回填 TuShare 原生值，禁止 `LAG(close)` 现算**（除权日参考前收需为除权后价），理由写入 docstring
 - **验证**：TDD 先红（`AttributeError: 'DailyQuote' object has no attribute 'pct_chg'`）后绿；`--limit 4`（2026-09-04…09-09）实机回填 22,196 行，重复运行同值（幂等），与 TuShare 原生逐行对拍 22,196 行 0 不一致（抽样 000001.SZ/300750.SZ/600000.SH 值全等）；全量 3 年约 750 次 `fetch_daily` 由运维另跑（见 Task 2.1–2.3 报告）
 - 测试：新增 `tests/test_daily_ingest_pct_chg.py` 3 例（映射落库、upsert 冲突补列、回填仅 UPDATE 无 LAG）；`uv run pytest -q` 185 passed / 24 deselected
-- 涉及模块：backend/app/migrations/versions/cf4b8e317fe5_add_pct_chg_to_daily_quotes_and_ranking_.py, backend/app/models/quote.py, backend/app/services/tushare_ingest.py, backend/app/repositories/quote_repo.py, backend/scripts/backfill_pct_chg.py, backend/tests/test_daily_ingest_pct_chg.py
+- **D4 复审修复**：三个排行索引补进 ORM `__table_args__`（`models/quote.py`、`models/daily_basic.py`），使 `alembic check` 不再对它们报 `remove_index`（输出中其余 13 项为既有漂移，不在本次范围）；upsert 测试改为按 `ON CONFLICT` 切分断言 INSERT 列清单——原整体字符串断言被 SET 的 `excluded.*` 覆盖，删掉 VALUES 字典条目仍会假绿；新增第二处 ingest（`ingest_daily_quotes_for_stock`）回归测试。测试共 4 例，两处断言均以变异测试验证会转红
+- 涉及模块：backend/app/migrations/versions/cf4b8e317fe5_add_pct_chg_to_daily_quotes_and_ranking_.py, backend/app/models/quote.py, backend/app/models/daily_basic.py, backend/app/services/tushare_ingest.py, backend/app/repositories/quote_repo.py, backend/scripts/backfill_pct_chg.py, backend/tests/test_daily_ingest_pct_chg.py
 
 ## 2026-09-11 - 首页公开化 Phase 1 收口：板块/资金/快讯三块 + 零 401 与降级门禁（Task 1.7–1.10）
 - **Task 1.7 板块区**：新增 `features/market/components/SectorFlow`（左列 `/market/sectors` 证监会口径、右列 `/market/capital-flow` 近似口径双向条）；`/market/sector-moneyflow` 实测返回 `[]` 无法支撑资金列，改走可用源并在 UI 标注「近似口径：涨/跌股成交额估算，非主力净流入」；两列独立查询独立降级
