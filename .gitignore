@@ -54,8 +54,13 @@ data/*
 !**/data/sw_seed.sql
 
 
-## claude code
+## AI 工具产物（.vscode/.cursor 见文件头部 IDE 段；data/ 见上方 data/* 规则）
 .claude/**
+.pi/
+.zcode/
+.playwright-mcp/
+.gemini/
+.video_agent/
 ## Build artifacts (test coverage / TS incremental build — regenerated locally)
 backend/.coverage
 frontend/tsconfig.tsbuildinfo
