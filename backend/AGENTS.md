@@ -16,7 +16,8 @@ backend service：为 frontend 提供 RESTful API，并负责三大交易所数�
 - uv 管理 Python 依赖；ruff（line-length 100）+ mypy（pydantic plugin）做静态检查
 
 ## 常用命令（在 backend/ 目录下）
-- 跑测试：`uv run pytest`
+- 跑测试：`uv run pytest`（默认 addopts 已排除 e2e 与 bench：`-m 'not e2e and not bench'`）
+- 性能基准：仓库根 `bash scripts/bench.sh`（门禁）/ `--quick`（冒烟）；基准用例在 `tests/benchmarks/`（marker `bench`），基线 `benchmarks/baseline.json` 入库、尺寸/seed 常量即基线契约
 - Lint / 类型检查：`uv run --extra dev ruff check .`、`uv run --extra dev mypy app`
 - 注意：ruff/mypy 在 dev extra 中，直接 `uv run ruff` 会找不到命令
 
