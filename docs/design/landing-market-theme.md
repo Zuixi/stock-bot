@@ -14,7 +14,7 @@
 
 CSS 变量挂在 `html[data-theme='light'|'dark']` 上，`src/app/theme.ts` 消费同名 token 注入 AntD。
 
-| Token | Light | Dark（TV 实测值） |
+| Token | Light | Dark（TV 实测；涨跌色见下方 AA 说明） |
 |---|---|---|
 | `--bg-page` | #ffffff | #131722 |
 | `--bg-panel` | #f8f9fd | #1e222d |
@@ -23,11 +23,15 @@ CSS 变量挂在 `html[data-theme='light'|'dark']` 上，`src/app/theme.ts` 消�
 | `--text-primary` | #131722 | #d1d4dc |
 | `--text-secondary` | #6a6d78 | #787b86 |
 | `--accent` | #2962ff | #2962ff |
-| `--up`（A股红涨） | #c62828 | #f23645 |
-| `--down`（绿跌） | #0a7d5f | #089981 |
+| `--up`（A股红涨） | #c62828 | #f2555a |
+| `--down`（绿跌） | #0a7d5f | #0aa088 |
 | `--hover` | rgba(41,98,255,.06) | rgba(41,98,255,.12) |
 
-> 浅色 `--up`/`--down` 已按 WCAG AA（对 `--bg-page` 对比度 ≥ 4.5）调整：原 `#f5222d`/`#22c55e` 仅 4.08:1 / 2.28:1。暗色值不变。门禁：`frontend && npm run check:design`（同时校验 `:root` 兜底块、light、dark 三处及 `theme.ts` 一致性）。
+> 涨跌色按 WCAG AA 调整，判据为**两个真实表面**（`--bg-page` 与 `SectionCard` 的 `--bg-panel`）对比度均 ≥ 4.5：
+> - 浅色原 `#f5222d`/`#22c55e` 对 `--bg-page` 仅 4.08:1 / 2.28:1 → `#c62828`（5.62/5.34）/`#0a7d5f`（5.11/4.85）。
+> - 暗色原 TV 实测 `#f23645`/`#089981` 对 `--bg-page` 4.59/5.01 达标，但对 `--bg-panel` 仅 4.08/4.45 不达标 → `#f2555a`（5.30/4.71）/`#0aa088`（5.45/4.84）；此处以 AA 表面为准，不再等于 TV 实测暗色值。
+>
+> 门禁：`frontend && npm run check:design`（校验 `:root` 兜底块、light、dark 三块 × 两表面的对比度，及与 `theme.ts` 的一致性）。
 
 暗色判定优先级：localStorage `stockbot-theme` > `prefers-color-scheme`。切换按钮（太阳/月亮 icon）放 **MainLayout Header 右侧 + Landing 导航右侧**。ECharts 统一走 `shared/ui/EChart` 封装，从 ThemeContext 读 axis/text/splitLine 颜色。
 

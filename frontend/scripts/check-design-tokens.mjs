@@ -42,19 +42,15 @@ function contrast(a, b) {
 }
 
 // 真实渲染表面：DeltaText/DataRow 既可能落在页面底（--bg-page），也渲染在
-// SectionCard 内（--bg-panel），浅色两处都必须达 AA —— 只查 bg-page 会漏掉卡片面。
-//
-// 暗色例外：暗色 --up/--down 是契约冻结的 TradingView 实测值，其 bg-panel 对比度
-// 当前不达标（#f23645 = 4.08:1， #089981 = 4.45:1）。在冻结色板上伪造“通过”会掩盖
-// 真实 AA 缺陷，故暗色仅校验 bg-page；暗色 bg-panel 覆盖待色值决策后补上。
-const LIGHT_SURFACES = ["bg-page", "bg-panel"];
-const DARK_SURFACES = ["bg-page"];
+// SectionCard 内（--bg-panel），因此三块（fallback/light/dark）都要对两个表面
+// 断言对比度 ≥ 4.5 —— 只查 bg-page 会漏掉卡片面。门禁在所有模式上一致，无例外。
+const SURFACES = ["bg-page", "bg-panel"];
 
 // fallback 无对应 theme.ts 模式；其一致性以 light 为准（见上注释）。
 const MODES = [
-  { label: "fallback", marker: ":root {", tsMode: "light", surfaces: LIGHT_SURFACES },
-  { label: "light", marker: '[data-theme="light"]', tsMode: "light", surfaces: LIGHT_SURFACES },
-  { label: "dark", marker: '[data-theme="dark"]', tsMode: "dark", surfaces: DARK_SURFACES },
+  { label: "fallback", marker: ":root {", tsMode: "light", surfaces: SURFACES },
+  { label: "light", marker: '[data-theme="light"]', tsMode: "light", surfaces: SURFACES },
+  { label: "dark", marker: '[data-theme="dark"]', tsMode: "dark", surfaces: SURFACES },
 ];
 
 let failed = 0;
