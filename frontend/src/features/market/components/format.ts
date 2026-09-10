@@ -19,7 +19,7 @@ export const fmtNorthYi = (v: number | null | undefined): string =>
   v == null ? DASH : `${v > 0 ? "+" : ""}${(v / 1e4).toFixed(2)}亿`;
 
 /**
- * TuShare 原生 `amount`（千元）→ 元 → 亿元，拆成 `DataRow` 的 value/unit 两段。
+ * TuShare 原生 `amount`（千元）→ 元 → 万亿元/亿元，拆成 `DataRow` 的 value/unit 两段。
  * 缺失返回 `{}`，由消费方（如 `DataRow valuePlaceholder="--"`）决定占位符；
  * 绝不回退 0.00。
  */
@@ -27,7 +27,9 @@ export function fmtAmountParts(
   amountQian: number | null | undefined,
 ): { value?: string; unit?: string } {
   if (amountQian == null) return {};
-  return { value: ((amountQian * 1e3) / 1e8).toFixed(2), unit: "亿元" };
+  const yuan = amountQian * 1e3;
+  if (Math.abs(yuan) >= 1e12) return { value: (yuan / 1e12).toFixed(2), unit: "万亿元" };
+  return { value: (yuan / 1e8).toFixed(2), unit: "亿元" };
 }
 
 /**

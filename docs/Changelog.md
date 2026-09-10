@@ -1,3 +1,9 @@
+## 2026-09-11 - 首页公开化 Phase 3 复审修复二：契约测试惰性解析 fixture + 恢复万亿元档
+- **契约测试不再在 import 期算路径**：`test_market_contract.py` 原在模块级 `FIXTURES_DIR = _fixtures_dir()`，纯后端检出（无 `frontend/`）时 `_fixtures_dir()` 抛 `RuntimeError`——pytest 为读 `pytestmark` 会先 import 模块，早于 `-m` 反选，导致默认 `uv run pytest` 变成 collection ERROR。改为 `_load()` 内惰性解析，fixture 目录/文件缺失时 `pytest.skip(...)`；实测把 `fixtures/` 改名隐藏后 `uv run pytest -q` 仍 209 passed / 29 deselected 且无 collection error，`-m e2e` 为 2 skipped；fixtures 就位时容器内 2 passed
+- **恢复 `fmtAmountParts` 的 `≥1e12 元 → 万亿元` 档**：前一轮把局部 `formatAmount` 抽成共享 helper 时漏了该档，当前数据不可达但属共享能力回退；已按原实现补回
+- 验证：`uv run pytest -q` 209/29（fixtures 有/无均无 collection error）、契约测试容器内 2 passed、`npx tsc -b`、`npm run check:design` 12/12、E2E(3010) 32/32、`self_review` ✔
+- 涉及模块：backend/tests/test_market_contract.py, frontend/src/features/market/components/format.ts, docs/references/best-practices.md
+
 ## 2026-09-11 - 首页公开化 Phase 3 复审修复：榜单/申万契约快照锁 + 行业广度条 + 缺失值收口
 - **契约漂移防护**：把容器内实抓的 `/market/rankings`（四类）与 `/market/sw-industry/performance` 真实响应落为 `frontend/e2e/fixtures/rankings.sample.json` / `swPerformance.sample.json`；前端 e2e mock 改为读同一批文件（不再手写载荷），并新增 `backend/tests/test_market_contract.py`（`@pytest.mark.e2e`，DB 实连）断言两端点实际发出的顶层/条目 key 集与 fixtures 完全一致——后端字段改名会先让契约测试转红，而不是 mock 静默漂移后页面渲染 undefined。**仍不证明活链路**（3010 dev 代理指向旧镜像，故 mock 是必需的），活链路验证待分支部署
 - **Task 3.2 广度条补齐**（计划 Step 2）：新增共享 `features/market/components/BreadthBar`（上涨红/下跌绿按 up_count:down_count 比例，4px 行内条，复用 `--up`/`--down`），从该目录 `index.ts` 导出，SectorFlow 申万行业行在 `DataRow` 下方消费
