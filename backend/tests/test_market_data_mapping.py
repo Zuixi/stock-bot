@@ -184,6 +184,7 @@ async def test_get_global_index_cards_merges_realtime_and_spark(monkeypatch):
         return [
             {
                 "code": "N225",
+                "secid": "100.N225",
                 "name": "日经225",
                 "price": 64214.48,
                 "pct_change": -0.17,
@@ -191,6 +192,7 @@ async def test_get_global_index_cards_merges_realtime_and_spark(monkeypatch):
             },
             {
                 "code": "KS11",
+                "secid": "100.KS11",
                 "name": "韩国KOSPI",
                 "price": None,
                 "pct_change": None,
@@ -542,3 +544,77 @@ async def test_ingest_dragon_tiger_explicit_date_skips_catchup(monkeypatch):
     result = await mds.ingest_dragon_tiger(db=None, trade_date=date(2026, 9, 4))
     assert result == {"upserted": 0, "days": 1}
     assert client.top_list_calls == ["20260904"]
+
+
+@pytest.mark.asyncio
+async def test_global_index_cards_distinguish_markets_with_same_code_digits(monkeypatch):
+    """不同市场前缀 + 相同数字段的 secid（1.000001 vs 0.000001）必须各自取到正确报价。
+
+    回归背景：快照曾按「数字段短码」索引（_em_code），沪/深同号段会静默错配；
+    改按完整 secid 索引后本用例锁定该不变量。
+    """
+
+    class _FakeCache:
+        def __init__(self) -> None:
+            self.store: dict = {}
+
+        async def get(self, key):
+            return self.store.get(key)
+
+        async def set(self, key, value, ttl=None):
+            self.store[key] = value
+
+    entries = [
+        {
+            "ts_code": "T1.SH",
+            "name": "沪测试",
+            "market": "CN",
+            "region": "asia",
+            "em_secid": "1.000001",
+            "source": "index_daily",
+        },
+        {
+            "ts_code": "T2.SZ",
+            "name": "深测试",
+            "market": "CN",
+            "region": "asia",
+            "em_secid": "0.000001",
+            "source": "index_daily",
+        },
+    ]
+    monkeypatch.setattr(mds, "GLOBAL_INDICES", entries)
+
+    async def fake_snapshot(secids):
+        return [
+            {
+                "code": "000001",
+                "secid": "1.000001",
+                "name": "沪测试",
+                "price": 111.0,
+                "pct_change": 1.0,
+                "change": 1.0,
+            },
+            {
+                "code": "000001",
+                "secid": "0.000001",
+                "name": "深测试",
+                "price": 222.0,
+                "pct_change": 2.0,
+                "change": 2.0,
+            },
+        ]
+
+    async def fake_kline(db, ts_code):
+        return []
+
+    monkeypatch.setattr(
+        mds,
+        "_get_eastmoney",
+        lambda: type("C", (), {"fetch_index_snapshot": staticmethod(fake_snapshot)}),
+    )
+    monkeypatch.setattr(mds.index_repo, "get_kline", fake_kline)
+
+    cards = await mds.get_global_index_cards(cache=_FakeCache())
+    by_code = {c["ts_code"]: c for c in cards}
+    assert by_code["T1.SH"]["price"] == 111.0
+    assert by_code["T2.SZ"]["price"] == 222.0

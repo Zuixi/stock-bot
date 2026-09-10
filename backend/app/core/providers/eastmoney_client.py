@@ -90,6 +90,9 @@ class EastmoneyClient:
         return [
             {
                 "code": d.get("f12"),
+                # 完整 secid（市场号+代码）作为唯一键：仅用 f12 短码会让沪/深
+                # 同号段互相覆盖（如 1.000001 与 0.000001）
+                "secid": f"{d.get('f13')}.{d.get('f12')}",
                 "name": d.get("f14"),
                 "price": _num(d.get("f2")),
                 "pct_change": _num(d.get("f3")),
