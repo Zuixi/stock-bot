@@ -662,6 +662,12 @@ html {
   color: var(--text-primary);
 }
 
+.landing-footer__sources {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 /* ── 骨架占位 ─────────────────────────────────────────── */
 .landing-skeleton {
   border-radius: 8px;

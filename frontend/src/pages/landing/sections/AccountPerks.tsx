@@ -8,7 +8,7 @@ const PERKS = [
   {
     tier: "注册用户",
     tierSub: "免费",
-    items: "+ 自选股跟踪 · 自定义标签 · 多设备同步 · 猪周期工作台完整能力",
+    items: "+ 自选股跟踪 · 自定义标签 · 多设备同步 · 周期信号提醒",
     fill: 0.67,
   },
   {
@@ -26,7 +26,7 @@ export function AccountPerks() {
       <div className="landing-container">
         <div className="landing-section-head">
           <h2 className="landing-section-title">现在能用什么</h2>
-          <p className="landing-section-sub">不搞付费墙——注册即解锁全部投研能力</p>
+          <p className="landing-section-sub">不搞付费墙——行情数据全公开，注册只增加个性化能力（自选、标签、多设备同步）</p>
         </div>
         <div className="landing-perks">
           {PERKS.map((p) => (
