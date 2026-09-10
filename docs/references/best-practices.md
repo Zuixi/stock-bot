@@ -128,3 +128,4 @@ SPA 内页断言同文案 Tag 时先等"目标页独有元素"挂载再取全局
 - 基础设施安全收敛应遵循"默认不可达 + 会话寿命有界 + 日志不可信输入剔除"三原则：中间件凭据绝不使用 guest 类默认值且端口不映射宿主机（按需 docker exec 访问）；滑动续期会话必须叠加绝对过期上限（如 7 天）防止无限续命；审计日志只记录哈希后的会话标识（SHA-256），且仅当显式声明信任反代（trust_forwarded_for）时才解析 X-Forwarded-For，否则客户端可伪造该头污染审计 IP。
 - 公开宣传页（Landing）不得被后端状态拖垮：所有公开 API 消费都要「加载骨架 + 失败静默降级占位文案」双兜底，且登录态 CTA 在 isAuthReady 之前隐藏文字（保留按钮位），防止错标签闪现与布局跳动；登录态只读复用 auth store selector，不改 auth 模块。
 - 页面级 Tab 化重组时，既有 ECharts 卡从裸 ReactECharts 迁到共享 EChart 封装要连「onEvents 透传」一起补齐（treemap 点击导航依赖它），且 option 构建纯函数必须把 colors 收为参数而非闭包静态色——否则明暗切换后图表仍是旧主题色；渐变/色阶端点从主题色推导（bgPanel→up/down）后，近零浅块的深色文字阈值类（nameDark）改挂 textPrimary/textSecondary 即可两种模式自然成立，无需按模式分支。
+- 同一份数据出现在产品多个页面时必须**单一同源**（同一 API/同一 service）：landing 曾走旧的 `/market/indices`（读 index_dailies 盘后日线）而市场页走 `/market/global-indices`（东财实时快照），"每 60 秒自动刷新"轮询的却是盘后库表，EOD vs realtime 口径差被用户当作数据错误上报。新增展示面时先审现有链路能否复用，口径差异要在 UI 上如实标注（如"盘后为准"），"实时"文案不得配非实时数据源；同源化时把两端测试断言（E2E mock 端点/载荷形状、单测注册表条数）一起同步，注册表扩容类断言优先锁"集合"而非只锁"个数"。
