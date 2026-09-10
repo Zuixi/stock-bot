@@ -135,6 +135,67 @@ test.describe("公开行情台首页 · 脉搏区（Task 1.5）", () => {
   });
 });
 
+const MOCK_SECTORS = [
+  { name: "船舶", changePercent: 4.46, totalMarketCap: 1.14e10, stockCount: 11, topStocks: [] },
+  { name: "水运", changePercent: 3.62, totalMarketCap: 1.36e10, stockCount: 19, topStocks: [] },
+  { name: "煤炭开采", changePercent: 3.47, totalMarketCap: 1.45e10, stockCount: 25, topStocks: [] },
+  { name: "焦炭加工", changePercent: 3.13, totalMarketCap: 2.31e9, stockCount: 7, topStocks: [] },
+  { name: "渔业", changePercent: 2.82, totalMarketCap: 2.58e9, stockCount: 7, topStocks: [] },
+  { name: "黄金", changePercent: 2.24, totalMarketCap: 1.7e10, stockCount: 10, topStocks: [] },
+  { name: "港口", changePercent: 2.08, totalMarketCap: 3.5e9, stockCount: 16, topStocks: [] },
+  { name: "铜", changePercent: 2.01, totalMarketCap: 3.18e10, stockCount: 18, topStocks: [] },
+  { name: "水力发电", changePercent: 1.68, totalMarketCap: 5.68e9, stockCount: 20, topStocks: [] },
+];
+
+const MOCK_CAPITAL_FLOW = [
+  { name: "元器件", inflow: 1509.75, outflow: -724.07 },
+  { name: "半导体", inflow: 443.88, outflow: -1357.9 },
+  { name: "通信设备", inflow: 1140.21, outflow: -569.02 },
+  { name: "电气设备", inflow: 691.36, outflow: -405.52 },
+  { name: "专用机械", inflow: 498.27, outflow: -473.62 },
+  { name: "化工原料", inflow: 502.98, outflow: -246.72 },
+  { name: "软件服务", inflow: 105.41, outflow: -437.9 },
+  { name: "小金属", inflow: 340.59, outflow: -102.47 },
+  { name: "汽车配件", inflow: 164.78, outflow: -243.14 },
+];
+
+test.describe("公开行情台首页 · 板块区（Task 1.7）", () => {
+  test.beforeEach(async ({ page }) => {
+    await MOCK_SESSION_ANON(page);
+    await page.route("**/api/v1/market/sectors", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_SECTORS) })
+    );
+    await page.route("**/api/v1/market/capital-flow", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_CAPITAL_FLOW) })
+    );
+  });
+
+  test("板块区：行业涨跌 + 资金流 + 口径标注", async ({ page }) => {
+    await page.goto("/#sectors");
+    const section = page.getByTestId("section-sectors");
+    await expect(section).toBeVisible();
+    // 口径必须显式可见：左列证监会（临时口径），右列近似资金流口径（非真实主力净流入）
+    await expect(section.getByText("行业口径：证监会")).toBeVisible();
+    await expect(section.getByText("近似口径")).toBeVisible();
+    // 左列行业涨跌（复用 DataRow/DeltaText）
+    await expect(section.locator(".datarow", { hasText: "船舶" })).toBeVisible({ timeout: 15000 });
+    await expect(section.locator(".datarow", { hasText: "船舶" }).locator(".delta")).toHaveText("+4.46%");
+    // 右列资金流净额（净流入/净流出）
+    await expect(section.getByText(/净流入|净流出/).first()).toBeVisible({ timeout: 15000 });
+  });
+
+  test("板块区两列独立降级：sectors 挂掉不牵连资金流列", async ({ page }) => {
+    // 后注册优先：覆盖 beforeEach 的 sectors mock，资金流仍返回
+    await page.route("**/api/v1/market/sectors", (route) => route.abort());
+    await page.goto("/#sectors");
+    const section = page.getByTestId("section-sectors");
+    await expect(section).toBeVisible();
+    await expect(section.getByText("行业涨跌暂不可用")).toBeVisible({ timeout: 15000 });
+    // 右列独立存活
+    await expect(section.getByText(/净流入|净流出/).first()).toBeVisible({ timeout: 15000 });
+  });
+});
+
 test.describe("公开行情台首页 · 榜单区（Task 1.6）", () => {
   test.beforeEach(async ({ page }) => {
     await MOCK_SESSION_ANON(page);

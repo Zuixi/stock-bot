@@ -2,6 +2,7 @@ import { Skeleton } from "antd";
 import "./landing.css";
 import { SectionCard } from "@/shared/ui";
 import { RankingMatrix } from "@/features/market/components/RankingMatrix";
+import { SectorFlow } from "@/features/market/components/SectorFlow";
 import { LandingNav } from "./sections/LandingNav";
 import { CompactHero } from "./sections/CompactHero";
 import { MarketPulse } from "./sections/MarketPulse";
@@ -40,7 +41,7 @@ export default function LandingPage() {
             </SectionCard>
             <RankingMatrix />
             <SectionCard id="sectors" title="行业与资金" moreHref="/market/category">
-              <SectionSkeleton />
+              <SectorFlow />
             </SectionCard>
             <SectionCard id="money" title="资金与情绪">
               <SectionSkeleton />
