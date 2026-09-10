@@ -37,10 +37,11 @@ const MOCK_SESSION_ANON = (page: import("@playwright/test").Page) =>
   );
 
 /** 字段名对齐 shared/types MarketIndex（value/changePercent/tsCode） */
+// global-indices 后端原始 payload（snake_case，与 /api/v1/market/global-indices 一致）
 const MOCK_INDICES = [
-  { code: "000001", tsCode: "000001.SH", name: "上证指数", value: 3951.51, change: 10.96, changePercent: 0.28, exchange: "SSE", asof: "2026-09-09" },
-  { code: "399001", tsCode: "399001.SZ", name: "深证成指", value: 13723.32, change: 20.11, changePercent: 0.15, exchange: "SZSE", asof: "2026-09-09" },
-  { code: "HSI", tsCode: "HSI", name: "恒生指数", value: 25274.96, change: -42.22, changePercent: -0.17, exchange: "HKEX", asof: "2026-09-09" },
+  { ts_code: "000001.SH", name: "上证指数", market: "CN", region: "asia", price: 3951.51, change: 10.96, pct_change: 0.28, spark: [3900, 3920, 3951.51], updated_at: "2026-09-11T10:00:00", source: "realtime" },
+  { ts_code: "399001.SZ", name: "深证成指", market: "CN", region: "asia", price: 13723.32, change: 20.11, pct_change: 0.15, spark: [13600, 13700, 13723.32], updated_at: "2026-09-11T10:00:00", source: "realtime" },
+  { ts_code: "HSI", name: "恒生指数", market: "HK", region: "asia", price: 25274.96, change: -42.22, pct_change: -0.17, spark: [25300, 25280, 25274.96], updated_at: "2026-09-11T10:00:00", source: "realtime" },
 ];
 
 test.describe("宣传页路由与品牌", () => {
@@ -87,7 +88,7 @@ test.describe("宣传页路由与品牌", () => {
 test.describe("宣传页数据区块", () => {
   test.beforeEach(async ({ page }) => {
     await MOCK_SESSION_ANON(page);
-    await page.route("**/api/v1/market/indices", (route) =>
+    await page.route("**/api/v1/market/global-indices", (route) =>
       route.fulfill({
         status: 200,
         contentType: "application/json",

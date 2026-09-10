@@ -481,3 +481,13 @@
 - **全量回归**：36 用例 33 过；余 3 项（research×2/userIsolation×1）为存量数据态依赖（industry metrics 空、固定用户名重复注册非幂等），与本分支无关
 - **调试沉淀**：Playwright addInitScript 与 expect 断言器存在状态翻转交互，清 storage 场景应改用「加载后清理+reload」；Mock 数据字段名必须对齐前端类型（MarketIndex 用 value/changePercent/tsCode）
 - 涉及模块：frontend/e2e(landing/darkmode 新增, auth 修复), frontend/vite.config
+
+## 2026-09-11 - 宣传页市场脉搏与市场页数据同源化（修复滞后性）
+- **问题**：用户实测 landing 首页"实时市场脉搏"与 /market 页指数对不上且滞后——landing 走旧接口 `/api/v1/market/indices`（`market_service.list_market_indices` 读 index_dailies 盘后日线，asof 硬编码 15:00），market 页走 `/api/v1/market/global-indices`（东财实时快照 + 60s 缓存），两条链路口径不同（EOD vs realtime）；landing 文案"每 60 秒自动刷新"轮询的却是盘后库表
+- **修复**：
+  - 前端 `MarketPulse.tsx` 改用与市场页同源的 `fetchGlobalIndices()`（global-indices 实时链路），Ticker 适配 GlobalIndexCard 字段（price/pctChange），文案改"东财实时快照，与市场页同源"
+  - 后端 `GLOBAL_INDICES` 补 5 只 A 股宽基：沪深300/中证500/科创50/上证50/北证50（东财 secid 1.000300/1.000905/1.000688/1.000016/0.899050 全部实测返回实时行情），landing 8 格与市场页 A 股指数完全对齐
+  - E2E mock 同步：`**/api/v1/market/indices` → `**/api/v1/market/global-indices`（snake_case 载荷）
+  - 单测同步：registry shape / cards 合并断言 9 → 14，新增 A 股 em_secid 集合锁定
+- **验证**：tsc ✓、ruff ✓、mapping 18 测试 ✓、gateway 实测 14 条（8 CN 全 realtime）
+- 涉及模块：frontend/src/pages/landing/sections/MarketPulse.tsx, frontend/e2e/landing.spec.ts, backend/app/services/market_data_service.py, backend/tests/test_market_data_mapping.py
