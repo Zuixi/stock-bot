@@ -31,7 +31,7 @@ export function LandingNav() {
         <a className="landing-nav-logo" href="#hero" aria-label="StockBot 首页">
           StockBot
         </a>
-        <nav className="landing-nav-links" aria-label="宣传页锚点导航">
+        <nav className="landing-nav-links" aria-label="行情台区块导航">
           {NAV_ANCHORS.map((a) => (
             <a key={a.id} className="landing-nav-link" href={`#${a.id}`}>
               {a.label}

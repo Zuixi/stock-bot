@@ -202,27 +202,6 @@ html {
   flex-wrap: wrap;
 }
 
-.landing-hero-secondary-cta {
-  display: inline-flex;
-  align-items: center;
-  height: 40px;
-  padding: 0 18px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  color: var(--text-primary);
-  font-size: 14px;
-  text-decoration: none;
-  background: var(--bg-page);
-  transition:
-    border-color 0.2s ease,
-    color 0.2s ease;
-}
-
-a:hover > .landing-hero-secondary-cta {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 /* ── Compact Hero（免登录行情台首屏，高度目标 ≤ 240px） ───── */
 .landing-hero--compact {
   padding: 64px 0 12px;

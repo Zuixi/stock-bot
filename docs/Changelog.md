@@ -1,3 +1,10 @@
+## 2026-09-11 - 首页公开化 Phase 1（D2 复审修复）：榜单剔除 null 行 + 脉搏区表面收口
+- **榜单**：涨幅/跌幅榜（及成交额榜）按当前排序维度剔除 null 行再截断 top-10（多取 20 条），修掉后端 desc 把无行情次新股排到榜首、涨幅榜首屏两行 `--` 的问题；`--` 缺失值契约改在不受过滤影响的成交额榜断言（Task 2.7 切 `/market/rankings` 后 SQL 已 `pct_chg IS NOT NULL`，此守卫为保险）
+- **脉搏区**：分布返回 `[]` 不再渲染成 `上涨 0 · 下跌 0`，改走「今日涨跌分布暂不可用」占位；分布柱家数补千分位与汇总行统一；`MarketPulse`/`index.tsx` 改直连模块路径，避免 barrel 把 ECharts 视图拖进匿名首页 chunk
+- **清理**：删除已无引用的 `.landing-hero-secondary-cta`；`LandingNav` aria-label 改为「行情台区块导航」（`darkmode.spec.ts` 同步）
+- 测试：分桶完整性用例显式断言「上涨+下跌 == 逐桶求和 == 常量」；新增空分布占位用例；18/18 全绿
+- 涉及模块：frontend/src/features/market/components/RankingMatrix.tsx, DistributionBars.tsx, frontend/src/pages/landing, frontend/e2e
+
 ## 2026-09-11 - 首页公开化 Phase 1：免登录行情台 IA 重排（Task 1.4–1.6）
 - **背景**：产品决策「免登录行情为主」——行情区块是首页主内容，营销区压缩到行情台之后；导航锚点从「功能/数据/行业」改为「脉搏/榜单/板块/资金/快讯」（`#pulse/#rankings/#sectors/#money/#news`）
 - **Task 1.4**：`Hero` 压缩为 `CompactHero`（保留 H1/信任行/CTA，实测高 232px ≤ 240px 目标，大图与次 CTA 移除），`index.tsx` 区块序列改为 紧凑 Hero → 脉搏/榜单/板块/资金/日历/快讯 → ValueProps/ProductShowcase → DataCoverage/IndustryGrid/AccountPerks/BottomCTA；未填充行情区块以 `<SectionCard>` + AntD `Skeleton` 显式骨架挂载
