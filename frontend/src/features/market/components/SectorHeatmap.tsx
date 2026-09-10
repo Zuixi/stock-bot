@@ -24,16 +24,22 @@ export function SectorHeatmap() {
   const option = {
     tooltip: {
       formatter: (params: any) => {
-        const d = params.data;
+        const d = params?.data;
+        // 空数据/内部虚拟节点可能缺少字段，缺值一律降级展示
+        if (!d || d.changePercent == null || d.name == null) return "";
         const sign = d.changePercent > 0 ? "+" : "";
         const leaders = (d.topStocks ?? [])
           .slice(0, 2)
-          .map((s: { name: string; changePercent: number }) => `${s.name} ${s.changePercent > 0 ? "+" : ""}${s.changePercent.toFixed(2)}%`)
+          .map((s: { name: string; changePercent: number }) =>
+            s.changePercent == null
+              ? s.name
+              : `${s.name} ${s.changePercent > 0 ? "+" : ""}${s.changePercent.toFixed(2)}%`
+          )
           .join("、");
         return (
           `<b>${d.name}</b><br/>` +
           `涨跌: ${sign}${d.changePercent.toFixed(2)}%<br/>` +
-          `市值: ${(d.value / 1e12).toFixed(2)}万亿 · ${d.stockCount ?? "—"} 只<br/>` +
+          `市值: ${d.value == null ? "—" : (d.value / 1e12).toFixed(2)}万亿 · ${d.stockCount ?? "—"} 只<br/>` +
           (leaders ? `领涨: ${leaders}` : "")
         );
       },
@@ -47,7 +53,9 @@ export function SectorHeatmap() {
         label: {
           show: true,
           formatter: (params: any) => {
-            const d = params.data;
+            const d = params?.data;
+            // 空库时 ECharts 会对内部虚拟节点执行一次 label 渲染，字段可能缺失
+            if (!d || d.changePercent == null || d.name == null) return "";
             const sign = d.changePercent > 0 ? "+" : "";
             // 浅色块（|涨跌|<0.8%）用深字保证对比度
             const cls = Math.abs(d.changePercent) < 0.8 ? "Dark" : "";

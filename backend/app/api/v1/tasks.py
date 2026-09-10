@@ -4,7 +4,13 @@ import uuid
 
 from fastapi import APIRouter, Query, status
 
-from app.api.deps import CacheDep, DbDep
+from app.api.deps import (
+    CacheDep,
+    CurrentUserDep,
+    DbDep,
+    OptionalUserDep,
+    require_permissions,
+)
 from app.core.exceptions import conflict_response, not_found_response
 from app.schemas.common import PagedResponse, PageParams
 from app.schemas.task import (
@@ -23,10 +29,20 @@ from app.services import task_service
 router = APIRouter()
 
 
+def _get_requested_by(user: CurrentUserDep) -> uuid.UUID | None:
+    if user.user_id:
+        try:
+            return uuid.UUID(str(user.user_id))
+        except ValueError:
+            return None
+    return None
+
+
 @router.get("", response_model=PagedResponse[TaskOut])
 async def list_tasks(
     db: DbDep,
     cache: CacheDep,
+    _user: OptionalUserDep,
     type: str | None = Query(None, description="Filter by task type"),
     status_filter: str | None = Query(None, alias="status", description="Filter by status"),
     page: int = Query(default=1, ge=1),
@@ -44,80 +60,128 @@ async def list_tasks(
     "/fetch-universe",
     response_model=TaskOut,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[require_permissions("tasks:trigger")],
 )
-async def fetch_universe(req: FetchUniverseRequest, db: DbDep) -> TaskOut:
+async def fetch_universe(
+    req: FetchUniverseRequest,
+    db: DbDep,
+    user: CurrentUserDep,
+) -> TaskOut:
     """Trigger a universe fetch task for a specific exchange."""
-    return await task_service.trigger_fetch_universe(db, req)
+    return await task_service.trigger_fetch_universe(db, req, requested_by=_get_requested_by(user))
 
 
 @router.post(
     "/fetch-quotes",
     response_model=TaskOut,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[require_permissions("tasks:trigger")],
 )
-async def fetch_quotes(req: FetchQuotesRequest, db: DbDep) -> TaskOut:
+async def fetch_quotes(
+    req: FetchQuotesRequest,
+    db: DbDep,
+    user: CurrentUserDep,
+) -> TaskOut:
     """Trigger a quotes fetch task."""
-    return await task_service.trigger_fetch_quotes(db, req)
+    return await task_service.trigger_fetch_quotes(db, req, requested_by=_get_requested_by(user))
 
 
 @router.post(
     "/fetch-daily-basic",
     response_model=TaskOut,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[require_permissions("tasks:trigger")],
 )
-async def fetch_daily_basic(req: FetchDailyBasicRequest, db: DbDep) -> TaskOut:
+async def fetch_daily_basic(
+    req: FetchDailyBasicRequest,
+    db: DbDep,
+    user: CurrentUserDep,
+) -> TaskOut:
     """Trigger a daily_basic fetch task (entire market per trade_date)."""
-    return await task_service.trigger_fetch_daily_basic(db, req)
+    return await task_service.trigger_fetch_daily_basic(
+        db, req, requested_by=_get_requested_by(user)
+    )
 
 
 @router.post(
     "/fetch-financial",
     response_model=TaskOut,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[require_permissions("tasks:trigger")],
 )
-async def fetch_financial(req: FetchFinancialRequest, db: DbDep) -> TaskOut:
+async def fetch_financial(
+    req: FetchFinancialRequest,
+    db: DbDep,
+    user: CurrentUserDep,
+) -> TaskOut:
     """Trigger a financial fetch task for a single stock."""
-    return await task_service.trigger_fetch_financial(db, req)
+    return await task_service.trigger_fetch_financial(db, req, requested_by=_get_requested_by(user))
 
 
 @router.post(
     "/run-clustering",
     response_model=TaskOut,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[require_permissions("tasks:trigger")],
 )
-async def run_clustering(req: RunClusteringRequest, db: DbDep) -> TaskOut:
+async def run_clustering(
+    req: RunClusteringRequest,
+    db: DbDep,
+    user: CurrentUserDep,
+) -> TaskOut:
     """Trigger a clustering run."""
-    return await task_service.trigger_clustering(db, req)
+    return await task_service.trigger_clustering(db, req, requested_by=_get_requested_by(user))
 
 
 @router.post(
     "/fetch-industry-metrics",
     response_model=TaskOut,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[require_permissions("tasks:trigger")],
 )
-async def fetch_industry_metrics(req: FetchIndustryMetricsRequest, db: DbDep) -> TaskOut:
+async def fetch_industry_metrics(
+    req: FetchIndustryMetricsRequest,
+    db: DbDep,
+    user: CurrentUserDep,
+) -> TaskOut:
     """Trigger an industry metrics ingest task (mock/AKShare)."""
-    return await task_service.trigger_fetch_industry_metrics(db, req)
+    return await task_service.trigger_fetch_industry_metrics(
+        db, req, requested_by=_get_requested_by(user)
+    )
 
 
 @router.post(
     "/fetch-securities",
     response_model=TaskOut,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[require_permissions("tasks:trigger")],
 )
-async def fetch_securities(req: FetchIndustrySecuritiesRequest, db: DbDep) -> TaskOut:
+async def fetch_securities(
+    req: FetchIndustrySecuritiesRequest,
+    db: DbDep,
+    user: CurrentUserDep,
+) -> TaskOut:
     """Trigger an ETF/convertible-bond daily fetch task (TuShare fund/cb daily)."""
-    return await task_service.trigger_fetch_securities(db, req)
+    return await task_service.trigger_fetch_securities(
+        db, req, requested_by=_get_requested_by(user)
+    )
 
 
 @router.post(
     "/fetch-market-data",
     response_model=TaskOut,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[require_permissions("tasks:trigger")],
 )
-async def fetch_market_data(req: MarketDataFetchRequest, db: DbDep) -> TaskOut:
+async def fetch_market_data(
+    req: MarketDataFetchRequest,
+    db: DbDep,
+    user: CurrentUserDep,
+) -> TaskOut:
     """Trigger a market-data fetch task (global index/moneyflow/northbound/etc.)."""
-    return await task_service.trigger_fetch_market_data(db, req)
+    return await task_service.trigger_fetch_market_data(
+        db, req, requested_by=_get_requested_by(user)
+    )
 
 
 @router.get("/{task_id}", response_model=TaskOut)
@@ -125,6 +189,7 @@ async def get_task(
     task_id: uuid.UUID,
     db: DbDep,
     cache: CacheDep,
+    _user: OptionalUserDep,
 ) -> TaskOut:
     """Get task status by ID."""
     task = await task_service.get_task(db, cache, task_id)
@@ -133,7 +198,11 @@ async def get_task(
     return task
 
 
-@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{task_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[require_permissions("tasks:trigger", "tasks:cancel")],
+)
 async def cancel_task(task_id: uuid.UUID, db: DbDep, cache: CacheDep) -> None:
     """Cancel a pending or running task."""
     ok = await task_service.cancel_task(db, cache, task_id)

@@ -33,11 +33,14 @@ from app.models.sse_index_snapshot import SseIndexSnapshot
 from app.models.stock import Stock, StockHistory, StockUserTag
 from app.models.sw_industry import StockCustomSwTag, SwIndustryClass, SwIndustryMember
 from app.models.task import Task
+from app.models.watchlist import UserWatchlist, UserWatchlistItem
 
 __all__ = [
     "Stock",
     "StockHistory",
     "StockUserTag",
+    "UserWatchlist",
+    "UserWatchlistItem",
     "DailyQuote",
     "DailyBasicIndicator",
     "IndexDaily",

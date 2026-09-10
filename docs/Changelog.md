@@ -201,7 +201,12 @@
 - **API**：`GET /api/v1/industries/{key}/securities?type=etf|cb&limit=90` → `{type, codes:[{ts_code, name, latest, change_pct(close vs pre_close), series}]}`，未拉取时 series 空（前端空态引导）
 - **前端**：「行情调研追踪」Tab 成分股对比表下新增"行业 ETF"（代码/名称/最新价/涨跌幅/成交量/近期走势 sparkline，复用 sparkOption+EChart）与"可转债"（registry 无在市转债时不渲染）两张紧凑表 +「拉取数据」按钮（触发任务后 3s 延迟刷新）
 - **测试**：`tests/test_industry_securities.py` 11 项离线单测（registry 标的/名称覆盖、TuShare 行映射含脏行跳过、序列组装涨跌幅、冲突列常量=模型约束=迁移、db 透传回归锁定）；e2e 追加 fetch-securities 任务→securities 端点全链路（≥30 序列行 + cb 分支随 registry 源无关）+ 404/422；Playwright 追加 ETF 表用例；全量 111 backend（99 offline + 12 e2e）+ 5 Playwright 通过（docker 重建实跑：ETF 243 行、3 只转债 729 行入库）
-- 涉及模块：backend/models/securities, backend/migrations, backend/core/providers/tushare_client, backend/services/industry_registry, backend/services/securities_service, backend/repositories/securities_repo, backend/core/mq, backend/workers/securities_worker, backend/scheduler, backend/services/task_service, backend/api/v1/tasks, backend/api/v1/industries, backend/schemas, frontend/shared/api, frontend/features/industry-research, frontend/pages/research-workbench, backend/tests, frontend/e2e
+208	- 涉及模块：backend/models/securities, backend/migrations, backend/core/providers/tushare_client, backend/services/industry_registry, backend/services/securities_service, backend/repositories/securities_repo, backend/core/mq, backend/workers/securities_worker, backend/scheduler, backend/services/task_service, backend/api/v1/tasks, backend/api/v1/industries, backend/schemas, frontend/shared/api, frontend/features/industry-research, frontend/pages/research-workbench, backend/tests, frontend/e2e
+209	
+210	## 2026-09-09 - 前端统一请求层、认证状态机与路由守卫 (Stage 2)
+211	- 重构 `shared/api/client.ts` 通用底层请求（强制 `credentials: include`、CSRF 单飞并发获取与自动注入、结构化 `ApiError` 统一解析、401 拦截事件广播），新建 `shared/api/auth.ts` 契约客户端，实现基于 Zustand + React Query 的 `features/auth` 登录状态机与 `RequireAuth` 路由守卫，集成 `/login` 登录/注册表单与导航栏 `UserMenu`。
+212	- 涉及模块：frontend/shared/api, frontend/features/auth, frontend/pages/login, frontend/app/router, frontend/app/layouts
+
 
 ## 2026-09-03 - P6 行业知识库
 - **表与迁移**：新增 `industry_knowledge`（迁移 e6f7a8b9c0d1，链头自 d5a6b7c8d9e0）：`industry_key/kind(org|principle|mindmap)/payload JSONB/sort`，同 kind 多行按 (kind, sort, id) 读序，索引 (industry_key, kind, sort)；纯内容管理，第二行业零表结构改动
@@ -406,6 +411,55 @@
 - 本地验证 ruff/mypy 全绿、pytest 155 passed；PR #1 六项 CI 全绿
 - 涉及模块：backend(migrations/models/scheduler/services/providers/repos), frontend(stock-detail), docs
 
+## 2026-09-09 - 认证微服务、Gateway 与数据归属架构设计 (Stage 0)
+- 完成企业级认证授权与多租户数据隔离体系的 Stage 0 顶层设计：明确 Gateway BFF 与 auth-service 目标拓扑、HttpOnly Session Cookie 与 CSRF 双重防御机制、下游 API 零信任短时 Principal Assertion (RS256) 签名与 JWKS 验签机制、统一 JSON 错误契约 (code/message/details/trace_id)、独立 auth_* 数据模型 (Argon2id / RTR Token Family)、业务模型多用户改造方案 (stock_custom_sw_tags 增加 user_id、自选股服务端化、tasks 增加 requested_by、Redis Key 用户隔离) 与 Stage 0-6 分阶段实施计划。
+- 涉及模块：docs/architecture/authentication-and-gateway, docs/architecture/auth-data-model, plans/2026-09-09-auth-gateway-implementation
+
+## 2026-09-09 - auth-service 独立微服务开发与凭证/JWKS体系 (Stage 1)
+- 实现独立的 `auth-service` 微服务工程体系，构建基于 Argon2id 的安全密码哈希与防暴力锁定、Redis 高性能滑动会话与 DB 持久化同步、CSRF 双重校验、RSA 短时 Principal Assertion JWT 签名与 RFC 7517 JWKS 公钥分发端点，完善了注册、登录、登出、会话查询与多端下线、网关会话内省等接口，提供全链路 100% 通过的离线单元与集成测试套件。
+- 涉及模块：auth-service(core/models/services/schemas/api/migrations/tests), plans, docs
+
+## 2026-09-09 - 引入 Traefik API Gateway 并完成容器拓扑与端口收敛 (Stage 3)
+- 引入 Traefik v3 API Gateway 作为整站统一流量入口，配置 JSON 结构化日志、Prometheus 监控指标与动态中间件（Security Headers、Rate Limit、Compression）；重构根 `docker-compose.yml` 容器编排体系，新增 `auth-db`、`migrate-auth` 与 `auth-service` 微服务，收敛下线 `api:8000` 与 `frontend:3000` 的宿主机端口暴露，实现基于 Traefik labels 的动态路由分发与 tasks 任务触发写限流保护，并提供 `.env.docker.example` 容器配置模板。
+- 涉及模块：gateway, docker-compose.yml, auth-service, backend/docker-compose.yml, .env.docker.example, plans, docs
+
+## 2026-09-09 - Stock API 零信任身份断言验签与权限矩阵保护 (Stage 4)
+- 实现基于 JWKS 异步加载与本地公钥缓存（单飞刷新）的 Principal Assertion (RS256) 验签器与 RBAC 权限依赖注入器（CurrentUserDep / OptionalUserDep / require_roles / require_permissions）；全面保护 tasks 触发与取消、行业指标 batch 导入、SSE 历史回补等敏感接口；客户端未签名 X-User-* 伪造头一律严格丢弃；修复前端跨交易所 fallback 仅对 404 降级与股票详情页 error/not-found 状态分流；新增 9 项无 DB 依赖单元与集成测试。
+- 涉及模块：backend/config, backend/core/auth, backend/api/deps, backend/api/v1/tasks, backend/api/v1/industries, backend/api/v1/market, frontend/shared/api, frontend/pages/stock-detail, backend/tests
+
+## 2026-09-09 - 用户标签与自选股服务端化与多用户数据隔离 (Stage 5)
+- 实现多用户业务数据隔离与自选股服务端化：ORM 模型（StockUserTag / UserWatchlist / UserWatchlistItem / Task）增加 `user_id` / `requested_by` 并完成 Alembic 迁移脚本 `5a1b2c3d4e5f`；新增 `watchlists` 路由、改造 `user-tags` 及全局标签端点接入 `CurrentUserDep` 与 `user:{user_id}:*` 缓存隔离；前端对接服务端自选股 API，升级 `useWatchlist` 状态机与标签组件按登录态分流读写，登出全量清理；编写 9 项纯单元与路由隔离测试，验证 100% 通过。
+- 涉及模块：backend/models, backend/migrations, backend/repositories, backend/services, backend/schemas, backend/api/v1(stocks/tags/watchlists/tasks), frontend/shared/api(watchlist/userTags), frontend/features/watchlist, frontend/features/stock-detail, frontend/pages(watchlist/tags/tags-detail), backend/tests
+
+## 2026-09-09 - CI/CD 自动化门禁扩展与端到端测试覆盖 (Stage 6)
+- 扩展 `.github/workflows/ci.yml` 引入 `auth-service` 的 Lint、TypeCheck 与 Test 门禁 job，并更新 `docker-smoke` 支持在 Traefik 网关（端口 80）下验证前端、API 及 `/auth` 接口全链路连通性；扩展 `.github/workflows/cd.yml` 增加 `auth-service` 多架构镜像构建推送；新增前端 Playwright E2E 认证与多用户隔离测试套件（`auth.spec.ts` 与 `userIsolation.spec.ts`）；完成全系统各微服务本地全量验证与阶段性实施计划收官。
+- 涉及模块：.github/workflows/ci.yml, .github/workflows/cd.yml, frontend/e2e, plans, docs
+
+
+
+
+## 2026-09-09 - P0 评审修复：forward-auth 断言注入与 JWT 契约统一
+- 修复 Traefik 未向 backend 注入身份断言导致登录后受保护 API 全部 401 的 P0 缺陷：新建 `forward-auth` sidecar（会话 Cookie 换取短时 Principal Assertion、CSRF 强制、匿名放行、fail-closed 503），新增 `strip-assertion` 防伪造中间件并接线 `api`/`api-tasks` 路由；统一 auth-service 与 backend 的 JWT iss/aud 默认契约（`stock-bot-auth` / `urn:stock-bot:api`）并在 compose 显式对齐，新增两端交叉契约测试与 CI 注册→登录→受保护接口 401/200 闭环 smoke。
+- 涉及模块：forward-auth(新建), gateway/dynamic, docker-compose.yml, .env.docker.example, auth-service/config, backend/tests, auth-service/tests, .github/workflows/ci.yml, docs, plans
+
+## 2026-09-09 - P1 安全加固：凭据收敛、CSRF 强制与生产安全配置
+- 落实安全评审 P1 项：登录响应体不再返回 session_id/csrf_token（凭据仅经 Set-Cookie 下发）；移除 X-Session-Id Header 旁路（会话识别仅认 Cookie）；auth-service 对 register/login 强制匿名 double-submit CSRF、logout 升级为会话绑定校验（失败 403 AUTH_CSRF_FAILED）；/internal/* 新增 X-Internal-Token 共享密钥校验（非空即强制，401 拒绝）；JWT 密钥支持经环境变量持久化注入并在 APP_ENV=production 时对 COOKIE_SECURE=false 启动 fail-fast；前端类型同步、CI smoke 补注册 CSRF 步骤、架构文档 3.3/4.5/4.6 与计划文档更新。
+- 涉及模块：auth-service(api/auth, api/internal, config, schemas, tests), frontend/shared/api/auth.ts, docker-compose.yml, .env.docker.example, .github/workflows/ci.yml, docs, plans
+
+## 2026-09-09 - P1/P2 评审修复：基建暴露面收敛、会话绝对上限与审计脱敏
+- 落实最后一批评审修复：RabbitMQ 替换 guest/guest 默认凭据并移除 5672/15672 宿主机映射（migrate/api/worker 的 RABBITMQ_URL 统一引用新变量）；Traefik dashboard 8080 端口不再映射宿主机；nginx 仅保留 /health 透传、不再公开后端 docs/redoc/openapi.json；auth-service CORS 默认列表移除 8000/8001 端口项；会话引入 7 天绝对过期上限（超限强制登出语义）；审计事件 payload 中明文 session_id 改为 SHA-256 哈希；X-Forwarded-For 仅在 trust_forwarded_for 开启时解析（默认不信任）；Vite 开发代理补全 /auth 与 /.well-known；补存量标签认领策略与暴力破解双层防护文档。
+- 涉及模块：docker-compose.yml, .env.docker.example, backend/.env.example, frontend/vite.config.ts, frontend/nginx.conf, auth-service(config, api/auth, services, tests), docs/architecture, plans
+
+## 2026-09-09 - 本地 Docker Compose 实跑验证（P7 认证闭环 E2E）
+- **实跑结果**：全栈经 Traefik Gateway 完成认证闭环实测 10 项场景全绿——公开路由 200、注册/登录 CSRF double-submit 正常、登录响应体无凭据、带 Cookie 访问受保护接口 200（forward-auth 断言注入 + backend JWKS 验签全链打通）、匿名 401、写请求无 CSRF 403、自选股写入正确归属 user_id、api:8000 与 frontend:3000 直连被阻断
+- **修复一**：Traefik ≤3.3 与 Docker Engine 29（最低 API 1.44）不兼容导致 Docker provider 协商 v1.24 被拒、路由无法加载——镜像钉至 v3.6.2 并注释勿降级
+- **修复二**：forward-auth 生产路径 lifespan 在 state 未挂 http 属性时访问即崩溃（测试注入路径掩盖）——getattr 兜底修复并新增回归测试
+- 涉及模块：docker-compose(gateway 镜像版本), forward-auth(app lifespan + tests), plans(实跑记录)
+
+## 2026-09-09 - 前端空数据库白屏修复 + 全局 ErrorBoundary
+- **问题**：全新部署（空库）下打开 /market 白屏——ECharts treemap 对内部虚拟节点执行 label 渲染时 `changePercent` 为 undefined，SectorHeatmap formatter 抛 TypeError 导致 React 18 卸载整棵树；且浏览器缓存旧 index.html 使修复不可见
+- **修复**：SectorHeatmap label/tooltip formatter 与两张资金流卡片 tooltip 补空值防御；新增全局 `ErrorBoundary`（路由级兜底，任何子树渲染异常降级为错误卡片而非白屏）；nginx SPA 入口增加 `Cache-Control: no-cache`（assets 仍长缓存，入口每次回源，杜绝发版后浏览器跑旧 bundle）
+- 涉及模块：frontend/features/market/components(SectorHeatmap/MarketMoneyflowCard/SectorMoneyflowCard), frontend/shared/ui(ErrorBoundary 新增), frontend/App, frontend/nginx.conf
 ## 2026-09-09 - 浏览器登录会话安全研究
 - 基于 RFC 9700、RFC 10017（OAuth 2.0 for Browser-Based Applications）、OpenID Connect Core 与 OWASP Session/CSRF Cheat Sheet，形成 stock_bot 的 BFF+HttpOnly 会话、刷新令牌轮换、CSRF 与 Cookie flags 建议。
 - 涉及模块：安全架构、backend、frontend、Docker Compose、docs

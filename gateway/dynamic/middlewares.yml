@@ -1,0 +1,87 @@
+# ==============================================================================
+# Traefik Dynamic Configuration — Middlewares
+# ==============================================================================
+
+http:
+  middlewares:
+    # --------------------------------------------------------------------------
+    # Strip client-forged assertion header (MUST run before forward-auth)
+    # Setting a customRequestHeader to empty string removes it from the request,
+    # so attackers can never smuggle an X-Principal-Assertion past the edge.
+    # --------------------------------------------------------------------------
+    strip-assertion:
+      headers:
+        customRequestHeaders:
+          X-Principal-Assertion: ""
+
+    # --------------------------------------------------------------------------
+    # Forward Auth: session cookie -> short-lived Principal Assertion injection
+    # forward-auth resolves stockbot_session to an X-Principal-Assertion header
+    # via authResponseHeaders and enforces CSRF for non-idempotent methods.
+    # NOTE: trustForwardHeader is deliberately FALSE — Traefik v3 then stamps
+    # X-Forwarded-Method / X-Forwarded-Uri from the real original request
+    # (client-supplied values would be spoofable and could bypass CSRF checks).
+    # --------------------------------------------------------------------------
+    forward-auth:
+      forwardAuth:
+        address: http://forward-auth:9000/verify
+        trustForwardHeader: false
+        authResponseHeaders:
+          - X-Principal-Assertion
+
+    # --------------------------------------------------------------------------
+    # Security Headers
+    # --------------------------------------------------------------------------
+    sec-headers:
+      headers:
+        browserXssFilter: true
+        contentTypeNosniff: true
+        frameDeny: true
+        customFrameOptionsValue: "DENY"
+        sslRedirect: false
+        customResponseHeaders:
+          X-Robots-Tag: "noindex, nofollow, nosnippet, noarchive"
+          X-Content-Type-Options: "nosniff"
+          X-XSS-Protection: "1; mode=block"
+
+    # --------------------------------------------------------------------------
+    # General API Rate Limiting
+    # --------------------------------------------------------------------------
+    api-ratelimit:
+      rateLimit:
+        average: 100
+        burst: 50
+        period: 1s
+
+    # --------------------------------------------------------------------------
+    # Auth Service Rate Limiting (Brute-force protection)
+    # --------------------------------------------------------------------------
+    auth-ratelimit:
+      rateLimit:
+        average: 20
+        burst: 10
+        period: 1s
+
+    # --------------------------------------------------------------------------
+    # Tasks Trigger Write Rate Limiting (Worker protection)
+    # --------------------------------------------------------------------------
+    tasks-ratelimit:
+      rateLimit:
+        average: 5
+        burst: 5
+        period: 1m
+
+    # --------------------------------------------------------------------------
+    # Path Prefix Stripping Middleware
+    # --------------------------------------------------------------------------
+    strip-api-prefix:
+      stripPrefix:
+        prefixes:
+          - "/api"
+        forceSlash: false
+
+    # --------------------------------------------------------------------------
+    # Compression (Gzip / Brotli)
+    # --------------------------------------------------------------------------
+    compress-middleware:
+      compress: {}

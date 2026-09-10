@@ -91,6 +91,8 @@
 - ROE、营收同比、净利润同比等财务成长指标需 TuShare `fina_indicator`/`profit_data` 接口支持、后端入库后方可展示；在此之前 FundamentalCards 应提供降级展示策略或临时隐藏相关指标。
 - echarts-for-react 默认 merge 模式下，用户交互过的组件状态（如 dataZoom 滚轮缩放窗口）不会被新 option 同名配置重置：数据全集切换的图表必须 `notMerge`（对齐 shared/ui/EChart 封装），且不要用固定 start/end 百分比裁剪初始视图——周期切换类交互的正确语义是"所选区间全量展示 + 每次切换重置缩放"。
 - antd 栅格内卡片等高要"双保险"：内容侧 Typography `ellipsis`（描述 `tooltip:true`）消除换行撑高，布局侧 Col `display:flex` + Card `height:100%` 拉伸兜底；flex 行内文本省略号必须给文本容器 `minWidth:0`（flex item 默认 min-width:auto 不收缩），Tag/图标侧补 `flexShrink:0`。
+- 重复图表组件的合并应先落纯函数层（计算/格式化/裁剪）并配 barrel 导出，且把类型签名当依赖契约先于组件实现冻结（任务 brief 的 Interfaces 块即签名源）——后续 UI 任务只依赖稳定签名，不再各自重复实现；brief 代码块可用 diff 逐字校验落地无漂移。
+- 微服务架构中的身份认证应采用“Gateway 同源 BFF + HttpOnly Session Cookie + 短时非对称签名断言（Principal Assertion JWT）+ 下游本地 JWKS 验签”的零信任模式，彻底消除 XSS 窃取与未签名 Header 伪造越权风险。
 - 重复图表组件的合并应先落纯函数层（计算/格式化/裁剪）并配 barrel 导出，且把类型签名当依赖契约先于组件实现冻结（任务 brief 的 Interfaces 块即签名源）——后续 UI 任务只依赖稳定签名；brief 代码块可用 diff 逐字校验落地无漂移。
 - ECharts option builder 保持返回未注解的结构化对象（推断类型天然可赋给 `Record<string, unknown>`），formatter 一律收 `params: unknown` 再局部断言；当 `string` 参数要索引 `Partial<Record<字面量联合,…>>` 时直接把参数收窄为字面量联合类型（如 `MaKey`），比在索引处加 `as` 断言更不易漂移。
 - antd 5.x 命名导出随小版本漂移：子组件（如 CheckableTag）可能只挂在主组件命名空间（`Tag.CheckableTag`）而非顶层导出，逐字移植参考代码时先对齐代码库内同组件既有用法再定 import 形态；此类 TS2305 还会连带制造"参数隐式 any"的次生报错，修掉根因即一并消除。
@@ -100,6 +102,15 @@
 - 市场情绪类可视化的三件套是直方图 + 平衡条 + 参与度（成交额）：平衡条把千位数量级压成长度比例供前注意感知，连续梯度色阶（0%→灰、极端→深色）优于离散档位——但必须为近零浅色块切换深色文字保对比度。
 - antd CheckableTag 选中态自带主题色实底，inline 彩色文字色会与之撞色（对比度 ~1.2:1）——彩色图例类控件用图内绝对定位文本行（线色文字 on 白底），不要用 CheckableTag 承载。
 - 前端接真实数据源时 ECharts tooltip/label formatter 里的可空数值必须先判空再 `.toFixed`（板块热力图 `d.changePercent.toFixed(2)` 无守卫页面加载即抛 TypeError，属存量隐患）；替换"近似实现"组件前先 grep 全量引用确认只剩 barrel+单页两处，且轮询语义要区分 `refetchInterval`（盘中定时刷新）与 `staleTime`（仅去抖），漏配会把"60s 自动更新"做成假象。
+- 计划 brief 给定的表格 rowKey 组合键先对活端点跑唯一性校验再落码：Tushare 明细类数据（解禁一股多持有人、大宗同日同股同价同买方多笔）在默认键上必撞 React duplicate key，复合键以「业务键 + 区分度最高且前端已展示的字段」补位（如 +holderName/+volume）而非引入未展示字段。
+- 把为全市场设计的端点复用到个股维度时，客户端 filter 的覆盖边界要在 UI 上写明而非只靠空态：龙虎榜接口无 symbol 参数，个股卡拉 limit=50 最新日再前端过滤，本股不在当日榜即显示"暂无上榜记录"，footer 同步注明"全市场最新日筛选本股"，避免用户把覆盖范围导致的空态误读为数据缺失；另外计划 brief 末尾自带的防未用报错脚手架（hidden span + 死 import）按其收尾指令删除即可，落库前对"这段代码存在的理由"过一遍能直接清掉这类残留。
+- 接三方行情先 curl 实测定字段与单位再写映射：东财 f62 是元、TuShare block_trade 是万元/万股、north_money 是万元、巨潮 announcementTime 是毫秒——单位/时间戳错一档，UI 就差四个数量级或 1970 年。
+- 定时任务的交易时段/工作日守卫必须显式 ZoneInfo("Asia/Shanghai")：容器默认 UTC，naive datetime.now() 会让盘中任务在真实交易时段静默跳过、却在晚间时段放行——cron 触发正确而 job 体空转，日志只有 executed successfully 没有业务结果行。
+108	- 复用网站数据先比对页面 HTML 里的实体代码（东财 BK 板块码）：代码一致即同源，排行页的扩展列（最大股/中单小单）多数在同端点 fields 里就有，无需另找接口。
+109	- 东财 kline 类接口（fflow/daykline 等）返回 CSV 字符串行，数值必须显式 float()；容器内长连接池偶发被服务端断连（RemoteProtocolError），HTTP GET 加一次传输层重试即可消除偶发失败。
+110	- 前端认证与统一请求层改造中，BFF HttpOnly 会话请求必须全局强制 `credentials: "include"`，非幂等操作需配合 single-flight CSRF Token 注入机制；同时在全局请求客户端中拦截 401 派发事件触发 QueryClient 缓存清理与状态重置，并通过 `skipAuth` 选项切断登录、注册及探针接口的 401 死循环。
+
+- 市场情绪类可视化的三件套是直方图+平衡条+参与度（成交额）：平衡条把千位数量级压成长度比例供前注意感知，连续梯度色阶（0%→灰、极端→深色）优于离散档位——但必须为近零浅色块切换深色文字保对比度。
 - 计划 brief 给定的表格 rowKey 组合键先对活端点跑唯一性校验再落码：Tushare 明细类数据（解禁一股多持有人、大宗同日同股同价同买方多笔）在默认键上必撞 React duplicate key，复合键以"业务键 + 区分度最高且前端已展示的字段"补位（如 +holderName/+volume）而非引入未展示字段。
 - 把为全市场设计的端点复用到个股维度时，客户端 filter 的覆盖边界要在 UI 上写明而非只靠空态：龙虎榜接口无 symbol 参数，个股卡拉 limit=50 最新日再前端过滤，本股不在当日榜即显示"暂无上榜记录"，footer 同步注明"全市场最新日筛选本股"，避免用户把覆盖范围导致的空态误读为数据缺失。
 
@@ -139,6 +150,15 @@
 - Agent 指令文件（AGENTS.md/CLAUDE.md）必须保持单一事实来源：CLAUDE.md 用 symlink 或一行转发指向 AGENTS.md 而非拷贝；同类沉淀文档不可并存近似命名（`best-practice.md` vs `best-practices.md` 曾同时被更新导致经验分裂，本文件即两文件合并产物）；AGENTS.md 中的命令必须实跑验证后再写入（本次发现 ruff/mypy 需 `uv run --extra dev`、frontend eslint 需先 `npm install`）。
 - 技术栈/README 这类"镜像型"文档极易与实现漂移（本项目 README 曾长期标注 SQLModel / Tailwind+shadcn，实际早已迁至 SQLAlchemy 2.0 async / Ant Design 5）：应把某一份文档定为唯一权威入口并纳入 PR 变更清单同步更新，其余文档只做链接跳转；同时每季度或大特性合入时对照一遍 compose / AGENTS / README 的端口、服务名、镜像名，避免"7 个服务 vs 实际 9 个、redis 6380"这类静默漂移。
 - uv 的 `[project.optional-dependencies] dev`（ruff/mypy/pytest）默认不随 `uv sync` 安装：CI 与本地都必须显式 `uv sync --extra dev`（或 `uv run --extra dev`），否则 `uv run ruff/mypy` 报 "Failed to spawn"——这会让 Lint/TypeCheck 形同虚设并放行历史欠账；同理 pytest 若依赖真实运行 API，须标 `pytest.mark.e2e` 并在 CI 用 `-m "not e2e"` 避免测试 job 必挂。
+- 多分支并行各自新增 Alembic 迁移、随后合并时，会产生两个 head 导致 `alembic upgrade head` 报 "Multiple head revisions"——在合并点新增一个 `down_revision=(链Ahead, 链Bhead)` 的空 merge 迁移（alembic merge <revA> <revB>）线性化两条链，否则 DB 迁移/CI Test job 必挂；此类 merge 迁移需 ruff-clean（去掉未用 import）。
+- 认证微服务与安全凭据设计应采用"Argon2id 密码哈希 + Redis 滑动会话 / DB 快照持久化 + 短时 RS256 非对称断言签名 + 公钥 JWKS 规范分发"的完整分层，且会话与主业务库严格物理隔离以保障身份系统的独立性与高可用。
+- 微服务拓扑演进中，API Gateway（如 Traefik）应作为唯一暴露的外部流量入口，下游业务 API 与前端容器必须收敛宿主机端口映射改为内网通信，并结合静态/动态中间件分层配置（Security Headers、Rate Limit、Compression）与 labels 声明式路由实现安全防护与任务防洪。
+- 下游微服务践行零信任安全原则：用户身份与权限必须严格源自经过非对称签名（RS256）并经本地 JWKS 验签的断言载荷，任何未经签名的入站 `X-User-*` 请求头必须强制丢弃以杜绝伪造越权；同时前端跨节点/跨交易所 fallback 必须严格限定在 404 Not Found 状态码，避免将 401/403/500 等关键鉴权与系统错误静默吞没。
+- 多用户业务数据归属设计应采用“模型与索引显式绑定 user_id + 路由层注入当前登录 Principal + 缓存键用户命名空间（`user:{user_id}:*`）隔离 + 前端 React Query 动态以 `user?.id` 门控并于登出时全量清理”的四层联动防护，彻底阻断横向越权与多端缓存串扰。
+- 在微服务与 API Gateway 架构中，CI/CD 流水线应将微服务专属门禁（Lint/TypeCheck/Test）与统一网关烟雾测试（仅通过 Gateway:80 外部入口验证各路由分发连通性）结合，配合前端 E2E 隔离断言，形成从代码静态分析到黑盒流量路由的完整自动化质量屏障。
+- 跨服务 JWT 契约（iss/aud/claims）绝不能靠口头约定：auth-service 与 backend 各自写一条交叉契约测试锁定同一 claim 结构与默认值（篡改即失败）；Traefik forwardAuth 永远以 GET 调用鉴权子请求且 trustForwardHeader=true 会透传客户端可伪造的 X-Forwarded-Method（可绕过 CSRF 方法判定），因此该开关必须为 false 让 Traefik 用真实原始方法覆写，同时用 strip-assertion（customRequestHeaders 置空=删除）在链首剥除客户端伪造的断言头。
+- 认证接口安全评审修复应遵循"凭据最小暴露"原则：登录响应体绝不回传 session_id/csrf_token（只经 Set-Cookie 下发）、会话识别只认 HttpOnly Cookie 不留 Header 旁路（如 X-Session-Id）、登录/注册等匿名写接口也要强制 CSRF double-submit（先 GET /auth/csrf 再回显 Header）、内部端点用共享密钥（X-Internal-Token，非空即 hmac 常数时间强制）收口，并以"APP_ENV=production 必须 COOKIE_SECURE=true"类模型级校验 fail-fast 防生产误配。
+- 基础设施安全收敛应遵循"默认不可达 + 会话寿命有界 + 日志不可信输入剔除"三原则：中间件凭据绝不使用 guest 类默认值且端口不映射宿主机（按需 docker exec 访问）；滑动续期会话必须叠加绝对过期上限（如 7 天）防止无限续命；审计日志只记录哈希后的会话标识（SHA-256），且仅当显式声明信任反代（trust_forwarded_for）时才解析 X-Forwarded-For，否则客户端可伪造该头污染审计 IP。
 - 清理废弃 mock 文件前应先全局检索引用并在删除后执行一次完整构建回归，避免隐式动态依赖遗漏；类似的，实施计划 brief 末尾自带的防未用报错脚手架（hidden span + 死 import）按其收尾指令删除即可，落库前对"这段代码存在的理由"过一遍能直接清掉这类残留。
 - 手写 Alembic 迁移的 revision ID 在多分支并行开发时是全局命名空间——先 `git log --all -S "<revision>"` 查重再落盘，活库 alembic_version 落在其他分支的 head 上时用临时隔离库验证迁移链而非硬闯活库。
 - 计划 brief 说"创建"某文件前先确认它是否已存在：cninfo_client.py 已有 webapi 行情客户端（CnInfoClient/get_cninfo_client），追加公告检索客户端时新类名 + 新工厂与既有命名并存，沿用 brief 的同名工厂会静默 shadow 旧客户端把行情/指数采集换成公告协议；brief 里的"伪代码调用"以既有代码真实签名为准改写而非照抄（task_service 实际是 `trigger_*(db, req)` 包 `_dispatch_task(db, task_type, queue_key, payload)`，brief 草稿的 `dispatch_task(task_type=,routing_key=,payload=)` 并不存在）。

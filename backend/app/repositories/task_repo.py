@@ -9,8 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.task import Task
 
 
-async def create_task(db: AsyncSession, task_type: str, payload: dict | None) -> Task:
-    task = Task(type=task_type, payload=payload, status="pending")
+async def create_task(
+    db: AsyncSession,
+    task_type: str,
+    payload: dict | None,
+    requested_by: uuid.UUID | None = None,
+) -> Task:
+    task = Task(type=task_type, payload=payload, status="pending", requested_by=requested_by)
     db.add(task)
     await db.flush()
     return task

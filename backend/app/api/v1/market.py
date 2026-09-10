@@ -5,7 +5,7 @@ from typing import Literal, cast
 
 from fastapi import APIRouter, BackgroundTasks, Query
 
-from app.api.deps import CacheDep, DbDep
+from app.api.deps import CacheDep, DbDep, require_permissions
 from app.core.exceptions import not_found_response
 from app.schemas.quote import IndexDailyOut, IndexKlineResponse
 from app.schemas.sse_index import (
@@ -242,7 +242,12 @@ async def get_sse_intraday(
     return resp
 
 
-@router.post("/sse-snapshots/backfill", response_model=BackfillResponse, status_code=202)
+@router.post(
+    "/sse-snapshots/backfill",
+    response_model=BackfillResponse,
+    status_code=202,
+    dependencies=[require_permissions("tasks:trigger")],
+)
 async def trigger_sse_backfill(
     req: BackfillRequest,
     background_tasks: BackgroundTasks,

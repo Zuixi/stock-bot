@@ -41,7 +41,7 @@ function buildOption(items: SectorMoneyflowItem[]) {
           }>
         )[0];
         const d = p?.data;
-        if (!d) return "";
+        if (!d || d.value == null) return "";
         return `<div style="font-weight:600">${p.name}</div>` +
           `<div>主力净流入：<b style="color:${d.value >= 0 ? COLORS.up : COLORS.down}">${d.value.toFixed(2)}亿</b></div>` +
           `<div>板块涨跌幅：${d.pct == null ? "—" : `${d.pct.toFixed(2)}%`}</div>` +
