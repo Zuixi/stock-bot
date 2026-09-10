@@ -12,7 +12,7 @@ Data sources
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Literal, cast
 
 from sqlalchemy import Subquery, func, select, text, union
@@ -85,6 +85,47 @@ async def _latest_trade_date_str() -> str:
     if d:
         return d.strftime("%Y%m%d")
     return datetime.now().strftime("%Y%m%d")
+
+
+# ---------------------------------------------------------------------------
+# Shared latest-trade-date resolver — single source of truth for "as of"
+# ---------------------------------------------------------------------------
+
+_LATEST_TRADE_DATE_CACHE_KEY = "market:latest_trade_date"
+_LATEST_TRADE_DATE_TTL = 300
+
+
+def last_weekday(d: date) -> date:
+    """Most recent weekday <= d.
+
+    Phase-2 heuristic ONLY — exchange holidays are NOT handled. Phase 4 swaps
+    this for a ``trade_calendar`` lookup behind the same signature.
+    """
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+async def get_latest_trade_date(db: AsyncSession, cache: CacheClient | None = None) -> date:
+    """Return the newest ``daily_quotes.trade_date`` (single shared resolver).
+
+    Redis-cached for 5 minutes under ``market:latest_trade_date``. Ruling Q:
+    ``CacheClient`` JSON-serializes, so the cached value is an ISO string and is
+    parsed back with ``date.fromisoformat``.
+    """
+    if cache:
+        cached = await cache.get(_LATEST_TRADE_DATE_CACHE_KEY)
+        if cached is not None:
+            return date.fromisoformat(cached) if isinstance(cached, str) else cast(date, cached)
+
+    result = await db.execute(select(func.max(DailyQuote.trade_date)))
+    as_of = result.scalar_one_or_none()
+    if as_of is None:
+        raise ValueError("daily_quotes is empty — run ingest first")
+
+    if cache:
+        await cache.set(_LATEST_TRADE_DATE_CACHE_KEY, as_of.isoformat(), _LATEST_TRADE_DATE_TTL)
+    return as_of
 
 
 # ---------------------------------------------------------------------------
