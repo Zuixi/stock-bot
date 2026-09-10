@@ -1,7 +1,7 @@
 import { Skeleton } from "antd";
 import "./landing.css";
 import { SectionCard } from "@/shared/ui";
-import { RankingMatrix } from "@/features/market/components";
+import { RankingMatrix } from "@/features/market/components/RankingMatrix";
 import { LandingNav } from "./sections/LandingNav";
 import { CompactHero } from "./sections/CompactHero";
 import { MarketPulse } from "./sections/MarketPulse";

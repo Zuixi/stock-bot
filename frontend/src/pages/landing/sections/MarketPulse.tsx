@@ -2,8 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchDistribution } from "@/shared/api/market";
 import { fetchGlobalIndices } from "@/shared/api/marketData";
 import type { GlobalIndexCard } from "@/shared/api/marketData";
-import { DistributionBars } from "@/features/market/components";
-import type { DistributionBucket } from "@/features/market/components";
+import { DistributionBars } from "@/features/market/components/DistributionBars";
+import type { DistributionBucket } from "@/features/market/components/DistributionBars";
 import { useTheme } from "@/app/theme-context";
 
 const REFRESH_MS = 60_000;
@@ -101,19 +101,23 @@ export function MarketPulse() {
 
   const indices = indicesQuery.data ? pickIndices(indicesQuery.data) : [];
 
-  const buckets: DistributionBucket[] = (distQuery.data ?? []).map((d) => ({
-    label: d.range,
-    count: d.count,
-    direction: directionOf(d.range),
-  }));
+  const dist = distQuery.data ?? [];
+  // 空数组不是「全平盘」而是「分布不可用」——缺失与零值语义不同，不能渲染成 上涨 0 · 下跌 0
+  const hasDistribution = dist.length > 0;
+
+  const buckets: DistributionBucket[] = hasDistribution
+    ? dist.map((d) => ({
+        label: d.range,
+        count: d.count,
+        direction: directionOf(d.range),
+      }))
+    : [];
 
   const sumOf = (ranges: string[]) =>
-    (distQuery.data ?? [])
-      .filter((d) => ranges.includes(d.range))
-      .reduce((s, d) => s + d.count, 0);
+    dist.filter((d) => ranges.includes(d.range)).reduce((s, d) => s + d.count, 0);
 
-  const up = distQuery.data ? sumOf(UP_RANGES) : null;
-  const down = distQuery.data ? sumOf(DOWN_RANGES) : null;
+  const up = hasDistribution ? sumOf(UP_RANGES) : null;
+  const down = hasDistribution ? sumOf(DOWN_RANGES) : null;
 
   return (
     <div className="landing-pulse-body">

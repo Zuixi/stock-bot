@@ -109,7 +109,29 @@ test.describe("公开行情台首页 · 脉搏区（Task 1.5）", () => {
     const counts = await pulse.locator(".distribution-bars__count").allTextContents();
     expect(counts).toHaveLength(11);
     const sum = counts.reduce((s, c) => s + Number(c.replace(/[^\d]/g, "")), 0);
+
+    // 汇总行的上涨/下跌必须与实际分桶一致，且两者之和 == 11 桶总和（漏桶即在此暴露）
+    const [upText, downText] = await pulse
+      .locator(".landing-pulse-summary b")
+      .allTextContents();
+    const up = Number(upText.replace(/[^\d]/g, ""));
+    const down = Number(downText.replace(/[^\d]/g, ""));
+    expect(up).toBe(MOCK_DIST_UP);
+    expect(down).toBe(MOCK_DIST_DOWN);
+    expect(up + down).toBe(sum);
     expect(sum).toBe(MOCK_DIST_UP + MOCK_DIST_DOWN);
+  });
+
+  test("分布返回空数组时走不可用占位，而非 上涨 0 · 下跌 0", async ({ page }) => {
+    // 后注册的路由优先，覆盖 beforeEach 的 11 桶 mock
+    await page.route("**/api/v1/market/distribution", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "[]" })
+    );
+    await page.goto("/#pulse");
+    const pulse = page.getByTestId("section-pulse");
+    await expect(pulse.getByText("今日涨跌分布暂不可用")).toBeVisible({ timeout: 15000 });
+    await expect(pulse.locator(".distribution-bars")).toHaveCount(0);
+    await expect(pulse.locator(".landing-pulse-summary b")).toHaveCount(0);
   });
 });
 
@@ -127,7 +149,7 @@ test.describe("公开行情台首页 · 榜单区（Task 1.6）", () => {
     await expect(section.locator(".datarow").first()).toBeVisible({ timeout: 15000 });
   });
 
-  test("榜单缺失涨跌幅渲染 --，绝不渲染 0.00%", async ({ page }) => {
+  test("榜单剔除 null 涨幅行，缺失涨跌幅仍渲染 --（绝不渲染 0.00%）", async ({ page }) => {
     // 契约 §DeltaText：ChangePercent 缺失（次新股无行情）时必须显示 "--"
     await page.route("**/api/v1/exchanges/stocks/enriched*", (route) =>
       route.fulfill({
@@ -159,6 +181,15 @@ test.describe("公开行情台首页 · 榜单区（Task 1.6）", () => {
 
     await page.goto("/#rankings");
     const section = page.getByTestId("section-rankings");
+
+    // 涨幅榜按 changePercent 排序：null（次新股无行情）行被前端剔除，不占榜首
+    await expect(section.locator(".datarow", { hasText: "贵州茅台" })).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(section.locator(".datarow", { hasText: "宁德时代" })).toHaveCount(0);
+
+    // DeltaText 缺失值契约改在不受排序过滤影响的成交额榜断言（该行 amount 非空，故仍渲染）
+    await section.getByRole("tab", { name: "成交额榜" }).click();
     const nullRow = section.locator(".datarow", { hasText: "宁德时代" });
     await expect(nullRow).toBeVisible({ timeout: 15000 });
     await expect(nullRow.locator(".delta")).toHaveText("--");

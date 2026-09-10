@@ -34,7 +34,7 @@ test.describe("明暗主题切换", () => {
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
     // 等待导航树真正可交互（lazy chunk + 会话初始化会重挂载导航）
-    await expect(page.getByRole("navigation", { name: "宣传页锚点导航" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "行情台区块导航" })).toBeVisible();
     await expect(page.getByTestId("theme-toggle").first()).toBeEnabled();
 
     // 会话 401 结算时导航可能重挂载，固定延时仍可能踩进竞态窗口——带重试点击直至生效
