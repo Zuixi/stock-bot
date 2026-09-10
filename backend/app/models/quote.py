@@ -30,6 +30,10 @@ class DailyQuote(Base):
     high: Mapped[float | None] = mapped_column(Numeric(12, 4))
     low: Mapped[float | None] = mapped_column(Numeric(12, 4))
     close: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
+    # TuShare ``daily`` returns both natively; nullable because existing rows
+    # (shared DB) predate the columns and are backfilled separately.
+    pre_close: Mapped[float | None] = mapped_column(Numeric(12, 4))
+    pct_chg: Mapped[float | None] = mapped_column(Numeric(8, 4))
     volume: Mapped[int | None]
     amount: Mapped[float | None] = mapped_column(Numeric(20, 2))
     adj_factor: Mapped[float | None] = mapped_column(Numeric(12, 6), default=1.0)

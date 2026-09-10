@@ -91,6 +91,8 @@ async def upsert_quotes(db: AsyncSession, quotes: list[DailyQuote]) -> int:
             "high": q.high,
             "low": q.low,
             "close": q.close,
+            "pre_close": q.pre_close,
+            "pct_chg": q.pct_chg,
             "volume": q.volume,
             "amount": q.amount,
             "adj_factor": q.adj_factor,
@@ -109,6 +111,8 @@ async def upsert_quotes(db: AsyncSession, quotes: list[DailyQuote]) -> int:
                 "high": insert(DailyQuote).excluded.high,
                 "low": insert(DailyQuote).excluded.low,
                 "close": insert(DailyQuote).excluded.close,
+                "pre_close": insert(DailyQuote).excluded.pre_close,
+                "pct_chg": insert(DailyQuote).excluded.pct_chg,
                 "volume": insert(DailyQuote).excluded.volume,
                 "amount": insert(DailyQuote).excluded.amount,
                 # COALESCE：新行因子为 NULL（每日 ingest 不带因子）时不覆盖既有已回补值
