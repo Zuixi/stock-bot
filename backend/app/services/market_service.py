@@ -15,13 +15,14 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any, Literal, cast
 
-from sqlalchemy import Subquery, func, select, text, union
+from sqlalchemy import Subquery, TextClause, func, select, text, union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
 from app.core.redis import CacheClient
 from app.models.quote import DailyQuote
 from app.models.stock import Stock
+from app.schemas.ranking import RankingItemOut, RankingResponseOut, RankingType
 from app.schemas.stock import StockOut
 
 logger = logging.getLogger(__name__)
@@ -489,6 +490,107 @@ async def get_hot_boards(
     if cache and boards:
         await cache.set(cache_key, boards, _MARKET_CACHE_TTL)
     return boards
+
+
+# ---------------------------------------------------------------------------
+# Public rankings — indexed top-N, enriched after the sort is locked
+# ---------------------------------------------------------------------------
+
+# Ruling O: only these five types exist; the sort column/direction come from this
+# file-local whitelist and are f-string-interpolated into the SQL. No user input
+# ever reaches the SQL string (unknown types raise before any query runs).
+_RANKING_ORDER: dict[str, tuple[str, str]] = {
+    "gainers": ("pct_chg", "DESC"),
+    "losers": ("pct_chg", "ASC"),
+    "amount": ("amount", "DESC"),
+    "volume": ("volume", "DESC"),
+    "turnover_rate": ("turnover_rate", "DESC"),
+}
+
+
+def _build_quote_rank_sql(order_col: str, order_dir: str) -> TextClause:
+    """Build the top-N query for a ``daily_quotes``-backed ranking type.
+
+    Ruling P: the ``pct_chg IS NOT NULL`` filter must stay — Postgres sorts
+    DESC as NULLS FIRST, so without it the 涨幅榜 leads with unrankable rows.
+    The outer ``ORDER BY`` re-imposes the order after the enrichment JOIN so the
+    join can never reshuffle the locked top-N.
+    """
+    return text(f"""
+        WITH topn AS (
+            SELECT q.stock_id, q.close, q.pct_chg, q.amount, q.volume
+            FROM daily_quotes q
+            WHERE q.trade_date = :as_of AND q.pct_chg IS NOT NULL
+            ORDER BY q.{order_col} {order_dir}
+            LIMIT :limit
+        )
+        SELECT s.symbol, s.name, s.exchange, t.close, t.pct_chg, t.amount, t.volume,
+               b.turnover_rate, b.total_mv
+        FROM topn t
+        JOIN stocks s ON s.id = t.stock_id
+        LEFT JOIN daily_basic_indicators b
+               ON b.stock_id = t.stock_id AND b.trade_date = :as_of
+        ORDER BY t.{order_col} {order_dir}
+    """)
+
+
+_QUOTE_RANK_SQL: dict[str, TextClause] = {
+    rank_type: _build_quote_rank_sql(order_col, order_dir)
+    for rank_type, (order_col, order_dir) in _RANKING_ORDER.items()
+    if rank_type != "turnover_rate"
+}
+
+# turnover_rate lives in daily_basic_indicators, so it needs its own top-N CTE.
+_TURNOVER_RANK_SQL = text("""
+    WITH topn AS (
+        SELECT b.stock_id, b.turnover_rate, b.total_mv
+        FROM daily_basic_indicators b
+        WHERE b.trade_date = :as_of AND b.turnover_rate IS NOT NULL
+        ORDER BY b.turnover_rate DESC
+        LIMIT :limit
+    )
+    SELECT s.symbol, s.name, s.exchange, q.close, q.pct_chg, q.amount, q.volume,
+           t.turnover_rate, t.total_mv
+    FROM topn t
+    JOIN stocks s ON s.id = t.stock_id
+    LEFT JOIN daily_quotes q ON q.stock_id = t.stock_id AND q.trade_date = :as_of
+    ORDER BY t.turnover_rate DESC
+""")
+
+
+async def get_rankings(
+    db: AsyncSession,
+    cache: CacheClient | None,
+    rank_type: str,
+    limit: int,
+) -> RankingResponseOut:
+    """Return the public top-N ranking for ``rank_type`` as of the latest trade date.
+
+    Cache-first (ruling S) mirroring ``get_distribution``; ``as_of`` is shared
+    with the rest of the market plane via :func:`get_latest_trade_date`.
+    """
+    if rank_type not in _RANKING_ORDER:
+        raise ValueError(f"unknown ranking type: {rank_type}")
+
+    cache_key = f"market:rankings:{rank_type}:{limit}"
+    if cache:
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return RankingResponseOut.model_validate(cached)
+
+    as_of = await get_latest_trade_date(db, cache)
+    stmt = _TURNOVER_RANK_SQL if rank_type == "turnover_rate" else _QUOTE_RANK_SQL[rank_type]
+    rows = (await db.execute(stmt, {"as_of": as_of, "limit": limit})).mappings().all()
+
+    out = RankingResponseOut(
+        as_of=as_of,
+        is_latest_trading_day=as_of >= last_weekday(date.today()),
+        type=cast(RankingType, rank_type),
+        items=[RankingItemOut(**dict(row)) for row in rows],
+    )
+    if cache:
+        await cache.set(cache_key, out.model_dump(mode="json"), _MARKET_CACHE_TTL)
+    return out
 
 
 # ---------------------------------------------------------------------------
