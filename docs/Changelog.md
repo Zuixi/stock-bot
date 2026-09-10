@@ -1,3 +1,11 @@
+## 2026-09-11 - 首页公开化 Phase 2（Task 2.1–2.3）：日线落库原生 pct_chg/pre_close + 权威回填
+- **Task 2.1**：Alembic 迁移 `cf4b8e317fe5`（`5a1b2c3d4e5f` →）为 `daily_quotes` 增可空 `pre_close Numeric(12,4)` / `pct_chg Numeric(8,4)`，并建 `idx_daily_quotes_date_pct(trade_date,pct_chg)`、`idx_daily_quotes_date_amount(trade_date,amount)`、`idx_daily_basic_date_turnover(trade_date,turnover_rate)`；实查 `pg_partitioned_table` 无 `daily_quotes` 行（未分区），故用普通复合索引、不加分区/合并分支；已 `alembic upgrade head`，`heads` 单行
+- **Task 2.2**：`DailyQuote` 模型 + `tushare_ingest` 两处日线构造（按 trade_date 全市场、按股票区间）+ `quote_repo.upsert_quotes` 的 VALUES 与 `on_conflict_do_update.set_` 全部补 `pre_close`/`pct_chg`（落地点四处缺一即静默丢字段）
+- **Task 2.3**：新增 `scripts/backfill_pct_chg.py`（`--years`/`--limit`/`--start-date`/`--end-date`，幂等）与 `quote_repo.update_pct_chg_for_date`（`sa.Values` + Core `UPDATE ... FROM (VALUES ...)` 单语句，仅 UPDATE 不 INSERT）；**只回填 TuShare 原生值，禁止 `LAG(close)` 现算**（除权日参考前收需为除权后价），理由写入 docstring
+- **验证**：TDD 先红（`AttributeError: 'DailyQuote' object has no attribute 'pct_chg'`）后绿；`--limit 4`（2026-09-04…09-09）实机回填 22,196 行，重复运行同值（幂等），与 TuShare 原生逐行对拍 22,196 行 0 不一致（抽样 000001.SZ/300750.SZ/600000.SH 值全等）；全量 3 年约 750 次 `fetch_daily` 由运维另跑（见 Task 2.1–2.3 报告）
+- 测试：新增 `tests/test_daily_ingest_pct_chg.py` 3 例（映射落库、upsert 冲突补列、回填仅 UPDATE 无 LAG）；`uv run pytest -q` 185 passed / 24 deselected
+- 涉及模块：backend/app/migrations/versions/cf4b8e317fe5_add_pct_chg_to_daily_quotes_and_ranking_.py, backend/app/models/quote.py, backend/app/services/tushare_ingest.py, backend/app/repositories/quote_repo.py, backend/scripts/backfill_pct_chg.py, backend/tests/test_daily_ingest_pct_chg.py
+
 ## 2026-09-11 - 首页公开化 Phase 1 收口：板块/资金/快讯三块 + 零 401 与降级门禁（Task 1.7–1.10）
 - **Task 1.7 板块区**：新增 `features/market/components/SectorFlow`（左列 `/market/sectors` 证监会口径、右列 `/market/capital-flow` 近似口径双向条）；`/market/sector-moneyflow` 实测返回 `[]` 无法支撑资金列，改走可用源并在 UI 标注「近似口径：涨/跌股成交额估算，非主力净流入」；两列独立查询独立降级
 - **Task 1.8 资金区**：新增 `MoneySentiment` 复用 `MarketMoneyflowCard`（`/market/market-moneyflow`）；**北向卡整卡移除**——`northbound_daily` 无数据行（非仅滞后），不以本地序列替补

@@ -67,6 +67,9 @@
 - 核实表分区状态别照抄 catalog 列名：PostgreSQL 10+ 的 `pg_partitioned_table` 主键列是 `partrelid`（不是 `relid`），更稳的判据是 `pg_class.relkind = 'p'`；列名写错会抛 `column does not exist` 而非返回 0/1，容易把"查询失败"静默读成"未分区"——分区与否必须由实际 catalog 查询闭环，不能采信模型文件里"已外部分区"的注释。
 - 自研 SQL seed 解析器（split-by-semicolon）的经典死法：「注释头 + 巨型 INSERT」脚本按分号切块后首块以 `--` 开头，"跳过注释块"逻辑会连 INSERT 一起吞掉——导入恒 0 行、不报错，只有核对目标表行数或读日志才能发现。防御 = 先剥离注释行再切分（纯函数化）+ 对畸形样例写解析单测；seed 导入类代码必须"导入后核对行数"而非只看退出码。另注意排障时先核对诊断前提：`grep -c` 零匹配（退出码 1）容易被误读成"已修复"。
 - 公开可达端点的昂贵排序/聚合路径必须有服务端缓存（客户端 staleTime 不算防护），且**缓存 key 必须包含所有改变结果集的过滤维度**（exchange/category/keyword/排序/分页）——漏掉一个维度会让一次查询的行静默服务给另一组筛选（缓存污染），这类缺陷不报错、只在特定筛选组合下返回错数据；同时要核实端点是否真的把 cache 依赖传进了 service（`cache=None` 断言会让缓存永不生效，等于没做）。
+- 按业务键（如 stock_id + trade_date）批量 UPDATE 的三种写法要选对：ORM `update(Model)` 带额外 WHERE 会走 ORM bulk-update 分支并要求参数含主键，executemany 在 asyncpg 下 `rowcount` 返回 -1。正确写法是 `sa.Values(...).data(rows)` + Core table 的 `UPDATE ... FROM (VALUES ...)` 单语句——rowcount 准确、无 N 次往返，也避开 ORM 身份映射同步限制。
+- 涨跌幅/前收这类含公司行为的派生字段必须用数据源原生值（按 trade_date 重拉权威源），不得在库内用 `LAG(close)` 现算：除权日的参考前收是除权后价，窗口函数恰在除权日算错且无声。补历史数据要"重拉权威源 + 逐行对拍"，并把该理由写进函数 docstring 防后人"优化"。
+- 给行情表新增字段时，落地点至少四处（模型、每个 ORM 构造点、repo 的 INSERT values、`on_conflict_do_update` 的 `set_`），漏任一处都不报错——INSERT 侧静默丢列、冲突侧静默留 NULL。用"mock 捕获落库对象 + 断言编译后 SQL 含 `excluded.<col>`"的单测锁死，比实机抽查行数更早暴露。
 
 ## 三、Docker 与部署
 
