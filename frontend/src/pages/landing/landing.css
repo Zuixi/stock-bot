@@ -223,6 +223,54 @@ a:hover > .landing-hero-secondary-cta {
   color: var(--accent);
 }
 
+/* ── Compact Hero（免登录行情台首屏，高度目标 ≤ 240px） ───── */
+.landing-hero--compact {
+  padding: 64px 0 12px;
+}
+
+.landing-hero-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 10px;
+  margin-bottom: 4px;
+}
+
+.landing-hero--compact .landing-hero-h1 {
+  font-size: clamp(24px, 3vw, 30px);
+  margin: 0 0 4px;
+}
+
+.landing-hero--compact .landing-hero-sub {
+  font-size: 14px;
+  line-height: 1.4;
+  margin: 0 auto 6px;
+}
+
+.landing-hero--compact .landing-hero-trust {
+  font-size: 12.5px;
+  margin-bottom: 6px;
+}
+
+/* ── 行情台（公开区块纵列，锚点跳转留吸顶导航位） ───────── */
+.landing-market {
+  padding: 8px 0 48px;
+}
+
+.landing-market-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.landing-root .section-card {
+  scroll-margin-top: 80px;
+}
+
 /* ── 实时脉搏卡 ───────────────────────────────────────── */
 .landing-pulse {
   margin-top: -48px; /* 与 Hero 底部叠一点，形成卡片浮起感 */
