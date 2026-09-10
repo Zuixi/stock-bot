@@ -1,6 +1,6 @@
 import { Skeleton } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { fetchCapitalFlow, fetchSectors } from "@/shared/api/market";
+import { fetchCapitalFlow, fetchSectors, fetchSwPerformance } from "@/shared/api/market";
 import { DataRow } from "@/shared/ui";
 import "./SectorFlow.css";
 
@@ -16,18 +16,29 @@ function flowNet(inflow: number, outflow: number): { net: number; label: string 
 }
 
 /**
- * 首页板块区：左列行业涨跌、右列板块资金流，两列各自独立查询与降级。
+ * 首页板块区：左列申万一级行业行情、右列板块资金流，两列各自独立查询与降级。
  *
- * 口径诚实标注：左列走 `/market/sectors`（证监会 csrc_desc，Phase 3 Task 3.2 切申万）；
- * 右列 `/market/capital-flow` 是按「上涨股成交额 / 下跌股成交额」聚合的**近似口径**，
- * 不是主力资金真实净流入——`/market/sector-moneyflow` 当前返回空数组，无法支撑该列。
+ * 左列走 `/market/sw-industry/performance`（申万一级口径）。**口径诚实**：请求失败
+ * 时回退 `/market/sectors`（证监会口径），并把标注如实切回「证监会」——标注永远
+ * 指向实际展示的数据源，绝不静默错标。右列 `/market/capital-flow` 是按「上涨股
+ * 成交额 / 下跌股成交额」聚合的**近似口径**，非主力资金真实净流入
+ * （`/market/sector-moneyflow` 当前返回空数组，无法支撑该列）。
  * 外层由首页 `<SectionCard id="sectors">` 提供卡片壳与标题。
  */
 export function SectorFlow() {
+  const swQuery = useQuery({
+    queryKey: ["landing", "sw-performance"],
+    queryFn: fetchSwPerformance,
+    staleTime: STALE_TIME,
+    // 首次失败即回退 CSRC 口径，不做指数退避重试（避免口径长时间悬空）
+    retry: 0,
+  });
+  const usingCsrc = swQuery.isError;
   const sectorsQuery = useQuery({
     queryKey: ["landing", "sectors"],
     queryFn: fetchSectors,
     staleTime: STALE_TIME,
+    enabled: usingCsrc,
   });
   const flowQuery = useQuery({
     queryKey: ["landing", "capital-flow"],
@@ -35,24 +46,39 @@ export function SectorFlow() {
     staleTime: STALE_TIME,
   });
 
-  const sectors = [...(sectorsQuery.data ?? [])]
+  const swRows = (swQuery.data?.items ?? []).slice(0, ROWS); // 服务端已按 avg_pct_chg 降序
+  const csrcRows = [...(sectorsQuery.data ?? [])]
     .sort((a, b) => b.changePercent - a.changePercent)
     .slice(0, ROWS);
   const flows = (flowQuery.data ?? []).slice(0, ROWS);
   const maxAbs = Math.max(1, ...flows.flatMap((f) => [Math.abs(f.inflow), Math.abs(f.outflow)]));
 
+  const leftLoading = usingCsrc ? sectorsQuery.isLoading : swQuery.isLoading;
+  const hasLeft = usingCsrc ? csrcRows.length > 0 : swRows.length > 0;
+
   return (
     <div className="sector-flow">
-      <div className="sector-flow__basis">行业口径：证监会（申万版即将上线）</div>
+      <div className="sector-flow__basis">
+        {`行业口径：${usingCsrc ? "证监会" : "申万一级"}`}
+      </div>
       <div className="sector-flow__cols">
         <div className="sector-flow__col">
           <div className="sector-flow__sub">行业涨跌</div>
-          {sectorsQuery.isLoading ? (
+          {leftLoading ? (
             <Skeleton active paragraph={{ rows: 4 }} title={false} />
-          ) : sectors.length > 0 ? (
-            sectors.map((s) => <DataRow key={s.name} title={s.name} delta={s.changePercent} />)
-          ) : (
+          ) : !hasLeft ? (
             <div className="sector-flow__empty">行业涨跌暂不可用</div>
+          ) : usingCsrc ? (
+            csrcRows.map((s) => <DataRow key={s.name} title={s.name} delta={s.changePercent} />)
+          ) : (
+            swRows.map((s) => (
+              <DataRow
+                key={s.code}
+                title={s.name}
+                ticker={`${s.member_count}只`}
+                delta={s.avg_pct_chg}
+              />
+            ))
           )}
         </div>
 
