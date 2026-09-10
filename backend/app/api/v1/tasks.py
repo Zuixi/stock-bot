@@ -68,9 +68,7 @@ async def fetch_universe(
     user: CurrentUserDep,
 ) -> TaskOut:
     """Trigger a universe fetch task for a specific exchange."""
-    return await task_service.trigger_fetch_universe(
-        db, req, requested_by=_get_requested_by(user)
-    )
+    return await task_service.trigger_fetch_universe(db, req, requested_by=_get_requested_by(user))
 
 
 @router.post(
@@ -85,9 +83,7 @@ async def fetch_quotes(
     user: CurrentUserDep,
 ) -> TaskOut:
     """Trigger a quotes fetch task."""
-    return await task_service.trigger_fetch_quotes(
-        db, req, requested_by=_get_requested_by(user)
-    )
+    return await task_service.trigger_fetch_quotes(db, req, requested_by=_get_requested_by(user))
 
 
 @router.post(
@@ -119,9 +115,7 @@ async def fetch_financial(
     user: CurrentUserDep,
 ) -> TaskOut:
     """Trigger a financial fetch task for a single stock."""
-    return await task_service.trigger_fetch_financial(
-        db, req, requested_by=_get_requested_by(user)
-    )
+    return await task_service.trigger_fetch_financial(db, req, requested_by=_get_requested_by(user))
 
 
 @router.post(
@@ -136,9 +130,7 @@ async def run_clustering(
     user: CurrentUserDep,
 ) -> TaskOut:
     """Trigger a clustering run."""
-    return await task_service.trigger_clustering(
-        db, req, requested_by=_get_requested_by(user)
-    )
+    return await task_service.trigger_clustering(db, req, requested_by=_get_requested_by(user))
 
 
 @router.post(

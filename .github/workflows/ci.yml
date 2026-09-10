@@ -279,7 +279,7 @@ jobs:
           # 验证后端 API 接口连通性
           curl -f http://localhost:80/api/v1/exchanges
           # 验证 auth-service 接口连通性
-          curl -f http://localhost:80/auth/health/live
+          curl -f http://localhost:80/health/live
           curl -f http://localhost:80/auth/csrf
           curl -f http://localhost:80/.well-known/jwks.json
       - name: Auth login closed-loop smoke (csrf -> register -> csrf -> login -> protected API)
