@@ -65,9 +65,7 @@ def make_assertion_jwt(
         "username": username,
         "roles": roles if roles is not None else ["researcher"],
         "permissions": (
-            permissions
-            if permissions is not None
-            else ["tasks:trigger", "research:manage"]
+            permissions if permissions is not None else ["tasks:trigger", "research:manage"]
         ),
         "iat": now,
         "nbf": now,
@@ -208,9 +206,10 @@ async def test_task_service_records_requested_by() -> None:
     now = datetime.now(UTC)
     mock_db = AsyncMock()
 
-    with patch("app.repositories.task_repo.create_task") as mock_create_task, \
-         patch("app.services.task_service.publish_message") as mock_publish:
-
+    with (
+        patch("app.repositories.task_repo.create_task") as mock_create_task,
+        patch("app.services.task_service.publish_message") as mock_publish,
+    ):
         mock_task = Task(
             id=uuid.uuid4(),
             type="fetch_universe",
@@ -418,8 +417,8 @@ async def test_user_tags_endpoint_isolation(
     transport = ASGITransport(app=isolation_test_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         with patch("app.services.user_tag_service.get_stock_tags") as mock_get_tags:
-            mock_get_tags.side_effect = (
-                lambda db, uid, sym: [tag_a] if str(uid) == user_a_id else [tag_b]
+            mock_get_tags.side_effect = lambda db, uid, sym: (
+                [tag_a] if str(uid) == user_a_id else [tag_b]
             )
 
             # User A gets stock tags

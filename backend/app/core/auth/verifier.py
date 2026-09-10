@@ -133,17 +133,12 @@ class AssertionVerifier:
             is_authenticated=True,
         )
 
-    async def authenticate_request(
-        self, request: Request, required: bool = True
-    ) -> Principal:
+    async def authenticate_request(self, request: Request, required: bool = True) -> Principal:
         """Authenticate an incoming HTTP request using Zero-Trust principles.
 
         Any unverified X-User-* headers passed by the client are strictly ignored.
         """
-        trace_id = (
-            request.headers.get("X-Request-Id")
-            or request.headers.get("X-Trace-Id")
-        )
+        trace_id = request.headers.get("X-Request-Id") or request.headers.get("X-Trace-Id")
 
         if not settings.auth_enabled:
             # When authentication is globally disabled (e.g. legacy/testing)
