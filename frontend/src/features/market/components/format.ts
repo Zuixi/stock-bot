@@ -36,7 +36,8 @@ export function fmtAmountParts(
  * 相对时间（Intl.RelativeTimeFormat("zh")）：如「2小时前」「3天前」。
  * 解析失败返回 `--`，绝不回退成「刚刚」（缺失语义与零值不同）。
  */
-export function fmtRelativeTime(iso: string, now: number = Date.now()): string {  const t = Date.parse(iso);
+export function fmtRelativeTime(iso: string, now: number = Date.now()): string {
+  const t = Date.parse(iso);
   if (Number.isNaN(t)) return DASH;
   const diffSec = Math.round((t - now) / 1000);
   const abs = Math.abs(diffSec);
