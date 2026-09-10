@@ -1,3 +1,12 @@
+## 2026-09-11 - 首页公开化 Phase 0：数据语义核实（北向/指数覆盖/分区状态）
+- **问题**：公开行情首页的三个前置事实未定，直接决定北向模块形态、指数条数据源与 Phase 2 索引方案
+- **核实**：
+  - 北向 `northbound_daily` 实测**全表 0 行**（非仅近 30 天断流），`/market/northbound` 返回 `[]`；`market_moneyflow_daily`、`sector_moneyflow_snapshots` 同为 0 行
+  - `index_dailies` 含 6 个指数：`000001.SH/000016.SH/000300.SH/399001.SZ/399006.SZ/899050.BJ`，`last_date` 均 `2026-09-10`；`GLOBAL_INDICES` 已含沪深300/上证50/北证50，与 `market_service._TARGET_INDICES` 对齐，**无需修 job**
+  - `daily_quotes` 实测**未分区**（`pg_class.relkind='r'`，`pg_partitioned_table` 计 0），Phase 2 用普通复合索引
+- 风险表 ②③④ 已销项并附原始查询输出，Task 11/14 的处置已明确
+- 涉及模块：plans/2026-09-11-public-market-homepage, docs/references/best-practices
+
 ## 2026-09-09 - API Gateway 选型调研
 - 比较 Docker Compose 场景下 NGINX、Traefik、Kong/APISIX 的动态路由、OIDC/JWT、限流、可观测性、配置复杂度与 Kubernetes 演进适配性，并结合当前 stock_bot 架构给出 Gateway 选择建议。
 - 涉及模块：架构调研、部署、认证、可观测性

@@ -64,6 +64,7 @@
 - pg `ON CONFLICT` 不处理同一 INSERT 语句内的自冲突（Postgres 约束检查逐行进行，同批两行撞同一唯一键直接报错）——无稳定业务键的表（如大宗交易 date+code+buyer+seller+price+volume 去重键）采集时先在 Python 端按约束键去重（保留末次）再 DO NOTHING；多源共存产生派生时先按 registry 源优先级逐 period 去重，否则同批重复键直接 CardinalityViolation 使整个 ingest 失败；映射层截断超长字符串列（如 reason String(160)）优先于让 DB 报错，比 DDL 放宽更可控。
 - 手写 `UPDATE ... FROM (VALUES ...)` 派生表 SQL 时，未定型的日期字符串字面量会被 PostgreSQL 推断为 text 列，与实体表 date 列比较直接抛 `operator does not exist: date = text`——VALUES 行内必须显式 `'...'::date` 转型；此类 SQL 类型错误纯函数单测覆盖不到，接线任务必须以实机验证（docker 重建 + curl + psql 计数）闭环。
 - UPSERT 覆盖"懒回补型"可空字段（如 adj_factor）时 SET 子句必须 `COALESCE(excluded.x, table.x)` 防 NULL 重灌抹掉历史回补值；回补的幂等判定口径必须与读取端可用性口径一致（按最新交易日行而非"任一行非空"），并为真实外呼加短 TTL 冷却 key 防数据未发布期间高频重拉——三者缺任一都会形成"不可用但永不修复"的跨日死锁。
+- 核实表分区状态别照抄 catalog 列名：PostgreSQL 10+ 的 `pg_partitioned_table` 主键列是 `partrelid`（不是 `relid`），更稳的判据是 `pg_class.relkind = 'p'`；列名写错会抛 `column does not exist` 而非返回 0/1，容易把"查询失败"静默读成"未分区"——分区与否必须由实际 catalog 查询闭环，不能采信模型文件里"已外部分区"的注释。
 - 自研 SQL seed 解析器（split-by-semicolon）的经典死法：「注释头 + 巨型 INSERT」脚本按分号切块后首块以 `--` 开头，"跳过注释块"逻辑会连 INSERT 一起吞掉——导入恒 0 行、不报错，只有核对目标表行数或读日志才能发现。防御 = 先剥离注释行再切分（纯函数化）+ 对畸形样例写解析单测；seed 导入类代码必须"导入后核对行数"而非只看退出码。另注意排障时先核对诊断前提：`grep -c` 零匹配（退出码 1）容易被误读成"已修复"。
 
 ## 三、Docker 与部署

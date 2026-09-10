@@ -34,7 +34,7 @@
 | 涨跌分布（11 档） | `GET /market/distribution` | ✅ Redis 300s | 随日线 |
 | 行业板块涨跌 | `GET /market/sectors` | ✅ Redis 300s | 日频（**CSRC 口径**，见风险 ①） |
 | 板块资金流榜 | `GET /market/sector-moneyflow` | — | 盘中 5 分钟轮询（东财） |
-| 大盘资金流 / 北向 | `GET /market/market-moneyflow`、`/northbound` | — | 盘中 / 日频（北向语义待核实，风险 ②） |
+| 大盘资金流 / 北向 | `GET /market/market-moneyflow`、`/northbound` | — | 盘中 / 日频（北向实测全表空，见风险 ②：撤卡或改单点） |
 | 事件（龙虎榜/大宗/解禁/回购） | `dragon-tiger`、`block-trades`、`share-floats`、`repurchases` | — | 日频（盘后） |
 | 公告流 | `GET /market/announcements` | — | 巨潮，8–22 点每 10 分钟 |
 | 申万分类树 / 成分 | `GET /market/sw-industry/tree`、`/sw-industry/{l1}/stocks` | — | 静态 |
@@ -99,7 +99,7 @@ LandingNav（增加行情区块锚点：脉搏/榜单/板块/日历/资讯）
 │  2. MarketPulse         指数条 + 涨跌分布 + 涨跌家数（首屏主角）
 │  3. RankingMatrix       涨幅 / 跌幅 / 成交额 / 换手率
 │  4. SectorFlow          申万行业涨跌（Phase 3 前临时 CSRC）+ 板块资金流 Top
-│  5. MoneyAndSentiment   北向（语义待 Phase 0）+ 大盘资金流
+│  5. MoneyAndSentiment   北向（实测全表空，见风险 ②：撤卡或改单点）+ 大盘资金流
 │  6. MarketCalendar      财报披露 / 分红 / 新股 /（宏观视 spike）
 │  7. MarketNews          公告快讯（+新闻视 spike）
 ├─ ── 营销收尾（压缩为一段）──
@@ -187,9 +187,9 @@ market_calendar_events(id, event_type, event_date DATE, symbol NULL,
 | # | 风险 | 处置 |
 |---|---|---|
 | ① | 首页板块口径 CSRC ≠ 产品身份申万 | D6：Phase 3 申万聚合落地，CSRC 仅临时 + UI 标注 |
-| ② | 北向 `net_amount` 披露口径 2024 年后变化，近年可能断流 | Phase 0 一条 SQL 核实近 30 天；断流则模块换「成交总额」口径或撤 |
-| ③ | 沪深300/上证50/北证50 不在 `global_index_daily` job 的 `GLOBAL_INDICES`，DB 有数据后不会补齐 | Phase 0 核实 `/market/indices` 是否返回沪深300；缺则修 job |
-| ④ | `daily_quotes` 分区状态未确认（注释称外部分区） | Phase 2 迁移前 SQL 实测；未分区→普通复合索引 |
+| ② | 北向 `net_amount` 披露口径 2024 年后变化，近年可能断流 | **已核实 2026-09-11（Task 0.2）：不止断流，是全表空。** `SELECT count(*), min(trade_date), max(trade_date) FROM northbound_daily` → `0 \| NULL \| NULL`；`SELECT trade_date, net_amount FROM northbound_daily ORDER BY trade_date DESC LIMIT 30` → `(0 rows)`；`GET /market/northbound?days=30` → `[]`。旁证：`market_moneyflow_daily` 同为 0 行，`sector_moneyflow_snapshots` 同为 0 行；但 `/market/market-moneyflow` 仍返回 `today: {...}` 且 `history: []`。**处置**：Task 11 北向卡**撤掉**或改「当日成交总额」单点口径（复用 `/market/market-moneyflow` 的 `today.total.amount`）——DB 无任何历史行，画不出 30 日趋势 |
+| ③ | 沪深300/上证50/北证50 不在 `global_index_daily` job 的 `GLOBAL_INDICES`，DB 有数据后不会补齐 | **已核实 2026-09-11（Task 0.2）：风险不成立，未改代码。** `SELECT ts_code, max(trade_date) FROM index_dailies GROUP BY ts_code ORDER BY ts_code` 返回 6 行：`000001.SH / 000016.SH / 000300.SH / 399001.SZ / 399006.SZ / 899050.BJ`，`last_date` 均 `2026-09-10`；`GLOBAL_INDICES`（`backend/app/services/market_data_service.py:29`）已含 `000300.SH`(L55)/`000016.SH`(L79)/`899050.BJ`(L87)，与 `market_service._TARGET_INDICES` 对齐；`GET /market/indices` 实测返回 6 条含沪深300/上证50/北证50。**无需 17:30 回补。** 遗留观察（非本风险）：`index_dailies` 无 `000905.SH`(中证500)/`000688.SH`(科创50)，二者在 `GLOBAL_INDICES` 里但不在 `_TARGET_INDICES`，首页不消费 |
+| ④ | `daily_quotes` 分区状态未确认（注释称外部分区） | **已核实 2026-09-11（Task 0.2）：未分区。** `SELECT relname, relkind FROM pg_class WHERE relname LIKE 'daily_quotes%'` → `daily_quotes \| r`（普通表，非分区表 `p`）；`SELECT count(*) FROM pg_partitioned_table WHERE partrelid = 'daily_quotes'::regclass` → `0`。（brief 原查询用 `relid`，PG15 实际列为 `partrelid`，已修正。）**处置**：Task 14 用普通复合索引。另注：现表已有 `uq_daily_quotes_stock_date UNIQUE (stock_id, trade_date)`（btree），迁移前先确认是否已够用再决定是否新建 |
 | ⑤ | 日历/新闻数据源未验证（Web 核实被拦） | Phase 0 spike；不可用则 Phase 4/5 裁剪 |
 | ⑥ | Tier 2 API 基准**从未实施**（`scripts/` 仅 Tier 1 的 bench.sh） | Phase 2 验收用 `EXPLAIN` 索引断言测试替代，不引用不存在的门禁 |
 | ⑦ | 整站 `X-Robots-Tag: noindex`，SEO 目标与之矛盾；且公开再分发行情数据有条款约束 | Phase 0 决策：默认维持 noindex；若要 SEO 需显式解除并限定范围 + 页脚数据署名 |
