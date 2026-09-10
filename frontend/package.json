@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "check:design": "node scripts/check-design-tokens.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",
