@@ -3,7 +3,7 @@ import { DeleteOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ChangeText, NumberText } from "@/shared/ui";
-import { useWatchlistStore } from "../store";
+import { useWatchlist } from "../useWatchlist";
 import { fetchStockEnrichedBySymbol } from "@/shared/api/stocks";
 import { EXCHANGE_LABELS } from "@/shared/types";
 import type { StockRecord } from "@/shared/types";
@@ -11,7 +11,7 @@ import type { ColumnsType } from "antd/es/table";
 
 export function WatchlistTable() {
   const navigate = useNavigate();
-  const { items, remove } = useWatchlistStore();
+  const { items, remove, isMutating } = useWatchlist();
 
   const { data = [], isLoading } = useQuery({
     queryKey: ["watchlist-stocks", items],
@@ -85,6 +85,7 @@ export function WatchlistTable() {
             type="text"
             size="small"
             danger
+            loading={isMutating}
             icon={<DeleteOutlined />}
             onClick={(e) => {
               e.stopPropagation();

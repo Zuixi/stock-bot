@@ -25,19 +25,30 @@ from app.schemas.task import (
 logger = logging.getLogger(__name__)
 
 
-async def _dispatch_task(db: AsyncSession, task_type: str, queue_key: str, payload: dict) -> Task:
+async def _dispatch_task(
+    db: AsyncSession,
+    task_type: str,
+    queue_key: str,
+    payload: dict,
+    requested_by: uuid.UUID | None = None,
+) -> Task:
     """创建任务行 → 先提交、后发消息。
 
     提交必须先于 publish：worker 消费到消息时任务行必须已可见，
     否则 update_task_status 查无此行会静默跳过，任务永远停在 pending。
     publish 失败时把任务标记为 failed，避免留下无消息的孤儿 pending。
     """
-    task = await task_repo.create_task(db, task_type, payload)
+    task = await task_repo.create_task(db, task_type, payload, requested_by=requested_by)
     await db.commit()
     try:
         await publish_message(
             queue_key,
-            {"task_id": str(task.id), "type": task_type, "payload": payload},
+            {
+                "task_id": str(task.id),
+                "type": task_type,
+                "payload": payload,
+                "requested_by": str(requested_by) if requested_by else None,
+            },
         )
     except Exception as exc:
         await task_repo.update_task_status(db, task.id, "failed", error=f"publish failed: {exc}")
@@ -46,35 +57,62 @@ async def _dispatch_task(db: AsyncSession, task_type: str, queue_key: str, paylo
     return task
 
 
-async def trigger_fetch_universe(db: AsyncSession, req: FetchUniverseRequest) -> TaskOut:
+async def trigger_fetch_universe(
+    db: AsyncSession,
+    req: FetchUniverseRequest,
+    requested_by: uuid.UUID | None = None,
+) -> TaskOut:
     payload = req.model_dump(exclude_none=True)
-    task = await _dispatch_task(db, "fetch_universe", "universe.fetch", payload)
+    task = await _dispatch_task(
+        db, "fetch_universe", "universe.fetch", payload, requested_by=requested_by
+    )
     logger.info("Dispatched fetch_universe task %s for exchange=%s", task.id, req.exchange)
     return TaskOut.model_validate(task)
 
 
-async def trigger_fetch_quotes(db: AsyncSession, req: FetchQuotesRequest) -> TaskOut:
+async def trigger_fetch_quotes(
+    db: AsyncSession,
+    req: FetchQuotesRequest,
+    requested_by: uuid.UUID | None = None,
+) -> TaskOut:
     payload = req.model_dump(exclude_none=True)
-    task = await _dispatch_task(db, "fetch_quotes", "quotes.fetch", payload)
+    task = await _dispatch_task(
+        db, "fetch_quotes", "quotes.fetch", payload, requested_by=requested_by
+    )
     logger.info("Dispatched fetch_quotes task %s", task.id)
     return TaskOut.model_validate(task)
 
 
-async def trigger_fetch_daily_basic(db: AsyncSession, req: FetchDailyBasicRequest) -> TaskOut:
+async def trigger_fetch_daily_basic(
+    db: AsyncSession,
+    req: FetchDailyBasicRequest,
+    requested_by: uuid.UUID | None = None,
+) -> TaskOut:
     """Trigger a daily_basic fetch task (entire market per trade_date)."""
     payload = req.model_dump(exclude_none=True)
-    task = await _dispatch_task(db, "fetch_daily_basic", "daily_basic.fetch", payload)
+    task = await _dispatch_task(
+        db, "fetch_daily_basic", "daily_basic.fetch", payload, requested_by=requested_by
+    )
     logger.info("Dispatched fetch_daily_basic task %s", task.id)
     return TaskOut.model_validate(task)
 
 
-async def trigger_fetch_financial(db: AsyncSession, req: FetchFinancialRequest) -> TaskOut:
+async def trigger_fetch_financial(
+    db: AsyncSession,
+    req: FetchFinancialRequest,
+    requested_by: uuid.UUID | None = None,
+) -> TaskOut:
     """Trigger a financial (statements + metrics) fetch for a single stock."""
     payload = req.model_dump(exclude_none=True)
-    task = await task_repo.create_task(db, "fetch_financial", payload)
+    task = await task_repo.create_task(db, "fetch_financial", payload, requested_by=requested_by)
     await publish_message(
         "financial.fetch",
-        {"task_id": str(task.id), "type": "fetch_financial", "payload": payload},
+        {
+            "task_id": str(task.id),
+            "type": "fetch_financial",
+            "payload": payload,
+            "requested_by": str(requested_by) if requested_by else None,
+        },
     )
     logger.info(
         "Dispatched fetch_financial task %s for %s/%s",
@@ -85,27 +123,41 @@ async def trigger_fetch_financial(db: AsyncSession, req: FetchFinancialRequest) 
     return TaskOut.model_validate(task)
 
 
-async def trigger_clustering(db: AsyncSession, req: RunClusteringRequest) -> TaskOut:
+async def trigger_clustering(
+    db: AsyncSession,
+    req: RunClusteringRequest,
+    requested_by: uuid.UUID | None = None,
+) -> TaskOut:
     payload = req.model_dump(exclude_none=True)
-    task = await _dispatch_task(db, "run_clustering", "clustering.run", payload)
+    task = await _dispatch_task(
+        db, "run_clustering", "clustering.run", payload, requested_by=requested_by
+    )
     logger.info("Dispatched clustering task %s, algorithm=%s", task.id, req.algorithm)
     return TaskOut.model_validate(task)
 
 
 async def trigger_fetch_industry_metrics(
-    db: AsyncSession, req: FetchIndustryMetricsRequest
+    db: AsyncSession,
+    req: FetchIndustryMetricsRequest,
+    requested_by: uuid.UUID | None = None,
 ) -> TaskOut:
     payload = req.model_dump(exclude_none=True)
-    task = await _dispatch_task(db, "fetch_industry_metrics", "industry_metrics.fetch", payload)
+    task = await _dispatch_task(
+        db, "fetch_industry_metrics", "industry_metrics.fetch", payload, requested_by=requested_by
+    )
     logger.info("Dispatched fetch_industry_metrics task %s, industry=%s", task.id, req.industry_key)
     return TaskOut.model_validate(task)
 
 
 async def trigger_fetch_securities(
-    db: AsyncSession, req: FetchIndustrySecuritiesRequest
+    db: AsyncSession,
+    req: FetchIndustrySecuritiesRequest,
+    requested_by: uuid.UUID | None = None,
 ) -> TaskOut:
     payload = req.model_dump(exclude_none=True)
-    task = await _dispatch_task(db, "fetch_securities", "securities.fetch", payload)
+    task = await _dispatch_task(
+        db, "fetch_securities", "securities.fetch", payload, requested_by=requested_by
+    )
     logger.info(
         "Dispatched fetch_securities task %s, industry=%s backfill_days=%s",
         task.id,
@@ -115,10 +167,16 @@ async def trigger_fetch_securities(
     return TaskOut.model_validate(task)
 
 
-async def trigger_fetch_market_data(db: AsyncSession, req: MarketDataFetchRequest) -> TaskOut:
+async def trigger_fetch_market_data(
+    db: AsyncSession,
+    req: MarketDataFetchRequest,
+    requested_by: uuid.UUID | None = None,
+) -> TaskOut:
     """Trigger a market-data ingest task (worker dispatches by req.type)."""
     payload = {"type": req.type, **(req.params or {})}
-    task = await _dispatch_task(db, "fetch_market_data", "market_data.fetch", payload)
+    task = await _dispatch_task(
+        db, "fetch_market_data", "market_data.fetch", payload, requested_by=requested_by
+    )
     logger.info("Dispatched fetch_market_data task %s, type=%s", task.id, req.type)
     return TaskOut.model_validate(task)
 

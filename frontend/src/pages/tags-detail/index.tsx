@@ -1,11 +1,13 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Breadcrumb, Card, Empty, Space, Tag, Typography } from "antd";
+import { Alert, Breadcrumb, Button, Card, Empty, Space, Tag, Typography } from "antd";
 import type { TableProps } from "antd";
+import { LoginOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { StockTable } from "@/features/market/components/StockTable";
 import type { StockRecord } from "@/shared/types";
 import { fetchStocksByTag } from "@/shared/api/userTags";
+import { useAuth } from "@/features/auth";
 
 type SortState = {
   sortBy?: keyof StockRecord;
@@ -26,14 +28,15 @@ function applySort(stocks: StockRecord[], sort: SortState): StockRecord[] {
 
 export default function TagsDetailPage() {
   const navigate = useNavigate();
+  const { user, isAuthenticated } = useAuth();
   const { tagName = "" } = useParams();
   const decodedTagName = decodeURIComponent(tagName);
   const [sort, setSort] = useState<SortState>({ sortBy: "symbol", sortOrder: "asc" });
 
   const { data: stocks = [], isLoading } = useQuery({
-    queryKey: ["tag-stocks", decodedTagName],
+    queryKey: ["tag-stocks", user?.id, decodedTagName],
     queryFn: () => fetchStocksByTag(decodedTagName),
-    enabled: Boolean(decodedTagName),
+    enabled: Boolean(decodedTagName && isAuthenticated && user?.id),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -47,6 +50,26 @@ export default function TagsDetailPage() {
       });
     }
   };
+
+  if (!isAuthenticated) {
+    return (
+      <Card>
+        <Alert
+          type="warning"
+          showIcon
+          message="请先登录"
+          description={
+            <Space align="center" style={{ marginTop: 8 }}>
+              <span>自定义标签为私有数据，请登录后查看对应个股。</span>
+              <Button type="primary" size="small" icon={<LoginOutlined />} onClick={() => navigate("/login")}>
+                立即登录
+              </Button>
+            </Space>
+          }
+        />
+      </Card>
+    );
+  }
 
   if (!decodedTagName) {
     return (
@@ -77,7 +100,13 @@ export default function TagsDetailPage() {
         {stocks.length === 0 && !isLoading ? (
           <Empty description="该标签下暂无股票" />
         ) : (
-          <StockTable data={displayStocks} onChange={onTableChange} sortBy={sort.sortBy} sortOrder={sort.sortOrder === "asc" ? "ascend" : "descend"} loading={isLoading} />
+          <StockTable
+            data={displayStocks}
+            onChange={onTableChange}
+            sortBy={sort.sortBy}
+            sortOrder={sort.sortOrder === "asc" ? "ascend" : "descend"}
+            loading={isLoading}
+          />
         )}
       </Card>
     </Space>

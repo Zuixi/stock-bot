@@ -8,6 +8,7 @@ import {
 } from "@ant-design/icons";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { SearchBar } from "@/features/search/components/SearchBar";
+import { UserMenu } from "@/features/auth";
 
 const { Header, Content, Footer } = Layout;
 
@@ -31,7 +32,7 @@ export function MainLayout() {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 24,
+          gap: 20,
           padding: "0 24px",
           borderBottom: "1px solid #f0f0f0",
           position: "sticky",
@@ -40,7 +41,11 @@ export function MainLayout() {
           background: "#fff",
         }}
       >
-        <Typography.Title level={4} style={{ margin: 0, whiteSpace: "nowrap", color: "#1677ff" }}>
+        <Typography.Title
+          level={4}
+          style={{ margin: 0, whiteSpace: "nowrap", color: "#1677ff", cursor: "pointer" }}
+          onClick={() => navigate("/market")}
+        >
           Stock Bot
         </Typography.Title>
         <Menu
@@ -51,6 +56,7 @@ export function MainLayout() {
           style={{ flex: 1, border: "none" }}
         />
         <SearchBar />
+        <UserMenu />
       </Header>
 
       <Content style={{ padding: "16px 24px", maxWidth: 1400, width: "100%", margin: "0 auto" }}>

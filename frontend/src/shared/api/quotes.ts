@@ -1,4 +1,4 @@
-import { apiGet } from "./client";
+import { ApiError, apiGet } from "./client";
 import type { AdjustMode, KLinePoint, KlineResult } from "@/shared/types";
 
 interface BackendDailyQuote {
@@ -57,8 +57,11 @@ export async function fetchKlineBySymbol(
         };
       });
       return { points, adjustAvailable: response.adjust_available !== false };
-    } catch {
-      // Try the next exchange.
+    } catch (err) {
+      if (err instanceof ApiError && err.status !== 404) {
+        throw err;
+      }
+      // Try the next exchange on 404.
     }
   }
 

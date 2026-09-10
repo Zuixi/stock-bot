@@ -39,6 +39,7 @@ ENV/
 .env
 .env.*
 !.env.example
+!.env.docker.example
 
 # Config (keep samples, ignore real secrets)
 src/config/*.yaml
@@ -58,6 +59,7 @@ data/*
 .claude/**
 ## Build artifacts (test coverage / TS incremental build — regenerated locally)
 backend/.coverage
+auth-service/.coverage
 frontend/tsconfig.tsbuildinfo
 !**/data/sw_custom_tags_seed.sql
 

@@ -15,7 +15,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Query, status
 
-from app.api.deps import CacheDep, DbDep
+from app.api.deps import CacheDep, DbDep, require_permissions
 from app.core.exceptions import not_found_response
 from app.schemas.industry import (
     DashboardOut,
@@ -121,6 +121,7 @@ async def get_industry_knowledge(industry_key: str, db: DbDep) -> IndustryKnowle
     "/{industry_key}/metrics/batch",
     response_model=MetricBatchResponse,
     status_code=status.HTTP_200_OK,
+    dependencies=[require_permissions("research:manage")],
 )
 async def batch_upsert_metrics(
     industry_key: str, req: MetricBatchRequest, db: DbDep

@@ -1,17 +1,47 @@
 import { useNavigate } from "react-router-dom";
-import { Card, Col, Empty, Row, Space, Spin, Tag, Typography } from "antd";
-import { TagsOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Col, Empty, Row, Space, Spin, Tag, Typography } from "antd";
+import { TagsOutlined, LoginOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAllTags } from "@/shared/api/userTags";
+import { useAuth } from "@/features/auth";
 
 export default function TagsPage() {
   const navigate = useNavigate();
+  const { user, isAuthenticated } = useAuth();
 
   const { data: tags = [], isLoading } = useQuery({
-    queryKey: ["all-tags"],
+    queryKey: ["all-tags", user?.id],
     queryFn: fetchAllTags,
+    enabled: Boolean(isAuthenticated && user?.id),
     staleTime: 5 * 60 * 1000,
   });
+
+  if (!isAuthenticated) {
+    return (
+      <Card
+        title={
+          <Space>
+            <TagsOutlined />
+            <span>自定义标签</span>
+          </Space>
+        }
+      >
+        <Alert
+          type="info"
+          showIcon
+          message="登录后查看个人标签"
+          description={
+            <Space align="center" style={{ marginTop: 8 }}>
+              <span>自定义股票标签属于用户专属数据。请登录后使用标签分类功能。</span>
+              <Button type="primary" size="small" icon={<LoginOutlined />} onClick={() => navigate("/login")}>
+                立即登录
+              </Button>
+            </Space>
+          }
+        />
+      </Card>
+    );
+  }
 
   if (isLoading) {
     return (
