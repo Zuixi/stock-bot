@@ -97,8 +97,12 @@ export interface SwPerformanceItem {
   /** 当日有行情（pct_chg 非空）的成员数。 */
   member_count: number;
   avg_pct_chg: number;
-  /** 成交额，TuShare 原生 千元（消费端 ×1000 → 元，与 rankings/StockEnrichedOut 同口径）。 */
-  total_amount: number;
+  /**
+   * 成交额，TuShare 原生 千元（消费端 ×1000 → 元，与 rankings/StockEnrichedOut 同口径）。
+   * 可空：`sum(amount)` 在该组报价成员均无成交额时为 NULL，后端刻意保留 `float | None`
+   * 以避免匿名端点触发 Pydantic 500（见 backend/app/schemas/sw_performance.py）。UI 渲染 `--`。
+   */
+  total_amount: number | null;
   up_count: number;
   down_count: number;
 }

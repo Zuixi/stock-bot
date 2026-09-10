@@ -58,8 +58,13 @@ function buildHistoryOption(history: MarketMoneyflowDay[], c: ThemePalette) {
   };
 }
 
-/** 大盘资金流（沪深两市合成口径）：今日四档 + 近 30 日主力净流入。 */
-export function MarketMoneyflowCard() {
+/**
+ * 大盘资金流内容（沪深两市合成口径）：今日四档 + 近 30 日主力净流入。
+ *
+ * 不含 Card 壳：`/market` 由 {@link MarketMoneyflowCard} 包 antd `<Card>`；
+ * 首页 `MoneySentiment` 块外层已有 `SectionCard`，直接内联本内容以免卡中卡。
+ */
+export function MarketMoneyflowContent() {
   const { colors } = useTheme();
   const { data, isLoading } = useQuery({
     queryKey: ["market-moneyflow"],
@@ -73,46 +78,53 @@ export function MarketMoneyflowCard() {
   const mainColor = (total?.mainNet ?? 0) > 0 ? colors.up : (total?.mainNet ?? 0) < 0 ? colors.down : colors.flat;
 
   return (
+    <Spin spinning={isLoading}>
+      {total && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>今日主力净流入</Typography.Text>
+            <span style={{ fontSize: 22, fontWeight: 600, color: mainColor, fontVariantNumeric: "tabular-nums" }}>
+              {fmtSignedYi(total.mainNet)}
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 2, fontSize: 12 }}>
+            {FLOW_ROWS.map(({ key, label }) => (
+              <span key={key}>
+                {label}
+                <b
+                  style={{
+                    fontVariantNumeric: "tabular-nums",
+                    color: (total[key] ?? 0) > 0 ? colors.up : (total[key] ?? 0) < 0 ? colors.down : colors.flat,
+                    marginLeft: 4,
+                  }}
+                >
+                  {fmtYi(total[key])}
+                </b>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {history.length > 0 ? (
+        <EChart option={buildHistoryOption(history, colors)} height={168} />
+      ) : (
+        <div style={{ height: 200, display: "flex", alignItems: "center", justifyContent: "center", color: colors.flat }}>
+          暂无大盘资金流数据（盘后自动更新）
+        </div>
+      )}
+    </Spin>
+  );
+}
+
+/** 大盘资金流卡（`/market` 资金流向 Tab）：Card 壳 + {@link MarketMoneyflowContent}。 */
+export function MarketMoneyflowCard() {
+  return (
     <Card
       title="大盘资金流"
       size="small"
       extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>沪深两市 · 近30日</Typography.Text>}
     >
-      <Spin spinning={isLoading}>
-        {total && (
-          <div style={{ marginBottom: 8 }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>今日主力净流入</Typography.Text>
-              <span style={{ fontSize: 22, fontWeight: 600, color: mainColor, fontVariantNumeric: "tabular-nums" }}>
-                {fmtSignedYi(total.mainNet)}
-              </span>
-            </div>
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 2, fontSize: 12 }}>
-              {FLOW_ROWS.map(({ key, label }) => (
-                <span key={key}>
-                  {label}
-                  <b
-                    style={{
-                      fontVariantNumeric: "tabular-nums",
-                      color: (total[key] ?? 0) > 0 ? colors.up : (total[key] ?? 0) < 0 ? colors.down : colors.flat,
-                      marginLeft: 4,
-                    }}
-                  >
-                    {fmtYi(total[key])}
-                  </b>
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-        {history.length > 0 ? (
-          <EChart option={buildHistoryOption(history, colors)} height={168} />
-        ) : (
-          <div style={{ height: 200, display: "flex", alignItems: "center", justifyContent: "center", color: colors.flat }}>
-            暂无大盘资金流数据（盘后自动更新）
-          </div>
-        )}
-      </Spin>
+      <MarketMoneyflowContent />
     </Card>
   );
 }

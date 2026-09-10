@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchCapitalFlow, fetchSectors, fetchSwPerformance } from "@/shared/api/market";
 import { DataRow } from "@/shared/ui";
 import { BreadthBar } from "./BreadthBar";
-import { fmtAmountParts } from "./format";
+import { fmtAmountParts, formatCnDate } from "./format";
 import "./SectorFlow.css";
 
 const STALE_TIME = 60_000;
@@ -56,20 +56,27 @@ export function SectorFlow() {
   const maxAbs = Math.max(1, ...flows.flatMap((f) => [Math.abs(f.inflow), Math.abs(f.outflow)]));
 
   const leftLoading = usingCsrc ? sectorsQuery.isLoading : swQuery.isLoading;
+  const leftError = usingCsrc ? sectorsQuery.isError : swQuery.isError;
   const hasLeft = usingCsrc ? csrcRows.length > 0 : swRows.length > 0;
+  // T+1 行业行情必须标注数据截止日（与 RankingMatrix 的「数据截至 …」同款、同措辞）。
+  // CSRC 回退口径的 /market/sectors 不返回 as_of，故仅在申万口径下展示。
+  const asOf = usingCsrc ? undefined : swQuery.data?.as_of;
 
   return (
     <div className="sector-flow">
       <div className="sector-flow__basis">
         {`行业口径：${usingCsrc ? "证监会" : "申万一级"}`}
+        {asOf ? ` · 数据截至 ${formatCnDate(asOf)}` : ""}
       </div>
       <div className="sector-flow__cols">
         <div className="sector-flow__col">
           <div className="sector-flow__sub">行业涨跌</div>
           {leftLoading ? (
             <Skeleton active paragraph={{ rows: 4 }} title={false} />
+          ) : leftError ? (
+            <div className="sector-flow__empty">行业涨跌暂不可用，请稍后重试</div>
           ) : !hasLeft ? (
-            <div className="sector-flow__empty">行业涨跌暂不可用</div>
+            <div className="sector-flow__empty">暂无行业涨跌数据</div>
           ) : usingCsrc ? (
             csrcRows.map((s) => <DataRow key={s.name} title={s.name} delta={s.changePercent} />)
           ) : (
@@ -131,7 +138,9 @@ export function SectorFlow() {
               );
             })
           ) : (
-            <div className="sector-flow__empty">资金流暂不可用</div>
+            <div className="sector-flow__empty">
+              {flowQuery.isError ? "资金流暂不可用，请稍后重试" : "暂无板块资金流数据"}
+            </div>
           )}
         </div>
       </div>

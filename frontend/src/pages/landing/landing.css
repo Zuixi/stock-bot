@@ -263,6 +263,13 @@ html {
   margin-bottom: 8px;
 }
 
+/* 指数条的「实时 + 60s 刷新」口径说明（仅描述指数，不含 T+1 分布） */
+.landing-pulse-caption {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: -4px;
+}
+
 .landing-pulse-summary {
   font-size: 13px;
   color: var(--text-secondary);

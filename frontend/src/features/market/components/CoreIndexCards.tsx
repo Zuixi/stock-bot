@@ -1,29 +1,11 @@
 import { Card, Col, Row, Skeleton } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { fetchGlobalIndices, type GlobalIndexCard } from "@/shared/api/marketData";
+import { fetchGlobalIndices } from "@/shared/api/marketData";
 import { GlobalIndexCardView } from "./GlobalIndexCardView";
+import { CORE_TS_CODES, pickCoreIndices } from "./coreIndices";
 
 const STALE_TIME = 60 * 1000;
 const REFETCH_INTERVAL = 60 * 1000;
-
-/** A股核心指数（契约 §4：上证/深证/创业板/沪深300/中证500/科创50） */
-const CORE_TS_CODES = [
-  "000001.SH", // 上证指数
-  "399001.SZ", // 深证成指
-  "399006.SZ", // 创业板指
-  "000300.SH", // 沪深300
-  "000905.SH", // 中证500
-  "000688.SH", // 科创50
-];
-
-/** 缺谁用其余 CN 指数顺位补齐，恒定 6 格 */
-function pickCoreIndices(list: GlobalIndexCard[]): GlobalIndexCard[] {
-  const core = CORE_TS_CODES
-    .map((code) => list.find((i) => i.tsCode === code))
-    .filter((i): i is GlobalIndexCard => !!i);
-  const rest = list.filter((i) => i.market === "CN" && !CORE_TS_CODES.includes(i.tsCode));
-  return [...core, ...rest].slice(0, CORE_TS_CODES.length);
-}
 
 /** A股核心指数卡：六个核心指数的 TV ticker 卡阵列（Stage C 指数总览 Tab） */
 export function CoreIndexCards() {
@@ -34,7 +16,8 @@ export function CoreIndexCards() {
     refetchInterval: REFETCH_INTERVAL,
   });
 
-  const core = pickCoreIndices(indices);
+  // 缺谁用其余 A 股指数顺位补齐（共享选择器；与宣传页指数条的差异在过滤条件）
+  const core = pickCoreIndices(indices, CORE_TS_CODES.length, (i) => i.market === "CN");
 
   return (
     <Card title="A股核心指数" size="small">
