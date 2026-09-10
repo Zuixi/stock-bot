@@ -17,7 +17,10 @@ class RankingItemOut(BaseModel):
     exchange: str | None = None
     close: float | None = None
     pct_chg: float | None = None
-    amount: float | None = None  # 元
+    # ``daily_quotes.amount`` is TuShare-native 千元 (see the model / get_sectors' x1000).
+    # Passed through raw to match StockEnrichedOut.amount; consumers apply the existing
+    # x1000 -> 元 conversion. Unit is 千元, not 元.
+    amount: float | None = None
     volume: float | None = None  # 股
     turnover_rate: float | None = None
     total_mv: float | None = None  # 万元

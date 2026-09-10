@@ -74,9 +74,16 @@ _FALLBACK_DISTRIBUTION = [
 
 
 async def _latest_trade_date(db: AsyncSession) -> date | None:
-    """Return the most recent trade_date in daily_quotes, or None."""
-    result = await db.execute(select(func.max(DailyQuote.trade_date)))
-    return result.scalar_one_or_none()
+    """Return the most recent trade_date, or None when daily_quotes is empty.
+
+    Thin **uncached** delegate to :func:`get_latest_trade_date` so the max()
+    SQL exists in exactly one place; the four dashboard readers below keep
+    reading directly (no cache dependency).
+    """
+    try:
+        return await get_latest_trade_date(db)
+    except ValueError:
+        return None
 
 
 async def _latest_trade_date_str() -> str:
@@ -578,7 +585,19 @@ async def get_rankings(
         if cached is not None:
             return RankingResponseOut.model_validate(cached)
 
-    as_of = await get_latest_trade_date(db, cache)
+    try:
+        as_of = await get_latest_trade_date(db, cache)
+    except ValueError:
+        # Public homepage block: an empty daily_quotes must degrade to a coherent
+        # empty payload (as get_distribution falls back), never a 500. Not cached —
+        # so the block recovers on the first ingest after the DB is populated.
+        return RankingResponseOut(
+            as_of=last_weekday(date.today()),
+            is_latest_trading_day=False,
+            type=cast(RankingType, rank_type),
+            items=[],
+        )
+
     stmt = _TURNOVER_RANK_SQL if rank_type == "turnover_rate" else _QUOTE_RANK_SQL[rank_type]
     rows = (await db.execute(stmt, {"as_of": as_of, "limit": limit})).mappings().all()
 
