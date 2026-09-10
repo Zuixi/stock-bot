@@ -1,0 +1,58 @@
+.distribution-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.distribution-bars__row {
+  display: grid;
+  grid-template-columns: 56px 1fr 56px;
+  align-items: center;
+  gap: 8px;
+}
+
+.distribution-bars__label {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.distribution-bars__track {
+  display: flex;
+  height: 10px;
+  background: var(--bg-page);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+/* 下跌桶从右向左生长，形成以中轴为界的双向柱观感 */
+.distribution-bars__row--down .distribution-bars__track {
+  justify-content: flex-end;
+}
+
+.distribution-bars__fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.distribution-bars__fill--up {
+  background: var(--up);
+}
+
+.distribution-bars__fill--down {
+  background: var(--down);
+}
+
+.distribution-bars__fill--flat {
+  background: var(--border);
+}
+
+.distribution-bars__count {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}

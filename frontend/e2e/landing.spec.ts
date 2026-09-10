@@ -132,8 +132,8 @@ test.describe("宣传页数据区块", () => {
     await page.goto("/");
     await expect(page.getByText("上证指数").first()).toBeVisible();
     await expect(page.getByText("+0.28%").first()).toBeVisible();
-    // 上涨/下跌摘要（分桶口径：up=80+30+19+5=134，down=90+120+60=270）
-    await expect(page.getByText(/上涨\s*134/).first()).toBeVisible();
+    // 上涨/下跌摘要（分桶口径对称且穷尽：up 含 0~1% → 100+80+30+19+5=234，down=90+120+60=270）
+    await expect(page.getByText(/上涨\s*234/).first()).toBeVisible();
     await expect(page.getByText(/下跌\s*270/).first()).toBeVisible();
   });
 

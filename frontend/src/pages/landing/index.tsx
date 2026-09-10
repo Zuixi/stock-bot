@@ -32,9 +32,11 @@ export default function LandingPage() {
         <CompactHero />
 
         {/* 行情台主体 —— 全部公开。区块间独立降级，单接口失败不牵连邻区。 */}
-        <MarketPulse />
         <section className="landing-market">
           <div className="landing-container landing-market-inner">
+            <SectionCard id="pulse" title="实时市场脉搏" moreHref="/market" moreText="进入行情页">
+              <MarketPulse />
+            </SectionCard>
             <SectionCard id="rankings" title="榜单" moreHref="/market">
               <SectionSkeleton />
             </SectionCard>
