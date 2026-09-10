@@ -24,6 +24,7 @@ from app.models.quote import DailyQuote
 from app.models.stock import Stock
 from app.schemas.ranking import RankingItemOut, RankingResponseOut, RankingType
 from app.schemas.stock import StockOut
+from app.schemas.sw_performance import SwPerformanceItemOut, SwPerformanceResponseOut
 
 logger = logging.getLogger(__name__)
 
@@ -610,6 +611,76 @@ async def get_rankings(
     if cache:
         await cache.set(cache_key, out.model_dump(mode="json"), _MARKET_CACHE_TTL)
     return out
+
+
+# ---------------------------------------------------------------------------
+# SW L1 industry performance (Task 3.1) — two-hop parent_code rollup
+# ---------------------------------------------------------------------------
+
+# Ruling U: roll L3 members up to L1 via the verified parent_code chain
+# (``sw_industry_classes`` levels L1=31 / L2=134 / L3=346; the two-hop chain
+# resolves for all L3 classes). Join keys: ``sw_industry_members.symbol`` ->
+# ``stocks.symbol`` (95.4% match, the correct key). Members are joined to
+# ``daily_quotes`` on the latest trade date so ``member_count`` / ``up_count`` /
+# ``down_count`` count only stocks that actually have a quote that day, and
+# ``avg_pct_chg`` is a true average over those stocks. ``pct_chg IS NOT NULL``
+# keeps suspended/no-quote names out of the denominator.
+_SW_PERF_SQL = text("""
+    WITH l1_members AS (
+        SELECT c1.industry_code AS code, c1.industry_name AS name, m.symbol
+        FROM sw_industry_members m
+        JOIN sw_industry_classes c3
+          ON c3.industry_code = m.industry_code AND c3.level = 3
+        JOIN sw_industry_classes c2 ON c2.industry_code = c3.parent_code
+        JOIN sw_industry_classes c1 ON c1.industry_code = c2.parent_code
+    )
+    SELECT lm.code, lm.name,
+           count(q.stock_id) AS member_count,
+           avg(q.pct_chg) AS avg_pct_chg,
+           sum(q.amount) AS total_amount,
+           count(*) FILTER (WHERE q.pct_chg > 0) AS up_count,
+           count(*) FILTER (WHERE q.pct_chg < 0) AS down_count
+    FROM l1_members lm
+    JOIN stocks s ON s.symbol = lm.symbol
+    JOIN daily_quotes q ON q.stock_id = s.id AND q.trade_date = :as_of
+    WHERE q.pct_chg IS NOT NULL
+    GROUP BY lm.code, lm.name
+    ORDER BY avg_pct_chg DESC
+""")
+
+
+async def get_sw_industry_performance(
+    db: AsyncSession,
+    cache: CacheClient | None,
+    limit: int = 31,
+) -> SwPerformanceResponseOut:
+    """Return Shenwan L1 industry performance as of the latest trade date.
+
+    Cache-first (ruling U) mirroring ``get_rankings``; the full L1 set is cached
+    under one key and ``limit`` is applied on read (the SQL returns all L1 rows).
+    """
+    cache_key = "market:sw-performance"
+    if cache:
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            out = SwPerformanceResponseOut.model_validate(cached)
+            return out.model_copy(update={"items": out.items[:limit]})
+
+    try:
+        as_of = await get_latest_trade_date(db, cache)
+    except ValueError:
+        # Anonymous homepage block: an empty daily_quotes degrades to an empty
+        # payload (never 500) and is not cached, so it recovers after the first ingest.
+        return SwPerformanceResponseOut(as_of=last_weekday(date.today()), items=[])
+
+    rows = (await db.execute(_SW_PERF_SQL, {"as_of": as_of})).mappings().all()
+    out = SwPerformanceResponseOut(
+        as_of=as_of,
+        items=[SwPerformanceItemOut(**dict(row)) for row in rows],
+    )
+    if cache:
+        await cache.set(cache_key, out.model_dump(mode="json"), _MARKET_CACHE_TTL)
+    return out.model_copy(update={"items": out.items[:limit]})
 
 
 # ---------------------------------------------------------------------------

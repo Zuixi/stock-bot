@@ -17,6 +17,7 @@ from app.schemas.sse_index import (
     SseSnapshotOut,
 )
 from app.schemas.stock import StockEnrichedOut, StockOut
+from app.schemas.sw_performance import SwPerformanceResponseOut
 from app.services import market_service, stock_tag_service
 
 router = APIRouter()
@@ -97,6 +98,16 @@ async def get_sw_industry_options(
 ) -> list[dict]:
     """Return SW industry nodes at the given level for dropdown selection."""
     return await stock_tag_service.list_sw_options(db, level)
+
+
+@router.get("/sw-industry/performance", response_model=SwPerformanceResponseOut)
+async def get_sw_industry_performance(
+    cache: CacheDep,
+    db: DbDep,
+    limit: int = Query(default=31, ge=1, le=31),
+) -> SwPerformanceResponseOut:
+    """公开申万一级行业行情聚合。口径 T+1，见响应 as_of。"""
+    return await market_service.get_sw_industry_performance(db, cache, limit)
 
 
 @router.get("/sw-industry/{level1_code}/stocks", response_model=list[StockOut])
