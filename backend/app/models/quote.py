@@ -17,6 +17,10 @@ class DailyQuote(Base):
         CheckConstraint("high >= low AND open >= 0 AND close >= 0", name="chk_ohlc"),
         Index("idx_daily_quotes_stock_date", "stock_id", "trade_date"),
         Index("idx_daily_quotes_date", "trade_date"),
+        # Ranking indexes created by migration cf4b8e317fe5; mirrored here so
+        # `alembic revision --autogenerate` does not emit drop_index for them.
+        Index("idx_daily_quotes_date_pct", "trade_date", "pct_chg"),
+        Index("idx_daily_quotes_date_amount", "trade_date", "amount"),
         # Partitioning is managed externally via ALTER TABLE partitioned by.
         # Do NOT put postgresql_partition_by here — it conflicts with
         # the auto-generated PrimaryKeyConstraint(id) and causes:
