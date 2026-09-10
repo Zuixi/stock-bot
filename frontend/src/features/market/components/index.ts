@@ -13,3 +13,4 @@ export { IndustryClassification } from "./IndustryClassification";
 export { MarketDataBoard } from "./MarketDataBoard";
 export { SwIndustryGrid } from "./SwIndustryGrid";
 export { DataCoverageMatrix } from "./DataCoverageMatrix";
+export { RankingMatrix } from "./RankingMatrix";
