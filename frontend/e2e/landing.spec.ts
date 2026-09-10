@@ -42,6 +42,8 @@ const MOCK_INDICES = [
   { ts_code: "000001.SH", name: "上证指数", market: "CN", region: "asia", price: 3951.51, change: 10.96, pct_change: 0.28, spark: [3900, 3920, 3951.51], updated_at: "2026-09-11T10:00:00", source: "realtime" },
   { ts_code: "399001.SZ", name: "深证成指", market: "CN", region: "asia", price: 13723.32, change: 20.11, pct_change: 0.15, spark: [13600, 13700, 13723.32], updated_at: "2026-09-11T10:00:00", source: "realtime" },
   { ts_code: "HSI", name: "恒生指数", market: "HK", region: "asia", price: 25274.96, change: -42.22, pct_change: -0.17, spark: [25300, 25280, 25274.96], updated_at: "2026-09-11T10:00:00", source: "realtime" },
+  // 涨跌幅缺失（EOD 兜底且 spark 不足时 pct_change 为 null）——须显示 "--" 而非 "0.00%"
+  { ts_code: "000300.SH", name: "沪深300", market: "CN", region: "asia", price: 4548.39, change: null, pct_change: null, spark: [], updated_at: "2026-09-11T10:00:00", source: "eod" },
 ];
 
 test.describe("宣传页路由与品牌", () => {
@@ -133,6 +135,13 @@ test.describe("宣传页数据区块", () => {
     // 上涨/下跌摘要（分桶口径：up=80+30+19+5=134，down=90+120+60=270）
     await expect(page.getByText(/上涨\s*134/).first()).toBeVisible();
     await expect(page.getByText(/下跌\s*270/).first()).toBeVisible();
+  });
+
+  test("缺失涨跌幅的指数显示 -- 而非 0.00%", async ({ page }) => {
+    await page.goto("/");
+    const card = page.locator(".landing-ticker", { hasText: "沪深300" });
+    await expect(card.locator(".landing-ticker-price")).toHaveText("4,548.39");
+    await expect(card.locator(".landing-ticker-chip")).toHaveText("--");
   });
 
   test("数据覆盖矩阵含核心数据域与免费徽章", async ({ page }) => {

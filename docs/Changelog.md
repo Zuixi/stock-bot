@@ -498,3 +498,11 @@
 - **修复**：解析重构为 `_split_sql_statements`（先剥离注释行再按分号切分，纯函数可单测）+ 修正 seed 头行分号 + 新增 tests/test_sw_seed_import.py 3 用例锁定畸形输入行为
 - **验证**：api 重建后 data_init 自动导入 1439 行；清 `market:sw-tree` 缓存后 tree API "其他"= 61 只（残余为确无申万映射股票，兜底保留），5560 只全可见
 - 涉及模块：backend/app/services/sw_industry_service.py, backend/data/sw_custom_tags_seed.sql, backend/tests/test_sw_seed_import.py(新增)
+
+## 2026-09-11 - 代码评审 P1-P4 优化（缺失值语义 / 解析器边界 / 快照键碰撞 / 日志语义）
+- **P1 缺失涨跌幅误显示 0.00%**（用户可见）：MarketPulse 的 Ticker 对 `pctChange=null` 用 `?? 0` 兜底，渲染成"0.00% + 中性色"会被读成平盘（EOD 兜底且 spark 不足时真实可达）。改为与价格同口径显示 `--`；先写 E2E 复现（Playwright 明确报 `unexpected value "0.00%"`）再修复，landing.spec 7/7 通过
+- **P2 解析器边界**：`_split_sql_statements` 原先只处理注释独占行，行尾注释（`INSERT ...; -- 说明`）会与下条语句粘连并被当语句执行（报语法错）。改为对每个分号块逐行剔除注释（覆盖两种形态），docstring 显式声明"不支持字符串字面量内分号"；单测 5 个（含红→绿复现）
+- **P3 快照键跨市场碰撞**：`_em_code` 取数字段短码，沪/深同号段（1.000001 vs 0.000001）会静默错配——单测精确复现（`assert 222.0 == 111.0`，沪市指数拿到深市报价）。client 返回体新增完整 `secid`（f13 市场号 + f12 代码），service 改按 secid 索引并删除 `_em_code`
+- **P4 导入日志语义含混**：`Imported ... N rows` 实为全表计数（排障时被误读为"本次导入量"）。改为 `table now has N rows (+M this run)`，实机验证输出 `1439 rows (+0 this run)`（幂等重放）
+- **验证**：后端 ruff/mypy ✓、单测 180 通过 ✓、landing E2E 7/7 ✓、实机重建 api+frontend 后 global-indices 14 条全 realtime 无回归 ✓
+- 涉及模块：frontend/src/pages/landing/sections/MarketPulse.tsx, frontend/e2e/landing.spec.ts, backend/app/services/sw_industry_service.py, backend/app/services/market_data_service.py, backend/app/core/providers/eastmoney_client.py, backend/tests/{test_sw_seed_import,test_market_data_mapping,test_eastmoney_client}.py

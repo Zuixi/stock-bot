@@ -33,3 +33,17 @@ def test_multiple_statements_and_blank_lines():
 
 def test_full_comment_script_yields_nothing():
     assert _split_sql_statements("-- only\n-- comments\n") == []
+
+
+def test_trailing_inline_comment_is_not_a_statement():
+    """行尾注释（`; -- note`）落在分号之后，不能当成语句执行（会语法错）。"""
+    sql = "DELETE FROM t; -- 说明文字\nINSERT INTO t VALUES (1);\n"
+    assert _split_sql_statements(sql) == [
+        "DELETE FROM t",
+        "INSERT INTO t VALUES (1)",
+    ]
+
+
+def test_comment_only_tail_chunk_dropped():
+    sql = "INSERT INTO t VALUES (1);\n-- trailer\n"
+    assert _split_sql_statements(sql) == ["INSERT INTO t VALUES (1)"]

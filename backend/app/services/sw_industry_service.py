@@ -129,14 +129,23 @@ async def export_sw_to_sql(dest: Path | None = None) -> Path:
 
 
 def _split_sql_statements(sql: str) -> list[str]:
-    """Strip ``--`` comment lines, then split the remainder on ``;``.
+    """Split a simple SQL script into executable statements.
 
-    注释行必须先剥离再切分：seed 文件常见「注释头 + 巨型 INSERT」，直接 split
-    后首块以 ``--`` 开头，若整块跳过会连 INSERT 一起丢掉（曾致 custom-tag
-    overlay 导入恒为 0 行）。
+    先按 ``;`` 切块，再对每块逐行剔除 ``--`` 注释（既覆盖注释独占行，也覆盖
+    分号之后的行尾注释，如 ``INSERT ...; -- 说明``）——不先剥离注释会连
+    INSERT 一起丢掉（曾致 custom-tag overlay 导入恒为 0 行），行尾注释则会被
+    当作下一条语句执行报语法错。
+
+    限制：不支持字符串字面量内部的分号（如 ``('a;b')``）——本仓库 seed 均为
+    代码/数字值；若未来出现含分号的字符串值，需改用真正的 SQL parser。
     """
-    body = "\n".join(ln for ln in sql.splitlines() if not ln.strip().startswith("--"))
-    return [stmt.strip() for stmt in body.split(";") if stmt.strip()]
+    statements: list[str] = []
+    for chunk in sql.split(";"):
+        kept = [ln for ln in chunk.splitlines() if not ln.strip().startswith("--")]
+        stmt = "\n".join(kept).strip()
+        if stmt:
+            statements.append(stmt)
+    return statements
 
 
 async def _execute_sql_script(db: AsyncSession, sql: str) -> None:
@@ -180,12 +189,17 @@ async def import_custom_tags_from_sql(src: Path | None = None) -> int:
         return 0
 
     async with async_session_factory() as db:
+        before = len((await db.execute(select(StockCustomSwTag.id))).scalars().all())
         await _execute_sql_script(db, sql)
         await db.commit()
-        count = len((await db.execute(select(StockCustomSwTag.id))).scalars().all())
+        after = len((await db.execute(select(StockCustomSwTag.id))).scalars().all())
 
-    logger.info("Imported custom-tag overlay from SQL seed: %d rows", count)
-    return count
+    # 打印"表内总数（本次新增）"：只报表计数会被误读成本次导入量（曾据此把
+    # 全表 0 行误判为"导入无效果"而延长排障）
+    logger.info(
+        "custom-tag overlay applied: table now has %d rows (%+d this run)", after, after - before
+    )
+    return after
 
 
 # ---------------------------------------------------------------------------

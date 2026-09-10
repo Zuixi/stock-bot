@@ -36,9 +36,10 @@ function formatPrice(value: number): string {
 
 function Ticker({ index }: { index: GlobalIndexCard }) {
   const { colors } = useTheme();
-  const pct = index.pctChange ?? 0;
-  const color = pct > 0 ? colors.up : pct < 0 ? colors.down : colors.flat;
-  const sign = pct > 0 ? "+" : "";
+  const pct = index.pctChange;
+  // 涨跌幅缺失（EOD 兜底且 spark 不足）时与价格同口径显示 "--"，不得回退成
+  // 0.00%（会被读成"平盘"，与 data 缺失语义相悖）
+  const color = pct == null || pct === 0 ? colors.flat : pct > 0 ? colors.up : colors.down;
 
   return (
     <div className="landing-ticker">
@@ -49,8 +50,7 @@ function Ticker({ index }: { index: GlobalIndexCard }) {
         {index.price != null ? formatPrice(index.price) : "--"}
       </div>
       <span className="landing-ticker-chip" style={{ background: color }}>
-        {sign}
-        {pct.toFixed(2)}%
+        {pct != null ? `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%` : "--"}
       </span>
     </div>
   );
