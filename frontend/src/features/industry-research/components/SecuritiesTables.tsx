@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Alert, Button, Card, Table, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { COLORS } from "@/app/theme";
+import { useTheme } from "@/app/theme-context";
 import {
   fetchIndustrySecurities,
   triggerFetchSecurities,
@@ -12,7 +12,7 @@ import {
 import { EChart, sparkOption } from "@/shared/ui/EChart";
 
 const NUM_FONT = {
-  fontFamily: '"Bahnschrift","Segoe UI",sans-serif',
+  fontFamily: '"Bahnschrift","DIN Alternate","Segoe UI",sans-serif',
   fontVariantNumeric: "tabular-nums" as const,
 };
 
@@ -22,8 +22,9 @@ function formatNum(value: number | null, digits = 2): string {
 }
 
 function ChangeCell({ pct }: { pct: number | null }) {
-  if (pct === null) return <span style={{ ...NUM_FONT, color: "#c9cdd4" }}>—</span>;
-  const color = pct > 0 ? COLORS.up : pct < 0 ? COLORS.down : COLORS.flat;
+  const { colors } = useTheme();
+  if (pct === null) return <span style={{ ...NUM_FONT, color: colors.flat }}>—</span>;
+  const color = pct > 0 ? colors.up : pct < 0 ? colors.down : colors.flat;
   const arrow = pct > 0 ? "▲" : pct < 0 ? "▼" : "";
   return (
     <span style={{ ...NUM_FONT, fontWeight: 600, color }}>
@@ -33,6 +34,7 @@ function ChangeCell({ pct }: { pct: number | null }) {
 }
 
 function useSecuritiesColumns(withSpark: boolean): ColumnsType<SecuritySeries> {
+  const { colors } = useTheme();
   return useMemo(() => {
     const cols: ColumnsType<SecuritySeries> = [
       { title: "代码", key: "ts_code", render: (_, r) => <span style={NUM_FONT}>{r.tsCode}</span> },
@@ -67,19 +69,19 @@ function useSecuritiesColumns(withSpark: boolean): ColumnsType<SecuritySeries> {
             <EChart
               option={sparkOption(
                 data,
-                r.changePct !== null && r.changePct < 0 ? COLORS.down : COLORS.primary
+                r.changePct !== null && r.changePct < 0 ? colors.down : colors.primary
               )}
               height={34}
               silent
             />
           ) : (
-            <span style={{ color: "#c9cdd4", fontSize: 12 }}>—</span>
+            <span style={{ color: colors.flat, fontSize: 12 }}>—</span>
           );
         },
       });
     }
     return cols;
-  }, [withSpark]);
+  }, [withSpark, colors]);
 }
 
 function SecuritiesTable({
@@ -188,7 +190,7 @@ export function SecuritiesTables({ industryKey }: { industryKey: string }) {
           title="可转债"
           extra={
             <Tooltip title="正股为成分股的在市转债，由 registry 维护（cb_basic 核验），退市自动移除">
-              <span style={{ fontSize: 11.5, color: "#86909c" }}>在市转债 · registry 维护</span>
+              <span style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>在市转债 · registry 维护</span>
             </Tooltip>
           }
         >

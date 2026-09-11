@@ -1,13 +1,14 @@
-import ReactECharts from "echarts-for-react";
 import { Card, Spin, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchDistribution } from "@/shared/api/market";
 import { fetchMarketMoneyflow } from "@/shared/api/marketData";
-import { COLORS } from "@/app/theme";
+import { EChart } from "@/shared/ui/EChart";
+import { useTheme } from "@/app/theme-context";
+import type { ThemePalette } from "@/app/theme";
 
 const STALE_TIME = 5 * 60 * 1000;
 
-/** 桶位中值（与后端 get_distribution 分桶一一对应），驱动强度渐变与涨/平/跌聚合。 */
+/** 桶位中值（与后端 get_distribution 分桶一一对应），驱动强度渐变和涨/平/跌聚合。 */
 const BUCKETS: Array<{ label: string; mid: number; flat?: boolean }> = [
   { label: "跌停", mid: -10 },
   { label: ">-7%", mid: -8.25 },
@@ -29,29 +30,31 @@ export function hexLerp(a: string, b: string, t: number): string {
   return `#${c.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
 
-function bucketColor(mid: number, flat?: boolean): string {
-  if (flat) return "#cbd5e1";
+/** 桶色：从中性面板色插值到红/绿主题色，越极端越深（Stage C 起随明暗主题切换） */
+function bucketColor(mid: number, flat: boolean | undefined, c: ThemePalette): string {
+  if (flat) return c.border;
   const t = Math.min(1, 0.3 + Math.abs(mid) / 10); // 越极端越深
-  return mid > 0 ? hexLerp("#fecaca", "#dc2626", t) : hexLerp("#bbf7d0", "#16a34a", t);
+  return mid > 0 ? hexLerp(c.bgPanel, c.up, t) : hexLerp(c.bgPanel, c.down, t);
 }
 
 /** 涨跌平衡条：红/灰/绿长度按家数比例——一秒读出市场多空比。 */
 function BalanceBar({ up, flat, down }: { up: number; flat: number; down: number }) {
+  const { colors } = useTheme();
   const total = up + flat + down || 1;
   const seg = (n: number) => `${((n / total) * 100).toFixed(2)}%`;
   return (
     <div style={{ marginTop: 10 }}>
       <div style={{ display: "flex", height: 14, borderRadius: 7, overflow: "hidden" }}>
-        <div style={{ width: seg(up), background: COLORS.up }} title={`上涨 ${up} 只`} />
-        <div style={{ width: seg(flat), background: "#cbd5e1" }} title={`平/微涨 ${flat} 只`} />
-        <div style={{ width: seg(down), background: COLORS.down }} title={`下跌 ${down} 只`} />
+        <div style={{ width: seg(up), background: colors.up }} title={`上涨 ${up} 只`} />
+        <div style={{ width: seg(flat), background: colors.border }} title={`平/微涨 ${flat} 只`} />
+        <div style={{ width: seg(down), background: colors.down }} title={`下跌 ${down} 只`} />
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 4 }}>
         <Typography.Text type="secondary">
-          上涨 <b style={{ color: COLORS.up, fontVariantNumeric: "tabular-nums" }}>{up.toLocaleString()}</b> 只
+          上涨 <b style={{ color: colors.up, fontVariantNumeric: "tabular-nums" }}>{up.toLocaleString()}</b> 只
         </Typography.Text>
         <Typography.Text type="secondary">
-          下跌 <b style={{ color: COLORS.down, fontVariantNumeric: "tabular-nums" }}>{down.toLocaleString()}</b> 只
+          下跌 <b style={{ color: colors.down, fontVariantNumeric: "tabular-nums" }}>{down.toLocaleString()}</b> 只
         </Typography.Text>
       </div>
     </div>
@@ -59,6 +62,7 @@ function BalanceBar({ up, flat, down }: { up: number; flat: number; down: number
 }
 
 export function DistributionChart() {
+  const { colors } = useTheme();
   const { data = [], isLoading } = useQuery({
     queryKey: ["market-distribution"],
     queryFn: fetchDistribution,
@@ -104,7 +108,7 @@ export function DistributionChart() {
           const meta = BUCKETS.find((b) => b.label === d.range);
           return {
             value: d.count,
-            itemStyle: { color: bucketColor(meta?.mid ?? 0, meta?.flat), borderRadius: 2 },
+            itemStyle: { color: bucketColor(meta?.mid ?? 0, meta?.flat, colors), borderRadius: 2 },
           };
         }),
         barMaxWidth: 36,
@@ -123,7 +127,7 @@ export function DistributionChart() {
       }
     >
       <Spin spinning={isLoading}>
-        <ReactECharts option={option} style={{ height: 220 }} />
+        <EChart option={option} height={220} />
         <BalanceBar up={up} flat={flat} down={down} />
       </Spin>
     </Card>

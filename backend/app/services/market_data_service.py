@@ -52,6 +52,46 @@ GLOBAL_INDICES: list[dict[str, str]] = [
         "source": "index_daily",
     },
     {
+        "ts_code": "000300.SH",
+        "name": "沪深300",
+        "market": "CN",
+        "region": "asia",
+        "em_secid": "1.000300",
+        "source": "index_daily",
+    },
+    {
+        "ts_code": "000905.SH",
+        "name": "中证500",
+        "market": "CN",
+        "region": "asia",
+        "em_secid": "1.000905",
+        "source": "index_daily",
+    },
+    {
+        "ts_code": "000688.SH",
+        "name": "科创50",
+        "market": "CN",
+        "region": "asia",
+        "em_secid": "1.000688",
+        "source": "index_daily",
+    },
+    {
+        "ts_code": "000016.SH",
+        "name": "上证50",
+        "market": "CN",
+        "region": "asia",
+        "em_secid": "1.000016",
+        "source": "index_daily",
+    },
+    {
+        "ts_code": "899050.BJ",
+        "name": "北证50",
+        "market": "CN",
+        "region": "asia",
+        "em_secid": "0.899050",
+        "source": "index_daily",
+    },
+    {
         "ts_code": "HSI",
         "name": "恒生指数",
         "market": "HK",
@@ -223,7 +263,8 @@ async def get_global_index_cards(cache: CacheClient | None = None) -> list[dict[
     try:
         em = _get_eastmoney()
         snap = await em.fetch_index_snapshot([g["em_secid"] for g in GLOBAL_INDICES])
-        quotes = {q["code"]: q for q in snap if q.get("code")}
+        # 按完整 secid 索引（不可用短码：沪/深同号段会互相覆盖）
+        quotes = {q["secid"]: q for q in snap if q.get("secid")}
     except Exception:
         logger.warning("global index snapshot fetch failed, falling back to EOD", exc_info=True)
 
@@ -241,7 +282,7 @@ async def get_global_index_cards(cache: CacheClient | None = None) -> list[dict[
             except Exception:
                 logger.warning("spark fetch failed for %s", g["ts_code"], exc_info=True)
 
-            q = quotes.get(_em_code(g["em_secid"]))
+            q = quotes.get(g["em_secid"])
             now = datetime.now(_SH).isoformat(timespec="seconds")
             if q and q.get("price") is not None:
                 cards.append(
@@ -285,10 +326,6 @@ async def get_global_index_cards(cache: CacheClient | None = None) -> list[dict[
     if cache is not None and any(c["price"] is not None for c in cards):
         await cache.set(GLOBAL_INDICES_CACHE_KEY, cards, ttl=GLOBAL_INDICES_TTL)
     return cards
-
-
-def _em_code(secid: str) -> str:
-    return secid.split(".", 1)[1]
 
 
 SECTOR_MONEYFLOW_CACHE_KEY = "market:sector-moneyflow:{dimension}"

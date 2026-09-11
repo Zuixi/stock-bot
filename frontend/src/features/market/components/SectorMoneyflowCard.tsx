@@ -1,15 +1,16 @@
 import { Card, Segmented, Spin } from "antd";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import ReactECharts from "echarts-for-react";
 import { fetchSectorMoneyflow, type SectorMoneyflowItem } from "@/shared/api/marketData";
-import { COLORS } from "@/app/theme";
+import { EChart } from "@/shared/ui/EChart";
+import { useTheme } from "@/app/theme-context";
+import type { ThemePalette } from "@/app/theme";
 
 const STALE_TIME = 60 * 1000;
 const REFETCH_INTERVAL = 60 * 1000;
 const TOP_N = 10;
 
-function buildOption(items: SectorMoneyflowItem[]) {
+function buildOption(items: SectorMoneyflowItem[], c: ThemePalette) {
   const top = items.slice(0, TOP_N);
   const names = top.map((i) => i.boardName ?? i.boardCode).reverse();
   const bars = top
@@ -19,7 +20,7 @@ function buildOption(items: SectorMoneyflowItem[]) {
       ratio: i.mainNetRatio,
       leadName: i.leadStockName,
       leadPct: i.leadStockPct,
-      itemStyle: { color: (i.mainNetInflow ?? 0) >= 0 ? COLORS.up : COLORS.down, borderRadius: 2 },
+      itemStyle: { color: (i.mainNetInflow ?? 0) >= 0 ? c.up : c.down, borderRadius: 2 },
     }))
     .reverse();
   return {
@@ -43,19 +44,20 @@ function buildOption(items: SectorMoneyflowItem[]) {
         const d = p?.data;
         if (!d || d.value == null) return "";
         return `<div style="font-weight:600">${p.name}</div>` +
-          `<div>主力净流入：<b style="color:${d.value >= 0 ? COLORS.up : COLORS.down}">${d.value.toFixed(2)}亿</b></div>` +
+          `<div>主力净流入：<b style="color:${d.value >= 0 ? c.up : c.down}">${d.value.toFixed(2)}亿</b></div>` +
           `<div>板块涨跌幅：${d.pct == null ? "—" : `${d.pct.toFixed(2)}%`}</div>` +
           `<div>主力净占比：${d.ratio == null ? "—" : `${d.ratio.toFixed(2)}%`}</div>` +
           `<div>主力净流入最大股：${d.leadName ?? "—"}${d.leadPct == null ? "" : `（${d.leadPct > 0 ? "+" : ""}${d.leadPct.toFixed(2)}%）`}</div>`;
       },
     },
-    xAxis: { type: "value", axisLabel: { formatter: (v: number) => `${v}亿` }, splitLine: { lineStyle: { color: "#f0f0f0" } } },
+    xAxis: { type: "value", axisLabel: { formatter: (v: number) => `${v}亿` } },
     yAxis: { type: "category", data: names, axisLabel: { width: 76, overflow: "truncate" } },
     series: [{ type: "bar", data: bars, barMaxWidth: 14 }],
   };
 }
 
 export function SectorMoneyflowCard() {
+  const { colors } = useTheme();
   const [dimension, setDimension] = useState<"industry" | "concept" | "region">("industry");
   const { data = [], isLoading } = useQuery({
     queryKey: ["sector-moneyflow", dimension],
@@ -82,9 +84,9 @@ export function SectorMoneyflowCard() {
     >
       <Spin spinning={isLoading}>
         {data.length > 0 ? (
-          <ReactECharts option={buildOption(data)} notMerge lazyUpdate style={{ height: 260 }} />
+          <EChart option={buildOption(data, colors)} height={260} />
         ) : (
-          <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: COLORS.flat }}>
+          <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: colors.flat }}>
             暂无资金流数据（交易日盘中自动更新）
           </div>
         )}

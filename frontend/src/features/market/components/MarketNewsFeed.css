@@ -1,0 +1,20 @@
+/* 首页快讯区：公告 Tabs + 底部「查看全部」 */
+
+.market-news-feed__foot {
+  text-align: right;
+  margin-top: 4px;
+}
+
+.market-news-feed__foot a {
+  font-size: 12.5px;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.market-news-feed__foot a:hover {
+  text-decoration: underline;
+}
+
+.market-news-feed .ant-tabs-nav {
+  margin-bottom: 4px;
+}

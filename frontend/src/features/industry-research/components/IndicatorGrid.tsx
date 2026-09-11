@@ -1,4 +1,4 @@
-import { COLORS } from "@/app/theme";
+import { useTheme } from "@/app/theme-context";
 import type { MetricLatest } from "@/shared/api/industryResearch";
 
 interface Props {
@@ -13,36 +13,37 @@ function formatValue(value: number): string {
 
 /** 核心指标速览网格（两列紧凑瓦片），预警标签由后端阈值计算下发 */
 export function IndicatorGrid({ metrics }: Props) {
+  const { colors } = useTheme();
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
       {metrics.map((m) => (
         <div
           key={m.metricKey}
           style={{
-            background: "#fafbfc",
-            border: "1px solid #f0f2f5",
+            background: "var(--bg-panel)",
+            border: "1px solid var(--border)",
             borderRadius: 8,
             padding: "9px 12px",
             transition: "border-color .2s",
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: "#4e5969" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: "var(--text-secondary)" }}>
             <span>{m.name}</span>
-            {m.freq && <span style={{ fontSize: 10.5, color: "#86909c" }}>{freqLabel(m.freq)}</span>}
+            {m.freq && <span style={{ fontSize: 10.5, color: "var(--text-secondary)" }}>{freqLabel(m.freq)}</span>}
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginTop: 3 }}>
             <span
               style={{
-                fontFamily: '"Bahnschrift","Segoe UI",sans-serif',
+                fontFamily: '"Bahnschrift","DIN Alternate","Segoe UI",sans-serif',
                 fontWeight: 700,
                 fontSize: 18,
                 fontVariantNumeric: "tabular-nums",
-                color: m.value !== null ? undefined : "#c9cdd4",
+                color: m.value !== null ? "var(--text-primary)" : colors.flat,
               }}
             >
               {m.value !== null ? formatValue(m.value) : "—"}
             </span>
-            {m.unit && <span style={{ fontSize: 11, color: "#86909c" }}>{m.unit}</span>}
+            {m.unit && <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>{m.unit}</span>}
             <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
               {m.warn && (
                 <span
@@ -62,10 +63,10 @@ export function IndicatorGrid({ metrics }: Props) {
               {m.delta?.pct !== null && m.delta && m.delta.direction !== "flat" && (
                 <span
                   style={{
-                    fontFamily: '"Bahnschrift","Segoe UI",sans-serif',
+                    fontFamily: '"Bahnschrift","DIN Alternate","Segoe UI",sans-serif',
                     fontWeight: 600,
                     fontSize: 12,
-                    color: m.delta.direction === "up" ? COLORS.up : COLORS.down,
+                    color: m.delta.direction === "up" ? colors.up : colors.down,
                   }}
                 >
                   {m.delta.direction === "up" ? "▲" : "▼"}

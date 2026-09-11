@@ -1,4 +1,4 @@
-import { Col, Row, Skeleton, Tabs } from "antd";
+import { Card, Col, Row, Skeleton, Tabs } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchGlobalIndices } from "@/shared/api/marketData";
 import { GlobalIndexCardView } from "./GlobalIndexCardView";
@@ -41,5 +41,9 @@ export function GlobalMarketBoard() {
     ),
   }));
 
-  return <Tabs defaultActiveKey="asia" items={items} />;
+  return (
+    <Card title="全球指数" size="small">
+      <Tabs defaultActiveKey="asia" items={items} />
+    </Card>
+  );
 }

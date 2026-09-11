@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { EChart } from "@/shared/ui/EChart";
-import { COLORS } from "@/app/theme";
+import { useTheme } from "@/app/theme-context";
 import type { TrendSeries } from "@/shared/api/industryResearch";
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
 
 /** 生猪价格 vs 行业成本（月度），tooltip 折算头均盈亏 */
 export function PriceCostChart({ trend, height = 296 }: Props) {
+  const { colors } = useTheme();
   const option = useMemo(() => {
     if (!trend) return null;
     const labels = Object.keys(trend.series);
@@ -27,13 +28,13 @@ export function PriceCostChart({ trend, height = 296 }: Props) {
         itemWidth: 14,
         itemHeight: 2.5,
         icon: "rect",
-        textStyle: { color: "#4e5969", fontSize: 12 },
+        textStyle: { color: colors.textSecondary, fontSize: 12 },
       },
       tooltip: {
         trigger: "axis",
-        backgroundColor: "#fff",
-        borderColor: "#e8ecf1",
-        textStyle: { color: "#1f2329", fontSize: 12.5 },
+        backgroundColor: colors.bgElevated,
+        borderColor: colors.border,
+        textStyle: { color: colors.textPrimary, fontSize: 12.5 },
         formatter: (params: unknown) => {
           const list = params as { axisValue: string; value: number | null; seriesName: string; color: string }[];
           const price = list[0]?.value;
@@ -42,7 +43,7 @@ export function PriceCostChart({ trend, height = 296 }: Props) {
           const diffLine =
             diff === null
               ? ""
-              : `<br/><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${diff >= 0 ? COLORS.up : COLORS.down};margin-right:6px"></span>头均盈亏 ≈ <b style="color:${diff >= 0 ? COLORS.up : COLORS.down}">${diff >= 0 ? "+" : ""}${(diff * 115).toFixed(0)}</b> 元/头`;
+              : `<br/><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${diff >= 0 ? colors.up : colors.down};margin-right:6px"></span>头均盈亏 ≈ <b style="color:${diff >= 0 ? colors.up : colors.down}">${diff >= 0 ? "+" : ""}${(diff * 115).toFixed(0)}</b> 元/头`;
           return (
             `<b>${list[0]?.axisValue ?? ""}</b>` +
             list
@@ -61,15 +62,14 @@ export function PriceCostChart({ trend, height = 296 }: Props) {
         data: trend.periods,
         axisLine: { show: false },
         axisTick: { show: false },
-        axisLabel: { color: "#86909c", fontSize: 11, interval: 5 },
+        axisLabel: { fontSize: 11, interval: 5 },
       },
       yAxis: {
         type: "value",
         scale: true,
         axisLine: { show: false },
         axisTick: { show: false },
-        axisLabel: { color: "#86909c", fontSize: 11 },
-        splitLine: { lineStyle: { color: "#f0f2f5" } },
+        axisLabel: { fontSize: 11 },
       },
       series: [
         {
@@ -78,8 +78,8 @@ export function PriceCostChart({ trend, height = 296 }: Props) {
           smooth: 0.3,
           symbol: "none",
           data: prices,
-          lineStyle: { width: 2.5, color: COLORS.primary },
-          itemStyle: { color: COLORS.primary },
+          lineStyle: { width: 2.5, color: colors.primary },
+          itemStyle: { color: colors.primary },
           areaStyle: {
             color: {
               type: "linear",
@@ -88,8 +88,8 @@ export function PriceCostChart({ trend, height = 296 }: Props) {
               x2: 0,
               y2: 1,
               colorStops: [
-                { offset: 0, color: "rgba(22,119,255,.10)" },
-                { offset: 1, color: "rgba(22,119,255,0)" },
+                { offset: 0, color: `${colors.primary}1a` },
+                { offset: 1, color: `${colors.primary}00` },
               ],
             },
           },
@@ -97,7 +97,7 @@ export function PriceCostChart({ trend, height = 296 }: Props) {
             data: [{ type: "min", name: "周期低点" }],
             symbol: "pin",
             symbolSize: 44,
-            itemStyle: { color: COLORS.up },
+            itemStyle: { color: colors.up },
             label: { color: "#fff", fontSize: 10, formatter: (p: { value: number }) => p.value?.toFixed(1) },
           },
         },
@@ -112,7 +112,7 @@ export function PriceCostChart({ trend, height = 296 }: Props) {
         },
       ],
     };
-  }, [trend]);
+  }, [trend, colors]);
 
   if (!option) return null;
   return <EChart option={option} height={height} />;

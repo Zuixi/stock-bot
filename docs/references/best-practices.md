@@ -64,6 +64,15 @@
 - pg `ON CONFLICT` 不处理同一 INSERT 语句内的自冲突（Postgres 约束检查逐行进行，同批两行撞同一唯一键直接报错）——无稳定业务键的表（如大宗交易 date+code+buyer+seller+price+volume 去重键）采集时先在 Python 端按约束键去重（保留末次）再 DO NOTHING；多源共存产生派生时先按 registry 源优先级逐 period 去重，否则同批重复键直接 CardinalityViolation 使整个 ingest 失败；映射层截断超长字符串列（如 reason String(160)）优先于让 DB 报错，比 DDL 放宽更可控。
 - 手写 `UPDATE ... FROM (VALUES ...)` 派生表 SQL 时，未定型的日期字符串字面量会被 PostgreSQL 推断为 text 列，与实体表 date 列比较直接抛 `operator does not exist: date = text`——VALUES 行内必须显式 `'...'::date` 转型；此类 SQL 类型错误纯函数单测覆盖不到，接线任务必须以实机验证（docker 重建 + curl + psql 计数）闭环。
 - UPSERT 覆盖"懒回补型"可空字段（如 adj_factor）时 SET 子句必须 `COALESCE(excluded.x, table.x)` 防 NULL 重灌抹掉历史回补值；回补的幂等判定口径必须与读取端可用性口径一致（按最新交易日行而非"任一行非空"），并为真实外呼加短 TTL 冷却 key 防数据未发布期间高频重拉——三者缺任一都会形成"不可用但永不修复"的跨日死锁。
+- 核实表分区状态别照抄 catalog 列名：PostgreSQL 10+ 的 `pg_partitioned_table` 主键列是 `partrelid`（不是 `relid`），更稳的判据是 `pg_class.relkind = 'p'`；列名写错会抛 `column does not exist` 而非返回 0/1，容易把"查询失败"静默读成"未分区"——分区与否必须由实际 catalog 查询闭环，不能采信模型文件里"已外部分区"的注释。
+- 自研 SQL seed 解析器（split-by-semicolon）的经典死法：「注释头 + 巨型 INSERT」脚本按分号切块后首块以 `--` 开头，"跳过注释块"逻辑会连 INSERT 一起吞掉——导入恒 0 行、不报错，只有核对目标表行数或读日志才能发现。防御 = 先剥离注释行再切分（纯函数化）+ 对畸形样例写解析单测；seed 导入类代码必须"导入后核对行数"而非只看退出码。另注意排障时先核对诊断前提：`grep -c` 零匹配（退出码 1）容易被误读成"已修复"。
+- 公开可达端点的昂贵排序/聚合路径必须有服务端缓存（客户端 staleTime 不算防护），且**缓存 key 必须包含所有改变结果集的过滤维度**（exchange/category/keyword/排序/分页）——漏掉一个维度会让一次查询的行静默服务给另一组筛选（缓存污染），这类缺陷不报错、只在特定筛选组合下返回错数据；同时要核实端点是否真的把 cache 依赖传进了 service（`cache=None` 断言会让缓存永不生效，等于没做）。
+- 按业务键（如 stock_id + trade_date）批量 UPDATE 的三种写法要选对：ORM `update(Model)` 带额外 WHERE 会走 ORM bulk-update 分支并要求参数含主键，executemany 在 asyncpg 下 `rowcount` 返回 -1。正确写法是 `sa.Values(...).data(rows)` + Core table 的 `UPDATE ... FROM (VALUES ...)` 单语句——rowcount 准确、无 N 次往返，也避开 ORM 身份映射同步限制。
+- 涨跌幅/前收这类含公司行为的派生字段必须用数据源原生值（按 trade_date 重拉权威源），不得在库内用 `LAG(close)` 现算：除权日的参考前收是除权后价，窗口函数恰在除权日算错且无声。补历史数据要"重拉权威源 + 逐行对拍"，并把该理由写进函数 docstring 防后人"优化"。
+- 给行情表新增字段时，落地点至少四处（模型、每个 ORM 构造点、repo 的 INSERT values、`on_conflict_do_update` 的 `set_`），漏任一处都不报错——INSERT 侧静默丢列、冲突侧静默留 NULL。用"mock 捕获落库对象 + 断言编译后 SQL 含 `excluded.<col>`"的单测锁死，比实机抽查行数更早暴露。
+- SQLAlchemy `text()` 的绑定参数只能承载**值**，列名与排序方向（`ORDER BY :col :dir`）无法参数化——排序维度必须从文件内硬编码白名单 f-string 插值，并保证任何用户输入都在到达字符串前被白名单校验拦下（校验即天然防注入）；同时 Postgres `ORDER BY x DESC` 默认 NULLS FIRST，可空排序列不显式加 `IS NOT NULL` 会让"涨幅榜"以 NULL 行领跑，榜单类查询必须在 SQL 内过滤坏行，而不是留给前端补。
+- 字段量纲注释必须与**存储单位**逐字一致：TuShare `amount` 存的是千元、`daily_basic` 市值是万元，注释写错单位比不写更危险——下游 mapper 会照错注释再乘错一档（10³ 级偏差），而透传单测只断言"原值透传"抓不到；不确定时标注来源口径（如"TuShare 原生千元，消费端 ×1000"）而非猜一个。
+- 行业聚合的**聚合对象必须是"当日真有行情的标的"而非静态成员表**：`sw_industry_members` 上卷 L3→L2→L1 后必须 INNER JOIN 当日 `daily_quotes` 并 `pct_chg IS NOT NULL` 再 `count`/`avg`，否则停牌/无行情成员会稀释 `avg_pct_chg` 并虚增 `member_count`（`up_count`+`down_count` 还只覆盖有涨跌的，平盘成员计入 `member_count` 属正确）；join 键先实测覆盖率再定（本次 `members.symbol → stocks.symbol` = 95.4%，高于计划的 >90% 阈值），别照抄 brief 里未验证的键名；若 `count(DISTINCT symbol) == count(*)` 则无扇出，可放心聚合。
 
 ## 三、Docker 与部署
 
@@ -113,6 +122,15 @@
 - 市场情绪类可视化的三件套是直方图+平衡条+参与度（成交额）：平衡条把千位数量级压成长度比例供前注意感知，连续梯度色阶（0%→灰、极端→深色）优于离散档位——但必须为近零浅色块切换深色文字保对比度。
 - 计划 brief 给定的表格 rowKey 组合键先对活端点跑唯一性校验再落码：Tushare 明细类数据（解禁一股多持有人、大宗同日同股同价同买方多笔）在默认键上必撞 React duplicate key，复合键以"业务键 + 区分度最高且前端已展示的字段"补位（如 +holderName/+volume）而非引入未展示字段。
 - 把为全市场设计的端点复用到个股维度时，客户端 filter 的覆盖边界要在 UI 上写明而非只靠空态：龙虎榜接口无 symbol 参数，个股卡拉 limit=50 最新日再前端过滤，本股不在当日榜即显示"暂无上榜记录"，footer 同步注明"全市场最新日筛选本股"，避免用户把覆盖范围导致的空态误读为数据缺失。
+- 公开宣传页（Landing）不得被后端状态拖垮：所有公开 API 消费都要「加载骨架 + 失败静默降级占位文案」双兜底，且登录态 CTA 在 isAuthReady 之前隐藏文字（保留按钮位），防止错标签闪现与布局跳动；登录态只读复用 auth store selector，不改 auth 模块。
+- 页面级 Tab 化重组时，既有 ECharts 卡从裸 ReactECharts 迁到共享 EChart 封装要连「onEvents 透传」一起补齐（treemap 点击导航依赖它），且 option 构建纯函数必须把 colors 收为参数而非闭包静态色——否则明暗切换后图表仍是旧主题色；渐变/色阶端点从主题色推导（bgPanel→up/down）后，近零浅块的深色文字阈值类（nameDark）改挂 textPrimary/textSecondary 即可两种模式自然成立，无需按模式分支。
+- 数据缺失的表达必须全组件统一：同一张卡片里价格缺失显示 `--`、涨跌幅却因 `?? 0` 兜底显示 `0.00%`，会被读成"平盘"——缺失与零值语义不同，任何指标渲染都要先判 null 再决定占位符；此类缺陷用 E2E mock 一条 null 数据即可稳定复现（先红后绿）。
+- 分桶统计的两侧集合必须对称且穷尽：上涨桶漏掉 `0~1%`、下跌桶含 `0~-1%` 会让「上涨家数」静默少一桶（实测 954 vs 1903），且不会报错——用 E2E 断言「逐桶家数求和 == 上涨 + 下跌 == 全部分桶总和」把漏桶钉死；公开首页多区块重组时每个区块各自包 `SectionCard` 并各自降级（骨架/占位文案），用「一个端点 abort + 邻区正常」的用例锁定单点失败不牵连邻区。
+- 按可空字段排序的榜单接口，服务端排序键若把 null 排在前面（`(is None, value)` 再 `reverse=True` 时 None 反成首位），首屏会被无数据行霸占——前端消费榜单类接口应按当前排序维度过滤不可排序行（多取一批再截断 top-N），且把 `--` 缺失值契约的 E2E 挪到不受该过滤影响的维度上断言，避免「修了置顶」却「删了契约覆盖」；空数组必须走不可用占位而非渲染成 0/0。
+- UI 上的**口径标注必须与实际数据源同源联动**：数据源切换/回退时标注要一起切（申万一级请求失败回退证监会数据，就把标签同步改回「行业口径：证监会」），绝不静默错标；`retry: 0` 让回退即时而非指数退避期间口径悬空。反面是**客户端 workaround 要写清存在条件、并在服务端修好后退役**：服务端 SQL 已 `pct_chg IS NOT NULL` 后，前端重复的 null 过滤层应删除（只保留真缺失渲染 `--` 的展示契约），临时 API 封装须 grep 零引用再删——但删除会改变 E2E 的请求锚点（首页不再调 `/exchanges/*`），同步把「防假绿」断言换成新端点，别让旧断言在删除后仍靠巧合通过。
+- 共享行组件的「缺失值占位」要显式开关而非默认填充：`DataRow` 有纯涨跌幅行（不传 `value`，省略数值槽才是对的），若把「`value===undefined` 一律渲染 `--`」写死进组件，这些行会凭空多出一个 `--`；正确做法是加可选 `valuePlaceholder` 让数值消费方显式 opt-in，同时**数值槽与单位一起判存在**（`hasValue && unit`），避免 `--` 后跟悬空的「亿元」。
+- 公开页面每个「登录入口」都要按会话态二选一，别与登录态感知的 CTA 各写一套：无条件渲染的「登录」按钮会和已登录 CTA「进入工作台」并存，而只断言 CTA 文案的 E2E 永远发现不了——补一条「已登录不得出现登录按钮」的断言把这类并存钉死；同理，反查 `northbound_daily` 零行这类「已知已死」的数据域，公开文案（覆盖矩阵/统计带/来源署名）必须同步降级为「规划中」，不能只在功能组件里移除而留文案继续宣称已覆盖。
+- 同一份「优先码 + 补位 + slice」算法被两处复制时，抽成共享 helper 并把两侧的差异（补位过滤条件）作为入参，而不是让 helper 猜；`as_of`/刷新节奏等口径文案要按数据源分家（实时指数条写「每 60 秒刷新」，T+1 分布只能写「当日收盘口径」），固定 `waitForTimeout` 的 E2E 换成 network-idle + 稳定 URL 断言，才能挡住更慢的重定向。
 
 ## 五、测试与 E2E
 
@@ -124,6 +142,10 @@
 - Worker 单测要脱离真库时，把 session 工厂暴露为模块级变量供 monkeypatch 成假 async context manager，且 NullSession 必须带 `async def commit()`——service 被 patch 后虽不触库，成功路径的 commit 照常执行，漏了会在断言前炸 AttributeError。
 - 性能基准与单测必须 marker 隔离（`bench`）且**基线契约显式化**：合成输入的尺寸/seed 写成测试常量并注释"改动即失基线"，门禁按 median 相对退化而非绝对 ms；微基准（<1ms）rounds 多 median 稳，**大样本基准（>10ms/次）单次抖动可达 7-8%**——控制样本量让各基准处于同一量级（~1-5ms）比调阈值更治本；管道里验证 exit code 要看 `PIPESTATUS`，`cmd | tail` 后 `$?` 是 tail 的。
 - **wall-clock 性能基线绑定硬件，入库基线不能跨机器门禁**：本机生成的 baseline.json 在 CI runner 上全部基准慢 30-50%，相对阈值门禁必假红。CI 硬门禁的标准做法是**同 runner A/B**（同一 job 内先 checkout base commit 跑一遍存临时基线、再 checkout head 对比），入库 baseline.json 只作本机开发参考。配套两个坑：Windows 侧创建的脚本无执行位（git mode 644），Linux CI 直接执行报 exit 126，须经解释器调用；A/B 产物写 $RUNNER_TEMP 而非 tracked 的基线文件，否则 PR 改基线时 `git checkout` 拒切。
+- 测试模块里的跨目录资源查找（fixture 路径、数据文件）**不能在 import 期求值**：pytest 为读模块的 `pytestmark` 会先 import，再应用 `-m` 反选；若模块级上调 `Path(...)` 且目标不存在就抛异常，纯后端/CI 环境里默认 `uv run pytest` 会变成 collection ERROR 而非干净反选。把解析放进 test 或惰性 helper，缺失时 `pytest.skip("...not present")`——同类跨仓依赖（前端 fixture 等）必须允许"后端独立可收集"。抽共享 helper 时也要逐档对照被替换的旧实现，别在"等价重构"里静默丢掉边界分支（`≥1e12 → 万亿` 档）。
+- 免登录公开页的「零 401」与「单源降级」要用真断言锁定，不能只做冒烟：收集全链路响应时须显式豁免登录态探测端点（匿名 `/auth/session` 返回 401 是"未登录"语义而非越权，与数据接口 401 性质不同），同时断言**确实发出了行情请求**以防"空集合平凡通过"的假绿；降级侧每块独立 query + 独立空/错态，abort 单个源后除故障列自身占位外，同卡另一列与所有邻区都必须仍可见。
+- 前端 e2e 手写 mock 载荷只能锁住前端自己的假设：后端字段改名时后端单测/`tsc`/mock e2e 会全绿，而真机上页面渲染 `undefined`/`--`。解法是**mock 与后端契约同源**——把容器内实抓的真实响应落成 committed fixture，前端 mock 读它、后端再加一条读同一批 fixture 的 `@pytest.mark.e2e` 契约测试断言实际发出的 key 集（顶层 + 条目）与之完全一致，改名即转红；注意这仍**不证明活链路**（dev 代理指向旧镜像时 mock 是必需的），活链路验证要等分支部署，须如实披露。配套：同一模块级 Redis 池在 function-scoped event loop 下跨 test 复用会报 "attached to a different loop"，autouse dispose fixture 除 `engine.dispose()` 外还要 `await close_redis_pool()`。
+- 多个 `@pytest.mark.e2e` 用例共用模块级 SQLAlchemy async engine 时，pytest-asyncio 的 function-scoped 事件循环会让上一用例遗留的池化连接在新循环里被复用，抛 `RuntimeError: Event loop is closed`（表现为随机某个用例失败，非断言失败）；在 autouse fixture 里 `await engine.dispose()` 按用例收尾即可，不必改全局 loop scope。
 
 ## 六、架构与分层
 
@@ -135,6 +157,8 @@
 - 内容型功能（知识库/图谱/原则）应落"迁移内 seed + JSONB 内容表 + 读路径装配"而非硬编码前端：内容单点维护在 seed 模块供迁移与单测共用，前端组件零行业知识，Playwright 断言锚定 `.ant-card-head-title` 一类标题容器以规避徽章同文案混淆。
 - 多分层微服务认证必须把 Gateway 当作性能/路由层而不是唯一安全边界：业务服务仍需独立校验 JWT 的签名、iss、aud、exp/nbf 并执行对象/属性/功能级授权；服务间另用 workload identity（优先 mTLS）鉴别调用方，禁止仅凭内网、Docker network 或可伪造的 `X-User-*` 请求头建立信任。用户 access token 只在其目标资源服务链路内转发，跨服务使用 audience 限定、scope 下缩的 token exchange；异步 MQ 消息不携带 bearer token，改由服务身份认证并在任务记录中保存最小化 actor/audit 元数据。
 - 小型 Docker Compose 系统选 API Gateway 时，应先按当前的服务发现、认证与限流需求收敛运维面：优先选择能直接读取容器元数据且无需额外控制面依赖的方案，同时让 FastAPI 保留 JWT 签名、iss/aud/exp/nbf 与对象级授权校验，避免把网关误当成唯一安全边界。
+- 同一份数据出现在产品多个页面时必须**单一同源**（同一 API/同一 service）：landing 曾走旧的 `/market/indices`（读 index_dailies 盘后日线）而市场页走 `/market/global-indices`（东财实时快照），"每 60 秒自动刷新"轮询的却是盘后库表，EOD vs realtime 口径差被用户当作数据错误上报。新增展示面时先审现有链路能否复用，口径差异要在 UI 上如实标注（如"盘后为准"），"实时"文案不得配非实时数据源；同源化时把两端测试断言（E2E mock 端点/载荷形状、单测注册表条数）一起同步，注册表扩容类断言优先锁"集合"而非只锁"个数"。
+- 跨端点共享的取值（如"数据截至日"）应收敛为**单一实现**（`max(trade_date)` 只写一处，其余调用方薄委托），但缓存是调用方各自选择的路径而非实现本身：不要为了"统一"给所有调用方强加缓存，也不要让薄委托顺手改掉老调用方的行为。空源降级责任在**使用层**：需要兜底语义的端点捕获实现抛出的异常并返回自洽空载荷（公开首页块绝不能因空库 500），只有确需该值的调用方才让异常穿透。把 `datetime.date` 放进 JSON 序列化的 `CacheClient` 时必须存 `isoformat()` 字符串并在读出侧 `date.fromisoformat` 兜底——直接存 `date` 依赖 `json.dumps(default=str)` 的隐式转换，读回是 str 而类型标注说 date，迟早出隐性类型错。
 
 ## 七、指标建模与规则引擎
 
@@ -162,6 +186,7 @@
 - 清理废弃 mock 文件前应先全局检索引用并在删除后执行一次完整构建回归，避免隐式动态依赖遗漏；类似的，实施计划 brief 末尾自带的防未用报错脚手架（hidden span + 死 import）按其收尾指令删除即可，落库前对"这段代码存在的理由"过一遍能直接清掉这类残留。
 - 手写 Alembic 迁移的 revision ID 在多分支并行开发时是全局命名空间——先 `git log --all -S "<revision>"` 查重再落盘，活库 alembic_version 落在其他分支的 head 上时用临时隔离库验证迁移链而非硬闯活库。
 - 计划 brief 说"创建"某文件前先确认它是否已存在：cninfo_client.py 已有 webapi 行情客户端（CnInfoClient/get_cninfo_client），追加公告检索客户端时新类名 + 新工厂与既有命名并存，沿用 brief 的同名工厂会静默 shadow 旧客户端把行情/指数采集换成公告协议；brief 里的"伪代码调用"以既有代码真实签名为准改写而非照抄（task_service 实际是 `trigger_*(db, req)` 包 `_dispatch_task(db, task_type, queue_key, payload)`，brief 草稿的 `dispatch_task(task_type=,routing_key=,payload=)` 并不存在）。
+- 决策类文档落字必须"实测证据 + 删除范围 + 替代定位"三件套：计划里承诺的目标（如 SEO/静态可索引落地路径）可能与已上线配置（网关整站 `X-Robots-Tag: noindex`）直接冲突，此时先跑黑盒探针实测配置并以事实为准，再把决策连同原始 header 输出、被删除的目标清单、以及易被误删的相邻项定位（页脚署名是给用户的合规署名而非 SEO）一并写死——否则后人会按旧计划文本隐式复活已删目标，或把非 SEO 项当 SEO 一起删掉。
 - 新产品模块（如行业投研工作台）落地前，先用单文件 HTML + CDN ECharts 做高保真交互原型验证信息架构与布局（结论先行、证据下钻、数据源权威性分级徽章），再迁移为 React 组件，可大幅降低前端返工成本；原型视觉应贴近真实技术栈（antd v5）而非另起炉灶。
 
 ---

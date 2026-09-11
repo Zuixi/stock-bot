@@ -1,0 +1,119 @@
+/*
+ * 数据覆盖矩阵（Stage C 自 landing 提取的共享版）
+ * landing 第 6 区块与 /market 页脚共用；颜色一律走 CSS 变量随明暗主题切换。
+ */
+
+.dc-stats-band {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 40px;
+}
+
+.dc-stat {
+  text-align: center;
+  padding: 20px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.dc-stat-num {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.dc-stat-label {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.dc-table {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.dc-row {
+  display: grid;
+  grid-template-columns: 1.1fr 2.2fr 0.8fr 1fr 0.5fr;
+  gap: 12px;
+  padding: 11px 20px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  align-items: center;
+}
+
+.dc-row:first-child {
+  border-top: none;
+}
+
+.dc-row--head {
+  background: var(--bg-elevated);
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.dc-domain {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dc-cell {
+  color: var(--text-secondary);
+}
+
+.dc-free-badge {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--down);
+  border: 1px solid var(--down);
+  border-radius: 4px;
+  padding: 0 8px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+/* 规划中的数据域：无源可溯，不署名来源也不标「免费」（中性灰，区别于已上线的绿色） */
+.dc-planned-badge {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 8px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+@media (max-width: 992px) {
+  .dc-stats-band {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .dc-stats-band {
+    grid-template-columns: 1fr;
+  }
+
+  /* 数据矩阵在窄屏改为紧凑两段式：域名单独一行，其余信息折行 */
+  .dc-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .dc-row--head {
+    display: none;
+  }
+
+  .dc-domain {
+    grid-column: 1 / -1;
+  }
+}

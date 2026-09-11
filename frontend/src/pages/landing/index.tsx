@@ -1,0 +1,65 @@
+import "./landing.css";
+import { SectionCard } from "@/shared/ui";
+import { RankingMatrix } from "@/features/market/components/RankingMatrix";
+import { SectorFlow } from "@/features/market/components/SectorFlow";
+import { MoneySentiment } from "@/features/market/components/MoneySentiment";
+import { MarketNewsFeed } from "@/features/market/components/MarketNewsFeed";
+import { LandingNav } from "./sections/LandingNav";
+import { CompactHero } from "./sections/CompactHero";
+import { MarketPulse } from "./sections/MarketPulse";
+import { ValueProps } from "./sections/ValueProps";
+import { ProductShowcase } from "./sections/ProductShowcase";
+import { DataCoverage } from "./sections/DataCoverage";
+import { IndustryGrid } from "./sections/IndustryGrid";
+import { AccountPerks } from "./sections/AccountPerks";
+import { BottomCTA } from "./sections/BottomCTA";
+import { LandingFooter } from "./sections/LandingFooter";
+
+/**
+ * StockBot 公开行情台首页（免登录，独立布局不套 MainLayout，契约 §2/§3）。
+ *
+ * 产品决策「免登录行情为主」：区块序列为紧凑 Hero → 脉搏/榜单/板块/资金/日历/快讯，
+ * 营销区（ValueProps/ProductShowcase）压缩到行情台之后，数据覆盖与行业网格留在尾部。
+ * 行情区块逐个 Task 填充，未填充者以显式文案独立降级（不用永久骨架屏——无文案的
+ * 持续 shimmer 会被读成页面卡死）。
+ */
+export default function LandingPage() {
+  return (
+    <div className="landing-root">
+      <LandingNav />
+      <main>
+        <CompactHero />
+
+        {/* 行情台主体 —— 全部公开。区块间独立降级，单接口失败不牵连邻区。 */}
+        <section className="landing-market">
+          <div className="landing-container landing-market-inner">
+            <SectionCard id="pulse" title="实时市场脉搏" moreHref="/market" moreText="进入行情页">
+              <MarketPulse />
+            </SectionCard>
+            <RankingMatrix />
+            <SectionCard id="sectors" title="行业与资金" moreHref="/market/category">
+              <SectorFlow />
+            </SectionCard>
+            <SectionCard id="money" title="资金与情绪">
+              <MoneySentiment />
+            </SectionCard>
+            <SectionCard id="calendar" title="日历">
+              <div className="landing-placeholder">日历即将上线</div>
+            </SectionCard>
+            <SectionCard id="news" title="快讯">
+              <MarketNewsFeed />
+            </SectionCard>
+          </div>
+        </section>
+
+        <ValueProps />
+        <ProductShowcase />
+        <DataCoverage />
+        <IndustryGrid />
+        <AccountPerks />
+        <BottomCTA />
+      </main>
+      <LandingFooter />
+    </div>
+  );
+}

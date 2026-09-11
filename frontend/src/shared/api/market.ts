@@ -31,6 +31,36 @@ export interface HotBoardItem {
 
 export type HotBoardCategory = "industry" | "concept" | "region";
 
+// ---------------------------------------------------------------------------
+// 公开榜单（Task 2.7，切到专用 /market/rankings 端点）
+// ---------------------------------------------------------------------------
+
+export type RankingType = "gainers" | "losers" | "amount" | "turnover_rate" | "volume";
+
+export interface RankingItem {
+  symbol: string;
+  name: string;
+  exchange?: string | null;
+  close?: number | null;
+  pct_chg?: number | null;
+  /** 成交额，TuShare 原生 千元（与 StockEnrichedOut.amount 同口径，消费端 ×1000 → 元）。 */
+  amount?: number | null;
+  volume?: number | null;
+  turnover_rate?: number | null;
+  total_mv?: number | null;
+}
+
+export interface RankingResponse {
+  as_of: string;
+  is_latest_trading_day: boolean;
+  type: RankingType;
+  items: RankingItem[];
+}
+
+export function fetchRankings(type: RankingType, limit = 10): Promise<RankingResponse> {
+  return apiGet<RankingResponse>(`/api/v1/market/rankings?type=${type}&limit=${limit}`);
+}
+
 interface IndexKlineResponse {
   ts_code: string;
   name: string;
@@ -55,6 +85,35 @@ export function fetchDistribution(): Promise<DistributionItem[]> {
 
 export function fetchSectors(): Promise<SectorSummary[]> {
   return apiGet<SectorSummary[]>("/api/v1/market/sectors");
+}
+
+// ---------------------------------------------------------------------------
+// 申万一级行业行情聚合（Task 3.1 / 3.2）
+// ---------------------------------------------------------------------------
+
+export interface SwPerformanceItem {
+  code: string;
+  name: string;
+  /** 当日有行情（pct_chg 非空）的成员数。 */
+  member_count: number;
+  avg_pct_chg: number;
+  /**
+   * 成交额，TuShare 原生 千元（消费端 ×1000 → 元，与 rankings/StockEnrichedOut 同口径）。
+   * 可空：`sum(amount)` 在该组报价成员均无成交额时为 NULL，后端刻意保留 `float | None`
+   * 以避免匿名端点触发 Pydantic 500（见 backend/app/schemas/sw_performance.py）。UI 渲染 `--`。
+   */
+  total_amount: number | null;
+  up_count: number;
+  down_count: number;
+}
+
+export interface SwPerformanceResponse {
+  as_of: string;
+  items: SwPerformanceItem[];
+}
+
+export function fetchSwPerformance(): Promise<SwPerformanceResponse> {
+  return apiGet<SwPerformanceResponse>("/api/v1/market/sw-industry/performance?limit=31");
 }
 
 export function fetchCapitalFlow(): Promise<CapitalFlowItem[]> {

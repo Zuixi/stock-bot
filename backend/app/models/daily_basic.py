@@ -24,6 +24,9 @@ class DailyBasicIndicator(Base):
         ),
         Index("idx_daily_basic_stock_date", "stock_id", "trade_date"),
         Index("idx_daily_basic_trade_date", "trade_date"),
+        # Created by migration cf4b8e317fe5; mirrored here so autogenerate does
+        # not emit drop_index for it.
+        Index("idx_daily_basic_date_turnover", "trade_date", "turnover_rate"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

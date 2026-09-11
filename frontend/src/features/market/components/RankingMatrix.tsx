@@ -1,0 +1,97 @@
+import { useState } from "react";
+import { Empty, Skeleton, Tabs } from "antd";
+import { useQuery } from "@tanstack/react-query";
+import { DataRow, SectionCard } from "@/shared/ui";
+import { fetchRankings } from "@/shared/api/market";
+import type { RankingType } from "@/shared/api/market";
+import { fmtAmountParts, formatCnDate } from "./format";
+
+interface RankingTab {
+  key: RankingType;
+  label: string;
+}
+
+const TABS: RankingTab[] = [
+  { key: "gainers", label: "涨幅榜" },
+  { key: "losers", label: "跌幅榜" },
+  { key: "amount", label: "成交额榜" },
+  { key: "turnover_rate", label: "换手率榜" },
+];
+
+const TOP_N = 10;
+
+/**
+ * 首页榜单矩阵：四 Tab 切换，数据源为 `GET /market/rankings`（服务端按
+ * `pct_chg IS NOT NULL` 过滤并锁定 top-N，每次请求 300s Redis 缓存）。
+ *
+ * 客户端 staleTime 放宽到 5 分钟避免首页轮询放大开销。失败/空态独立降级，
+ * 不抛页面级异常。缺失涨跌幅一律由 DeltaText 渲染 `--`，不回退 0.00%。
+ */
+export function RankingMatrix() {
+  const [active, setActive] = useState<RankingType>("gainers");
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["home", "ranking", active],
+    queryFn: () => fetchRankings(active, TOP_N),
+    staleTime: 5 * 60_000,
+  });
+
+  const rows = data?.items ?? [];
+
+  return (
+    <SectionCard id="rankings" title="今日榜单" moreHref="/market" moreText="进入行情页">
+      <Tabs
+        activeKey={active}
+        onChange={(k) => setActive(k as RankingType)}
+        items={TABS.map((t) => ({ key: t.key, label: t.label }))}
+      />
+      {data?.as_of ? (
+        <div className="section-card__asof">数据截至 {formatCnDate(data.as_of)}</div>
+      ) : null}
+      {isLoading ? (
+        <Skeleton active paragraph={{ rows: 6 }} />
+      ) : isError ? (
+        <div
+          style={{
+            padding: "24px 0",
+            textAlign: "center",
+            color: "var(--text-secondary)",
+            fontSize: 13,
+          }}
+        >
+          榜单数据暂不可用，请稍后重试
+        </div>
+      ) : rows.length === 0 ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无榜单数据" />
+      ) : (
+        rows.map((r) => {
+          const amount = active === "amount" ? fmtAmountParts(r.amount) : undefined;
+          const value =
+            active === "amount"
+              ? amount?.value
+              : active === "turnover_rate"
+                ? (r.turnover_rate?.toFixed(2) ?? undefined)
+                : (r.close?.toFixed(2) ?? undefined);
+          const unit =
+            active === "amount"
+              ? amount?.unit
+              : active === "turnover_rate"
+                ? "%"
+                : "元";
+          return (
+            <DataRow
+              key={r.symbol}
+              title={r.name}
+              ticker={r.symbol}
+              value={value}
+              unit={unit}
+              valuePlaceholder="--"
+              delta={r.pct_chg}
+              href={`/stock/${r.symbol}`}
+            />
+          );
+        })
+      )}
+    </SectionCard>
+  );
+}
