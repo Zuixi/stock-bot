@@ -25,6 +25,7 @@ async def _dispose_engine_after_test() -> AsyncGenerator[None, None]:
     yield
     await engine.dispose()
 
+
 # (query label, the index Task 2.1 created for it, the table it lives on)
 _PLAN_CASES = [
     (

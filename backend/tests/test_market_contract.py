@@ -80,9 +80,9 @@ async def test_rankings_emits_fixture_keyset() -> None:
             body = resp.json()
             assert set(body) == set(sample), f"response keys drifted for {rank_type}"
             assert body["items"], f"fixture produced no rows for {rank_type}"
-            assert set(body["items"][0]) == set(
-                sample["items"][0]
-            ), f"item keys drifted for {rank_type}"
+            assert set(body["items"][0]) == set(sample["items"][0]), (
+                f"item keys drifted for {rank_type}"
+            )
 
 
 @pytest.mark.asyncio
@@ -91,9 +91,7 @@ async def test_sw_performance_emits_fixture_keyset() -> None:
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.get(
-            "/api/v1/market/sw-industry/performance", params={"limit": 3}
-        )
+        resp = await client.get("/api/v1/market/sw-industry/performance", params={"limit": 3})
     assert resp.status_code == 200
     body = resp.json()
     assert set(body) == set(fixture)
