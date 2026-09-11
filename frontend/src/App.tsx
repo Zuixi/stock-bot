@@ -3,7 +3,8 @@ import zhCN from "antd/locale/zh_CN";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router-dom";
 import { AppRouter } from "@/app/router";
-import { antdTheme } from "@/app/theme";
+import { buildAntdTheme } from "@/app/theme";
+import { ThemeProvider, useTheme } from "@/app/theme-context";
 import { AuthProvider } from "@/features/auth";
 import { ApiError } from "@/shared/api/client";
 import { ErrorBoundary } from "@/shared/ui/ErrorBoundary";
@@ -24,9 +25,11 @@ const queryClient = new QueryClient({
   },
 });
 
-export default function App() {
+/** ConfigProvider 需要消费 ThemeContext，必须在 ThemeProvider 内层渲染 */
+function RootProviders() {
+  const { mode } = useTheme();
   return (
-    <ConfigProvider locale={zhCN} theme={antdTheme}>
+    <ConfigProvider locale={zhCN} theme={buildAntdTheme(mode)}>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
           <BrowserRouter>
@@ -37,5 +40,13 @@ export default function App() {
         </AuthProvider>
       </QueryClientProvider>
     </ConfigProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <ThemeProvider>
+      <RootProviders />
+    </ThemeProvider>
   );
 }

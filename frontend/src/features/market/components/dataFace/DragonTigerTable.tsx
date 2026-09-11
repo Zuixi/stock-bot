@@ -3,13 +3,14 @@ import type { ColumnsType } from "antd/es/table";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { fetchDragonTiger, type DragonTigerItem } from "@/shared/api/marketData";
-import { COLORS } from "@/app/theme";
+import { useTheme } from "@/app/theme-context";
 import { fmtSignedYi } from "../format";
 
 const NUM_FONT: React.CSSProperties = { fontVariantNumeric: "tabular-nums" };
 
 export function DragonTigerTable() {
   const navigate = useNavigate();
+  const { colors } = useTheme();
   const { data = [], isLoading } = useQuery({
     queryKey: ["dragon-tiger"],
     queryFn: () => fetchDragonTiger(15),
@@ -22,7 +23,7 @@ export function DragonTigerTable() {
     {
       title: "涨跌幅", dataIndex: "pctChange", width: 80, align: "right",
       render: (_, r) => (
-        <span style={{ ...NUM_FONT, color: (r.pctChange ?? 0) > 0 ? COLORS.up : (r.pctChange ?? 0) < 0 ? COLORS.down : COLORS.flat }}>
+        <span style={{ ...NUM_FONT, color: (r.pctChange ?? 0) > 0 ? colors.up : (r.pctChange ?? 0) < 0 ? colors.down : colors.flat }}>
           {r.pctChange == null ? "—" : `${r.pctChange > 0 ? "+" : ""}${r.pctChange.toFixed(2)}%`}
         </span>
       ),
@@ -30,7 +31,7 @@ export function DragonTigerTable() {
     {
       title: "龙虎榜净买额", dataIndex: "netAmount", width: 110, align: "right",
       render: (_, r) => (
-        <span style={{ ...NUM_FONT, fontWeight: 600, color: (r.netAmount ?? 0) > 0 ? COLORS.up : (r.netAmount ?? 0) < 0 ? COLORS.down : COLORS.flat }}>
+        <span style={{ ...NUM_FONT, fontWeight: 600, color: (r.netAmount ?? 0) > 0 ? colors.up : (r.netAmount ?? 0) < 0 ? colors.down : colors.flat }}>
           {fmtSignedYi(r.netAmount)}
         </span>
       ),

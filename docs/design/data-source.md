@@ -138,3 +138,81 @@
 
 - 7 张表：`sector_moneyflow_snapshots` / `dragon_tiger_entries` / `northbound_daily` / `block_trades` / `share_floats` / `stock_repurchases` / `announcements`；读取端点 Redis 缓存 TTL 300s；手动触发走 `POST /api/v1/tasks/fetch-market-data`（`market_data.fetch` 队列，9 类 payload 二选一）。
 - 单位总原则：接三方行情先 curl 实测定字段与单位再写映射，消费端只做展示分档（详见 [best-practices](../references/best-practices.md)）。
+
+## 八、日历与新闻源实测（2026-09-11）
+
+> 服务「公网首页（免登录行情面板）」Phase 4（市场日历）/ Phase 5（新闻流）的可行性输入。
+> 探针脚本 [backend/scripts/spike_calendar_sources.py](../../backend/scripts/spike_calendar_sources.py)，
+> 调用真实 `TUSHARE_TOKEN`（`backend/.env`，不落库、不打印）；结果由本人手抄本节。
+> 探针走 `TuShareClient._query`，失败时再经底层 `_pro.query` 取上游原文——
+> 客户端 `handle_error` 会把权限错误重写成 canned RuntimeError、其余错误重写成
+> `failed after N retries`，直接读 `_query` 的异常拿不到逐字原文。
+
+**结论：8 个接口 —— 5 可用 / 3 积分不足 / 0 不存在 / 0 网络不可达。**
+
+| 接口 | 用途 | 结论 | 实测证据（2026-09-11，见下方原文） |
+|---|---|---|---|
+| `disclosure_date` | 财报披露计划 | **可用（区间过滤见坑）** | `end_date=20260630`（报告期）→ 5561 行；`pre_date=20260831` → 164 行；`actual_date=20260829` → 765 行；传 `start_date/end_date` 组合 → **0 行** |
+| `dividend` | 分红送股 | **可用** | `ts_code=600519.SH` → 89 行，含 `div_proc/record_date/ex_date/pay_date`（本次只按单票探，未探全市场区间语义） |
+| `new_share` | IPO 新股 | **可用** | `start_date=20260801&end_date=20260911` → 26 行，含 `ipo_date/price/pe/funds/ballot` |
+| `trade_cal` | 交易日历 | **可用** | `exchange=SSE` 2026 全年 → 365 行；`is_open=0` 9 月 → 9 行（非交易日单列可按 `is_open` 过滤） |
+| `eco_cal` | 宏观日历 | **可用（单次上限 100 行）** | 20260901–20260930 → 100 行；拉到 20260101–20261231 仍 100 行 → 每次调用硬上限 100 行，需分窗/逐日翻页 |
+| `news` | 新闻快讯 | **积分不足** | 上游原文见下；客户端侧为 canned `permission denied` |
+| `major_news` | 长篇通讯 | **积分不足** | 同上 |
+| `cctv_news` | 新闻联播文字稿 | **积分不足** | 同上 |
+
+**可用接口返回列名（`df.columns`，逐字抄自实测输出，供 Phase 4/5 写字段映射）：**
+
+| 接口 | 返回列 |
+|---|---|
+| `disclosure_date` | `ts_code, ann_date, end_date, pre_date, actual_date` |
+| `dividend` | `ts_code, end_date, ann_date, div_proc, stk_div, stk_bo_rate, stk_co_rate, cash_div, cash_div_tax, record_date, ex_date, pay_date, div_listdate, imp_ann_date` |
+| `new_share` | `ts_code, sub_code, name, ipo_date, issue_date, amount, market_amount, price, pe, limit_amount, funds, ballot` |
+| `trade_cal` | `exchange, cal_date, is_open, pretrade_date` |
+| `eco_cal` | `date, time, currency, country, event, value, pre_value, fore_value` |
+
+### 不可用接口的上游返回文案（逐字，仅 3 个新闻源）
+
+> 脚本 `[RAW]` 行打印为 `Exception: <文案>`；下表为去掉该 Python 异常类名前缀后的上游原文。
+
+```
+news:       抱歉，您没有接口(news)访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+major_news: 抱歉，您没有接口(major_news)访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+cctv_news:  抱歉，您没有接口(cctv_news)访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+```
+
+三者为**权限不足（积分档未开）**，不是接口不存在、也不是网络不可达——接口名有效，
+上游以权限文案明确拒绝；同 token 下其余 5 个接口正常返回，网络本身可达。
+
+### 坑：`disclosure_date` 的日期区间过滤待确认
+
+该接口可用参数为 `ts_code` / `end_date`（**报告期**，如 `20260630`）/ `pre_date`（预约披露日，单日）/
+`actual_date`（实际披露日，单日）。任务书初稿的 `start_date + end_date` 组合实测**返回 0 行且不报错**，
+极易误判成「接口不可用」；0 行的原因**疑为区间参数不被支持**（已补单传 `end_date` 对照仍为 0，
+但未单传 `start_date` 对照，故此处只作推断，不作定论）。实测对照：
+
+| 传参 | 行数 | 含义 |
+|---|---|---|
+| `start_date=20260901, end_date=20260930` | 0 | 实测该参数组合返回 0 行，疑因区间参数不被支持 |
+| `end_date=20260930`（单传） | 0 | 单传亦为 0，说明 `end_date` 是报告期过滤而非自然日区间 |
+| `end_date=20260630` | 5561 | 该报告期（2026 半年报）全部披露计划 |
+| `ts_code=600519.SH, end_date=20260630` | 1 | 单票该报告期计划 |
+| `pre_date=20260831` | 164 | 当日预约披露的股票 |
+| `actual_date=20260829` | 765 | 当实际披露的股票 |
+| 空参 | 6000 | 上游默认上限 6000 行（全历史截断） |
+
+Phase 4 取「未来某段日历」须**按日循环 `pre_date`**（或按报告期取 `end_date` 再本地按
+`pre_date` 分桶），不能指望一次区间调用。
+
+### 降级决策（Phase 4 / Phase 5）
+
+- **Phase 4 市场日历：无需降级到「只做三类」。** 四类日历全部可用——
+  `trade_cal`（交易日）+ `disclosure_date`（财报披露，按 `pre_date` 逐日）+ `dividend`（分红）+
+  `new_share`（新股）；`eco_cal` 宏观事件**可选**纳入，但受 100 行/次上限，需按日或短窗拉取。
+  任务书预留的「`eco_cal` 不可用 → 只做 财报/分红/新股 三类」分支**未触发**。
+- **Phase 5 新闻流：只做公告流。** `news` / `major_news` / `cctv_news` 全部积分不足 →
+  新闻快讯路径不建，复用既有巨潮 cninfo `announcements` 管道（见 §七）作为首页信息流，
+  零新增外部接口。**不适用**「全网络不可达 → mock-first」约定：网络可达，仅权限档未开，
+  后续如需新闻可评估 TuShare 积分升级或换源（如东财快讯），不在本 Phase 落地。
+- **落库/调度**：本节点仅确认可用性，Phase 4/5 的表结构、缓存与调度在各自计划中定义；
+  未改动任何生产代码。

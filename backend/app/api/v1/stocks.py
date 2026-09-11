@@ -79,6 +79,7 @@ async def list_stocks_all_exchanges(
 @router.get("/stocks/enriched", response_model=PagedResponse[StockEnrichedOut])
 async def list_stocks_all_exchanges_enriched(
     db: DbDep,
+    cache: CacheDep,
     exchange: str | None = None,
     category: str | None = None,
     keyword: str | None = None,
@@ -98,7 +99,7 @@ async def list_stocks_all_exchanges_enriched(
     page_params = PageParams(page=page, page_size=page_size)
     items, total = await stock_service.list_stocks_enriched(
         db,
-        None,  # type: ignore[arg-type]  # cache 参数未被该路径使用，保持端点不含缓存依赖
+        cache,
         params,
         page_params,
     )

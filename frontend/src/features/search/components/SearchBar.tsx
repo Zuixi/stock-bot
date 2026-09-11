@@ -33,7 +33,7 @@ export function SearchBar() {
         label: (
           <div style={{ display: "flex", justifyContent: "space-between" }}>
             <span>{s.name}</span>
-            <span style={{ color: "#999", fontFamily: "monospace" }}>{s.symbol}</span>
+            <span style={{ color: "var(--text-secondary)", fontFamily: "monospace" }}>{s.symbol}</span>
           </div>
         ),
       }));

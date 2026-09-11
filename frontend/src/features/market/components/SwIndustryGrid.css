@@ -1,0 +1,64 @@
+/*
+ * 申万行业网格（Stage C 自 landing 提取的共享版）
+ * landing 宣传页与 /market 工作台共用；颜色一律走 CSS 变量随明暗主题切换。
+ */
+
+.sw-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: 10px;
+}
+
+.sw-cell {
+  border-radius: 8px;
+  padding: 14px 12px;
+  min-height: 64px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid var(--border);
+  transition: transform 0.15s ease;
+}
+
+.sw-cell:hover {
+  transform: translateY(-2px);
+}
+
+.sw-name {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.sw-count {
+  font-size: 11px;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+  margin-top: 4px;
+}
+
+.sw-fallback {
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  padding: 48px 0;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
+
+.sw-skeleton {
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--bg-panel) 25%, var(--bg-elevated) 50%, var(--bg-panel) 75%);
+  background-size: 200% 100%;
+  animation: sw-skeleton-wave 1.4s ease infinite;
+  border: 1px solid var(--border);
+}
+
+@keyframes sw-skeleton-wave {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}

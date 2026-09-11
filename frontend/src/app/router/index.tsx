@@ -1,9 +1,10 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route } from "react-router-dom";
 import { lazy, Suspense } from "react";
 import { MainLayout } from "@/app/layouts/MainLayout";
 import { RequireAuth } from "@/features/auth";
 import { Spin } from "antd";
 
+const LandingPage = lazy(() => import("@/pages/landing"));
 const MarketPage = lazy(() => import("@/pages/market"));
 const CategoryPage = lazy(() => import("@/pages/market-category"));
 const IndustryLevel2Page = lazy(() => import("@/pages/market-industry-level2"));
@@ -29,8 +30,17 @@ function PageLoading() {
 export function AppRouter() {
   return (
     <Routes>
+      {/* Landing 宣传页：公开路由，独立布局不套 MainLayout（契约 §2）；
+          已登录停留此页，由页内 CTA「进入工作台」跳 /market */}
+      <Route
+        path="/"
+        element={
+          <Suspense fallback={<PageLoading />}>
+            <LandingPage />
+          </Suspense>
+        }
+      />
       <Route element={<MainLayout />}>
-        <Route path="/" element={<Navigate to="/market" replace />} />
         <Route
           path="/login"
           element={

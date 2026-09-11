@@ -12,17 +12,19 @@ Data sources
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Literal, cast
 
-from sqlalchemy import Subquery, func, select, text, union
+from sqlalchemy import Subquery, TextClause, func, select, text, union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
 from app.core.redis import CacheClient
 from app.models.quote import DailyQuote
 from app.models.stock import Stock
+from app.schemas.ranking import RankingItemOut, RankingResponseOut, RankingType
 from app.schemas.stock import StockOut
+from app.schemas.sw_performance import SwPerformanceItemOut, SwPerformanceResponseOut
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +75,16 @@ _FALLBACK_DISTRIBUTION = [
 
 
 async def _latest_trade_date(db: AsyncSession) -> date | None:
-    """Return the most recent trade_date in daily_quotes, or None."""
-    result = await db.execute(select(func.max(DailyQuote.trade_date)))
-    return result.scalar_one_or_none()
+    """Return the most recent trade_date, or None when daily_quotes is empty.
+
+    Thin **uncached** delegate to :func:`get_latest_trade_date` so the max()
+    SQL exists in exactly one place; the four dashboard readers below keep
+    reading directly (no cache dependency).
+    """
+    try:
+        return await get_latest_trade_date(db)
+    except ValueError:
+        return None
 
 
 async def _latest_trade_date_str() -> str:
@@ -85,6 +94,54 @@ async def _latest_trade_date_str() -> str:
     if d:
         return d.strftime("%Y%m%d")
     return datetime.now().strftime("%Y%m%d")
+
+
+# ---------------------------------------------------------------------------
+# Shared latest-trade-date resolver — single source of truth for "as of"
+# ---------------------------------------------------------------------------
+
+_LATEST_TRADE_DATE_CACHE_KEY = "market:latest_trade_date"
+_LATEST_TRADE_DATE_TTL = 300
+
+
+def last_weekday(d: date) -> date:
+    """Most recent weekday <= d.
+
+    Phase-2 heuristic ONLY — exchange holidays are NOT handled. Phase 4 swaps
+    this for a ``trade_calendar`` lookup behind the same signature.
+    """
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+async def get_latest_trade_date(db: AsyncSession, cache: CacheClient | None = None) -> date:
+    """Return the newest ``daily_quotes.trade_date`` (single shared resolver).
+
+    Redis-cached for 5 minutes under ``market:latest_trade_date``. Ruling Q:
+    ``CacheClient`` JSON-serializes, so the cached value is an ISO string and is
+    parsed back with ``date.fromisoformat``. A non-string (or unparseable) cached
+    value is treated as a cache miss and re-resolved from the DB — ``cast`` would
+    be a runtime no-op and could leak a non-``date`` straight to callers.
+    """
+    if cache:
+        cached = await cache.get(_LATEST_TRADE_DATE_CACHE_KEY)
+        if isinstance(cached, str):
+            try:
+                return date.fromisoformat(cached)
+            except ValueError:
+                # Corrupt cache payload — fall through and re-resolve from the DB
+                # (then overwrite the cache below) rather than trusting it.
+                pass
+
+    result = await db.execute(select(func.max(DailyQuote.trade_date)))
+    as_of = result.scalar_one_or_none()
+    if as_of is None:
+        raise ValueError("daily_quotes is empty — run ingest first")
+
+    if cache:
+        await cache.set(_LATEST_TRADE_DATE_CACHE_KEY, as_of.isoformat(), _LATEST_TRADE_DATE_TTL)
+    return as_of
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +505,194 @@ async def get_hot_boards(
     if cache and boards:
         await cache.set(cache_key, boards, _MARKET_CACHE_TTL)
     return boards
+
+
+# ---------------------------------------------------------------------------
+# Public rankings — indexed top-N, enriched after the sort is locked
+# ---------------------------------------------------------------------------
+
+# Ruling O: only these five types exist; the sort column/direction come from this
+# file-local whitelist and are f-string-interpolated into the SQL. No user input
+# ever reaches the SQL string (unknown types raise before any query runs).
+_RANKING_ORDER: dict[str, tuple[str, str]] = {
+    "gainers": ("pct_chg", "DESC"),
+    "losers": ("pct_chg", "ASC"),
+    "amount": ("amount", "DESC"),
+    "volume": ("volume", "DESC"),
+    "turnover_rate": ("turnover_rate", "DESC"),
+}
+
+
+def _build_quote_rank_sql(order_col: str, order_dir: str) -> TextClause:
+    """Build the top-N query for a ``daily_quotes``-backed ranking type.
+
+    Ruling P: the ``pct_chg IS NOT NULL`` filter must stay — Postgres sorts
+    DESC as NULLS FIRST, so without it the 涨幅榜 leads with unrankable rows.
+    The outer ``ORDER BY`` re-imposes the order after the enrichment JOIN so the
+    join can never reshuffle the locked top-N. Both ORDER BYs carry a
+    ``stock_id ASC`` tiebreak: without it, rows with equal sort values (e.g. all
+    zero-volume 成交额 rows, many 涨停 ties) have no stable order and the top-N
+    selection / response order can shuffle between identical calls.
+    """
+    return text(f"""
+        WITH topn AS (
+            SELECT q.stock_id, q.close, q.pct_chg, q.amount, q.volume
+            FROM daily_quotes q
+            WHERE q.trade_date = :as_of AND q.pct_chg IS NOT NULL
+            ORDER BY q.{order_col} {order_dir}, q.stock_id ASC
+            LIMIT :limit
+        )
+        SELECT s.symbol, s.name, s.exchange, t.close, t.pct_chg, t.amount, t.volume,
+               b.turnover_rate, b.total_mv
+        FROM topn t
+        JOIN stocks s ON s.id = t.stock_id
+        LEFT JOIN daily_basic_indicators b
+               ON b.stock_id = t.stock_id AND b.trade_date = :as_of
+        ORDER BY t.{order_col} {order_dir}, t.stock_id ASC
+    """)
+
+
+_QUOTE_RANK_SQL: dict[str, TextClause] = {
+    rank_type: _build_quote_rank_sql(order_col, order_dir)
+    for rank_type, (order_col, order_dir) in _RANKING_ORDER.items()
+    if rank_type != "turnover_rate"
+}
+
+# turnover_rate lives in daily_basic_indicators, so it needs its own top-N CTE.
+# ``stock_id ASC`` tiebreak mirrors _build_quote_rank_sql — equal turnover_rate
+# rows must not shuffle between identical calls.
+_TURNOVER_RANK_SQL = text("""
+    WITH topn AS (
+        SELECT b.stock_id, b.turnover_rate, b.total_mv
+        FROM daily_basic_indicators b
+        WHERE b.trade_date = :as_of AND b.turnover_rate IS NOT NULL
+        ORDER BY b.turnover_rate DESC, b.stock_id ASC
+        LIMIT :limit
+    )
+    SELECT s.symbol, s.name, s.exchange, q.close, q.pct_chg, q.amount, q.volume,
+           t.turnover_rate, t.total_mv
+    FROM topn t
+    JOIN stocks s ON s.id = t.stock_id
+    LEFT JOIN daily_quotes q ON q.stock_id = t.stock_id AND q.trade_date = :as_of
+    ORDER BY t.turnover_rate DESC, t.stock_id ASC
+""")
+
+
+async def get_rankings(
+    db: AsyncSession,
+    cache: CacheClient | None,
+    rank_type: str,
+    limit: int,
+) -> RankingResponseOut:
+    """Return the public top-N ranking for ``rank_type`` as of the latest trade date.
+
+    Cache-first (ruling S) mirroring ``get_distribution``; ``as_of`` is shared
+    with the rest of the market plane via :func:`get_latest_trade_date`.
+    """
+    if rank_type not in _RANKING_ORDER:
+        raise ValueError(f"unknown ranking type: {rank_type}")
+
+    cache_key = f"market:rankings:{rank_type}:{limit}"
+    if cache:
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return RankingResponseOut.model_validate(cached)
+
+    try:
+        as_of = await get_latest_trade_date(db, cache)
+    except ValueError:
+        # Public homepage block: an empty daily_quotes must degrade to a coherent
+        # empty payload (as get_distribution falls back), never a 500. Not cached —
+        # so the block recovers on the first ingest after the DB is populated.
+        return RankingResponseOut(
+            as_of=last_weekday(date.today()),
+            is_latest_trading_day=False,
+            type=cast(RankingType, rank_type),
+            items=[],
+        )
+
+    stmt = _TURNOVER_RANK_SQL if rank_type == "turnover_rate" else _QUOTE_RANK_SQL[rank_type]
+    rows = (await db.execute(stmt, {"as_of": as_of, "limit": limit})).mappings().all()
+
+    out = RankingResponseOut(
+        as_of=as_of,
+        is_latest_trading_day=as_of >= last_weekday(date.today()),
+        type=cast(RankingType, rank_type),
+        items=[RankingItemOut(**dict(row)) for row in rows],
+    )
+    if cache:
+        await cache.set(cache_key, out.model_dump(mode="json"), _MARKET_CACHE_TTL)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# SW L1 industry performance (Task 3.1) — two-hop parent_code rollup
+# ---------------------------------------------------------------------------
+
+# Ruling U: roll L3 members up to L1 via the verified parent_code chain
+# (``sw_industry_classes`` levels L1=31 / L2=134 / L3=346; the two-hop chain
+# resolves for all L3 classes). Join keys: ``sw_industry_members.symbol`` ->
+# ``stocks.symbol`` (95.4% match, the correct key). Members are joined to
+# ``daily_quotes`` on the latest trade date so ``member_count`` / ``up_count`` /
+# ``down_count`` count only stocks that actually have a quote that day, and
+# ``avg_pct_chg`` is a true average over those stocks. ``pct_chg IS NOT NULL``
+# keeps suspended/no-quote names out of the denominator.
+_SW_PERF_SQL = text("""
+    WITH l1_members AS (
+        SELECT c1.industry_code AS code, c1.industry_name AS name, m.symbol
+        FROM sw_industry_members m
+        JOIN sw_industry_classes c3
+          ON c3.industry_code = m.industry_code AND c3.level = 3
+        JOIN sw_industry_classes c2 ON c2.industry_code = c3.parent_code
+        JOIN sw_industry_classes c1 ON c1.industry_code = c2.parent_code
+    )
+    SELECT lm.code, lm.name,
+           count(q.stock_id) AS member_count,
+           avg(q.pct_chg) AS avg_pct_chg,
+           sum(q.amount) AS total_amount,
+           count(*) FILTER (WHERE q.pct_chg > 0) AS up_count,
+           count(*) FILTER (WHERE q.pct_chg < 0) AS down_count
+    FROM l1_members lm
+    JOIN stocks s ON s.symbol = lm.symbol
+    JOIN daily_quotes q ON q.stock_id = s.id AND q.trade_date = :as_of
+    WHERE q.pct_chg IS NOT NULL
+    GROUP BY lm.code, lm.name
+    ORDER BY avg_pct_chg DESC
+""")
+
+
+async def get_sw_industry_performance(
+    db: AsyncSession,
+    cache: CacheClient | None,
+    limit: int = 31,
+) -> SwPerformanceResponseOut:
+    """Return Shenwan L1 industry performance as of the latest trade date.
+
+    Cache-first (ruling U) mirroring ``get_rankings``; the full L1 set is cached
+    under one key and ``limit`` is applied on read (the SQL returns all L1 rows).
+    """
+    cache_key = "market:sw-performance"
+    if cache:
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            out = SwPerformanceResponseOut.model_validate(cached)
+            return out.model_copy(update={"items": out.items[:limit]})
+
+    try:
+        as_of = await get_latest_trade_date(db, cache)
+    except ValueError:
+        # Anonymous homepage block: an empty daily_quotes degrades to an empty
+        # payload (never 500) and is not cached, so it recovers after the first ingest.
+        return SwPerformanceResponseOut(as_of=last_weekday(date.today()), items=[])
+
+    rows = (await db.execute(_SW_PERF_SQL, {"as_of": as_of})).mappings().all()
+    out = SwPerformanceResponseOut(
+        as_of=as_of,
+        items=[SwPerformanceItemOut(**dict(row)) for row in rows],
+    )
+    if cache:
+        await cache.set(cache_key, out.model_dump(mode="json"), _MARKET_CACHE_TTL)
+    return out.model_copy(update={"items": out.items[:limit]})
 
 
 # ---------------------------------------------------------------------------

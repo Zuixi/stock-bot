@@ -1,3 +1,120 @@
+## 2026-09-11 - 首页公开化 Phase 3 终审修复：登录态导航/口径诚实/DRY/内链/Section 视觉收口（F1–F16）
+- **F1 登录态导航**：`LandingNav` 原无条件渲染「登录」按钮，与已登录的 `CtaButton`「进入工作台」并存；改为 `isAuthReady` 后按 `isAuthenticated` 二选一（已登录渲染 `UserMenu`），并在 e2e 加「已登录不得出现登录按钮」断言（先证红：`toHaveCount(0)` 收到 1）
+- **F2 公开文案不得宣称已死数据源**：`DataCoverageMatrix` 北向资金行标「规划中」（来源/频率 `—`、徽章中性灰），统计带 `10 大数据域` → `9 已上线数据域`、`100% 全部免费` → `已上线数据免费`；同步 `docs/design/landing-market-theme.md` §5
+- **F3 快讯故障 ≠ 无新闻**（口径诚实，与脉搏块同批）：`AnnouncementFeed` 增 `isError` 分支独立错误占位「公告快讯暂不可用，请稍后重试」，不再落回 `暂无公告快讯`；e2e abort `/market/announcements` 断言错误占位（先证红）
+- **F4 as_of/口径分家**：`SectorFlow` 申万口径补「· 数据截至 9月9日」（复用抽到 `format.ts#formatCnDate` 的格式化与 `section-card__asof` 样式）；`MarketPulse` 把「实时 + 每 60 秒刷新」限定到指数条 caption，分布/家数改「当日 …（T+1）」措辞
+- **F5–F7 类型/DRY/内链**：`market.ts` `total_amount` 改 `number | null` 对齐后端 `float | None`；新增 `features/market/components/coreIndices.ts`（`CORE_TS_CODES` + `pickCoreIndices(list, count, isEligibleRest)`，其余补位过滤由调用方传入），宣传页指数条与核心指数卡共用；`SectionCard`/`DataRow` 内链改 `react-router` `<Link>`，消除整页刷新
+- **F8/F9 区块视觉/占位**：`MarketMoneyflowCard` 抽出 `MarketMoneyflowContent`，`MoneySentiment` 在 `SectionCard` 内直接渲染纯内容 + 同构子标题（不再卡中卡，`/market` 用法不变）；日历块永久骨架屏改显式文案「日历即将上线」
+- **F10–F16 收尾**：`CompactHero` 注释如实说明徽章为静态字符串（本页无时间源）；`get_latest_trade_date` 非 str/非法缓存值不再 `cast` 穿透，改为回退 DB；榜单 quote/turnover SQL 补 `stock_id ASC` 确定性 tiebreak（新增 3 条子串断言）；`RankingMatrix` 删除无样式死类 `ranking__asof`，改用有规则的 `section-card__asof`；`SectorFlow` 区分网络故障与合法空载荷占位；`test_market_contract._load` 全注解 `dict[str, Any]`；`landing.spec.ts` 固定 `waitForTimeout(800)` 改 network-idle + 稳定 URL
+- **验证**：E2E(3010) 57 passed / 3 failed（3 项为 research×2 + userIsolation×1 既有失败，本分支未触碰该两文件）；`uv run pytest -q` 213 passed / 29 deselected（+4 新单测）；`npx tsc -b`、`npm run check:design` 12/12、`bash scripts/self_review.sh` 全绿（`npm run lint` 因 node_modules 缺 eslint 二进制不可用，非本次改动引入）
+- 涉及模块：frontend/src/pages/landing/{index.tsx,landing.css,sections/{LandingNav,MarketPulse,CompactHero}.tsx}, frontend/src/features/market/components/{DataCoverageMatrix.{tsx,css},AnnouncementFeed,MarketMoneyflowCard,MoneySentiment.{tsx,css},RankingMatrix,SectorFlow,CoreIndexCards,coreIndices,format,index}.ts, frontend/src/shared/{ui/{SectionCard.{tsx,css},DataRow.tsx},api/market.ts}, frontend/e2e/{landing,public-homepage}.spec.ts, backend/app/services/market_service.py, backend/tests/{test_latest_trade_date,test_rankings,test_market_contract}.py, docs/design/landing-market-theme.md
+
+## 2026-09-11 - 首页公开化 Phase 3 复审修复二：契约测试惰性解析 fixture + 恢复万亿元档
+- **契约测试不再在 import 期算路径**：`test_market_contract.py` 原在模块级 `FIXTURES_DIR = _fixtures_dir()`，纯后端检出（无 `frontend/`）时 `_fixtures_dir()` 抛 `RuntimeError`——pytest 为读 `pytestmark` 会先 import 模块，早于 `-m` 反选，导致默认 `uv run pytest` 变成 collection ERROR。改为 `_load()` 内惰性解析，fixture 目录/文件缺失时 `pytest.skip(...)`；实测把 `fixtures/` 改名隐藏后 `uv run pytest -q` 仍 209 passed / 29 deselected 且无 collection error，`-m e2e` 为 2 skipped；fixtures 就位时容器内 2 passed
+- **恢复 `fmtAmountParts` 的 `≥1e12 元 → 万亿元` 档**：前一轮把局部 `formatAmount` 抽成共享 helper 时漏了该档，当前数据不可达但属共享能力回退；已按原实现补回
+- 验证：`uv run pytest -q` 209/29（fixtures 有/无均无 collection error）、契约测试容器内 2 passed、`npx tsc -b`、`npm run check:design` 12/12、E2E(3010) 32/32、`self_review` ✔
+- 涉及模块：backend/tests/test_market_contract.py, frontend/src/features/market/components/format.ts, docs/references/best-practices.md
+
+## 2026-09-11 - 首页公开化 Phase 3 复审修复：榜单/申万契约快照锁 + 行业广度条 + 缺失值收口
+- **契约漂移防护**：把容器内实抓的 `/market/rankings`（四类）与 `/market/sw-industry/performance` 真实响应落为 `frontend/e2e/fixtures/rankings.sample.json` / `swPerformance.sample.json`；前端 e2e mock 改为读同一批文件（不再手写载荷），并新增 `backend/tests/test_market_contract.py`（`@pytest.mark.e2e`，DB 实连）断言两端点实际发出的顶层/条目 key 集与 fixtures 完全一致——后端字段改名会先让契约测试转红，而不是 mock 静默漂移后页面渲染 undefined。**仍不证明活链路**（3010 dev 代理指向旧镜像，故 mock 是必需的），活链路验证待分支部署
+- **Task 3.2 广度条补齐**（计划 Step 2）：新增共享 `features/market/components/BreadthBar`（上涨红/下跌绿按 up_count:down_count 比例，4px 行内条，复用 `--up`/`--down`），从该目录 `index.ts` 导出，SectorFlow 申万行业行在 `DataRow` 下方消费
+- **缺失值收口**：`SwPerformanceItemOut.total_amount` 改 `float | None`（`sum(amount)` 可空，原非可选会在匿名端点触发 Pydantic 500）；`DataRow` 增可选 `valuePlaceholder`，数值缺失渲染 `--`（纯涨跌幅行不传、行为不变），RankingMatrix 三 Tab 与 SectorFlow 成交额槽位消费；`amount` 千元换算抽到 `features/market/components/format.ts#fmtAmountParts` 供两处复用；总成交额作为行业行 value 显示（千元→元→亿元）
+- **口径诚实**：SectorFlow 成员数小字改为「当日有行情 N只」（`member_count` 是当日 `pct_chg` 非空的成员数，非静态成分总数）
+- **验证**：`uv run pytest -q` 209 passed / 29 deselected（新增 total_amount 可空单测）；契约测试容器内 2 passed（新增 `close_redis_pool()` 到 autouse dispose，避免模块级 Redis 池跨 event loop）；`npx tsc -b`、`npm run check:design`、`self_review` 全绿；E2E(3010) 32/32
+- 涉及模块：backend/app/schemas/sw_performance.py, backend/tests/{test_sw_performance,test_market_contract}.py, frontend/e2e/fixtures/*, frontend/e2e/public-homepage.spec.ts, frontend/src/features/market/components/{BreadthBar.tsx,BreadthBar.css,SectorFlow.tsx,SectorFlow.css,RankingMatrix.tsx,format.ts,index.ts}, frontend/src/shared/ui/DataRow.tsx
+
+## 2026-09-11 - 首页公开化 Phase 3（Task 2.7 / 3.1 / 3.2）：榜单切专用端点 + 申万一级行业聚合 + 板块区申万口径
+- **Task 2.7 榜单**：`features/market/components/RankingMatrix` 从临时 enriched 排序路径切到 `GET /market/rankings`（新增 `shared/api/market.ts#fetchRankings`/`RankingType`/`RankingResponse`）；Tab 扩为四项（涨幅/跌幅/成交额/换手率，后端五种类型中 `volume` 不上首页）；头部按 `as_of` 显示「数据截至 9月9日」；`daily_quotes.amount` 千元口径沿用既有 mapper 约定（×1000→元 再 /1e8→亿元）不做「修正」；**移除 D2 遗留的客户端 null 行过滤**（Ruling T：新 SQL 已 `pct_chg IS NOT NULL`，客户端为重复层），保留 `DeltaText` 真缺失渲染 `--` 契约；确认零引用后删除临时 `fetchStockRanking` 及其 `RankingRow`/`RankingSortBy` 类型
+- **Task 3.1 申万一级行情聚合**：新增 `GET /api/v1/market/sw-industry/performance?limit=31`（`app/schemas/sw_performance.py` + `market_service.get_sw_industry_performance` + `_SW_PERF_SQL`）：以 `sw_industry_members.symbol → stocks.symbol` 为 join 键，经 `sw_industry_classes` 两跳 `parent_code` 链把 L3 成员上卷到 L1（L1=31/L2=134/L3=346，全 L3 可解析）；聚合前 JOIN `daily_quotes` 于最新交易日并 `pct_chg IS NOT NULL`，故 `member_count`/`up_count`/`down_count` **只计当日真有行情的股票**、`avg_pct_chg` 为这些股票的真实均值；`total_amount`（`sum(amount)`）为 TuShare 千元、透传原值（注释据实标注）；匿名端点走 `CacheClient`（key `market:sw-performance`，`_MARKET_CACHE_TTL`）且空库降级为空 payload（不缓存）；`as_of` 复用 `get_latest_trade_date`
+- **Task 3.2 板块区切申万**：`SectorFlow` 左列改 `fetchSwPerformance`（行版式 = 行业名 + `member_count` 小字 `35只` + `DeltaText(avg_pct_chg)`），口径标注改为「行业口径：申万一级」并删除「申万版即将上线」；**保留 CSRC 回退**——申万请求失败时回退 `/market/sectors` 且标注同步切回「行业口径：证监会」，标注永远与所展示的数据源一致，绝不静默错标（`retry: 0` 使回退即时）
+- **验证**：TDD 先红后绿——Task 2.7 三条新断言先红（换手率 Tab/数据截至/不剔除 null）后 4 passed；Task 3.1 ImportError 先红后 7 passed；Task 3.2 申万标注断言先红后 4 passed；容器内以本分支代码 + ASGI 连真库实跑新端点，`limit=5` 200（as_of=2026-09-09，与原生 SQL 逐值一致）、默认 31 条且降序、`limit=0/99` 422，Redis `market:sw-performance` TTL≈277s；真库 SQL 实测 31 个 L1 组、4,058 个当日有行情成员且无 symbol 扇出
+- 测试：`uv run pytest -q` 208 passed / 27 deselected；`uv run --extra dev mypy app` 143 files 无问题；前端 `npx tsc -b`、`npm run check:design`、`bash scripts/self_review.sh` 全绿；E2E（3010）landing 7 + darkmode 3 + public-homepage 22 = 32/32
+- 涉及模块：backend/app/services/market_service.py, backend/app/schemas/sw_performance.py, backend/app/api/v1/market.py, backend/tests/test_sw_performance.py, frontend/src/shared/api/market.ts, frontend/src/shared/api/stocks.ts, frontend/src/features/market/components/{RankingMatrix,SectorFlow}.tsx, frontend/e2e/public-homepage.spec.ts
+
+## 2026-09-11 - 首页公开化 Phase 2（Task 2.4–2.6）：共享交易日解析 + 公开 `/market/rankings` 榜单 + 索引计划锁
+- **Task 2.4**：`market_service.get_latest_trade_date(db, cache=None)`（Redis key `market:latest_trade_date`，TTL 300s）为"数据截至日"的单一实现：`_latest_trade_date` 改为其无缓存薄委托（`max(trade_date)` 只写一处），既有四处 dashboard 读取器（distribution/sectors/capital-flow/hot-boards）复用同一实现但**行为不变、仍为直读无缓存**，rankings 走 300s 缓存路径；缓存按 Ruling Q 存 `as_of.isoformat()`、读出 `date.fromisoformat` 兜底（`CacheClient` 是 JSON 序列化，`date` 不可直接 JSON 化）；纯函数 `last_weekday` 为 `is_latest_trading_day` 的 Phase-2 启发式（节假日不处理，Phase 4 换 `trade_calendar` 同签名）
+- **Task 2.5**：新增 `app/schemas/ranking.py`（`RankingItemOut` / `RankingResponseOut`，含 `as_of` + `is_latest_trading_day`；`amount` 注释据实标为 TuShare 原生**千元**、透传原值）与 `GET /api/v1/market/rankings?type=gainers|losers|amount|turnover_rate|volume&limit=`；五种类型经文件内硬编码 `_RANKING_ORDER` 白名单 f-string 拼 ORDER BY（Ruling O：bind 参数不能承载标识符/方向，删 `:rank_col_expr`，无用户输入进串；Pydantic `Literal` 边界校验 + service 侧 membership 复检双闸）；`daily_quotes` 四种保留 `pct_chg IS NOT NULL`（Ruling P：DESC 默认 NULLS FIRST，否则涨幅榜以 NULL 行领跑），`turnover_rate` 走 `daily_basic_indicators`；top-N CTE 排好后外层再 ORDER BY，保证补字段 JOIN 不重排；缓存优先 + `_MARKET_CACHE_TTL`（Ruling S）；**空库降级**：rankings 层捕获 `ValueError` 返回空 payload（`as_of`=最近工作日、`is_latest_trading_day=false`、`items=[]`，不缓存），公开首页块不再 500，而 `get_latest_trade_date` 对确需日期的调用方仍抛 `ValueError`
+- **Task 2.6**：新增 `tests/test_rankings_index.py`（`@pytest.mark.e2e`，默认 addopts 排除），锁三条 Task 2.1 索引的计划不回退：gainers→`idx_daily_quotes_date_pct`、amount→`idx_daily_quotes_date_amount`、turnover_rate→`idx_daily_basic_date_turnover`，断言命中期望索引节点且计划无 `Sort`
+- **验证**：TDD 先红后绿（Task 2.4 纯函数 ImportError→5 passed；Task 2.5 schema ModuleNotFoundError→7 passed）；容器内以本分支代码 + ASGI transport 连真库实跑，5 种类型 200 且返回真实行，非法 `type` 与 `limit=0` 均 422；Task 2.6 三例 e2e 容器内 3 passed，实抓计划分别为三种 Index Scan
+- 测试：`uv run pytest -q` 201 passed / 27 deselected；`uv run --extra dev mypy app` 142 files 无问题
+- 涉及模块：backend/app/services/market_service.py, backend/app/schemas/ranking.py, backend/app/api/v1/market.py, backend/tests/test_latest_trade_date.py, backend/tests/test_rankings.py, backend/tests/test_rankings_index.py
+
+## 2026-09-11 - 首页公开化 Phase 2（Task 2.1–2.3）：日线落库原生 pct_chg/pre_close + 权威回填
+- **Task 2.1**：Alembic 迁移 `cf4b8e317fe5`（`5a1b2c3d4e5f` →）为 `daily_quotes` 增可空 `pre_close Numeric(12,4)` / `pct_chg Numeric(8,4)`，并建 `idx_daily_quotes_date_pct(trade_date,pct_chg)`、`idx_daily_quotes_date_amount(trade_date,amount)`、`idx_daily_basic_date_turnover(trade_date,turnover_rate)`；实查 `pg_partitioned_table` 无 `daily_quotes` 行（未分区），故用普通复合索引、不加分区/合并分支；已 `alembic upgrade head`，`heads` 单行
+- **Task 2.2**：`DailyQuote` 模型 + `tushare_ingest` 两处日线构造（按 trade_date 全市场、按股票区间）+ `quote_repo.upsert_quotes` 的 VALUES 与 `on_conflict_do_update.set_` 全部补 `pre_close`/`pct_chg`（落地点四处缺一即静默丢字段）
+- **Task 2.3**：新增 `scripts/backfill_pct_chg.py`（`--years`/`--limit`/`--start-date`/`--end-date`，幂等）与 `quote_repo.update_pct_chg_for_date`（`sa.Values` + Core `UPDATE ... FROM (VALUES ...)` 单语句，仅 UPDATE 不 INSERT）；**只回填 TuShare 原生值，禁止 `LAG(close)` 现算**（除权日参考前收需为除权后价），理由写入 docstring
+- **验证**：TDD 先红（`AttributeError: 'DailyQuote' object has no attribute 'pct_chg'`）后绿；`--limit 4`（2026-09-04…09-09）实机回填 22,196 行，重复运行同值（幂等），与 TuShare 原生逐行对拍 22,196 行 0 不一致（抽样 000001.SZ/300750.SZ/600000.SH 值全等）；全量 3 年约 750 次 `fetch_daily` 由运维另跑（见 Task 2.1–2.3 报告）
+- 测试：新增 `tests/test_daily_ingest_pct_chg.py` 3 例（映射落库、upsert 冲突补列、回填仅 UPDATE 无 LAG）；`uv run pytest -q` 185 passed / 24 deselected
+- **D4 复审修复**：三个排行索引补进 ORM `__table_args__`（`models/quote.py`、`models/daily_basic.py`），使 `alembic check` 不再对它们报 `remove_index`（输出中其余 13 项为既有漂移，不在本次范围）；upsert 测试改为按 `ON CONFLICT` 切分断言 INSERT 列清单——原整体字符串断言被 SET 的 `excluded.*` 覆盖，删掉 VALUES 字典条目仍会假绿；新增第二处 ingest（`ingest_daily_quotes_for_stock`）回归测试。测试共 4 例，两处断言均以变异测试验证会转红
+- 涉及模块：backend/app/migrations/versions/cf4b8e317fe5_add_pct_chg_to_daily_quotes_and_ranking_.py, backend/app/models/quote.py, backend/app/models/daily_basic.py, backend/app/services/tushare_ingest.py, backend/app/repositories/quote_repo.py, backend/scripts/backfill_pct_chg.py, backend/tests/test_daily_ingest_pct_chg.py
+
+## 2026-09-11 - 首页公开化 Phase 1 收口：板块/资金/快讯三块 + 零 401 与降级门禁（Task 1.7–1.10）
+- **Task 1.7 板块区**：新增 `features/market/components/SectorFlow`（左列 `/market/sectors` 证监会口径、右列 `/market/capital-flow` 近似口径双向条）；`/market/sector-moneyflow` 实测返回 `[]` 无法支撑资金列，改走可用源并在 UI 标注「近似口径：涨/跌股成交额估算，非主力净流入」；两列独立查询独立降级
+- **Task 1.8 资金区**：新增 `MoneySentiment` 复用 `MarketMoneyflowCard`（`/market/market-moneyflow`）；**北向卡整卡移除**——`northbound_daily` 无数据行（非仅滞后），不以本地序列替补
+- **Task 1.9 快讯区**：新增 `MarketNewsFeed`（财报公告/重大事项两 Tab，各 10 条），复用并导出 `dataFace/AnnouncementFeed`（增 category/limit/timeMode 可选 props + `format.fmtRelativeTime`）；零新数据源（TuShare 新闻接口积分门槛），不做伪新闻流
+- **Task 1.10 收口**：页脚加「数据来源：TuShare · 东方财富 · 巨潮资讯网 · 上海证券交易所」；免登录行情文案纠偏（移除行业树「注册后查看」、账号能力区「注册即解锁全部投研能力」与注册档「猪周期工作台完整能力」，仅个性化——自选/标签/同步/提醒——保留在注册档）；新增 e2e 硬门禁——匿名全链路除 `/auth/session` 探测外零 401/403（并断言确发出行情请求防假绿）、单源/全源 abort 不白屏
+- 测试：public-homepage 8 → 20，合计 30/30（landing 7 + darkmode 3）全绿
+- 涉及模块：frontend/src/features/market/components/{SectorFlow, MoneySentiment, MarketNewsFeed, dataFace/AnnouncementFeed, format.ts}, frontend/src/pages/landing, frontend/e2e/public-homepage.spec.ts
+
+## 2026-09-11 - 首页公开化 Phase 1（D2 复审修复）：榜单剔除 null 行 + 脉搏区表面收口
+- **榜单**：涨幅/跌幅榜（及成交额榜）按当前排序维度剔除 null 行再截断 top-10（多取 20 条），修掉后端 desc 把无行情次新股排到榜首、涨幅榜首屏两行 `--` 的问题；`--` 缺失值契约改在不受过滤影响的成交额榜断言（Task 2.7 切 `/market/rankings` 后 SQL 已 `pct_chg IS NOT NULL`，此守卫为保险）
+- **脉搏区**：分布返回 `[]` 不再渲染成 `上涨 0 · 下跌 0`，改走「今日涨跌分布暂不可用」占位；分布柱家数补千分位与汇总行统一；`MarketPulse`/`index.tsx` 改直连模块路径，避免 barrel 把 ECharts 视图拖进匿名首页 chunk
+- **清理**：删除已无引用的 `.landing-hero-secondary-cta`；`LandingNav` aria-label 改为「行情台区块导航」（`darkmode.spec.ts` 同步）
+- 测试：分桶完整性用例显式断言「上涨+下跌 == 逐桶求和 == 常量」；新增空分布占位用例；18/18 全绿
+- 涉及模块：frontend/src/features/market/components/RankingMatrix.tsx, DistributionBars.tsx, frontend/src/pages/landing, frontend/e2e
+
+## 2026-09-11 - 首页公开化 Phase 1：免登录行情台 IA 重排（Task 1.4–1.6）
+- **背景**：产品决策「免登录行情为主」——行情区块是首页主内容，营销区压缩到行情台之后；导航锚点从「功能/数据/行业」改为「脉搏/榜单/板块/资金/快讯」（`#pulse/#rankings/#sectors/#money/#news`）
+- **Task 1.4**：`Hero` 压缩为 `CompactHero`（保留 H1/信任行/CTA，实测高 232px ≤ 240px 目标，大图与次 CTA 移除），`index.tsx` 区块序列改为 紧凑 Hero → 脉搏/榜单/板块/资金/日历/快讯 → ValueProps/ProductShowcase → DataCoverage/IndustryGrid/AccountPerks/BottomCTA；未填充行情区块以 `<SectionCard>` + AntD `Skeleton` 显式骨架挂载
+- **Task 1.5**：新增 `features/market/components/DistributionBars`（横向双向柱，与 `/market` DistributionChart 同 11 桶口径），`MarketPulse` 包进 `<SectionCard id="pulse">` 并加 `.index-ticker` 锚；**修复分桶漏桶**：`UP_RANGES` 补 `0~1%` 使两侧对称穷尽（实测上涨由 954 → 1,903，不再静默丢掉 949 只），失败降级文案去掉「注册后」改为「行情数据暂不可用，请稍后重试」
+- **Task 1.6**：新增 `shared/api/stocks.ts#fetchStockRanking`（走 Task 1.3 已缓存的 `/api/v1/exchanges/stocks/enriched` 排序端点）与 `features/market/components/RankingMatrix`（涨幅/跌幅/成交额三 Tab；换手率榜后端未支持，Phase 2 Task 2.7 补）；缺失涨跌幅经 `DeltaText` 渲染 `--`
+- **测试**：`public-homepage.spec.ts` 扩至 7 例（含「上涨+下跌 == 11 桶总和」「null 渲染 `--` 不渲染 0.00%」「脉搏区失败不影响榜单区」）；`landing.spec.ts` 分桶期望随口径修正 134 → 234；landing 7 + darkmode 3 + public-homepage 7 全绿
+- 涉及模块：frontend/src/pages/landing, frontend/src/features/market/components, frontend/src/shared/api/stocks.ts, frontend/e2e
+
+## 2026-09-11 - 首页公开化 Phase 1（D7 修订）：暗色涨跌色达标卡片表面，门禁统一
+- **问题**：`SectionCard` 内 `DeltaText`/`DataRow` 实际渲染在 `--bg-panel #1e222d`；暗色 `--up #f23645`(4.08:1) / `--down #089981`(4.45:1) 对卡片面不达 WCAG AA（对 `--bg-page #131722` 的 4.59/5.01 达标掩盖了该缺陷）。原 D7「暗色已达标故不动」是在错误表面（`--bg-page`）上测得，予以推翻
+- **修复**：暗色 `--up #f2555a`（bg-page 5.30 / bg-panel 4.71）、`--down #0aa088`（bg-page 5.45 / bg-panel 4.84），同步 `:root[data-theme="dark"]` 与 `theme.ts` `THEME_COLORS.dark`；`:root` 兜底块保持浅色不变
+- **门禁**：移除 `check-design-tokens.mjs` 内的暗色例外，`check:design` 对 fallback/light/dark 三块 × `--bg-page`/`--bg-panel` 两表面统一断言 ≥ 4.5，12 项全 PASS、exit 0
+- 涉及模块：frontend/src/app/styles/theme.css, frontend/src/app/theme.ts, frontend/scripts/check-design-tokens.mjs, docs/design/landing-market-theme.md
+
+## 2026-09-11 - 首页公开化 Phase 1（D1 复核补漏）：设计令牌门禁接入 CI + 覆盖卡片表面
+- **问题**：`npm run check:design` 只存在于 package.json，无任何自动化路径调用，改色破坏 AA 或 `theme.ts`/`theme.css` 失同步时 CI/lint/build 全绿；且原脚本只对 `--bg-page` 校验，漏掉 DataRow/DeltaText 实际所在的 `SectionCard` 表面（`--bg-panel`）
+- **修复**：CI `frontend-lint` job 在 `npm ci` 后新增 `npm run check:design` 硬门禁步骤；脚本对 light/fallback 同时校验 `--bg-page` 与 `--bg-panel` 对比度 ≥ 4.5
+- **发现（已由 D7 修订销项）**：暗色 `--up #f23645`(4.08:1) / `--down #089981`(4.45:1) 对 `--bg-panel #1e222d` 不达 AA；本条目当时未改暗色、暂只校验 `--bg-page`，随后按 D7 修订改为暗色换值并统一两表面校验（见上一条）
+- 涉及模块：.github/workflows/ci.yml, frontend/scripts/check-design-tokens.mjs, docs/references/best-practices.md
+
+## 2026-09-11 - 首页公开化 Phase 1：enriched 排序路径加 Redis 缓存（公开流量防护）
+- **问题**：`/api/v1/exchanges/stocks/enriched` 公开可达，带 `sort_by` 时每次请求都走「全市场查询 + LATERAL + Python 排序」且完全无缓存，匿名流量可打满 DB
+- **修复**：`list_stocks_enriched` 排序分支前置 Redis 缓存（key `stocks:enriched:sort:{exchange}:{category}:{keyword}:{sort_by}:{sort_order}:{offset}:{page_size}`，TTL 60s），命中直接反序列化返回，不再触库；key 含全部过滤维度，避免不同筛选互串
+- **连带修复**：端点原本以 `cache=None` 调用（注释称缓存参数未被使用），导致缓存无法生效；改为注入 `CacheDep` 传入真实 `CacheClient`，让防护真正短路
+- 涉及模块：backend/app/services/stock_service.py, backend/app/api/v1/stocks.py, backend/tests/test_stock_sort_cache.py
+
+## 2026-09-11 - 首页公开化 Phase 1：共享 UI 原语 DeltaText / DataRow / SectionCard
+- 新增 `frontend/src/shared/ui/` 三个行情区块基础件：`DeltaText({value, suffix?})`（正 `+`/负 `−`/零无符号/缺失 `--`，消费 `--up`/`--down` CSS 变量随主题切换）、`DataRow({logo?, title, ticker?, value?, unit?, href?, delta?})`、`SectionCard({id?, title, moreHref?, moreText?, children})`；签名由后续所有行情区块消费，不得改动
+- 三个组件与类型经 `shared/ui/index.ts` 桶文件导出；新增 `frontend/e2e/public-homepage.spec.ts` 最小冒烟（`/` 返回 200 且 H1 可见）
+- 涉及模块：frontend/src/shared/ui, frontend/e2e
+
+## 2026-09-11 - 首页公开化 Phase 1：涨跌色 WCAG AA 修复 + 设计令牌门禁
+- **问题**：浅色模式 `--up #f5222d` / `--down #22c55e` 对 `--bg-page #ffffff` 对比度仅 4.08:1 / 2.28:1，均低于 WCAG AA 的 4.5:1
+- **修复**：浅色涨跌色改为 `--up #c62828`（5.62:1）/ `--down #0a7d5f`（5.11:1），同步三处声明（`:root` 首帧兜底块、`:root[data-theme="light"]`、`theme.ts` `THEME_COLORS.light`）；`flat`/`hover` 不动。暗色当轮未动，后经 D7 修订换值（见上）——原判据只测了 `--bg-page`，未覆盖 `SectionCard` 的 `--bg-panel`
+- **门禁**：新增 `frontend/scripts/check-design-tokens.mjs` 与 `npm run check:design`，校验三块 `--up`/`--down` 对比度 ≥ 4.5 且 `theme.ts` 同名值一致；任何改色先跑它
+- 涉及模块：frontend/src/app/styles/theme.css, frontend/src/app/theme.ts, frontend/scripts, docs/design/landing-market-theme.md
+
+## 2026-09-11 - 首页公开化 Phase 0：noindex / SEO 决策记录
+- **核实**：`curl -sI` 实测 `http://127.0.0.1:80/`（frontend 路由，200）与 `/api/v1/market/distribution`（HEAD 405 / GET 200）均返回 `X-Robots-Tag: noindex, nofollow, nosnippet, noarchive`；四条 router（frontend/api/auth/api-tasks）均挂载 `sec-headers@file`，中间件定义在 `gateway/dynamic/middlewares.yml:35-45`
+- **决策**：维持整站 `noindex`（理由：公开再分发行情数据有条款约束 + Vite SPA 难索引、投入产出不成比例）；本计划删除一切 SEO /「静态可索引落地路径」目标；页脚数据来源署名（Task 13）保留，定位为面向用户的合规署名而非 SEO
+- **复核**：`api-ratelimit` 的 `burst(50) < average(100)` 仅记录为「待用户确认是否有意为之」，未改网关配置
+- 涉及模块：plans/2026-09-11-public-market-homepage（§0.5.1、风险 ⑦）, docs/references/best-practices（八）
+
+## 2026-09-11 - 首页公开化 Phase 0：数据语义核实（北向/指数覆盖/分区状态）
+- **问题**：公开行情首页的三个前置事实未定，直接决定北向模块形态、指数条数据源与 Phase 2 索引方案
+- **核实**：
+  - 北向 `northbound_daily` 实测**全表 0 行**（非仅近 30 天断流），`/market/northbound` 返回 `[]`；`market_moneyflow_daily`、`sector_moneyflow_snapshots` 同为 0 行
+  - `index_dailies` 含 6 个指数：`000001.SH/000016.SH/000300.SH/399001.SZ/399006.SZ/899050.BJ`，`last_date` 均 `2026-09-10`；`GLOBAL_INDICES` 已含沪深300/上证50/北证50，与 `market_service._TARGET_INDICES` 对齐，**无需修 job**
+  - `daily_quotes` 实测**未分区**（`pg_class.relkind='r'`，`pg_partitioned_table` 计 0），Phase 2 用普通复合索引
+- 风险表 ②③④ 已销项并附原始查询输出，Task 11/14 的处置已明确
+- 涉及模块：plans/2026-09-11-public-market-homepage, docs/references/best-practices
+
 ## 2026-09-09 - API Gateway 选型调研
 - 比较 Docker Compose 场景下 NGINX、Traefik、Kong/APISIX 的动态路由、OIDC/JWT、限流、可观测性、配置复杂度与 Kubernetes 演进适配性，并结合当前 stock_bot 架构给出 Gateway 选择建议。
 - 涉及模块：架构调研、部署、认证、可观测性
@@ -460,6 +577,52 @@
 - **问题**：全新部署（空库）下打开 /market 白屏——ECharts treemap 对内部虚拟节点执行 label 渲染时 `changePercent` 为 undefined，SectorHeatmap formatter 抛 TypeError 导致 React 18 卸载整棵树；且浏览器缓存旧 index.html 使修复不可见
 - **修复**：SectorHeatmap label/tooltip formatter 与两张资金流卡片 tooltip 补空值防御；新增全局 `ErrorBoundary`（路由级兜底，任何子树渲染异常降级为错误卡片而非白屏）；nginx SPA 入口增加 `Cache-Control: no-cache`（assets 仍长缓存，入口每次回源，杜绝发版后浏览器跑旧 bundle）
 - 涉及模块：frontend/features/market/components(SectorHeatmap/MarketMoneyflowCard/SectorMoneyflowCard), frontend/shared/ui(ErrorBoundary 新增), frontend/App, frontend/nginx.conf
+
+## 2026-09-10 - TradingView 风格明暗双主题基础设施（Stage A）
+- 落实 `docs/design/landing-market-theme.md` §1 配色契约：`theme.ts` 重构为 `buildAntdTheme(mode)` 工厂（dark 走 darkAlgorithm）+ `THEME_COLORS` 双模式色板（up/down 红涨绿跌随主题切换）；新建 `app/styles/theme.css` 双轨 CSS 变量（`:root[data-theme]` + 首帧浅色兜底）；新建 `ThemeContext/ThemeProvider`（localStorage `stockbot-theme` > `prefers-color-scheme`，写 `data-theme` 持久化）；新增 `ThemeToggle` 挂 MainLayout Header；MainLayout/SearchBar/UserMenu 壳层硬编码色全部换 CSS 变量；`shared/ui/EChart` 封装内深合并注入 axisLabel/legend/splitLine/textStyle 主题色（调用方显式设置恒优先）；ChangeText/KlineChart/klineOption 全局件改经 `useTheme().colors` 取具体 hex。业务卡片内部细节留给 Stage C。
+- 涉及模块：frontend/app(theme 新工厂/theme-context 新增/styles 新增/layouts/MainLayout), frontend/shared/ui(EChart/ChangeText/ThemeToggle 新增/kline), frontend/features/search, frontend/features/auth(UserMenu), frontend/main.tsx, frontend/App
+
+## 2026-09-10 - StockBot 品牌宣传页 Landing（Stage B）
+- 落实 `docs/design/landing-market-theme.md` §0-§5：`/` 从重定向 /market 改为公开 lazy Landing 页（独立布局不套 MainLayout，已登录停留此页）；10 区块全量落地——透明吸顶导航（滚动 >24px 加底色+边框，锚点 功能/数据/行业，登录态 CTA）、Hero（「把一个行业，研究透。」+ 信任行 + 纯 CSS accent 渐变装饰）、实时脉搏卡（/market/indices 8 ticker + /market/distribution 涨跌摘要，60s 轮询，失败静默降级占位）、价值三卡、深色产品展示区（纯 CSS+DOM 绘制周期相位条/来源徽章/信号卡，明暗主题恒定）、§5 十行数据覆盖矩阵（统计带 + 免费徽章）、申万行业网格（按个股数 accent 透明度阶梯，失败占位文案）、账号能力三档横条、底部 CTA、页脚（免责声明 + GitHub）。CTA 登录态感知：已登录「进入工作台」→ /market，未登录「免费开始」→ /login（isAuthReady 前隐藏文字防闪现）；颜色全部走 CSS 变量或 useTheme().colors，不引入新依赖。
+- 涉及模块：frontend/app/router, frontend/pages/landing(新增 index/landing.css/useLandingCta/sections×11)
+
+## 2026-09-10 - 市场页 TradingView 化重构与全量主题适配（Stage C）
+- 落实 `docs/design/landing-market-theme.md` §4/§5：`/market` 重构为四分类 Tab（`data-testid="market-tabs"`：指数总览=全球指数卡+A股核心指数卡 / A股全景=涨跌分布+板块热力图+申万行业网格+热门板块+行业分类 / 资金流向=板块+大盘+北向三卡 / 数据面=龙虎榜等 Tab 表现状迁移），页脚上方新增数据版图精简矩阵；新增 `CoreIndexCards`（六核心指数复用 `GlobalIndexCardView`，与 GlobalMarketBoard 共享 ["global-indices"] 查询缓存）；`GlobalIndexCardView` 按 TV ticker 行规范重排（名称左/价格右对齐/涨跌幅色块带 +/- 号）并接入 useTheme；市场页卡片规范（--bg-panel 底、1px --border、8px 圆角）经 `pages/market/market.css` 落地。
+- Stage B 的 DataCoverage 矩阵与 IndustryGrid 提取为共享组件 `features/market/components/DataCoverageMatrix` + `SwIndustryGrid`（CSS co-locate 随组件走，landing.css 移除已迁移规则），landing 两 section 改为薄包装，市场页直接复用。
+- Stage A 主题债全量清偿：features/market、features/industry-research、features/stock-detail 全部静态 `COLORS.*` 引用（15 处）与图表 `backgroundColor:"#fff"`/splitLine `#f0f0f0` 硬编码改经 `useTheme().colors` 或 CSS 变量注入（纯函数 buildOption 改收 colors 参数）；市场页五张图从裸 ReactECharts 迁至 `shared/ui/EChart` 封装（默认注入 backgroundColor transparent + 轴/分隔线主题色，新增 onEvents 透传支撑热力图点击）；SectorHeatmap/DistributionChart 渐变端点色改由主题色推导（Dark class 阈值 0.8 保留，近中性块文字用 textPrimary/textSecondary 随主题成立）；e2e marketDataFace 板块资金流/数据面两用例补顶层 Tab 切换。deprecated `COLORS` 导出保留（research-workbench 存量引用另行迁移）。
+- 涉及模块：frontend/pages/market(重构+market.css 新增), frontend/pages/landing(sections 两处薄包装+landing.css 瘦身), frontend/features/market(components×10+新增 CoreIndexCards/SwIndustryGrid/DataCoverageMatrix), frontend/features/industry-research(components×5), frontend/features/stock-detail(RelatedEvents), frontend/shared/ui(EChart), frontend/e2e(marketDataFace)
+
+## 2026-09-10 - 宣传页/TV 风格市场页/暗色模式 E2E 自测收尾
+- **E2E 新增与修复**：新增 landing.spec.ts（8 用例：公开路由/登录态 CTA 互换/脉搏卡/数据矩阵/行业网格）与 darkmode.spec.ts（3 用例：切换/持久化/暗色无白底）；修复 auth.spec 两处 strict-mode 脆弱选择器（注册表单子串双匹配、Modal 双标题）
+- **E2E 环境**：vite dev proxy 改经 Gateway(:80)（端口收敛后 8000/8001 不可达）、dev server 显式绑 127.0.0.1（默认 [::1] 致 Chromium 拒连）
+- **全量回归**：36 用例 33 过；余 3 项（research×2/userIsolation×1）为存量数据态依赖（industry metrics 空、固定用户名重复注册非幂等），与本分支无关
+- **调试沉淀**：Playwright addInitScript 与 expect 断言器存在状态翻转交互，清 storage 场景应改用「加载后清理+reload」；Mock 数据字段名必须对齐前端类型（MarketIndex 用 value/changePercent/tsCode）
+- 涉及模块：frontend/e2e(landing/darkmode 新增, auth 修复), frontend/vite.config
+
+## 2026-09-11 - 宣传页市场脉搏与市场页数据同源化（修复滞后性）
+- **问题**：用户实测 landing 首页"实时市场脉搏"与 /market 页指数对不上且滞后——landing 走旧接口 `/api/v1/market/indices`（`market_service.list_market_indices` 读 index_dailies 盘后日线，asof 硬编码 15:00），market 页走 `/api/v1/market/global-indices`（东财实时快照 + 60s 缓存），两条链路口径不同（EOD vs realtime）；landing 文案"每 60 秒自动刷新"轮询的却是盘后库表
+- **修复**：
+  - 前端 `MarketPulse.tsx` 改用与市场页同源的 `fetchGlobalIndices()`（global-indices 实时链路），Ticker 适配 GlobalIndexCard 字段（price/pctChange），文案改"东财实时快照，与市场页同源"
+  - 后端 `GLOBAL_INDICES` 补 5 只 A 股宽基：沪深300/中证500/科创50/上证50/北证50（东财 secid 1.000300/1.000905/1.000688/1.000016/0.899050 全部实测返回实时行情），landing 8 格与市场页 A 股指数完全对齐
+  - E2E mock 同步：`**/api/v1/market/indices` → `**/api/v1/market/global-indices`（snake_case 载荷）
+  - 单测同步：registry shape / cards 合并断言 9 → 14，新增 A 股 em_secid 集合锁定
+- **验证**：tsc ✓、ruff ✓、mapping 18 测试 ✓、gateway 实测 14 条（8 CN 全 realtime）
+- 涉及模块：frontend/src/pages/landing/sections/MarketPulse.tsx, frontend/e2e/landing.spec.ts, backend/app/services/market_data_service.py, backend/tests/test_market_data_mapping.py
+
+## 2026-09-11 - 申万 custom-tag overlay 导入修复（"其他"分类 1497→61 只回落）
+- **问题**：用户实测宣传页行业网格出现"其他 1497 只"分类。诊断链：tree API 的"其他"= 未命中申万 L3 成分与自定义标签的股票兜底聚合（market_service.get_sw_industry_tree）→ 库里 stock_custom_sw_tags 为 0 行 → 2026-09-03 的 OTHER→SW merge（1439 行）在 P7 重建数据库后从未导入
+- **根因**：`import_custom_tags_from_sql` 按 `;` 切分且把以 `--` 开头的块整块跳过——seed 文件是「9 行注释头 + 单条 1439 行 VALUES INSERT（行内无分号，仅末尾一个分号）」，切分后首块恰好 = 注释头+完整 INSERT，以 `--` 开头被整体丢弃，导入恒为 0 行（api 日志 "Imported custom-tag overlay: 0 rows" 安静存在了两天）；seed 文件本身格式正确（40ff00c 入库即无分号），问题纯在解析器
+- **修复**：解析重构为 `_split_sql_statements`（先剥离注释行再按分号切分，纯函数可单测）+ 修正 seed 头行分号 + 新增 tests/test_sw_seed_import.py 3 用例锁定畸形输入行为
+- **验证**：api 重建后 data_init 自动导入 1439 行；清 `market:sw-tree` 缓存后 tree API "其他"= 61 只（残余为确无申万映射股票，兜底保留），5560 只全可见
+- 涉及模块：backend/app/services/sw_industry_service.py, backend/data/sw_custom_tags_seed.sql, backend/tests/test_sw_seed_import.py(新增)
+
+## 2026-09-11 - 代码评审 P1-P4 优化（缺失值语义 / 解析器边界 / 快照键碰撞 / 日志语义）
+- **P1 缺失涨跌幅误显示 0.00%**（用户可见）：MarketPulse 的 Ticker 对 `pctChange=null` 用 `?? 0` 兜底，渲染成"0.00% + 中性色"会被读成平盘（EOD 兜底且 spark 不足时真实可达）。改为与价格同口径显示 `--`；先写 E2E 复现（Playwright 明确报 `unexpected value "0.00%"`）再修复，landing.spec 7/7 通过
+- **P2 解析器边界**：`_split_sql_statements` 原先只处理注释独占行，行尾注释（`INSERT ...; -- 说明`）会与下条语句粘连并被当语句执行（报语法错）。改为对每个分号块逐行剔除注释（覆盖两种形态），docstring 显式声明"不支持字符串字面量内分号"；单测 5 个（含红→绿复现）
+- **P3 快照键跨市场碰撞**：`_em_code` 取数字段短码，沪/深同号段（1.000001 vs 0.000001）会静默错配——单测精确复现（`assert 222.0 == 111.0`，沪市指数拿到深市报价）。client 返回体新增完整 `secid`（f13 市场号 + f12 代码），service 改按 secid 索引并删除 `_em_code`
+- **P4 导入日志语义含混**：`Imported ... N rows` 实为全表计数（排障时被误读为"本次导入量"）。改为 `table now has N rows (+M this run)`，实机验证输出 `1439 rows (+0 this run)`（幂等重放）
+- **验证**：后端 ruff/mypy ✓、单测 180 通过 ✓、landing E2E 7/7 ✓、实机重建 api+frontend 后 global-indices 14 条全 realtime 无回归 ✓
+- 涉及模块：frontend/src/pages/landing/sections/MarketPulse.tsx, frontend/e2e/landing.spec.ts, backend/app/services/sw_industry_service.py, backend/app/services/market_data_service.py, backend/app/core/providers/eastmoney_client.py, backend/tests/{test_sw_seed_import,test_market_data_mapping,test_eastmoney_client}.py
 ## 2026-09-09 - 浏览器登录会话安全研究
 - 基于 RFC 9700、RFC 10017（OAuth 2.0 for Browser-Based Applications）、OpenID Connect Core 与 OWASP Session/CSRF Cheat Sheet，形成 stock_bot 的 BFF+HttpOnly 会话、刷新令牌轮换、CSRF 与 Cookie flags 建议。
 - 涉及模块：安全架构、backend、frontend、Docker Compose、docs

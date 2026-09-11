@@ -1,8 +1,21 @@
 """Quote repository: kline and latest quote queries."""
 
 from datetime import date
+from typing import cast
 
-from sqlalchemy import desc, exists, func, select, text
+from sqlalchemy import (
+    Integer,
+    Numeric,
+    Table,
+    Values,
+    column,
+    desc,
+    exists,
+    func,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.quote import DailyQuote
@@ -91,6 +104,8 @@ async def upsert_quotes(db: AsyncSession, quotes: list[DailyQuote]) -> int:
             "high": q.high,
             "low": q.low,
             "close": q.close,
+            "pre_close": q.pre_close,
+            "pct_chg": q.pct_chg,
             "volume": q.volume,
             "amount": q.amount,
             "adj_factor": q.adj_factor,
@@ -109,6 +124,8 @@ async def upsert_quotes(db: AsyncSession, quotes: list[DailyQuote]) -> int:
                 "high": insert(DailyQuote).excluded.high,
                 "low": insert(DailyQuote).excluded.low,
                 "close": insert(DailyQuote).excluded.close,
+                "pre_close": insert(DailyQuote).excluded.pre_close,
+                "pct_chg": insert(DailyQuote).excluded.pct_chg,
                 "volume": insert(DailyQuote).excluded.volume,
                 "amount": insert(DailyQuote).excluded.amount,
                 # COALESCE：新行因子为 NULL（每日 ingest 不带因子）时不覆盖既有已回补值
@@ -117,6 +134,55 @@ async def upsert_quotes(db: AsyncSession, quotes: list[DailyQuote]) -> int:
                     DailyQuote.__table__.c.adj_factor,
                 ),
             },
+        )
+    )
+    result = await db.execute(stmt)
+    await db.flush()
+    return result.rowcount  # type: ignore[attr-defined, no-any-return]
+
+
+async def update_pct_chg_for_date(
+    db: AsyncSession,
+    trade_date: date,
+    rows: list[tuple[int, float | None, float | None]],
+) -> int:
+    """Bulk-update ``pre_close``/``pct_chg`` for one trade_date; returns rows updated.
+
+    ``rows`` is ``(stock_id, pre_close, pct_chg)`` taken from TuShare's native
+    ``daily`` response, re-fetched by trade_date. Do **not** "optimize" this into
+    ``LAG(close)`` over ``daily_quotes``: on an ex-dividend day the reference
+    close is the adjusted previous close, and a naive window function computes
+    the wrong pct_chg exactly on those days. TuShare's native values already
+    account for the corporate action.
+
+    UPDATE-only, never INSERT: these reconcile rows that already exist (the
+    backfill walks trade_dates of ``daily_quotes``). An INSERT path would need
+    ``close`` (NOT NULL) and would fabricate rows for pairs absent from the
+    authoritative day's data.
+    """
+    if not rows:
+        return 0
+
+    # Single statement: UPDATE ... FROM (VALUES ...) carries the true affected
+    # rowcount. The executemany form returns -1 under asyncpg, and the ORM
+    # bulk-update path demands primary keys the (stock_id, trade_date)
+    # reconcile does not carry.
+    table = cast(Table, DailyQuote.__table__)
+    provided = Values(
+        column("stock_id", Integer),
+        column("pre_close", Numeric(12, 4)),
+        column("pct_chg", Numeric(8, 4)),
+        name="v",
+    ).data(rows)
+    stmt = (
+        update(table)
+        .where(
+            table.c.stock_id == provided.c.stock_id,
+            table.c.trade_date == trade_date,
+        )
+        .values(
+            pre_close=provided.c.pre_close,
+            pct_chg=provided.c.pct_chg,
         )
     )
     result = await db.execute(stmt)

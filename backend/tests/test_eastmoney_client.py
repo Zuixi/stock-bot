@@ -49,6 +49,7 @@ async def test_fetch_index_snapshot_parses_and_handles_dash():
     rows = await client.fetch_index_snapshot(["100.N225", "100.KS11"])
     assert rows[0] == {
         "code": "N225",
+        "secid": "100.N225",
         "name": "日经225",
         "price": 64214.48,
         "pct_change": -0.17,
