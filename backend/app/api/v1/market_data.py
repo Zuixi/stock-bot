@@ -1,14 +1,16 @@
 """Market-data face endpoints: global indices / sector moneyflow / northbound（北向）/
 dragon-tiger（龙虎榜）/ block-trades（大宗交易）/ share-floats（解禁）/ repurchases（回购）/
-announcements（公告快讯）."""
+announcements（公告快讯）/ limit-up ladder（连板梯队与市场情绪）."""
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import CacheDep
+from app.schemas.limit_up import LimitUpLadderOut, SectorLimitUpOut, YesterdayLimitUpOut
 from app.schemas.market_data import (
     AnnouncementOut,
     BlockTradeOut,
@@ -20,9 +22,14 @@ from app.schemas.market_data import (
     SectorMoneyflowOut,
     ShareFloatOut,
 )
-from app.services import market_data_service
+from app.services import limit_up_service, market_data_service
 
 router = APIRouter(tags=["market-data"])
+
+
+def _iso(v: str | None) -> date | None:
+    """ISO 日期 → date；解析失败抛 ValueError（由各端点转 400，与 /dragon-tiger 同写法）。"""
+    return datetime.fromisoformat(v).date() if v else None
 
 
 @router.get("/global-indices", response_model=list[GlobalIndexCardOut])
@@ -131,3 +138,56 @@ async def get_market_moneyflow(cache: CacheDep) -> MarketMoneyflowOut:
     """大盘资金流：今日四档实时 + 近 30 日历史（沪深两市合成口径）。"""
     payload = await market_data_service.get_market_moneyflow(cache)
     return MarketMoneyflowOut(**payload)
+
+
+@router.get("/limit-up-ladder", response_model=LimitUpLadderOut)
+async def get_limit_up_ladder(
+    cache: CacheDep,
+    date_: str | None = Query(
+        default=None, alias="date", description="ISO 日期，缺省=库内最新交易日"
+    ),
+    lookback: int = Query(default=10, ge=5, le=30),
+) -> LimitUpLadderOut:
+    """连板梯队 + 情绪温度计（本地 K 线自算为主，见 docs/design/limit-up-sentiment.md）。"""
+    try:
+        snap = await limit_up_service.get_snapshot(cache, _iso(date_), lookback)
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="date must be ISO format, e.g. 2026-09-08"
+        ) from None
+    return LimitUpLadderOut(
+        as_of=snap["as_of"], as_of_prev=snap["as_of_prev"], source=snap["source"],
+        limits_present=snap["limits_present"], is_partial=snap["is_partial"],
+        sw_coverage=snap["sw_coverage"], lookback=lookback,
+        degraded_reason=snap["degraded_reason"],
+        kpis=snap["kpis"] or None, echelons=snap["echelons"],
+    )
+
+
+@router.get("/sector-limit-up", response_model=SectorLimitUpOut)
+async def get_sector_limit_up(
+    cache: CacheDep,
+    date_: str | None = Query(default=None, alias="date"),
+    sw_l1: str | None = Query(default=None, description="按申万一级代码过滤，如 110000"),
+) -> SectorLimitUpOut:
+    try:
+        snap = await limit_up_service.get_snapshot(cache, _iso(date_))
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="date must be ISO format, e.g. 2026-09-08"
+        ) from None
+    payload = limit_up_service.sector_payload(snap, sw_l1)
+    return SectorLimitUpOut(**payload)
+
+
+@router.get("/yesterday-limit-up", response_model=YesterdayLimitUpOut)
+async def get_yesterday_limit_up(
+    cache: CacheDep, date_: str | None = Query(default=None, alias="date")
+) -> YesterdayLimitUpOut:
+    try:
+        snap = await limit_up_service.get_snapshot(cache, _iso(date_))
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="date must be ISO format, e.g. 2026-09-08"
+        ) from None
+    return YesterdayLimitUpOut(**limit_up_service.yesterday_payload(snap))
