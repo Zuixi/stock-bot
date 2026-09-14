@@ -83,9 +83,7 @@ async def get_snapshot(
         rows = await limit_up_repo.fetch_limit_up_window(
             db, as_of=target, as_of_prev=market_days[-2], window_start=market_days[0]
         )
-        # 「候选为空」的判据是当日无涨停（breadth.zt_count==0），不是窗口行数：
-        # 完整行情日的 kpis 来自 breadth、与窗口行无关，不能因窗口为空就整份丢弃。
-        if not rows and breadth["zt_count"] == 0:
+        if not rows:
             snap["degraded_reason"] = "no_limit_up_rows"
             return snap
 

@@ -147,6 +147,8 @@
 - 前端 e2e 手写 mock 载荷只能锁住前端自己的假设：后端字段改名时后端单测/`tsc`/mock e2e 会全绿，而真机上页面渲染 `undefined`/`--`。解法是**mock 与后端契约同源**——把容器内实抓的真实响应落成 committed fixture，前端 mock 读它、后端再加一条读同一批 fixture 的 `@pytest.mark.e2e` 契约测试断言实际发出的 key 集（顶层 + 条目）与之完全一致，改名即转红；注意这仍**不证明活链路**（dev 代理指向旧镜像时 mock 是必需的），活链路验证要等分支部署，须如实披露。配套：同一模块级 Redis 池在 function-scoped event loop 下跨 test 复用会报 "attached to a different loop"，autouse dispose fixture 除 `engine.dispose()` 外还要 `await close_redis_pool()`。
 - 多个 `@pytest.mark.e2e` 用例共用模块级 SQLAlchemy async engine 时，pytest-asyncio 的 function-scoped 事件循环会让上一用例遗留的池化连接在新循环里被复用，抛 `RuntimeError: Event loop is closed`（表现为随机某个用例失败，非断言失败）；在 autouse fixture 里 `await engine.dispose()` 按用例收尾即可，不必改全局 loop scope。
 
+- 不要让生产语义迁就不真实的测试 fixture：fixture 必须与真实数据源**同形状同键集**（如窗口行 16 键），否则会静默放过「空窗口 + 非零广度」这类本应被显式降级标记（`no_limit_up_rows`）的异常态，甚至让半成品 payload 落入缓存。修复方向永远是改 fixture、恢复严格判据，并把「完整日必须真产出梯队」写成回归断言。
+
 ## 六、架构与分层
 
 - 分类/标签等用户可编辑的多对多关系应独立建表并采用"先删后插"的全量替换策略，避免增量 diff 逻辑复杂化；合成分类节点（如"其他"）应复用现有字段自动分组，减少用户手动维护成本；自定义标签系统应与现有分类体系独立设计（独立建表 + 独立前端组件 + 专用聚合页），避免与分类逻辑耦合。
