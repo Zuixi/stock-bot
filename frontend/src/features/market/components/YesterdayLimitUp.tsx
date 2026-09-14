@@ -1,10 +1,12 @@
-import { Table, Tag } from "antd";
+import { Empty, Table, Tag } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { ChangeText } from "@/shared/ui";
 import type { YesterdayLimitUp, YesterdayLimitUpItem } from "@/shared/api/limitUp";
 
 interface Props {
   data: YesterdayLimitUp | null | undefined;
+  /** 端点降级（如 partial_day）时渲染短占位文案，不展示不完整数据。 */
+  degraded?: boolean;
 }
 
 /** 状态 Tag：晋级（isLu）/ 炸板（broken）/ 停牌（suspended）/ 震荡。停牌优先于晋级判断。 */
@@ -18,7 +20,7 @@ function statusTag(item: YesterdayLimitUpItem) {
 /**
  * 昨日涨停今日表现：`todayPct == null`（含停牌）渲染 `--`，绝不回落 0.00%。
  */
-export function YesterdayLimitUp({ data }: Props) {
+export function YesterdayLimitUp({ data, degraded = false }: Props) {
   const columns: ColumnsType<YesterdayLimitUpItem> = [
     {
       title: "代码",
@@ -61,6 +63,10 @@ export function YesterdayLimitUp({ data }: Props) {
       render: (_, r) => statusTag(r),
     },
   ];
+
+  if (degraded) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="数据不完整，暂不展示昨日表现" />;
+  }
 
   return (
     <Table<YesterdayLimitUpItem>

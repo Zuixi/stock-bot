@@ -27,7 +27,9 @@ import {
 } from "@/features/market/components";
 import "./market.css";
 
-/** `degraded_reason` → 中文文案；不同原因不同文案，未知原因回退原串，不静默吞掉。 */
+/** `degraded_reason` → 中文文案；不同原因不同文案，未知原因回退原串，不静默吞掉。
+ * 本映射仅用于「情绪温度计」卡（长文案），三张数据卡各自用短占位文案（见组件内）。
+ */
 const DEGRADED_REASON_TEXT: Record<string, string> = {
   price_limits_missing: "涨跌停价尚未回补，连板梯队暂不可用（每个交易日 16:50 自动补齐）",
   partial_day: "当日行情未回补完整，暂不展示梯队",
@@ -44,6 +46,7 @@ function DegradedNotice({ reason }: { reason: string }) {
 /**
  * 短线情绪 Tab：三个端点各自 `useQuery`，单点失败不牵连邻区。
  * 梯队/申万 L3/昨日涨停三块各自降级，卡头 `asof` 独立（梯队用 as_of，昨日用 as_of_prev）。
+ * 每张数据卡按各自端点的 `degradedReason` 独立门禁，避免降级态仍展示不完整数据。
  */
 function SentimentTab() {
   const ladder = useQuery({
@@ -62,6 +65,8 @@ function SentimentTab() {
     staleTime: 60_000,
   });
   const degraded = ladder.data?.degradedReason;
+  const sectorsDegraded = Boolean(sectors.data?.degradedReason);
+  const yesterdayDegraded = Boolean(yesterday.data?.degradedReason);
   return (
     <Row gutter={[16, 16]}>
       <Col span={24}>
@@ -71,17 +76,17 @@ function SentimentTab() {
       </Col>
       <Col span={24}>
         <SectionCard title="连板梯队" asof={ladder.data?.asOf}>
-          <LimitUpLadder echelons={ladder.data?.echelons ?? []} />
+          <LimitUpLadder echelons={ladder.data?.echelons ?? []} degraded={Boolean(degraded)} />
         </SectionCard>
       </Col>
       <Col xs={24} xl={12}>
         <SectionCard title="申万三级最高板" asof={sectors.data?.asOf}>
-          <SwL3LimitUpBoard data={sectors.data} />
+          <SwL3LimitUpBoard data={sectors.data} degraded={sectorsDegraded} />
         </SectionCard>
       </Col>
       <Col xs={24} xl={12}>
         <SectionCard title="昨日涨停今日表现" asof={yesterday.data?.asOfPrev}>
-          <YesterdayLimitUp data={yesterday.data} />
+          <YesterdayLimitUp data={yesterday.data} degraded={yesterdayDegraded} />
         </SectionCard>
       </Col>
     </Row>

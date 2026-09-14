@@ -3,6 +3,8 @@ import type { LadderStock } from "@/shared/api/limitUp";
 
 interface Props {
   echelons: Array<{ streak: number; label: string; stocks: LadderStock[] }>;
+  /** 端点降级（如 partial_day）时渲染短占位文案，不展示不完整数据。 */
+  degraded?: boolean;
 }
 
 /**
@@ -10,7 +12,15 @@ interface Props {
  * `{daysSpan}天{boardsInWindow}板` 仅在 `boardsInWindow !== streak` 时显示（避免冗余）；
  * `缺少 N 个交易日` 披露停牌/无行情；封板时间缺失渲染 `--`（本地路径恒 null）。
  */
-export function LimitUpLadder({ echelons }: Props) {
+export function LimitUpLadder({ echelons, degraded = false }: Props) {
+  if (degraded) {
+    return (
+      <div className="sentiment-ladder">
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="数据不完整，暂不展示梯队" />
+      </div>
+    );
+  }
+
   if (echelons.length === 0) {
     return (
       <div className="sentiment-ladder">
