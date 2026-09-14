@@ -1,3 +1,13 @@
+## 2026-09-15 - 数据回填：补齐日线缺口 + 权威 pct_chg 全量回填（数据运维，无代码改动）
+- **发现**：`daily_quotes` 缺 2026-09-10 / 09-11 / 09-14 三个交易日（09-11 仅 1 行、09-14 仅 3 行），而 `daily_basic_indicators` 同期**有** 5548 行/日——两条回补链路覆盖不一致，缺口因此极难察觉；下游连板梯队只是把 `as_of_prev` 悄悄滑回 09-09，不报错
+- **补齐日线**：按交易日显式重拉 `ingest_daily_quotes`（09-10 / 09-11 / 09-14，各 upsert 5548 行，原生 `pct_chg`/`pre_close` 一并落库），日线缺口归零
+- **权威 pct_chg 全量回填**：`scripts/backfill_pct_chg.py --years 3` → **725 个交易日 / 3,881,294 行**；3 年窗口 `pct_chg` 覆盖率 **99.867%**（NULL 0.133% ≈ 停牌/新股），最新 3 个交易日 NULL 数为 0，满足计划 Task 2.3 的「< 1%」判据
+- **限价补漏**：`ingest_stock_price_limits` 自动识别 20 个缺失交易日并补全 → **111,064 行**（2026-08-18 ~ 2026-09-14）
+- **情绪快照**：`persist_snapshot` 落库 2026-09-14（涨停 57 / 跌停 18 / 炸板 39 / 破板率 0.4062 / 昨涨停今均 +3.2131% / max_streak 4 = `000993` 闽东电力）
+- **结果**：`/market/{rankings,distribution,limit-up-ladder,yesterday-limit-up,sector-limit-up}` 全部返回真实数据，`degraded_reason` 由 `price_limits_missing` 变为 `null`；`/market/rankings` 的 `as_of` 从 09-09 前进到 **2026-09-14**
+- **遗留（建议另立修复）**：`_fetch_yesterday_daily_quotes` 只拉「上一个工作日」且命中即跳过，没有补漏窗口——调度器停摆一天就会留下永久空洞，而限价链路有补漏、日线没有（已沉淀进 best-practices 一）
+- 涉及模块：数据运维（无代码改动）, docs/Changelog.md, docs/references/best-practices.md
+
 ## 2026-09-14 - 行尾归一化入库（.gitattributes）+ 双端检出与工作区属主修复
 - **问题**：Windows 侧检出工作区为 CRLF、index 存 LF，WSL 侧未设 `core.autocrlf` → `git status` 一次性报 380 个文件「整体改写」（+76296/-76278），实际改动只有 2 个文件；同时仓库文件属主为 root，`.git` 不可写导致任何 commit/pull 必然失败
 - **修复**：新增仓库根 `.gitattributes`（`* text=auto eol=lf`，二进制由 `text=auto` 自动跳过），gitattributes 优先于 `core.autocrlf`，双端不再需要各自的本地配置；工作区重新检出为 LF，`scripts/*.sh` 从此可在 WSL 直接 `bash` 执行（此前报 `set: pipefail: invalid option`）
