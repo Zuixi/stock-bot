@@ -1,3 +1,8 @@
+## 2026-09-14 - 连板梯队 Task 4 补钉：钉死严格 no_limit_up_rows 路径与降级快照不写缓存（仅测试）
+- 控制器规则第三轮只加测试、不动生产代码。新增两条契约测试：①`test_no_limit_up_rows_when_limits_present_but_window_empty` 钉死 round 1 恢复的严格判据精确触发条件（限价存在 + 窗口空 + zt_count=75 ⇒ `degraded_reason=="no_limit_up_rows"`、`echelons==[]`、`kpis=={}`）；②`test_degraded_snapshots_are_not_cached_but_complete_is` 用最小 `_RecordingCache`（get 恒 miss、记录 set）断言 `price_limits_missing` 与 `no_limit_up_rows` 两条降级路径 `cache.set` 未被调用，并补正例控制（完整日快照必被 set、key 含 as_of+lookback 两维、ttl==SNAPSHOT_TTL）。另修正 `_lu_row` docstring「16 键」→「18 键」并说明口径（18=行键数，16=窗口交易日数）。两条新测试均做变异验证确认能真失败（改回旧判据 / 让降级也 set 均转红）
+- 验证：`uv run pytest tests/test_limit_up_service.py -v` 6 passed；`uv run pytest -q` 234 passed / 31 deselected；`ruff check` 改动文件、`mypy app`、`bash scripts/self_review.sh` 全绿
+- 涉及模块：backend/tests/test_limit_up_service.py, docs/references/best-practices.md
+
 ## 2026-09-14 - 连板梯队 Task 4 评审修复：恢复严格 no_limit_up_rows 判据并修正不真实 fixture
 - 评审发现 `limit_up_service.get_snapshot` 曾把空候选窗口判据放宽为 `not rows and zt_count == 0` 以迁就不真实测试 fixture（空 window + 非零 zt_count），会产出「表头有 zt/zb、梯队/板块/昨日全空、无 degraded_reason 且被缓存」的半成品 payload。修复方向按控制器裁定：**恢复严格判据 `if not rows: → no_limit_up_rows`（改测试而非改生产语义）**，新增 `_lu_row` 构造器让两个 fixture 给出与 T2 `fetch_limit_up_window` 同形状（16 键）的非空窗口，并在完整日用例追加 `assert snap["echelons"]` 回归护栏（完整日必须真产出梯队）；断言值不变。真库 2026-09-08 复验仍与黄金日一致（4板×3/3板×3/2板×13/首板×56，zt=75/dt=1/zb=39，sw_coverage 0.9333，空间板 4/4）
 - 验证：`uv run pytest -q` 232 passed / 31 deselected；`ruff check` 改动文件、`mypy app`、`bash scripts/self_review.sh` 全绿
