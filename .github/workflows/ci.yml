@@ -274,16 +274,51 @@ jobs:
           cp .env.docker.example .env 2>/dev/null || true
       - name: Build and start services
         run: docker compose up -d --build --wait
-      - name: Verify health via gateway (port 80)
+      - name: Diagnose gateway routing (always)
+        # 网关只把 :80 映射到宿主机（dashboard :8080 仅内网），所以路由表只能在容器内取。
+        # 本步骤无条件跑：一旦下面的健康检查失败，这几行就是唯一的根因证据——
+        # 「容器全 Healthy 但一切路径都返回 Traefik 自己的 404（body 恰为 19 字节
+        # '404 page not found'）」只可能是 Docker provider 没把 labels 变成 router，
+        # 而 provider 失败的原因（API 版本协商 / socket 不可达）只出现在 Traefik 日志里。
         run: |
-          # 验证前端首页
-          curl -f http://localhost:80/ | head -1
-          # 验证后端 API 接口连通性
-          curl -f http://localhost:80/api/v1/exchanges
-          # 验证 auth-service 接口连通性
-          curl -f http://localhost:80/health/live
-          curl -f http://localhost:80/auth/csrf
-          curl -f http://localhost:80/.well-known/jwks.json
+          echo '=== docker version ==='
+          docker version --format 'client={{.Client.Version}} server={{.Server.Version}} api={{.Server.APIVersion}} minapi={{.Server.MinAPIVersion}}' || true
+          echo '=== traefik image tag ==='
+          docker inspect gateway --format '{{.Config.Image}}' || true
+          echo '=== compose ps ==='
+          docker compose ps || true
+          echo '=== traefik providers (routers/services as loaded) ==='
+          docker compose exec -T gateway sh -c \
+            'wget -qO- http://127.0.0.1:8080/api/rawdata' 2>/dev/null | head -c 3000 || echo '(rawdata unavailable)'
+          echo
+          echo '=== gateway logs (last 120) ==='
+          docker compose logs gateway --tail=120 --no-log-prefix || true
+      - name: Verify health via gateway (port 80)
+        # 条件式轮询而非固定 sleep：`up --wait` 只保证容器健康，不保证 Traefik 已把
+        # Docker labels 变成 router（provider 有自身的事件订阅节奏）。先打一次现场，
+        # 再按条件重试到阈值，失败时把最后一次的响应体一起打出来。
+        run: |
+          wait_for() {
+            local url="$1" desc="$2" tries=30 code body
+            for i in $(seq 1 "$tries"); do
+              body=$(curl -s -o /tmp/body -w '%{http_code}' "$url" || echo 000)
+              code="$body"
+              if [ "$code" = "200" ]; then
+                [ "$i" -gt 1 ] && echo "  ✓ $desc 在第 $i 次尝试就绪（$url）"
+                return 0
+              fi
+              [ "$i" = 1 ] && echo "  首次尝试 $desc（$url）→ HTTP $code，响应体：$(head -c 200 /tmp/body)"
+              sleep 2
+            done
+            echo "  ✗ $desc（$url）连续 $tries 次未就绪，HTTP $code，响应体：$(head -c 200 /tmp/body)"
+            return 1
+          }
+          # 验证前端首页 / 后端 API / auth-service 连通性
+          wait_for http://localhost:80/ '前端首页'
+          wait_for http://localhost:80/api/v1/exchanges '后端 API'
+          wait_for http://localhost:80/health/live 'auth-service health'
+          wait_for http://localhost:80/auth/csrf 'auth csrf'
+          wait_for http://localhost:80/.well-known/jwks.json 'jwks'
       - name: Auth login closed-loop smoke (csrf -> register -> csrf -> login -> protected API)
         run: |
           # 匿名写操作（注册/登录）均需先 GET /auth/csrf 做 double-submit CSRF
@@ -294,6 +329,9 @@ jobs:
           curl -sf -b /tmp/jar http://localhost/api/v1/watchlists | head -c 200   # 必须登录态 200
           # 未登录必须 401
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost/api/v1/watchlists)" = "401"
+      - name: Gateway logs on failure
+        if: failure()
+        run: docker compose logs gateway --tail=200 --no-log-prefix || true
       - name: Teardown
         if: always()
         run: docker compose down -v

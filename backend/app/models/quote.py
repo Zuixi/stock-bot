@@ -15,7 +15,6 @@ class DailyQuote(Base):
     __table_args__ = (
         UniqueConstraint("stock_id", "trade_date", name="uq_daily_quotes_stock_date"),
         CheckConstraint("high >= low AND open >= 0 AND close >= 0", name="chk_ohlc"),
-        Index("idx_daily_quotes_stock_date", "stock_id", "trade_date"),
         Index("idx_daily_quotes_date", "trade_date"),
         # Ranking indexes created by migration cf4b8e317fe5; mirrored here so
         # `alembic revision --autogenerate` does not emit drop_index for them.
@@ -28,7 +27,7 @@ class DailyQuote(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    stock_id: Mapped[int] = mapped_column(nullable=False, index=True)
+    stock_id: Mapped[int] = mapped_column(nullable=False)
     trade_date: Mapped[date] = mapped_column(nullable=False)
     open: Mapped[float | None] = mapped_column(Numeric(12, 4))
     high: Mapped[float | None] = mapped_column(Numeric(12, 4))

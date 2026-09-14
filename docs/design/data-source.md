@@ -139,6 +139,16 @@
 - 7 张表：`sector_moneyflow_snapshots` / `dragon_tiger_entries` / `northbound_daily` / `block_trades` / `share_floats` / `stock_repurchases` / `announcements`；读取端点 Redis 缓存 TTL 300s；手动触发走 `POST /api/v1/tasks/fetch-market-data`（`market_data.fetch` 队列，9 类 payload 二选一）。
 - 单位总原则：接三方行情先 curl 实测定字段与单位再写映射，消费端只做展示分档（详见 [best-practices](../references/best-practices.md)）。
 
+### 涨跌停价与涨停池（2026-09-14 实测）
+
+| 源 | 接口 | 内容 | 结论 |
+|---|---|---|---|
+| TuShare | `stk_limit`（`fields=trade_date,ts_code,pre_close,up_limit,down_limit`） | 全市场（含基金/B股，单日 5,637 行）交易所口径涨跌停价 + 原生 `pre_close` | **权威基准**，单交易日一次调用；5,499 行可映射到 A 股 `stocks`。不传 `fields` 时 `pre_close` 不返回 |
+| 东财 push2ex | `/getTopicZTPool`（`ut=7eea3edcaed734bea9cbfc24409ed989`） | 当日涨停股池：`lbc` 连板数、`fbt/lbt` 首/末封板时间、`fund` 封单、`zbc` 炸板次数、`zttj{days,ct}` | 仅作**增强**（本地日线给不出封板时间/封单）。`date=YYYYMMDD` **必填**（不带 `date` 返回 `rc=102`）；`push2delay` 同路径返回空，只能用 `push2ex`；响应 `qdate` 恒为当天、不可当校验用 |
+| 东财 push2ex | `/getYesterdayZTPool`、`/getTopicZBPool` | 昨日涨停今日表现 / 炸板池 | 备选对账源，不入主路径 |
+
+> 本地化计算不依赖 `trade_cal`：窗口交易日取自 `daily_quotes` 实际存在的日期（库内无持久化交易日历，且"真有行情"本身就是最准的可用性判据）。
+
 ## 八、日历与新闻源实测（2026-09-11）
 
 > 服务「公网首页（免登录行情面板）」Phase 4（市场日历）/ Phase 5（新闻流）的可行性输入。

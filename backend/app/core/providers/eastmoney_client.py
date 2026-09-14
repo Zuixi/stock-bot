@@ -47,6 +47,9 @@ def _num(v: Any) -> float | None:
 class EastmoneyClient:
     """节流 + UA 的东财只读客户端；仅批量端点，杜绝逐股轮询。"""
 
+    ZT_POOL_PATH = "/getTopicZTPool"
+    ZT_POOL_BASE = "https://push2ex.eastmoney.com"
+
     def __init__(self) -> None:
         self._last_call = 0.0
         self._lock = asyncio.Lock()
@@ -241,6 +244,59 @@ class EastmoneyClient:
                 }
             )
         return rows
+
+    @staticmethod
+    def _map_zt_pool_row(d: dict[str, Any]) -> dict[str, Any]:
+        """东财涨停池原始行 → 归一字段。
+
+        定点整数：p=价格×1000、fbt/lbt=HHMMSS（需零填充）、fund/amount 已是元。
+        zttj{days,ct} 是可缺的统计块（个别票缺"N天M板"），缺则置 None 而不是造 0。
+        """
+
+        def _t(v: Any) -> str | None:
+            if v in (None, "", 0):
+                return None
+            s = str(int(v)).zfill(6)
+            return f"{s[:2]}:{s[2:4]}:{s[4:6]}"
+
+        zttj = d.get("zttj") or {}
+        return {
+            "symbol": str(d.get("c")),
+            "name": d.get("n"),
+            "streak": _num(d.get("lbc")),
+            "days": zttj.get("days"),
+            "boards": zttj.get("ct"),
+            "seal_time": _t(d.get("fbt")),
+            "seal_fund": _num(d.get("fund")),
+            "break_count": _num(d.get("zbc")),
+            "board_name": d.get("hybk"),
+            "amount": _num(d.get("amount")),
+        }
+
+    async def fetch_limit_up_pool(self, trade_date: str) -> list[dict[str, Any]]:
+        """东财涨停股池（含封板时间/封单资金/炸板次数）——本地日线给不出的三字段。
+
+        `trade_date` 必填（YYYYMMDD）：不带 date 服务端返回 rc=102/data=null。
+        仅在增强路径调用；失败由调用方兜住，不参与主路径。
+
+        实测事实（2026-09-14 curl 复验，勿"优化"）：
+        - 该路径只在 push2ex 可用；push2delay 对 /getTopicZTPool 返回空（与其他
+          push2 端点"push2delay 优先"的注释相反，这是可接受的例外）。
+        - 响应里的 qdate 恒为当天、与请求 date 无关，不要拿它做校验。
+        - 端点只服务最近约 20 个交易日：更早的 as_of 返回 rc=0/pool=[]（预期行为，
+          不是故障），增强会静默返回空、seal_* 保持 null。
+        """
+        params: dict[str, Any] = {
+            "ut": "7eea3edcaed734bea9cbfc24409ed989",
+            "dpt": "wz.ztzt",
+            "Pageindex": 0,
+            "pagesize": 5000,
+            "sort": "fbt:asc",
+            "date": trade_date,
+        }
+        data = await self._get_json(self.ZT_POOL_BASE, self.ZT_POOL_PATH, params)
+        pool = ((data.get("data") or {}) or {}).get("pool") or []
+        return [self._map_zt_pool_row(d) for d in pool]
 
 
 _client: EastmoneyClient | None = None
