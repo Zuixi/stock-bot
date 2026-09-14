@@ -161,6 +161,22 @@
 - 风险表 ②③④ 已销项并附原始查询输出，Task 11/14 的处置已明确
 - 涉及模块：plans/2026-09-11-public-market-homepage, docs/references/best-practices
 
+## 2026-09-11 - 公开行情台首页实施计划（含免登录现状核实与数据面缺口盘点）
+- 新增 `plans/2026-09-11-public-market-homepage.md`：6 阶段 tracer-bullet 计划 + 前置 spike，目标为首页在未登录状态即可作为完整行情台（指数/榜单/板块/日历/资讯），登录只解锁个性化（自选/标签/提醒）
+- **免登录现状核实**（结论：已基本成立，非鉴权改造项目）：网关 `forward-auth` 对无 session cookie 请求匿名放行（`return Response(status_code=200)`）；路由层仅 `/watchlist`、`/tags` 包 `RequireAuth`；后端行情类端点（exchanges/stocks/financials/market/market-data/clusters/industries-GET）均未挂 `CurrentUserDep`
+- **数据面缺口盘点**（决定成本的三项）：
+  - 榜单无高性能路径——`stocks/enriched?sort_by=` 实为「拉全市场 10k + LATERAL + Python sort」（约 +70ms/2300 只），且不支持换手率/成交量排序
+  - `pct_chg` 被丢弃——TuShare `daily` 原生返回 `pct_chg`/`pre_close`，但 `DailyQuote` 模型无此列且 `tushare_ingest.py` 未映射，导致涨跌幅只能查询时现算、无索引可支撑（修复成本极低）
+  - 日历（财报/分红/IPO/宏观）与财经新闻**均无数据源**；交易日历无持久化表，调度守卫 `weekday()<5` 导致节假日空跑
+- **设计面实测**：现有涨跌色浅色模式不达 WCAG AA——涨 `#f5222d` 4.08:1、跌 `#22c55e` 仅 2.28:1（暗色 4.59/5.01 达标），给出重取取值与对比度回归测试要求
+- 设计参考：TradingView 首页 chrome-devtools 实测（248 CSS 变量具名调色板、`--v-rhythm-*` 四档响应式节奏刻度、`data-theme` 单属性换肤、模块模板×资产类别矩阵式 IA）作为**内部设计参考**记入附录 A
+- **计划修订 + 任务级细化（同日二轮，评审后）**：
+  - 定位拍板：首页**以免登录行情为主体**，营销区压缩为尾部一段（Spec D1 重写）；涨跌色修复从 Phase 5 提前到 Phase 1（独立可访问性缺陷）
+  - 评审发现 3 处硬伤并已修入计划：① Phase 1 临时榜单路径（`stock_service.list_stocks_enriched` 排序分支）**完全无缓存**而公开暴露 → 新增 Task 1.3 Redis TTL 缓存；② 网关 `sec-headers` 对整站打 `X-Robots-Tag: noindex`，SEO 目标与之矛盾 → 降级为 Phase 0 决策项（默认维持 noindex）；③ Phase 2 验收曾引用**从未实施的 Tier 2 API 基准** → 改为 EXPLAIN 索引断言测试（Task 2.6）
+  - 评审补充 6 项已并入：申万口径（CSRC 临时 + Phase 3 申万聚合端点）、北向数据语义核实（2024 披露口径变化）、`pct_chg` 回填改权威源重拉（禁 `LAG(close)` 现算——除权日会错）、防护清单（§0.5）、e2e 具体化（`public-homepage.spec.ts` 零 401 + 降级用例）、页脚数据来源署名
+  - 新增 `plans/2026-09-11-public-market-homepage-tasks.md`：superpowers 任务级计划，Phase 0–3 共 17 个 Task，逐步 TDD（含测试与实现代码、EXPLAIN 断言、e2e 用例）；Phase 4（日历）/5（资讯增强）待 Phase 0 spike 结论后另立计划
+- 涉及模块：plans、docs/Changelog、docs/references/best-practices
+
 ## 2026-09-09 - API Gateway 选型调研
 - 比较 Docker Compose 场景下 NGINX、Traefik、Kong/APISIX 的动态路由、OIDC/JWT、限流、可观测性、配置复杂度与 Kubernetes 演进适配性，并结合当前 stock_bot 架构给出 Gateway 选择建议。
 - 涉及模块：架构调研、部署、认证、可观测性

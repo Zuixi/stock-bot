@@ -76,6 +76,7 @@
 - 行业聚合的**聚合对象必须是"当日真有行情的标的"而非静态成员表**：`sw_industry_members` 上卷 L3→L2→L1 后必须 INNER JOIN 当日 `daily_quotes` 并 `pct_chg IS NOT NULL` 再 `count`/`avg`，否则停牌/无行情成员会稀释 `avg_pct_chg` 并虚增 `member_count`（`up_count`+`down_count` 还只覆盖有涨跌的，平盘成员计入 `member_count` 属正确）；join 键先实测覆盖率再定（本次 `members.symbol → stocks.symbol` = 95.4%，高于计划的 >90% 阈值），别照抄 brief 里未验证的键名；若 `count(DISTINCT symbol) == count(*)` 则无扇出，可放心聚合。
 - 盘后一次性派生落库（如情绪周期）在编排层快照之上再判跳过时，必须把 `is_partial`（当日行情行数不足）放在空候选 `no_limit_up_rows` 之前：编排层 get_snapshot 在候选窗口为空时会先报 no_limit_up_rows，而部分 ingest 才是更本质的跳过原因，只按 degraded_reason 判会把部分行情日错记成 no_limit_up_rows 或直接 `k["zt_count"]` KeyError。
 - 手写 Alembic 迁移里的 `DROP INDEX CONCURRENTLY` 必须在 `op.get_context()` 的 `autocommit_block()` 内执行（CONCURRENTLY 不允许在事务块内跑，普通 `op.execute` 会在迁移事务里直接报错），而它真正生效的前提是 `migrations/env.py` 用 `async with engine.connect()` 而非 `engine.begin()`——后者把整个 MigrationContext 包在外层事务里，`autocommit_block()` 一进去就断言失败；改 `env.py` 是影响全链的改动，改完必须用「空库从零 `alembic upgrade head`」验证一遍，不能只跑增量。
+- 建表/映射时「只挑当前用得到的字段」是最隐蔽的数据债：上游免费返回、且未来可能用于排序/过滤/聚合的数值字段（本次即 TuShare `daily` 的 `pct_chg`/`pre_close`）不落库，就只能查询时现算——**派生值不是存储列，任何索引都撑不住 `ORDER BY <派生列> DESC LIMIT N`**。凡上游免费给出的字段，建表时就一并入库（成本≈0）；已丢弃的按「补列 → 补映射 → 历史回填」三步偿还，**不要用预计算快照表绕过**（快照与明细会口径漂移，且违背 DRY）。
 
 ## 三、Docker 与部署
 
@@ -202,6 +203,7 @@
 - 决策类文档落字必须"实测证据 + 删除范围 + 替代定位"三件套：计划里承诺的目标（如 SEO/静态可索引落地路径）可能与已上线配置（网关整站 `X-Robots-Tag: noindex`）直接冲突，此时先跑黑盒探针实测配置并以事实为准，再把决策连同原始 header 输出、被删除的目标清单、以及易被误删的相邻项定位（页脚署名是给用户的合规署名而非 SEO）一并写死——否则后人会按旧计划文本隐式复活已删目标，或把非 SEO 项当 SEO 一起删掉。
 - 新产品模块（如行业投研工作台）落地前，先用单文件 HTML + CDN ECharts 做高保真交互原型验证信息架构与布局（结论先行、证据下钻、数据源权威性分级徽章），再迁移为 React 组件，可大幅降低前端返工成本；原型视觉应贴近真实技术栈（antd v5）而非另起炉灶。
 - 审计实施计划时，把每个"已存在/无需改动/复用既有/实测 X"都当成待验证断言逐条对代码与真库核实（TuShare「默认显示=N」的字段不显式传 `fields` 就不返回、计划里不存在的 `_iso()` helper、规划器实际选的索引名、前后端路由与组件 props 形状）："已验证"旁注最容易把审查注意力从真缺陷上移走；计划里的实测数字必须能被计划自己的代码复现（本次发现计划自称的"34ms / 895 行"与它自己那条只回两天的 SQL（302 行）对不上）；契约收窄后要连**所有消费方与自检脚本**一起收窄——前端 TS union（`"local_calc" | "web"`）与按 Python 语法写的 grep（`Literal[...]`）互相 grep 不到，等于留了一条永久静默的漂移通道。
+- 写实施计划时两个必查项：① **验收标准引用的门禁/工具必须先验证其存在**——曾把 Phase 2 验收写成"按 Tier 2 软门禁口径"，而 Tier 2（k6 API 基准）只存在于计划文档、`scripts/` 与 workflows 里从未实施，等于没设门禁；替代法是写成可执行的 EXPLAIN 索引断言测试。② **计划目标要与边缘配置对账**——网关 `sec-headers` 给整站（含 frontend 路由）打了 `X-Robots-Tag: noindex`，任何"静态可索引/SEO"目标在该配置下直接落空；写计划前 curl 一遍响应头比写完后返工便宜。
 
 ---
 
