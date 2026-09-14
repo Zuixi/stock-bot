@@ -16,7 +16,12 @@ export function LimitUpLadder({ echelons, degraded = false }: Props) {
   if (degraded) {
     return (
       <div className="sentiment-ladder">
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="数据不完整，暂不展示梯队" />
+        <Typography.Text
+          type="secondary"
+          style={{ display: "block", padding: "24px 0", textAlign: "center" }}
+        >
+          数据不完整，暂不展示梯队
+        </Typography.Text>
       </div>
     );
   }

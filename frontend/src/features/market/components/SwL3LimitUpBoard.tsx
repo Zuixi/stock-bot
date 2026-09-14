@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Empty, Segmented, Table } from "antd";
+import { Segmented, Table, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useNavigate } from "react-router-dom";
 import type { SectorLimitUp, SectorLimitUpItem } from "@/shared/api/limitUp";
@@ -71,7 +71,12 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
   if (degraded) {
     return (
       <div className="sector-limit-up">
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="数据不完整，暂不展示板块板高" />
+        <Typography.Text
+          type="secondary"
+          style={{ display: "block", padding: "24px 0", textAlign: "center" }}
+        >
+          数据不完整，暂不展示板块板高
+        </Typography.Text>
       </div>
     );
   }

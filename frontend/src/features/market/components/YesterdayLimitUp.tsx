@@ -1,4 +1,4 @@
-import { Empty, Table, Tag } from "antd";
+import { Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { ChangeText } from "@/shared/ui";
 import type { YesterdayLimitUp, YesterdayLimitUpItem } from "@/shared/api/limitUp";
@@ -65,7 +65,14 @@ export function YesterdayLimitUp({ data, degraded = false }: Props) {
   ];
 
   if (degraded) {
-    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="数据不完整，暂不展示昨日表现" />;
+    return (
+      <Typography.Text
+        type="secondary"
+        style={{ display: "block", padding: "24px 0", textAlign: "center" }}
+      >
+        数据不完整，暂不展示昨日表现
+      </Typography.Text>
+    );
   }
 
   return (
