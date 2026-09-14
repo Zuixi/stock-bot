@@ -857,6 +857,71 @@ async def get_repurchases(
     return rows[:limit]
 
 
+def _map_stk_limit_rows(
+    df: pd.DataFrame, trade_date: date, stock_id_map: dict[str, int]
+) -> list[dict[str, Any]]:
+    """TuShare stk_limit 行 → 落库 dict（纯映射，同步函数：与模块内其他 `_map_*` 一致）。
+
+    丢弃两类行：映射不到 A 股 stocks 的（基金/B 股，实测单日 5,637 行里 138 行）、
+    限价为空的。**原值透传，不做任何比例重算。**
+    """
+    rows: list[dict[str, Any]] = []
+    for row in df.to_dict("records"):
+        ts_code = str(row.get("ts_code", "")).strip()
+        stock_id = stock_id_map.get(ts_code)
+        up_limit = row.get("up_limit")
+        if stock_id is None or up_limit is None or pd.isna(up_limit):
+            continue
+        rows.append(
+            {
+                "trade_date": trade_date,
+                "stock_id": stock_id,
+                "ts_code": ts_code,
+                "pre_close": None if pd.isna(row.get("pre_close")) else float(row["pre_close"]),
+                "up_limit": float(up_limit),
+                "down_limit": None if pd.isna(row.get("down_limit")) else float(row["down_limit"]),
+            }
+        )
+    return rows
+
+
+async def ingest_stock_price_limits(
+    db: AsyncSession, trade_date: date | None = None, window_days: int = 20
+) -> dict[str, Any]:
+    """拉取缺失交易日的交易所口径涨跌停价（幂等 + 补漏）。
+
+    「补漏」判据是 stock_price_limits 里没有该日任何行，而不是"最新日已存在就跳过"：
+    窗口中间的日子缺一个，连板链就会断在那里，且不会报错——只能靠逐日对账发现。
+    """
+    from app.repositories import limit_up_repo, stock_repo  # noqa: PLC0415
+
+    client = _get_tushare()
+    as_of = trade_date or await limit_up_repo.latest_quote_date(db)
+    if as_of is None:
+        return {"status": "skipped", "reason": "daily_quotes empty"}
+    dates = await limit_up_repo.list_recent_trade_dates(db, as_of, window_days)
+    todo = await limit_up_repo.missing_price_limit_dates(db, dates)
+    if trade_date is not None:
+        todo = [trade_date]
+    if not todo:
+        return {"status": "ok", "as_of": as_of.isoformat(), "fetched": 0, "upserted": 0}
+
+    stock_id_map = await stock_repo.build_ts_code_to_stock_id(db)
+    fetched = upserted = 0
+    for d in todo:
+        df = await client.fetch_stk_limit(trade_date=d.strftime("%Y%m%d"))
+        rows = _map_stk_limit_rows(df, d, stock_id_map)
+        fetched += len(rows)
+        upserted += await limit_up_repo.upsert_price_limits(db, rows)
+    return {
+        "status": "ok",
+        "as_of": as_of.isoformat(),
+        "dates": [d.isoformat() for d in todo],
+        "fetched": fetched,
+        "upserted": upserted,
+    }
+
+
 async def _main() -> None:
     from app.core.database import async_session_factory  # noqa: PLC0415
 
