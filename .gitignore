@@ -62,6 +62,7 @@ data/*
 .playwright-mcp/
 .gemini/
 .video_agent/
+.superpowers/
 ## Build artifacts (test coverage / TS incremental build — regenerated locally)
 backend/.coverage
 auth-service/.coverage
