@@ -8,3 +8,4 @@ export { DataRow } from "./DataRow";
 export type { DataRowProps } from "./DataRow";
 export { SectionCard } from "./SectionCard";
 export type { SectionCardProps } from "./SectionCard";
+export { formatCnDate } from "./date";

@@ -52,9 +52,6 @@ export function fmtRelativeTime(iso: string, now: number = Date.now()): string {
 
 /**
  * `as_of`（YYYY-MM-DD）→「9月9日」样式（榜单与板块的「数据截至」共用）。
- * 非法/缺段输入原样返回，不猜测。
+ * 共享实现见 @/shared/ui/date，此处仅转发以保留既有导出名（RankingMatrix 等零改动）。
  */
-export function formatCnDate(iso: string): string {
-  const [, month, day] = iso.split("-");
-  return month && day ? `${Number(month)}月${Number(day)}日` : iso;
-}
+export { formatCnDate } from "@/shared/ui/date";
