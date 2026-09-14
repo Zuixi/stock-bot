@@ -97,17 +97,37 @@ def test_sector_ladder_picks_deterministic_leader_and_buckets_unmapped():
     assert got["items"][0]["max_streak"] == 2
 
 
-def test_yesterday_limit_up_reports_suspended_stock_as_null_not_zero():
-    """今日停牌的昨日涨停股不得算成 0%（缺失与零值语义不同）。"""
+def test_yesterday_limit_up_computes_today_pct_when_quoted():
+    """今日有行情的昨日涨停股：按当日 pre_close 算 today_pct，且不得误判为停牌。"""
     rows = [
         _row(1, D4, is_lu=True, streak=1, pre_close=10.0),
         _row(1, D5, is_lu=False, streak=0, close=11.0, open_=10.5, pre_close=10.0),
     ]
     got = calc.yesterday_limit_up(rows, D4, D5, [D4, D5])
     item = got["items"][0]
+    assert item["suspended"] is False
     assert item["today_pct"] == 10.0
     assert item["today_open_premium"] == 5.0
     assert got["kpis"]["yzt_avg_pct"] == 10.0
+
+
+def test_yesterday_limit_up_reports_suspended_stock_as_null_not_zero():
+    """今日停牌的昨日涨停股 today_* 一律 None，且 suspended=True（缺失 ≠ 0%）。
+
+    反例：把无当日行的票默认成 today_pct=0.0，会被当成"平盘"混进均值与榜单且不报错
+    （真实 0.00% 与缺失无法区分）；正确口径是排除在 measured 之外。
+    """
+    rows = [_row(1, D4, is_lu=True, streak=1, pre_close=10.0)]   # D5 停牌：无当日行
+    got = calc.yesterday_limit_up(rows, D4, D5, [D4, D5])
+    item = got["items"][0]
+    assert item["suspended"] is True
+    assert item["today_pct"] is None
+    assert item["today_open_premium"] is None
+    assert item["today_streak"] is None
+    assert item["broken"] is False
+    assert got["kpis"] == {
+        "n": 1, "measured": 0, "yzt_avg_pct": None, "yzt_avg_open_premium": None,
+    }
 
 
 def test_yesterday_pct_uses_today_pre_close_not_prev_row():
