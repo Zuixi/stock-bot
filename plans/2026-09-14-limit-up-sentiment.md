@@ -1316,7 +1316,7 @@ git commit -m "feat(limit-up): 梯队/晋级率/板块聚合/情绪 KPI 纯函�
 
 ---
 
-### Task 4: 快照编排服务与 4 个只读端点
+### Task 4: 快照编排服务与 3 个只读端点（+ 日历 schema）
 
 **Files:**
 - Create: `backend/app/services/limit_up_service.py`、`backend/app/schemas/limit_up.py`
@@ -1328,8 +1328,9 @@ git commit -m "feat(limit-up): 梯队/晋级率/板块聚合/情绪 KPI 纯函�
 - Produces:
   - `limit_up_service.get_snapshot(cache, as_of=None, lookback=LOOKBACK_TRADE_DAYS) -> dict`
     （键 `as_of, as_of_prev, source, limits_present, is_partial, sw_coverage, lookback, degraded_reason, breadth, kpis, echelons, sectors, yesterday, market_days`）
-  - `limit_up_service.ladder_payload / sector_payload / yesterday_payload / calendar_payload`（4 个投影）
-  - `api/v1/market_data.py`：`GET /limit-up-ladder`、`GET /sector-limit-up`、`GET /yesterday-limit-up`、`GET /sentiment/calendar`
+  - `limit_up_service.get_snapshot(cache, as_of=None, lookback=LOOKBACK_TRADE_DAYS) -> dict`
+  - `limit_up_service.sector_payload / yesterday_payload`（2 个投影）
+  - `api/v1/market_data.py`：`GET /limit-up-ladder`、`GET /sector-limit-up`、`GET /yesterday-limit-up`（**3 个端点**；`GET /sentiment/calendar` 归 Task 5——它依赖 Task 5 才建的 `market_sentiment_daily` 表与 `list_sentiment_calendar`，在 T4 注册会交付一个必 500 且无测试覆盖的路由）
 
 - [ ] **Step 1: 写失败的测试（降级契约）**
 
@@ -1698,7 +1699,7 @@ class SentimentCalendarPointOut(BaseModel):
     max_streak: int = 0
 ```
 
-- [ ] **Step 4: 写 4 个端点**
+- [ ] **Step 4: 写 3 个端点**
 
 `backend/app/api/v1/market_data.py` 追加：
 
@@ -1740,14 +1741,6 @@ async def get_yesterday_limit_up(
 ) -> YesterdayLimitUpOut:
     snap = await limit_up_service.get_snapshot(cache, _iso(date_))
     return YesterdayLimitUpOut(**limit_up_service.yesterday_payload(snap))
-
-
-@router.get("/sentiment/calendar", response_model=list[SentimentCalendarPointOut])
-async def get_sentiment_calendar(
-    cache: CacheDep, days: int = Query(default=30, ge=5, le=120)
-) -> list[SentimentCalendarPointOut]:
-    rows = await limit_up_service.get_calendar(cache, days)
-    return [SentimentCalendarPointOut(**r) for r in rows]
 ```
 
 _iso(...)：本模块新增一个小 helper（**目前不存在**，现有 `get_*_endpoint` 的日期解析在 service 层、
@@ -1759,10 +1752,11 @@ def _iso(v: str | None) -> date | None:
     """ISO 日期 → date；解析失败抛 ValueError（由各端点转 400，与 /dragon-tiger 同写法）。"""
     return datetime.fromisoformat(v).date() if v else None
 ```
-`limit_up_service` 再补两个投影函数与 `get_calendar`：
+`limit_up_service` 再补两个投影函数：
 
 ```python
 def sector_payload(snap: dict[str, Any], sw_l1: str | None = None) -> dict[str, Any]:
+    """申万 L3 最高板投影；`sw_l1` 过滤为客户端维度，缓存不受其影响。"""
     items = snap["sectors"]["items"]
     if sw_l1:
         items = [i for i in items if i["l1_code"] == sw_l1]
@@ -1774,24 +1768,15 @@ def sector_payload(snap: dict[str, Any], sw_l1: str | None = None) -> dict[str, 
 
 
 def yesterday_payload(snap: dict[str, Any]) -> dict[str, Any]:
+    """昨日涨停今日表现投影。"""
     return {
         "as_of": snap["as_of"], "as_of_prev": snap["as_of_prev"], "source": snap["source"],
         "degraded_reason": snap["degraded_reason"],
         "kpis": snap["yesterday"]["kpis"], "items": snap["yesterday"]["items"],
     }
-
-
-async def get_calendar(cache: CacheClient | None, days: int = 30) -> list[dict[str, Any]]:
-    """情绪周期时序（来自 market_sentiment_daily 派生缓存；Task 5 落库）。"""
-    key = f"market:limit-up:calendar:{days}"
-    if cache is not None and (cached := await cache.get(key)):
-        return cached
-    async with async_session_factory() as db:
-        rows = await limit_up_repo.list_sentiment_calendar(db, days)
-    if cache is not None and rows:
-        await cache.set(key, rows, ttl=CALENDAR_TTL)
-    return rows
 ```
+
+> `get_calendar` 与 `GET /sentiment/calendar` **不在本任务**（见 Files 说明：它们归 Task 5，因为依赖 Task 5 才建的 `market_sentiment_daily` 表与 `limit_up_repo.list_sentiment_calendar`）。`SentimentCalendarPointOut` schema 仍在本任务定义（Task 5 直接用它）。
 
 - [ ] **Step 5: 跑测试与全量检查**
 
@@ -1844,7 +1829,7 @@ git commit -m "feat(limit-up): 快照编排服务与 4 个只读端点（可用�
 
 **Interfaces:**
 - Consumes: Task 4 的 `get_snapshot`
-- Produces: `limit_up_service.persist_snapshot(db, cache, as_of=None) -> dict`（返回 `{"status","trade_date","zt_count"}`）；`limit_up_repo.list_sentiment_calendar(db, days) -> list[dict]`
+- Produces: `limit_up_service.persist_snapshot(db, cache, as_of=None) -> dict`（返回 `{"status","trade_date","zt_count"}`）；`limit_up_service.get_calendar(cache, days=30) -> list[dict]`；`limit_up_repo.list_sentiment_calendar(db, days) -> list[dict]`；端点 `GET /sentiment/calendar`
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -1916,7 +1901,7 @@ class MarketSentimentDaily(Base):
 
 迁移（`--rev-id b8d2e1c3f4a5`，`down_revision = "a7c1f0b2d3e4"`）按模型逐列 `op.create_table` 写出，`UniqueConstraint("trade_date", name="uq_sentiment_daily_date")`。
 
-- [ ] **Step 4: repo + service + 接线**
+- [ ] **Step 4: repo + service + 接线（含日历端点）**
 
 `limit_up_repo.py` 追加：
 
@@ -1996,7 +1981,7 @@ async def persist_snapshot(
 
 接线：`MarketDataJobType` 加 `"sentiment_daily"`；worker 加分支（**传 `cache=None`**：盘后任务不需要
 缓存，且可避开上一条的 str/date 转换）；`scheduler/jobs.py` 加 `sentiment_daily_job`（17:15，晚于 16:50 的限价补漏）。
-Task 4 已把 `get_calendar` 接到 `market_sentiment_daily`，本任务只需保证它真有数据。
+日历端点（`get_calendar` + `GET /sentiment/calendar`）在**本任务**实现（T4 只交付 3 个端点、只定义 `SentimentCalendarPointOut` schema）：它依赖本任务才建的 `market_sentiment_daily` 表与 `list_sentiment_calendar`，放在 T4 会交付一个必 500 且无覆盖的路由。
 
 ```python
     # Short-term sentiment snapshot (limit-up ladder cycle): 17:15 Mon-Fri
