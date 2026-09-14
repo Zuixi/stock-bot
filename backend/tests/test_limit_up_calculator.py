@@ -11,16 +11,42 @@ from app.services import limit_up_calculator as calc
 D1, D2, D3, D4, D5 = (date(2026, 9, d) for d in (1, 2, 3, 4, 5))
 
 
-def _row(stock_id, d, *, is_lu, streak, symbol="000001", name="测试", close=10.0,
-         pre_close=9.0, open_=9.2, amount=1.0, sw_l3="110703", sw_l3_name="生猪养殖",
-         sw_l1="110000", sw_l1_name="农林牧渔"):
+def _row(
+    stock_id,
+    d,
+    *,
+    is_lu,
+    streak,
+    symbol="000001",
+    name="测试",
+    close=10.0,
+    pre_close=9.0,
+    open_=9.2,
+    amount=1.0,
+    sw_l3="110703",
+    sw_l3_name="生猪养殖",
+    sw_l1="110000",
+    sw_l1_name="农林牧渔",
+):
     return {
-        "stock_id": stock_id, "symbol": symbol, "name": name, "trade_date": d,
-        "close": close, "open": open_, "high": close, "amount": amount,
-        "pre_close": pre_close, "up_limit": 11.0, "down_limit": 9.0,
-        "is_lu": is_lu, "touched": is_lu, "streak_upto": streak,
-        "sw_l3_code": sw_l3, "sw_l3_name": sw_l3_name,
-        "sw_l1_code": sw_l1, "sw_l1_name": sw_l1_name,
+        "stock_id": stock_id,
+        "symbol": symbol,
+        "name": name,
+        "trade_date": d,
+        "close": close,
+        "open": open_,
+        "high": close,
+        "amount": amount,
+        "pre_close": pre_close,
+        "up_limit": 11.0,
+        "down_limit": 9.0,
+        "is_lu": is_lu,
+        "touched": is_lu,
+        "streak_upto": streak,
+        "sw_l3_code": sw_l3,
+        "sw_l3_name": sw_l3_name,
+        "sw_l1_code": sw_l1,
+        "sw_l1_name": sw_l1_name,
     }
 
 
@@ -51,7 +77,7 @@ def test_n_day_m_board_counts_market_days_not_stock_rows():
     market_days = [D1, D2, D3, D4, D5]
     rows = [_row(1, D3, is_lu=True, streak=1), _row(1, D5, is_lu=True, streak=2)]
     span, boards = calc.n_day_m_board(rows, 1, D5, market_days)
-    assert (boards, span) == (2, 3)          # 3天2板
+    assert (boards, span) == (2, 3)  # 3天2板
 
 
 def test_suspended_days_do_not_break_streak():
@@ -61,18 +87,24 @@ def test_suspended_days_do_not_break_streak():
     本地数字会与用户拿来对照的第三方不一致。missing_days 必须如实下发。
     """
     market_days = [D1, D2, D3, D4, D5]
-    rows = [_row(1, D1, is_lu=True, streak=1), _row(1, D4, is_lu=True, streak=2),
-            _row(1, D5, is_lu=True, streak=3)]
+    rows = [
+        _row(1, D1, is_lu=True, streak=1),
+        _row(1, D4, is_lu=True, streak=2),
+        _row(1, D5, is_lu=True, streak=3),
+    ]
     assert calc.ladder(rows, D5)[0]["stocks"][0]["streak"] == 3
-    assert calc.missing_days(rows, 1, market_days) == 2      # 5 个市场日 - 3 天有行情
+    assert calc.missing_days(rows, 1, market_days) == 2  # 5 个市场日 - 3 天有行情
 
 
 def test_promotion_rate_is_intersection_based():
     """1进2 的分子必须是交集：昨日首板 且 今日二板。"""
     rows = [
-        _row(1, D4, is_lu=True, streak=1), _row(1, D5, is_lu=True, streak=2),   # 晋级
-        _row(2, D4, is_lu=True, streak=1), _row(2, D5, is_lu=False, streak=0),  # 断板
-        _row(3, D4, is_lu=True, streak=1), _row(3, D5, is_lu=True, streak=1),   # 断后回封
+        _row(1, D4, is_lu=True, streak=1),
+        _row(1, D5, is_lu=True, streak=2),  # 晋级
+        _row(2, D4, is_lu=True, streak=1),
+        _row(2, D5, is_lu=False, streak=0),  # 断板
+        _row(3, D4, is_lu=True, streak=1),
+        _row(3, D5, is_lu=True, streak=1),  # 断后回封
     ]
     promo = calc.promotion_rate(rows, D4, D5, level=1)
     assert promo == {"rate": 1 / 3, "n": 3, "noisy": True}
@@ -87,13 +119,23 @@ def test_sector_ladder_picks_deterministic_leader_and_buckets_unmapped():
     rows = [
         _row(1, D5, is_lu=True, streak=2, symbol="000002", amount=5.0, sw_l3="110703"),
         _row(2, D5, is_lu=True, streak=2, symbol="000001", amount=5.0, sw_l3="110703"),
-        _row(3, D5, is_lu=True, streak=1, symbol="000003", amount=9.0, sw_l3=None,
-             sw_l3_name=None, sw_l1=None, sw_l1_name=None),
+        _row(
+            3,
+            D5,
+            is_lu=True,
+            streak=1,
+            symbol="000003",
+            amount=9.0,
+            sw_l3=None,
+            sw_l3_name=None,
+            sw_l1=None,
+            sw_l1_name=None,
+        ),
     ]
     got = calc.sector_ladder(rows, D5)
     assert got["unclassified_count"] == 1
     assert got["items"][0]["l3_name"] == "生猪养殖"
-    assert got["items"][0]["leader_symbol"] == "000001"   # 同板同额 → symbol 升序
+    assert got["items"][0]["leader_symbol"] == "000001"  # 同板同额 → symbol 升序
     assert got["items"][0]["max_streak"] == 2
 
 
@@ -117,7 +159,7 @@ def test_yesterday_limit_up_reports_suspended_stock_as_null_not_zero():
     反例：把无当日行的票默认成 today_pct=0.0，会被当成"平盘"混进均值与榜单且不报错
     （真实 0.00% 与缺失无法区分）；正确口径是排除在 measured 之外。
     """
-    rows = [_row(1, D4, is_lu=True, streak=1, pre_close=10.0)]   # D5 停牌：无当日行
+    rows = [_row(1, D4, is_lu=True, streak=1, pre_close=10.0)]  # D5 停牌：无当日行
     got = calc.yesterday_limit_up(rows, D4, D5, [D4, D5])
     item = got["items"][0]
     assert item["suspended"] is True
@@ -126,7 +168,10 @@ def test_yesterday_limit_up_reports_suspended_stock_as_null_not_zero():
     assert item["today_streak"] is None
     assert item["broken"] is False
     assert got["kpis"] == {
-        "n": 1, "measured": 0, "yzt_avg_pct": None, "yzt_avg_open_premium": None,
+        "n": 1,
+        "measured": 0,
+        "yzt_avg_pct": None,
+        "yzt_avg_open_premium": None,
     }
 
 
@@ -142,9 +187,9 @@ def test_yesterday_pct_uses_today_pre_close_not_prev_row():
         _row(1, D5, is_lu=False, streak=0, close=10.5, open_=10.2, pre_close=10.0),
     ]
     item = calc.yesterday_limit_up(rows, D4, D5, [D4, D5])["items"][0]
-    assert item["today_pct"] == 5.0          # (10.5-10.0)/10.0，而不是 (10.5-9.0)/9.0
+    assert item["today_pct"] == 5.0  # (10.5-10.0)/10.0，而不是 (10.5-9.0)/9.0
     assert item["today_open_premium"] == 2.0
-    assert item["broken"] is False            # 每个 item 都必须带 broken 键（停牌股也不例外）
+    assert item["broken"] is False  # 每个 item 都必须带 broken 键（停牌股也不例外）
 
 
 def test_sentiment_kpis_broken_rate_uses_market_breadth():

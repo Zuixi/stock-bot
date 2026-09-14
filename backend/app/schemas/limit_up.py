@@ -20,7 +20,7 @@ class LadderStockOut(BaseModel):
     missing_days: int
     sw_l1_name: str | None = None
     sw_l3_name: str | None = None
-    seal_time: str | None = None      # 本地路径恒 None（前端渲染 --）
+    seal_time: str | None = None  # 本地路径恒 None（前端渲染 --）
     seal_fund: float | None = None
     break_count: int | None = None
 

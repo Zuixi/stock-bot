@@ -156,6 +156,8 @@
 - SQL 里承载的不变量（gaps-and-islands 的分区键、COALESCE 兜底）要守卫在**默认门禁**里，而不是躲在 `-m e2e` 之后：只要该 SQL 只用了兼容语法（COALESCE / `row_number() OVER(PARTITION BY …)` / LEFT JOIN / 绑定参数），就可在 SQLite 内存库建最小 schema、**import 模块里的 SQL 常量**（复制文本会漂移并静默通过）跑合成夹具钉死精确值；写完后做一次变异验证（临时删分区键 / 临时去 COALESCE，确认转红再还原）证明守卫真能失败。
 - 装饰层（Web 增强/兜底）失败路径的测试必须让被测函数**真正走到外呼分支**——非空输入 + 无降级标记（`degraded_reason is None`）；若给空输入会命中早退分支、外呼 mock 根本不被调用，异常路径就「假绿」。装饰层自身失败只 `logger.warning(exc_info=True)` 就地回退、绝不改变主路径的 `source`/`degraded_reason`/梯队成员与顺序：主口径可回放、装饰口径给不出就保持 `null`，两者并存必须靠这条隔离约定守住。
 
+- 本地自检脚本必须与 CI 跑的 lint 口径**逐条对齐**，不能只覆盖其中一个子命令：CI 的后端 lint job 跑 `ruff check app/ tests/` **加** `ruff format --check app/ tests/`，而 `scripts/self_review.sh` 原先只跑 `ruff check`（AGENTS.md 也只写了 check）——于是本特性 16 个改动文件从未被 format 过，本地每个任务都"全绿"、CI 的 `Lint (backend)` 必红，直到 PR 才暴露。补门禁时按"改动文件 + 与 CI 相同命令集"实现（本次已给 `self_review.sh` 加 `ruff format --check $PY`），并顺手核一遍脚本里的命令清单与 workflow 是否一一对应；`ruff check` 通过不等于代码已格式化。
+
 ## 六、架构与分层
 
 - 分类/标签等用户可编辑的多对多关系应独立建表并采用"先删后插"的全量替换策略，避免增量 diff 逻辑复杂化；合成分类节点（如"其他"）应复用现有字段自动分组，减少用户手动维护成本；自定义标签系统应与现有分类体系独立设计（独立建表 + 独立前端组件 + 专用聚合页），避免与分类逻辑耦合。

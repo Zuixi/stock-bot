@@ -51,8 +51,9 @@ async def test_window_rides_stock_date_unique_index() -> None:
     # 任选其一（2026-09-14 实测：本库选 idx_daily_quotes_stock_date；断言 uq_ 会误红，
     # 且 T9 删掉 idx_ 之后才轮到 uq_）。
     assert index_names & {"uq_daily_quotes_stock_date", "idx_daily_quotes_stock_date"}, index_names
-    assert not any(n["Node Type"] == "Seq Scan" and n.get("Relation Name") == "daily_quotes"
-                   for n in nodes), "daily_quotes 全表扫描"
+    assert not any(
+        n["Node Type"] == "Seq Scan" and n.get("Relation Name") == "daily_quotes" for n in nodes
+    ), "daily_quotes 全表扫描"
 
 
 def _walk(node: dict[str, Any], out: list[dict[str, Any]]) -> None:

@@ -231,14 +231,26 @@ class _CalendarCache:
 
 _CAL_ROWS = [
     {
-        "trade_date": D4, "zt_count": 50, "dt_count": 1, "zb_count": 20,
-        "broken_rate": 0.2857, "yzt_avg_pct": 1.5, "promo_1to2": 0.4,
-        "promo_2to3": 0.2, "max_streak": 3,
+        "trade_date": D4,
+        "zt_count": 50,
+        "dt_count": 1,
+        "zb_count": 20,
+        "broken_rate": 0.2857,
+        "yzt_avg_pct": 1.5,
+        "promo_1to2": 0.4,
+        "promo_2to3": 0.2,
+        "max_streak": 3,
     },
     {
-        "trade_date": D5, "zt_count": 75, "dt_count": 1, "zb_count": 39,
-        "broken_rate": 0.3421, "yzt_avg_pct": 2.8225, "promo_1to2": 0.5,
-        "promo_2to3": 0.3, "max_streak": 4,
+        "trade_date": D5,
+        "zt_count": 75,
+        "dt_count": 1,
+        "zb_count": 39,
+        "broken_rate": 0.3421,
+        "yzt_avg_pct": 2.8225,
+        "promo_1to2": 0.5,
+        "promo_2to3": 0.3,
+        "max_streak": 4,
     },
 ]
 

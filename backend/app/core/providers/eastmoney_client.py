@@ -46,6 +46,7 @@ def _num(v: Any) -> float | None:
 
 class EastmoneyClient:
     """节流 + UA 的东财只读客户端；仅批量端点，杜绝逐股轮询。"""
+
     ZT_POOL_PATH = "/getTopicZTPool"
     ZT_POOL_BASE = "https://push2ex.eastmoney.com"
 
@@ -251,6 +252,7 @@ class EastmoneyClient:
         定点整数：p=价格×1000、fbt/lbt=HHMMSS（需零填充）、fund/amount 已是元。
         zttj{days,ct} 是可缺的统计块（个别票缺"N天M板"），缺则置 None 而不是造 0。
         """
+
         def _t(v: Any) -> str | None:
             if v in (None, "", 0):
                 return None

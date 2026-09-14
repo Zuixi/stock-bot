@@ -51,14 +51,14 @@ _SCHEMA = [
 # 的形状，`DISTINCT` 去重后回一行；去掉 `DISTINCT` 会让它扇出（守卫的唯一真实触发源）。
 _QUOTES = [
     (1, "2026-09-01", 11.0, 11.0, 11.0, 100.0),  # T
-    (1, "2026-09-02", 9.0, 9.0, 9.0, 100.0),    # 有行情、无限价行 → NULL → false
+    (1, "2026-09-02", 9.0, 9.0, 9.0, 100.0),  # 有行情、无限价行 → NULL → false
     (1, "2026-09-03", 11.0, 11.0, 11.0, 100.0),  # T
     (1, "2026-09-04", 11.0, 11.0, 11.0, 100.0),  # T（as_of_prev）
-    (1, "2026-09-05", 9.0, 9.0, 9.0, 100.0),    # F（as_of）
-    (2, "2026-09-01", 9.0, 9.0, 9.0, 50.0),     # F
-    (2, "2026-09-02", 9.0, 9.0, 9.0, 50.0),     # F
-    (2, "2026-09-03", 9.0, 9.0, 9.0, 50.0),     # F
-    (2, "2026-09-04", 9.0, 9.0, 9.0, 50.0),     # F
+    (1, "2026-09-05", 9.0, 9.0, 9.0, 100.0),  # F（as_of）
+    (2, "2026-09-01", 9.0, 9.0, 9.0, 50.0),  # F
+    (2, "2026-09-02", 9.0, 9.0, 9.0, 50.0),  # F
+    (2, "2026-09-03", 9.0, 9.0, 9.0, 50.0),  # F
+    (2, "2026-09-04", 9.0, 9.0, 9.0, 50.0),  # F
     (2, "2026-09-05", 11.0, 11.0, 11.0, 50.0),  # T（as_of）
     (3, "2026-09-04", 11.0, 11.0, 11.0, 80.0),  # T（as_of_prev）
     (3, "2026-09-05", 11.0, 11.0, 11.0, 80.0),  # T（as_of）
@@ -96,17 +96,11 @@ def window_engine() -> Engine:
             conn.exec_driver_sql(stmt)
         conn.execute(
             text("INSERT INTO daily_quotes VALUES (:a, :b, :c, :d, :e, :f)"),
-            [
-                {"a": s, "b": d, "c": c, "d": o, "e": h, "f": amt}
-                for s, d, c, o, h, amt in _QUOTES
-            ],
+            [{"a": s, "b": d, "c": c, "d": o, "e": h, "f": amt} for s, d, c, o, h, amt in _QUOTES],
         )
         conn.execute(
             text("INSERT INTO stock_price_limits VALUES (:a, :b, :c, :d, :e)"),
-            [
-                {"a": s, "b": d, "c": pc, "d": ul, "e": dl}
-                for s, d, pc, ul, dl in _LIMITS
-            ],
+            [{"a": s, "b": d, "c": pc, "d": ul, "e": dl} for s, d, pc, ul, dl in _LIMITS],
         )
         conn.execute(
             text("INSERT INTO stocks VALUES (:a, :b, :c)"),
@@ -128,10 +122,14 @@ def window_engine() -> Engine:
 
 def _run_window(engine: Engine) -> list[dict[str, Any]]:
     with engine.connect() as conn:
-        rows = conn.execute(
-            text(limit_up_repo._WINDOW_SQL),
-            {"window_start": WINDOW_START, "as_of": AS_OF, "as_of_prev": AS_OF_PREV},
-        ).mappings().all()
+        rows = (
+            conn.execute(
+                text(limit_up_repo._WINDOW_SQL),
+                {"window_start": WINDOW_START, "as_of": AS_OF, "as_of_prev": AS_OF_PREV},
+            )
+            .mappings()
+            .all()
+        )
     return [dict(r) for r in rows]
 
 

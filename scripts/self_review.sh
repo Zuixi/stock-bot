@@ -4,7 +4,7 @@
 # 被 AGENTS.md「完成前自检门禁」引用，并挂进 .pre-commit 兜底。
 #
 # 用法（在仓库根目录执行）：
-#   bash scripts/self_review.sh            # 快检：空白/冲突 + 改动文件 ruff + 文档同步告警
+#   bash scripts/self_review.sh            # 快检：空白/冲突 + 改动文件 ruff(check+format) + 文档同步告警
 #   bash scripts/self_review.sh --full     # 全量：快检 + 后端 mypy/pytest + 前端 tsc
 #
 # 退出码：0 = 通过；1 = 有硬性未过项（空白/ruff/mypy/test/tsc）。
@@ -37,7 +37,10 @@ ok "diff --check 通过"
 PY=$(py_files)
 echo; echo "== [2/4] 后端 lint（ruff，改动文件） =="
 if [ -n "$PY" ]; then
-  if (cd backend && uv run ruff check $PY); then ok "ruff 通过 (${PY//$'\n'/ })"; else fail "ruff 未通过"; fi
+  if (cd backend && uv run ruff check $PY); then ok "ruff check 通过 (${PY//$'\n'/ })"; else fail "ruff check 未通过"; fi
+  # CI 同时跑 `ruff format --check app/ tests/`（见 .github/workflows/ci.yml）；只跑 check 会让
+  # 未格式化的改动本地全绿、CI 必红，故这里一并按同一口径校验改动文件。
+  if (cd backend && uv run ruff format --check $PY); then ok "ruff format --check 通过"; else fail "ruff format --check 未通过（跑 `uv run ruff format <files>`）"; fi
 else
   echo "  （无 backend Python 改动，跳过）"
 fi
