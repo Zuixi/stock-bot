@@ -1,6 +1,9 @@
-"""连板窗口 SQL 的两条不变量：无扇出、计划不回退。
+"""连板窗口 SQL 的 Postgres 计划形状守卫。
 
 `-m e2e`（需要真 Postgres）。运行：uv run pytest tests/test_limit_up_repo.py -v -m e2e
+
+无扇出与窗口完整性两条不变量已提升到默认门禁（tests/test_limit_up_window_sql.py，SQLite
+内存库），本文件只留真正需要真库的计划形状守卫（走 uq_/idx_ 索引、不逐股 probe）。
 """
 
 import json
@@ -28,23 +31,6 @@ async def _window_args(db: Any) -> dict[str, Any]:
     days = await limit_up_repo.list_recent_trade_dates(db, as_of, 16)
     assert len(days) >= 2
     return {"as_of": as_of, "as_of_prev": days[-2], "window_start": days[0]}
-
-
-async def test_window_has_no_fanout() -> None:
-    """同一 (stock_id, trade_date) 不得出现两次。
-
-    候选集是「今日 ∪ 昨日」涨停并集，两日都涨停的票在 cand 里出现两次会让
-    JOIN cand 扇出：实测涨停数从真值 75 变 94，并凭空造出 8 连板。加 DISTINCT 才一致。
-    SW 侧同理：sw_industry_members 若一股多行业，LEFT JOIN 也会扇出。
-    """
-    async with async_session_factory() as db:
-        rows = await limit_up_repo.fetch_limit_up_window(db, **await _window_args(db))
-    keys = [(r["stock_id"], r["trade_date"]) for r in rows]
-    assert len(keys) == len(set(keys)), "窗口查询出现扇出（cand 未 DISTINCT 或成员表一股多行业）"
-    assert rows, "窗口为空：stock_price_limits 尚未回补"
-    # 窗口必须回整段交易日，而不只是 as_of/as_of_prev 两天：
-    # 否则 boards_in_window 恒 ≤ 2、每只票 missing_days 恒 = 窗口天数 - 2。
-    assert len({r["trade_date"] for r in rows}) > 2, "窗口被截成两天：N天M板/停牌缺日全错"
 
 
 async def test_window_rides_stock_date_unique_index() -> None:

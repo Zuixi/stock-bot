@@ -115,7 +115,7 @@ L3→L2→L1 走 `sw_industry_classes.parent_code` 两跳链（同 `market_servi
 
 **纯派生缓存**：可随时从 `daily_quotes + stock_price_limits` 重建，绝不是真相来源。存在的唯一理由是跨月的情绪周期时序图重算昂贵。
 
-**不建逐日明细表**：`daily_quotes + stock_price_limits` 本身就是历史；实测当日约 75 只候选的一次完整梯队计算只需一条 SQL（34ms / 895 行）。建明细表 = 复制真相 + 多一条会过期的写入链路。
+**不建逐日明细表**：`daily_quotes + stock_price_limits` 本身就是历史；实测当日约 75 只候选的一次完整梯队计算只需一条 SQL（16 交易日整窗 2,411 行 / ~48ms，见 §六）。建明细表 = 复制真相 + 多一条会过期的写入链路。
 
 ## 五、API 契约
 
