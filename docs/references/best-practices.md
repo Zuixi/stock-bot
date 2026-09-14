@@ -55,6 +55,7 @@
 - 定时任务的交易时段/工作日守卫必须显式 `ZoneInfo("Asia/Shanghai")` 且与 CronTrigger 使用同一时区：容器默认 UTC，`CronTrigger(timezone="Asia/Shanghai")` 会在正确的北京时间触发，但 job 内部再用 naive `datetime.now()`（UTC）判断（如 `_in_trading_hours()`）会永远为 False，任务全部被静默跳过，日志只有 executed successfully 没有业务结果；同理，"回填上一交易日"必须查 `trade_cal` 而不是 `weekday()` 推算，否则节假日后会产生永久缺口。
 - 第三方行情先 curl 实测定字段与单位再写映射：东财 f62 是元、TuShare block_trade 是万元/万股、north_money 是万元、巨潮 announcementTime 是毫秒——单位/时间戳错一档，UI 就差四个数量级或 1970 年。
 - 回补窗口类参数（months）必须从 API schema → worker payload → service → fetcher 全链贯通并各自设默认值，任何一层残留硬编码窗口（如 `df.tail(45)`）都会让上游参数静默失效；生成演示序列时"末点精确等于基准值"要靠生成器结构保证并用纯单测钉死，不能依赖抖动碰巧为零。
+- 依赖第三方实时接口的功能必须先把口径落成自有数据再算（限价这类**有权威原值**的字段要用官方接口原值落表，别用名称/代码前缀推比例）：实测 2026-09-08 名称启发式把 75 只涨停误判成 83 只（9 只 ST 名称股真实限幅 10%）、而用 `LAG(close)` 当前收会把涨停数算成 142——外呼失败只降级"增强字段"（封板时间/封单），绝不降级主口径。**且要核到字段级**：TuShare 文档里"默认显示=N"的列（如 `stk_limit.pre_close`）不显式传 `fields` 就不返回，落库整列 NULL 而不报错；同理涨跌幅分母必须取**当日行**的 `pre_close`（取前一日行 = 静默多算一天，实测 2.82% → 13.95%）。附三条同源教训：候选集合取两日并集必须 `DISTINCT`（扇出会 75→94 并造出假连板）；gaps-and-islands 的 `grp = rn_all - rn_by_val` 只保证组内常量、**不保证组间唯一**，`PARTITION BY` 必须带上分组列本体（否则不同值的岛会合并且 streak 静默虚高）；以及"缺失 ≠ 零"在停牌股上必须显式回传 `missing_days` 而不是折算成 0%。
 
 ## 二、数据库与性能
 
@@ -74,7 +75,7 @@
 - 字段量纲注释必须与**存储单位**逐字一致：TuShare `amount` 存的是千元、`daily_basic` 市值是万元，注释写错单位比不写更危险——下游 mapper 会照错注释再乘错一档（10³ 级偏差），而透传单测只断言"原值透传"抓不到；不确定时标注来源口径（如"TuShare 原生千元，消费端 ×1000"）而非猜一个。
 - 行业聚合的**聚合对象必须是"当日真有行情的标的"而非静态成员表**：`sw_industry_members` 上卷 L3→L2→L1 后必须 INNER JOIN 当日 `daily_quotes` 并 `pct_chg IS NOT NULL` 再 `count`/`avg`，否则停牌/无行情成员会稀释 `avg_pct_chg` 并虚增 `member_count`（`up_count`+`down_count` 还只覆盖有涨跌的，平盘成员计入 `member_count` 属正确）；join 键先实测覆盖率再定（本次 `members.symbol → stocks.symbol` = 95.4%，高于计划的 >90% 阈值），别照抄 brief 里未验证的键名；若 `count(DISTINCT symbol) == count(*)` 则无扇出，可放心聚合。
 - 盘后一次性派生落库（如情绪周期）在编排层快照之上再判跳过时，必须把 `is_partial`（当日行情行数不足）放在空候选 `no_limit_up_rows` 之前：编排层 get_snapshot 在候选窗口为空时会先报 no_limit_up_rows，而部分 ingest 才是更本质的跳过原因，只按 degraded_reason 判会把部分行情日错记成 no_limit_up_rows 或直接 `k["zt_count"]` KeyError。
-
+- 手写 Alembic 迁移里的 `DROP INDEX CONCURRENTLY` 必须在 `op.get_context()` 的 `autocommit_block()` 内执行（CONCURRENTLY 不允许在事务块内跑，普通 `op.execute` 会在迁移事务里直接报错），而它真正生效的前提是 `migrations/env.py` 用 `async with engine.connect()` 而非 `engine.begin()`——后者把整个 MigrationContext 包在外层事务里，`autocommit_block()` 一进去就断言失败；改 `env.py` 是影响全链的改动，改完必须用「空库从零 `alembic upgrade head`」验证一遍，不能只跑增量。
 
 ## 三、Docker 与部署
 
@@ -133,6 +134,7 @@
 - 共享行组件的「缺失值占位」要显式开关而非默认填充：`DataRow` 有纯涨跌幅行（不传 `value`，省略数值槽才是对的），若把「`value===undefined` 一律渲染 `--`」写死进组件，这些行会凭空多出一个 `--`；正确做法是加可选 `valuePlaceholder` 让数值消费方显式 opt-in，同时**数值槽与单位一起判存在**（`hasValue && unit`），避免 `--` 后跟悬空的「亿元」。
 - 公开页面每个「登录入口」都要按会话态二选一，别与登录态感知的 CTA 各写一套：无条件渲染的「登录」按钮会和已登录 CTA「进入工作台」并存，而只断言 CTA 文案的 E2E 永远发现不了——补一条「已登录不得出现登录按钮」的断言把这类并存钉死；同理，反查 `northbound_daily` 零行这类「已知已死」的数据域，公开文案（覆盖矩阵/统计带/来源署名）必须同步降级为「规划中」，不能只在功能组件里移除而留文案继续宣称已覆盖。
 - 同一份「优先码 + 补位 + slice」算法被两处复制时，抽成共享 helper 并把两侧的差异（补位过滤条件）作为入参，而不是让 helper 猜；`as_of`/刷新节奏等口径文案要按数据源分家（实时指数条写「每 60 秒刷新」，T+1 分布只能写「当日收盘口径」），固定 `waitForTimeout` 的 E2E 换成 network-idle + 稳定 URL 断言，才能挡住更慢的重定向。
+- antd 的 `Empty`（含 `PRESENTED_IMAGE_SIMPLE`）会把自己渲染的插图设成 `<title>{locale.description}</title>`（zh_CN 即「暂无数据」），自定义 `description` **不会**覆盖这个可访问名，于是降级卡的可访问名与可见文案不一致（屏幕阅读器会读错）；要真正去掉它，该分支就不能用 antd 空态插图、改用纯文本占位。同源教训：Playwright 的 `getByText` 会命中 SVG `<title>`，这条断言恰好能抓到它——空态/占位文案的 E2E 断言要意识到命中对象可能是 SVG 的 `<title>` 而非可见文本。
 
 ## 五、测试与 E2E
 
@@ -149,7 +151,7 @@
 - 前端 e2e 手写 mock 载荷只能锁住前端自己的假设：后端字段改名时后端单测/`tsc`/mock e2e 会全绿，而真机上页面渲染 `undefined`/`--`。解法是**mock 与后端契约同源**——把容器内实抓的真实响应落成 committed fixture，前端 mock 读它、后端再加一条读同一批 fixture 的 `@pytest.mark.e2e` 契约测试断言实际发出的 key 集（顶层 + 条目）与之完全一致，改名即转红；注意这仍**不证明活链路**（dev 代理指向旧镜像时 mock 是必需的），活链路验证要等分支部署，须如实披露。配套：同一模块级 Redis 池在 function-scoped event loop 下跨 test 复用会报 "attached to a different loop"，autouse dispose fixture 除 `engine.dispose()` 外还要 `await close_redis_pool()`。
 - 多个 `@pytest.mark.e2e` 用例共用模块级 SQLAlchemy async engine 时，pytest-asyncio 的 function-scoped 事件循环会让上一用例遗留的池化连接在新循环里被复用，抛 `RuntimeError: Event loop is closed`（表现为随机某个用例失败，非断言失败）；在 autouse fixture 里 `await engine.dispose()` 按用例收尾即可，不必改全局 loop scope。
 
-- 不要让生产语义迁就不真实的测试 fixture：fixture 必须与真实数据源**同形状同键集**（如窗口行 16 键），否则会静默放过「空窗口 + 非零广度」这类本应被显式降级标记（`no_limit_up_rows`）的异常态，甚至让半成品 payload 落入缓存。修复方向永远是改 fixture、恢复严格判据，并把「完整日必须真产出梯队」写成回归断言。
+- 不要让生产语义迁就不真实的测试 fixture：fixture 必须与真实数据源**同形状同键集**（如窗口行 18 键——16 是窗口交易日数、18 才是窗口行键数），否则会静默放过「空窗口 + 非零广度」这类本应被显式降级标记（`no_limit_up_rows`）的异常态，甚至让半成品 payload 落入缓存。修复方向永远是改 fixture、恢复严格判据，并把「完整日必须真产出梯队」写成回归断言。
 - 修复/恢复一条 load-bearing 判据（如严格降级条件 `if not rows: → no_limit_up_rows`）后，必须补一条**专用测试钉死精确触发条件**（限价存在+窗口空+广度非零 ⇒ reason/echelons/kpis 的具体形态），否则未来重构可再次放宽而全绿；缓存类负向断言（降级快照不写缓存）必须**带正例控制**（完整快照必被 set 且 key 含 as_of+lookback 两维），否则「从不缓存」的假实现也能通过。写完用一次快速变异验证（临时改回旧判据 / 临时让降级也 cache.set，确认新测试转红再改回）作为能真失败的客观证据。
 - 装饰层（Web 增强/兜底）失败路径的测试必须让被测函数**真正走到外呼分支**——非空输入 + 无降级标记（`degraded_reason is None`）；若给空输入会命中早退分支、外呼 mock 根本不被调用，异常路径就「假绿」。装饰层自身失败只 `logger.warning(exc_info=True)` 就地回退、绝不改变主路径的 `source`/`degraded_reason`/梯队成员与顺序：主口径可回放、装饰口径给不出就保持 `null`，两者并存必须靠这条隔离约定守住。
 
