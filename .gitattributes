@@ -1,0 +1,7 @@
+# 统一行尾：仓库与检出一致使用 LF。
+# 本仓库被 Windows Git 与 WSL Git 双端检出；若不做归一化，Windows 侧工作区是 CRLF、
+# index 存的是 LF，WSL 侧（未设 core.autocrlf）会把每个文本文件都判成"整体改写"，
+# `git status` 与 `git diff` 直接失效（曾一次性出现 380 个假改动）。
+# gitattributes 优先于 core.autocrlf，双端行为一致，无需各自的本地配置。
+# 二进制文件由 text=auto 的自动探测跳过，无需逐类声明。
+* text=auto eol=lf

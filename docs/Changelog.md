@@ -1,3 +1,12 @@
+## 2026-09-14 - 行尾归一化入库（.gitattributes）+ 双端检出与工作区属主修复
+- **问题**：Windows 侧检出工作区为 CRLF、index 存 LF，WSL 侧未设 `core.autocrlf` → `git status` 一次性报 380 个文件「整体改写」（+76296/-76278），实际改动只有 2 个文件；同时仓库文件属主为 root，`.git` 不可写导致任何 commit/pull 必然失败
+- **修复**：新增仓库根 `.gitattributes`（`* text=auto eol=lf`，二进制由 `text=auto` 自动跳过），gitattributes 优先于 `core.autocrlf`，双端不再需要各自的本地配置；工作区重新检出为 LF，`scripts/*.sh` 从此可在 WSL 直接 `bash` 执行（此前报 `set: pipefail: invalid option`）
+- **renormalize**：`git add --renormalize .` 归一化了唯一以 CRLF 入库的 blob —— `backend/tests/fixtures/caaa_article.html`（461 行）；该 fixture 由 `Path.read_text()` 读取，行尾对其断言无影响
+- **副产品**：4 个 worktree 的 `.git` 由 Windows 绝对路径（`F:/...`）改为相对路径（`gitdir: ../stock_bot/.git/worktrees/<name>`），WSL 侧恢复可用（原先 `git worktree list` 全部标 `prunable`）
+- **踩坑**：批量重写工作区后 `git status` 仍报几百个 phantom 修改而 `git diff` 为空——index 缓存的 stat（size/ino）停在旧值，补一次 `git add -A` 重新 stat 才归零
+- 验证：`git status --porcelain` 仅剩预期改动；`git diff --stat origin/main` 收敛到 .gitattributes + fixture 归一化 + Changelog/best-practices 四个文件
+- 涉及模块：.gitattributes（新增）, backend/tests/fixtures/caaa_article.html, docs/Changelog.md, docs/references/best-practices.md
+
 ## 2026-09-14 - CI docker-smoke 根因修复：网关缺健康检查导致 `--wait` 提前返回
 - **现象**：`Docker Compose Smoke Test` 全容器 Healthy，但经网关的**所有**路径都返回 Traefik 自己的 404（body 恰 19 字节 `404 page not found`，含 `PathPrefix(/` 的前端首页）；第一个失败还被 `curl -f ... | head -1` 吞掉退出码，由第二个 curl 以 exit 22 中断 job。
 - **根因**：`gateway` 服务**没有 healthcheck**（compose 里 7 个服务有、它没有），所以 `docker compose up -d --build --wait` 在 Traefik 容器刚 Running 时就返回，而 Traefik 还需一个节拍去订阅 Docker 事件、把容器 labels 变成 router；这段窗口内路由表为空 → 一切 404。CI 日志实证：诊断步骤（+约 1.4s）后 `/api/rawdata` 已列出全部 `*@docker` router，健康检查 5/5 首次尝试即 200 —— 即窗口真实存在，且只有「立刻断言」才会踩中。
