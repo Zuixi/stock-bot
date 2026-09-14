@@ -136,9 +136,50 @@ async def get_snapshot(
     snap["sw_coverage"] = round(mapped / len(ladder_pcts), 4) if ladder_pcts else None
     if snap["is_partial"] and snap["degraded_reason"] is None:
         snap["degraded_reason"] = "partial_day"
+    if snap["degraded_reason"] is None:
+        snap = await enrich_from_web(snap, target.strftime("%Y%m%d"))
     if cache is not None and snap["degraded_reason"] is None:
         await cache.set(key, snap, ttl=SNAPSHOT_TTL)
     return snap
+
+
+async def _fetch_web_pool(trade_date: str) -> list[dict[str, Any]]:
+    from app.core.providers.eastmoney_client import get_eastmoney_client  # noqa: PLC0415
+
+    return await get_eastmoney_client().fetch_limit_up_pool(trade_date)
+
+
+def apply_web_enrichment(
+    snapshot: dict[str, Any], web_rows: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """把 Web 的封板时间/封单/炸板次数注入匹配 symbol；未匹配保持 None。"""
+    by_symbol = {r["symbol"]: r for r in web_rows}
+    for echelon in snapshot.get("echelons", []):
+        for stock in echelon["stocks"]:
+            web = by_symbol.get(stock["symbol"])
+            if web is None:
+                continue
+            stock["seal_time"] = web["seal_time"]
+            stock["seal_fund"] = web["seal_fund"]
+            stock["break_count"] = web["break_count"]
+    return snapshot
+
+
+async def enrich_from_web(snapshot: dict[str, Any], trade_date: str) -> dict[str, Any]:
+    """附加封板信息（增强字段只能来自 Web）；任何失败仅 log，主路径状态不变。
+
+    取数按 **as_of**（不是"今天"）：daily_quotes 只回补到上一个工作日，
+    `latest_quote_date` 永远不是今天，所以 `target == 今日 && 盘中` 的触发条件恒为假（死代码）；
+    且该端点支持历史日期，按 as_of 取数既正确又不需要交易时段判断。
+    """
+    if not snapshot.get("echelons") or snapshot.get("degraded_reason"):
+        return snapshot
+    try:
+        web_rows = await _fetch_web_pool(trade_date)
+    except Exception:  # noqa: BLE001 —— 增强失败不得影响主路径
+        logger.warning("limit-up web enrichment failed; seal fields stay null", exc_info=True)
+        return snapshot
+    return apply_web_enrichment(snapshot, web_rows)
 
 
 def sector_payload(snap: dict[str, Any], sw_l1: str | None = None) -> dict[str, Any]:
