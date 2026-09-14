@@ -1,3 +1,10 @@
+## 2026-09-14 - CI docker-smoke 根因修复：网关缺健康检查导致 `--wait` 提前返回
+- **现象**：`Docker Compose Smoke Test` 全容器 Healthy，但经网关的**所有**路径都返回 Traefik 自己的 404（body 恰 19 字节 `404 page not found`，含 `PathPrefix(/` 的前端首页）；第一个失败还被 `curl -f ... | head -1` 吞掉退出码，由第二个 curl 以 exit 22 中断 job。
+- **根因**：`gateway` 服务**没有 healthcheck**（compose 里 7 个服务有、它没有），所以 `docker compose up -d --build --wait` 在 Traefik 容器刚 Running 时就返回，而 Traefik 还需一个节拍去订阅 Docker 事件、把容器 labels 变成 router；这段窗口内路由表为空 → 一切 404。CI 日志实证：诊断步骤（+约 1.4s）后 `/api/rawdata` 已列出全部 `*@docker` router，健康检查 5/5 首次尝试即 200 —— 即窗口真实存在，且只有「立刻断言」才会踩中。
+- **修复（治根而非加 sleep）**：给 `gateway` 加健康检查，断言**路由表已加载**（`wget -qO- http://127.0.0.1:8080/api/rawdata | grep -q 'frontend@docker'`），让 `up --wait` 等待真正的就绪条件；同时把 smoke 步骤的 `curl -f` 改成**条件式轮询**（30×2s，打印首次尝试与失败响应体）作为纵深防御，并新增 `Diagnose gateway routing (always)` / `Gateway logs on failure` 两步，把网关版本、容器状态、rawdata 路由表与日志留在现场（网关 dashboard 只在容器内可达，故用 `compose exec`）。
+- 验证：`docker compose config -q` ✔；CI `Docker Compose Smoke Test` 由 failure → success（含后续 `Auth login closed-loop smoke`）。
+- 涉及模块：docker-compose.yml（gateway healthcheck）, .github/workflows/ci.yml（docker-smoke 三步骤）, docs/build.md（启动流程补网关层就绪条件）, docs/references/best-practices.md
+
 ## 2026-09-14 - 连板梯队 PR#9 CI 修复：ruff format 本地门禁与 CI 口径对齐
 - **CI `Lint (backend)` 转红**：CI 的后端 lint job 跑的是 `ruff check app/ tests/` **外加** `ruff format --check app/ tests/`（`.github/workflows/ci.yml:24-25`），本特性各任务的本地自检只跑 `ruff check`，于是 16 个改动文件从没被 format 过——本地全绿、CI 必红。修复：`uv run ruff format app/ tests/` 格式化本特性全部改动文件（16 files reformatted，其中 0 个是既有文件，说明全部由本 PR 引入）。
 - **补门禁防复发**：`scripts/self_review.sh` 的 ruff 步骤增加 `ruff format --check $PY`（与 CI 同口径、同样只看改动文件），并在脚本头注释与失败提示里写明「跑 `uv run ruff format <files>`」。自检现在能提前抓到这类问题，而不必等 CI。
