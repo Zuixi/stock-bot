@@ -9,6 +9,10 @@
    被合并后 true 行继承 false 行的计数（实测 600127 报 3 实为 1）。
 2. `is_lu` / `touched` 必须 `COALESCE(..., false)`——LEFT JOIN 到缺失限价的交易日会得到 NULL，
    NULL 会让 gaps-and-islands 的 grp 分组错乱（NULL 与 false 不同组）。
+3. `cand` 必须 `DISTINCT`——两日都涨停的票（股 3）在候选 CTE 里会出现两次，去掉
+   `DISTINCT` 会把窗口行按候选数翻倍，制造出重复 `(stock_id, trade_date)` 的扇出
+   （涨停家数 75→94 那类错误的合成版）。这是 `test_window_has_no_fanout_and_full_window`
+   的唯一真实触发源：fixture 必须真的有一只在 as_of 与 as_of_prev 双涨停的票。
 
 本文件直接 `import` 模块常量 `limit_up_repo._WINDOW_SQL`，不复制 SQL 文本（复制的文本会
 漂移并静默通过）。`_BREADTH_SQL` 用 Postgres 专属的 `count(*) FILTER`，不在此列；真库的
@@ -43,6 +47,8 @@ _SCHEMA = [
 # 股 1：is_lu 序列 [T, F, T, T, F]，其中 D2 有行情但 stock_price_limits 无行（COALESCE 兜底）。
 # 股 2：零跑股——窗口内连续 4 个非涨停日 + 末日 1 个涨停（候选集要求 as_of/as_of_prev 涨停，
 # 所以"完全没有涨停"的股票不会进入窗口；用零跑覆盖该场景）。
+# 股 3：双涨停股——as_of 与 as_of_prev 两天都涨停。这正是 `cand` 里同一 stock_id 出现两次
+# 的形状，`DISTINCT` 去重后回一行；去掉 `DISTINCT` 会让它扇出（守卫的唯一真实触发源）。
 _QUOTES = [
     (1, "2026-09-01", 11.0, 11.0, 11.0, 100.0),  # T
     (1, "2026-09-02", 9.0, 9.0, 9.0, 100.0),    # 有行情、无限价行 → NULL → false
@@ -54,6 +60,8 @@ _QUOTES = [
     (2, "2026-09-03", 9.0, 9.0, 9.0, 50.0),     # F
     (2, "2026-09-04", 9.0, 9.0, 9.0, 50.0),     # F
     (2, "2026-09-05", 11.0, 11.0, 11.0, 50.0),  # T（as_of）
+    (3, "2026-09-04", 11.0, 11.0, 11.0, 80.0),  # T（as_of_prev）
+    (3, "2026-09-05", 11.0, 11.0, 11.0, 80.0),  # T（as_of）
 ]
 
 # up_limit=10.0 → close >= 9.995 即涨停。股 1 的 D2 故意缺行。
@@ -67,10 +75,12 @@ _LIMITS = [
     (2, "2026-09-03", 10.0, 10.0, 9.0),
     (2, "2026-09-04", 10.0, 10.0, 9.0),
     (2, "2026-09-05", 10.0, 10.0, 9.0),
+    (3, "2026-09-04", 10.0, 10.0, 9.0),
+    (3, "2026-09-05", 10.0, 10.0, 9.0),
 ]
 
-_STOCKS = [(1, "000001", "测试一"), (2, "000002", "测试二")]
-_MEMBERS = [("000001", "110703"), ("000002", "110703")]
+_STOCKS = [(1, "000001", "测试一"), (2, "000002", "测试二"), (3, "000003", "测试三")]
+_MEMBERS = [("000001", "110703"), ("000002", "110703"), ("000003", "110703")]
 _CLASSES = [
     ("110000", "农林牧渔", 1, None),
     ("110700", "养殖业", 2, "110000"),
@@ -163,7 +173,11 @@ def test_zero_run_does_not_inflate_streak(window_engine: Engine) -> None:
 
 
 def test_window_has_no_fanout_and_full_window(window_engine: Engine) -> None:
-    """无扇出（(stock_id, trade_date) 唯一）且回整段交易日（>2 个不同日期）。"""
+    """无扇出（(stock_id, trade_date) 唯一）且回整段交易日（>2 个不同日期）。
+
+    扇出的真实来源是 cand 未 DISTINCT：股 3 在 as_of 与 as_of_prev 双涨停，去掉
+    DISTINCT 会让它的每个窗口行都按候选数翻倍，`(stock_id, trade_date)` 出现重复。
+    """
     rows = _run_window(window_engine)
     assert rows, "窗口为空"
     keys = [(r["stock_id"], r["trade_date"]) for r in rows]
