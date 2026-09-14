@@ -37,7 +37,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.create_index(
-        "idx_daily_quotes_stock_date", "daily_quotes", ["stock_id", "trade_date"]
-    )
+    op.create_index("idx_daily_quotes_stock_date", "daily_quotes", ["stock_id", "trade_date"])
     op.create_index("ix_daily_quotes_stock_id", "daily_quotes", ["stock_id"])

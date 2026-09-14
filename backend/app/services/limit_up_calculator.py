@@ -158,11 +158,7 @@ def yesterday_limit_up(
     premiums: list[float] = []
     for p in prev:
         t = today.get(p["stock_id"])
-        pre = (
-            None
-            if t is None or t["pre_close"] is None
-            else float(t["pre_close"])
-        )
+        pre = None if t is None or t["pre_close"] is None else float(t["pre_close"])
         item: dict[str, Any] = {
             "symbol": p["symbol"],
             "name": p["name"],

@@ -161,11 +161,16 @@ async def get_limit_up_ladder(
             status_code=400, detail="date must be ISO format, e.g. 2026-09-08"
         ) from None
     return LimitUpLadderOut(
-        as_of=snap["as_of"], as_of_prev=snap["as_of_prev"], source=snap["source"],
-        limits_present=snap["limits_present"], is_partial=snap["is_partial"],
-        sw_coverage=snap["sw_coverage"], lookback=lookback,
+        as_of=snap["as_of"],
+        as_of_prev=snap["as_of_prev"],
+        source=snap["source"],
+        limits_present=snap["limits_present"],
+        is_partial=snap["is_partial"],
+        sw_coverage=snap["sw_coverage"],
+        lookback=lookback,
         degraded_reason=snap["degraded_reason"],
-        kpis=snap["kpis"] or None, echelons=snap["echelons"],
+        kpis=snap["kpis"] or None,
+        echelons=snap["echelons"],
     )
 
 

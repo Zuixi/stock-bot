@@ -230,9 +230,7 @@ class StockPriceLimit(Base):
     pre_close: Mapped[float | None] = mapped_column(Numeric(12, 4))
     up_limit: Mapped[float | None] = mapped_column(Numeric(12, 4))
     down_limit: Mapped[float | None] = mapped_column(Numeric(12, 4))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class MarketSentimentDaily(Base):

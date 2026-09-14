@@ -879,9 +879,7 @@ def _map_stk_limit_rows(
                 "ts_code": ts_code,
                 "pre_close": None if pd.isna(row.get("pre_close")) else float(row["pre_close"]),
                 "up_limit": float(up_limit),
-                "down_limit": None
-                if pd.isna(row.get("down_limit"))
-                else float(row["down_limit"]),
+                "down_limit": None if pd.isna(row.get("down_limit")) else float(row["down_limit"]),
             }
         )
     return rows

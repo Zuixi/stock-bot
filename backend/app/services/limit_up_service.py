@@ -107,7 +107,7 @@ async def get_snapshot(
         item["days_span"] = span
         item["boards_in_window"] = boards
         item["missing_days"] = calc.missing_days(rows, item["stock_id"], market_days)
-        item["seal_time"] = None      # 本地路径不具备（Web 增强在 Task 6 注入）
+        item["seal_time"] = None  # 本地路径不具备（Web 增强在 Task 6 注入）
         item["seal_fund"] = None
         item["break_count"] = None
     yesterday = calc.yesterday_limit_up(rows, market_days[-2], target, market_days)
@@ -235,11 +235,17 @@ async def persist_snapshot(
     # asyncpg `'str' object has no attribute 'toordinal'`（真库复现过）。
     trade_date = date.fromisoformat(str(snap["as_of"]))
     row = {
-        "trade_date": trade_date, "zt_count": k["zt_count"], "dt_count": k["dt_count"],
-        "zb_count": k["zb_count"], "broken_rate": k["broken_rate"],
-        "yzt_avg_pct": k["yzt_avg_pct"], "promo_1to2": k["promo_1to2"],
-        "promo_1to2_n": k["promo_1to2_n"], "promo_2to3": k["promo_2to3"],
-        "promo_2to3_n": k["promo_2to3_n"], "max_streak": k["max_streak"],
+        "trade_date": trade_date,
+        "zt_count": k["zt_count"],
+        "dt_count": k["dt_count"],
+        "zb_count": k["zb_count"],
+        "broken_rate": k["broken_rate"],
+        "yzt_avg_pct": k["yzt_avg_pct"],
+        "promo_1to2": k["promo_1to2"],
+        "promo_1to2_n": k["promo_1to2_n"],
+        "promo_2to3": k["promo_2to3"],
+        "promo_2to3_n": k["promo_2to3_n"],
+        "max_streak": k["max_streak"],
         "max_streak_symbol": leaders[0]["symbol"] if leaders else None,
         "source": snap["source"],
     }

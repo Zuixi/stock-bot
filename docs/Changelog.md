@@ -1,3 +1,9 @@
+## 2026-09-14 - 连板梯队 PR#9 CI 修复：ruff format 本地门禁与 CI 口径对齐
+- **CI `Lint (backend)` 转红**：CI 的后端 lint job 跑的是 `ruff check app/ tests/` **外加** `ruff format --check app/ tests/`（`.github/workflows/ci.yml:24-25`），本特性各任务的本地自检只跑 `ruff check`，于是 16 个改动文件从没被 format 过——本地全绿、CI 必红。修复：`uv run ruff format app/ tests/` 格式化本特性全部改动文件（16 files reformatted，其中 0 个是既有文件，说明全部由本 PR 引入）。
+- **补门禁防复发**：`scripts/self_review.sh` 的 ruff 步骤增加 `ruff format --check $PY`（与 CI 同口径、同样只看改动文件），并在脚本头注释与失败提示里写明「跑 `uv run ruff format <files>`」。自检现在能提前抓到这类问题，而不必等 CI。
+- 验证：`ruff format --check app/ tests/` → 194 files already formatted；`ruff check app/ tests/` → All checks passed；`uv run pytest -q` 246 passed / 30 deselected；`mypy app` 150 files clean；`bash scripts/self_review.sh` 新 format 步骤 ✔
+- 涉及模块：backend/app/**/*.py（本特性 16 个文件格式化）, scripts/self_review.sh, docs/references/best-practices.md
+
 ## 2026-09-14 - 连板梯队 终审修复：SQLite 合成夹具把 gaps-and-islands 不变量钉进默认门禁 + 修 spec 自相矛盾（仅测试/文档）
 - **streak 不变量默认门禁守卫**（终审 #1/#2）：新增 `backend/tests/test_limit_up_window_sql.py`（无 `-m e2e`、无 Postgres），在 SQLite 内存库建最小 schema（daily_quotes/stock_price_limits/stocks/sw_industry_members/sw_industry_classes），**直接 import `limit_up_repo._WINDOW_SQL`**（不复制 SQL 文本）跑合成夹具：股 1 is_lu 序列 [T, F, T, T, F]（其中 F 日有行情无限价行 → 走 COALESCE），钉死 false 岛后 true 岛必须从 1 重启（D3/D4 streak_upto=1/2）与缺限价行日 `is_lu`/`touched` 为布尔假而非 NULL；股 2 覆盖零跑不抬升涨停 streak；同文件搬入无扇出（(stock_id,trade_date) 唯一）与整窗（>2 个不同 trade_date）断言。变异验证：临时把 `PARTITION BY i.stock_id, i.is_lu, i.grp` 去掉 `is_lu` → D3/D4 变 2/3（红）；临时去掉两个 `COALESCE(..., false)` → `is_lu=None`（红）；还原后全绿且 `git diff` 对 `limit_up_repo.py` 为空。`test_limit_up_repo.py` 只留真库计划形状守卫（`-m e2e`），docstring 注明无扇出/整窗已上移默认门禁
 - **spec 自相矛盾**（终审 #3）：`docs/design/limit-up-sentiment.md:118` 把已作废的「34ms / 895 行」改为「16 交易日整窗 2,411 行 / ~48ms，见 §六」，与 §六实测口径一致

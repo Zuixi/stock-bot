@@ -44,19 +44,26 @@ async def missing_price_limit_dates(db: AsyncSession, dates: list[date]) -> list
     if not dates:
         return []
     present = set(
-        (await db.execute(
-            select(StockPriceLimit.trade_date)
-            .where(StockPriceLimit.trade_date.in_(dates))
-            .group_by(StockPriceLimit.trade_date)
-        )).scalars().all()
+        (
+            await db.execute(
+                select(StockPriceLimit.trade_date)
+                .where(StockPriceLimit.trade_date.in_(dates))
+                .group_by(StockPriceLimit.trade_date)
+            )
+        )
+        .scalars()
+        .all()
     )
     return [d for d in dates if d not in present]
 
 
 async def has_price_limits(db: AsyncSession, as_of: date) -> bool:
-    stmt = select(func.count()).select_from(StockPriceLimit).where(
-        StockPriceLimit.trade_date == as_of
-    ).limit(1)
+    stmt = (
+        select(func.count())
+        .select_from(StockPriceLimit)
+        .where(StockPriceLimit.trade_date == as_of)
+        .limit(1)
+    )
     return bool((await db.execute(stmt)).scalar_one())
 
 
@@ -78,18 +85,23 @@ async def upsert_price_limits(db: AsyncSession, rows: list[dict[str, Any]]) -> i
     total = 0
     for i in range(0, len(deduped), _UPSERT_CHUNK):
         batch = deduped[i : i + _UPSERT_CHUNK]
-        stmt = pg_insert(StockPriceLimit).values(batch).on_conflict_do_update(
-            constraint="uq_price_limit_date_stock",
-            set_={
-                "pre_close": pg_insert(StockPriceLimit).excluded.pre_close,
-                "up_limit": pg_insert(StockPriceLimit).excluded.up_limit,
-                "down_limit": pg_insert(StockPriceLimit).excluded.down_limit,
-            },
+        stmt = (
+            pg_insert(StockPriceLimit)
+            .values(batch)
+            .on_conflict_do_update(
+                constraint="uq_price_limit_date_stock",
+                set_={
+                    "pre_close": pg_insert(StockPriceLimit).excluded.pre_close,
+                    "up_limit": pg_insert(StockPriceLimit).excluded.up_limit,
+                    "down_limit": pg_insert(StockPriceLimit).excluded.down_limit,
+                },
+            )
         )
         result = cast("CursorResult[Any]", await db.execute(stmt))
         total += int(result.rowcount)
     await db.flush()
     return total
+
 
 # 查询形状即性能契约（实测，2026-09-14 复测：16 交易日窗口 2026-08-18~09-08，
 # 等价索引临时表）：整窗回 2,411 行 / ~48ms；只取末日+前日回 302 行 / ~47ms。
@@ -191,11 +203,15 @@ async def fetch_limit_up_window(
     调用方（`limit_up_calculator`）自己按日期筛选。
     """
     rows = (
-        await db.execute(
-            text(_WINDOW_SQL),
-            {"as_of": as_of, "as_of_prev": as_of_prev, "window_start": window_start},
+        (
+            await db.execute(
+                text(_WINDOW_SQL),
+                {"as_of": as_of, "as_of_prev": as_of_prev, "window_start": window_start},
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     return [dict(r) for r in rows]
 
 
@@ -206,9 +222,13 @@ async def fetch_day_breadth(db: AsyncSession, as_of: date) -> dict[str, int]:
 
 
 async def upsert_sentiment_daily(db: AsyncSession, row: dict[str, Any]) -> int:
-    stmt = pg_insert(MarketSentimentDaily).values(**row).on_conflict_do_update(
-        constraint="uq_sentiment_daily_date",
-        set_={k: v for k, v in row.items() if k not in ("trade_date", "source")},
+    stmt = (
+        pg_insert(MarketSentimentDaily)
+        .values(**row)
+        .on_conflict_do_update(
+            constraint="uq_sentiment_daily_date",
+            set_={k: v for k, v in row.items() if k not in ("trade_date", "source")},
+        )
     )
     result = cast("CursorResult[Any]", await db.execute(stmt))
     await db.flush()
@@ -217,18 +237,18 @@ async def upsert_sentiment_daily(db: AsyncSession, row: dict[str, Any]) -> int:
 
 async def list_sentiment_calendar(db: AsyncSession, days: int) -> list[dict[str, Any]]:
     """近 N 个交易日情绪时序（升序），供周期图消费。"""
-    stmt = (
-        select(MarketSentimentDaily)
-        .order_by(MarketSentimentDaily.trade_date.desc())
-        .limit(days)
-    )
+    stmt = select(MarketSentimentDaily).order_by(MarketSentimentDaily.trade_date.desc()).limit(days)
     rows = list((await db.execute(stmt)).scalars().all())
     return [
         {
             "trade_date": r.trade_date,
-            "zt_count": r.zt_count, "dt_count": r.dt_count, "zb_count": r.zb_count,
-            "broken_rate": r.broken_rate, "yzt_avg_pct": r.yzt_avg_pct,
-            "promo_1to2": r.promo_1to2, "promo_2to3": r.promo_2to3,
+            "zt_count": r.zt_count,
+            "dt_count": r.dt_count,
+            "zb_count": r.zb_count,
+            "broken_rate": r.broken_rate,
+            "yzt_avg_pct": r.yzt_avg_pct,
+            "promo_1to2": r.promo_1to2,
+            "promo_2to3": r.promo_2to3,
             "max_streak": r.max_streak,
         }
         for r in reversed(rows)
