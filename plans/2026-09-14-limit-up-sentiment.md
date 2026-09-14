@@ -1983,6 +1983,37 @@ async def persist_snapshot(
 缓存，且可避开上一条的 str/date 转换）；`scheduler/jobs.py` 加 `sentiment_daily_job`（17:15，晚于 16:50 的限价补漏）。
 日历端点（`get_calendar` + `GET /sentiment/calendar`）在**本任务**实现（T4 只交付 3 个端点、只定义 `SentimentCalendarPointOut` schema）：它依赖本任务才建的 `market_sentiment_daily` 表与 `list_sentiment_calendar`，放在 T4 会交付一个必 500 且无覆盖的路由。
 
+`limit_up_service.py` 追加（`CALENDAR_TTL` 已在 T4 定义好，本任务直接用）：
+
+```python
+async def get_calendar(cache: CacheClient | None, days: int = 30) -> list[dict[str, Any]]:
+    """情绪周期时序（来自 `market_sentiment_daily` 派生缓存，升序）。
+
+    缓存 key 含 `days`（改变结果集的维度）；空结果不缓存，避免把"还没落库"固化成空图。
+    """
+    key = f"market:limit-up:calendar:{days}"
+    if cache is not None and (cached := await cache.get(key)):
+        return cached
+    async with async_session_factory() as db:
+        rows = await limit_up_repo.list_sentiment_calendar(db, days)
+    if cache is not None and rows:
+        await cache.set(key, rows, ttl=CALENDAR_TTL)
+    return rows
+```
+
+`api/v1/market_data.py` 追加（第 4 个端点，归本任务）：
+
+```python
+@router.get("/sentiment/calendar", response_model=list[SentimentCalendarPointOut])
+async def get_sentiment_calendar(
+    cache: CacheDep, days: int = Query(default=30, ge=5, le=120)
+) -> list[SentimentCalendarPointOut]:
+    rows = await limit_up_service.get_calendar(cache, days)
+    return [SentimentCalendarPointOut(**r) for r in rows]
+```
+
+并为这两个新增单元补一条单测（`tests/test_limit_up_service.py`）：monkeypatch `limit_up_repo.list_sentiment_calendar` 返回两行、用一个记录 `set` 调用的最小 fake cache，断言 ①无缓存时返回仓库行、②有缓存时**不再**查库、③空结果**不**写缓存、④key 含 `days`。
+
 ```python
     # Short-term sentiment snapshot (limit-up ladder cycle): 17:15 Mon-Fri
     scheduler.add_job(
@@ -1997,7 +2028,7 @@ async def persist_snapshot(
 - [ ] **Step 5: 跑测试与实机验证**
 
 Run: `cd backend && uv run pytest tests/test_limit_up_service.py -v`
-Expected: 6 passed。
+Expected: 8 passed（T4 交付的 6 例 + 本任务 2 例：`persist_snapshot` 跳过降级日 + `get_calendar` 缓存语义）；以实际计数为准并在报告里写明。
 Run: `cd backend && uv run alembic upgrade head && uv run alembic heads`
 Expected: `b8d2e1c3f4a5 (head)`，单 head。
 Run:
