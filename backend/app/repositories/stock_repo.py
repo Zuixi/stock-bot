@@ -121,3 +121,19 @@ async def upsert_stock(db: AsyncSession, stock: Stock) -> Stock:
 async def insert_stock_history(db: AsyncSession, record: StockHistory) -> None:
     db.add(record)
     await db.flush()
+
+
+_TS_SUFFIX = {"Shanghai_Stocks": ".SH", "Shenzen_Stocks": ".SZ", "Beijing_Stocks": ".BJ"}
+
+
+async def build_ts_code_to_stock_id(db: AsyncSession) -> dict[str, int]:
+    """TuShare ts_code（如 '000001.SZ'）→ stock_id。
+
+    唯一的 ts_code 映射实现：'stocks.detail->>ts_code' 也可用，但那是 JSONB 提取、
+    需函数索引才能 join，不能作为读取路径的连接键。
+    """
+    result = await db.execute(select(Stock.id, Stock.exchange, Stock.symbol))
+    return {
+        f"{row.symbol}{_TS_SUFFIX.get(row.exchange, '')}": row.id  # type: ignore[misc]
+        for row in result
+    }

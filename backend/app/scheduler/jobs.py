@@ -370,6 +370,31 @@ async def repurchase_daily_job() -> None:
         logger.exception("Repurchase daily job failed")
 
 
+async def price_limits_daily_job() -> None:
+    """权威涨跌停价补漏（交易日 16:50，晚于 16:30 的 quotes 回补）。
+
+    按时区显式取上海日期：容器默认 UTC，naive datetime.now() 会取到前一天。
+    补漏判据在 service 内（stock_price_limits 无该日行），所以即使某天任务没跑，
+    下一次也会自动追平。
+
+    注意窗口上界：daily_quotes 的每日回补拉的是「上一个工作日」
+    （见 _fetch_yesterday_daily_quotes），
+    所以本任务补到的最新交易日 = 上一个交易日，与情绪快照的 `as_of` 语义一致。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_stock_price_limits(db)
+            await db.commit()
+        logger.info("Price limits daily done: %s", result)
+    except Exception:
+        logger.exception("Price limits daily job failed")
+
+
 async def announcements_poll_job() -> None:
     """巨潮公告轮询（8-22 点每 10 分钟，DO NOTHING 去重近 3 日窗口）。
 

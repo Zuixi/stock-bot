@@ -369,17 +369,21 @@ class TuShareClient(RateLimitedSyncProvider):
         self,
         trade_date: str = "",
         ts_code: str = "",
+        fields: str = "trade_date,ts_code,pre_close,up_limit,down_limit",
     ) -> pd.DataFrame:
         """Fetch daily price limit info (涨跌停价格).
 
-        See: docs/references/tushare/每日涨停价格.md
+        ``pre_close`` 在 TuShare 文档里是「默认显示 = N」字段：不显式传 fields，
+        API 只返回 [trade_date, ts_code, up_limit, down_limit]（2026-09-14 实测）。
+        漏传会让 stock_price_limits.pre_close 整列为 NULL，而昨日涨停溢价/赚钱效应
+        KPI 全依赖它——静默产出 null 而不是报错。
         """
         kwargs: dict[str, str] = {}
         if trade_date:
             kwargs["trade_date"] = trade_date
         if ts_code:
             kwargs["ts_code"] = ts_code
-        return await self._query("stk_limit", **kwargs)
+        return await self._query("stk_limit", fields=fields, **kwargs)
 
     # ------------------------------------------------------------------
     # Market-data face APIs (全球指数 + 资金面/事件面)
