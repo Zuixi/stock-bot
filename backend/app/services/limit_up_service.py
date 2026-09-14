@@ -15,6 +15,8 @@ from app.repositories import limit_up_repo
 from app.services import limit_up_calculator as calc
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from app.core.redis import CacheClient
 
 logger = logging.getLogger(__name__)
@@ -163,3 +165,64 @@ def yesterday_payload(snap: dict[str, Any]) -> dict[str, Any]:
         "kpis": snap["yesterday"]["kpis"],
         "items": snap["yesterday"]["items"],
     }
+
+
+async def persist_snapshot(
+    db: AsyncSession | None, cache: CacheClient | None, as_of: date | None = None
+) -> dict[str, Any]:
+    """盘后把当日情绪聚合写入派生表（幂等，可重复跑）。
+
+    is_partial / 限价缺失 / 空候选 / 无行情一律不写：时序图里塞进一个假低谷比缺一天更糟；
+    `no_limit_up_rows`（快照 kpis 为空）漏在名单外会直接 `k["zt_count"]` KeyError。
+    """
+    snap = await get_snapshot(cache, as_of)
+    # 部分行情日优先按 partial_day 跳过：get_snapshot 在「候选窗口为空」时先报
+    # no_limit_up_rows，但部分 ingest 才是更本质的跳过原因（数据没拉全，而非真的没涨停）。
+    if snap.get("is_partial"):
+        return {"status": "skipped", "reason": "partial_day"}
+    if snap["degraded_reason"] in (
+        "price_limits_missing",
+        "partial_day",
+        "no_quotes",
+        "insufficient_trade_days",
+        "no_limit_up_rows",
+    ):
+        return {"status": "skipped", "reason": snap["degraded_reason"]}
+    k = snap["kpis"]
+    leaders = snap["echelons"][0]["stocks"] if snap["echelons"] else []
+    # 缓存命中时 snap 是 Redis JSON 回读的，as_of 已变成 str；直接落库会抛
+    # asyncpg `'str' object has no attribute 'toordinal'`（真库复现过）。
+    trade_date = date.fromisoformat(str(snap["as_of"]))
+    row = {
+        "trade_date": trade_date, "zt_count": k["zt_count"], "dt_count": k["dt_count"],
+        "zb_count": k["zb_count"], "broken_rate": k["broken_rate"],
+        "yzt_avg_pct": k["yzt_avg_pct"], "promo_1to2": k["promo_1to2"],
+        "promo_1to2_n": k["promo_1to2_n"], "promo_2to3": k["promo_2to3"],
+        "promo_2to3_n": k["promo_2to3_n"], "max_streak": k["max_streak"],
+        "max_streak_symbol": leaders[0]["symbol"] if leaders else None,
+        "source": snap["source"],
+    }
+    if db is None:
+        async with async_session_factory() as session:
+            await limit_up_repo.upsert_sentiment_daily(session, row)
+            await session.commit()
+    else:
+        await limit_up_repo.upsert_sentiment_daily(db, row)
+    return {"status": "ok", "trade_date": trade_date, "zt_count": k["zt_count"]}
+
+
+async def get_calendar(cache: CacheClient | None, days: int = 30) -> list[dict[str, Any]]:
+    """情绪周期时序（来自 `market_sentiment_daily` 派生缓存，升序）。
+
+    缓存 key 含 `days`（改变结果集的维度）；空结果不缓存，避免把"还没落库"固化成空图。
+    """
+    key = f"market:limit-up:calendar:{days}"
+    if cache is not None:
+        cached: list[dict[str, Any]] | None = await cache.get(key)
+        if cached:
+            return cached
+    async with async_session_factory() as db:
+        rows = await limit_up_repo.list_sentiment_calendar(db, days)
+    if cache is not None and rows:
+        await cache.set(key, rows, ttl=CALENDAR_TTL)
+    return rows

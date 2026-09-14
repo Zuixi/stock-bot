@@ -395,6 +395,27 @@ async def price_limits_daily_job() -> None:
         logger.exception("Price limits daily job failed")
 
 
+async def sentiment_daily_job() -> None:
+    """盘后情绪聚合落库（交易日 17:15，晚于 16:50 的限价补漏）。
+
+    幂等 upsert（唯一键 trade_date）；降级日（部分行情/限价缺失/空候选）一律跳过，
+    避免时序图被假低谷污染。传 cache=None 走无缓存 get_snapshot，同时规避 Redis JSON
+    回读后 as_of 变 str 的 asyncpg 日期序列化坑。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import limit_up_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await limit_up_service.persist_snapshot(db, None)
+            await db.commit()
+        logger.info("Sentiment daily done: %s", result)
+    except Exception:
+        logger.exception("Sentiment daily job failed")
+
+
 async def announcements_poll_job() -> None:
     """巨潮公告轮询（8-22 点每 10 分钟，DO NOTHING 去重近 3 日窗口）。
 

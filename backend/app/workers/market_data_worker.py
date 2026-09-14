@@ -20,7 +20,7 @@ def _opt_date(v: Any) -> date | None:
 
 
 async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
-    from app.services import announcement_service, market_data_service
+    from app.services import announcement_service, limit_up_service, market_data_service
 
     async with async_session_factory() as db:
         if job == "global_index_daily":
@@ -64,6 +64,9 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
                 db, trade_date=_opt_date(params.get("trade_date")),
                 window_days=int(params.get("window_days", 20)),
             )
+        elif job == "sentiment_daily":
+            # 盘后落库不需要缓存（cache=None）：避免命中 Redis JSON 后 as_of 变 str。
+            result = await limit_up_service.persist_snapshot(db, None)
         else:
             # Defensive: unreachable via process() — the type is validated there.
             return {"status": "failed", "error": f"unknown market_data type: {job}"}
