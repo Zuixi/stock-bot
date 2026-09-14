@@ -2548,7 +2548,13 @@ export function formatCnDate(iso: string): string {
 
 `features/market/components/format.ts` 的既有 `formatCnDate` 改为 `export { formatCnDate } from "@/shared/ui/date";`（保留原导出名，`RankingMatrix` 等既有消费方零改动），并同步把 `shared/ui/index.ts` 的 barrel 补上 `export { formatCnDate } from "./date";`。
 
-`SentimentTab`（同文件内小组件）用**一次** `useQuery(["limit-up-ladder"], fetchLimitUpLadder)` 拿梯队与 KPI，另外两个端点各自 `useQuery`（三块各自降级，单点失败不牵连邻区）。注意补 import（该文件现状只导入 react/antd）：
+`SentimentTab`（同文件内小组件）用**一次** `useQuery(["limit-up-ladder"], fetchLimitUpLadder)` 拿梯队与 KPI，另外两个端点各自 `useQuery`（三块各自降级，单点失败不牵连邻区）。
+
+**每张数据卡必须按「各自端点」的 `degradedReason` 独立门禁**（否则会重现口径缺陷：表头写「暂不展示梯队」而下一张卡照旧渲染不完整数据）：
+- 长文案（`DegradedNotice` 的 reason→文案映射）**只放在情绪温度计卡**；
+- 三张数据卡各自渲染**互不相同**的短占位（如「数据不完整，暂不展示梯队」/「…板块板高」/「…昨日表现」），以保证长文案全页**唯一命中**（否则 e2e 的 `getByText` 会因多元素命中报 strict mode violation）；
+- 正常但无数据（无 `degradedReason`）走既有空态文案，与降级态区分；
+- 新增 `degraded?: boolean` 必须默认 `false`（fail-open），不得因为 prop 缺失而隐藏健康卡。注意补 import（该文件现状只导入 react/antd）：
 
 ```tsx
 import { useQuery } from "@tanstack/react-query";
@@ -2572,17 +2578,17 @@ function SentimentTab() {
       </Col>
       <Col span={24}>
         <SectionCard title="连板梯队" asof={ladder.data?.asOf}>
-          <LimitUpLadder echelons={ladder.data?.echelons ?? []} />
+          <LimitUpLadder echelons={ladder.data?.echelons ?? []} degraded={Boolean(degraded)} />
         </SectionCard>
       </Col>
       <Col xs={24} xl={12}>
         <SectionCard title="申万三级最高板" asof={sectors.data?.asOf}>
-          <SwL3LimitUpBoard data={sectors.data} />
+          <SwL3LimitUpBoard data={sectors.data} degraded={Boolean(sectors.data?.degradedReason)} />
         </SectionCard>
       </Col>
       <Col xs={24} xl={12}>
         <SectionCard title="昨日涨停今日表现" asof={yesterday.data?.asOfPrev}>
-          <YesterdayLimitUp data={yesterday.data} />
+          <YesterdayLimitUp data={yesterday.data} degraded={Boolean(yesterday.data?.degradedReason)} />
         </SectionCard>
       </Col>
     </Row>
