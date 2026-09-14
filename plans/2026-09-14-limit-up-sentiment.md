@@ -1284,7 +1284,7 @@ def is_partial(breadth: dict[str, int]) -> bool:
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cd backend && uv run pytest tests/test_limit_up_calculator.py -v`
-Expected: 12 passed。
+Expected: 11 passed。
 
 - [ ] **Step 5: Commit**
 
@@ -2825,7 +2825,7 @@ git commit -m "perf(db): 清理 daily_quotes 与唯一约束重复的索引"
 - **降级契约**：`source` **只用** `local_calc`（东财 `hybk` 是东财板块口径、填不进申万 L3，Web 不产出完整 payload）；限价缺失/当日行数 < 4000（正常 5,490）时返回空 payload + `degraded_reason`（`price_limits_missing` / `partial_day` / `no_quotes` / `no_limit_up_rows` / `insufficient_trade_days`），**不猜比例**；读端点不写库，唯一外呼是东财增强（失败静默）
 - **Web 增强**：东财涨停池（`push2ex/getTopicZTPool`，`date` 必填、客户端 10s 超时）按 `as_of` 取数注入封板时间/封单资金/炸板次数，失败只 log 不改主路径状态；本地路径这三字段为 `null`，前端渲染 `--`。`push2delay` 对该端点返回空，故硬编码 `push2ex`
 - **情绪周期**：`market_sentiment_daily`（纯派生缓存，可重建）盘后 17:15 落库 + `GET /market/sentiment/calendar`
-- **验证**：TDD 先红后绿（纯函数 12 例含 off-by-one、停牌 policy A 与 pre_close 分母；repo 扇出/窗口完整性/计划守卫 3 例 e2e；降级契约 6 例；Web 映射/失败隔离/降级不外呼 5 例）；黄金日 2026-09-08 全链路口径一致（梯队 4板×3/3板×3/2板×13/首板×56，涨停 75 / 跌停 1 / 炸板 39，昨日涨停池 95 只今日均值 +2.8225% / 今开溢价 +3.11%，`sw_coverage` 0.9333）；`uv run pytest -q`、`mypy app`、`npx tsc -b`、`npm run check:design`、`playwright test`、`bash scripts/self_review.sh` 全绿
+- **验证**：TDD 先红后绿（纯函数 11 例含 off-by-one、停牌 policy A 与 pre_close 分母；repo 扇出/窗口完整性/计划守卫 3 例 e2e；降级契约 6 例；Web 映射/失败隔离/降级不外呼 5 例）；黄金日 2026-09-08 全链路口径一致（梯队 4板×3/3板×3/2板×13/首板×56，涨停 75 / 跌停 1 / 炸板 39，昨日涨停池 95 只今日均值 +2.8225% / 今开溢价 +3.11%，`sw_coverage` 0.9333）；`uv run pytest -q`、`mypy app`、`npx tsc -b`、`npm run check:design`、`playwright test`、`bash scripts/self_review.sh` 全绿
 - 涉及模块：backend/app/{models/market_data.py,repositories/{limit_up_repo,stock_repo}.py,services/{limit_up_calculator,limit_up_service,market_data_service,tushare_ingest}.py,core/providers/eastmoney_client.py,schemas/{limit_up,task}.py,api/v1/market_data.py,workers/market_data_worker.py,scheduler/{jobs,runner}.py,migrations/versions/a7c1f0b2d3e4_*}, backend/tests/test_limit_up_{ingest,repo,calculator,service,web}.py, frontend/src/{shared/api/limitUp.ts,features/market/components/{SentimentHeader,LimitUpLadder,SwL3LimitUpBoard,YesterdayLimitUp}.tsx,pages/market/index.tsx}, frontend/e2e/limitUpSentiment.spec.ts, docs/design/limit-up-sentiment.md
 ```
 
