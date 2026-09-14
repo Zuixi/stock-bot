@@ -148,6 +148,7 @@
 - 多个 `@pytest.mark.e2e` 用例共用模块级 SQLAlchemy async engine 时，pytest-asyncio 的 function-scoped 事件循环会让上一用例遗留的池化连接在新循环里被复用，抛 `RuntimeError: Event loop is closed`（表现为随机某个用例失败，非断言失败）；在 autouse fixture 里 `await engine.dispose()` 按用例收尾即可，不必改全局 loop scope。
 
 - 不要让生产语义迁就不真实的测试 fixture：fixture 必须与真实数据源**同形状同键集**（如窗口行 16 键），否则会静默放过「空窗口 + 非零广度」这类本应被显式降级标记（`no_limit_up_rows`）的异常态，甚至让半成品 payload 落入缓存。修复方向永远是改 fixture、恢复严格判据，并把「完整日必须真产出梯队」写成回归断言。
+- 修复/恢复一条 load-bearing 判据（如严格降级条件 `if not rows: → no_limit_up_rows`）后，必须补一条**专用测试钉死精确触发条件**（限价存在+窗口空+广度非零 ⇒ reason/echelons/kpis 的具体形态），否则未来重构可再次放宽而全绿；缓存类负向断言（降级快照不写缓存）必须**带正例控制**（完整快照必被 set 且 key 含 as_of+lookback 两维），否则「从不缓存」的假实现也能通过。写完用一次快速变异验证（临时改回旧判据 / 临时让降级也 cache.set，确认新测试转红再改回）作为能真失败的客观证据。
 
 ## 六、架构与分层
 
