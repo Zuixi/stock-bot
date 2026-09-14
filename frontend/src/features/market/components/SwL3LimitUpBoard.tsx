@@ -1,11 +1,13 @@
 import { useMemo, useState } from "react";
-import { Segmented, Table } from "antd";
+import { Empty, Segmented, Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useNavigate } from "react-router-dom";
 import type { SectorLimitUp, SectorLimitUpItem } from "@/shared/api/limitUp";
 
 interface Props {
   data: SectorLimitUp | null | undefined;
+  /** 端点降级（如 partial_day）时渲染短占位文案，不展示不完整数据。 */
+  degraded?: boolean;
 }
 
 const ALL = "all";
@@ -15,7 +17,7 @@ const ALL = "all";
  * 顶部 Segmented 客户端按一级行业（l1Code）过滤，数据来自已加载的 `items`。
  * 行点击跳个股页 `/stock/:symbol`（与 StockTable/DragonTigerTable 同路由）。
  */
-export function SwL3LimitUpBoard({ data }: Props) {
+export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
   const navigate = useNavigate();
   const [l1, setL1] = useState<string>(ALL);
 
@@ -65,6 +67,14 @@ export function SwL3LimitUpBoard({ data }: Props) {
       render: (_, r) => r.l1Name ?? "--",
     },
   ];
+
+  if (degraded) {
+    return (
+      <div className="sector-limit-up">
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="数据不完整，暂不展示板块板高" />
+      </div>
+    );
+  }
 
   return (
     <div className="sector-limit-up">
