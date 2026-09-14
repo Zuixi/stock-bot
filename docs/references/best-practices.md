@@ -79,6 +79,8 @@
 
 ## 三、Docker 与部署
 
+- 容器「健康/运行」不等于「可服务」：编排里**没有 healthcheck 的网关**（Traefik/nginx 之类）会让 `docker compose up --wait` 在其容器刚 Running 时就返回，而它的 provider 还要一个节拍才把容器 labels 变成 router —— 这段窗口内**所有**路径都返回网关自己的 404（Traefik 的 body 恰 19 字节 `404 page not found`），且极易被 `curl -f ... | head -1` 吞掉退出码、看起来像偶发。正确做法是把健康检查断言在**真正需要的就绪条件**上（本例：`/api/rawdata` 里出现预期的 router 名），让 `--wait` 等到可路由；消费侧再加条件式轮询作纵深防御，并在 CI 里保留「失败即 dump 网关版本/容器状态/路由表/日志」的诊断步骤 —— 网关 dashboard 常只在容器内可达，诊断得用 `compose exec`。
+
 - Docker build 缓存不可信：`COPY . .` 步骤即便显示 `DONE`（非 CACHED），实际可能未检测到文件变更（OrbStack on macOS 已知问题）。每次 rebuild 后必须 `docker exec` 验证容器内文件内容，不可仅依赖构建输出。
 - Docker 多阶段构建应将依赖安装与源码复制分层，利用层缓存加速重建；前端 Dockerfile 应保留完整构建路径的同时支持 `target: runtime` 跳过构建阶段以适配网络受限环境。
 - 前端多阶段镜像的运行时阶段必须通过 `COPY --from=<builder>` 获取构建产物，避免误从构建上下文复制 `dist/` 导致镜像构建失败。
