@@ -85,6 +85,7 @@ MarketDataJobType = Literal[
     "repurchases",
     "announcements",
     "price_limits",
+    "sentiment_daily",
 ]
 
 

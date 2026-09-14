@@ -233,3 +233,29 @@ class StockPriceLimit(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class MarketSentimentDaily(Base):
+    """短线情绪周期聚合（约 10 个数字/交易日）。
+
+    纯派生缓存：可随时由 daily_quotes + stock_price_limits 重建，绝不是真相来源。
+    存在的唯一理由是跨月时序图重算昂贵——逐日明细不落表，因为 daily_quotes 本身就是历史。
+    """
+
+    __tablename__ = "market_sentiment_daily"
+    __table_args__ = (UniqueConstraint("trade_date", name="uq_sentiment_daily_date"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    zt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    dt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    zb_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    broken_rate: Mapped[float | None] = mapped_column(Float)
+    yzt_avg_pct: Mapped[float | None] = mapped_column(Float)
+    promo_1to2: Mapped[float | None] = mapped_column(Float)
+    promo_1to2_n: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    promo_2to3: Mapped[float | None] = mapped_column(Float)
+    promo_2to3_n: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_streak_symbol: Mapped[str | None] = mapped_column(String(10))
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="local_calc")

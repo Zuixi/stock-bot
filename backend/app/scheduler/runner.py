@@ -23,6 +23,7 @@ from app.scheduler.jobs import (
     repurchase_daily_job,
     sector_moneyflow_job,
     securities_refresh_job,
+    sentiment_daily_job,
     share_float_daily_job,
     sse_post_close_job,
     sse_trade_hours_job,
@@ -210,6 +211,15 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(day_of_week="mon-fri", hour=16, minute=50, timezone="Asia/Shanghai"),
         id="price_limits_daily",
         name="Price limits daily",
+        replace_existing=True,
+    )
+
+    # Short-term sentiment snapshot (limit-up ladder cycle): 17:15 Mon-Fri
+    scheduler.add_job(
+        sentiment_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute=15, timezone="Asia/Shanghai"),
+        id="sentiment_daily",
+        name="Market sentiment daily",
         replace_existing=True,
     )
 

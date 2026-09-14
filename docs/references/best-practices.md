@@ -73,6 +73,8 @@
 - SQLAlchemy `text()` 的绑定参数只能承载**值**，列名与排序方向（`ORDER BY :col :dir`）无法参数化——排序维度必须从文件内硬编码白名单 f-string 插值，并保证任何用户输入都在到达字符串前被白名单校验拦下（校验即天然防注入）；同时 Postgres `ORDER BY x DESC` 默认 NULLS FIRST，可空排序列不显式加 `IS NOT NULL` 会让"涨幅榜"以 NULL 行领跑，榜单类查询必须在 SQL 内过滤坏行，而不是留给前端补。
 - 字段量纲注释必须与**存储单位**逐字一致：TuShare `amount` 存的是千元、`daily_basic` 市值是万元，注释写错单位比不写更危险——下游 mapper 会照错注释再乘错一档（10³ 级偏差），而透传单测只断言"原值透传"抓不到；不确定时标注来源口径（如"TuShare 原生千元，消费端 ×1000"）而非猜一个。
 - 行业聚合的**聚合对象必须是"当日真有行情的标的"而非静态成员表**：`sw_industry_members` 上卷 L3→L2→L1 后必须 INNER JOIN 当日 `daily_quotes` 并 `pct_chg IS NOT NULL` 再 `count`/`avg`，否则停牌/无行情成员会稀释 `avg_pct_chg` 并虚增 `member_count`（`up_count`+`down_count` 还只覆盖有涨跌的，平盘成员计入 `member_count` 属正确）；join 键先实测覆盖率再定（本次 `members.symbol → stocks.symbol` = 95.4%，高于计划的 >90% 阈值），别照抄 brief 里未验证的键名；若 `count(DISTINCT symbol) == count(*)` 则无扇出，可放心聚合。
+- 盘后一次性派生落库（如情绪周期）在编排层快照之上再判跳过时，必须把 `is_partial`（当日行情行数不足）放在空候选 `no_limit_up_rows` 之前：编排层 get_snapshot 在候选窗口为空时会先报 no_limit_up_rows，而部分 ingest 才是更本质的跳过原因，只按 degraded_reason 判会把部分行情日错记成 no_limit_up_rows 或直接 `k["zt_count"]` KeyError。
+
 
 ## 三、Docker 与部署
 

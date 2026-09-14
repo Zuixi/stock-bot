@@ -10,7 +10,12 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import CacheDep
-from app.schemas.limit_up import LimitUpLadderOut, SectorLimitUpOut, YesterdayLimitUpOut
+from app.schemas.limit_up import (
+    LimitUpLadderOut,
+    SectorLimitUpOut,
+    SentimentCalendarPointOut,
+    YesterdayLimitUpOut,
+)
 from app.schemas.market_data import (
     AnnouncementOut,
     BlockTradeOut,
@@ -191,3 +196,11 @@ async def get_yesterday_limit_up(
             status_code=400, detail="date must be ISO format, e.g. 2026-09-08"
         ) from None
     return YesterdayLimitUpOut(**limit_up_service.yesterday_payload(snap))
+
+
+@router.get("/sentiment/calendar", response_model=list[SentimentCalendarPointOut])
+async def get_sentiment_calendar(
+    cache: CacheDep, days: int = Query(default=30, ge=5, le=120)
+) -> list[SentimentCalendarPointOut]:
+    rows = await limit_up_service.get_calendar(cache, days)
+    return [SentimentCalendarPointOut(**r) for r in rows]

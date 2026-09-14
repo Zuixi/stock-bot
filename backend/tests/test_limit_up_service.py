@@ -213,3 +213,104 @@ async def test_degraded_snapshots_are_not_cached_but_complete_is(
     assert D5.isoformat() in key
     assert str(svc.calc.LOOKBACK_TRADE_DAYS) in key
     assert ttl == svc.SNAPSHOT_TTL
+
+
+class _CalendarCache:
+    """get 可预填、记录 set 调用的最小 CacheClient 替身（日历缓存语义用）。"""
+
+    def __init__(self, cached: Any | None = None) -> None:
+        self.cached = cached
+        self.set_calls: list[tuple[str, Any, int | None]] = []
+
+    async def get(self, key: str) -> Any | None:
+        return self.cached
+
+    async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
+        self.set_calls.append((key, value, ttl))
+
+
+_CAL_ROWS = [
+    {
+        "trade_date": D4, "zt_count": 50, "dt_count": 1, "zb_count": 20,
+        "broken_rate": 0.2857, "yzt_avg_pct": 1.5, "promo_1to2": 0.4,
+        "promo_2to3": 0.2, "max_streak": 3,
+    },
+    {
+        "trade_date": D5, "zt_count": 75, "dt_count": 1, "zb_count": 39,
+        "broken_rate": 0.3421, "yzt_avg_pct": 2.8225, "promo_1to2": 0.5,
+        "promo_2to3": 0.3, "max_streak": 4,
+    },
+]
+
+
+async def test_persist_skips_partial_day(_patch_sources: dict[str, Any]) -> None:
+    """部分 ingest 的当日不得写入情绪表（否则时序图会永远带着一个假低谷）。"""
+    _patch_sources["breadth"] = {"zt_count": 3, "dt_count": 0, "zb_count": 1, "quoted": 12}
+    got = await svc.persist_snapshot(db=None, cache=None, as_of=D5)  # type: ignore[arg-type]
+    assert got["status"] == "skipped"
+    assert got["reason"] == "partial_day"
+
+
+async def test_persist_skips_empty_candidate_day(
+    _patch_sources: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """kpis 为空的降级快照（no_limit_up_rows）必须跳过，不能拿 k["zt_count"] 取 KeyError。"""
+    _patch_sources["window"] = []  # 候选集为空 → 限价在、但无涨停行
+    _patch_sources["breadth"] = {"zt_count": 0, "dt_count": 0, "zb_count": 0, "quoted": 5490}
+    called = False
+
+    async def _boom(*_a: Any, **_kw: Any) -> int:
+        nonlocal called
+        called = True
+        return 0
+
+    monkeypatch.setattr(svc.limit_up_repo, "upsert_sentiment_daily", _boom)
+    got = await svc.persist_snapshot(db=None, cache=None, as_of=D5)  # type: ignore[arg-type]
+    assert got == {"status": "skipped", "reason": "no_limit_up_rows"}
+    assert called is False
+
+
+async def test_calendar_cache_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
+    """日历端点缓存语义：①无缓存查库返回；②有缓存不再查库；③空结果不写缓存；④key 含 days。"""
+    calls = 0
+
+    async def _list(_db: Any, days: int) -> list[dict[str, Any]]:
+        nonlocal calls
+        calls += 1
+        return list(_CAL_ROWS)
+
+    monkeypatch.setattr(svc.limit_up_repo, "list_sentiment_calendar", _list)
+
+    # ① 无缓存 → 返回仓库行
+    got = await svc.get_calendar(None, 5)
+    assert got == _CAL_ROWS
+    assert calls == 1
+
+    # ② 有缓存 → 不再查库
+    calls = 0
+    cached = [dict(_CAL_ROWS[0])]
+    cache = _CalendarCache(cached=cached)
+    got = await svc.get_calendar(cache, 5)
+    assert got == cached
+    assert calls == 0
+
+    # ③ 空结果 → 不写缓存
+    async def _empty(_db: Any, days: int) -> list[dict[str, Any]]:
+        nonlocal calls
+        calls += 1
+        return []
+
+    monkeypatch.setattr(svc.limit_up_repo, "list_sentiment_calendar", _empty)
+    cache = _CalendarCache()
+    got = await svc.get_calendar(cache, 5)
+    assert got == []
+    assert cache.set_calls == []
+
+    # ④ key 含 days
+    monkeypatch.setattr(svc.limit_up_repo, "list_sentiment_calendar", _list)
+    cache = _CalendarCache()
+    await svc.get_calendar(cache, 7)
+    assert len(cache.set_calls) == 1
+    key, _value, ttl = cache.set_calls[0]
+    assert "calendar:7" in key
+    assert ttl == svc.CALENDAR_TTL

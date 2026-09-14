@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.market_data import StockPriceLimit
+from app.models.market_data import MarketSentimentDaily, StockPriceLimit
 from app.models.quote import DailyQuote
 
 
@@ -203,3 +203,33 @@ async def fetch_day_breadth(db: AsyncSession, as_of: date) -> dict[str, int]:
     """当日全市场涨停/跌停/炸板家数与有行情家数。"""
     row = (await db.execute(text(_BREADTH_SQL), {"as_of": as_of})).mappings().one()
     return {k: int(v or 0) for k, v in dict(row).items()}
+
+
+async def upsert_sentiment_daily(db: AsyncSession, row: dict[str, Any]) -> int:
+    stmt = pg_insert(MarketSentimentDaily).values(**row).on_conflict_do_update(
+        constraint="uq_sentiment_daily_date",
+        set_={k: v for k, v in row.items() if k not in ("trade_date", "source")},
+    )
+    result = cast("CursorResult[Any]", await db.execute(stmt))
+    await db.flush()
+    return int(result.rowcount)
+
+
+async def list_sentiment_calendar(db: AsyncSession, days: int) -> list[dict[str, Any]]:
+    """近 N 个交易日情绪时序（升序），供周期图消费。"""
+    stmt = (
+        select(MarketSentimentDaily)
+        .order_by(MarketSentimentDaily.trade_date.desc())
+        .limit(days)
+    )
+    rows = list((await db.execute(stmt)).scalars().all())
+    return [
+        {
+            "trade_date": r.trade_date,
+            "zt_count": r.zt_count, "dt_count": r.dt_count, "zb_count": r.zb_count,
+            "broken_rate": r.broken_rate, "yzt_avg_pct": r.yzt_avg_pct,
+            "promo_1to2": r.promo_1to2, "promo_2to3": r.promo_2to3,
+            "max_streak": r.max_streak,
+        }
+        for r in reversed(rows)
+    ]
