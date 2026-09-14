@@ -750,19 +750,6 @@ class TuShareIngestService:
 
     async def _build_stock_id_map(self, db: AsyncSession) -> dict[str, int]:
         """Build a mapping from TuShare ts_code (e.g. '000001.SZ') to DB stock_id."""
-        from sqlalchemy import select  # noqa: PLC0415
+        from app.repositories.stock_repo import build_ts_code_to_stock_id  # noqa: PLC0415
 
-        from app.models.stock import Stock  # noqa: PLC0415
-
-        result = await db.execute(select(Stock.id, Stock.exchange, Stock.symbol))
-        mapping: dict[str, int] = {}
-        suffix_map = {
-            "Shanghai_Stocks": ".SH",
-            "Shenzen_Stocks": ".SZ",
-            "Beijing_Stocks": ".BJ",
-        }
-        for row in result:
-            suffix = suffix_map.get(row.exchange, "")
-            ts_code = f"{row.symbol}{suffix}"
-            mapping[ts_code] = row.id
-        return mapping
+        return await build_ts_code_to_stock_id(db)

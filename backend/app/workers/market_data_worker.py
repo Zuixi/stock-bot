@@ -59,6 +59,11 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
             result = await announcement_service.ingest_announcements(
                 db, days=int(params.get("days", 3))
             )
+        elif job == "price_limits":
+            result = await market_data_service.ingest_stock_price_limits(
+                db, trade_date=_opt_date(params.get("trade_date")),
+                window_days=int(params.get("window_days", 20)),
+            )
         else:
             # Defensive: unreachable via process() — the type is validated there.
             return {"status": "failed", "error": f"unknown market_data type: {job}"}

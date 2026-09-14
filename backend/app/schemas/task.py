@@ -84,6 +84,7 @@ MarketDataJobType = Literal[
     "share_floats",
     "repurchases",
     "announcements",
+    "price_limits",
 ]
 
 

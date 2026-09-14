@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -202,3 +203,33 @@ class Announcement(Base):
     category: Mapped[str] = mapped_column(String(16), nullable=False)  # report | event
     pdf_url: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class StockPriceLimit(Base):
+    """交易所口径的每日涨跌停价（TuShare stk_limit），连板判定的唯一权威基准。
+
+    为什么不用「名称含 ST + 代码前缀推比例」：2026-09-08 实测权威 up_limit 判出 75 只涨停，
+    名称启发式判出 83 只，10 处分歧里 9 只是 ST 名称股（当日真实限幅 10%，如 ST晨鸣
+    up_limit=2.13 / pre_close=1.94）。stocks.name 是当日快照而非历史名称，历史回放必错。
+    pre_close 由 stk_limit 原生提供（交易所口径、已含除权调整；**需客户端显式传 fields**），
+    禁止用 LAG(close) 现算。注意语义：该行 pre_close 是「本交易日的前收」，
+    要算某日涨跌幅就得取**该日行**的 pre_close。
+
+    建键说明：用 stock_id 而非 ts_code——stocks 表没有 ts_code 列（只在 detail JSONB 里），
+    JSONB join 需函数索引且每次读都要过 stocks。不额外建索引：唯一键已服务日筛，窗口侧走
+    hash join（实测单日 5,499 行 hash 2.6ms / 317kB），加第二个索引是纯写放大。
+    """
+
+    __tablename__ = "stock_price_limits"
+    __table_args__ = (UniqueConstraint("trade_date", "stock_id", name="uq_price_limit_date_stock"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    stock_id: Mapped[int] = mapped_column(nullable=False)
+    ts_code: Mapped[str] = mapped_column(String(16), nullable=False)  # 溯源用
+    pre_close: Mapped[float | None] = mapped_column(Numeric(12, 4))
+    up_limit: Mapped[float | None] = mapped_column(Numeric(12, 4))
+    down_limit: Mapped[float | None] = mapped_column(Numeric(12, 4))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
