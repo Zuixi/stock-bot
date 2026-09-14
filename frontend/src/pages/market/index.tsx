@@ -1,5 +1,12 @@
 import { useState } from "react";
-import { Card, Col, Row, Tabs, Typography } from "antd";
+import { Alert, Card, Col, Row, Tabs, Typography } from "antd";
+import { useQuery } from "@tanstack/react-query";
+import { SectionCard } from "@/shared/ui";
+import {
+  fetchLimitUpLadder,
+  fetchSectorLimitUp,
+  fetchYesterdayLimitUp,
+} from "@/shared/api/limitUp";
 import {
   GlobalMarketBoard,
   CoreIndexCards,
@@ -13,8 +20,73 @@ import {
   MarketDataBoard,
   SwIndustryGrid,
   DataCoverageMatrix,
+  SentimentHeader,
+  LimitUpLadder,
+  SwL3LimitUpBoard,
+  YesterdayLimitUp,
 } from "@/features/market/components";
 import "./market.css";
+
+/** `degraded_reason` → 中文文案；不同原因不同文案，未知原因回退原串，不静默吞掉。 */
+const DEGRADED_REASON_TEXT: Record<string, string> = {
+  price_limits_missing: "涨跌停价尚未回补，连板梯队暂不可用（每个交易日 16:50 自动补齐）",
+  partial_day: "当日行情未回补完整，暂不展示梯队",
+  no_quotes: "库内暂无行情数据",
+  no_limit_up_rows: "当日无涨停股（候选为空）",
+  insufficient_trade_days: "交易日不足 2 天",
+};
+
+function DegradedNotice({ reason }: { reason: string }) {
+  const text = DEGRADED_REASON_TEXT[reason] ?? reason;
+  return <Alert type="warning" showIcon message={text} />;
+}
+
+/**
+ * 短线情绪 Tab：三个端点各自 `useQuery`，单点失败不牵连邻区。
+ * 梯队/申万 L3/昨日涨停三块各自降级，卡头 `asof` 独立（梯队用 as_of，昨日用 as_of_prev）。
+ */
+function SentimentTab() {
+  const ladder = useQuery({
+    queryKey: ["limit-up-ladder"],
+    queryFn: () => fetchLimitUpLadder(),
+    staleTime: 60_000,
+  });
+  const sectors = useQuery({
+    queryKey: ["sector-limit-up"],
+    queryFn: () => fetchSectorLimitUp(),
+    staleTime: 60_000,
+  });
+  const yesterday = useQuery({
+    queryKey: ["yesterday-limit-up"],
+    queryFn: () => fetchYesterdayLimitUp(),
+    staleTime: 60_000,
+  });
+  const degraded = ladder.data?.degradedReason;
+  return (
+    <Row gutter={[16, 16]}>
+      <Col span={24}>
+        <SectionCard title="情绪温度计">
+          {degraded ? <DegradedNotice reason={degraded} /> : <SentimentHeader kpis={ladder.data?.kpis} />}
+        </SectionCard>
+      </Col>
+      <Col span={24}>
+        <SectionCard title="连板梯队" asof={ladder.data?.asOf}>
+          <LimitUpLadder echelons={ladder.data?.echelons ?? []} />
+        </SectionCard>
+      </Col>
+      <Col xs={24} xl={12}>
+        <SectionCard title="申万三级最高板" asof={sectors.data?.asOf}>
+          <SwL3LimitUpBoard data={sectors.data} />
+        </SectionCard>
+      </Col>
+      <Col xs={24} xl={12}>
+        <SectionCard title="昨日涨停今日表现" asof={yesterday.data?.asOfPrev}>
+          <YesterdayLimitUp data={yesterday.data} />
+        </SectionCard>
+      </Col>
+    </Row>
+  );
+}
 
 /**
  * 行情中心（Stage C TradingView 化重构，契约 docs/design/landing-market-theme.md §4）：
@@ -91,6 +163,11 @@ export default function MarketPage() {
           </Col>
         </Row>
       ),
+    },
+    {
+      key: "sentiment",
+      label: "短线情绪",
+      children: <SentimentTab />,
     },
   ];
 
