@@ -45,7 +45,7 @@ def do_run_migrations(connection) -> None:  # type: ignore[no-untyped-def]
 
 async def run_migrations_online() -> None:
     engine = create_async_engine(settings.database_url, echo=False)
-    async with engine.begin() as conn:
+    async with engine.connect() as conn:
         await conn.run_sync(do_run_migrations)
     await engine.dispose()
 
