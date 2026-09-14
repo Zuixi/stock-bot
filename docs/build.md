@@ -56,6 +56,7 @@ docker compose up --build -d
 2. **数据库迁移**：`migrate` 容器运行 `alembic upgrade head`，创建/更新表结构后退出
 3. **应用层**：`api`（FastAPI）、`worker`（RabbitMQ 消费者）、`scheduler`（APScheduler 定时采集）在迁移完成后启动
 4. **前端层**：`frontend`（nginx）在 API 健康检查通过后启动
+5. **网关层**：`gateway`（Traefik）在应用/前端容器就绪后启动，其健康检查断言的是**路由表已加载**（`/api/rawdata` 里出现 `frontend@docker`），而不只是进程存活——`docker compose up --wait` 因此会真正等到网关可路由；否则 `--wait` 在网关容器刚 Running 时就返回，紧接着的请求会撞上 Traefik 默认 404（body 恰 19 字节 `404 page not found`）。
 
 ### 服务端口
 

@@ -27,6 +27,19 @@ services:
       - api
       - auth-service
       - forward-auth
+    healthcheck:
+      # 断言 Docker provider 已把容器 labels 变成 router（而不只是“进程活着”）。
+      # 没有这个健康检查时，`docker compose up --wait` 在网关容器刚 Running 时就返回，
+      # 而 Traefik 还需一个节拍去订阅 Docker 事件、加载路由表；这段窗口内**所有**路径
+      # （含 frontend 的 PathPrefix(`/`)）都返回 Traefik 自己的 404（body 恰 19 字节
+      # '404 page not found'）——CI 的 docker-smoke 曾因此在首个 curl 上失败但被
+      # `| head -1` 吞掉退出码，再由第二个 curl 以 exit 22 中断整个 job。
+      # 断言 'frontend@docker' 存在 = 可路由，让 --wait 等真正的就绪条件。
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/rawdata | grep -q 'frontend@docker'"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
 
   # ---- infrastructure: databases & brokers ----
   postgres:
