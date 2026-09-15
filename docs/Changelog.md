@@ -1,3 +1,19 @@
+## 2026-09-15 - 服务管理规则固化 + 申万三级最高板热度榜重设计 + 昨日涨停卡口径澄清
+- **服务管理规则（用户要求）**：Agent 起长驻服务前必须清掉旧实例——实测 wt_landing worktree 的 vite 在 3000/3001 各挂一个、上轮 TaskStop 只杀 npm 父进程留下 vite 孤儿继续占 3002；本次 `taskkill //F //T` 全部清掉并固化规则进 AGENTS.md 新增「服务管理约定」（netstat 查占用 → Get-CimInstance 确认身份 → `//T` 杀进程树 → 收尾不留孤儿/保留须报端口与 PID）
+- **申万三级最高板重设计**（`SwL3LimitUpBoard` 重写）：block Segmented 塞 21 个一级行业把标签截成单字（不可用），换 CheckableTag wrap + 家数徽标；新增「仅看 ≥2 板」开关；表格换自绘热度榜行——板高 4 格热度色阶（与梯队同语言）+ 涨停家数占比条 + 板高 desc→家数 desc→l3Code 确定性排序；行点击跳龙头个股与 `.sector-limit-up` 根类契约保留
+- **昨日涨停卡口径澄清**：卡头「数据截至」从涨停日（as_of_prev，显示 9月11日）改为表现日（as_of，9月14日），卡内首行新增「统计 9月11日 涨停股在 9月14日 的表现 · 行情 T+1 回补」——旧标法被用户误读为"数据落后一个交易日"，实为双日口径表达问题；当日表现等 T+1 回补后自然生成
+- **契约同步**：limit-up-sentiment.md「UI 呈现契约」补 SwL3 与 as_of 口径两节；e2e 补「仅看 ≥2 板」与口径行断言
+- 验证：`npm run build` ✔、vite dev(3002) 实测：CheckableTag 过滤（电子→3 行）、叠加仅连板（→1 行）、还原 38 行、明暗双主题
+- 涉及模块：AGENTS.md（服务管理约定）, frontend/src/features/market/components/{SwL3LimitUpBoard.tsx,SwL3LimitUpBoard.css,YesterdayLimitUp.tsx}, frontend/src/pages/market/index.tsx, frontend/e2e/limitUpSentiment.spec.ts, docs/design/limit-up-sentiment.md, docs/Changelog.md, docs/references/best-practices.md
+
+## 2026-09-15 - 短线情绪 Tab 重设计：hero 风 KPI 温度计 + 连板梯队分档列（修复比值显示 bug）
+- **修数据展示 bug**：`broken_rate`/`promo_1to2`/`promo_2to3` 后端是 0-1 比值，旧 UI 直接 `toFixed(2)%` 把 40.62% 显示成 "0.41%"、晋级率 "0.21%"/"0.75%"——重设计后统一 ×100 渲染（40.62% / 21.21% / 75.00%），契约已写入 limit-up-sentiment.md「UI 呈现契约」
+- **情绪温度计 hero 化**（新 `SentimentThermometer` 替代 `SentimentHeader` datarow 版式）：涨停/炸板/跌停大数字瓦片 + 多空力量条（家数占比）+ 6 个二级指标瓦片（新露出 `yzt_avg_open_premium` 今开溢价均值）+ 涨停/跌停趋势线（纯 SVG）；环比 chip 与趋势线接通既有但从未消费的 `/market/sentiment/calendar` 端点（30 日），无前值只藏 chip、日历滞后 as_of 时以实时 KPI 补趋势末点、<2 点显示"累积中"占位
+- **连板梯队分档列**（`LimitUpLadder` 重写）：每档一卡（板高热度色阶 + 家数占比条 + 家数 chip）替代平铺 Tag 流；档内按封板时间升序、行可点跳个股页；新露出 `seal_fund` 封单额与 `break_count` 炸板次数（仅 >0 时警示显示）；首板默认 12 家折叠 + "展开全部"；汇总 pill（空间板/连板/首板家数）
+- **配套**：温度计卡头补 `数据截至` 行；`e2e/limitUpSentiment.spec.ts` 同步新结构（`.thermo` 根类 + 比值 ×100 断言 + calendar 路由 mock），内容契约（`--`/「缺少 N 个交易日」/降级文案）保持不变
+- 验证：`npm run build`（tsc+vite）✔、`npm run check:design` 8/8 PASS、vite dev + chrome-devtools 实测明暗双主题/390px 移动端/环比 chip 数值逐项核对
+- 涉及模块：frontend/src/features/market/components（SentimentThermometer 新增、LimitUpLadder 重写、SentimentHeader 删除）, frontend/src/pages/market/index.tsx, frontend/e2e/limitUpSentiment.spec.ts, docs/design/limit-up-sentiment.md, docs/references/best-practices.md
+
 ## 2026-09-15 - 数据回填：补齐日线缺口 + 权威 pct_chg 全量回填（数据运维，无代码改动）
 - **发现**：`daily_quotes` 缺 2026-09-10 / 09-11 / 09-14 三个交易日（09-11 仅 1 行、09-14 仅 3 行），而 `daily_basic_indicators` 同期**有** 5548 行/日——两条回补链路覆盖不一致，缺口因此极难察觉；下游连板梯队只是把 `as_of_prev` 悄悄滑回 09-09，不报错
 - **补齐日线**：按交易日显式重拉 `ingest_daily_quotes`（09-10 / 09-11 / 09-14，各 upsert 5548 行，原生 `pct_chg`/`pre_close` 一并落库），日线缺口归零

@@ -25,6 +25,16 @@ stock bot 能够查看当前市场行情，股票类别，每个分类的具体�
 整体服务通过 docker compose build 和 docker compose up -d 进行构建和启动。
 项目组件具体信息可以参考组件的AGENTS.md文件。
 
+## 服务管理约定（强制的 agent 行为规则）
+Agent 反复踩坑：起新服务不关旧服务，端口一路漂移堆积（实测同一 worktree 的 vite 在 3000/3001 各挂一个、TaskStop 只杀父进程留下 vite 孤儿）。因此：
+
+1. **重启必先清旧**：启动任何长驻服务（`vite dev`/`uvicorn`/`docker compose up` 等）前，先查目标端口并清掉旧实例：
+   - 查占用：`netstat -ano | grep :<port> | grep LISTEN`
+   - 杀前确认进程身份（避免误杀）：`powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"ProcessId=<pid>\" | Select-Object CommandLine"`
+   - 杀进程树（`//T` 必加，否则只杀父进程留孤儿）：`taskkill //F //T //PID <pid>`
+2. **优先复用**：目标端口已有健康且属于本项目的服务时，直接复用，不再新起。
+3. **收尾不留孤儿**：会话结束前关掉自己启动的服务；确需保留给用户查看的，必须在收尾输出写明端口、PID 与关闭命令。
+
 ## 关键文档
 - [plans/](./plans/) — 功能实施计划（tracer-bullet 分阶段），重点 [industry-research-workbench.md](./plans/industry-research-workbench.md)（投研工作台 / 猪智投）
 - [docs/design/](./docs/design/) — 设计文档、原型与数据源调研（data-source.md）
