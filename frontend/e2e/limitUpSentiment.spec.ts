@@ -5,6 +5,9 @@ import { expect, test } from "@playwright/test";
  * - 本地自算路径下 封板时间 渲染 `--`（缺失 ≠ 0）
  * - 降级原因必须显示对应文案，不得显示"暂无数据"
  * - 三块各自降级：abort 一个端点，邻区仍正常
+ * 2026-09-15 重设计：温度计根类 `.sentiment-header` → `.thermo`；
+ * 比值字段（炸板率/晋级率）必须 ×100 渲染（后端 0.3421 → UI 34.21%）；
+ * 环比 chip 与趋势线来自 `/sentiment/calendar`（无前值时只藏对应元素）。
  */
 const LADDER = {
   as_of: "2026-09-08", as_of_prev: "2026-09-07", source: "local_calc",
@@ -25,6 +28,18 @@ const LADDER = {
   ],
 };
 
+/** 两点历史：as_of=09-08 的前一交易日为 09-05，环比 chip 与趋势线都应出现。 */
+const CALENDAR = [
+  { trade_date: "2026-09-05", zt_count: 60, dt_count: 3, zb_count: 30, broken_rate: 0.3333,
+    yzt_avg_pct: 1.8, promo_1to2: 0.2, promo_2to3: 0.4, max_streak: 5 },
+  { trade_date: "2026-09-08", zt_count: 70, dt_count: 2, zb_count: 38, broken_rate: 0.35,
+    yzt_avg_pct: 2.5, promo_1to2: 0.16, promo_2to3: 0.3, max_streak: 4 },
+];
+
+function routeCalendar(page: import("@playwright/test").Page, json: unknown) {
+  return page.route("**/market/sentiment/calendar*", (r) => r.fulfill({ json }));
+}
+
 test("情绪 Tab 展示梯队并遵守缺失值契约", async ({ page }) => {
   await page.route("**/market/limit-up-ladder*", (r) => r.fulfill({ json: LADDER }));
   await page.route("**/market/sector-limit-up*", (r) => r.fulfill({ json: {
@@ -44,6 +59,7 @@ test("情绪 Tab 展示梯队并遵守缺失值契约", async ({ page }) => {
         today_open_premium: null, today_streak: null, is_lu: false, touched: false,
         broken: false, suspended: true, missing_days: 1, sw_l3_name: "房地产" },
     ] } }));
+  await routeCalendar(page, CALENDAR);
 
   await page.goto("/market");
   await page.getByRole("tab", { name: "短线情绪" }).click();
@@ -58,15 +74,25 @@ test("情绪 Tab 展示梯队并遵守缺失值契约", async ({ page }) => {
   // 停牌披露
   await expect(page.locator(".sentiment-ladder")).toContainText("缺少");
   // 温度计
-  await expect(page.locator(".sentiment-header")).toContainText("75");
-  await expect(page.locator(".sentiment-header")).toContainText("39");
+  await expect(page.locator(".thermo")).toContainText("75");
+  await expect(page.locator(".thermo")).toContainText("39");
+  // 比值字段必须 ×100：broken_rate 0.3421 → 34.21%（历史 bug 是显示 0.34%）
+  await expect(page.locator(".thermo")).toContainText("34.21%");
+  // 晋级率同理：0.1585 → 15.85%
+  await expect(page.locator(".thermo")).toContainText("15.85%");
+  // 环比 chip：涨停 75 vs 前日 70 → +5；有前值时趋势线（svg）出现
+  await expect(page.locator(".thermo").getByText("+5", { exact: true })).toBeVisible();
+  await expect(page.locator(".thermo-trend__svg")).toBeVisible();
+  // 申万 L3 热度榜：L1 过滤 tags 渲染、行列表含龙头；「仅看 ≥2 板」开关存在
+  await expect(page.locator(".sector-limit-up")).toContainText("生猪养殖");
+  await expect(page.locator(".sector-limit-up")).toContainText("牧原股份");
+  await expect(page.locator(".sector-limit-up")).toContainText("仅看 ≥2 板");
+  // 昨日涨停卡：卡头是表现日，卡内必须显式标注涨停日样本口径（防「数据落后」误读）
+  await expect(page.getByText(/统计 9月7日 涨停股在 9月8日 的表现/)).toBeVisible();
   // 昨日表现：停牌票不得渲染 0.00%
   const suspendedRow = page.locator("tr", { hasText: "万科A" });
   await expect(suspendedRow).toContainText("停牌");
   await expect(suspendedRow).not.toContainText("0.00%");
-  // 申万 L3
-  await expect(page.locator(".sector-limit-up")).toContainText("生猪养殖");
-  await expect(page.locator(".sector-limit-up")).toContainText("牧原股份");
 });
 
 test("限价缺失时显示原因而非空态", async ({ page }) => {
@@ -79,6 +105,7 @@ test("限价缺失时显示原因而非空态", async ({ page }) => {
   await page.route("**/market/yesterday-limit-up*", (r) => r.fulfill({ json: {
     as_of: null, as_of_prev: null, source: "local_calc",
     degraded_reason: "price_limits_missing", kpis: {}, items: [] } }));
+  await routeCalendar(page, []);
 
   await page.goto("/market");
   await page.getByRole("tab", { name: "短线情绪" }).click();
@@ -92,6 +119,7 @@ test("单端点失败不牵连邻区", async ({ page }) => {
   await page.route("**/market/yesterday-limit-up*", (r) => r.fulfill({ json: {
     as_of: "2026-09-08", as_of_prev: "2026-09-07", source: "local_calc",
     degraded_reason: null, kpis: { n: 0, measured: 0 }, items: [] } }));
+  await routeCalendar(page, CALENDAR);
   await page.goto("/market");
   await page.getByRole("tab", { name: "短线情绪" }).click();
   await expect(page.locator(".sentiment-ladder")).toContainText("敦煌种业");

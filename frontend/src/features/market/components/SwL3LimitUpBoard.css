@@ -1,0 +1,222 @@
+/* 申万三级最高板（热度榜）：一级行业 CheckableTag 过滤（可换行，替代截断的 block Segmented）
+ * + 板高 4 格热度色阶（与连板梯队同一套 heat 语义）+ 涨停家数占比条。
+ * 行整行可点跳龙头个股。 */
+
+.sw3-filter {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.sw3-filter__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.sw3-tag {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 9px;
+  margin: 0;
+  font-size: 12px;
+  background: var(--bg-page);
+}
+
+.sw3-tag__count {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.65;
+  margin-left: 2px;
+}
+
+.sw3-lianz-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  padding-top: 2px;
+}
+
+/* ── 列头 ─────────────────────────────────────────────── */
+.sw3-head,
+.sw3-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px 84px 118px;
+  gap: 12px;
+  align-items: center;
+}
+
+.sw3-head {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  padding: 0 8px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sw3-head__right {
+  text-align: right;
+}
+
+/* ── 行 ───────────────────────────────────────────────── */
+.sw3-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sw3-list li + li .sw3-row {
+  border-top: 1px solid var(--border);
+}
+
+.sw3-row {
+  padding: 7px 8px;
+  cursor: pointer;
+  border-radius: 6px;
+  border-top-color: transparent;
+  transition: background-color 0.15s ease;
+}
+
+.sw3-row:hover {
+  background: var(--hover);
+}
+
+.sw3-row__names {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sw3-row__l3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sw3-row__l1 {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+
+.sw3-row__streak {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+/* 板高 4 格：填充数 = 板高（≥4 封顶），填充色随热档加深 */
+.sw3-cells {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.sw3-cells i {
+  width: 10px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--hover);
+}
+
+.sw3-cells i.sw3-cells__on {
+  background: var(--sw-heat, var(--up));
+}
+
+.sw3-row--h1 {
+  --sw-heat: var(--sw3-h1);
+}
+
+.sw3-row--h2 {
+  --sw-heat: var(--sw3-h2);
+}
+
+.sw3-row--h3 {
+  --sw-heat: var(--sw3-h3);
+}
+
+.sw3-row--h4 {
+  --sw-heat: var(--sw3-h4);
+}
+
+.sw3-row--h3 .sw3-row__streak,
+.sw3-row--h4 .sw3-row__streak {
+  color: var(--up);
+}
+
+.sw3-row__leader {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sw3-row__zt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.sw3-row__zt-bar {
+  display: inline-block;
+  width: 56px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hover);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.sw3-row__zt-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.75;
+}
+
+/* 热度色阶（与 LimitUpLadder 同语义：涨色 alpha 随板高加深） */
+.sector-limit-up {
+  --sw3-h1: rgba(198, 40, 40, 0.32);
+  --sw3-h2: rgba(198, 40, 40, 0.55);
+  --sw3-h3: rgba(198, 40, 40, 0.8);
+  --sw3-h4: #c62828;
+}
+
+:root[data-theme="dark"] .sector-limit-up {
+  --sw3-h1: rgba(242, 85, 90, 0.38);
+  --sw3-h2: rgba(242, 85, 90, 0.62);
+  --sw3-h3: rgba(242, 85, 90, 0.85);
+  --sw3-h4: #f2555a;
+}
+
+/* ── 响应式：窄屏收起板高格与家数条 ──────────────────── */
+@media (max-width: 640px) {
+  .sw3-head,
+  .sw3-row {
+    grid-template-columns: minmax(0, 1fr) 84px 64px;
+  }
+
+  .sw3-head__right,
+  .sw3-row__zt {
+    display: none;
+  }
+}

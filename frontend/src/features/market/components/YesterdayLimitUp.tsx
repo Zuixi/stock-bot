@@ -1,6 +1,7 @@
 import { Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { ChangeText } from "@/shared/ui";
+import { formatCnDate } from "@/shared/ui/date";
 import type { YesterdayLimitUp, YesterdayLimitUpItem } from "@/shared/api/limitUp";
 
 interface Props {
@@ -76,14 +77,24 @@ export function YesterdayLimitUp({ data, degraded = false }: Props) {
   }
 
   return (
-    <Table<YesterdayLimitUpItem>
-      rowKey="symbol"
-      size="small"
-      columns={columns}
-      dataSource={data?.items ?? []}
-      pagination={false}
-      scroll={{ x: 700 }}
-      locale={{ emptyText: "无昨日涨停样本" }}
-    />
+    <div>
+      {/* 口径说明：卡头「数据截至」是表现日；涨停日（as_of_prev）在这里显式标注，
+          否则会被误读为「数据落后一个交易日」（实测 2026-09-15 用户反馈）。 */}
+      {data?.asOf && data?.asOfPrev ? (
+        <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
+          统计 {formatCnDate(data.asOfPrev)} 涨停股在 {formatCnDate(data.asOf)} 的表现 · 行情 T+1
+          回补，当日表现次日生成
+        </div>
+      ) : null}
+      <Table<YesterdayLimitUpItem>
+        rowKey="symbol"
+        size="small"
+        columns={columns}
+        dataSource={data?.items ?? []}
+        pagination={false}
+        scroll={{ x: 700 }}
+        locale={{ emptyText: "无昨日涨停样本" }}
+      />
+    </div>
   );
 }

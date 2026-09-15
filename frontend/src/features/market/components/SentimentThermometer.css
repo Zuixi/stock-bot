@@ -1,0 +1,299 @@
+/* 情绪温度计（hero 风）：大数字 KPI 瓦片 + 多空力量条 + 周期趋势线。
+ * 光晕装饰与 landing-hero 同手法（radial-gradient + blur），颜色全走 CSS 变量随明暗切换；
+ * warn（炸板）无全局令牌，在组件根上按主题给两套值。 */
+
+.thermo {
+  --thermo-warn: #d46b08;
+  --thermo-warn-tint: rgba(212, 107, 8, 0.12);
+  --thermo-up-tint: rgba(198, 40, 40, 0.1);
+  --thermo-down-tint: rgba(10, 125, 95, 0.1);
+  position: relative;
+  overflow: hidden;
+}
+
+:root[data-theme="dark"] .thermo {
+  --thermo-warn: #faad14;
+  --thermo-warn-tint: rgba(250, 173, 20, 0.14);
+  --thermo-up-tint: rgba(242, 85, 90, 0.14);
+  --thermo-down-tint: rgba(10, 160, 136, 0.14);
+}
+
+/* hero 同款光晕：低透明 radial 两团，绝对定位 + blur，不挡交互 */
+.thermo::before,
+.thermo::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  pointer-events: none;
+}
+
+.thermo::before {
+  width: 240px;
+  height: 240px;
+  top: -150px;
+  left: -50px;
+  background: radial-gradient(circle, rgba(41, 98, 255, 0.09), transparent 70%);
+}
+
+.thermo::after {
+  width: 280px;
+  height: 280px;
+  top: -130px;
+  right: -70px;
+  background: radial-gradient(circle, var(--thermo-up-tint), transparent 70%);
+}
+
+.thermo > * {
+  position: relative;
+}
+
+/* ── 三大计数 ─────────────────────────────────────────── */
+.thermo-primary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.thermo-tile {
+  background: var(--bg-page);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  min-width: 0;
+}
+
+.thermo-tile__label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  white-space: nowrap;
+}
+
+.thermo-tile__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.thermo-tile__num {
+  font-size: 30px;
+  line-height: 1.1;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.thermo-tile__unit {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.thermo-tile--up .thermo-tile__num {
+  color: var(--up);
+}
+
+.thermo-tile--down .thermo-tile__num {
+  color: var(--down);
+}
+
+.thermo-tile--warn .thermo-tile__num {
+  color: var(--thermo-warn);
+}
+
+/* ── 环比 pill ────────────────────────────────────────── */
+.thermo-chip {
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.thermo-chip--up {
+  color: var(--up);
+  background: var(--thermo-up-tint);
+}
+
+.thermo-chip--down {
+  color: var(--down);
+  background: var(--thermo-down-tint);
+}
+
+.thermo-chip--flat {
+  color: var(--text-secondary);
+  background: var(--hover);
+}
+
+/* ── 多空力量条 ───────────────────────────────────────── */
+.thermo-bar {
+  display: flex;
+  gap: 3px;
+  height: 12px;
+  margin-top: 12px;
+  border-radius: 6px;
+  background: var(--hover);
+  overflow: hidden;
+}
+
+.thermo-bar__seg {
+  display: block;
+  min-width: 4px;
+}
+
+.thermo-bar__seg--up {
+  background: var(--up);
+}
+
+.thermo-bar__seg--warn {
+  background: var(--thermo-warn);
+  opacity: 0.85;
+}
+
+.thermo-bar__seg--down {
+  background: var(--down);
+}
+
+/* ── 二级指标瓦片 ─────────────────────────────────────── */
+.thermo-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.thermo-tile--metric {
+  padding: 10px 12px;
+}
+
+.thermo-metric {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-height: 26px;
+  flex-wrap: wrap;
+}
+
+.thermo-metric__num {
+  font-size: 19px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.thermo-metric__num--muted {
+  color: var(--text-secondary);
+}
+
+.thermo-metric__num--up {
+  color: var(--up);
+}
+
+.thermo-metric__num--down {
+  color: var(--down);
+}
+
+.thermo-metric__unit {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.thermo-tile__note {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── 周期趋势线 ───────────────────────────────────────── */
+.thermo-trend {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.thermo-trend--pending {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.thermo-trend__legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.thermo-trend__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.thermo-trend__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.thermo-trend__dot--up {
+  background: var(--up);
+}
+
+.thermo-trend__dot--down {
+  background: var(--down);
+}
+
+.thermo-trend__range {
+  margin-left: auto;
+}
+
+.thermo-trend__svg {
+  display: block;
+  width: 100%;
+  height: 64px;
+}
+
+.thermo-trend__line {
+  fill: none;
+  stroke-width: 2;
+}
+
+.thermo-trend__line--up {
+  stroke: var(--up);
+}
+
+.thermo-trend__line--down {
+  stroke: var(--down);
+}
+
+/* KPI 缺失（非降级但 kpis 为 null）的退化态 */
+.thermo-empty {
+  color: var(--text-secondary);
+  padding: 12px 0;
+}
+
+/* ── 响应式 ───────────────────────────────────────────── */
+@media (max-width: 992px) {
+  .thermo-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .thermo-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .thermo-tile__num {
+    font-size: 24px;
+  }
+}

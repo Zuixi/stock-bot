@@ -22,7 +22,7 @@ export { MoneySentiment } from "./MoneySentiment";
 export { MarketNewsFeed } from "./MarketNewsFeed";
 export { AnnouncementFeed } from "./dataFace/AnnouncementFeed";
 export type { AnnouncementFeedProps } from "./dataFace/AnnouncementFeed";
-export { SentimentHeader } from "./SentimentHeader";
+export { SentimentThermometer } from "./SentimentThermometer";
 export { LimitUpLadder } from "./LimitUpLadder";
 export { SwL3LimitUpBoard } from "./SwL3LimitUpBoard";
 export { YesterdayLimitUp } from "./YesterdayLimitUp";

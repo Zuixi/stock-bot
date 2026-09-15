@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
-import { Segmented, Table, Typography } from "antd";
-import type { ColumnsType } from "antd/es/table";
+import { Switch, Tag, Typography } from "antd";
 import { useNavigate } from "react-router-dom";
-import type { SectorLimitUp, SectorLimitUpItem } from "@/shared/api/limitUp";
+import type { SectorLimitUp } from "@/shared/api/limitUp";
+import "./SwL3LimitUpBoard.css";
 
 interface Props {
   data: SectorLimitUp | null | undefined;
@@ -12,61 +12,52 @@ interface Props {
 
 const ALL = "all";
 
+/** 板高热档：与连板梯队同一色阶语义（streak 1-4，≥4 归 h4）。 */
+function heatClass(streak: number): string {
+  return `sw3-row--h${Math.min(Math.max(streak, 1), 4)}`;
+}
+
 /**
- * 申万三级最高板：按细分行业聚合的最高板/龙头/涨停家数。
- * 顶部 Segmented 客户端按一级行业（l1Code）过滤，数据来自已加载的 `items`。
- * 行点击跳个股页 `/stock/:symbol`（与 StockTable/DragonTigerTable 同路由）。
+ * 申万三级最高板（热度榜重设计）：一级行业 CheckableTag 过滤（wrap 不截断，替代
+ * 21 项挤一行只显示单字的 block Segmented）+「仅看 ≥2 板」开关 + 自绘行列表。
+ * 行内：细分行业 / 板高格（4 格热度色阶，与梯队同语言）/ 龙头 / 涨停家数占比条。
+ * 排序 板高 desc → 家数 desc → l3Code（确定性，避免同板高行抖动）；行点击跳龙头个股。
  */
 export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
   const navigate = useNavigate();
   const [l1, setL1] = useState<string>(ALL);
+  const [lianzOnly, setLianzOnly] = useState(false);
+
+  const items = data?.items ?? [];
 
   const l1Options = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const item of data?.items ?? []) {
-      if (item.l1Code && !seen.has(item.l1Code)) {
-        seen.set(item.l1Code, item.l1Name ?? item.l1Code);
+    const seen = new Map<string, { name: string; count: number }>();
+    for (const item of items) {
+      if (!item.l1Code) continue;
+      const prev = seen.get(item.l1Code);
+      if (prev) {
+        prev.count += 1;
+      } else {
+        seen.set(item.l1Code, { name: item.l1Name ?? item.l1Code, count: 1 });
       }
     }
-    return [...seen.entries()].map(([code, name]) => ({ label: name, value: code }));
-  }, [data]);
+    return [...seen.entries()].sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]));
+  }, [items]);
 
-  const rows = useMemo(() => {
-    const items = data?.items ?? [];
-    return l1 === ALL ? items : items.filter((i) => i.l1Code === l1);
-  }, [data, l1]);
+  const rows = useMemo(
+    () =>
+      items
+        .filter((i) => (l1 === ALL || i.l1Code === l1) && (!lianzOnly || i.maxStreak >= 2))
+        .sort(
+          (a, b) =>
+            b.maxStreak - a.maxStreak ||
+            b.ztCount - a.ztCount ||
+            a.l3Code.localeCompare(b.l3Code),
+        ),
+    [items, l1, lianzOnly],
+  );
 
-  const columns: ColumnsType<SectorLimitUpItem> = [
-    {
-      title: "细分行业",
-      dataIndex: "l3Name",
-      render: (_, r) => r.l3Name ?? "--",
-    },
-    {
-      title: "最高板",
-      dataIndex: "maxStreak",
-      align: "right",
-      width: 80,
-      render: (_, r) => `${r.maxStreak}板`,
-    },
-    {
-      title: "龙头",
-      dataIndex: "leaderName",
-      render: (_, r) => r.leaderName ?? "--",
-    },
-    {
-      title: "涨停家数",
-      dataIndex: "ztCount",
-      align: "right",
-      width: 90,
-    },
-    {
-      title: "一级行业",
-      dataIndex: "l1Name",
-      ellipsis: true,
-      render: (_, r) => r.l1Name ?? "--",
-    },
-  ];
+  const maxZt = Math.max(...rows.map((r) => r.ztCount), 1);
 
   if (degraded) {
     return (
@@ -83,26 +74,75 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
 
   return (
     <div className="sector-limit-up">
-      <Segmented
-        block
-        value={l1}
-        options={[{ label: "全部", value: ALL }, ...l1Options]}
-        onChange={(v) => setL1(v as string)}
-        style={{ marginBottom: 12 }}
-      />
-      <Table<SectorLimitUpItem>
-        rowKey="l3Code"
-        size="small"
-        columns={columns}
-        dataSource={rows}
-        pagination={false}
-        scroll={{ x: 560 }}
-        locale={{ emptyText: "无申万三级涨停数据" }}
-        onRow={(r) => ({
-          style: { cursor: "pointer" },
-          onClick: () => navigate(`/stock/${r.leaderSymbol}`),
-        })}
-      />
+      <div className="sw3-filter">
+        <div className="sw3-filter__tags">
+          <Tag.CheckableTag className="sw3-tag" checked={l1 === ALL} onChange={() => setL1(ALL)}>
+            全部 <span className="sw3-tag__count">{items.length}</span>
+          </Tag.CheckableTag>
+          {l1Options.map(([code, { name, count }]) => (
+            <Tag.CheckableTag
+              key={code}
+              className="sw3-tag"
+              checked={l1 === code}
+              onChange={() => setL1(l1 === code ? ALL : code)}
+            >
+              {name} <span className="sw3-tag__count">{count}</span>
+            </Tag.CheckableTag>
+          ))}
+        </div>
+        <label className="sw3-lianz-toggle">
+          <Switch size="small" checked={lianzOnly} onChange={setLianzOnly} />
+          仅看 ≥2 板
+        </label>
+      </div>
+
+      <div className="sw3-head" aria-hidden>
+        <span>细分行业</span>
+        <span>最高板</span>
+        <span>龙头</span>
+        <span className="sw3-head__right">涨停家数</span>
+      </div>
+
+      {rows.length === 0 ? (
+        <Typography.Text
+          type="secondary"
+          style={{ display: "block", padding: "24px 0", textAlign: "center" }}
+        >
+          {lianzOnly ? "当前筛选下无连板行业" : "无申万三级涨停数据"}
+        </Typography.Text>
+      ) : (
+        <ul className="sw3-list">
+          {rows.map((r) => (
+            <li key={r.l3Code}>
+              <div
+                className={`sw3-row ${heatClass(r.maxStreak)}`}
+                onClick={() => navigate(`/stock/${r.leaderSymbol}`)}
+                title={`${r.l3Name ?? r.l3Code} · 龙头 ${r.leaderName ?? "--"} → 个股页`}
+              >
+                <span className="sw3-row__names">
+                  <span className="sw3-row__l3">{r.l3Name ?? "--"}</span>
+                  {r.l1Name && l1 === ALL ? <span className="sw3-row__l1">{r.l1Name}</span> : null}
+                </span>
+                <span className="sw3-row__streak">
+                  <span className="sw3-cells" aria-hidden>
+                    {[1, 2, 3, 4].map((n) => (
+                      <i key={n} className={n <= r.maxStreak ? "sw3-cells__on" : undefined} />
+                    ))}
+                  </span>
+                  {r.maxStreak}板
+                </span>
+                <span className="sw3-row__leader">{r.leaderName ?? "--"}</span>
+                <span className="sw3-row__zt">
+                  <span className="sw3-row__zt-bar" aria-hidden>
+                    <span style={{ width: `${(r.ztCount / maxZt) * 100}%` }} />
+                  </span>
+                  {r.ztCount}
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

@@ -118,6 +118,9 @@
 - 市场情绪类可视化的三件套是直方图 + 平衡条 + 参与度（成交额）：平衡条把千位数量级压成长度比例供前注意感知，连续梯度色阶（0%→灰、极端→深色）优于离散档位——但必须为近零浅色块切换深色文字保对比度。
 - antd CheckableTag 选中态自带主题色实底，inline 彩色文字色会与之撞色（对比度 ~1.2:1）——彩色图例类控件用图内绝对定位文本行（线色文字 on 白底），不要用 CheckableTag 承载。
 - 前端接真实数据源时 ECharts tooltip/label formatter 里的可空数值必须先判空再 `.toFixed`（板块热力图 `d.changePercent.toFixed(2)` 无守卫页面加载即抛 TypeError，属存量隐患）；替换"近似实现"组件前先 grep 全量引用确认只剩 barrel+单页两处，且轮询语义要区分 `refetchInterval`（盘中定时刷新）与 `staleTime`（仅去抖），漏配会把"60s 自动更新"做成假象。
+- 比值型字段（炸板率/晋级率，后端 0-1）渲染成百分比必须 ×100，且与「本身已是百分数」的字段（涨跌幅均值）在同一个 UI 里区分口径：实测旧温度计把 0.4062 显示成 "0.41%"、0.2121 显示成 "0.21%"——差 100 倍无任何报错，只有拿 分子/分母 手算一遍才能发现；接 KPI 字段前先对一份真实响应手算核值，UI 展示口径写入契约文档（limit-up-sentiment.md「UI 呈现契约」）。
+- react-query 组件里新增 useMemo/useCallback 必须放在 `if (!data) return` 早退之前，且验收必须含「冷加载 + 数据晚到」路径：HMR/已挂载页面上 hooks 数量恒定不会报错，等数据到达后 hooks 从少变多直接炸 ErrorBoundary（"Rendered more hooks than during the previous render"），浏览器实测要 reload 后等 query resolve 再断言。
+- 双日期口径卡（"昨日涨停→今日表现"）卡头只标涨停日（as_of_prev）会被用户误读为数据落后——「数据截至」必须指表现日（as_of），样本日在卡内显式标注双日文案；antd Segmented block 塞 20+ 选项会把标签截成单字不可用，多选项过滤用 CheckableTag wrap（带计数徽标）。
 - 计划 brief 给定的表格 rowKey 组合键先对活端点跑唯一性校验再落码：Tushare 明细类数据（解禁一股多持有人、大宗同日同股同价同买方多笔）在默认键上必撞 React duplicate key，复合键以「业务键 + 区分度最高且前端已展示的字段」补位（如 +holderName/+volume）而非引入未展示字段。
 - 把为全市场设计的端点复用到个股维度时，客户端 filter 的覆盖边界要在 UI 上写明而非只靠空态：龙虎榜接口无 symbol 参数，个股卡拉 limit=50 最新日再前端过滤，本股不在当日榜即显示"暂无上榜记录"，footer 同步注明"全市场最新日筛选本股"，避免用户把覆盖范围导致的空态误读为数据缺失；另外计划 brief 末尾自带的防未用报错脚手架（hidden span + 死 import）按其收尾指令删除即可，落库前对"这段代码存在的理由"过一遍能直接清掉这类残留。
 - 接三方行情先 curl 实测定字段与单位再写映射：东财 f62 是元、TuShare block_trade 是万元/万股、north_money 是万元、巨潮 announcementTime 是毫秒——单位/时间戳错一档，UI 就差四个数量级或 1970 年。
@@ -186,6 +189,7 @@
 ## 八、工程流程与文档（元经验）
 
 - 调试数据空白问题时，优先直调后端 API 确认响应字段，再追代码。空字段可能来自三层中任意一层：后端未查 → schema 未定义 → 前端映射硬编码 undefined。
+- Agent 起长驻服务（vite dev 等）必须"重启先清旧"：实测同一 worktree 的 vite 在 3000/3001 各挂一个无人认领，且 TaskStop/杀 npm 父进程会留下 vite 孤儿继续占端口导致下个会话端口漂移——查占用（`netstat -ano | grep :<port>`）→ 确认命令行身份（Get-CimInstance）→ `taskkill //F //T //PID`（`//T` 杀进程树，必加）再起新实例；规则已固化进 AGENTS.md「服务管理约定」。
 - Agent 指令文件（AGENTS.md/CLAUDE.md）必须保持单一事实来源：CLAUDE.md 用 symlink 或一行转发指向 AGENTS.md 而非拷贝；同类沉淀文档不可并存近似命名（`best-practice.md` vs `best-practices.md` 曾同时被更新导致经验分裂，本文件即两文件合并产物）；AGENTS.md 中的命令必须实跑验证后再写入（本次发现 ruff/mypy 需 `uv run --extra dev`、frontend eslint 需先 `npm install`）。
 - 技术栈/README 这类"镜像型"文档极易与实现漂移（本项目 README 曾长期标注 SQLModel / Tailwind+shadcn，实际早已迁至 SQLAlchemy 2.0 async / Ant Design 5）：应把某一份文档定为唯一权威入口并纳入 PR 变更清单同步更新，其余文档只做链接跳转；同时每季度或大特性合入时对照一遍 compose / AGENTS / README 的端口、服务名、镜像名，避免"7 个服务 vs 实际 9 个、redis 6380"这类静默漂移。
 - uv 的 `[project.optional-dependencies] dev`（ruff/mypy/pytest）默认不随 `uv sync` 安装：CI 与本地都必须显式 `uv sync --extra dev`（或 `uv run --extra dev`），否则 `uv run ruff/mypy` 报 "Failed to spawn"——这会让 Lint/TypeCheck 形同虚设并放行历史欠账；同理 pytest 若依赖真实运行 API，须标 `pytest.mark.e2e` 并在 CI 用 `-m "not e2e"` 避免测试 job 必挂。
