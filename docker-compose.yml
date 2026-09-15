@@ -343,7 +343,13 @@ services:
       - "traefik.http.services.frontend.loadbalancer.server.port=80"
 
 volumes:
+  # 卷名显式锚定既有数据卷（原 wt_p7 部署所建）。部署源切换到 main 后，
+  # 若去掉 name: 会按项目前缀新建一套空卷，行情/情绪历史数据将"消失"。
   postgres_data:
+    name: stock_bot_wt_p7_postgres_data
   auth_postgres_data:
+    name: stock_bot_wt_p7_auth_postgres_data
   redis_data:
+    name: stock_bot_wt_p7_redis_data
   rabbitmq_data:
+    name: stock_bot_wt_p7_rabbitmq_data
