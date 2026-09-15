@@ -1,3 +1,21 @@
+## 2026-09-16 - 部署源切换到 main：docker 卷名锚定 + 清理 9/15 partial 脏数据
+- **部署切换（用户拍板：只保留 main 分支 docker 栈，验证一律 kill 旧服务后重新部署）**：`stock_bot_wt_p7` 旧栈 down（保留卷）→ 主 worktree `docker compose up -d --build`（main 代码）。新 scheduler 注册 **18 个任务，含旧栈缺失的 `Price limits daily`（16:50）与 `Market sentiment daily`（17:15）**；前端为含短线情绪/申万榜重设计的 dist
+- **卷名锚定（防空库）**：运行数据在 `stock_bot_wt_p7_*` 四个卷里，而主 worktree 默认 project=`stock_bot` 会新建空卷——docker-compose.yml volumes 段显式 `name:` 锚定既有四卷（postgres/auth/redis/rabbitmq），数据零丢失；注释写明原因
+- **3002 dev server 彻底下线**：TaskStop 两次留下 vite 孤儿均按 `taskkill //F //T` 补杀；3000/3001/3002 全清，此后验证一律走 `localhost:80` docker 栈
+- **9/15 partial 脏数据清除**：重启后 `as_of` 卡在 9/15 且 `is_partial=true`——根因是 backend 启动的"3 年日线覆盖"任务从 TuShare 单股接口拉到 9/15 已生成的仅 2 行（数据源侧当日未出全）写入库；而 16:30 回补 job 用"存在即跳过"判据会被这 2 行挡住形成死锁。已 `DELETE` 该 2 行，`as_of` 回到完整态 9/14，今晚 16:30/16:50/17:15 任务链自动补齐 9/15 全量（含限价与情绪快照）
+- **已知误伤（无害）**：清理时把 9/15 完整的 5546 行 `daily_basic_indicators` 一并删除（TuShare daily_basic 出数早于 daily，属好数据被误判 partial）——今天 16:45 任务检测缺失会自动重拉全量
+- **遗留风险**：APScheduler `misfire_grace_time` 仍为默认 1s（方案 A 未落地），宿主睡眠/Resource Saver 期间任务仍会被丢弃——今天 16:50/17:15 任务能否执行取决于宿主是否活跃；建议尽快落地 grace 配置 + 关闭 Docker Desktop Resource Saver
+- 涉及模块：docker-compose.yml（volumes 锚定）, 部署运维（栈切换/脏数据清理）, docs/Changelog.md, docs/references/best-practices.md
+
+## 2026-09-16 - 回补失败根因诊断：宿主挂起 + misfire_grace_time=1s 全量丢弃
+- **现象**：情绪接口 `as_of` 停在 9/14，9/15 数据从未回补；历史上 9/10、9/11、9/14 均需手动补
+- **取证**：scheduler 容器 26h 日志 **0 次 "Running job"**，每个任务槽位只有 `Run time of job ... was missed by ...`（迟到 17s~3m47s，第一个就是 9/15 07:00 晚 3m47s）；RestartCount=0、无 OOM；RabbitMQ 全队列 0 消息且消费者健在（消息从未发布）
+- **反证**：容器内 asyncio `sleep(5)` 实测三连 5.00s 零漂移（宿主活跃时定时器正常）→ 排除任务/代码阻塞，锁定**宿主睡眠或 Docker Desktop Resource Saver 把容器进程成段挂起**，醒来必超 APScheduler 默认 `misfire_grace_time=1s` → 到点任务全量静默丢弃
+- **放大器**：`_fetch_yesterday_daily_quotes/_daily_basic` 只补 T-1、存在即跳过、无补漏窗口；运行栈是 wt_p7 旧镜像，调度器里根本没有 price_limits/sentiment 任务
+- 排障提示：scheduler 容器日志时间戳为 **UTC**（北京 = UTC+8），"15:41 静默"实为北京 23:41 后夜间无任务
+- 教训沉淀：docs/references/best-practices.md（misfire_grace_time + 容器挂起 + 补漏窗口 + UTC 日志）
+- 涉及模块：诊断（无代码改动）, docs/references/best-practices.md
+
 ## 2026-09-15 - 服务管理规则固化 + 申万三级最高板热度榜重设计 + 昨日涨停卡口径澄清
 - **服务管理规则（用户要求）**：Agent 起长驻服务前必须清掉旧实例——实测 wt_landing worktree 的 vite 在 3000/3001 各挂一个、上轮 TaskStop 只杀 npm 父进程留下 vite 孤儿继续占 3002；本次 `taskkill //F //T` 全部清掉并固化规则进 AGENTS.md 新增「服务管理约定」（netstat 查占用 → Get-CimInstance 确认身份 → `//T` 杀进程树 → 收尾不留孤儿/保留须报端口与 PID）
 - **申万三级最高板重设计**（`SwL3LimitUpBoard` 重写）：block Segmented 塞 21 个一级行业把标签截成单字（不可用），换 CheckableTag wrap + 家数徽标；新增「仅看 ≥2 板」开关；表格换自绘热度榜行——板高 4 格热度色阶（与梯队同语言）+ 涨停家数占比条 + 板高 desc→家数 desc→l3Code 确定性排序；行点击跳龙头个股与 `.sector-limit-up` 根类契约保留

@@ -121,6 +121,7 @@
 - 比值型字段（炸板率/晋级率，后端 0-1）渲染成百分比必须 ×100，且与「本身已是百分数」的字段（涨跌幅均值）在同一个 UI 里区分口径：实测旧温度计把 0.4062 显示成 "0.41%"、0.2121 显示成 "0.21%"——差 100 倍无任何报错，只有拿 分子/分母 手算一遍才能发现；接 KPI 字段前先对一份真实响应手算核值，UI 展示口径写入契约文档（limit-up-sentiment.md「UI 呈现契约」）。
 - react-query 组件里新增 useMemo/useCallback 必须放在 `if (!data) return` 早退之前，且验收必须含「冷加载 + 数据晚到」路径：HMR/已挂载页面上 hooks 数量恒定不会报错，等数据到达后 hooks 从少变多直接炸 ErrorBoundary（"Rendered more hooks than during the previous render"），浏览器实测要 reload 后等 query resolve 再断言。
 - 双日期口径卡（"昨日涨停→今日表现"）卡头只标涨停日（as_of_prev）会被用户误读为数据落后——「数据截至」必须指表现日（as_of），样本日在卡内显式标注双日文案；antd Segmented block 塞 20+ 选项会把标签截成单字不可用，多选项过滤用 CheckableTag wrap（带计数徽标）。
+- 开发机 Docker 容器里跑 cron/定时任务必须显式配 APScheduler `misfire_grace_time`（默认仅 1 秒）+ `coalesce=True`：宿主睡眠或 Docker Desktop Resource Saver 会把容器进程成段挂起，醒来必超宽限 → 所有到点任务被**静默丢弃**（症状：日志只有成串 "Run time of job ... was missed by"、0 次 "Running job"、MQ 队列全空；实测诊断时宿主活跃状态下 asyncio timer 零漂移可反证非代码阻塞）。幂等回补类任务应配"补最近 N 个交易日缺口"的窗口判据而非"只补 T-1 存在即跳过"，否则停摆一天留永久空洞；排障时注意容器日志时间戳可能是 UTC。
 - 计划 brief 给定的表格 rowKey 组合键先对活端点跑唯一性校验再落码：Tushare 明细类数据（解禁一股多持有人、大宗同日同股同价同买方多笔）在默认键上必撞 React duplicate key，复合键以「业务键 + 区分度最高且前端已展示的字段」补位（如 +holderName/+volume）而非引入未展示字段。
 - 把为全市场设计的端点复用到个股维度时，客户端 filter 的覆盖边界要在 UI 上写明而非只靠空态：龙虎榜接口无 symbol 参数，个股卡拉 limit=50 最新日再前端过滤，本股不在当日榜即显示"暂无上榜记录"，footer 同步注明"全市场最新日筛选本股"，避免用户把覆盖范围导致的空态误读为数据缺失；另外计划 brief 末尾自带的防未用报错脚手架（hidden span + 死 import）按其收尾指令删除即可，落库前对"这段代码存在的理由"过一遍能直接清掉这类残留。
 - 接三方行情先 curl 实测定字段与单位再写映射：东财 f62 是元、TuShare block_trade 是万元/万股、north_money 是万元、巨潮 announcementTime 是毫秒——单位/时间戳错一档，UI 就差四个数量级或 1970 年。
