@@ -68,6 +68,11 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
         elif job == "sentiment_daily":
             # 盘后落库不需要缓存（cache=None）：避免命中 Redis JSON 后 as_of 变 str。
             result = await limit_up_service.persist_snapshot(db, None)
+        elif job == "reconcile":
+            from app.services import reconciliation_service  # noqa: PLC0415
+
+            # 手动全量对账：幂等，无缺口时零 TuShare 请求
+            result = await reconciliation_service.reconcile_market_data(db)
         else:
             # Defensive: unreachable via process() — the type is validated there.
             return {"status": "failed", "error": f"unknown market_data type: {job}"}
