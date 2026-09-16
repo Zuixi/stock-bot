@@ -122,13 +122,14 @@
 - react-query 组件里新增 useMemo/useCallback 必须放在 `if (!data) return` 早退之前，且验收必须含「冷加载 + 数据晚到」路径：HMR/已挂载页面上 hooks 数量恒定不会报错，等数据到达后 hooks 从少变多直接炸 ErrorBoundary（"Rendered more hooks than during the previous render"），浏览器实测要 reload 后等 query resolve 再断言。
 - 双日期口径卡（"昨日涨停→今日表现"）卡头只标涨停日（as_of_prev）会被用户误读为数据落后——「数据截至」必须指表现日（as_of），样本日在卡内显式标注双日文案；antd Segmented block 塞 20+ 选项会把标签截成单字不可用，多选项过滤用 CheckableTag wrap（带计数徽标）。
 - 开发机 Docker 容器里跑 cron/定时任务必须显式配 APScheduler `misfire_grace_time`（默认仅 1 秒）+ `coalesce=True`：宿主睡眠或 Docker Desktop Resource Saver 会把容器进程成段挂起，醒来必超宽限 → 所有到点任务被**静默丢弃**（症状：日志只有成串 "Run time of job ... was missed by"、0 次 "Running job"、MQ 队列全空；实测诊断时宿主活跃状态下 asyncio timer 零漂移可反证非代码阻塞）。幂等回补类任务应配"补最近 N 个交易日缺口"的窗口判据而非"只补 T-1 存在即跳过"，否则停摆一天留永久空洞；排障时注意容器日志时间戳可能是 UTC。
+- 手动补数后必须清派生端点的 Redis 缓存再验证："DB 已更新但 API 仍返回旧值"第一嫌疑是缓存——`get_calendar` 的 `market:limit-up:calendar:{days}` 把"只有 9/14"的旧结果集固化（非空即缓存，"空结果不缓存"防不住**旧**结果），实测补完 9/15/9/16 日历端点仍只返回 1 点，`DEL market:limit-up:calendar:*` 后才出 3 点；补数顺序按依赖链 quotes → daily_basic → price_limits（按 daily_quotes 缺失日自动补漏）→ 逐日 `persist_snapshot(as_of=d)`，且补数脚本验证要看 DB 行数 + API 响应两端而非只看脚本退出码。
 - 计划 brief 给定的表格 rowKey 组合键先对活端点跑唯一性校验再落码：Tushare 明细类数据（解禁一股多持有人、大宗同日同股同价同买方多笔）在默认键上必撞 React duplicate key，复合键以「业务键 + 区分度最高且前端已展示的字段」补位（如 +holderName/+volume）而非引入未展示字段。
 - 把为全市场设计的端点复用到个股维度时，客户端 filter 的覆盖边界要在 UI 上写明而非只靠空态：龙虎榜接口无 symbol 参数，个股卡拉 limit=50 最新日再前端过滤，本股不在当日榜即显示"暂无上榜记录"，footer 同步注明"全市场最新日筛选本股"，避免用户把覆盖范围导致的空态误读为数据缺失；另外计划 brief 末尾自带的防未用报错脚手架（hidden span + 死 import）按其收尾指令删除即可，落库前对"这段代码存在的理由"过一遍能直接清掉这类残留。
 - 接三方行情先 curl 实测定字段与单位再写映射：东财 f62 是元、TuShare block_trade 是万元/万股、north_money 是万元、巨潮 announcementTime 是毫秒——单位/时间戳错一档，UI 就差四个数量级或 1970 年。
 - 定时任务的交易时段/工作日守卫必须显式 ZoneInfo("Asia/Shanghai")：容器默认 UTC，naive datetime.now() 会让盘中任务在真实交易时段静默跳过、却在晚间时段放行——cron 触发正确而 job 体空转，日志只有 executed successfully 没有业务结果行。
-108	- 复用网站数据先比对页面 HTML 里的实体代码（东财 BK 板块码）：代码一致即同源，排行页的扩展列（最大股/中单小单）多数在同端点 fields 里就有，无需另找接口。
-109	- 东财 kline 类接口（fflow/daykline 等）返回 CSV 字符串行，数值必须显式 float()；容器内长连接池偶发被服务端断连（RemoteProtocolError），HTTP GET 加一次传输层重试即可消除偶发失败。
-110	- 前端认证与统一请求层改造中，BFF HttpOnly 会话请求必须全局强制 `credentials: "include"`，非幂等操作需配合 single-flight CSRF Token 注入机制；同时在全局请求客户端中拦截 401 派发事件触发 QueryClient 缓存清理与状态重置，并通过 `skipAuth` 选项切断登录、注册及探针接口的 401 死循环。
+- 复用网站数据先比对页面 HTML 里的实体代码（东财 BK 板块码）：代码一致即同源，排行页的扩展列（最大股/中单小单）多数在同端点 fields 里就有，无需另找接口。
+- 东财 kline 类接口（fflow/daykline 等）返回 CSV 字符串行，数值必须显式 float()；容器内长连接池偶发被服务端断连（RemoteProtocolError），HTTP GET 加一次传输层重试即可消除偶发失败。
+- 前端认证与统一请求层改造中，BFF HttpOnly 会话请求必须全局强制 `credentials: "include"`，非幂等操作需配合 single-flight CSRF Token 注入机制；同时在全局请求客户端中拦截 401 派发事件触发 QueryClient 缓存清理与状态重置，并通过 `skipAuth` 选项切断登录、注册及探针接口的 401 死循环。
 
 - 市场情绪类可视化的三件套是直方图+平衡条+参与度（成交额）：平衡条把千位数量级压成长度比例供前注意感知，连续梯度色阶（0%→灰、极端→深色）优于离散档位——但必须为近零浅色块切换深色文字保对比度。
 - 计划 brief 给定的表格 rowKey 组合键先对活端点跑唯一性校验再落码：Tushare 明细类数据（解禁一股多持有人、大宗同日同股同价同买方多笔）在默认键上必撞 React duplicate key，复合键以"业务键 + 区分度最高且前端已展示的字段"补位（如 +holderName/+volume）而非引入未展示字段。
@@ -178,6 +179,7 @@
 - 小型 Docker Compose 系统选 API Gateway 时，应先按当前的服务发现、认证与限流需求收敛运维面：优先选择能直接读取容器元数据且无需额外控制面依赖的方案，同时让 FastAPI 保留 JWT 签名、iss/aud/exp/nbf 与对象级授权校验，避免把网关误当成唯一安全边界。
 - 同一份数据出现在产品多个页面时必须**单一同源**（同一 API/同一 service）：landing 曾走旧的 `/market/indices`（读 index_dailies 盘后日线）而市场页走 `/market/global-indices`（东财实时快照），"每 60 秒自动刷新"轮询的却是盘后库表，EOD vs realtime 口径差被用户当作数据错误上报。新增展示面时先审现有链路能否复用，口径差异要在 UI 上如实标注（如"盘后为准"），"实时"文案不得配非实时数据源；同源化时把两端测试断言（E2E mock 端点/载荷形状、单测注册表条数）一起同步，注册表扩容类断言优先锁"集合"而非只锁"个数"。
 - 跨端点共享的取值（如"数据截至日"）应收敛为**单一实现**（`max(trade_date)` 只写一处，其余调用方薄委托），但缓存是调用方各自选择的路径而非实现本身：不要为了"统一"给所有调用方强加缓存，也不要让薄委托顺手改掉老调用方的行为。空源降级责任在**使用层**：需要兜底语义的端点捕获实现抛出的异常并返回自洽空载荷（公开首页块绝不能因空库 500），只有确需该值的调用方才让异常穿透。把 `datetime.date` 放进 JSON 序列化的 `CacheClient` 时必须存 `isoformat()` 字符串并在读出侧 `date.fromisoformat` 兜底——直接存 `date` 依赖 `json.dumps(default=str)` 的隐式转换，读回是 str 而类型标注说 date，迟早出隐性类型错。
+- 定时同步类系统的正确性不能寄托在"调度触发"层（edge-triggered，"在时刻 T 执行 X"），任务语义应是 level-triggered 的"收敛到期望状态"（expected vs actual 对账 + 幂等补齐循环）：触发只负责 timeliness，完整性由对账兜底——宿主睡眠/容器挂起在任何开发机都是常态；完整性判据用**行数量级**（≥0.8×全市场数）而非存在性（partial 行会挡住补齐形成死锁），派生表写入须与读缓存失效内聚在同一服务方法（调用方记得清缓存是不可靠假设）。方案全文见 plans/2026-09-17-data-sync-self-healing.md——实机首跑即在 10 日窗口内发现 7 天情绪历史盲区并自动补齐：派生表任务上线若无历史回放，上线前的日子是永久盲区，只有跨域对账能发现。
 
 ## 七、指标建模与规则引擎
 
