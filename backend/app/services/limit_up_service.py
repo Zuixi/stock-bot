@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 SNAPSHOT_TTL = 300
 CALENDAR_TTL = 900
+# 派生表（market_sentiment_daily）写入后须失效的读缓存键模式：失效内聚在
+# persist_snapshot 内，任何调用方（定时/手动/对账）都不依赖"记得清缓存"。
+_CALENDAR_CACHE_PATTERN = "market:limit-up:calendar:*"
 _WINDOW_BUFFER = 6  # gaps-and-islands 需要的前置上下文（lookback 之外多取的交易日）
 
 
@@ -208,6 +211,18 @@ def yesterday_payload(snap: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _invalidate_calendar_cache() -> int:
+    """失效情绪周期读缓存（Redis 不可用时 delete_pattern 内部静默返回 0）。
+
+    calendar 缓存"非空即缓存"会把旧结果集固化（TTL 900s 内补数也不可见），
+    实测 9/17 补完两日数据后日历端点仍只返回 1 点——失效必须与落库同点发生。
+    """
+    from app.core.redis import CacheClient, get_redis_pool  # noqa: PLC0415
+
+    cache = CacheClient(await get_redis_pool())
+    return await cache.delete_pattern(_CALENDAR_CACHE_PATTERN)
+
+
 async def persist_snapshot(
     db: AsyncSession | None, cache: CacheClient | None, as_of: date | None = None
 ) -> dict[str, Any]:
@@ -255,6 +270,7 @@ async def persist_snapshot(
             await session.commit()
     else:
         await limit_up_repo.upsert_sentiment_daily(db, row)
+    await _invalidate_calendar_cache()
     return {"status": "ok", "trade_date": trade_date, "zt_count": k["zt_count"]}
 
 
