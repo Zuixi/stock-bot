@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 
 from app.scheduler.jobs import (
     announcements_poll_job,
@@ -20,6 +23,7 @@ from app.scheduler.jobs import (
     industry_metrics_refresh_job,
     northbound_daily_job,
     price_limits_daily_job,
+    reconcile_market_data_job,
     repurchase_daily_job,
     sector_moneyflow_job,
     securities_refresh_job,
@@ -35,9 +39,59 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 盘中高频任务的宽限上限：宿主挂起醒来后补跑一堆过期快照/轮询毫无意义，
+# 超过 5 分钟的直接丢弃（job 体内还有交易时段守卫兜底）。
+INTRADAY_GRACE_SEC = 300
+
+# 启动对账延迟：等 DB 迁移/连接池/启动 seeding 先就绪，再跑收敛
+_STARTUP_DELAY = timedelta(seconds=120)
+
+# 盘后日频任务 misfire_grace_time=None：宿主睡眠/Resource Saver 挂起在任何开发机
+# 都是常态，迟到也必须执行（coalesce 合并堆积为一次）——完整性由对账层兜底
+# （reconciliation_service），但触发层先做到"永不静默丢弃"。
+# 见 plans/2026-09-17-data-sync-self-healing.md L1。
+
 
 def create_scheduler() -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
+    scheduler = AsyncIOScheduler(
+        timezone="Asia/Shanghai",
+        job_defaults={
+            "misfire_grace_time": None,
+            "coalesce": True,
+            "max_instances": 1,
+        },
+    )
+
+    # ── 对账收敛触发（三处互为冗余，plans/2026-09-17 L2）──────────────
+    # 1) 启动 +2min：宿主醒来/栈重启后必然经过的收敛点（延迟给启动 seeding 让路）
+    scheduler.add_job(
+        reconcile_market_data_job,
+        DateTrigger(run_date=datetime.now(ZoneInfo("Asia/Shanghai")) + _STARTUP_DELAY),
+        id="startup_reconcile",
+        name="Startup reconcile",
+        replace_existing=True,
+    )
+    # 2) 交易日 17:45：正常盘后任务链之后的兜底自检
+    scheduler.add_job(
+        reconcile_market_data_job,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour=17,
+            minute=45,
+            timezone="Asia/Shanghai",
+        ),
+        id="reconcile_post_chain",
+        name="Post-chain reconcile",
+        replace_existing=True,
+    )
+    # 3) 每日 10:00：非交易日也要能补上一个交易日的洞（周五晚停摆、周六开机）
+    scheduler.add_job(
+        reconcile_market_data_job,
+        CronTrigger(hour=10, minute=0, timezone="Asia/Shanghai"),
+        id="reconcile_weekend_catchup",
+        name="Weekend catch-up reconcile",
+        replace_existing=True,
+    )
 
     # Trading hours: every 10 minutes, Monday–Friday, 9:30–15:00
     # The job itself checks whether we're actually inside the trading window.
@@ -51,6 +105,7 @@ def create_scheduler() -> AsyncIOScheduler:
         ),
         id="sse_trade_hours",
         name="SSE trade-hours snapshot",
+        misfire_grace_time=INTRADAY_GRACE_SEC,
         replace_existing=True,
     )
 
@@ -65,6 +120,7 @@ def create_scheduler() -> AsyncIOScheduler:
         ),
         id="sse_trade_close",
         name="SSE 15:00 closing tick",
+        misfire_grace_time=INTRADAY_GRACE_SEC,
         replace_existing=True,
     )
 
@@ -79,6 +135,7 @@ def create_scheduler() -> AsyncIOScheduler:
         ),
         id="sse_post_close",
         name="SSE post-close snapshot",
+        misfire_grace_time=INTRADAY_GRACE_SEC,
         replace_existing=True,
     )
 
@@ -157,6 +214,7 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5", timezone="Asia/Shanghai"),
         id="sector_moneyflow_poll",
         name="Sector moneyflow intraday poll",
+        misfire_grace_time=INTRADAY_GRACE_SEC,
         replace_existing=True,
     )
 
@@ -230,6 +288,7 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(hour="8-22", minute="*/10", timezone="Asia/Shanghai"),
         id="announcements_poll",
         name="Cninfo announcements poll",
+        misfire_grace_time=INTRADAY_GRACE_SEC,
         replace_existing=True,
     )
 

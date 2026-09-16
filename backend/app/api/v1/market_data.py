@@ -27,6 +27,7 @@ from app.schemas.market_data import (
     SectorMoneyflowOut,
     ShareFloatOut,
 )
+from app.schemas.reconciliation import DataFreshnessOut
 from app.services import limit_up_service, market_data_service
 
 router = APIRouter(tags=["market-data"])
@@ -209,3 +210,17 @@ async def get_sentiment_calendar(
 ) -> list[SentimentCalendarPointOut]:
     rows = await limit_up_service.get_calendar(cache, days)
     return [SentimentCalendarPointOut(**r) for r in rows]
+
+
+@router.get("/data-freshness", response_model=DataFreshnessOut)
+async def get_data_freshness() -> DataFreshnessOut:
+    """数据新鲜度巡检（只读，绝不触发回补）：把"静默缺数据"变成端点可见。
+
+    复用对账器的期望集/行数判据（apply=False 路径），开销为几次聚合计数查询。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import reconciliation_service  # noqa: PLC0415
+
+    async with async_session_factory() as db:
+        result = await reconciliation_service.reconcile_market_data(db, apply=False)
+    return DataFreshnessOut(**result)
