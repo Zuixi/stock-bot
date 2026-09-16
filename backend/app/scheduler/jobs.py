@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from datetime import date, datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -72,98 +72,61 @@ async def sse_post_close_job() -> None:
 
 
 # ------------------------------------------------------------------
-# Daily data ingestion jobs (TuShare "daily" + "daily_basic" APIs)
+# Daily data ingestion (reconciliation thin-wrappers, L3)
 # ------------------------------------------------------------------
 
 
-async def _fetch_yesterday_daily_quotes() -> None:
-    """Fetch yesterday's full-market daily quotes and persist to DB."""
-    yesterday = date.today() - timedelta(days=1)
-    while yesterday.weekday() >= 5:
-        yesterday -= timedelta(days=1)
-    trade_date = yesterday.strftime("%Y%m%d")
-
+async def _run_reconcile(only: set[str] | None) -> None:
+    """对账薄封装：会话生命周期 + 异常边界统一在这里。"""
     from app.core.database import async_session_factory  # noqa: PLC0415
-    from app.repositories import quote_repo  # noqa: PLC0415
-    from app.services.tushare_ingest import TuShareIngestService  # noqa: PLC0415
+    from app.services import reconciliation_service  # noqa: PLC0415
 
     try:
         async with async_session_factory() as db:
-            if await quote_repo.trade_date_exists(db, yesterday):
-                logger.info("Skipping quotes backfill — trade_date=%s already exists", trade_date)
-                return
-
-        service = TuShareIngestService()
-        async with async_session_factory() as db:
-            result = await service.ingest_daily_quotes(db, trade_date)
-            await db.commit()
-            logger.info(
-                "Daily quotes backfill: trade_date=%s upserted=%d",
-                trade_date,
-                result.get("upserted", 0),
-            )
+            result = await reconciliation_service.reconcile_market_data(db, only=only)
+        logger.info(
+            "Reconcile done (only=%s): %s",
+            sorted(only) if only else "all",
+            {k: v["status"] for k, v in result["domains"].items()},
+        )
     except Exception:
-        logger.exception("Daily quotes backfill failed for trade_date=%s", trade_date)
-
-
-async def _fetch_yesterday_daily_basic() -> None:
-    """Fetch yesterday's full-market daily_basic indicators and persist to DB."""
-    yesterday = date.today() - timedelta(days=1)
-    while yesterday.weekday() >= 5:
-        yesterday -= timedelta(days=1)
-    trade_date = yesterday.strftime("%Y%m%d")
-
-    from app.core.database import async_session_factory  # noqa: PLC0415
-    from app.repositories import daily_basic_repo  # noqa: PLC0415
-    from app.services.tushare_ingest import TuShareIngestService  # noqa: PLC0415
-
-    try:
-        async with async_session_factory() as db:
-            if await daily_basic_repo.trade_date_exists(db, yesterday):
-                logger.info(
-                    "Skipping daily_basic backfill — trade_date=%s already exists", trade_date
-                )
-                return
-
-        service = TuShareIngestService()
-        async with async_session_factory() as db:
-            result = await service.ingest_daily_basic(db, trade_date)
-            await db.commit()
-            logger.info(
-                "Daily basic backfill: trade_date=%s upserted=%d",
-                trade_date,
-                result.get("upserted", 0),
-            )
-    except Exception:
-        logger.exception("Daily basic backfill failed for trade_date=%s", trade_date)
+        logger.exception("Reconcile failed (only=%s)", sorted(only) if only else "all")
 
 
 async def daily_quotes_backfill_job() -> None:
-    """Run daily quotes backfill after market close (16:30 Mon-Fri).
+    """全市场日线对账补齐（16:30 Mon-Fri）。
 
-    Fetches yesterday's trade date data so there's enough buffer for
-    TuShare to have processed the day's results.
+    旧语义"只补 T-1 + exists-skip"有两个结构性缺陷：停摆一天=永久洞（9/10、
+    9/11、9/14、9/15 四次事故），partial 行挡住全量回补形成死锁（9/16）。
+    对账语义：窗口内（默认 10 个交易日）缺失日与行数不足日一律重拉。
     """
     if not _is_workday():
         logger.debug("Skipping daily quotes backfill — not a workday")
         return
 
     logger.info("Daily quotes backfill job triggered")
-    await _fetch_yesterday_daily_quotes()
+    await _run_reconcile(only={"daily_quotes"})
 
 
 async def daily_basic_backfill_job() -> None:
-    """Run daily_basic backfill after market close (16:45 Mon-Fri).
-
-    Must run after daily_quotes_backfill_job since daily_basic uses
-    the same trade_date source.
-    """
+    """每日指标（daily_basic）对账补齐（16:45 Mon-Fri，quotes 之后）。"""
     if not _is_workday():
-        logger.debug("Skipping daily_basic backfill — not a workday")
+        logger.debug("Skipping daily basic backfill — not a workday")
         return
 
     logger.info("Daily basic backfill job triggered")
-    await _fetch_yesterday_daily_basic()
+    await _run_reconcile(only={"daily_basic"})
+
+
+async def reconcile_market_data_job() -> None:
+    """全量对账（四域：quotes/basic/price_limits/sentiment）。
+
+    触发：scheduler 启动 +2min、每交易日 17:45 兜底、非交易日 10:00、worker 手动。
+    **无工作日守卫**：周末/节假日启动也要能补上一个交易日的洞（宿主周五晚上
+    挂起、周六开机是真实场景）。幂等：无缺口时零 TuShare 请求。
+    """
+    logger.info("Full reconcile job triggered")
+    await _run_reconcile(only=None)
 
 
 # ------------------------------------------------------------------
@@ -377,9 +340,9 @@ async def price_limits_daily_job() -> None:
     补漏判据在 service 内（stock_price_limits 无该日行），所以即使某天任务没跑，
     下一次也会自动追平。
 
-    注意窗口上界：daily_quotes 的每日回补拉的是「上一个工作日」
-    （见 _fetch_yesterday_daily_quotes），
-    所以本任务补到的最新交易日 = 上一个交易日，与情绪快照的 `as_of` 语义一致。
+    注意窗口上界：daily_quotes 的对账补齐以 trade_cal 期望集为准（截止昨日，
+    T-1 语义，见 reconciliation_service），所以本任务补到的最新交易日 =
+    上一个交易日，与情绪快照的 `as_of` 语义一致。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.services import market_data_service  # noqa: PLC0415

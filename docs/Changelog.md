@@ -1,3 +1,27 @@
+## 2026-09-17 - 对账式自愈数据面落地：misfire 硬化 + reconciliation_service + 新鲜度端点（Phase 1+2 全部实施并实机验收通过）
+- **L1 调度硬化**：`create_scheduler` 注入 `job_defaults={misfire_grace_time: None, coalesce: True, max_instances: 1}`（宿主挂起醒来补跑、堆积合并）；盘中五任务（SSE 快照×3/资金流轮询/公告轮询）例外 `grace=300` 防醒来堆积无意义快照。scheduler 注册 **18→21 任务**（+Startup reconcile/+Post-chain 17:45/+Weekend catch-up 10:00）
+- **L2/L3 对账收敛器**（新 `reconciliation_service.py`）：trade_cal 期望集（截止昨日 T-1 语义，不可用降级工作日启发式）× 行数阈值（≥0.8×stocks 全市场数）判完整，`missing ∪ partial` 逐日重拉（upsert 幂等解 partial 死锁）；sentiment 仅在 quotes+limits 完备日补；底座补数先 commit 再派生（get_snapshot 独立会话可见性）。16:30/16:45 job 重写为单域对账薄封装，`_fetch_yesterday_*` 与 exists-skip 语义删除；worker `market_data.fetch` 队列新增 `reconcile` 类型
+- **L4 缓存失效内聚**：`persist_snapshot` upsert 成功后 `delete_pattern("market:limit-up:calendar:*")`——任何调用方不再依赖"记得清缓存"（skipped 路径不失效）
+- **L5 可观测**：`GET /market/data-freshness` 只读巡检（apply=False 复用对账判据），每域报 latest/missing/partial/status
+- **L6 已拍板划掉**：后续部署服务器，开发机不做宿主改造
+- **实机验收（superpowers 全流程 TDD）**：删 9/15 四域数据 → scheduler 重启 +2min 启动对账**自动补回**（quotes/basic 5546、limits 5560 行）；**首跑还发现了无人知晓的历史盲区**——情绪表 9/03-9/11 七天从未落库，一并补齐，日历趋势线 1→10 点且缓存经失效路径自动更新（无手动 DEL）；freshness 端点四域全 ok。测试 268 passed（新增 24 个：配置/对账/失效/端点/触发），ruff check+format ✓、mypy ✓
+- 涉及模块：backend/app/scheduler/{runner,jobs}.py, backend/app/services/{reconciliation_service 新增,limit_up_service}.py, backend/app/schemas/{task,reconciliation 新增}.py, backend/app/api/v1/market_data.py, backend/app/workers/market_data_worker.py, backend/tests/×5 新增, plans/2026-09-17-data-sync-self-healing.md, docs/{Changelog,references/best-practices}.md
+
+## 2026-09-17 - 数据定时同步根治方案设计：对账式自愈数据面（计划入库，未实施）
+- **动机**：三次同构事故（9/10-9/14 partial 死锁、9/15-9/16 宿主挂起任务全丢）+ 一次缓存固化，共同模式是**正确性寄托在"调度触发"这个最脆弱环节**——开发机宿主睡眠是常态，方案必须让完整性由对账层保证
+- **方案**（plans/2026-09-17-data-sync-self-healing.md，L1-L6 分层）：L1 `job_defaults={misfire_grace_time: None, coalesce: True}` 硬化（盘中四任务例外 300s）；L2 新增 `reconciliation_service.reconcile_market_data` 对账收敛器（trade_cal 期望集 × 行数阈值判据，触发三处冗余：启动+2min / 17:45 cron / worker 手动）；L3 删"只补 T-1+exists-skip"改窗口补漏（结构性解 partial 死锁）；L4 calendar 缓存失效内聚进 `persist_snapshot`；L5 `/market/data-freshness` 只读巡检端点；L6 宿主环境（关 Resource Saver）降级为非依赖项
+- **关键设计决策**：完整性以**行数量级**（≥0.8×stocks 活跃数）而非存在性判定；派生表写入与读缓存失效同一服务方法内完成；数据时点维持 T-1 语义（当日拉取另立任务）
+- **状态**：设计已定稿待评审，Phase 1（硬化+缓存失效）→ Phase 2（对账器+语义重写）→ Phase 3（扩域+UI 角标）分期实施，尚未动代码
+- 涉及模块：plans/2026-09-17-data-sync-self-healing.md（新增）, docs/Changelog.md, docs/references/best-practices.md
+
+## 2026-09-17 - 手动补齐 9/15、9/16 行情与情绪数据 + 清除日历缓存固化（数据运维，无代码改动）
+- **现象与根因**：情绪页 `as_of` 停在 9/14——9/16 16:21 主栈启动后宿主**再次挂起**（"Up 4 minutes" + scheduler 日志停在启动行后零输出），9/16 的 16:30/16:50/17:15 盘后任务链又一次没跑，叠加 9/15 缺口，两个交易日全靠手动补；Changelog 9/16 条「今晚任务链自动补齐」的预期落空，验证了 grace/coalesce 未落地前宿主挂起必复现
+- **手动补数（worker 容器内按依赖链执行）**：`ingest_daily_quotes`+`ingest_daily_basic`（9/15、9/16 各 upsert 5546 行）→ `ingest_stock_price_limits`（按 daily_quotes 缺失日自动补漏，两日共 11120 行）→ `persist_snapshot(as_of=…)` 逐日落库（9/15：涨停 32/跌停 34/最高 5 板；9/16：涨停 91/跌停 4/最高 6 板）
+- **新发现缓存固化坑**：`get_calendar` 的 Redis 键 `market:limit-up:calendar:{days}` 把"只有 9/14"的旧结果集固化（非空即缓存），补数后日历端点仍只返回 1 点——`DEL market:limit-up:calendar:*` 后恢复 3 点，趋势线与环比随之可用；沉淀进 best-practices（补数验证必须 DB + API 两端核对）
+- **顺手修复**：best-practices.md 三条条目残留历史编辑混入的行号前缀脏数据（`108\t-`/`109\t-`/`110\t-`），已清理
+- **遗留**：待办 A（misfire_grace_time/coalesce + 补漏窗口）与 C（关 Docker Desktop Resource Saver）仍未落地，宿主挂起即复现，9/17 盘后任务能否自动跑取决于宿主是否活跃
+- 涉及模块：数据运维（补数/清缓存）, docs/Changelog.md, docs/references/best-practices.md
+
 ## 2026-09-16 - 部署源切换到 main：docker 卷名锚定 + 清理 9/15 partial 脏数据
 - **部署切换（用户拍板：只保留 main 分支 docker 栈，验证一律 kill 旧服务后重新部署）**：`stock_bot_wt_p7` 旧栈 down（保留卷）→ 主 worktree `docker compose up -d --build`（main 代码）。新 scheduler 注册 **18 个任务，含旧栈缺失的 `Price limits daily`（16:50）与 `Market sentiment daily`（17:15）**；前端为含短线情绪/申万榜重设计的 dist
 - **卷名锚定（防空库）**：运行数据在 `stock_bot_wt_p7_*` 四个卷里，而主 worktree 默认 project=`stock_bot` 会新建空卷——docker-compose.yml volumes 段显式 `name:` 锚定既有四卷（postgres/auth/redis/rabbitmq），数据零丢失；注释写明原因
