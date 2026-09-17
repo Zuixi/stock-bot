@@ -221,13 +221,14 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
 
-    # Intraday sentiment snapshot: Mon-Fri 9-14 every 5 min (cron already excludes
-    # 周末 + 收盘后；task 体内不另加 ``_is_workday()``/``_in_trading_hours()`` 守卫
-    # ——``job_defaults`` 的 ``coalesce=True`` + ``misfire_grace_time=None`` 兜住
-    # 宿主挂起的合并补跑；``INTRADAY_GRACE_SEC`` 把"睡太久追一堆过期点"卡在 5min。
+    # Intraday sentiment snapshot: Mon-Fri 9:00-15:55 every 5 min —— cron 圈住
+    # "含 15:00 收盘 tick 的盘中窗口"（hour=9-15），盘前 09:00-09:25 与 15:05 后
+    # 的 tick 由 task 体内 ``_is_workday()``/``_in_trading_hours()`` 早返回拦掉
+    # （与 sector_moneyflow_job 同款）；``INTRADAY_GRACE_SEC`` 把"宿主睡太久追一堆
+    # 过期点"卡在 5min（``job_defaults`` 的 ``coalesce=True`` 负责合并堆积）。
     scheduler.add_job(
         intraday_sentiment_poll_job,
-        CronTrigger(day_of_week="mon-fri", hour="9-14", minute="*/5", timezone="Asia/Shanghai"),
+        CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5", timezone="Asia/Shanghai"),
         id="intraday_sentiment_poll",
         name="Intraday sentiment snapshot",
         misfire_grace_time=INTRADAY_GRACE_SEC,

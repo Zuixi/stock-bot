@@ -413,7 +413,11 @@ async def sentiment_daily_job() -> None:
 
 
 async def intraday_sentiment_poll_job() -> None:
-    """盘中分时点入库（交易日 9:00-14:55 每 5 分钟，cron 表达式已排除周末与非交易时段）。
+    """盘中分时点入库（交易日 9:25-15:05 每 5 分钟，job 内交易时段守卫）。
+
+    cron 只圈住 ``mon-fri 9-15``（含 15:00 收盘 tick），非交易时段/非工作日由
+    ``_is_workday``/``_in_trading_hours`` 早返回拦掉——与 ``sector_moneyflow_job``
+    同款守卫：09:00-09:25 的盘前 tick 与 15:05 后的 tick 不落到网络调用。
 
     盘中"今日"语义固定为上海时区当前日期。东财涨停池抓取/DB 写入失败时整段静默
     （``logger.exception`` + 登记 ``job:failures``），由下一次 5min 轮询自愈——任务
@@ -423,6 +427,13 @@ async def intraday_sentiment_poll_job() -> None:
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.repositories import market_data_repo  # noqa: PLC0415
     from app.services import intraday_sentiment_service  # noqa: PLC0415
+
+    if not _is_workday():
+        logger.debug("intraday_sentiment_poll skipped: not a workday")
+        return
+    if not _in_trading_hours():
+        logger.debug("intraday_sentiment_poll skipped: outside trading hours")
+        return
 
     now_sh = datetime.now(_SH_TZ)
     today = now_sh.date()
