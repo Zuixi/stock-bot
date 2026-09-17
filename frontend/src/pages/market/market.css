@@ -30,3 +30,17 @@
 .market-page .ant-card {
   border-radius: 8px;
 }
+
+/* 情绪 Tab 的盘中/收盘口径切换（Task 13）：控件与提示同一行，窄屏换行 */
+.sentiment-mode-switch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.sentiment-mode-switch__hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
