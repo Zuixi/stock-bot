@@ -247,15 +247,24 @@ async def _fetch_indices_from_tushare() -> list[dict[str, Any]]:
 # :func:`market_snapshot_service.load_day_rows` call (plus that module's 300s Redis
 # entry) and do the bucketing/grouping in Python over the same rows.
 #
-# The win is **page-level**, and it is modest (Task 7 measured, day 2026-09-16):
-# a page rendering all five costs 217ms → 189ms cold (median of 5) and 1.4ms → 1.4ms
-# warm (the endpoint result caches already covered the warm path), while the
-# Postgres statements behind it drop from 5 + 1 to 1 + 1. No single-query speedup is
-# claimed — each endpoint measured *in isolation* is slower than before (its own
-# ~46ms statement became a ~75ms full-market load or a ~14ms 1.2MB cache parse), so
-# the work moved from Postgres to the API process rather than disappearing. The
-# loader alone is slower than any one of the retired statements because it returns
-# all ~5,485 rows (see the loader's module docstring).
+# The win is **page-level**, and it is modest (Task 7 measured, day 2026-09-16, n=5
+# page medians): a page rendering all five costs 217ms → 165ms cold and 1.4ms → 1.4ms
+# warm (the endpoint result caches already covered the warm path), while the Postgres
+# statements behind it drop from 30 (pre-rewrite) / 27 (319fa90, whose four endpoint
+# resolvers were still called bare) to **7**: one 5-statement completeness probe, one
+# full-market row load, one SW rollup.
+#
+# No single-query speedup is claimed: measured in isolation, every endpoint was
+# already slower than its retired statement (pre-rewrite endpoint cold times were
+# distribution 198ms, sectors 64ms, capital-flow 47ms, hot-boards 52ms; the shared
+# loader alone is 76ms of SQL or a 15ms 1.2MB Redis parse). The work moved from
+# Postgres to the API process rather than disappearing — the loader runs heavier than
+# any one retired statement because it returns all ~5,485 rows (see the loader's
+# module docstring).
+#
+# All four resolvers below are called ``cache=cache``. A bare call re-runs the
+# 5-statement completeness probe and re-reads ``market:day:latest_complete`` once per
+# endpoint, which is what made the page issue ~27 statements instead of 7.
 # ---------------------------------------------------------------------------
 
 #: Distribution buckets in display order. Boundaries mirror the retired SQL CASE
@@ -329,7 +338,7 @@ async def get_distribution(cache: CacheClient | None = None) -> dict[str, Any]:
             return cast(dict[str, Any], cached)
 
     async with async_session_factory() as db:
-        md = await market_day_service.resolve_latest_complete_day(db)
+        md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
         rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
 
     # No resolved day → ``items: []`` (an unresolved day must not render as eleven
@@ -376,7 +385,7 @@ async def get_sectors(cache: CacheClient | None = None) -> dict[str, Any]:
             return cast(dict[str, Any], cached)
 
     async with async_session_factory() as db:
-        md = await market_day_service.resolve_latest_complete_day(db)
+        md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
         rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
 
     payload = _envelope(md, _sector_items(rows))
@@ -429,18 +438,13 @@ async def get_capital_flow(cache: CacheClient | None = None) -> dict[str, Any]:
             return cast(dict[str, Any], cached)
 
     async with async_session_factory() as db:
-        md = await market_day_service.resolve_latest_complete_day(db)
+        md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
         rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
 
     payload = _envelope(md, _capital_flow_items(rows))
     if cache and md is not None:
         await cache.set(cache_key, payload, _MARKET_CACHE_TTL)
     return payload
-
-
-def _hot_board_key(category: HotBoardCategory) -> str:
-    """Row key a board category groups by (``concept`` never reaches this)."""
-    return "csrc_desc" if category == "industry" else "province"
 
 
 def _hot_board_items(
@@ -453,7 +457,7 @@ def _hot_board_items(
     :func:`summarize_group`, so ``up + flat + down == total`` holds — the retired SQL
     could leave suspended/no-quote rows out of all three counts.
     """
-    key = _hot_board_key(category)
+    key = "csrc_desc" if category == "industry" else "province"  # concept never gets here
     items: list[dict[str, Any]] = []
     for name, group in group_by(rows, key).items():
         stats = summarize_group(group)
@@ -492,7 +496,7 @@ async def get_hot_boards(
             return cast(dict[str, Any], cached)
 
     async with async_session_factory() as db:
-        md = await market_day_service.resolve_latest_complete_day(db)
+        md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
         rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
 
     payload = _envelope(md, _hot_board_items(rows, category))
