@@ -10,10 +10,11 @@ import logging
 import math
 import sys
 from datetime import date, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories import index_repo, market_data_repo
@@ -144,6 +145,18 @@ GLOBAL_INDICES: list[dict[str, str]] = [
 
 def _today_sh() -> date:
     return datetime.now(_SH).date()
+
+
+async def _latest_snapshot_day(db: AsyncSession, model_day_col: Any) -> date | None:
+    """某快照表最近有数据的日期（表空/列脏 → ``None``，不抛）。
+
+    读路径的"最近可用日"必须来自数据本身（该表实际持有的最大 ``trade_date``），
+    不能拿"今天"去查：盘中轮询表（sector_moneyflow_snapshots / northbound_daily /
+    market_moneyflow_daily）滞后时，用今天查会返回空数组，端点只能显示"暂无数据"。
+    后续任务复用此 seam（`_latest_snapshot_day(db, Model.trade_date)`）。
+    """
+    value = (await db.execute(select(func.max(model_day_col)))).scalar()
+    return value if isinstance(value, date) else None
 
 
 def _f(v: Any) -> float | None:
@@ -328,7 +341,7 @@ async def get_global_index_cards(cache: CacheClient | None = None) -> list[dict[
     return cards
 
 
-SECTOR_MONEYFLOW_CACHE_KEY = "market:sector-moneyflow:{dimension}"
+SECTOR_MONEYFLOW_CACHE_KEY = "market:sector-moneyflow:{dimension}:{as_of}"
 SECTOR_MONEYFLOW_TTL = 60
 SECTOR_MONEYFLOW_CACHE_LIMIT = 100  # 端点 limit 上限（le=100）：缓存全量再按请求切片
 
@@ -347,46 +360,67 @@ async def ingest_sector_moneyflow(db: AsyncSession) -> dict[str, int]:
     return result
 
 
+def _map_sector_moneyflow_row(snap: Any) -> dict[str, Any]:
+    """快照行 → 响应 dict（领涨股三列取 getattr：旧行/测试替身可能缺列）。"""
+    return {
+        "board_code": snap.board_code,
+        "board_name": snap.board_name,
+        "pct_change": snap.pct_change,
+        "main_net_inflow": snap.main_net_inflow,
+        "super_large_net": snap.super_large_net,
+        "large_net": snap.large_net,
+        "main_net_ratio": snap.main_net_ratio,
+        "up_count": snap.up_count,
+        "down_count": snap.down_count,
+        "lead_stock_name": getattr(snap, "lead_stock_name", None),
+        "lead_stock_code": getattr(snap, "lead_stock_code", None),
+        "lead_stock_pct": getattr(snap, "lead_stock_pct", None),
+    }
+
+
 async def get_sector_moneyflow(
     cache: CacheClient | None, dimension: str = "industry", limit: int = 15
-) -> list[dict[str, Any]]:
-    """当日板块主力资金流榜（Redis 60s 共享缓存；缓存 limit 上限行，按请求切片）。"""
-    key = SECTOR_MONEYFLOW_CACHE_KEY.format(dimension=dimension)
-    if cache is not None:
-        cached = await cache.get(key)
-        if cached:
-            rows_cached: list[dict[str, Any]] = cached
-            return rows_cached[:limit]
+) -> dict[str, Any]:
+    """最近可用日的板块主力资金流榜 + 陈旧度（Redis 60s 共享缓存，键含该快照日）。
 
+    ``as_of`` 取 ``sector_moneyflow_snapshots`` 实际持有的最近 ``trade_date``，而不是
+    "今天"：东财源随时能返回 100 行，但落表只在盘中轮询时发生，用今天查会在该表滞后
+    时返回空数组、前端只能显示"暂无数据"。``stale_days`` 是**自然日**差
+    ``(_today_sh() - as_of).days``——语义是"这批数据有多旧"，不是交易日计数。
+    表内一行都没有 → ``{"as_of": None, "stale_days": None, "items": []}``（不抛）。
+    """
     from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.models.market_data import SectorMoneyflowSnapshot  # noqa: PLC0415
 
-    rows: list[dict[str, Any]] = []
     async with async_session_factory() as db:
-        for snap in await market_data_repo.list_sector_moneyflow(
-            db, _today_sh(), dimension, SECTOR_MONEYFLOW_CACHE_LIMIT
-        ):
-            rows.append(
-                {
-                    "board_code": snap.board_code,
-                    "board_name": snap.board_name,
-                    "pct_change": snap.pct_change,
-                    "main_net_inflow": snap.main_net_inflow,
-                    "super_large_net": snap.super_large_net,
-                    "large_net": snap.large_net,
-                    "main_net_ratio": snap.main_net_ratio,
-                    "up_count": snap.up_count,
-                    "down_count": snap.down_count,
-                    "lead_stock_name": snap.lead_stock_name,
-                    "lead_stock_code": snap.lead_stock_code,
-                    "lead_stock_pct": snap.lead_stock_pct,
-                }
-            )
-    if cache is not None and rows:
-        await cache.set(key, rows, ttl=SECTOR_MONEYFLOW_TTL)
-    return rows[:limit]
+        as_of = await _latest_snapshot_day(db, SectorMoneyflowSnapshot.trade_date)
+        key = SECTOR_MONEYFLOW_CACHE_KEY.format(
+            dimension=dimension, as_of=as_of.isoformat() if as_of is not None else "none"
+        )
+        if cache is not None:
+            cached = await cache.get(key)
+            if cached:
+                return {**cached, "items": cached["items"][:limit]}
+
+        items: list[dict[str, Any]] = []
+        if as_of is not None:
+            for snap in await market_data_repo.list_sector_moneyflow(
+                db, as_of, dimension, SECTOR_MONEYFLOW_CACHE_LIMIT
+            ):
+                items.append(_map_sector_moneyflow_row(snap))
+
+    stale_days = (_today_sh() - as_of).days if as_of is not None else None
+    payload: dict[str, Any] = {
+        "as_of": as_of.isoformat() if as_of is not None else None,
+        "stale_days": stale_days,
+        "items": items,
+    }
+    if cache is not None and items:
+        await cache.set(key, payload, ttl=SECTOR_MONEYFLOW_TTL)
+    return {**payload, "items": items[:limit]}
 
 
-MARKET_MONEYFLOW_CACHE_KEY = "market:market-moneyflow"
+MARKET_MONEYFLOW_CACHE_KEY = "market:market-moneyflow:{history_as_of}"
 MARKET_MONEYFLOW_TTL = 60
 
 
@@ -400,9 +434,23 @@ async def ingest_market_moneyflow_daily(db: AsyncSession, days: int = 10) -> dic
 
 
 async def get_market_moneyflow(cache: Any | None) -> dict[str, Any]:
-    """大盘资金流：今日四档实时（ulist 合计，不落表）+ 近 30 日历史（表内）。"""
+    """大盘资金流：今日四档实时（ulist 合计，不落表）+ 近 30 日历史（表内）。
+
+    ``history_as_of`` / ``history_stale_days``（自然日差）单独标注 30 日历史段的
+    最近日：实时档位来自东财 ulist，与历史表是两条来源，卡片必须能分别说明历史是
+    否陈旧（``market_moneyflow_daily`` 的 job 曾未注册，实测滞后 14 天）。历史表
+    为空 → 两者均 ``None``。缓存键含 ``history_as_of``，翻日后不会回放旧 payload。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.models.market_data import MarketMoneyflowDaily  # noqa: PLC0415
+
+    async with async_session_factory() as db:
+        history_as_of = await _latest_snapshot_day(db, MarketMoneyflowDaily.trade_date)
+    key = MARKET_MONEYFLOW_CACHE_KEY.format(
+        history_as_of=history_as_of.isoformat() if history_as_of is not None else "none"
+    )
     if cache is not None:
-        cached: dict[str, Any] | None = await cache.get(MARKET_MONEYFLOW_CACHE_KEY)
+        cached: dict[str, Any] | None = await cache.get(key)
         if cached:
             return cached
     try:
@@ -411,27 +459,33 @@ async def get_market_moneyflow(cache: Any | None) -> dict[str, Any]:
         logger.warning("market moneyflow today fetch failed", exc_info=True)
         today = None
     history: list[dict[str, Any]] = []
-    from app.core.database import async_session_factory  # noqa: PLC0415
-
-    async with async_session_factory() as db:
-        for row in await market_data_repo.list_market_moneyflow_daily(db, 30):
-            history.append(
-                {
-                    "date": row.trade_date.isoformat(),
-                    "main_net": row.main_net,
-                    "super_large_net": row.super_large_net,
-                    "large_net": row.large_net,
-                    "mid_net": row.mid_net,
-                    "small_net": row.small_net,
-                    "main_ratio": row.main_ratio,
-                    "close": row.close,
-                    "pct_change": row.pct_change,
-                    "amount": row.amount,
-                }
-            )
-    payload = {"today": today, "history": history}
+    if history_as_of is not None:  # 表空（history_as_of=None）时历史必然为空，不查
+        async with async_session_factory() as db:
+            for row in await market_data_repo.list_market_moneyflow_daily(db, 30):
+                history.append(
+                    {
+                        "date": row.trade_date.isoformat(),
+                        "main_net": row.main_net,
+                        "super_large_net": row.super_large_net,
+                        "large_net": row.large_net,
+                        "mid_net": row.mid_net,
+                        "small_net": row.small_net,
+                        "main_ratio": row.main_ratio,
+                        "close": row.close,
+                        "pct_change": row.pct_change,
+                        "amount": row.amount,
+                    }
+                )
+    payload = {
+        "today": today,
+        "history": history,
+        "history_as_of": history_as_of.isoformat() if history_as_of is not None else None,
+        "history_stale_days": (
+            (_today_sh() - history_as_of).days if history_as_of is not None else None
+        ),
+    }
     if cache is not None and (history or today):
-        await cache.set(MARKET_MONEYFLOW_CACHE_KEY, payload, ttl=MARKET_MONEYFLOW_TTL)
+        await cache.set(key, payload, ttl=MARKET_MONEYFLOW_TTL)
     return payload
 
 
@@ -520,28 +574,53 @@ async def ingest_northbound(db: AsyncSession, days: int = 30) -> dict[str, int]:
     return {"upserted": upserted}
 
 
-NORTHBOUND_CACHE_KEY = "market:northbound:{days}"
+NORTHBOUND_CACHE_KEY = "market:northbound:{days}:{as_of}"
 NORTHBOUND_TTL = 300
+NORTHBOUND_DISCONTINUED_AFTER_DAYS = 5
 
 
-async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> list[dict[str, Any]]:
-    """北向净流入日序列（升序，Redis 300s 共享缓存）。"""
-    key = NORTHBOUND_CACHE_KEY.format(days=days)
-    if cache is not None:
-        cached = await cache.get(key)
-        if cached:
-            rows_cached: list[dict[str, Any]] = cached
-            return rows_cached
+async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> dict[str, Any]:
+    """北向净流入日序列（升序）+ 数据源状态（Redis 300s 共享缓存，键含最近日）。
 
+    ``source_status``：``stale_days <= 5`` → ``"live"``，否则 ``"discontinued"``
+    （``stale_days`` 为自然日差 ``_today_sh() - as_of``）。上游 TuShare
+    ``moneyflow_hsgt`` 已停更（实测 30 天窗口最新只到 2026-08-21，表内最近日
+    2026-09-07），卡片必须能说"该源已停更"而不是画一条不带截止标注的线。表空 →
+    ``as_of=None``、``stale_days=None``、``source_status="discontinued"``（拿不到任何
+    数据就谈不上 live）。
+    """
     from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.models.market_data import NorthboundDaily  # noqa: PLC0415
 
-    rows: list[dict[str, Any]] = []
     async with async_session_factory() as db:
-        for n in await market_data_repo.list_northbound(db, days):
-            rows.append({"date": n.trade_date.isoformat(), "net_amount": n.net_amount})
-    if cache is not None and rows:
-        await cache.set(key, rows, ttl=NORTHBOUND_TTL)
-    return rows
+        as_of = await _latest_snapshot_day(db, NorthboundDaily.trade_date)
+        key = NORTHBOUND_CACHE_KEY.format(
+            days=days, as_of=as_of.isoformat() if as_of is not None else "none"
+        )
+        if cache is not None:
+            cached: Any = await cache.get(key)
+            if cached:
+                return cast("dict[str, Any]", cached)
+
+        items: list[dict[str, Any]] = []
+        if as_of is not None:  # 表空（as_of=None）时明细必然为空，不查
+            for n in await market_data_repo.list_northbound(db, days):
+                items.append({"date": n.trade_date.isoformat(), "net_amount": n.net_amount})
+
+    stale_days = (_today_sh() - as_of).days if as_of is not None else None
+    payload: dict[str, Any] = {
+        "as_of": as_of.isoformat() if as_of is not None else None,
+        "stale_days": stale_days,
+        "source_status": (
+            "live"
+            if stale_days is not None and stale_days <= NORTHBOUND_DISCONTINUED_AFTER_DAYS
+            else "discontinued"
+        ),
+        "items": items,
+    }
+    if cache is not None and items:
+        await cache.set(key, payload, ttl=NORTHBOUND_TTL)
+    return payload
 
 
 def _map_share_float_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
