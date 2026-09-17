@@ -38,6 +38,30 @@ def _row(**overrides: Any) -> dict[str, Any]:
     return row
 
 
+def _db_row(**overrides: Any) -> dict[str, Any]:
+    """One row as the DB returns it: the numeric columns are ``Decimal``."""
+    row = _row(
+        close=Decimal("9.1000"),
+        pct_chg=Decimal("-0.8715"),
+        amount=Decimal("656348.14"),
+        total_mv=Decimal("30308312.85"),
+        circ_mv=Decimal("30308312.85"),
+        turnover_rate=Decimal("0.2172"),
+    )
+    row.update(overrides)
+    return row
+
+
+class _FakeResult:
+    """Minimal stand-in for SQLAlchemy's ``Result`` (only ``.mappings()`` is used)."""
+
+    def __init__(self, mappings: list[dict[str, Any]]) -> None:
+        self._mappings = mappings
+
+    def mappings(self) -> list[dict[str, Any]]:
+        return self._mappings
+
+
 class _FakeCache:
     """Redis 的 JSON 边界替身：写入必须能 ``json.dumps``，读出必是反序列化结果。
 
@@ -145,7 +169,7 @@ def test_summarize_group_all_five_fields_with_none_counted_as_flat() -> None:
     assert out["down_count"] == 1
     # (3.0 + 0.0 + (-1.5)) / 3 = 0.5 — the None must NOT drag it to 0.375
     assert out["avg_chg"] == pytest.approx(0.5)
-    # the counts partition the group (old SQL's ELSE 0 fallback semantics)
+    # the counts partition the group (new convention: NULL counts as flat)
     assert out["up_count"] + out["flat_count"] + out["down_count"] == out["total"]
 
 
@@ -160,7 +184,7 @@ def test_summarize_group_empty_input_is_all_zero() -> None:
 
 
 def test_summarize_group_all_null_pct_chg_has_zero_mean() -> None:
-    """No non-null pct_chg → 0.0 (old SQL AVG(...) → NULL → ``or 0``)."""
+    """No non-null pct_chg → 0.0 mean, all flat."""
     out = mss.summarize_group([_row(pct_chg=None), _row(pct_chg=None)])
     assert out == {
         "total": 2,
@@ -203,6 +227,32 @@ async def test_cache_hit_short_circuits_the_db(monkeypatch: pytest.MonkeyPatch) 
     assert cache.sets == []  # hits do not rewrite the entry
 
 
+async def test_cache_hit_preserves_payload_row_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hits return the cached rows verbatim; the writer stored them stock_id-ordered.
+
+    Two-plus out-of-order rows are used so a hidden ``sorted()``/``dict`` regroup
+    on the hit path would show up, and ``None`` string fields prove the
+    ``str | None`` type check is not over-strict.
+    """
+    fetch = AsyncMock(return_value=[_row(stock_id=1)])
+    monkeypatch.setattr(mss, "_fetch_rows", fetch)
+    payload = [
+        _row(stock_id=9, name=None),
+        _row(stock_id=3),
+        _row(stock_id=5, csrc_desc=None),
+    ]
+    cache = _FakeCache(payload=payload)
+
+    rows = await mss.load_day_rows(AsyncMock(), D16, cache=cache)
+
+    assert rows == payload  # verbatim order
+    assert [r["stock_id"] for r in rows] == [9, 3, 5]
+    assert rows[0]["name"] is None
+    assert rows[2]["csrc_desc"] is None
+    fetch.assert_not_awaited()
+    assert cache.sets == []
+
+
 async def test_cache_miss_writes_payload_with_key_and_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
     fetch = AsyncMock(return_value=[_row(stock_id=1), _row(stock_id=2, symbol="600004")])
     monkeypatch.setattr(mss, "_fetch_rows", fetch)
@@ -216,6 +266,53 @@ async def test_cache_miss_writes_payload_with_key_and_ttl(monkeypatch: pytest.Mo
     assert cache.sets == [
         (DAY_KEY, [_row(stock_id=1), _row(stock_id=2, symbol="600004")], mss.SNAPSHOT_TTL)
     ]
+
+
+async def test_cold_path_normalizes_decimal_db_rows_to_json_safe_floats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cold path normalizes raw DB ``Decimal`` mappings exactly once.
+
+    ``db.execute`` (not the ``_fetch_rows`` seam) is faked, so this drives the
+    real fetch→normalize→cache-write path. ``_FakeCache.set`` runs a strict
+    ``json.dumps`` (no ``default=``), so a leaked ``Decimal`` would raise here.
+    """
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_FakeResult([_db_row()]))
+    cache = _FakeCache()
+
+    rows = await mss.load_day_rows(db, D16, cache=cache)
+
+    assert rows == [_row()]
+    assert all(isinstance(rows[0][key], float) for key in mss._FLOAT_KEYS)
+    assert cache.sets == [(DAY_KEY, [_row()], mss.SNAPSHOT_TTL)]
+
+
+async def test_cold_path_normalizes_each_row_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One miss must touch ``_normalize_row`` once per row (fetch + cache write share it).
+
+    Before the fix ``_fetch_rows`` normalized and ``_to_payload`` normalized again:
+    two rows cost four calls (~6.5ms/5485 rows of redundant work) on every miss.
+    """
+    real = mss._normalize_row
+    calls = 0
+
+    def counting(row: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return real(row)
+
+    monkeypatch.setattr(mss, "_normalize_row", counting)
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_FakeResult([_db_row(), _db_row(stock_id=2)]))
+    cache = _FakeCache()
+
+    rows = await mss.load_day_rows(db, D16, cache=cache)
+
+    assert [r["stock_id"] for r in rows] == [1, 2]
+    assert calls == 2  # not 4
 
 
 async def test_load_day_rows_without_cache_still_fetches(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -249,6 +346,8 @@ async def test_empty_day_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
         [{"stock_id": 1}],  # missing keys
         [{**_row(), "stock_id": "not-a-number"}],  # uncoercible id
         [{**_row(), "close": "9.1"}],  # numeric field shipped as a string
+        [{**_row(), "csrc_desc": {"a": 1}}],  # string field shipped as a dict
+        [{**_row(), "province": 123}],  # string field shipped as an int
         [_row(), ["not", "a", "dict"]],
     ],
 )
@@ -266,11 +365,38 @@ async def test_malformed_cache_payload_falls_back_to_db(
     fetch.assert_awaited_once()
 
 
-async def test_empty_list_payload_is_a_valid_hit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``[]`` is a well-formed payload: "malformed" is about shape, not emptiness."""
-    fetch = AsyncMock(return_value=[_row()])
+async def test_overflowing_json_number_payload_falls_back_to_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A >308-digit JSON integer makes ``float()`` raise ``OverflowError``.
+
+    That must degrade to a cache miss like every other unusable payload — it must
+    not escape into the request path.
+    """
+    fetch = AsyncMock(return_value=[_row(stock_id=42)])
+    monkeypatch.setattr(mss, "_fetch_rows", fetch)
+    cache = _FakeCache(payload=[{**_row(), "close": 10**400}])
+
+    rows = await mss.load_day_rows(AsyncMock(), D16, cache=cache)
+
+    assert rows == [_row(stock_id=42)]
+    fetch.assert_awaited_once()
+
+
+async def test_empty_list_payload_is_treated_as_a_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``[]`` is a miss, not a hit.
+
+    This module never writes an empty list (only non-empty days are cached), and a
+    stray ``[]`` would freeze a "no data" day for the whole TTL — the exact state
+    the non-empty write rule exists to prevent.
+    """
+    fetch = AsyncMock(return_value=[_row(stock_id=42)])
     monkeypatch.setattr(mss, "_fetch_rows", fetch)
     cache = _FakeCache(payload=[])
 
-    assert await mss.load_day_rows(AsyncMock(), D16, cache=cache) == []
-    fetch.assert_not_awaited()
+    rows = await mss.load_day_rows(AsyncMock(), D16, cache=cache)
+
+    assert rows == [_row(stock_id=42)]
+    fetch.assert_awaited_once()

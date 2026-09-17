@@ -16,12 +16,22 @@ TuShare 原生值），重算纯属浪费。
 SQL 只读 ``daily_quotes.pct_chg``，**不再**对 ``daily_quotes`` 做前收 LATERAL；
 市值/换手率仍取每股最近一条 ``daily_basic_indicators``（``trade_date <= :day``，
 不看到未来）——那一个 LATERAL 保留，理由见 :func:`_snapshot_stmt`。
+
+性能口径（实测，不作「单查询提速」宣称）：
+
+- 本 loader 单次取行 **warm ~70ms / 冷会话 ~200ms**（含连接建立与首次执行开销），
+  **比旧的单端点 SQL（~46ms）慢** —— 旧形态只回 10 行聚合结果，本语句回 5485 行 × 11 列
+  （含旧形态根本没有的市值/换手率），其中约 46ms 还是 ``daily_basic`` 的逐股 LATERAL。
+- 收益在架构侧：(a) 市场平面 4~6 个端点从「各自一次 ~46ms SQL + 各自的 daily_basic 查询」
+  收敛为**共用这 1 次取行 + 1 份缓存**；(b) 缓存命中约 **15ms**（1.2MB payload 的 JSON
+  解析占大头）。故 Task 7 必须让**所有**市场平面端点都改走本 loader —— 只改部分端点会
+  让未改的端点从 ~46ms 退到 ~70ms。
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -63,20 +73,24 @@ _FLOAT_KEYS: tuple[str, ...] = (
     "turnover_rate",
 )
 
+#: 字符串列必须真是 ``str | None``：一个 dict/int 漏进来会在下游变成分组键。
+_STRING_KEYS: tuple[str, ...] = ("symbol", "name", "csrc_desc", "province")
+
 
 def _snapshot_stmt(day: date) -> Select[Any]:
     """一天的全市场取行语句：一票一行，按 ``stock_id`` 升序（下游分组可复现）。
 
     ``pct_chg`` 直接读 ``daily_quotes`` 存储列 —— 不再有 ``daily_quotes`` 上的
-    前收 LATERAL（436 万行表上每股一次历史查找；实测只读存储列的同一日取行
-    5~11ms，而旧形态带前收回看 44ms）。
+    前收 LATERAL（436 万行表上每股一次历史查找）。成本诚实说明：整个取行 warm 约
+    70ms、冷会话约 200ms（含连接与首次执行），**比旧单端点 SQL 的约 46ms 慢** ——
+    旧形态只回 10 行聚合，本语句回 5485 行 × 11 列；收益来自 4~6 个端点共用这
+    一次取行 + 一份缓存（Redis 命中约 15ms），不是单条查询提速。
 
     市值/换手率用一个 **correlated LATERAL** 取每股 ``trade_date <= :day`` 的最近
     一条 ``daily_basic_indicators``，而不是 ``DISTINCT ON`` 整表子查询：后者要在
     190 万行（且每日 +5.5k）上物化并排序，实测 1.4s；LATERAL 走
-    ``idx_daily_basic_stock_date`` 只做 5485 次索引查找，实测整个取行 69ms（中位，
-    其中约 46ms 就是这一步），是本查询当前的主要成本。
-    ``<= :day``（而非无界最新）避免把未来某天的市值提前用在这一天。
+    ``idx_daily_basic_stock_date`` 只做 5485 次索引查找（约 46ms，是本查询当前的
+    主要成本）。``<= :day``（而非无界最新）避免把未来某天的市值提前用在这一天。
     """
     day_param = bindparam("day", value=day, type_=Date)
     latest_basic = (
@@ -121,8 +135,8 @@ def _snapshot_stmt(day: date) -> Select[Any]:
 def _as_float(value: Any) -> float | None:
     """``None`` → ``None``；``Decimal``/``int``/``float`` → ``float``。
 
-    数值列在这里一次性规范化（Decimal 就是「JSON 不安全」的那个类型），于是
-    :func:`_to_payload` 写缓存无需再转换、缓存命中与查库两条路径返回同型值。
+    数值列在这里一次性规范化（Decimal 就是「JSON 不安全」的那个类型），于是冷
+    （打库）/热（缓存）两条路径返回同型值、写缓存也无需再转换。
     其他类型（含数字字符串）按 payload 损坏处理，由 :func:`_from_payload` 兜底成 miss。
     """
     if value is None:
@@ -136,22 +150,35 @@ def _normalize_row(row: Mapping[Any, Any]) -> dict[str, Any]:
     """把一行（RowMapping 或缓存 dict）规范成 :data:`ROW_KEYS` 契约。
 
     幂等：规范化过的 dict 再进一次结果不变。缺键抛 KeyError、类型不对抛
-    TypeError/ValueError —— 由 :func:`_from_payload` 转成「缓存 miss」。
+    TypeError/ValueError/OverflowError —— 由 :func:`_from_payload` 转成「缓存 miss」。
+
+    数值列走 :func:`_as_float`；字符串列要求 ``str | None``，否则同样按损坏处理
+    （一个 dict 型 ``csrc_desc`` 漏过去会在下游变成分组键）。
 
     直接按契约键索引 ``row``（``row[key]``）而不先 ``dict(row)``：RowMapping →
     dict 的整表物化在 5485 行上值 6ms（实测 12.5ms → 6.5ms），不值得。
     （``Mapping[Any, Any]`` 而非 ``Mapping[str, Any]``：SQLAlchemy 的 ``RowMapping``
     不是前者的子类型，键都是字符串但类型层面得放宽。）
+    这是全模块**唯一**的规范化点：:func:`_fetch_rows` 返回原始 DB 映射，
+    :func:`load_day_rows` 对它调用一次 :func:`_to_payload` 即同时得到返回值和缓存 payload
+    （旧写法 fetch 里规范化一遍、写缓存再规范化一遍，5485 行多花约 6.5ms）。
     """
     normalized: dict[str, Any] = {"stock_id": int(row["stock_id"])}
     for key in ROW_KEYS[1:]:
         value = row[key]
-        normalized[key] = _as_float(value) if key in _FLOAT_KEYS else value
+        if key in _FLOAT_KEYS:
+            normalized[key] = _as_float(value)
+        elif key in _STRING_KEYS:
+            if value is not None and not isinstance(value, str):
+                raise TypeError(f"snapshot field {key!r} is not a string: {type(value).__name__}")
+            normalized[key] = value
+        else:  # pragma: no cover — ROW_KEYS 全覆盖，防止新增键时静默漏掉类型校验
+            raise TypeError(f"snapshot field {key!r} has no declared type")
     return normalized
 
 
-def _to_payload(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """规范化成 JSON 安全 payload（键白名单 + Decimal → float）。"""
+def _to_payload(rows: Iterable[Mapping[Any, Any]]) -> list[dict[str, Any]]:
+    """规范化成 JSON 安全 payload（键白名单 + Decimal → float），全模块唯一转换点。"""
     return [_normalize_row(row) for row in rows]
 
 
@@ -159,23 +186,32 @@ def _from_payload(payload: Any) -> list[dict[str, Any]] | None:
     """从缓存 payload 重建行列表；不可用（形状/类型损坏）时返回 ``None`` = miss。
 
     ``CacheClient`` 走 JSON，日期/Decimal 回来都是别的类型；这里不做猜测，
-    只接受本模块自己写出的形状（``list[dict]`` + ROW_KEYS 齐全 + 数值可转 float）。
-    损坏 payload 记 warning 并按 miss 处理，绝不把半截数据喂给下游。
+    只接受本模块自己写出的形状（**非空** ``list[dict]`` + ROW_KEYS 齐全 +
+    数值可转 float + 字符串列为 ``str | None``）。损坏 payload 记 warning 并按
+    miss 处理，绝不把半截数据喂给下游。
+
+    ``[]`` 也算 miss：本模块从不写空列表（只有非空的一天才写缓存），而一个游离的
+    ``[]`` 会把「无数据」状态冻满 300s —— 正是「空日不写缓存」想避免的状态。
+    ``OverflowError`` 一并兜住：JSON 整数可以有 >308 位，``float()`` 会当场溢出。
     """
-    if isinstance(payload, list):
+    if isinstance(payload, list) and payload:
         try:
             return [_normalize_row(item) for item in payload]
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
             pass
     # 只记前 200 字符：合法 payload 是 1.2MB 级，坏 payload 也可能是（别把日志打爆）。
     logger.warning("load_day_rows: unusable cache payload %s", repr(payload)[:200])
     return None
 
 
-async def _fetch_rows(db: AsyncSession, day: date) -> list[dict[str, Any]]:
-    """取行 SQL seam（单测 monkeypatch 本函数即不碰库）。"""
+async def _fetch_rows(db: AsyncSession, day: date) -> list[Mapping[Any, Any]]:
+    """取行 SQL seam（单测 monkeypatch 本函数即不碰库）。
+
+    返回**原始** DB 映射（数值是 ``Decimal``）：规范化只由 :func:`load_day_rows`
+    统一做一次，seam 语义即「把库里的行原样交出来」。
+    """
     result = await db.execute(_snapshot_stmt(day))
-    return [_normalize_row(row) for row in result.mappings()]
+    return list(result.mappings())
 
 
 async def load_day_rows(
@@ -189,6 +225,9 @@ async def load_day_rows(
     ``cache`` 是 duck-typed 客户端（``async get`` / ``async set(key, value, ttl=…)``），
     可为 ``None``（不打缓存）。只有取到非空行才写缓存：空日不写，免得把一次瞬时
     空结果冻 5 分钟（日级判据本身要求行数与 pct_chg 覆盖率达标，空日不该被消费）。
+
+    冷路径只规范化一次：``_fetch_rows`` 交回原始映射，这里一个 :func:`_to_payload`
+    同时产出返回值与缓存 payload。
     """
     cache_key = SNAPSHOT_CACHE_KEY.format(day=day.isoformat())
     if cache is not None:
@@ -197,10 +236,10 @@ async def load_day_rows(
             rows = _from_payload(cached)
             if rows is not None:
                 return rows
-    rows = await _fetch_rows(db, day)
-    if cache is not None and rows:
-        await cache.set(cache_key, _to_payload(rows), SNAPSHOT_TTL)
-    return rows
+    payload = _to_payload(await _fetch_rows(db, day))
+    if cache is not None and payload:
+        await cache.set(cache_key, payload, SNAPSHOT_TTL)
+    return payload
 
 
 def group_by(rows: list[dict[str, Any]], key: str) -> dict[str, list[dict[str, Any]]]:
@@ -221,12 +260,21 @@ def group_by(rows: list[dict[str, Any]], key: str) -> dict[str, list[dict[str, A
 def summarize_group(items: list[dict[str, Any]]) -> dict[str, Any]:
     """组内涨跌统计：``total`` / ``up_count`` / ``flat_count`` / ``down_count`` / ``avg_chg``。
 
-    口径（与旧 SQL ``SUM(CASE WHEN pct_chg > 0 …)`` 一致）：
+    口径（**有意与旧 SQL ``_hot_board_rows`` 不同**，控制器已批准）：
     ``up_count`` = ``pct_chg > 0``，``down_count`` = ``pct_chg < 0``，
-    ``flat_count`` 含 ``pct_chg == 0`` **与 ``pct_chg is None``**（缺失按平盘计，
-    与旧 SQL 的 ``ELSE 0`` 兜底同语义；因此 ``up+flat+down == total``）。
-    ``avg_chg`` 是非空 ``pct_chg`` 的算术平均，没有非空值时 ``0.0``
-    （与旧 SQL ``AVG(...)`` 对全 NULL 组返回 NULL 后 ``or 0`` 一致）。
+    ``flat_count`` 含 ``pct_chg == 0`` **与 ``pct_chg is None``**。
+
+    旧形态的 ``CASE WHEN prev.close > 0 THEN … ELSE 0 END`` 把「前收缺失」就地伪造成
+    ``0.0``、又把这个 0% 喂进 ``AVG``；而真正算出 ``NULL``（当日 close 缺失）的行会同时
+    落空 ``> 0`` / ``= 0`` / ``< 0`` 三个 CASE、一个桶都不进。于是旧口径下
+    ``up+flat+down == total`` 并不成立，均值里也混着伪造出来的 0%。本模块改为
+    「``NULL`` 计平盘、但不进均值分母」：``up+flat+down == total`` **按构造恒成立**，
+    也不再凭空造出 0%。这是刻意的语义变更本身（``flat_count`` / ``avg_chg`` 都可能与旧
+    数字不同），不是等价改写。
+
+    ``avg_chg`` 是非空 ``pct_chg`` 的算术平均，没有非空值时 ``0.0``；分母取自**存储列**
+    （``Numeric(8,4)`` 已四舍五入），不再由 full-precision 的 ``close/prev`` 现算，
+    与旧口径可能存在 <0.01 的差异（展示层仍按现状 ``round(…, 2)``）。
     """
     up_count = 0
     flat_count = 0
