@@ -34,6 +34,8 @@ RowT = TypeVar("RowT")
 
 def chunk_rows(rows: Sequence[RowT], size: int = UPSERT_CHUNK) -> Iterator[list[RowT]]:
     """把多行 INSERT 的入参切成 ``size`` 行一批（asyncpg 绑定参数上限防护）。"""
+    if size <= 0:
+        raise ValueError(f"chunk size must be positive, got {size}")
     for start in range(0, len(rows), size):
         yield list(rows[start : start + size])
 

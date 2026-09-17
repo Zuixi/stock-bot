@@ -274,9 +274,9 @@ async def market_moneyflow_daily_job() -> None:
             result = await market_data_service.ingest_market_moneyflow_daily(db)
             await db.commit()
         logger.info("Market moneyflow daily done: %s", result)
-    except Exception:
-        # 未接告警：本 job 在 runner.py 里没有任何注册（无 scheduler id 可挂，见 task-4 报告）
+    except Exception as exc:
         logger.exception("Market moneyflow daily job failed")
+        await _alert_job_failure("market_moneyflow_daily", exc)
 
 
 async def northbound_daily_job() -> None:
