@@ -543,6 +543,7 @@ Expected：`limit-up-ladder` 返回完整日的 5 档梯队；`data-freshness` �
 **Interfaces:**
 - Produces：
   - `async def load_day_rows(db, day: date, *, cache=None) -> list[dict[str, Any]]`——元素 `{"stock_id", "symbol", "name", "csrc_desc", "province", "close", "pct_chg", "amount", "total_mv", "circ_mv", "turnover_rate"}`，按 `stock_id` 升序
+  > 实施期修订（Task 8）：行契约瘦身为 6 键（`stock_id`, `symbol`, `name`, `csrc_desc`, `province`, `pct_chg`, `amount`）+ `basic_date`；`total_mv`/`circ_mv`/`turnover_rate` 因无消费者已删除。
   - Redis 键 `market:day:rows:{day}`，TTL `300`
   - `def group_by(rows, key: str) -> dict[str, list[dict]]`（纯函数，供各端点分组）
   - `def summarize_group(items) -> dict`（`{total, up_count, flat_count, down_count, avg_chg}`，纯函数）
