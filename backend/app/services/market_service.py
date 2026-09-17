@@ -35,6 +35,7 @@ from sqlalchemy import Subquery, TextClause, func, select, text, union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
+from app.core.providers.eastmoney_client import get_eastmoney_client
 from app.core.redis import CacheClient
 from app.models.stock import Stock
 from app.schemas.ranking import RankingItemOut, RankingResponseOut, RankingType
@@ -480,17 +481,84 @@ async def get_capital_flow(cache: CacheClient | None = None) -> dict[str, Any]:
     return payload
 
 
+#: 热门板块的**产地**判别：东财板块体系（真实 ``BK`` code）或本地分组回落。
+_HOT_BOARD_SOURCE_EASTMONEY = "eastmoney_boards"
+_HOT_BOARD_SOURCE_LOCAL = "local_grouping"
+#: 回落原因码（东财板块榜不可用时）；回落 payload 必须同时带 source + 该码。
+_HOT_BOARD_DEGRADED_REASON = "eastmoney_unavailable"
+#: items 上限（沿用换源前的展示口径：卡片 6 条、明细页 10 条/页）。
+_HOT_BOARD_LIMIT = 10
+
+
+def _hot_board_item(category: HotBoardCategory, row: dict[str, Any]) -> dict[str, Any]:
+    """东财板块行 → 既有 ``HotBoardItem`` 键（+ ``mainNetInflow``/``mainNetRatio``/``amount``）。
+
+    ``row["board_code"]`` 直读（缺键即 KeyError，不静默降级成 `""`）——与
+    ``market_data_service._map_sector_moneyflow_row`` 同一条约定：映射表被改名/拼错
+    时必须炸，而不是把"没有 BK 码"混进"这个板块没数据"。
+
+    ``leaders`` 用东财的"主力净流入最大股"（每行仅这一只，板块榜接口不给 Top-N）；
+    ``f128/f136`` 为 ``-`` 时返回空数组，而不是造一只 0.0% 的假领涨股——前端
+    （``HotSectors`` / ``market-hot-sectors``）直接 ``leader.changePercent.toFixed(2)``，
+    null 会炸。
+    """
+    code = str(row["board_code"])
+    lead_name = row.get("lead_stock_name")
+    lead_pct = row.get("lead_stock_pct")
+    leaders: list[dict[str, Any]] = []
+    if lead_name and lead_name != "-" and lead_pct is not None:
+        leaders.append(
+            {
+                "symbol": row.get("lead_stock_code") or "",
+                "name": lead_name,
+                "changePercent": lead_pct,
+            }
+        )
+    return {
+        "id": f"{category}-{code}",
+        "name": row.get("board_name"),
+        "code": code,
+        "changePercent": row.get("pct_change"),
+        "upCount": row.get("up_count"),
+        "flatCount": row.get("flat_count"),
+        "downCount": row.get("down_count"),
+        "leaders": leaders,
+        "mainNetInflow": row.get("main_net_inflow"),
+        "mainNetRatio": row.get("main_net_ratio"),
+        "amount": row.get("amount"),
+    }
+
+
+def _hot_board_items_from_eastmoney(
+    category: HotBoardCategory, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """东财板块行 → Top-``_HOT_BOARD_LIMIT`` 条 items。
+
+    东财已按 ``fid=f3`` 降序返回；这里**再排一次**，理由与本地路径相同：进榜判据是
+    涨幅本身，不依赖上行排序的实现细节（``pz``/``fid`` 被改动时不会静默改变契约）。
+    ``pct_change`` 缺值排最后（不能与 None 比较）。
+    """
+    items = [_hot_board_item(category, row) for row in rows]
+    items.sort(
+        key=lambda item: (
+            item["changePercent"] if item["changePercent"] is not None else float("-inf")
+        ),
+        reverse=True,
+    )
+    return items[:_HOT_BOARD_LIMIT]
+
+
 def _hot_board_items(
     rows: list[dict[str, Any]], category: HotBoardCategory
 ) -> list[dict[str, Any]]:
-    """Top-10 boards for one category, sorted by the display-rounded average change.
+    """本地分组口径的 Top-10 板块（**仅回落路径**），按展示取整后的均涨幅排序。
 
-    Phase 3 will swap the *data source* (East Money boards) behind these same item
-    keys; this task only moves the rows onto the shared snapshot. Counts come from
-    :func:`summarize_group`, so ``up + flat + down == total`` holds — the retired SQL
-    could leave suspended/no-quote rows out of all three counts.
+    东财板块榜不可用时才走到这里：``code`` 恒为 ``""``（本地分组没有东财 ``BK``
+    码），``leaders`` 恒为空（快照行里没有"领涨股"这一事实），``id`` 用组名。
+    Counts come from :func:`summarize_group`, so ``up + flat + down == total`` holds —
+    the retired SQL could leave suspended/no-quote rows out of all three counts.
     """
-    key = "csrc_desc" if category == "industry" else "province"  # concept never gets here
+    key = "csrc_desc" if category == "industry" else "province"
     items: list[dict[str, Any]] = []
     for name, group in group_by(rows, key).items():
         stats = summarize_group(group)
@@ -507,34 +575,98 @@ def _hot_board_items(
             }
         )
     items.sort(key=lambda item: item["changePercent"], reverse=True)
-    return items[:10]
+    return items[:_HOT_BOARD_LIMIT]
+
+
+async def _hot_boards_local(
+    category: HotBoardCategory, cache: CacheClient | None, *, degraded_reason: str
+) -> dict[str, Any]:
+    """回落路径：本地按日分组（T+1 判据日）+ 显式产地/降级标注。
+
+    键仍是 ``market:hot-boards:{category}:{as_of}``（换源前的老键）——与东财路径的
+    ``market:hot-boards:em:...`` 分属两个命名空间，谁都不会读到对方的 payload。
+    命中校验带 ``source``：换源前写入的老 payload（无该字段）一律当 miss 重算，
+    否则会回放一份**没有产地标注**的 items 冒充新契约。
+    """
+    async with async_session_factory() as db:
+        md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
+        cache_key = _day_cache_key(f"market:hot-boards:{category}", md)
+        if md is not None and cache:
+            cached = await cache.get(cache_key)
+            if isinstance(cached, dict) and cached.get("source") == _HOT_BOARD_SOURCE_LOCAL:
+                return cast(dict[str, Any], cached)
+        rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
+
+    payload = _envelope(md, _hot_board_items(rows, category))
+    payload["source"] = _HOT_BOARD_SOURCE_LOCAL
+    payload["degraded_reason"] = degraded_reason
+    if cache and md is not None:
+        await cache.set(cache_key, payload, _MARKET_CACHE_TTL)
+    return payload
 
 
 async def get_hot_boards(
     category: HotBoardCategory,
     cache: CacheClient | None = None,
 ) -> dict[str, Any]:
-    """Return hot boards for the given category as an ``as_of`` envelope.
+    """热门板块：东财板块体系（真实 ``BK`` code）为主，失败回落本地分组并标注。
 
-    ``concept`` has no data source yet, so it returns an empty envelope without
-    probing the DB (``as_of=None`` / ``partial``).
+    东财路径 ``source="eastmoney_boards"``、``as_of`` = **今日**、``as_of_quality="partial"``：
+    板块榜是实时快照，不是库内判据日，"完整日"判据在这里不适用——与 Task 10/11 盘中
+    路径（``as_of=今日`` + ``partial``）同一口径。缓存键按今日（跨零点自然换键）。
+
+    回落路径（东财 fetch 抛错）``source="local_grouping"`` +
+    ``degraded_reason="eastmoney_unavailable"``，日与质量沿用 T+1 判据。
     """
-    if category == "concept":
-        return _envelope(None, [])
+    today = _today_sh()
+    cache_key = f"market:hot-boards:em:{category}:{today.isoformat()}"
+    if cache is not None:
+        cached = await cache.get(cache_key)
+        if isinstance(cached, dict) and cached.get("source") == _HOT_BOARD_SOURCE_EASTMONEY:
+            return cast(dict[str, Any], cached)
 
-    async with async_session_factory() as db:
-        md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
-        cache_key = _day_cache_key(f"market:hot-boards:{category}", md)
-        if md is not None and cache:
-            cached = await cache.get(cache_key)
-            if isinstance(cached, dict):  # bare-list payloads from before this change = miss
-                return cast(dict[str, Any], cached)
-        rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
+    try:
+        rows = await get_eastmoney_client().fetch_board_list(category)
+    except Exception:
+        # 与 market_data_service 的东财回落同一写法：宽 except + warning，绝不把
+        # 上游故障升级成 5xx（板块卡片仍有本地分组可看，只是被标注为降级）。
+        logger.warning(
+            "hot-boards: eastmoney board list failed, using local grouping", exc_info=True
+        )
+        return await _hot_boards_local(category, cache, degraded_reason=_HOT_BOARD_DEGRADED_REASON)
 
-    payload = _envelope(md, _hot_board_items(rows, category))
-    if cache and md is not None:
+    payload: dict[str, Any] = {
+        "as_of": today.isoformat(),
+        "as_of_quality": "partial",
+        "as_of_reason": None,
+        "source": _HOT_BOARD_SOURCE_EASTMONEY,
+        "degraded_reason": None,
+        "items": _hot_board_items_from_eastmoney(category, rows),
+    }
+    if cache is not None:
         await cache.set(cache_key, payload, _MARKET_CACHE_TTL)
     return payload
+
+
+async def get_board_stocks(
+    board_code: str, limit: int = 50, cache: CacheClient | None = None
+) -> list[dict[str, Any]]:
+    """东财板块成分股（主力净流入降序）。``board_code`` 合法性由端点先校验。
+
+    实时快照，键含 code + limit（同一 code 不同 limit 各自一份，避免切片错配）；
+    无行不写缓存（下一次请求会重新问上游，而不是把"上游短暂为空"烤 5 分钟）。
+    上游失败**向上抛**：这里没有本地替代源，端点据此回 502（不返回假空列表）。
+    """
+    cache_key = f"market:board-stocks:{board_code}:{limit}"
+    if cache is not None:
+        cached = await cache.get(cache_key)
+        if isinstance(cached, list):
+            return cast(list[dict[str, Any]], cached)
+
+    rows = await get_eastmoney_client().fetch_board_stocks(board_code, limit=limit)
+    if cache is not None and rows:
+        await cache.set(cache_key, rows, _MARKET_CACHE_TTL)
+    return rows
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,11 @@ What this locks
 1. ``get_distribution`` / ``get_sectors`` / ``get_capital_flow`` / ``get_hot_boards``
    compute their buckets/groups in Python from **one** ``load_day_rows`` call: the
    patched loader is the only row source and the DB session is never executed
-   (``_BoomSession`` turns any ``db.execute`` into a hard failure).
+   (``_BoomSession`` turns any ``db.execute`` into a hard failure). Task 14 moved
+   ``get_hot_boards`` onto the East Money board list first, so the hot-board cases
+   here patch that fetch to **fail** (``_patch_eastmoney_failure``) and thereby pin
+   the *fallback* path — the East Money path has its own coverage in
+   ``test_board_endpoints.py``.
 2. The distribution bucket edges, the group keys/counts and the envelope fields.
 3. The empty-day path still returns an empty envelope and never loads rows.
 4. Shenwan L1 performance deliberately stays on its own rollup statement (it needs
@@ -98,6 +102,17 @@ def _patch_rows(monkeypatch: pytest.MonkeyPatch, rows: list[dict[str, Any]]) -> 
 
     monkeypatch.setattr(market_service, "load_day_rows", _load)
     return calls
+
+
+def _patch_eastmoney_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the East Money board fetch blow up, so ``get_hot_boards`` takes the local
+    fallback. The zero-arg factory raising (not just the fetch) is deliberate: the
+    whole ``try`` block must count as "East Money unavailable"."""
+
+    def _boom() -> Any:
+        raise RuntimeError("eastmoney unavailable (patched)")
+
+    monkeypatch.setattr(market_service, "get_eastmoney_client", _boom)
 
 
 class _BoomSession:
@@ -298,11 +313,13 @@ async def test_capital_flow_ranks_by_total_turnover_and_keeps_top_10(
 # ---------------------------------------------------------------------------
 
 
-async def test_hot_boards_industry_breadth_partitions_every_row(
+async def test_hot_boards_fallback_industry_breadth_partitions_every_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Counts come from the shared summarizer: up + flat + down == the group size."""
+    """East Money down => local grouping; counts come from the shared summarizer
+    (up + flat + down == the group size)."""
     _patch_day(monkeypatch, _resolved())
+    _patch_eastmoney_failure(monkeypatch)
     _patch_rows(
         monkeypatch,
         [
@@ -331,12 +348,17 @@ async def test_hot_boards_industry_breadth_partitions_every_row(
     assert (out["items"][1]["upCount"], out["items"][1]["flatCount"]) == (0, 0)
     assert out["items"][1]["downCount"] == 1
     assert out["as_of"] == "2026-09-16"
+    # the degraded payload says so out loud (no BK code, no leaders either)
+    assert (out["source"], out["degraded_reason"]) == ("local_grouping", "eastmoney_unavailable")
 
 
-async def test_hot_boards_region_groups_by_province_and_keeps_top_10(
+async def test_hot_boards_fallback_region_groups_by_province_and_keeps_top_10(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """``region`` is on the East Money board list too (``t:1``); local ``province``
+    grouping is the fallback."""
     _patch_day(monkeypatch, _resolved())
+    _patch_eastmoney_failure(monkeypatch)
     rows = [_row(csrc_desc="电子", province=f"省{i:02d}", pct_chg=float(i)) for i in range(12)]
     _patch_rows(monkeypatch, rows)
 
@@ -345,25 +367,15 @@ async def test_hot_boards_region_groups_by_province_and_keeps_top_10(
     assert len(out["items"]) == 10
     assert out["items"][0]["id"] == "region-省11"
     assert out["items"][0]["changePercent"] == 11.0
+    assert out["source"] == "local_grouping"
     percentages = [item["changePercent"] for item in out["items"]]
     assert percentages == sorted(percentages, reverse=True)
 
 
-async def test_hot_boards_concept_still_returns_empty_envelope_without_the_loader(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def _boom(*_a: Any, **_kw: Any) -> None:
-        raise AssertionError("concept has no source; must not resolve a day or load rows")
-
-    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _boom)
-    monkeypatch.setattr(market_service, "load_day_rows", _boom)
-
-    assert await market_service.get_hot_boards("concept", None) == {
-        "as_of": None,
-        "as_of_quality": "partial",
-        "as_of_reason": None,
-        "items": [],
-    }
+# ``test_hot_boards_concept_still_returns_empty_envelope_without_the_loader`` was the
+# locked-in form of "concept has no data source". Task 14 gave concept a real source
+# (East Money ``m:90+t:3``), so that test is gone; the concept contract — non-empty,
+# BK-coded, and still no DB read — now lives in ``test_board_endpoints.py``.
 
 
 # ---------------------------------------------------------------------------
@@ -416,21 +428,43 @@ def test_rewritten_endpoint_bodies_hold_no_sql(func: Any) -> None:
 
 #: Task 8: every result key carries the **resolved day** (``{prefix}:{as_of}``), so a
 #: repaired/rolled-over day can never be served from the previous day's payload.
+#: Task 14 adds ``reads``: ``get_hot_boards`` probes its East Money key (keyed by
+#: **today**, not by the resolved day) before falling back to the day-keyed local
+#: payload, so the fallback path legitimately reads two keys and writes one.
 _REWRITTEN_ENDPOINTS = [
-    ("distribution", f"market:distribution:{D16.isoformat()}", market_service.get_distribution),
-    ("sectors", f"market:sectors:{D16.isoformat()}", market_service.get_sectors),
-    ("capital-flow", f"market:capital-flow:{D16.isoformat()}", market_service.get_capital_flow),
+    (
+        "distribution",
+        [f"market:distribution:{D16.isoformat()}"],
+        f"market:distribution:{D16.isoformat()}",
+        market_service.get_distribution,
+    ),
+    (
+        "sectors",
+        [f"market:sectors:{D16.isoformat()}"],
+        f"market:sectors:{D16.isoformat()}",
+        market_service.get_sectors,
+    ),
+    (
+        "capital-flow",
+        [f"market:capital-flow:{D16.isoformat()}"],
+        f"market:capital-flow:{D16.isoformat()}",
+        market_service.get_capital_flow,
+    ),
     (
         "hot-boards",
+        [
+            f"market:hot-boards:em:industry:{D16.isoformat()}",
+            f"market:hot-boards:industry:{D16.isoformat()}",
+        ],
         f"market:hot-boards:industry:{D16.isoformat()}",
         lambda cache: market_service.get_hot_boards("industry", cache),
     ),
 ]
 
 
-@pytest.mark.parametrize(("endpoint", "cache_key", "call"), _REWRITTEN_ENDPOINTS)
+@pytest.mark.parametrize(("endpoint", "reads", "write_key", "call"), _REWRITTEN_ENDPOINTS)
 async def test_rewritten_endpoints_never_execute_sql(
-    monkeypatch: pytest.MonkeyPatch, endpoint: str, cache_key: str, call: Any
+    monkeypatch: pytest.MonkeyPatch, endpoint: str, reads: list[str], write_key: str, call: Any
 ) -> None:
     """The only row source is the shared loader — the session must stay untouched.
 
@@ -443,6 +477,9 @@ async def test_rewritten_endpoints_never_execute_sql(
     )
     calls = _patch_rows(monkeypatch, [_row(pct_chg=1.0)])
     monkeypatch.setattr(market_service, "async_session_factory", _BoomSession)
+    # hot-boards: East Money unavailable (its key is stamped with "today" = D16)
+    _patch_eastmoney_failure(monkeypatch)
+    monkeypatch.setattr(market_service, "_today_sh", lambda: D16)
     cache = _RecordingCache()
 
     out = await call(cache)
@@ -460,9 +497,9 @@ async def test_rewritten_endpoints_never_execute_sql(
     # which is exactly the regression this pins.
     assert len(day_calls) == 1
     assert day_calls[0][1] is cache
-    # this module reads/writes only its own result key; the snapshot key is the loader's
-    assert cache.reads == [cache_key]
-    assert [key for key, _value, _ttl in cache.writes] == [cache_key]
+    # this module reads/writes only its own result key(s); the snapshot key is the loader's
+    assert cache.reads == reads
+    assert [key for key, _value, _ttl in cache.writes] == [write_key]
 
 
 class _SeededCache:
@@ -482,19 +519,20 @@ class _SeededCache:
 
 
 @pytest.mark.parametrize(
-    ("prefix", "call"),
+    ("prefix", "extra_reads", "call"),
     [
-        ("market:distribution", market_service.get_distribution),
-        ("market:sectors", market_service.get_sectors),
-        ("market:capital-flow", market_service.get_capital_flow),
+        ("market:distribution", [], market_service.get_distribution),
+        ("market:sectors", [], market_service.get_sectors),
+        ("market:capital-flow", [], market_service.get_capital_flow),
         (
             "market:hot-boards:industry",
+            [f"market:hot-boards:em:industry:{D16.isoformat()}"],
             lambda cache: market_service.get_hot_boards("industry", cache),
         ),
     ],
 )
 async def test_result_cache_key_includes_the_resolved_day(
-    monkeypatch: pytest.MonkeyPatch, prefix: str, call: Any
+    monkeypatch: pytest.MonkeyPatch, prefix: str, extra_reads: list[str], call: Any
 ) -> None:
     """A payload cached for another day must not be served for the resolved day.
 
@@ -505,6 +543,10 @@ async def test_result_cache_key_includes_the_resolved_day(
     day_key = f"{prefix}:{D16.isoformat()}"
     _patch_day(monkeypatch, _resolved())
     calls = _patch_rows(monkeypatch, [_row(pct_chg=1.0)])
+    # hot-boards: the East Money probe (keyed by today = D16) must miss, then the
+    # day-keyed local fallback must miss the two seeded poisons and recompute.
+    _patch_eastmoney_failure(monkeypatch)
+    monkeypatch.setattr(market_service, "_today_sh", lambda: D16)
     cache = _SeededCache(
         {
             prefix: {"as_of": "2026-09-15", "as_of_quality": "complete", "items": []},
@@ -517,15 +559,21 @@ async def test_result_cache_key_includes_the_resolved_day(
     assert out["as_of"] == D16.isoformat()
     assert out["items"], "a poisoned hit would have produced no items"
     assert len(calls) == 1, "the loader must run for the resolved day"
-    assert cache.reads == [day_key]
+    assert cache.reads == [*extra_reads, day_key]
     assert [key for key, _v, _t in cache.writes] == [day_key]
 
 
 async def test_empty_day_returns_empty_envelope_and_never_loads_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No resolved day → ``as_of=None`` / ``partial`` / ``items=[]`` and no loader call."""
+    """No resolved day → ``as_of=None`` / ``partial`` / ``items=[]`` and no loader call.
+
+    ``get_hot_boards`` is the Task-14 exception: its *fallback* envelope carries the
+    extra ``source``/``degraded_reason`` discriminator, so it is asserted separately
+    (and its East Money fetch is patched out — this module must stay offline).
+    """
     _patch_day(monkeypatch, None)
+    _patch_eastmoney_failure(monkeypatch)
 
     async def _boom(*_a: Any, **_kw: Any) -> list[dict[str, Any]]:
         raise AssertionError("no resolved day => the day loader must not run")
@@ -537,7 +585,6 @@ async def test_empty_day_returns_empty_envelope_and_never_loads_rows(
         await market_service.get_distribution(cache),  # type: ignore[arg-type]
         await market_service.get_sectors(cache),  # type: ignore[arg-type]
         await market_service.get_capital_flow(cache),  # type: ignore[arg-type]
-        await market_service.get_hot_boards("industry", cache),  # type: ignore[arg-type]
     ):
         assert out == {
             "as_of": None,
@@ -545,6 +592,14 @@ async def test_empty_day_returns_empty_envelope_and_never_loads_rows(
             "as_of_reason": None,
             "items": [],
         }
+    assert await market_service.get_hot_boards("industry", cache) == {  # type: ignore[arg-type]
+        "as_of": None,
+        "as_of_quality": "partial",
+        "as_of_reason": None,
+        "source": "local_grouping",
+        "degraded_reason": "eastmoney_unavailable",
+        "items": [],
+    }
     assert cache.writes == []  # nothing is cached for an unresolved day
 
 

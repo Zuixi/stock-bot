@@ -1,8 +1,11 @@
 import { apiGet } from "./client";
 import {
+  mapHotBoards,
   mapMarketList,
   type AsOfQuality,
+  type BackendHotBoardsOut,
   type BackendMarketListOut,
+  type HotBoardsEnvelope,
   type MarketListEnvelope,
 } from "./marketEnvelope";
 import type { KLinePoint, KlineResult, MarketIndex, SectorSummary, SseIntradayResponse } from "@/shared/types";
@@ -27,12 +30,19 @@ export interface HotBoardLeader {
 export interface HotBoardItem {
   id: string;
   name: string;
+  /** 东财板块码（`BK####`）；本地分组回落时为空串（见 `HotBoardsEnvelope.source`）。 */
   code: string;
   changePercent: number;
   upCount: number;
   flatCount: number;
   downCount: number;
   leaders: HotBoardLeader[];
+  /** 主力净流入（元）；本地分组回落时不存在（undefined）。 */
+  mainNetInflow?: number | null;
+  /** 主力净流入占比（%）；本地分组回落时不存在（undefined）。 */
+  mainNetRatio?: number | null;
+  /** 成交额（元）；本地分组回落时不存在（undefined）。 */
+  amount?: number | null;
 }
 
 export type HotBoardCategory = "industry" | "concept" | "region";
@@ -155,9 +165,16 @@ export function fetchCapitalFlow(): Promise<MarketListEnvelope<CapitalFlowItem>>
   return apiGet<BackendMarketListOut<CapitalFlowItem>>("/api/v1/market/capital-flow").then(mapMarketList);
 }
 
-/** 热门板块。同 {@link fetchDistribution}：返回 `{items, 口径元数据}` 信封。 */
-export function fetchHotBoards(category: HotBoardCategory): Promise<MarketListEnvelope<HotBoardItem>> {
-  return apiGet<BackendMarketListOut<HotBoardItem>>("/api/v1/market/hot-boards", { category }).then(mapMarketList);
+/**
+ * 热门板块（Task 14 起走东财板块体系，真实 `BK` code）。
+ *
+ * 回落到本地分组时 `source === "local_grouping"`（`code` 为空串、`leaders` 为空数组），
+ * 消费端据此决定是否展示"降级"标注，不要假装它还是东财板块。
+ */
+export function fetchHotBoards(category: HotBoardCategory): Promise<HotBoardsEnvelope<HotBoardItem>> {
+  return apiGet<BackendHotBoardsOut<HotBoardItem>>("/api/v1/market/hot-boards", { category }).then(
+    mapHotBoards
+  );
 }
 
 export function fetchSseIntraday(code: string, date?: string): Promise<SseIntradayResponse> {

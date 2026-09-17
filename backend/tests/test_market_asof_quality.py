@@ -44,6 +44,15 @@ def _day(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _patch_eastmoney_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force ``get_hot_boards`` onto its local fallback (East Money unavailable)."""
+
+    def _boom() -> Any:
+        raise RuntimeError("eastmoney unavailable (patched)")
+
+    monkeypatch.setattr(market_service, "get_eastmoney_client", _boom)
+
+
 def _patch_day_rows(monkeypatch: pytest.MonkeyPatch, rows: list[dict]) -> None:
     """Patch the shared per-day snapshot loader (Task 7) used by the market plane."""
 
@@ -86,23 +95,28 @@ async def test_capital_flow_carries_as_of_quality(_day: None, monkeypatch) -> No
     assert out["items"][0] == {"name": "电子", "inflow": 1.0, "outflow": -0.0}
 
 
-async def test_hot_boards_carries_as_of_quality(_day: None, monkeypatch) -> None:
+async def test_hot_boards_fallback_carries_resolved_day_as_of_quality(
+    _day: None, monkeypatch
+) -> None:
+    """Task 14: East Money down => the local fallback keeps the T+1 day semantics
+    (``as_of`` = 判据日) and marks itself; the East Money path reports *today* as
+    ``partial`` instead — see ``test_board_endpoints.py``."""
     _patch_day_rows(monkeypatch, [{"csrc_desc": "电子", "pct_chg": 1.0}])
+    _patch_eastmoney_failure(monkeypatch)
 
     out = await market_service.get_hot_boards("industry", None)
 
     assert out["as_of"] == "2026-09-16"
     assert out["as_of_quality"] == "fallback"
     assert out["items"][0]["id"] == "industry-电子"
+    assert (out["source"], out["degraded_reason"]) == ("local_grouping", "eastmoney_unavailable")
 
 
-async def test_hot_boards_concept_is_empty_envelope(monkeypatch) -> None:
-    async def _boom(*_a: Any, **_kw: Any) -> None:
-        raise AssertionError("concept has no data source; must not probe the DB")
-
-    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _boom)
-    out = await market_service.get_hot_boards("concept", None)
-    assert out == {"as_of": None, "as_of_quality": "partial", "as_of_reason": None, "items": []}
+# ``test_hot_boards_concept_is_empty_envelope`` locked "concept has no data source"
+# (concept must not even probe the DB). Task 14 wired concept to the East Money
+# concept board set (``m:90+t:3``), so an empty concept envelope is now a bug: the
+# concept contract (non-empty BK-coded items, still zero DB reads) is locked by
+# ``test_board_endpoints.py``.
 
 
 async def test_empty_db_list_endpoint_never_raises(monkeypatch) -> None:
