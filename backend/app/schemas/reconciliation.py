@@ -21,7 +21,9 @@ class JobFailureOut(BaseModel):
     """最近失败的调度任务（来自 job_alert_service 的 `job:failures` 登记表）。"""
 
     job_id: str  # scheduler 注册 id（与 runner.py 的 add_job(id=...) 一致）
-    error: str  # repr(exc)：单行、含异常类型，够定位不必翻日志
+    # repr(exc) 截断到 500 字符（job_alert_service.MAX_ERROR_CHARS）；含异常类型，
+    # 够定位不必翻日志（StatementError 的 repr 可能带换行，故不是严格单行）
+    error: str
     at: str  # ISO8601（Asia/Shanghai）
 
 

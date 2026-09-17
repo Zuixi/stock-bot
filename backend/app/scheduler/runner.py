@@ -21,6 +21,7 @@ from app.scheduler.jobs import (
     financial_backfill_job,
     global_index_daily_job,
     industry_metrics_refresh_job,
+    market_moneyflow_daily_job,
     northbound_daily_job,
     price_limits_daily_job,
     reconcile_market_data_job,
@@ -216,6 +217,16 @@ def create_scheduler() -> AsyncIOScheduler:
         id="sector_moneyflow_poll",
         name="Sector moneyflow intraday poll",
         misfire_grace_time=INTRADAY_GRACE_SEC,
+        replace_existing=True,
+    )
+
+    # Market moneyflow daily (大盘资金流): Mon-Fri 16:20 post close (idempotent upsert)
+    # 曾长期漏注册 —— job 函数存在但 scheduler 从未触发，表自 2026-09-03 起陈旧。
+    scheduler.add_job(
+        market_moneyflow_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=20, timezone="Asia/Shanghai"),
+        id="market_moneyflow_daily",
+        name="Market moneyflow daily",
         replace_existing=True,
     )
 
