@@ -27,6 +27,15 @@
   color: var(--text-secondary);
 }
 
+/* 标题右侧的原样标注（如盘中口径 as_of_label）：弱化但不隐藏，与标题同基线 */
+.section-card__asof-label {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
 /* 口径徽标（收盘/未完整/按最近完整日、N 天前、数据源已停更）：与「数据截至 …」同行的小 chip */
 .section-card__quality {
   margin-left: 6px;

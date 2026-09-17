@@ -17,6 +17,12 @@ export interface SectionCardProps {
   staleDays?: number | null;
   /** 上游数据源状态：`discontinued` → 「数据源已停更」 */
   sourceStatus?: string | null;
+  /**
+   * 标题右侧的**原样**标注（如盘中口径的 `as_of_label`）。
+   * 不经过格式化：调用方给什么就渲染什么——回落文案（`盘中不可用，已回落收盘`）
+   * 必须如实上屏，不能在 UI 层被美化成一个更「好看」的措辞。
+   */
+  note?: string | null;
   children: ReactNode;
 }
 
@@ -30,12 +36,16 @@ export function SectionCard({
   quality,
   staleDays,
   sourceStatus,
+  note,
   children,
 }: SectionCardProps) {
   return (
     <section className="section-card" id={id} data-testid={`section-${id ?? title}`}>
       <header className="section-card__head">
-        <h3 className="section-card__title">{title}</h3>
+        <h3 className="section-card__title">
+          {title}
+          {note ? <span className="section-card__asof-label">{note}</span> : null}
+        </h3>
         {moreHref ? (
           <Link className="section-card__more" to={moreHref}>
             {moreText} ›

@@ -1,12 +1,14 @@
 import { useState } from "react";
-import { Alert, Card, Col, Row, Tabs, Typography } from "antd";
+import { Alert, Card, Col, Row, Segmented, Tabs, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { SectionCard } from "@/shared/ui";
 import {
   fetchLimitUpLadder,
   fetchSectorLimitUp,
   fetchSentimentCalendar,
+  fetchSentimentIntraday,
   fetchYesterdayLimitUp,
+  type SentimentMode,
 } from "@/shared/api/limitUp";
 import {
   GlobalMarketBoard,
@@ -22,6 +24,7 @@ import {
   SwIndustryGrid,
   DataCoverageMatrix,
   SentimentThermometer,
+  SentimentIntradayChart,
   LimitUpLadder,
   SwL3LimitUpBoard,
   YesterdayLimitUp,
@@ -50,26 +53,42 @@ function DegradedNotice({ reason }: { reason: string }) {
  * 情绪周期日历（market_sentiment_daily）只喂温度计的环比 chip 与趋势线，缺失不阻断主数据。
  * 梯队/申万 L3/昨日涨停三块各自降级，卡头 `asof` 独立（梯队用 as_of，昨日用 as_of_prev）。
  * 每张数据卡按各自端点的 `degradedReason` 独立门禁，避免降级态仍展示不完整数据。
+ *
+ * 双口径（Task 13）：顶部「盘中 / 收盘」切换。**默认收盘**（首屏与历史行为一致）；
+ * 切盘中后三张涨停卡带 `mode=intraday` 重取、卡头透传后端 `as_of_label`，并在梯队上方
+ * 渲染盘中分时曲线。query key 一律把 `mode` 放第三段——同端点两种消费节奏（盘中 30s
+ * 刷新、收盘日频）绝不能共用缓存条目（Phase 1 的拆 key 教训，见 `CoreIndexCards`）。
  */
 function SentimentTab() {
-  const { refetchInterval } = useMarketPolling();
+  const [mode, setMode] = useState<SentimentMode>("close");
+  const isIntraday = mode === "intraday";
+  // 盘中与收盘都走 A 股时段（开市 30s / 休市停）；收盘口径本就是这个节奏，不因新增盘中而提速。
+  const { refetchInterval } = useMarketPolling("session");
   const ladder = useQuery({
-    queryKey: ["market", "limit-up-ladder"],
-    queryFn: () => fetchLimitUpLadder(),
-    staleTime: 60_000,
+    queryKey: ["market", "limit-up-ladder", mode],
+    queryFn: () => fetchLimitUpLadder(undefined, 10, mode),
+    staleTime: isIntraday ? 30_000 : 60_000,
     refetchInterval,
   });
   const sectors = useQuery({
-    queryKey: ["market", "sector-limit-up"],
-    queryFn: () => fetchSectorLimitUp(),
-    staleTime: 60_000,
+    queryKey: ["market", "sector-limit-up", mode],
+    queryFn: () => fetchSectorLimitUp(undefined, undefined, mode),
+    staleTime: isIntraday ? 30_000 : 60_000,
     refetchInterval,
   });
   const yesterday = useQuery({
-    queryKey: ["market", "yesterday-limit-up"],
-    queryFn: () => fetchYesterdayLimitUp(),
-    staleTime: 60_000,
+    queryKey: ["market", "yesterday-limit-up", mode],
+    queryFn: () => fetchYesterdayLimitUp(undefined, mode),
+    staleTime: isIntraday ? 30_000 : 60_000,
     refetchInterval,
+  });
+  // 分时序列只在盘中口径下取（收盘口径不请求）；date 交给后端按上海时区解析「今天」。
+  const intraday = useQuery({
+    queryKey: ["market", "sentiment-intraday"],
+    queryFn: () => fetchSentimentIntraday(),
+    staleTime: 30_000,
+    refetchInterval,
+    enabled: isIntraday,
   });
   const calendar = useQuery({
     queryKey: ["market", "sentiment-calendar", 30],
@@ -81,42 +100,66 @@ function SentimentTab() {
   const sectorsDegraded = Boolean(sectors.data?.degradedReason);
   const yesterdayDegraded = Boolean(yesterday.data?.degradedReason);
   return (
-    <Row gutter={[16, 16]}>
-      <Col span={24}>
-        <SectionCard title="情绪温度计" asof={ladder.data?.asOf} quality={ladder.data?.asOfQuality}>
-          {degraded ? (
-            <DegradedNotice reason={degraded} />
-          ) : (
-            <SentimentThermometer
-              kpis={ladder.data?.kpis}
-              history={calendar.data ?? []}
-              asOf={ladder.data?.asOf}
-            />
-          )}
-        </SectionCard>
-      </Col>
-      <Col span={24}>
-        <SectionCard title="连板梯队" asof={ladder.data?.asOf} quality={ladder.data?.asOfQuality}>
-          <LimitUpLadder echelons={ladder.data?.echelons ?? []} degraded={Boolean(degraded)} />
-        </SectionCard>
-      </Col>
-      <Col xs={24} xl={12}>
-        <SectionCard title="申万三级最高板" asof={sectors.data?.asOf} quality={sectors.data?.asOfQuality}>
-          <SwL3LimitUpBoard data={sectors.data} degraded={sectorsDegraded} />
-        </SectionCard>
-      </Col>
-      <Col xs={24} xl={12}>
-        {/* 卡头「数据截至」用表现日 as_of；涨停日样本口径在组件内标注，
-            只标 as_of_prev 会被误读为数据落后（2026-09-15 用户反馈） */}
-        <SectionCard
-          title="昨日涨停今日表现"
-          asof={yesterday.data?.asOf}
-          quality={yesterday.data?.asOfQuality}
-        >
-          <YesterdayLimitUp data={yesterday.data} degraded={yesterdayDegraded} />
-        </SectionCard>
-      </Col>
-    </Row>
+    <div className="sentiment-tab">
+      {/* 口径切换：默认收盘。切换只改 query key/参数，不重置任何本地状态 */}
+      <div className="sentiment-mode-switch" data-testid="sentiment-mode-switch">
+        <Segmented<SentimentMode>
+          size="small"
+          value={mode}
+          onChange={setMode}
+          options={[
+            { label: "收盘", value: "close" },
+            { label: "盘中", value: "intraday" },
+          ]}
+        />
+        <span className="sentiment-mode-switch__hint">
+          {isIntraday ? "盘中口径（今日东财涨停池 · 30 秒刷新）" : "收盘口径（本地自算 · 可回放）"}
+        </span>
+      </div>
+      <Row gutter={[16, 16]}>
+        <Col span={24}>
+          <SectionCard
+            title="情绪温度计"
+            asof={ladder.data?.asOf}
+            quality={ladder.data?.asOfQuality}
+            note={ladder.data?.asOfLabel}
+          >
+            {degraded ? (
+              <DegradedNotice reason={degraded} />
+            ) : (
+              <SentimentThermometer
+                kpis={ladder.data?.kpis}
+                history={calendar.data ?? []}
+                asOf={ladder.data?.asOf}
+              />
+            )}
+          </SectionCard>
+        </Col>
+        <Col span={24}>
+          <SectionCard title="连板梯队" asof={ladder.data?.asOf} quality={ladder.data?.asOfQuality}>
+            {/* 盘中口径才画分时曲线：收盘口径没有「分时」这一维度 */}
+            {isIntraday ? <SentimentIntradayChart points={intraday.data ?? []} /> : null}
+            <LimitUpLadder echelons={ladder.data?.echelons ?? []} degraded={Boolean(degraded)} />
+          </SectionCard>
+        </Col>
+        <Col xs={24} xl={12}>
+          <SectionCard title="申万三级最高板" asof={sectors.data?.asOf} quality={sectors.data?.asOfQuality}>
+            <SwL3LimitUpBoard data={sectors.data} degraded={sectorsDegraded} />
+          </SectionCard>
+        </Col>
+        <Col xs={24} xl={12}>
+          {/* 卡头「数据截至」用表现日 as_of；涨停日样本口径在组件内标注，
+              只标 as_of_prev 会被误读为数据落后（2026-09-15 用户反馈） */}
+          <SectionCard
+            title="昨日涨停今日表现"
+            asof={yesterday.data?.asOf}
+            quality={yesterday.data?.asOfQuality}
+          >
+            <YesterdayLimitUp data={yesterday.data} degraded={yesterdayDegraded} />
+          </SectionCard>
+        </Col>
+      </Row>
+    </div>
   );
 }
 
