@@ -4,7 +4,9 @@ Data sources
 ------------
 - **PostgreSQL**: ``index_dailies`` for main indices, ``stocks`` + ``daily_quotes``
   for aggregated stats.
-- **Redis**: short-lived cache (300s) for all dashboard endpoints.
+- **Redis**: short-lived cache for all dashboard endpoints — 300s for day-granular
+  aggregations (:data:`_MARKET_CACHE_TTL`), 60s for realtime East Money snapshots
+  (:data:`_REALTIME_CACHE_TTL`).
 - **TuShare Pro** (via ``TuShareClient``): fallback for indices when DB is empty.
 
 "最新交易日"的唯一判据是 :mod:`app.services.market_day_service`（行数 + pct_chg
@@ -50,7 +52,7 @@ logger = logging.getLogger(__name__)
 HotBoardCategory = Literal["industry", "concept", "region"]
 
 #: 按日结果缓存的 TTL（秒）= 300s，与首页**多数**按日聚合卡片的
-#: ``staleTime = 5*60_000``（RankingMatrix / SectorHeatmap / HotSectors /
+#: ``staleTime = 5*60_000``（RankingMatrix / SectorHeatmap /
 #: IndustryClassification / DistributionChart / NorthboundCard）同量级：客户端不
 #: 主动重取的窗口里，服务端条目也就不必重算。
 #:
@@ -59,7 +61,16 @@ HotBoardCategory = Literal["industry", "concept", "region"]
 #: 用 ``staleTime = 60s`` 轮询，它重取时会读到最长 300s 的服务端条目；陈旧度由
 #: payload 自带的 ``as_of`` 显式暴露，不靠 TTL 对齐。键里带 ``as_of``（见
 #: :func:`_day_cache_key`），故补数/翻日只会让新键 miss，不会让旧标签继续冒充。
+#:
+#: **只适用于按日聚类的 payload**。"陈旧度由 as_of 自曝"这条论证对**实时快照**不成立：
+#: 它们的 ``as_of`` 只到日粒度（今天），拿不到"这份快照是几分钟前的"这一事实，而
+#: 消费端（``HotSectors``）盘中每 30s 轮询一次。实时类走 :data:`_REALTIME_CACHE_TTL`。
 _MARKET_CACHE_TTL = 300  # 5 minutes
+#: 实时快照的 TTL（秒）= 60s（spec §4.5 "实时类 60s"，与 ``market:sector-moneyflow``
+#: 的实时口径一致）：东财板块榜 / 成分股 payload 的 ``as_of`` 是**日粒度**，没有
+#: "快照生成时刻"字段，300s 会让 30s 轮询读到同一份快照约 10 次而无处可辨陈旧度。
+#: 上游那点 QPS 用共享缓存扛住即可，不值得拿"用户看到 5 分钟前的涨幅"去换。
+_REALTIME_CACHE_TTL = 60  # 1 minute
 _SW_OTHER_LEVEL1_CODE = "OTHER"
 _SW_OTHER_LEVEL1_NAME = "其他"
 _SW_OTHER_UNKNOWN_INDUSTRY = "未知行业"
@@ -488,6 +499,14 @@ _HOT_BOARD_SOURCE_LOCAL = "local_grouping"
 _HOT_BOARD_DEGRADED_REASON = "eastmoney_unavailable"
 #: items 上限（沿用换源前的展示口径：卡片 6 条、明细页 10 条/页）。
 _HOT_BOARD_LIMIT = 10
+#: 回落路径**真正有本地口径**的 category → ``stocks`` 表字段。这里是白名单而不是
+#: ``"csrc_desc" if industry else "province"``：后者给 ``concept`` 也发一份省份分组，
+#: 等于把跨口径的行冒充成概念板块（Task 14 fix round 1）。新增 category 时必须在这
+#: 张表里显式登记，否则回落即空（诚实降级）。
+_LOCAL_GROUPING_KEYS: dict[HotBoardCategory, str] = {
+    "industry": "csrc_desc",
+    "region": "province",
+}
 
 
 def _hot_board_item(category: HotBoardCategory, row: dict[str, Any]) -> dict[str, Any]:
@@ -557,8 +576,15 @@ def _hot_board_items(
     码），``leaders`` 恒为空（快照行里没有"领涨股"这一事实），``id`` 用组名。
     Counts come from :func:`summarize_group`, so ``up + flat + down == total`` holds —
     the retired SQL could leave suspended/no-quote rows out of all three counts.
+
+    **没有本地真实口径的 category 返回 ``[]``**（见 :data:`_LOCAL_GROUPING_KEYS`）：
+    ``concept`` 在 stock 表里没有对应字段，此前 ``else`` 分支把它映射到 ``province``，
+    于是"东财概念榜不可用"会回落到一堆**省份**行（``id=concept-省XX``）——跨口径的
+    假数据比空列表更坏，前端会把它当概念板块展示。空 items + 降级标注才是诚实的降级。
     """
-    key = "csrc_desc" if category == "industry" else "province"
+    key = _LOCAL_GROUPING_KEYS.get(category)
+    if key is None:
+        return []
     items: list[dict[str, Any]] = []
     for name, group in group_by(rows, key).items():
         stats = summarize_group(group)
@@ -616,7 +642,12 @@ async def get_hot_boards(
     路径（``as_of=今日`` + ``partial``）同一口径。缓存键按今日（跨零点自然换键）。
 
     回落路径（东财 fetch 抛错）``source="local_grouping"`` +
-    ``degraded_reason="eastmoney_unavailable"``，日与质量沿用 T+1 判据。
+    ``degraded_reason="eastmoney_unavailable"``，日与质量沿用 T+1 判据；该路径下
+    ``concept`` 无本地口径（:data:`_LOCAL_GROUPING_KEYS`），返回空 items 而不是省
+    份分组。
+
+    两条路径的 TTL 不同：东财快照是实时类 → :data:`_REALTIME_CACHE_TTL`（60s，与
+    前端盘中 30s 轮询同量级）；回落 payload 是按日聚合 → :data:`_MARKET_CACHE_TTL`。
     """
     today = _today_sh()
     cache_key = f"market:hot-boards:em:{category}:{today.isoformat()}"
@@ -644,7 +675,7 @@ async def get_hot_boards(
         "items": _hot_board_items_from_eastmoney(category, rows),
     }
     if cache is not None:
-        await cache.set(cache_key, payload, _MARKET_CACHE_TTL)
+        await cache.set(cache_key, payload, _REALTIME_CACHE_TTL)
     return payload
 
 
@@ -654,7 +685,8 @@ async def get_board_stocks(
     """东财板块成分股（主力净流入降序）。``board_code`` 合法性由端点先校验。
 
     实时快照，键含 code + limit（同一 code 不同 limit 各自一份，避免切片错配）；
-    无行不写缓存（下一次请求会重新问上游，而不是把"上游短暂为空"烤 5 分钟）。
+    无行不写缓存（下一次请求会重新问上游，而不是把"上游短暂为空"烤满
+    :data:`_REALTIME_CACHE_TTL`）。
     上游失败**向上抛**：这里没有本地替代源，端点据此回 502（不返回假空列表）。
     """
     cache_key = f"market:board-stocks:{board_code}:{limit}"
@@ -665,7 +697,7 @@ async def get_board_stocks(
 
     rows = await get_eastmoney_client().fetch_board_stocks(board_code, limit=limit)
     if cache is not None and rows:
-        await cache.set(cache_key, rows, _MARKET_CACHE_TTL)
+        await cache.set(cache_key, rows, _REALTIME_CACHE_TTL)
     return rows
 
 
