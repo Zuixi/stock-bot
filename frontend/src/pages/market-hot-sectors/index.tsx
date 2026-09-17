@@ -9,6 +9,7 @@ import {
   type HotBoardCategory,
   type HotBoardItem,
 } from "@/shared/api/market";
+import { useMarketPolling } from "@/features/market/hooks/useMarketPolling";
 
 const HOT_BOARD_CATEGORIES: { key: HotBoardCategory; label: string }[] = [
   { key: "industry", label: "行业板块" },
@@ -48,9 +49,13 @@ export default function MarketHotSectorsPage() {
   const activeCategory: HotBoardCategory = isValidCategory(category) ? category : "industry";
   const [sort, setSort] = useState<SortState>({ sortBy: "changePercent", sortOrder: "desc" });
 
+  const { refetchInterval } = useMarketPolling();
+  // 与 /market 的「A股热门板块」卡共用 key：同一端点全局只有一个缓存条目（此前
+  // `hot-boards-page` 与 `hot-boards` 双 key → 双请求、两份可能漂移的缓存）
   const { data: boardEnvelope } = useQuery({
-    queryKey: ["hot-boards-page", activeCategory],
+    queryKey: ["market", "hot-boards", activeCategory],
     queryFn: () => fetchHotBoards(activeCategory),
+    refetchInterval,
   });
   const boardRows = boardEnvelope?.items ?? [];
   const rows = useMemo(() => sortRows(boardRows, sort), [boardRows, sort]);

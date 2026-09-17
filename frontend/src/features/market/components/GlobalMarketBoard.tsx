@@ -2,9 +2,9 @@ import { Card, Col, Row, Skeleton, Tabs } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchGlobalIndices } from "@/shared/api/marketData";
 import { GlobalIndexCardView } from "./GlobalIndexCardView";
+import { useMarketPolling } from "../hooks/useMarketPolling";
 
 const STALE_TIME = 60 * 1000;
-const REFETCH_INTERVAL = 60 * 1000;
 
 const REGIONS = [
   { key: "asia", label: "亚洲" },
@@ -12,11 +12,12 @@ const REGIONS = [
 ] as const;
 
 export function GlobalMarketBoard() {
+  const { refetchInterval } = useMarketPolling();
   const { data: indices = [], isLoading } = useQuery({
-    queryKey: ["global-indices"],
+    queryKey: ["market", "global-indices"],
     queryFn: fetchGlobalIndices,
     staleTime: STALE_TIME,
-    refetchInterval: REFETCH_INTERVAL,
+    refetchInterval,
   });
 
   const items = REGIONS.map((r) => ({

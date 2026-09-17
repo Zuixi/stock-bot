@@ -26,3 +26,13 @@
   font-size: 12px;
   color: var(--text-secondary);
 }
+
+/* 口径徽标（收盘/未完整/回落至 …、N 天前、数据源已停更）：与「数据截至 …」同行的小 chip */
+.section-card__quality {
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}

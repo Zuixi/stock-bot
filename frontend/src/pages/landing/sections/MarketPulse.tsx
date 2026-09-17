@@ -3,11 +3,11 @@ import { fetchDistribution } from "@/shared/api/market";
 import { fetchGlobalIndices } from "@/shared/api/marketData";
 import type { GlobalIndexCard } from "@/shared/api/marketData";
 import { DistributionBars } from "@/features/market/components/DistributionBars";
+import { FreshnessNote } from "@/shared/ui";
 import type { DistributionBucket } from "@/features/market/components/DistributionBars";
 import { pickCoreIndices } from "@/features/market/components/coreIndices";
 import { useTheme } from "@/app/theme-context";
-
-const REFRESH_MS = 60_000;
+import { useMarketPolling } from "@/features/market/hooks/useMarketPolling";
 
 /** 恒定 8 格：优先核心 6 码，缺谁用任意市场的其余指数顺位补齐（共享选择器） */
 const TICKER_COUNT = 8;
@@ -70,17 +70,18 @@ function TickerSkeletons() {
  */
 export function MarketPulse() {
   const { colors } = useTheme();
+  const { refetchInterval } = useMarketPolling();
 
   const indicesQuery = useQuery({
-    queryKey: ["global-indices"],
+    queryKey: ["market", "global-indices"],
     queryFn: fetchGlobalIndices,
-    refetchInterval: REFRESH_MS,
+    refetchInterval,
   });
 
   const distQuery = useQuery({
-    queryKey: ["market-distribution"],
+    queryKey: ["market", "distribution"],
     queryFn: fetchDistribution,
-    refetchInterval: REFRESH_MS,
+    refetchInterval,
   });
 
   const indices = indicesQuery.data ? pickCoreIndices(indicesQuery.data, TICKER_COUNT) : [];
@@ -124,6 +125,8 @@ export function MarketPulse() {
       {buckets.length > 0 ? (
         <div className="landing-pulse-dist">
           <div className="landing-pulse-dist-title">当日涨跌分布（日度 / T+1）</div>
+          {/* 分布是唯一按日聚合的块：必须自证「数据截至 X + 口径」，与市场页同款 */}
+          <FreshnessNote asOf={distQuery.data?.asOf} quality={distQuery.data?.asOfQuality} />
           <DistributionBars buckets={buckets} />
         </div>
       ) : null}

@@ -1,4 +1,5 @@
 import { apiGet } from "./client";
+import type { AsOfQuality } from "./marketEnvelope";
 
 // ---------------------------------------------------------------------------
 // 连板梯队与市场情绪（Task 4/5/6 的 4 个端点）。
@@ -41,6 +42,7 @@ interface BackendKpis {
 interface BackendLadder {
   as_of: string | null;
   as_of_prev: string | null;
+  as_of_quality?: AsOfQuality;
   source: "local_calc";
   limits_present: boolean;
   is_partial: boolean;
@@ -64,6 +66,7 @@ interface BackendSectorLimitUpItem {
 
 interface BackendSectorLimitUp {
   as_of: string | null;
+  as_of_quality?: AsOfQuality;
   source: "local_calc";
   degraded_reason: string | null;
   unclassified_count: number;
@@ -88,6 +91,7 @@ interface BackendYesterdayLimitUpItem {
 interface BackendYesterdayLimitUp {
   as_of: string | null;
   as_of_prev: string | null;
+  as_of_quality?: AsOfQuality;
   source: "local_calc";
   degraded_reason: string | null;
   kpis: Record<string, unknown>;
@@ -142,6 +146,8 @@ export interface SentimentKpis {
 export interface LimitUpLadder {
   asOf: string | null;
   asOfPrev: string | null;
+  /** 判据日完整性口径（后端 Task 2 起返回，默认 partial）。 */
+  asOfQuality: AsOfQuality;
   source: "local_calc";
   limitsPresent: boolean;
   isPartial: boolean;
@@ -165,6 +171,8 @@ export interface SectorLimitUpItem {
 
 export interface SectorLimitUp {
   asOf: string | null;
+  /** 判据日完整性口径（后端 Task 2 起返回，默认 partial）。 */
+  asOfQuality: AsOfQuality;
   source: "local_calc";
   degradedReason: string | null;
   unclassifiedCount: number;
@@ -189,6 +197,8 @@ export interface YesterdayLimitUpItem {
 export interface YesterdayLimitUp {
   asOf: string | null;
   asOfPrev: string | null;
+  /** 判据日完整性口径（后端 Task 2 起返回，默认 partial）。 */
+  asOfQuality: AsOfQuality;
   source: "local_calc";
   degradedReason: string | null;
   kpis: Record<string, unknown>;
@@ -285,6 +295,8 @@ export function fetchLimitUpLadder(date?: string, lookback = 10): Promise<LimitU
   return apiGet<BackendLadder>("/api/v1/market/limit-up-ladder", { date, lookback }).then((b) => ({
     asOf: b.as_of,
     asOfPrev: b.as_of_prev,
+    // 缺省回合 `partial`：口径未知时不得谎报「收盘」
+    asOfQuality: b.as_of_quality ?? "partial",
     source: b.source,
     limitsPresent: b.limits_present,
     isPartial: b.is_partial,
@@ -298,6 +310,7 @@ export function fetchLimitUpLadder(date?: string, lookback = 10): Promise<LimitU
 export function fetchSectorLimitUp(date?: string, swL1?: string): Promise<SectorLimitUp> {
   return apiGet<BackendSectorLimitUp>("/api/v1/market/sector-limit-up", { date, sw_l1: swL1 }).then((b) => ({
     asOf: b.as_of,
+    asOfQuality: b.as_of_quality ?? "partial",
     source: b.source,
     degradedReason: b.degraded_reason,
     unclassifiedCount: b.unclassified_count,
@@ -309,6 +322,7 @@ export function fetchYesterdayLimitUp(date?: string): Promise<YesterdayLimitUp> 
   return apiGet<BackendYesterdayLimitUp>("/api/v1/market/yesterday-limit-up", { date }).then((b) => ({
     asOf: b.as_of,
     asOfPrev: b.as_of_prev,
+    asOfQuality: b.as_of_quality ?? "partial",
     source: b.source,
     degradedReason: b.degraded_reason,
     kpis: b.kpis,
