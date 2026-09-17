@@ -6,7 +6,14 @@ Data sources
   for aggregated stats.
 - **Redis**: short-lived cache (300s) for all dashboard endpoints.
 - **TuShare Pro** (via ``TuShareClient``): fallback for indices when DB is empty.
-- **Static fallback**: last-resort data when both sources return empty.
+
+"最新交易日"的唯一判据是 :mod:`app.services.market_day_service`（行数 + pct_chg
+非空率 + 限价存在）。本模块不再直接 ``max(daily_quotes.trade_date)``：
+``_latest_trade_date`` 与 :func:`get_latest_trade_date` 都是它的薄封装，前者返回
+``None``、后者在库真空时保留 ``ValueError`` 契约（两个调用方 ``get_rankings`` /
+``get_sw_industry_performance`` 的非空库行为不变）。``get_latest_trade_date`` 的
+Redis 缓存由判据模块统一持有（``market:day:latest_complete``，TTL 60s），旧的
+``market:latest_trade_date`` / 300s 缓存已下线。
 """
 
 from __future__ import annotations
@@ -20,11 +27,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
 from app.core.redis import CacheClient
-from app.models.quote import DailyQuote
 from app.models.stock import Stock
 from app.schemas.ranking import RankingItemOut, RankingResponseOut, RankingType
 from app.schemas.stock import StockOut
 from app.schemas.sw_performance import SwPerformanceItemOut, SwPerformanceResponseOut
+from app.services import market_day_service
 
 logger = logging.getLogger(__name__)
 
@@ -52,39 +59,19 @@ INDEX_NAME_MAP: dict[str, str] = {idx["ts_code"]: idx["name"] for idx in _TARGET
 INDEX_EXCHANGE_MAP: dict[str, str] = {idx["ts_code"]: idx["exchange"] for idx in _TARGET_INDICES}
 
 # ---------------------------------------------------------------------------
-# Static fallback data — returned only when both DB and TuShare are empty
-# ---------------------------------------------------------------------------
-
-_FALLBACK_DISTRIBUTION = [
-    {"range": "跌停", "count": 0},
-    {"range": ">-7%", "count": 0},
-    {"range": "-5~-7%", "count": 0},
-    {"range": "-3~-5%", "count": 0},
-    {"range": "-1~-3%", "count": 0},
-    {"range": "0~-1%", "count": 0},
-    {"range": "0~1%", "count": 0},
-    {"range": "1~3%", "count": 0},
-    {"range": "3~5%", "count": 0},
-    {"range": ">5%", "count": 0},
-    {"range": "涨停", "count": 0},
-]
-
-# ---------------------------------------------------------------------------
-# Helper: get the latest trade date from DB
+# Helper: latest trade date = completeness-predicate delegate (single source)
 # ---------------------------------------------------------------------------
 
 
 async def _latest_trade_date(db: AsyncSession) -> date | None:
-    """Return the most recent trade_date, or None when daily_quotes is empty.
+    """Return the resolved latest trade date, or ``None`` when daily_quotes is empty.
 
-    Thin **uncached** delegate to :func:`get_latest_trade_date` so the max()
-    SQL exists in exactly one place; the four dashboard readers below keep
-    reading directly (no cache dependency).
+    Thin **uncached** delegate to :func:`market_day_service.resolve_latest_complete_day`
+    so the "which day is usable" decision exists in exactly one place. Callers that
+    also need the quality label call the resolver directly (see the ``get_*`` readers).
     """
-    try:
-        return await get_latest_trade_date(db)
-    except ValueError:
-        return None
+    md = await market_day_service.resolve_latest_complete_day(db)
+    return md.day if md is not None else None
 
 
 async def _latest_trade_date_str() -> str:
@@ -97,11 +84,8 @@ async def _latest_trade_date_str() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Shared latest-trade-date resolver — single source of truth for "as of"
+# "as of" helpers — the completeness predicate is the only source of truth
 # ---------------------------------------------------------------------------
-
-_LATEST_TRADE_DATE_CACHE_KEY = "market:latest_trade_date"
-_LATEST_TRADE_DATE_TTL = 300
 
 
 def last_weekday(d: date) -> date:
@@ -116,32 +100,35 @@ def last_weekday(d: date) -> date:
 
 
 async def get_latest_trade_date(db: AsyncSession, cache: CacheClient | None = None) -> date:
-    """Return the newest ``daily_quotes.trade_date`` (single shared resolver).
+    """Return the resolved latest **complete-capable** trade date.
 
-    Redis-cached for 5 minutes under ``market:latest_trade_date``. Ruling Q:
-    ``CacheClient`` JSON-serializes, so the cached value is an ISO string and is
-    parsed back with ``date.fromisoformat``. A non-string (or unparseable) cached
-    value is treated as a cache miss and re-resolved from the DB — ``cast`` would
-    be a runtime no-op and could leak a non-``date`` straight to callers.
+    Kept for its two legacy callers (``get_rankings`` / ``get_sw_industry_performance``);
+    they now call the resolver directly so they can also surface ``as_of_quality``.
+    Empty ``daily_quotes`` still raises ``ValueError`` (callers degrade without a 500).
+    The Redis cache lives in :mod:`app.services.market_day_service`
+    (``market:day:latest_complete``, TTL 60s) — the old ``market:latest_trade_date``
+    300s date-string cache was retired with this change.
     """
-    if cache:
-        cached = await cache.get(_LATEST_TRADE_DATE_CACHE_KEY)
-        if isinstance(cached, str):
-            try:
-                return date.fromisoformat(cached)
-            except ValueError:
-                # Corrupt cache payload — fall through and re-resolve from the DB
-                # (then overwrite the cache below) rather than trusting it.
-                pass
-
-    result = await db.execute(select(func.max(DailyQuote.trade_date)))
-    as_of = result.scalar_one_or_none()
-    if as_of is None:
+    md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
+    if md is None:
         raise ValueError("daily_quotes is empty — run ingest first")
+    return md.day
 
-    if cache:
-        await cache.set(_LATEST_TRADE_DATE_CACHE_KEY, as_of.isoformat(), _LATEST_TRADE_DATE_TTL)
-    return as_of
+
+def _envelope(
+    md: market_day_service.MarketDay | None, rows: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Build the ``MarketListOut`` payload; empty DB degrades to ``as_of=None``.
+
+    ``reason`` is only populated when the resolved day is a fallback/partial pick
+    (see Task 1's ``MarketDay``); branch callers on ``as_of_quality``, never on ``reason``.
+    """
+    return {
+        "as_of": md.day.isoformat() if md is not None else None,
+        "as_of_quality": md.quality if md is not None else "partial",
+        "as_of_reason": md.reason if md is not None else None,
+        "items": rows,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -249,58 +236,44 @@ async def _fetch_indices_from_tushare() -> list[dict[str, Any]]:
     return results
 
 
-async def get_distribution(cache: CacheClient | None = None) -> list[dict[str, Any]]:
-    """Return market-wide up/down distribution from DB daily_quotes."""
-    cache_key = "market:distribution"
-    if cache:
-        cached = await cache.get(cache_key)
-        if cached is not None:
-            return cast(list[dict[str, Any]], cached)
-
-    async with async_session_factory() as db:
-        latest = await _latest_trade_date(db)
-        if not latest:
-            return _FALLBACK_DISTRIBUTION
-
-        stmt = text("""
+async def _distribution_rows(db: AsyncSession, day: date) -> list[dict[str, Any]]:
+    """Single-day up/down distribution rows (seam: unit tests monkeypatch this)."""
+    stmt = text("""
+        SELECT
+            CASE
+                WHEN pct_chg <= -9.5 THEN '跌停'
+                WHEN pct_chg < -7 THEN '>-7%'
+                WHEN pct_chg < -5 THEN '-5~-7%'
+                WHEN pct_chg < -3 THEN '-3~-5%'
+                WHEN pct_chg < -1 THEN '-1~-3%'
+                WHEN pct_chg < 0 THEN '0~-1%'
+                WHEN pct_chg < 1 THEN '0~1%'
+                WHEN pct_chg < 3 THEN '1~3%'
+                WHEN pct_chg < 5 THEN '3~5%'
+                WHEN pct_chg >= 9.5 THEN '涨停'
+                ELSE '>5%'
+            END AS range_label,
+            COUNT(*) AS cnt
+        FROM (
             SELECT
-                CASE
-                    WHEN pct_chg <= -9.5 THEN '跌停'
-                    WHEN pct_chg < -7 THEN '>-7%'
-                    WHEN pct_chg < -5 THEN '-5~-7%'
-                    WHEN pct_chg < -3 THEN '-3~-5%'
-                    WHEN pct_chg < -1 THEN '-1~-3%'
-                    WHEN pct_chg < 0 THEN '0~-1%'
-                    WHEN pct_chg < 1 THEN '0~1%'
-                    WHEN pct_chg < 3 THEN '1~3%'
-                    WHEN pct_chg < 5 THEN '3~5%'
-                    WHEN pct_chg >= 9.5 THEN '涨停'
-                    ELSE '>5%'
-                END AS range_label,
-                COUNT(*) AS cnt
-            FROM (
-                SELECT
-                    dq.stock_id,
-                    CASE WHEN dq.close > 0 AND prev.close > 0
-                         THEN ((dq.close - prev.close) / prev.close * 100)
-                         ELSE 0 END AS pct_chg
-                FROM daily_quotes dq
-                LEFT JOIN LATERAL (
-                    SELECT close FROM daily_quotes dq2
-                    WHERE dq2.stock_id = dq.stock_id
-                      AND dq2.trade_date < :trade_date
-                    ORDER BY dq2.trade_date DESC
-                    LIMIT 1
-                ) prev ON true
-                WHERE dq.trade_date = :trade_date
-            ) sub
-            GROUP BY range_label
-        """)
-        result = await db.execute(stmt, {"trade_date": latest})
-        db_rows = {row.range_label: row.cnt for row in result}
-
-    if not db_rows:
-        return _FALLBACK_DISTRIBUTION
+                dq.stock_id,
+                CASE WHEN dq.close > 0 AND prev.close > 0
+                     THEN ((dq.close - prev.close) / prev.close * 100)
+                     ELSE 0 END AS pct_chg
+            FROM daily_quotes dq
+            LEFT JOIN LATERAL (
+                SELECT close FROM daily_quotes dq2
+                WHERE dq2.stock_id = dq.stock_id
+                  AND dq2.trade_date < :trade_date
+                ORDER BY dq2.trade_date DESC
+                LIMIT 1
+            ) prev ON true
+            WHERE dq.trade_date = :trade_date
+        ) sub
+        GROUP BY range_label
+    """)
+    result = await db.execute(stmt, {"trade_date": day})
+    db_rows = {row.range_label: row.cnt for row in result}
 
     ordered_ranges = [
         "跌停",
@@ -315,94 +288,34 @@ async def get_distribution(cache: CacheClient | None = None) -> list[dict[str, A
         ">5%",
         "涨停",
     ]
-    data = [{"range": r, "count": db_rows.get(r, 0)} for r in ordered_ranges]
-    if cache:
-        await cache.set(cache_key, data, _MARKET_CACHE_TTL)
-    return data
+    return [{"range": r, "count": db_rows.get(r, 0)} for r in ordered_ranges]
 
 
-async def get_sectors(cache: CacheClient | None = None) -> list[dict[str, Any]]:
-    """Return industry sector performance from DB."""
-    cache_key = "market:sectors"
+async def get_distribution(cache: CacheClient | None = None) -> dict[str, Any]:
+    """Return market-wide up/down distribution as ``{as_of, as_of_quality, items}``."""
+    cache_key = "market:distribution"
     if cache:
         cached = await cache.get(cache_key)
-        if cached is not None:
-            return cast(list[dict[str, Any]], cached)
+        if isinstance(cached, dict):  # bare-list payloads from before this change = miss
+            return cast(dict[str, Any], cached)
 
     async with async_session_factory() as db:
-        latest = await _latest_trade_date(db)
-        if not latest:
-            return []
+        md = await market_day_service.resolve_latest_complete_day(db)
+        rows = await _distribution_rows(db, md.day) if md is not None else []
 
-        stmt = text("""
-            WITH latest_quotes AS (
-                SELECT dq.stock_id, dq.close, dq.amount,
-                       prev.close AS prev_close
-                FROM daily_quotes dq
-                LEFT JOIN LATERAL (
-                    SELECT close FROM daily_quotes dq2
-                    WHERE dq2.stock_id = dq.stock_id
-                      AND dq2.trade_date < :trade_date
-                    ORDER BY dq2.trade_date DESC
-                    LIMIT 1
-                ) prev ON true
-                WHERE dq.trade_date = :trade_date
-            )
-            SELECT
-                s.csrc_desc AS industry,
-                COUNT(*) AS stock_count,
-                SUM(lq.amount) AS total_amount,
-                AVG(CASE WHEN lq.prev_close > 0
-                    THEN (lq.close - lq.prev_close) / lq.prev_close * 100
-                    ELSE 0 END) AS avg_change_pct
-            FROM stocks s
-            JOIN latest_quotes lq ON lq.stock_id = s.id
-            WHERE s.csrc_desc IS NOT NULL AND s.csrc_desc != ''
-            GROUP BY s.csrc_desc
-            ORDER BY avg_change_pct DESC
-            LIMIT 30
-        """)
-        result = await db.execute(stmt, {"trade_date": latest})
-        rows = result.fetchall()
-
-    sectors: list[dict[str, Any]] = []
-    for row in rows:
-        sectors.append(
-            {
-                "name": row.industry,
-                "changePercent": round(float(row.avg_change_pct or 0), 2),
-                "totalMarketCap": float(row.total_amount or 0) * 1000,
-                "stockCount": int(row.stock_count),
-                "topStocks": [],
-            }
-        )
-    if cache and sectors:
-        await cache.set(cache_key, sectors, _MARKET_CACHE_TTL)
-    return sectors
+    payload = _envelope(md, rows)
+    if cache and md is not None:
+        await cache.set(cache_key, payload, _MARKET_CACHE_TTL)
+    return payload
 
 
-async def get_capital_flow(cache: CacheClient | None = None) -> list[dict[str, Any]]:
-    """Return sector-level turnover distribution from DB."""
-    cache_key = "market:capital-flow"
-    if cache:
-        cached = await cache.get(cache_key)
-        if cached is not None:
-            return cast(list[dict[str, Any]], cached)
-
-    async with async_session_factory() as db:
-        latest = await _latest_trade_date(db)
-        if not latest:
-            return []
-
-        stmt = text("""
-            SELECT
-                s.csrc_desc AS industry,
-                SUM(CASE WHEN dq.close >= COALESCE(prev.close, dq.close)
-                    THEN dq.amount ELSE 0 END) AS inflow_raw,
-                SUM(CASE WHEN dq.close < COALESCE(prev.close, dq.close)
-                    THEN dq.amount ELSE 0 END) AS outflow_raw
-            FROM stocks s
-            JOIN daily_quotes dq ON dq.stock_id = s.id AND dq.trade_date = :trade_date
+async def _sector_rows(db: AsyncSession, day: date) -> list[dict[str, Any]]:
+    """CSRC-industry performance rows for one day (seam: unit tests monkeypatch this)."""
+    stmt = text("""
+        WITH latest_quotes AS (
+            SELECT dq.stock_id, dq.close, dq.amount,
+                   prev.close AS prev_close
+            FROM daily_quotes dq
             LEFT JOIN LATERAL (
                 SELECT close FROM daily_quotes dq2
                 WHERE dq2.stock_id = dq.stock_id
@@ -410,13 +323,80 @@ async def get_capital_flow(cache: CacheClient | None = None) -> list[dict[str, A
                 ORDER BY dq2.trade_date DESC
                 LIMIT 1
             ) prev ON true
-            WHERE s.csrc_desc IS NOT NULL AND s.csrc_desc != ''
-            GROUP BY s.csrc_desc
-            ORDER BY (SUM(dq.amount)) DESC
-            LIMIT 10
-        """)
-        result = await db.execute(stmt, {"trade_date": latest})
-        rows = result.fetchall()
+            WHERE dq.trade_date = :trade_date
+        )
+        SELECT
+            s.csrc_desc AS industry,
+            COUNT(*) AS stock_count,
+            SUM(lq.amount) AS total_amount,
+            AVG(CASE WHEN lq.prev_close > 0
+                THEN (lq.close - lq.prev_close) / lq.prev_close * 100
+                ELSE 0 END) AS avg_change_pct
+        FROM stocks s
+        JOIN latest_quotes lq ON lq.stock_id = s.id
+        WHERE s.csrc_desc IS NOT NULL AND s.csrc_desc != ''
+        GROUP BY s.csrc_desc
+        ORDER BY avg_change_pct DESC
+        LIMIT 30
+    """)
+    result = await db.execute(stmt, {"trade_date": day})
+    rows = result.fetchall()
+
+    return [
+        {
+            "name": row.industry,
+            "changePercent": round(float(row.avg_change_pct or 0), 2),
+            "totalMarketCap": float(row.total_amount or 0) * 1000,
+            "stockCount": int(row.stock_count),
+            "topStocks": [],
+        }
+        for row in rows
+    ]
+
+
+async def get_sectors(cache: CacheClient | None = None) -> dict[str, Any]:
+    """Return industry sector performance as ``{as_of, as_of_quality, items}``."""
+    cache_key = "market:sectors"
+    if cache:
+        cached = await cache.get(cache_key)
+        if isinstance(cached, dict):  # bare-list payloads from before this change = miss
+            return cast(dict[str, Any], cached)
+
+    async with async_session_factory() as db:
+        md = await market_day_service.resolve_latest_complete_day(db)
+        rows = await _sector_rows(db, md.day) if md is not None else []
+
+    payload = _envelope(md, rows)
+    if cache and md is not None:
+        await cache.set(cache_key, payload, _MARKET_CACHE_TTL)
+    return payload
+
+
+async def _capital_flow_rows(db: AsyncSession, day: date) -> list[dict[str, Any]]:
+    """Sector inflow/outflow rows for one day (seam: unit tests monkeypatch this)."""
+    stmt = text("""
+        SELECT
+            s.csrc_desc AS industry,
+            SUM(CASE WHEN dq.close >= COALESCE(prev.close, dq.close)
+                THEN dq.amount ELSE 0 END) AS inflow_raw,
+            SUM(CASE WHEN dq.close < COALESCE(prev.close, dq.close)
+                THEN dq.amount ELSE 0 END) AS outflow_raw
+        FROM stocks s
+        JOIN daily_quotes dq ON dq.stock_id = s.id AND dq.trade_date = :trade_date
+        LEFT JOIN LATERAL (
+            SELECT close FROM daily_quotes dq2
+            WHERE dq2.stock_id = dq.stock_id
+              AND dq2.trade_date < :trade_date
+            ORDER BY dq2.trade_date DESC
+            LIMIT 1
+        ) prev ON true
+        WHERE s.csrc_desc IS NOT NULL AND s.csrc_desc != ''
+        GROUP BY s.csrc_desc
+        ORDER BY (SUM(dq.amount)) DESC
+        LIMIT 10
+    """)
+    result = await db.execute(stmt, {"trade_date": day})
+    rows = result.fetchall()
 
     flows: list[dict[str, Any]] = []
     for row in rows:
@@ -429,82 +409,106 @@ async def get_capital_flow(cache: CacheClient | None = None) -> list[dict[str, A
                 "outflow": round(-outflow, 2),
             }
         )
-    if cache and flows:
-        await cache.set(cache_key, flows, _MARKET_CACHE_TTL)
     return flows
+
+
+async def get_capital_flow(cache: CacheClient | None = None) -> dict[str, Any]:
+    """Return sector-level turnover distribution as an ``as_of`` envelope."""
+    cache_key = "market:capital-flow"
+    if cache:
+        cached = await cache.get(cache_key)
+        if isinstance(cached, dict):  # bare-list payloads from before this change = miss
+            return cast(dict[str, Any], cached)
+
+    async with async_session_factory() as db:
+        md = await market_day_service.resolve_latest_complete_day(db)
+        rows = await _capital_flow_rows(db, md.day) if md is not None else []
+
+    payload = _envelope(md, rows)
+    if cache and md is not None:
+        await cache.set(cache_key, payload, _MARKET_CACHE_TTL)
+    return payload
+
+
+async def _hot_board_rows(
+    db: AsyncSession, day: date, category: HotBoardCategory
+) -> list[dict[str, Any]]:
+    """Board breadth rows for one day + category (seam: unit tests monkeypatch this)."""
+    group_col = "csrc_desc" if category == "industry" else "province"
+    stmt = text(f"""
+        WITH latest_quotes AS (
+            SELECT dq.stock_id, dq.close,
+                   CASE WHEN prev.close > 0
+                        THEN (dq.close - prev.close) / prev.close * 100
+                        ELSE 0 END AS pct_chg
+            FROM daily_quotes dq
+            LEFT JOIN LATERAL (
+                SELECT close FROM daily_quotes dq2
+                WHERE dq2.stock_id = dq.stock_id
+                  AND dq2.trade_date < :trade_date
+                ORDER BY dq2.trade_date DESC
+                LIMIT 1
+            ) prev ON true
+            WHERE dq.trade_date = :trade_date
+        )
+        SELECT
+            s.{group_col} AS group_name,
+            COUNT(*) AS total,
+            SUM(CASE WHEN lq.pct_chg > 0 THEN 1 ELSE 0 END) AS up_count,
+            SUM(CASE WHEN lq.pct_chg = 0 THEN 1 ELSE 0 END) AS flat_count,
+            SUM(CASE WHEN lq.pct_chg < 0 THEN 1 ELSE 0 END) AS down_count,
+            AVG(lq.pct_chg) AS avg_chg
+        FROM stocks s
+        JOIN latest_quotes lq ON lq.stock_id = s.id
+        WHERE s.{group_col} IS NOT NULL AND s.{group_col} != ''
+        GROUP BY s.{group_col}
+        ORDER BY avg_chg DESC
+        LIMIT 10
+    """)  # noqa: S608
+    result = await db.execute(stmt, {"trade_date": day})
+    rows = result.fetchall()
+
+    return [
+        {
+            "id": f"{category}-{row.group_name}",
+            "name": row.group_name,
+            "code": "",
+            "changePercent": round(float(row.avg_chg or 0), 2),
+            "upCount": int(row.up_count or 0),
+            "flatCount": int(row.flat_count or 0),
+            "downCount": int(row.down_count or 0),
+            "leaders": [],
+        }
+        for row in rows
+    ]
 
 
 async def get_hot_boards(
     category: HotBoardCategory,
     cache: CacheClient | None = None,
-) -> list[dict[str, Any]]:
-    """Return hot boards for the given category from DB."""
+) -> dict[str, Any]:
+    """Return hot boards for the given category as an ``as_of`` envelope.
+
+    ``concept`` has no data source yet, so it returns an empty envelope without
+    probing the DB (``as_of=None`` / ``partial``).
+    """
     if category == "concept":
-        return []
+        return _envelope(None, [])
 
     cache_key = f"market:hot-boards:{category}"
     if cache:
         cached = await cache.get(cache_key)
-        if cached is not None:
-            return cast(list[dict[str, Any]], cached)
-
-    group_col = "csrc_desc" if category == "industry" else "province"
+        if isinstance(cached, dict):  # bare-list payloads from before this change = miss
+            return cast(dict[str, Any], cached)
 
     async with async_session_factory() as db:
-        latest = await _latest_trade_date(db)
-        if not latest:
-            return []
+        md = await market_day_service.resolve_latest_complete_day(db)
+        rows = await _hot_board_rows(db, md.day, category) if md is not None else []
 
-        stmt = text(f"""
-            WITH latest_quotes AS (
-                SELECT dq.stock_id, dq.close,
-                       CASE WHEN prev.close > 0
-                            THEN (dq.close - prev.close) / prev.close * 100
-                            ELSE 0 END AS pct_chg
-                FROM daily_quotes dq
-                LEFT JOIN LATERAL (
-                    SELECT close FROM daily_quotes dq2
-                    WHERE dq2.stock_id = dq.stock_id
-                      AND dq2.trade_date < :trade_date
-                    ORDER BY dq2.trade_date DESC
-                    LIMIT 1
-                ) prev ON true
-                WHERE dq.trade_date = :trade_date
-            )
-            SELECT
-                s.{group_col} AS group_name,
-                COUNT(*) AS total,
-                SUM(CASE WHEN lq.pct_chg > 0 THEN 1 ELSE 0 END) AS up_count,
-                SUM(CASE WHEN lq.pct_chg = 0 THEN 1 ELSE 0 END) AS flat_count,
-                SUM(CASE WHEN lq.pct_chg < 0 THEN 1 ELSE 0 END) AS down_count,
-                AVG(lq.pct_chg) AS avg_chg
-            FROM stocks s
-            JOIN latest_quotes lq ON lq.stock_id = s.id
-            WHERE s.{group_col} IS NOT NULL AND s.{group_col} != ''
-            GROUP BY s.{group_col}
-            ORDER BY avg_chg DESC
-            LIMIT 10
-        """)  # noqa: S608
-        result = await db.execute(stmt, {"trade_date": latest})
-        rows = result.fetchall()
-
-    boards: list[dict[str, Any]] = []
-    for row in rows:
-        boards.append(
-            {
-                "id": f"{category}-{row.group_name}",
-                "name": row.group_name,
-                "code": "",
-                "changePercent": round(float(row.avg_chg or 0), 2),
-                "upCount": int(row.up_count or 0),
-                "flatCount": int(row.flat_count or 0),
-                "downCount": int(row.down_count or 0),
-                "leaders": [],
-            }
-        )
-    if cache and boards:
-        await cache.set(cache_key, boards, _MARKET_CACHE_TTL)
-    return boards
+    payload = _envelope(md, rows)
+    if cache and md is not None:
+        await cache.set(cache_key, payload, _MARKET_CACHE_TTL)
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -578,16 +582,26 @@ _TURNOVER_RANK_SQL = text("""
 """)
 
 
+async def _ranking_rows(
+    db: AsyncSession, rank_type: str, day: date, limit: int
+) -> list[dict[str, Any]]:
+    """Top-N ranking rows for one day (seam: unit tests monkeypatch this)."""
+    stmt = _TURNOVER_RANK_SQL if rank_type == "turnover_rate" else _QUOTE_RANK_SQL[rank_type]
+    rows = (await db.execute(stmt, {"as_of": day, "limit": limit})).mappings().all()
+    return [dict(row) for row in rows]
+
+
 async def get_rankings(
     db: AsyncSession,
     cache: CacheClient | None,
     rank_type: str,
     limit: int,
 ) -> RankingResponseOut:
-    """Return the public top-N ranking for ``rank_type`` as of the latest trade date.
+    """Return the public top-N ranking for ``rank_type`` as of the resolved day.
 
-    Cache-first (ruling S) mirroring ``get_distribution``; ``as_of`` is shared
-    with the rest of the market plane via :func:`get_latest_trade_date`.
+    Cache-first (ruling S) mirroring ``get_distribution``; ``as_of`` and
+    ``as_of_quality`` come from the completeness predicate (Task 1) rather than a
+    raw ``max(trade_date)`` — a dirty latest day must not blank the ranking.
     """
     if rank_type not in _RANKING_ORDER:
         raise ValueError(f"unknown ranking type: {rank_type}")
@@ -598,27 +612,27 @@ async def get_rankings(
         if cached is not None:
             return RankingResponseOut.model_validate(cached)
 
-    try:
-        as_of = await get_latest_trade_date(db, cache)
-    except ValueError:
+    md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
+    if md is None:
         # Public homepage block: an empty daily_quotes must degrade to a coherent
         # empty payload (as get_distribution falls back), never a 500. Not cached —
         # so the block recovers on the first ingest after the DB is populated.
         return RankingResponseOut(
             as_of=last_weekday(date.today()),
+            as_of_quality="partial",
             is_latest_trading_day=False,
             type=cast(RankingType, rank_type),
             items=[],
         )
 
-    stmt = _TURNOVER_RANK_SQL if rank_type == "turnover_rate" else _QUOTE_RANK_SQL[rank_type]
-    rows = (await db.execute(stmt, {"as_of": as_of, "limit": limit})).mappings().all()
-
+    rows = await _ranking_rows(db, rank_type, md.day, limit)
     out = RankingResponseOut(
-        as_of=as_of,
-        is_latest_trading_day=as_of >= last_weekday(date.today()),
+        as_of=md.day,
+        as_of_quality=md.quality,
+        as_of_reason=md.reason,
+        is_latest_trading_day=md.day >= last_weekday(date.today()),
         type=cast(RankingType, rank_type),
-        items=[RankingItemOut(**dict(row)) for row in rows],
+        items=[RankingItemOut(**row) for row in rows],
     )
     if cache:
         await cache.set(cache_key, out.model_dump(mode="json"), _MARKET_CACHE_TTL)
@@ -661,15 +675,22 @@ _SW_PERF_SQL = text("""
 """)
 
 
+async def _sw_performance_rows(db: AsyncSession, day: date) -> list[dict[str, Any]]:
+    """SW L1 rollup rows for one day (seam: unit tests monkeypatch this)."""
+    rows = (await db.execute(_SW_PERF_SQL, {"as_of": day})).mappings().all()
+    return [dict(row) for row in rows]
+
+
 async def get_sw_industry_performance(
     db: AsyncSession,
     cache: CacheClient | None,
     limit: int = 31,
 ) -> SwPerformanceResponseOut:
-    """Return Shenwan L1 industry performance as of the latest trade date.
+    """Return Shenwan L1 industry performance as of the resolved day.
 
     Cache-first (ruling U) mirroring ``get_rankings``; the full L1 set is cached
     under one key and ``limit`` is applied on read (the SQL returns all L1 rows).
+    ``as_of_quality`` comes from the completeness predicate (Task 1).
     """
     cache_key = "market:sw-performance"
     if cache:
@@ -678,17 +699,20 @@ async def get_sw_industry_performance(
             out = SwPerformanceResponseOut.model_validate(cached)
             return out.model_copy(update={"items": out.items[:limit]})
 
-    try:
-        as_of = await get_latest_trade_date(db, cache)
-    except ValueError:
+    md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
+    if md is None:
         # Anonymous homepage block: an empty daily_quotes degrades to an empty
         # payload (never 500) and is not cached, so it recovers after the first ingest.
-        return SwPerformanceResponseOut(as_of=last_weekday(date.today()), items=[])
+        return SwPerformanceResponseOut(
+            as_of=last_weekday(date.today()), as_of_quality="partial", items=[]
+        )
 
-    rows = (await db.execute(_SW_PERF_SQL, {"as_of": as_of})).mappings().all()
+    rows = await _sw_performance_rows(db, md.day)
     out = SwPerformanceResponseOut(
-        as_of=as_of,
-        items=[SwPerformanceItemOut(**dict(row)) for row in rows],
+        as_of=md.day,
+        as_of_quality=md.quality,
+        as_of_reason=md.reason,
+        items=[SwPerformanceItemOut(**row) for row in rows],
     )
     if cache:
         await cache.set(cache_key, out.model_dump(mode="json"), _MARKET_CACHE_TTL)

@@ -164,6 +164,7 @@ async def get_limit_up_ladder(
     return LimitUpLadderOut(
         as_of=snap["as_of"],
         as_of_prev=snap["as_of_prev"],
+        as_of_quality=snap.get("as_of_quality", "partial"),
         source=snap["source"],
         limits_present=snap["limits_present"],
         is_partial=snap["is_partial"],

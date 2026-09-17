@@ -132,22 +132,30 @@ async def test_sw_performance_cache_hit_skips_db() -> None:
     assert db.calls == []
 
 
+def _patch_resolved_day(monkeypatch, quality: str = "complete") -> None:
+    async def _resolve(_db, *, cache=None):
+        return market_service.market_day_service.MarketDay(
+            date(2026, 9, 9), quality, None, 5485, 5513, 1.0, True
+        )
+
+    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _resolve)
+
+
 @pytest.mark.asyncio
 async def test_sw_performance_computes_and_caches(monkeypatch) -> None:
-    async def _fake_latest(_db, _cache=None):
-        return date(2026, 9, 9)
-
-    monkeypatch.setattr(market_service, "get_latest_trade_date", _fake_latest)
+    _patch_resolved_day(monkeypatch)
     cache = RecordingCache()
     db = _FakeDb([_row("110000", "农林牧渔", avg=1.23)])
 
     out = await market_service.get_sw_industry_performance(db, cache, 31)  # type: ignore[arg-type]
 
     assert out.as_of == date(2026, 9, 9)
+    assert out.as_of_quality == "complete"
     assert out.items[0].avg_pct_chg == 1.23
     # Ruling U: anonymous endpoint must go through CacheClient with _MARKET_CACHE_TTL.
     assert cache.set_calls[0][0] == "market:sw-performance"
     assert cache.set_calls[0][1]["as_of"] == "2026-09-09"  # type: ignore[index]
+    assert cache.set_calls[0][1]["as_of_quality"] == "complete"  # type: ignore[index]
     assert cache.set_calls[0][2] == market_service._MARKET_CACHE_TTL
 
 
@@ -169,14 +177,15 @@ async def test_sw_performance_limit_applied_on_cache_hit() -> None:
 async def test_sw_performance_degrades_on_empty_db(monkeypatch) -> None:
     """Public homepage block: empty daily_quotes must degrade, never 500, and not cache."""
 
-    async def _empty(_db, _cache=None):
-        raise ValueError("daily_quotes is empty — run ingest first")
+    async def _empty(_db, *, cache=None):
+        return None
 
-    monkeypatch.setattr(market_service, "get_latest_trade_date", _empty)
+    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _empty)
     cache = RecordingCache()
 
     out = await market_service.get_sw_industry_performance(_FakeDb([]), cache, 31)  # type: ignore[arg-type]
 
     assert out.items == []
     assert out.as_of == market_service.last_weekday(date.today())
+    assert out.as_of_quality == "partial"
     assert cache.set_calls == []

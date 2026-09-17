@@ -7,6 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, Query
 
 from app.api.deps import CacheDep, DbDep, require_permissions
 from app.core.exceptions import not_found_response
+from app.schemas.market import MarketListOut
 from app.schemas.quote import IndexDailyOut, IndexKlineResponse
 from app.schemas.ranking import RankingResponseOut, RankingType
 from app.schemas.sse_index import (
@@ -28,9 +29,9 @@ async def list_market_indices(cache: CacheDep) -> list[dict]:
     return await market_service.list_market_indices(cache=cache)
 
 
-@router.get("/distribution", response_model=list[dict])
-async def get_distribution(cache: CacheDep) -> list[dict]:
-    return await market_service.get_distribution(cache=cache)
+@router.get("/distribution", response_model=MarketListOut)
+async def get_distribution(cache: CacheDep) -> MarketListOut:
+    return MarketListOut.model_validate(await market_service.get_distribution(cache=cache))
 
 
 @router.get("/rankings", response_model=RankingResponseOut)
@@ -44,22 +45,22 @@ async def get_rankings(
     return await market_service.get_rankings(db, cache, type, limit)
 
 
-@router.get("/sectors", response_model=list[dict])
-async def get_sectors(cache: CacheDep) -> list[dict]:
-    return await market_service.get_sectors(cache=cache)
+@router.get("/sectors", response_model=MarketListOut)
+async def get_sectors(cache: CacheDep) -> MarketListOut:
+    return MarketListOut.model_validate(await market_service.get_sectors(cache=cache))
 
 
-@router.get("/capital-flow", response_model=list[dict])
-async def get_capital_flow(cache: CacheDep) -> list[dict]:
-    return await market_service.get_capital_flow(cache=cache)
+@router.get("/capital-flow", response_model=MarketListOut)
+async def get_capital_flow(cache: CacheDep) -> MarketListOut:
+    return MarketListOut.model_validate(await market_service.get_capital_flow(cache=cache))
 
 
-@router.get("/hot-boards", response_model=list[dict])
+@router.get("/hot-boards", response_model=MarketListOut)
 async def get_hot_boards(
     cache: CacheDep,
     category: Literal["industry", "concept", "region"] = Query(default="industry"),
-) -> list[dict]:
-    return await market_service.get_hot_boards(category, cache=cache)
+) -> MarketListOut:
+    return MarketListOut.model_validate(await market_service.get_hot_boards(category, cache=cache))
 
 
 @router.get("/indices/{ts_code}/kline", response_model=IndexKlineResponse)

@@ -99,12 +99,22 @@ async def test_get_rankings_cache_hit_skips_db(monkeypatch) -> None:
     assert db.calls == []
 
 
+def _market_day(quality: str = "complete") -> object:
+    return market_service.market_day_service.MarketDay(
+        date(2026, 9, 10), quality, None, 5485, 5513, 1.0, True
+    )
+
+
+def _patch_resolved_day(monkeypatch) -> None:
+    async def _resolve(_db, *, cache=None):
+        return _market_day()
+
+    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _resolve)
+
+
 @pytest.mark.asyncio
 async def test_get_rankings_computes_and_sets_cache(monkeypatch) -> None:
-    async def _fake_latest(_db, _cache=None):
-        return date(2026, 9, 10)
-
-    monkeypatch.setattr(market_service, "get_latest_trade_date", _fake_latest)
+    _patch_resolved_day(monkeypatch)
     cache = RecordingCache()
     db = _FakeDb(
         [
@@ -126,9 +136,11 @@ async def test_get_rankings_computes_and_sets_cache(monkeypatch) -> None:
 
     assert [i.symbol for i in out.items] == ["600000"]
     assert out.as_of == date(2026, 9, 10)
+    assert out.as_of_quality == "complete"
     # Ruling Q: cache payload is JSON-mode (as_of is a string).
     assert cache.set_calls[0][0] == "market:rankings:gainers:5"
     assert cache.set_calls[0][1]["as_of"] == "2026-09-10"  # type: ignore[index]
+    assert cache.set_calls[0][1]["as_of_quality"] == "complete"  # type: ignore[index]
     assert cache.set_calls[0][2] == market_service._MARKET_CACHE_TTL
 
 
@@ -140,12 +152,12 @@ async def test_get_rankings_rejects_unknown_type() -> None:
 
 @pytest.mark.asyncio
 async def test_get_rankings_degrades_on_empty_db(monkeypatch) -> None:
-    """Empty daily_quotes must return an empty payload, not propagate ValueError (500)."""
+    """Empty daily_quotes must return an empty payload, not propagate an error (500)."""
 
-    async def _empty(_db, _cache=None):
-        raise ValueError("daily_quotes is empty — run ingest first")
+    async def _empty(_db, *, cache=None):
+        return None
 
-    monkeypatch.setattr(market_service, "get_latest_trade_date", _empty)
+    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _empty)
     cache = RecordingCache()
     db = _FakeDb([])
 
@@ -154,28 +166,29 @@ async def test_get_rankings_degrades_on_empty_db(monkeypatch) -> None:
     assert out.items == []
     assert out.is_latest_trading_day is False
     assert out.as_of == market_service.last_weekday(date.today())
+    assert out.as_of_quality == "partial"
     assert db.calls == []
     assert cache.set_calls == [], "empty fallback must not be cached (recover immediately)"
 
 
 @pytest.mark.asyncio
 async def test_latest_trade_date_helper_delegates_uncached(monkeypatch) -> None:
-    """The four dashboard readers keep using the uncached thin delegate."""
+    """The uncached thin delegate returns the resolved day (no cache dependency)."""
     seen: list[object] = []
 
-    async def _fake(_db, _cache=None):
-        seen.append(_cache)
-        return date(2026, 9, 9)
+    async def _fake(_db, *, cache=None):
+        seen.append(cache)
+        return _market_day()
 
-    monkeypatch.setattr(market_service, "get_latest_trade_date", _fake)
-    assert await market_service._latest_trade_date(_FakeDb([])) == date(2026, 9, 9)  # type: ignore[arg-type]
+    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _fake)
+    assert await market_service._latest_trade_date(_FakeDb([])) == date(2026, 9, 10)  # type: ignore[arg-type]
     assert seen == [None], "siblings must not acquire a cache dependency"
 
 
 @pytest.mark.asyncio
 async def test_latest_trade_date_helper_returns_none_on_empty(monkeypatch) -> None:
-    async def _empty(_db, _cache=None):
-        raise ValueError("empty")
+    async def _empty(_db, *, cache=None):
+        return None
 
-    monkeypatch.setattr(market_service, "get_latest_trade_date", _empty)
+    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _empty)
     assert await market_service._latest_trade_date(_FakeDb([])) is None  # type: ignore[arg-type]

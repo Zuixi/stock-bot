@@ -1,9 +1,17 @@
-"""Tests for the shared latest-trade-date resolver + weekday heuristic (Task 2.4)."""
+"""Tests for the shared latest-trade-date resolver + weekday heuristic (Task 2.4).
+
+Task 2 rewired both helpers onto the completeness predicate
+(:mod:`app.services.market_day_service`) so "latest day" has one source of truth.
+The ISO-string Redis cache these tests used to assert now lives in the predicate
+module (covered by ``test_market_day_service.py``); here we lock the delegation +
+``ValueError`` contract kept for the two legacy callers.
+"""
 
 from datetime import date
 
 import pytest
 
+from app.services import market_service
 from app.services.market_service import get_latest_trade_date, last_weekday
 
 
@@ -21,94 +29,46 @@ class RecordingCache:
 
     def __init__(self) -> None:
         self.store: dict[str, object] = {}
-        self.set_calls: list[tuple[str, object, int | None]] = []
-
-    async def get(self, key: str):
-        return self.store.get(key)
-
-    async def set(self, key: str, value: object, ttl: int | None = None) -> None:
-        self.store[key] = value
-        self.set_calls.append((key, value, ttl))
-
-
-class _FakeResult:
-    def __init__(self, value: object) -> None:
-        self._value = value
-
-    def scalar_one_or_none(self) -> object:
-        return self._value
 
 
 class _FakeDb:
-    def __init__(self, value: object) -> None:
-        self.value = value
+    def __init__(self) -> None:
         self.execute_calls = 0
 
-    async def execute(self, *args: object, **kwargs: object) -> _FakeResult:
-        self.execute_calls += 1
-        return _FakeResult(self.value)
+
+def _patch_resolver(monkeypatch: pytest.MonkeyPatch, md: object) -> list[dict[str, object]]:
+    """Patch the predicate seam on its call site in ``market_service``."""
+    seen: list[dict[str, object]] = []
+
+    async def _resolve(_db: object, *, cache: object = None) -> object:
+        seen.append({"cache": cache})
+        return md
+
+    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _resolve)
+    return seen
+
+
+def _market_day(day: date = date(2026, 9, 10)) -> object:
+    return market_service.market_day_service.MarketDay(day, "complete", None, 5485, 5513, 1.0, True)
 
 
 @pytest.mark.asyncio
-async def test_get_latest_trade_date_reads_db_then_caches_isoformat() -> None:
-    cache = RecordingCache()
-    db = _FakeDb(date(2026, 9, 10))
-
-    out = await get_latest_trade_date(db, cache)  # type: ignore[arg-type]
-
+async def test_get_latest_trade_date_returns_resolved_day(monkeypatch) -> None:
+    _patch_resolver(monkeypatch, _market_day())
+    out = await get_latest_trade_date(_FakeDb())  # type: ignore[arg-type]
     assert out == date(2026, 9, 10)
-    # Ruling Q: the cache must hold a JSON-serializable ISO string, not a date.
-    assert cache.store["market:latest_trade_date"] == "2026-09-10"
-    assert cache.set_calls == [("market:latest_trade_date", "2026-09-10", 300)]
 
 
 @pytest.mark.asyncio
-async def test_get_latest_trade_date_cache_hit_skips_db() -> None:
+async def test_get_latest_trade_date_forwards_cache(monkeypatch) -> None:
+    seen = _patch_resolver(monkeypatch, _market_day())
     cache = RecordingCache()
-    cache.store["market:latest_trade_date"] = "2026-09-10"
-    db = _FakeDb(None)
-
-    out = await get_latest_trade_date(db, cache)  # type: ignore[arg-type]
-
-    assert out == date(2026, 9, 10)
-    assert db.execute_calls == 0
+    await get_latest_trade_date(_FakeDb(), cache)  # type: ignore[arg-type]
+    assert seen == [{"cache": cache}]
 
 
 @pytest.mark.asyncio
-async def test_get_latest_trade_date_non_str_cache_falls_through_to_db() -> None:
-    """A non-string cached value must not be ``cast`` through as a ``date``.
-
-    ``cast`` is a runtime no-op, so trusting a non-str payload would leak e.g. an
-    int/None/float to callers that then ``.strftime`` or compare it as a date.
-    """
-    cache = RecordingCache()
-    cache.store["market:latest_trade_date"] = 1778544000  # int payload, not a date
-    db = _FakeDb(date(2026, 9, 10))
-
-    out = await get_latest_trade_date(db, cache)  # type: ignore[arg-type]
-
-    assert out == date(2026, 9, 10)
-    assert db.execute_calls == 1
-    # re-resolved value overwrites the bad cache entry
-    assert cache.store["market:latest_trade_date"] == "2026-09-10"
-
-
-@pytest.mark.asyncio
-async def test_get_latest_trade_date_malformed_str_cache_falls_through_to_db() -> None:
-    cache = RecordingCache()
-    cache.store["market:latest_trade_date"] = "not-a-date"
-    db = _FakeDb(date(2026, 9, 10))
-
-    out = await get_latest_trade_date(db, cache)  # type: ignore[arg-type]
-
-    assert out == date(2026, 9, 10)
-    assert db.execute_calls == 1
-    assert cache.store["market:latest_trade_date"] == "2026-09-10"
-
-
-@pytest.mark.asyncio
-async def test_get_latest_trade_date_empty_table_raises() -> None:
-    db = _FakeDb(None)
-
+async def test_get_latest_trade_date_empty_table_raises(monkeypatch) -> None:
+    _patch_resolver(monkeypatch, None)
     with pytest.raises(ValueError, match="daily_quotes is empty"):
-        await get_latest_trade_date(db)  # type: ignore[arg-type]
+        await get_latest_trade_date(_FakeDb())  # type: ignore[arg-type]

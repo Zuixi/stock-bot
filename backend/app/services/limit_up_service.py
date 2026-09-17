@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from app.core.database import async_session_factory
 from app.repositories import limit_up_repo
 from app.services import limit_up_calculator as calc
+from app.services import market_day_service
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +43,7 @@ def _empty(as_of: date | None, reason: str) -> dict[str, Any]:
     return {
         "as_of": as_of,
         "as_of_prev": None,
+        "as_of_quality": "partial",
         "source": "local_calc",
         "limits_present": False,
         "is_partial": False,
@@ -61,7 +63,15 @@ async def get_snapshot(
 ) -> dict[str, Any]:
     """一次查询 → 一份快照 → 3 个端点共享，保证口径同源。"""
     async with async_session_factory() as db:
-        target = as_of or await limit_up_repo.latest_quote_date(db)
+        quality: market_day_service.MarketQuality = "partial"
+        if as_of is not None:
+            target: date | None = as_of
+        else:
+            # 无显式日期 → 走完整性判据，脏的最新日不得把情绪面打成空快照。
+            md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
+            target = md.day if md is not None else None
+            if md is not None:
+                quality = md.quality
         if target is None:
             return _empty(None, "no_quotes")
         key = f"market:limit-up:snapshot:{target.isoformat()}:{lookback}"
@@ -77,6 +87,7 @@ async def get_snapshot(
         breadth = await limit_up_repo.fetch_day_breadth(db, target)
         limits_present = await limit_up_repo.has_price_limits(db, target)
         snap = _empty(target, None)  # type: ignore[arg-type]
+        snap["as_of_quality"] = quality
         snap["as_of_prev"] = market_days[-2]
         snap["limits_present"] = limits_present
         snap["is_partial"] = calc.is_partial(breadth)
@@ -192,6 +203,7 @@ def sector_payload(snap: dict[str, Any], sw_l1: str | None = None) -> dict[str, 
         items = [i for i in items if i["l1_code"] == sw_l1]
     return {
         "as_of": snap["as_of"],
+        "as_of_quality": snap.get("as_of_quality", "partial"),
         "source": snap["source"],
         "degraded_reason": snap["degraded_reason"],
         "unclassified_count": snap["sectors"]["unclassified_count"],
@@ -204,6 +216,7 @@ def yesterday_payload(snap: dict[str, Any]) -> dict[str, Any]:
     return {
         "as_of": snap["as_of"],
         "as_of_prev": snap["as_of_prev"],
+        "as_of_quality": snap.get("as_of_quality", "partial"),
         "source": snap["source"],
         "degraded_reason": snap["degraded_reason"],
         "kpis": snap["yesterday"]["kpis"],
