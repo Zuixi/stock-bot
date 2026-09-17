@@ -4,8 +4,25 @@ import { marketStatus, type MarketStatus } from "./marketStatus";
 /** 开市时的刷新节奏：与后端按日缓存（300s TTL）搭配时，30s 已足够「盘中可见」。 */
 export const OPEN_POLL_INTERVAL_MS = 30_000;
 
+/**
+ * 指数卡（全球指数 / A股核心指数）的常驻慢轮询节奏：**不问 A 股时段**，全天 300s。
+ *
+ * 为什么不能跟 A 股时段：指数卡读的 `/market/global-indices` 同时含美股/欧股，
+ * 美股时段在 A 股收盘之后；若跟着 A 股时段停摆，夜盘整晚不更新（此前是全天 60s，
+ * 收盘后被 Task 9 的 A 股时段判据误伤成 false）。300s 是「仍能跟上美股」与
+ * 「不必整夜 60s 打后端」之间的折中。
+ */
+export const INDEX_POLL_INTERVAL_MS = 300_000;
+
 /** 状态自身的复查节奏（开/收盘两个边界：09:30、15:00）。 */
 const STATUS_TICK_MS = 60_000;
+
+/**
+ * 轮询模式：
+ * - `"session"`（默认）：A 股按日聚合卡——开市 30s，其余 `false`（不轮询）；
+ * - `"global-index"`：指数卡——常驻 300s（见 {@link INDEX_POLL_INTERVAL_MS}）。
+ */
+export type MarketPollMode = "session" | "global-index";
 
 /**
  * 市场状态驱动的共享轮询间隔。
@@ -18,11 +35,16 @@ const STATUS_TICK_MS = 60_000;
  *
  * 返回 `false` 表示「不轮询」——离开交易时段后页面停止后台请求，避免收盘后整夜
  * 空转（此前各卡各自 60s 轮询，收盘后依旧打后端）。
+ *
+ * `"global-index"` 模式不跟踪 A 股状态，也就没有 tick（状态与它无关）。
+ *
+ * @param mode 轮询模式，见 {@link MarketPollMode}
  */
-export function useMarketPolling(): { refetchInterval: number | false } {
+export function useMarketPolling(mode: MarketPollMode = "session"): { refetchInterval: number | false } {
   const [status, setStatus] = useState<MarketStatus>(() => marketStatus());
 
   useEffect(() => {
+    if (mode !== "session") return; // 常驻模式无状态可跟，不装 tick
     const id = window.setInterval(() => {
       setStatus((prev) => {
         const next = marketStatus();
@@ -30,7 +52,8 @@ export function useMarketPolling(): { refetchInterval: number | false } {
       });
     }, STATUS_TICK_MS);
     return () => window.clearInterval(id);
-  }, []);
+  }, [mode]);
 
+  if (mode === "global-index") return { refetchInterval: INDEX_POLL_INTERVAL_MS };
   return { refetchInterval: status === "open" ? OPEN_POLL_INTERVAL_MS : false };
 }

@@ -9,7 +9,7 @@ const STALE_TIME = 60 * 1000;
 
 /** A股核心指数卡：六个核心指数的 TV ticker 卡阵列（Stage C 指数总览 Tab） */
 export function CoreIndexCards() {
-  const { refetchInterval } = useMarketPolling();
+  const { refetchInterval } = useMarketPolling("global-index");
   const { data: indices = [], isLoading } = useQuery({
     queryKey: ["market", "global-indices"],
     queryFn: fetchGlobalIndices,

@@ -63,19 +63,23 @@ function TickerSkeletons() {
 }
 
 /**
- * 实时脉搏卡内容：公开指数 8 格 + 涨跌分布柱 + 家数汇总，60s 轮询。
+ * 实时脉搏卡内容：公开指数 8 格 + 涨跌分布柱 + 家数汇总。指数条常驻 300s 轮询
+ * （含美股/欧股），涨跌分布随 A 股时段（开市 30s / 休市停）。
  *
  * 免登录可读；指数与分布两条查询各自降级，任一失败不影响另一块，也不抛到页面级
  * ErrorBoundary。外层由首页 `<SectionCard id="pulse">` 提供卡片壳与标题。
  */
 export function MarketPulse() {
   const { colors } = useTheme();
+  // 指数条含任意市场（核心 6 码缺谁就用非核心补齐，见 pickCoreIndices）→ 常驻 300s；
+  // 涨跌分布是 A 股按日口径 → 随 A 股时段启停。两者节奏不同，故分别取用。
+  const { refetchInterval: indexRefetchInterval } = useMarketPolling("global-index");
   const { refetchInterval } = useMarketPolling();
 
   const indicesQuery = useQuery({
     queryKey: ["market", "global-indices"],
     queryFn: fetchGlobalIndices,
-    refetchInterval,
+    refetchInterval: indexRefetchInterval,
   });
 
   const distQuery = useQuery({
