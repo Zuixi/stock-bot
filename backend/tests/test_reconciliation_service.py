@@ -91,6 +91,8 @@ def _seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "repairs": [],
         "null_gaps": {},
         "repair_error": None,
+        "repair_unfilled": 0,
+        "repair_remaining": 0,
     }
 
     async def _expected(
@@ -113,7 +115,13 @@ def _seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         if state["repair_error"] is not None:
             raise state["repair_error"]
         rows = sum(n for d, n in state["null_gaps"].items() if start <= d <= end)
-        return {"stocks": 1 if rows else 0, "rows": rows, "failed": 0}
+        return {
+            "stocks": 1 if rows else 0,
+            "rows": rows,
+            "failed": 0,
+            "unfilled": state["repair_unfilled"],
+            "remaining": state["repair_remaining"],
+        }
 
     monkeypatch.setattr(rc, "_get_tushare", lambda: _CLIENT)
     monkeypatch.setattr(rc, "expected_trade_dates", _expected)
@@ -230,6 +238,8 @@ async def test_reconcile_repairs_adj_factor_for_refetched_quotes_day(
         "days": [D14.isoformat()],
         "rows": 3,
         "failed": 0,
+        "unfilled": 0,
+        "remaining": 0,
         "error": None,
     }
 
@@ -261,9 +271,32 @@ async def test_reconcile_dry_run_never_repairs_adj_factor(_seams: dict[str, Any]
     assert result["adj_factor_repaired"] is None
 
 
-async def test_reconcile_survives_adj_repair_failure(_seams: dict[str, Any]) -> None:
-    """补洞失败不得让对账失败；失败写进结果 + 会话清理（否则后续补数 PendingRollback）。"""
+def test_contiguous_runs_merges_adjacent_days() -> None:
+    """连续重拉日必须聚成**一个**区间（每股一次外呼覆盖整段），非连续才拆（M6a）。"""
+    assert rc._contiguous_runs([D14, D15, D16]) == [(D14, D16)]  # 合并
+    assert rc._contiguous_runs([D14, D15, D17]) == [(D14, D15), (D17, D17)]  # 中段断开才拆
+    assert rc._contiguous_runs([]) == []
+
+
+async def test_reconcile_surfaces_adj_repair_remaining(_seams: dict[str, Any]) -> None:
+    """补洞被预算截断时，`remaining` 必须透出到 reconcile 结果（I2：截断可见）。"""
     _seams["counts"]["daily_quotes"] = {D14: 0}
+    _seams["repair_remaining"] = 42
+
+    result = await rc.reconcile_market_data(db=object())
+
+    assert result["adj_factor_repaired"]["remaining"] == 42
+
+
+async def test_reconcile_survives_adj_repair_failure(_seams: dict[str, Any]) -> None:
+    """补洞失败不得让对账失败；失败写进结果 + 会话清理 + **后续域照常跑**。
+
+    会话不清理会让随后的 sentiment 补数报 PendingRollbackError —— 所以本测试除了
+    断言 rollback/no-raise，还要证明 sentiment 域在补洞失败后仍然执行了（M6b）。
+    """
+    _seams["counts"]["daily_quotes"] = {D14: UNIVERSE, D15: UNIVERSE, D16: 0}  # 重拉 9/16
+    _seams["counts"]["price_limits"] = {D14: UNIVERSE, D15: UNIVERSE, D16: UNIVERSE}
+    _seams["counts"]["sentiment"] = {D14: 1, D15: 0, D16: 0}  # 9/15 缺、底座完备
     _seams["repair_error"] = RuntimeError("tushare 500")
 
     class _DB:
@@ -280,3 +313,4 @@ async def test_reconcile_survives_adj_repair_failure(_seams: dict[str, Any]) -> 
     assert result["adj_factor_repaired"]["error"] == "RuntimeError: tushare 500"
     assert result["adj_factor_repaired"]["rows"] == 0
     assert result["domains"]["daily_quotes"]["status"] == "refetched"  # 对账本身仍算成功
+    assert _seams["refetch"]["sentiment"] == [D15]  # 补洞失败后 sentiment 域照常补

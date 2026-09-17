@@ -142,7 +142,9 @@ async def _repair_adj_factors(db: Any, days: list[date]) -> dict[str, Any]:
 
     失败可见性：本模块不持有 scheduler 的 ``job_id``（``record_job_failure`` 由
     jobs.py 的 except 块调用），故按本模块既有约定记 WARNING（带 traceback），并把
-    失败写进结果的 ``adj_factor_repaired.error``，freshness 端点可直接看到。
+    失败写进结果的 ``adj_factor_repaired.error``。该结果随 worker 回执与 scheduler
+    日志外露；``/market/data-freshness`` 恒以 ``apply=False`` 调用，本字段在那里
+    恒为 ``null``（只读巡检不补洞），不要指望巡检端点看到它。
     失败后主动 ``rollback`` 清会话：否则中断的事务会让随后的 sentiment 补数报
     PendingRollbackError，把"补因子失败"升级成"对账失败"，违背非致命契约。
     """
@@ -150,6 +152,8 @@ async def _repair_adj_factors(db: Any, days: list[date]) -> dict[str, Any]:
         "days": [d.isoformat() for d in days],
         "rows": 0,
         "failed": 0,
+        "unfilled": 0,
+        "remaining": 0,
         "error": None,
     }
     try:
@@ -159,7 +163,10 @@ async def _repair_adj_factors(db: Any, days: list[date]) -> dict[str, Any]:
             stats = await backfill_missing_adj_factors(db, start=start, end=end)
             outcome["rows"] += int(stats.get("rows", 0))
             outcome["failed"] += int(stats.get("failed", 0))
-        if outcome["failed"]:
+            outcome["unfilled"] += int(stats.get("unfilled", 0))
+            # 预算截断：本次没修完的股票数，透出到结果，避免"看起来全修完了"
+            outcome["remaining"] += int(stats.get("remaining", 0))
+        if outcome["failed"] or outcome["unfilled"] or outcome["remaining"]:
             logger.warning("RECONCILE adj_factor repair partial: %s", outcome)
     except Exception as exc:  # noqa: BLE001 — 加法式修复，失败不得反噬对账
         outcome["error"] = f"{type(exc).__name__}: {exc}"

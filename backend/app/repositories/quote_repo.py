@@ -236,6 +236,31 @@ async def list_missing_adj_factor_pairs(
     return [(int(stock_id), trade_date) for stock_id, trade_date in result.all()]
 
 
+async def list_missing_adj_factor_dates_for_stocks(
+    db: AsyncSession, stock_ids: list[int]
+) -> list[tuple[int, date]]:
+    """给定股票的**全部** ``adj_factor`` 为 NULL 的 ``(stock_id, trade_date)``（升序）。
+
+    与 :func:`list_missing_adj_factor_pairs` 的分工：那个按 ``[start, end]`` 发现
+    "本次运行该修哪些股票"，这个不带日期上界、给出这些股票的**完整**历史缺口。
+    I1：一旦决定修某只 ``ever_fetched`` 股票，就必须补完它所有 NULL 行——只补本次
+    运行的日子会留下"最新行有因子、中段仍 NULL"的锁死态（懒加载只看最新行，对账
+    按行数判完整，两条路都不会再回来）。
+    """
+    if not stock_ids:
+        return []
+    stmt = (
+        select(DailyQuote.stock_id, DailyQuote.trade_date)
+        .where(
+            DailyQuote.stock_id.in_(stock_ids),
+            DailyQuote.adj_factor.is_(None),
+        )
+        .order_by(DailyQuote.stock_id, DailyQuote.trade_date)
+    )
+    result = await db.execute(stmt)
+    return [(int(stock_id), trade_date) for stock_id, trade_date in result.all()]
+
+
 async def update_adj_factors(
     db: AsyncSession, stock_id: int, factors: list[tuple[date, float]]
 ) -> int:
