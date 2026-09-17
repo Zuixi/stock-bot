@@ -1,10 +1,9 @@
 import { apiGet } from "./client";
 import {
   mapMarketList,
-  type AnnotatedList,
-  type AsOfMeta,
   type AsOfQuality,
   type BackendMarketListOut,
+  type MarketListEnvelope,
 } from "./marketEnvelope";
 import type { KLinePoint, KlineResult, MarketIndex, SectorSummary, SseIntradayResponse } from "@/shared/types";
 
@@ -90,20 +89,16 @@ export function fetchMarketIndices(): Promise<MarketIndex[]> {
 }
 
 /**
- * 涨跌分布。后端返回 `MarketListOut` 信封，mapper 解包 `.items` 后仍返回数组，
- * 口径元数据（`asOf` / `asOfQuality` / `asOfReason`）挂在返回的数组上，见 `marketEnvelope.ts`。
+ * 涨跌分布。后端返回 `MarketListOut` 信封，mapper 解包后返回 `{items, asOf, asOfQuality, asOfReason}`，
+ * 消费端读 `.items`，口径元数据见 `marketEnvelope.ts`。
  */
-export function fetchDistribution(): Promise<AnnotatedList<DistributionItem, AsOfMeta>> {
-  return apiGet<BackendMarketListOut<DistributionItem>>("/api/v1/market/distribution").then((b) =>
-    mapMarketList(b, (r) => r),
-  );
+export function fetchDistribution(): Promise<MarketListEnvelope<DistributionItem>> {
+  return apiGet<BackendMarketListOut<DistributionItem>>("/api/v1/market/distribution").then(mapMarketList);
 }
 
-/** 板块涨跌（CSRC 口径）。同 {@link fetchDistribution}：返回数组 + 口径元数据。 */
-export function fetchSectors(): Promise<AnnotatedList<SectorSummary, AsOfMeta>> {
-  return apiGet<BackendMarketListOut<SectorSummary>>("/api/v1/market/sectors").then((b) =>
-    mapMarketList(b, (r) => r),
-  );
+/** 板块涨跌（CSRC 口径）。同 {@link fetchDistribution}：返回 `{items, 口径元数据}` 信封。 */
+export function fetchSectors(): Promise<MarketListEnvelope<SectorSummary>> {
+  return apiGet<BackendMarketListOut<SectorSummary>>("/api/v1/market/sectors").then(mapMarketList);
 }
 
 // ---------------------------------------------------------------------------
@@ -138,18 +133,14 @@ export function fetchSwPerformance(): Promise<SwPerformanceResponse> {
   return apiGet<SwPerformanceResponse>("/api/v1/market/sw-industry/performance?limit=31");
 }
 
-/** 板块资金流（近似口径）。同 {@link fetchDistribution}：返回数组 + 口径元数据。 */
-export function fetchCapitalFlow(): Promise<AnnotatedList<CapitalFlowItem, AsOfMeta>> {
-  return apiGet<BackendMarketListOut<CapitalFlowItem>>("/api/v1/market/capital-flow").then((b) =>
-    mapMarketList(b, (r) => r),
-  );
+/** 板块资金流（近似口径）。同 {@link fetchDistribution}：返回 `{items, 口径元数据}` 信封。 */
+export function fetchCapitalFlow(): Promise<MarketListEnvelope<CapitalFlowItem>> {
+  return apiGet<BackendMarketListOut<CapitalFlowItem>>("/api/v1/market/capital-flow").then(mapMarketList);
 }
 
-/** 热门板块。同 {@link fetchDistribution}：返回数组 + 口径元数据。 */
-export function fetchHotBoards(category: HotBoardCategory): Promise<AnnotatedList<HotBoardItem, AsOfMeta>> {
-  return apiGet<BackendMarketListOut<HotBoardItem>>("/api/v1/market/hot-boards", { category }).then((b) =>
-    mapMarketList(b, (r) => r),
-  );
+/** 热门板块。同 {@link fetchDistribution}：返回 `{items, 口径元数据}` 信封。 */
+export function fetchHotBoards(category: HotBoardCategory): Promise<MarketListEnvelope<HotBoardItem>> {
+  return apiGet<BackendMarketListOut<HotBoardItem>>("/api/v1/market/hot-boards", { category }).then(mapMarketList);
 }
 
 export function fetchSseIntraday(code: string, date?: string): Promise<SseIntradayResponse> {

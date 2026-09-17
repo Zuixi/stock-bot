@@ -20,11 +20,12 @@ function getHotBoardCategoryLabel(category: HotBoardCategory): string {
 export function HotSectors() {
   const navigate = useNavigate();
   const [category, setCategory] = useState<HotBoardCategory>("industry");
-  const { data: boardRows = [], isLoading } = useQuery({
+  const { data: boardEnvelope, isLoading } = useQuery({
     queryKey: ["hot-boards", category],
     queryFn: () => fetchHotBoards(category),
     staleTime: STALE_TIME,
   });
+  const boardRows = boardEnvelope?.items ?? [];
   const rows = useMemo(
     () => [...boardRows].sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent)).slice(0, 6),
     [boardRows]

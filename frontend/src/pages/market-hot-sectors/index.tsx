@@ -48,10 +48,11 @@ export default function MarketHotSectorsPage() {
   const activeCategory: HotBoardCategory = isValidCategory(category) ? category : "industry";
   const [sort, setSort] = useState<SortState>({ sortBy: "changePercent", sortOrder: "desc" });
 
-  const { data: boardRows = [] } = useQuery({
+  const { data: boardEnvelope } = useQuery({
     queryKey: ["hot-boards-page", activeCategory],
     queryFn: () => fetchHotBoards(activeCategory),
   });
+  const boardRows = boardEnvelope?.items ?? [];
   const rows = useMemo(() => sortRows(boardRows, sort), [boardRows, sort]);
   const selectedBoardCode = searchParams.get("board");
 

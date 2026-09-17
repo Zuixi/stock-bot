@@ -39,11 +39,12 @@ function buildOption(points: Array<{ date: string; netAmount: number | null }>, 
 
 export function NorthboundCard() {
   const { colors } = useTheme();
-  const { data = [], isLoading } = useQuery({
+  const { data: northbound, isLoading } = useQuery({
     queryKey: ["northbound", 30],
     queryFn: () => fetchNorthbound(30),
     staleTime: STALE_TIME,
   });
+  const data = northbound?.items ?? [];
   const last = data.length > 0 ? data[data.length - 1] : undefined;
   const total = data.reduce((acc, p) => acc + (p.netAmount ?? 0), 0);
   const lastColor = (last?.netAmount ?? 0) > 0 ? colors.up : (last?.netAmount ?? 0) < 0 ? colors.down : colors.flat;

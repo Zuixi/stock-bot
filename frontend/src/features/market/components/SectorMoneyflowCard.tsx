@@ -59,12 +59,13 @@ function buildOption(items: SectorMoneyflowItem[], c: ThemePalette) {
 export function SectorMoneyflowCard() {
   const { colors } = useTheme();
   const [dimension, setDimension] = useState<"industry" | "concept" | "region">("industry");
-  const { data = [], isLoading } = useQuery({
+  const { data: moneyflow, isLoading } = useQuery({
     queryKey: ["sector-moneyflow", dimension],
     queryFn: () => fetchSectorMoneyflow(dimension),
     staleTime: STALE_TIME,
     refetchInterval: REFETCH_INTERVAL,
   });
+  const data = moneyflow?.items ?? [];
   return (
     <Card
       title="板块主力资金流"
