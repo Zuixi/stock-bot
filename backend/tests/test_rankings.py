@@ -157,6 +157,12 @@ async def test_get_rankings_degrades_on_empty_db(monkeypatch) -> None:
     async def _empty(_db, *, cache=None):
         return None
 
+    # Production labels ``as_of`` from the Shanghai wall clock (``_today_sh()``),
+    # not the host local date; pin it so the assertion cannot flake on a host
+    # whose date lags/leads Asia/Shanghai (e.g. a UTC CI runner after 16:00 UTC).
+    # Pinned to a Saturday: the expected label is Friday, proving both the
+    # Shanghai-day source and the ``last_weekday`` roll-back are exercised.
+    monkeypatch.setattr(market_service, "_today_sh", lambda: date(2026, 9, 19))
     monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _empty)
     cache = RecordingCache()
     db = _FakeDb([])
@@ -165,7 +171,8 @@ async def test_get_rankings_degrades_on_empty_db(monkeypatch) -> None:
 
     assert out.items == []
     assert out.is_latest_trading_day is False
-    assert out.as_of == market_service.last_weekday(date.today())
+    assert out.as_of == date(2026, 9, 18), "周六的最近预期交易日是周五（上海时区）"
+    assert out.as_of == market_service.last_weekday(market_service._today_sh())
     assert out.as_of_quality == "partial"
     assert db.calls == []
     assert cache.set_calls == [], "empty fallback must not be cached (recover immediately)"
