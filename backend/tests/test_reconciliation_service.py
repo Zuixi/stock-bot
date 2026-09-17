@@ -160,6 +160,25 @@ async def test_reconcile_all_good_is_noop(_seams: dict[str, Any]) -> None:
     assert all(dom["status"] == "ok" for dom in result["domains"].values())
 
 
+async def test_reconcile_reports_quotes_symbols_next_to_universe(_seams: dict[str, Any]) -> None:
+    """threshold 的分母是 stocks 表行数 —— 该表冻结时全 ok 也说明不了名录是新的。
+
+    所以结果里必须并列给出「名录数」与「最新期望日实际有行情的股票数」，
+    缺 65 只（1.2%）这类漂移才可能被发现（0.8 容差永远报 ok）。
+    """
+    _seams["counts"]["daily_quotes"] = {D14: UNIVERSE, D15: UNIVERSE, D16: UNIVERSE - 61}
+    for domain in ("daily_basic", "price_limits"):
+        _seams["counts"][domain] = {d: UNIVERSE for d in _seams["expected"]}
+    _seams["counts"]["sentiment"] = {d: 1 for d in _seams["expected"]}
+
+    result = await rc.reconcile_market_data(db=object(), apply=False)
+
+    assert result["universe"] == UNIVERSE
+    assert result["quotes_symbols_latest"] == UNIVERSE - 61
+    # 差 61 只仍全 ok —— 这正是原判据的盲区，并列暴露是唯一发现途径
+    assert result["domains"]["daily_quotes"]["status"] == "ok"
+
+
 async def test_reconcile_commits_between_base_and_sentiment(_seams: dict[str, Any]) -> None:
     """sentiment 的 get_snapshot 走独立会话——底座补数必须先 commit 才可见。"""
     _seams["counts"]["daily_quotes"] = {D14: UNIVERSE, D15: 2, D16: 0}

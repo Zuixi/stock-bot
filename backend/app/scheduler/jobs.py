@@ -394,3 +394,48 @@ async def announcements_poll_job() -> None:
         logger.info("Announcements poll done: %s", result)
     except Exception:
         logger.exception("Announcements poll failed")
+
+
+# ------------------------------------------------------------------
+# Stock universe refresh (weekly —— 名录元数据变化慢，但它是日线采集的 ts_code 映射
+# 源：stocks 表冻结一天，当日全部新上市股票的行就被静默丢弃一天)
+# ------------------------------------------------------------------
+
+
+async def universe_refresh_job() -> None:
+    """Refresh stock universe metadata (09:00 Sat, weekly).
+
+    与 UniverseWorker 共用同一 ingest 方法：upsert 会刷新 stocks.asof 并写入
+    stocks_history 快照。逐交易所隔离失败，最后统一失效列表类缓存（与 worker 一致）。
+    交易所清单复用 models.stock.ExchangeName 单一事实源，不另立常量。
+    """
+    from typing import get_args  # noqa: PLC0415
+
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.core.redis import CacheClient, get_redis_pool  # noqa: PLC0415
+    from app.models.stock import ExchangeName  # noqa: PLC0415
+    from app.services.tushare_ingest import TuShareIngestService  # noqa: PLC0415
+
+    logger.info("Universe refresh job triggered")
+    service = TuShareIngestService()
+    for exchange in get_args(ExchangeName):
+        try:
+            async with async_session_factory() as db:
+                result = await service.ingest_stock_universe(db, exchange)
+                await db.commit()
+            logger.info(
+                "Universe refresh %s done: inserted=%s skipped=%s",
+                exchange,
+                result.get("inserted"),
+                result.get("skipped"),
+            )
+        except Exception:
+            logger.exception("Universe refresh failed for %s", exchange)
+
+    try:
+        redis = await get_redis_pool()
+        cache = CacheClient(redis)
+        await cache.delete_pattern("stock:list:*")
+        await cache.delete_pattern("stock:categories:*")
+    except Exception:
+        logger.exception("Universe refresh cache invalidation failed (non-fatal)")

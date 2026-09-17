@@ -31,6 +31,7 @@ from app.scheduler.jobs import (
     share_float_daily_job,
     sse_post_close_job,
     sse_trade_hours_job,
+    universe_refresh_job,
 )
 
 logging.basicConfig(
@@ -305,6 +306,18 @@ def create_scheduler() -> AsyncIOScheduler:
         ),
         id="financial_backfill",
         name="Financial statements backfill",
+        replace_existing=True,
+    )
+
+    # Stock universe metadata: Sat 09:00 weekly (non-trading day, low load)。
+    # 名录冻结的代价不只是显示错：日线采集按 stocks 表映射 ts_code，映射不到的行
+    # 被静默丢弃（实测 65 只次新股行情从未落库），stocks.asof 又被前端当"数据截至"
+    # 展示。此处补自动刷新，与手动 /tasks/fetch-universe 共用同一 ingest 方法。
+    scheduler.add_job(
+        universe_refresh_job,
+        CronTrigger(day_of_week="sat", hour=9, minute=0, timezone="Asia/Shanghai"),
+        id="universe_refresh",
+        name="Universe metadata refresh",
         replace_existing=True,
     )
 

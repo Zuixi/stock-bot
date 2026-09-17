@@ -83,4 +83,8 @@ test("个股头部：8项指标网格含今开/昨收/换手率", async ({ page 
   await expect(mcapCell).toContainText(/万亿/);
   const turnoverCell = page.locator(".ant-descriptions-item").filter({ hasText: "成交额" });
   await expect(turnoverCell).toContainText(/亿/);
+
+  // "数据截至"绑定最新行情 trade_date（全站统一的「9月16日」口径），而不是
+  // 名录 asof —— 后者是 ingest 时间戳，会渲染成 2026-05-08T15:09:16.546850Z
+  await expect(page.getByText(/数据截至/)).toContainText(/^数据截至 \d+月\d+日$/);
 });
