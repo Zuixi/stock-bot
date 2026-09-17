@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { Card, List, Segmented, Space, Spin, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { ChangeText } from "@/shared/ui";
+import { ChangeText, FreshnessNote } from "@/shared/ui";
 import { useNavigate } from "react-router-dom";
 import { fetchHotBoards, type HotBoardCategory } from "@/shared/api/market";
+import { useMarketPolling } from "../hooks/useMarketPolling";
 
 const HOT_BOARD_CATEGORIES: { key: HotBoardCategory; label: string }[] = [
   { key: "industry", label: "行业板块" },
@@ -20,10 +21,12 @@ function getHotBoardCategoryLabel(category: HotBoardCategory): string {
 export function HotSectors() {
   const navigate = useNavigate();
   const [category, setCategory] = useState<HotBoardCategory>("industry");
+  const { refetchInterval } = useMarketPolling();
   const { data: boardEnvelope, isLoading } = useQuery({
-    queryKey: ["hot-boards", category],
+    queryKey: ["market", "hot-boards", category],
     queryFn: () => fetchHotBoards(category),
     staleTime: STALE_TIME,
+    refetchInterval,
   });
   const boardRows = boardEnvelope?.items ?? [];
   const rows = useMemo(
@@ -49,6 +52,7 @@ export function HotSectors() {
           onChange={(value) => setCategory(value as HotBoardCategory)}
         />
         <Spin spinning={isLoading}>
+          <FreshnessNote asOf={boardEnvelope?.asOf} quality={boardEnvelope?.asOfQuality} />
           <List
             size="small"
             dataSource={rows}

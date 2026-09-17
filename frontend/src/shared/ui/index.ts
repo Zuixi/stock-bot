@@ -7,5 +7,7 @@ export type { DeltaTextProps } from "./DeltaText";
 export { DataRow } from "./DataRow";
 export type { DataRowProps } from "./DataRow";
 export { SectionCard } from "./SectionCard";
+export { FreshnessNote, freshnessBadges, qualityBadgeText } from "./FreshnessNote";
+export type { FreshnessNoteProps } from "./FreshnessNote";
 export type { SectionCardProps } from "./SectionCard";
 export { formatCnDate } from "./date";

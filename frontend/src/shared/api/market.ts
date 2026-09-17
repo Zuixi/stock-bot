@@ -56,18 +56,37 @@ export interface RankingItem {
   total_mv?: number | null;
 }
 
-export interface RankingResponse {
+/** 后端原始 payload（snake_case；只在本文件的 mapper 里解包）。 */
+interface BackendRankingResponse {
   as_of: string;
-  /** 判据日完整性口径（后端 Task 2 起返回）；Phase 1 徽标 / query key 消费。 */
-  as_of_quality: AsOfQuality;
-  as_of_reason: string | null;
+  as_of_quality?: AsOfQuality;
+  as_of_reason?: string | null;
   is_latest_trading_day: boolean;
   type: RankingType;
   items: RankingItem[];
 }
 
+/** 榜单响应的前端形状（camelCase，与 `marketEnvelope.ts` 的其它信封一致）。 */
+export interface RankingResponse {
+  asOf: string;
+  /** 判据日完整性口径（后端 Task 2 起返回）；Phase 1 徽标消费。 */
+  asOfQuality: AsOfQuality;
+  asOfReason: string | null;
+  isLatestTradingDay: boolean;
+  type: RankingType;
+  items: RankingItem[];
+}
+
 export function fetchRankings(type: RankingType, limit = 10): Promise<RankingResponse> {
-  return apiGet<RankingResponse>(`/api/v1/market/rankings?type=${type}&limit=${limit}`);
+  return apiGet<BackendRankingResponse>(`/api/v1/market/rankings?type=${type}&limit=${limit}`).then((b) => ({
+    asOf: b.as_of,
+    // 缺省回落 `partial`：口径未知时不得谎报「收盘」
+    asOfQuality: b.as_of_quality ?? "partial",
+    asOfReason: b.as_of_reason ?? null,
+    isLatestTradingDay: b.is_latest_trading_day,
+    type: b.type,
+    items: b.items,
+  }));
 }
 
 interface IndexKlineResponse {
@@ -121,16 +140,14 @@ export interface SwPerformanceItem {
   down_count: number;
 }
 
-export interface SwPerformanceResponse {
-  as_of: string;
-  /** 判据日完整性口径（后端 Task 2 起返回）；Phase 1 徽标消费。 */
-  as_of_quality: AsOfQuality;
-  as_of_reason: string | null;
-  items: SwPerformanceItem[];
-}
-
-export function fetchSwPerformance(): Promise<SwPerformanceResponse> {
-  return apiGet<SwPerformanceResponse>("/api/v1/market/sw-industry/performance?limit=31");
+/**
+ * 申万一级行业行情。与 {@link fetchDistribution} 同款信封：`{items, asOf, asOfQuality, asOfReason}`
+ * （后端 Task 2 起返回 `as_of_quality`，Task 7 起走当日快照）。
+ */
+export function fetchSwPerformance(): Promise<MarketListEnvelope<SwPerformanceItem>> {
+  return apiGet<BackendMarketListOut<SwPerformanceItem>>(
+    "/api/v1/market/sw-industry/performance?limit=31",
+  ).then(mapMarketList);
 }
 
 /** 板块资金流（近似口径）。同 {@link fetchDistribution}：返回 `{items, 口径元数据}` 信封。 */

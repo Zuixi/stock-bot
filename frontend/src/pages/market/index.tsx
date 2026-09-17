@@ -26,6 +26,7 @@ import {
   SwL3LimitUpBoard,
   YesterdayLimitUp,
 } from "@/features/market/components";
+import { useMarketPolling } from "@/features/market/hooks/useMarketPolling";
 import "./market.css";
 
 /** `degraded_reason` → 中文文案；不同原因不同文案，未知原因回退原串，不静默吞掉。
@@ -51,25 +52,30 @@ function DegradedNotice({ reason }: { reason: string }) {
  * 每张数据卡按各自端点的 `degradedReason` 独立门禁，避免降级态仍展示不完整数据。
  */
 function SentimentTab() {
+  const { refetchInterval } = useMarketPolling();
   const ladder = useQuery({
-    queryKey: ["limit-up-ladder"],
+    queryKey: ["market", "limit-up-ladder"],
     queryFn: () => fetchLimitUpLadder(),
     staleTime: 60_000,
+    refetchInterval,
   });
   const sectors = useQuery({
-    queryKey: ["sector-limit-up"],
+    queryKey: ["market", "sector-limit-up"],
     queryFn: () => fetchSectorLimitUp(),
     staleTime: 60_000,
+    refetchInterval,
   });
   const yesterday = useQuery({
-    queryKey: ["yesterday-limit-up"],
+    queryKey: ["market", "yesterday-limit-up"],
     queryFn: () => fetchYesterdayLimitUp(),
     staleTime: 60_000,
+    refetchInterval,
   });
   const calendar = useQuery({
-    queryKey: ["sentiment-calendar"],
+    queryKey: ["market", "sentiment-calendar", 30],
     queryFn: () => fetchSentimentCalendar(30),
     staleTime: 300_000,
+    refetchInterval,
   });
   const degraded = ladder.data?.degradedReason;
   const sectorsDegraded = Boolean(sectors.data?.degradedReason);
@@ -77,7 +83,7 @@ function SentimentTab() {
   return (
     <Row gutter={[16, 16]}>
       <Col span={24}>
-        <SectionCard title="情绪温度计" asof={ladder.data?.asOf}>
+        <SectionCard title="情绪温度计" asof={ladder.data?.asOf} quality={ladder.data?.asOfQuality}>
           {degraded ? (
             <DegradedNotice reason={degraded} />
           ) : (
@@ -90,19 +96,23 @@ function SentimentTab() {
         </SectionCard>
       </Col>
       <Col span={24}>
-        <SectionCard title="连板梯队" asof={ladder.data?.asOf}>
+        <SectionCard title="连板梯队" asof={ladder.data?.asOf} quality={ladder.data?.asOfQuality}>
           <LimitUpLadder echelons={ladder.data?.echelons ?? []} degraded={Boolean(degraded)} />
         </SectionCard>
       </Col>
       <Col xs={24} xl={12}>
-        <SectionCard title="申万三级最高板" asof={sectors.data?.asOf}>
+        <SectionCard title="申万三级最高板" asof={sectors.data?.asOf} quality={sectors.data?.asOfQuality}>
           <SwL3LimitUpBoard data={sectors.data} degraded={sectorsDegraded} />
         </SectionCard>
       </Col>
       <Col xs={24} xl={12}>
         {/* 卡头「数据截至」用表现日 as_of；涨停日样本口径在组件内标注，
             只标 as_of_prev 会被误读为数据落后（2026-09-15 用户反馈） */}
-        <SectionCard title="昨日涨停今日表现" asof={yesterday.data?.asOf}>
+        <SectionCard
+          title="昨日涨停今日表现"
+          asof={yesterday.data?.asOf}
+          quality={yesterday.data?.asOfQuality}
+        >
           <YesterdayLimitUp data={yesterday.data} degraded={yesterdayDegraded} />
         </SectionCard>
       </Col>

@@ -3,17 +3,18 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchGlobalIndices } from "@/shared/api/marketData";
 import { GlobalIndexCardView } from "./GlobalIndexCardView";
 import { CORE_TS_CODES, pickCoreIndices } from "./coreIndices";
+import { useMarketPolling } from "../hooks/useMarketPolling";
 
 const STALE_TIME = 60 * 1000;
-const REFETCH_INTERVAL = 60 * 1000;
 
 /** A股核心指数卡：六个核心指数的 TV ticker 卡阵列（Stage C 指数总览 Tab） */
 export function CoreIndexCards() {
+  const { refetchInterval } = useMarketPolling();
   const { data: indices = [], isLoading } = useQuery({
-    queryKey: ["global-indices"],
+    queryKey: ["market", "global-indices"],
     queryFn: fetchGlobalIndices,
     staleTime: STALE_TIME,
-    refetchInterval: REFETCH_INTERVAL,
+    refetchInterval,
   });
 
   // 缺谁用其余 A 股指数顺位补齐（共享选择器；与宣传页指数条的差异在过滤条件）

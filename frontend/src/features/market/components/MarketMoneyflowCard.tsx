@@ -2,12 +2,13 @@ import { Card, Spin, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchMarketMoneyflow, type MarketMoneyflowDay } from "@/shared/api/marketData";
 import { EChart } from "@/shared/ui/EChart";
+import { FreshnessNote } from "@/shared/ui";
 import { useTheme } from "@/app/theme-context";
 import type { ThemePalette } from "@/app/theme";
 import { fmtSignedYi, fmtYi } from "./format";
+import { useMarketPolling } from "../hooks/useMarketPolling";
 
 const STALE_TIME = 60 * 1000;
-const REFETCH_INTERVAL = 60 * 1000;
 
 const FLOW_ROWS: Array<{ key: "superLargeNet" | "largeNet" | "midNet" | "smallNet"; label: string }> = [
   { key: "superLargeNet", label: "超大单" },
@@ -66,11 +67,12 @@ function buildHistoryOption(history: MarketMoneyflowDay[], c: ThemePalette) {
  */
 export function MarketMoneyflowContent() {
   const { colors } = useTheme();
+  const { refetchInterval } = useMarketPolling();
   const { data, isLoading } = useQuery({
-    queryKey: ["market-moneyflow"],
+    queryKey: ["market", "market-moneyflow"],
     queryFn: fetchMarketMoneyflow,
     staleTime: STALE_TIME,
-    refetchInterval: REFETCH_INTERVAL,
+    refetchInterval,
   });
   const today = data?.today ?? null;
   const total = today?.total ?? null;
@@ -79,6 +81,8 @@ export function MarketMoneyflowContent() {
 
   return (
     <Spin spinning={isLoading}>
+      {/* 口径标注只描述近 30 日历史序列（`history_as_of`）；今日四档是盘中累计值 */}
+      <FreshnessNote asOf={data?.historyAsOf} staleDays={data?.historyStaleDays} />
       {total && (
         <div style={{ marginBottom: 8 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>

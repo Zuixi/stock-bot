@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { fetchDragonTiger, type DragonTigerItem } from "@/shared/api/marketData";
 import { useTheme } from "@/app/theme-context";
+import { useMarketPolling } from "../../hooks/useMarketPolling";
 import { fmtSignedYi } from "../format";
 
 const NUM_FONT: React.CSSProperties = { fontVariantNumeric: "tabular-nums" };
@@ -11,10 +12,12 @@ const NUM_FONT: React.CSSProperties = { fontVariantNumeric: "tabular-nums" };
 export function DragonTigerTable() {
   const navigate = useNavigate();
   const { colors } = useTheme();
+  const { refetchInterval } = useMarketPolling();
   const { data = [], isLoading } = useQuery({
-    queryKey: ["dragon-tiger"],
+    queryKey: ["market", "dragon-tiger"],
     queryFn: () => fetchDragonTiger(15),
     staleTime: 5 * 60 * 1000,
+    refetchInterval,
   });
 
   const columns: ColumnsType<DragonTigerItem> = [

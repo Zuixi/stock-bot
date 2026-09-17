@@ -3,11 +3,12 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchSectorMoneyflow, type SectorMoneyflowItem } from "@/shared/api/marketData";
 import { EChart } from "@/shared/ui/EChart";
+import { FreshnessNote } from "@/shared/ui";
 import { useTheme } from "@/app/theme-context";
 import type { ThemePalette } from "@/app/theme";
+import { useMarketPolling } from "../hooks/useMarketPolling";
 
 const STALE_TIME = 60 * 1000;
-const REFETCH_INTERVAL = 60 * 1000;
 const TOP_N = 10;
 
 function buildOption(items: SectorMoneyflowItem[], c: ThemePalette) {
@@ -59,11 +60,12 @@ function buildOption(items: SectorMoneyflowItem[], c: ThemePalette) {
 export function SectorMoneyflowCard() {
   const { colors } = useTheme();
   const [dimension, setDimension] = useState<"industry" | "concept" | "region">("industry");
+  const { refetchInterval } = useMarketPolling();
   const { data: moneyflow, isLoading } = useQuery({
-    queryKey: ["sector-moneyflow", dimension],
+    queryKey: ["market", "sector-moneyflow", dimension],
     queryFn: () => fetchSectorMoneyflow(dimension),
     staleTime: STALE_TIME,
-    refetchInterval: REFETCH_INTERVAL,
+    refetchInterval,
   });
   const data = moneyflow?.items ?? [];
   return (
@@ -84,6 +86,7 @@ export function SectorMoneyflowCard() {
       }
     >
       <Spin spinning={isLoading}>
+        <FreshnessNote asOf={moneyflow?.asOf} staleDays={moneyflow?.staleDays} />
         {data.length > 0 ? (
           <EChart option={buildOption(data, colors)} height={260} />
         ) : (

@@ -3,8 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchDistribution } from "@/shared/api/market";
 import { fetchMarketMoneyflow } from "@/shared/api/marketData";
 import { EChart } from "@/shared/ui/EChart";
+import { FreshnessNote } from "@/shared/ui";
 import { useTheme } from "@/app/theme-context";
 import type { ThemePalette } from "@/app/theme";
+import { useMarketPolling } from "../hooks/useMarketPolling";
 
 const STALE_TIME = 5 * 60 * 1000;
 
@@ -63,18 +65,20 @@ function BalanceBar({ up, flat, down }: { up: number; flat: number; down: number
 
 export function DistributionChart() {
   const { colors } = useTheme();
+  const { refetchInterval } = useMarketPolling();
   const { data: distribution, isLoading } = useQuery({
-    queryKey: ["market-distribution"],
+    queryKey: ["market", "distribution"],
     queryFn: fetchDistribution,
     staleTime: STALE_TIME,
+    refetchInterval,
   });
   const data = distribution?.items ?? [];
   // 成交额复用大盘资金流的实时查询（同 queryKey 共享缓存与轮询）
   const { data: mm } = useQuery({
-    queryKey: ["market-moneyflow"],
+    queryKey: ["market", "market-moneyflow"],
     queryFn: fetchMarketMoneyflow,
     staleTime: 60 * 1000,
-    refetchInterval: 60 * 1000,
+    refetchInterval,
   });
   const amount = mm?.today?.total?.amount ?? null;
 
@@ -128,6 +132,7 @@ export function DistributionChart() {
       }
     >
       <Spin spinning={isLoading}>
+        <FreshnessNote asOf={distribution?.asOf} quality={distribution?.asOfQuality} />
         <EChart option={option} height={220} />
         <BalanceBar up={up} flat={flat} down={down} />
       </Spin>

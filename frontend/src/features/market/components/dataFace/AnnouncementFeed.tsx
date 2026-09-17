@@ -2,6 +2,7 @@ import { List, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAnnouncements } from "@/shared/api/marketData";
 import { fmtRelativeTime } from "../format";
+import { useMarketPolling } from "../../hooks/useMarketPolling";
 
 const CATEGORY_META: Record<string, { label: string; color: string }> = {
   report: { label: "财报", color: "blue" },
@@ -32,11 +33,13 @@ export function AnnouncementFeed({
   maxRows,
   timeMode = "absolute",
 }: AnnouncementFeedProps) {
+  const { refetchInterval } = useMarketPolling();
   const { data = [], isLoading, isError } = useQuery({
     // category 只做客户端过滤，故 key 不含 category：首页两个 Tab 共享一次请求
-    queryKey: ["announcements", fetchLimit],
+    queryKey: ["market", "announcements", fetchLimit],
     queryFn: () => fetchAnnouncements(undefined, fetchLimit),
     staleTime: 5 * 60 * 1000,
+    refetchInterval,
   });
 
   // 口径诚实：接口故障 ≠「确实没有公告」。故障走独立错误占位，绝不落回空态文案

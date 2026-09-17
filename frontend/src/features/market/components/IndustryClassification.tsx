@@ -2,16 +2,19 @@ import { useNavigate } from "react-router-dom";
 import { Card, Col, Empty, Row, Skeleton, Space, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchSwIndustryTree } from "@/shared/api/swIndustry";
+import { useMarketPolling } from "../hooks/useMarketPolling";
 
 const STALE_TIME = 5 * 60 * 1000;
 const SKELETON_COUNT = 12;
 
 export function IndustryClassification() {
   const navigate = useNavigate();
+  const { refetchInterval } = useMarketPolling();
   const { data: tree = [], isLoading } = useQuery({
-    queryKey: ["sw-industry-tree"],
+    queryKey: ["market", "sw-industry-tree"],
     queryFn: fetchSwIndustryTree,
     staleTime: STALE_TIME,
+    refetchInterval,
   });
 
   return (
