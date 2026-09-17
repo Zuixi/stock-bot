@@ -13,22 +13,36 @@ TuShare 原生值），重算纯属浪费。
   替代每个端点各写一遍 SQL 聚合（口径只此一份）；
 - ``SNAPSHOT_CACHE_KEY`` / ``SNAPSHOT_TTL`` —— 缓存身份与寿命。
 
+行契约（Task 8 瘦身）：市场平面四个消费方（distribution / sectors / capital-flow /
+hot-boards）实际只读 ``pct_chg`` / ``csrc_desc`` / ``province`` / ``amount`` /
+``total_mv``，故 :data:`ROW_KEYS` 从 11 列缩到 6 列（并新增 ``basic_date``，见下）。
+``stock_id`` / ``symbol`` / ``name`` / ``close`` / ``circ_mv`` / ``turnover_rate``
+已从 SQL 选择列表与缓存 payload 中一并删除：payload 实测 1.2MB → 0.6MB，缓存命中
+时的 JSON 解析随之近乎减半。行序仍由 SQL ``ORDER BY daily_quotes.stock_id`` 保证
+（列不选，但排序照旧），下游分组/排序的可复现性不变。
+
 SQL 只读 ``daily_quotes.pct_chg``，**不再**对 ``daily_quotes`` 做前收 LATERAL；
-市值/换手率仍取每股最近一条 ``daily_basic_indicators``（``trade_date <= :day``，
-不看到未来）——那一个 LATERAL 保留，理由见 :func:`_snapshot_stmt`。
+市值仍取每股最近一条 ``daily_basic_indicators``（``trade_date <= :day``，不看到
+未来）——那一个 LATERAL 保留，理由见 :func:`_snapshot_stmt`。
+
+``total_mv`` 与 ``basic_date`` 成对出现：``basic_date`` 是那一行 ``daily_basic``
+自己的 ``trade_date``（``<= :day`` 的最近一条）。**缺口降级**：某天没有
+``daily_basic`` 行时，市值会静默落到更早一天——消费方/适配层必须用
+``basic_date < day`` 判陈旧，而不是假定市值属于展示日（见 :func:`_snapshot_stmt`）。
 
 性能口径（实测，不作「单查询提速」宣称）：
 
 - 本 loader 单次取行 **warm ~70ms / 冷会话 ~200ms**（含连接建立与首次执行开销），
-  **比旧的单端点 SQL（~46ms）慢** —— 旧形态只回 10 行聚合结果，本语句回 5485 行 × 11 列
-  （含旧形态根本没有的市值/换手率），其中约 46ms 还是 ``daily_basic`` 的逐股 LATERAL。
+  **比旧的单端点 SQL（~46ms）慢** —— 旧形态只回 10 行聚合结果，本语句回 5485 行
+  （含旧形态根本没有的市值列），其中约 46ms 还是 ``daily_basic`` 的逐股 LATERAL。
 - 收益在架构侧：(a) 市场平面 4~6 个端点从「各自一次 ~46ms SQL + 各自的 daily_basic 查询」
-  收敛为**共用这 1 次取行 + 1 份缓存**；(b) 缓存命中约 **15ms**（1.2MB payload 的 JSON
-  解析占大头）。故 Task 7 必须让**所有**市场平面端点都改走本 loader —— 只改部分端点会
-  让未改的端点从 ~46ms 退到 ~70ms。**唯一例外**：``get_sw_industry_performance`` 走申万
-  成员关系（``sw_industry_members`` → L3/L2/L1，且一只股票可属多个 L1），那不是「每股一条」
-  的日事实，硬塞进本行契约会把歧义带进每一次取行；它保留自家汇总语句，但同样只读存储列
-  ``pct_chg``（无前收 LATERAL），理由与取舍见 Task 7 报告。
+  收敛为**共用这 1 次取行 + 1 份缓存**；(b) 缓存命中只花 JSON 解析（Task 8 瘦身后
+  6 列 payload 实测 ~7ms，瘦身前 11 列 ~14ms）。故 Task 7 必须让**所有**市场平面端点
+  都改走本 loader —— 只改部分端点会让未改的端点从 ~46ms 退到 ~70ms。**唯一例外**：
+  ``get_sw_industry_performance`` 走申万成员关系（``sw_industry_members`` →
+  L3/L2/L1，且一只股票可属多个 L1），那不是「每股一条」的日事实，硬塞进本行契约会把
+  歧义带进每一次取行；它保留自家汇总语句，但同样只读存储列 ``pct_chg``（无前收
+  LATERAL），理由与取舍见 Task 7 报告。
 """
 
 from __future__ import annotations
@@ -52,32 +66,24 @@ SNAPSHOT_CACHE_KEY = "market:day:rows:{day}"
 SNAPSHOT_TTL = 300  # 5 minutes — 与 market_service 的 _MARKET_CACHE_TTL 对齐
 
 #: 单行契约（键序即 SQL 选择顺序）。下游按这些键消费，缓存 payload 也按它们校验。
+#: Task 8 起只保留四个消费方真正读到的列 + ``basic_date``（市值陈旧度标注）。
 ROW_KEYS: tuple[str, ...] = (
-    "stock_id",
-    "symbol",
-    "name",
     "csrc_desc",
     "province",
-    "close",
     "pct_chg",
     "amount",
     "total_mv",
-    "circ_mv",
-    "turnover_rate",
+    "basic_date",
 )
 
 #: 数值列的规范化目标类型（Decimal/None → float/None），保证冷热两条路径同型。
-_FLOAT_KEYS: tuple[str, ...] = (
-    "close",
-    "pct_chg",
-    "amount",
-    "total_mv",
-    "circ_mv",
-    "turnover_rate",
-)
+_FLOAT_KEYS: tuple[str, ...] = ("pct_chg", "amount", "total_mv")
 
 #: 字符串列必须真是 ``str | None``：一个 dict/int 漏进来会在下游变成分组键。
-_STRING_KEYS: tuple[str, ...] = ("symbol", "name", "csrc_desc", "province")
+_STRING_KEYS: tuple[str, ...] = ("csrc_desc", "province")
+
+#: 日期列在缓存里必须是 ISO 字符串（JSON 无 date 类型），DB 的 ``date`` 在此转一次。
+_DATE_KEYS: tuple[str, ...] = ("basic_date",)
 
 
 def _snapshot_stmt(day: date) -> Select[Any]:
@@ -86,21 +92,26 @@ def _snapshot_stmt(day: date) -> Select[Any]:
     ``pct_chg`` 直接读 ``daily_quotes`` 存储列 —— 不再有 ``daily_quotes`` 上的
     前收 LATERAL（436 万行表上每股一次历史查找）。成本诚实说明：整个取行 warm 约
     70ms、冷会话约 200ms（含连接与首次执行），**比旧单端点 SQL 的约 46ms 慢** ——
-    旧形态只回 10 行聚合，本语句回 5485 行 × 11 列；收益来自 4~6 个端点共用这
-    一次取行 + 一份缓存（Redis 命中约 15ms），不是单条查询提速。
+    旧形态只回 10 行聚合，本语句回 5485 行；收益来自 4~6 个端点共用这一次取行 +
+    一份缓存（Redis 命中约 7ms），不是单条查询提速。
 
-    市值/换手率用一个 **correlated LATERAL** 取每股 ``trade_date <= :day`` 的最近
-    一条 ``daily_basic_indicators``，而不是 ``DISTINCT ON`` 整表子查询：后者要在
-    190 万行（且每日 +5.5k）上物化并排序，实测 1.4s；LATERAL 走
+    市值用一个 **correlated LATERAL** 取每股 ``trade_date <= :day`` 的最近一条
+    ``daily_basic_indicators``，而不是 ``DISTINCT ON`` 整表子查询：后者要在 190 万
+    行（且每日 +5.5k）上物化并排序，实测 1.4s；LATERAL 走
     ``idx_daily_basic_stock_date`` 只做 5485 次索引查找（约 46ms，是本查询当前的
     主要成本）。``<= :day``（而非无界最新）避免把未来某天的市值提前用在这一天。
+
+    **缺口降级（必修口径）**：``<= :day`` 意味着某只股票在某天缺少
+    ``daily_basic`` 行时，这里会静默取到更早一天的市值。为让下游看得见，LATERAL
+    同时取回该行的 ``trade_date`` 作为 ``basic_date``：``basic_date != :day`` 就是
+    "市值是旧的"的唯一证据，消费方不得假定市值属于展示日。当日完全无
+    ``daily_basic`` 行时 ``basic_date`` 与 ``total_mv`` 同为 ``None``（不是伪造 0）。
     """
     day_param = bindparam("day", value=day, type_=Date)
     latest_basic = (
         select(
             DailyBasicIndicator.total_mv.label("total_mv"),
-            DailyBasicIndicator.circ_mv.label("circ_mv"),
-            DailyBasicIndicator.turnover_rate.label("turnover_rate"),
+            DailyBasicIndicator.trade_date.label("basic_date"),
         )
         .where(
             DailyBasicIndicator.stock_id == DailyQuote.stock_id,
@@ -113,17 +124,12 @@ def _snapshot_stmt(day: date) -> Select[Any]:
     )
     return (
         select(
-            DailyQuote.stock_id,
-            Stock.symbol,
-            Stock.name,
             Stock.csrc_desc,
             Stock.province,
-            DailyQuote.close,
             DailyQuote.pct_chg,
             DailyQuote.amount,
             latest_basic.c.total_mv,
-            latest_basic.c.circ_mv,
-            latest_basic.c.turnover_rate,
+            latest_basic.c.basic_date,
         )
         .select_from(DailyQuote)
         .join(Stock, Stock.id == DailyQuote.stock_id)
@@ -149,14 +155,32 @@ def _as_float(value: Any) -> float | None:
     raise TypeError(f"snapshot field is not numeric: {type(value).__name__}")
 
 
+def _as_iso_date(value: Any) -> str | None:
+    """日期列 → ISO ``YYYY-MM-DD`` 字符串（JSON 无 date 类型）。
+
+    ``date`` → ``isoformat()``；``str`` 必须能被 ``date.fromisoformat`` 解析
+    （缓存回读，顺手把 ``20260916`` 之类的合法变体归一化）。其他类型/解析失败都
+    按 payload 损坏抛错，由 :func:`_from_payload` 兜底成 miss —— 一个坏日期串
+    漏给消费方会在下游变成静默的错误陈旧度判断。
+    """
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, str):
+        return date.fromisoformat(value).isoformat()
+    raise TypeError(f"snapshot field is not a date: {type(value).__name__}")
+
+
 def _normalize_row(row: Mapping[Any, Any]) -> dict[str, Any]:
     """把一行（RowMapping 或缓存 dict）规范成 :data:`ROW_KEYS` 契约。
 
     幂等：规范化过的 dict 再进一次结果不变。缺键抛 KeyError、类型不对抛
     TypeError/ValueError/OverflowError —— 由 :func:`_from_payload` 转成「缓存 miss」。
 
-    数值列走 :func:`_as_float`；字符串列要求 ``str | None``，否则同样按损坏处理
-    （一个 dict 型 ``csrc_desc`` 漏过去会在下游变成分组键）。
+    数值列走 :func:`_as_float`，日期列走 :func:`_as_iso_date`，字符串列要求
+    ``str | None``，否则同样按损坏处理（一个 dict 型 ``csrc_desc`` 漏过去会在下游
+    变成分组键）。
 
     直接按契约键索引 ``row``（``row[key]``）而不先 ``dict(row)``：RowMapping →
     dict 的整表物化在 5485 行上值 6ms（实测 12.5ms → 6.5ms），不值得。
@@ -166,11 +190,13 @@ def _normalize_row(row: Mapping[Any, Any]) -> dict[str, Any]:
     :func:`load_day_rows` 对它调用一次 :func:`_to_payload` 即同时得到返回值和缓存 payload
     （旧写法 fetch 里规范化一遍、写缓存再规范化一遍，5485 行多花约 6.5ms）。
     """
-    normalized: dict[str, Any] = {"stock_id": int(row["stock_id"])}
-    for key in ROW_KEYS[1:]:
+    normalized: dict[str, Any] = {}
+    for key in ROW_KEYS:
         value = row[key]
         if key in _FLOAT_KEYS:
             normalized[key] = _as_float(value)
+        elif key in _DATE_KEYS:
+            normalized[key] = _as_iso_date(value)
         elif key in _STRING_KEYS:
             if value is not None and not isinstance(value, str):
                 raise TypeError(f"snapshot field {key!r} is not a string: {type(value).__name__}")
@@ -181,7 +207,7 @@ def _normalize_row(row: Mapping[Any, Any]) -> dict[str, Any]:
 
 
 def _to_payload(rows: Iterable[Mapping[Any, Any]]) -> list[dict[str, Any]]:
-    """规范化成 JSON 安全 payload（键白名单 + Decimal → float），全模块唯一转换点。"""
+    """规范化成 JSON 安全 payload（键白名单 + Decimal → float/date → ISO），唯一转换点。"""
     return [_normalize_row(row) for row in rows]
 
 
@@ -190,8 +216,8 @@ def _from_payload(payload: Any) -> list[dict[str, Any]] | None:
 
     ``CacheClient`` 走 JSON，日期/Decimal 回来都是别的类型；这里不做猜测，
     只接受本模块自己写出的形状（**非空** ``list[dict]`` + ROW_KEYS 齐全 +
-    数值可转 float + 字符串列为 ``str | None``）。损坏 payload 记 warning 并按
-    miss 处理，绝不把半截数据喂给下游。
+    数值可转 float + 日期为 ISO 字符串 + 字符串列为 ``str | None``）。损坏 payload
+    记 warning 并按 miss 处理，绝不把半截数据喂给下游。
 
     ``[]`` 也算 miss：本模块从不写空列表（只有非空的一天才写缓存），而一个游离的
     ``[]`` 会把「无数据」状态冻满 300s —— 正是「空日不写缓存」想避免的状态。
@@ -202,7 +228,7 @@ def _from_payload(payload: Any) -> list[dict[str, Any]] | None:
             return [_normalize_row(item) for item in payload]
         except (KeyError, TypeError, ValueError, OverflowError):
             pass
-    # 只记前 200 字符：合法 payload 是 1.2MB 级，坏 payload 也可能是（别把日志打爆）。
+    # 只记前 200 字符：合法 payload 是 0.6MB 级，坏 payload 也可能是（别把日志打爆）。
     logger.warning("load_day_rows: unusable cache payload %s", repr(payload)[:200])
     return None
 
@@ -210,8 +236,8 @@ def _from_payload(payload: Any) -> list[dict[str, Any]] | None:
 async def _fetch_rows(db: AsyncSession, day: date) -> list[Mapping[Any, Any]]:
     """取行 SQL seam（单测 monkeypatch 本函数即不碰库）。
 
-    返回**原始** DB 映射（数值是 ``Decimal``）：规范化只由 :func:`load_day_rows`
-    统一做一次，seam 语义即「把库里的行原样交出来」。
+    返回**原始** DB 映射（数值是 ``Decimal``、``basic_date`` 是 ``date``）：
+    规范化只由 :func:`load_day_rows` 统一做一次，seam 语义即「把库里的行原样交出来」。
     """
     result = await db.execute(_snapshot_stmt(day))
     return list(result.mappings())
@@ -231,6 +257,10 @@ async def load_day_rows(
 
     冷路径只规范化一次：``_fetch_rows`` 交回原始映射，这里一个 :func:`_to_payload`
     同时产出返回值与缓存 payload。
+
+    返回行只含 :data:`ROW_KEYS`（Task 8 瘦身）；其中 ``basic_date`` 是该行市值
+    所来自的 ``daily_basic.trade_date``，消费方用它判市值是否陈旧（见
+    :func:`_snapshot_stmt`）。
     """
     cache_key = SNAPSHOT_CACHE_KEY.format(day=day.isoformat())
     if cache is not None:

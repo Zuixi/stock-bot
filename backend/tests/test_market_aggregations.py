@@ -406,13 +406,15 @@ def test_rewritten_endpoint_bodies_hold_no_sql(func: Any) -> None:
     assert match is None, f"{match.group(0)!r} survived the Task 7 rewrite"
 
 
+#: Task 8: every result key carries the **resolved day** (``{prefix}:{as_of}``), so a
+#: repaired/rolled-over day can never be served from the previous day's payload.
 _REWRITTEN_ENDPOINTS = [
-    ("distribution", "market:distribution", market_service.get_distribution),
-    ("sectors", "market:sectors", market_service.get_sectors),
-    ("capital-flow", "market:capital-flow", market_service.get_capital_flow),
+    ("distribution", f"market:distribution:{D16.isoformat()}", market_service.get_distribution),
+    ("sectors", f"market:sectors:{D16.isoformat()}", market_service.get_sectors),
+    ("capital-flow", f"market:capital-flow:{D16.isoformat()}", market_service.get_capital_flow),
     (
         "hot-boards",
-        "market:hot-boards:industry",
+        f"market:hot-boards:industry:{D16.isoformat()}",
         lambda cache: market_service.get_hot_boards("industry", cache),
     ),
 ]
@@ -453,6 +455,62 @@ async def test_rewritten_endpoints_never_execute_sql(
     # this module reads/writes only its own result key; the snapshot key is the loader's
     assert cache.reads == [cache_key]
     assert [key for key, _value, _ttl in cache.writes] == [cache_key]
+
+
+class _SeededCache:
+    """Cache with preset payloads keyed by exact key; records reads/writes (no redis)."""
+
+    def __init__(self, seeds: dict[str, dict[str, Any]]) -> None:
+        self.seeds = seeds
+        self.reads: list[str] = []
+        self.writes: list[tuple[str, Any, int | None]] = []
+
+    async def get(self, key: str) -> Any | None:
+        self.reads.append(key)
+        return self.seeds.get(key)
+
+    async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
+        self.writes.append((key, value, ttl))
+
+
+@pytest.mark.parametrize(
+    ("prefix", "call"),
+    [
+        ("market:distribution", market_service.get_distribution),
+        ("market:sectors", market_service.get_sectors),
+        ("market:capital-flow", market_service.get_capital_flow),
+        (
+            "market:hot-boards:industry",
+            lambda cache: market_service.get_hot_boards("industry", cache),
+        ),
+    ],
+)
+async def test_result_cache_key_includes_the_resolved_day(
+    monkeypatch: pytest.MonkeyPatch, prefix: str, call: Any
+) -> None:
+    """A payload cached for another day must not be served for the resolved day.
+
+    Two poisons are seeded: the day-less pre-Task-8 key and the previous day's key. Only
+    an implementation whose key carries the resolved ``as_of`` misses both and recomputes;
+    any day-agnostic key hits one of them and replays the wrong ``as_of`` label.
+    """
+    day_key = f"{prefix}:{D16.isoformat()}"
+    _patch_day(monkeypatch, _resolved())
+    calls = _patch_rows(monkeypatch, [_row(pct_chg=1.0)])
+    cache = _SeededCache(
+        {
+            prefix: {"as_of": "2026-09-15", "as_of_quality": "complete", "items": []},
+            f"{prefix}:2026-09-15": {"as_of": "2026-09-15", "items": []},
+        }
+    )
+
+    out = await call(cache)
+
+    assert out["as_of"] == D16.isoformat()
+    assert out["items"], "a poisoned hit would have produced no items"
+    assert len(calls) == 1, "the loader must run for the resolved day"
+    assert cache.reads == [day_key]
+    assert [key for key, _v, _t in cache.writes] == [day_key]
 
 
 async def test_empty_day_returns_empty_envelope_and_never_loads_rows(

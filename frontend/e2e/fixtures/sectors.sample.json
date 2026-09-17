@@ -1,0 +1,28 @@
+{
+  "as_of": "2026-09-16",
+  "as_of_quality": "complete",
+  "as_of_reason": null,
+  "items": [
+    {
+      "name": "林业",
+      "changePercent": 5.97,
+      "totalMarketCap": 3095586720.0,
+      "stockCount": 4,
+      "topStocks": []
+    },
+    {
+      "name": "半导体",
+      "changePercent": 4.76,
+      "totalMarketCap": 249178597910.0,
+      "stockCount": 194,
+      "topStocks": []
+    },
+    {
+      "name": "红黄酒",
+      "changePercent": 4.39,
+      "totalMarketCap": 1790672280.0,
+      "stockCount": 9,
+      "topStocks": []
+    }
+  ]
+}

@@ -1,5 +1,9 @@
 """``market_snapshot_service`` 契约：取行 SQL、分组/汇总纯函数、缓存 JSON 边界。
 
+Task 8 起行契约瘦身为 :data:`mss.ROW_KEYS`（6 列：四个消费方真正读到的
+``csrc_desc`` / ``province`` / ``pct_chg`` / ``amount`` / ``total_mv``，加
+``basic_date`` 标注市值来自哪一天），缓存 payload 相应从 11 列缩到 6 列。
+
 离线：``_fetch_rows`` 是 SQL seam，缓存用 JSON 边界替身，全程不碰库、不打网。
 """
 
@@ -22,31 +26,24 @@ DAY_KEY = "market:day:rows:2026-09-16"
 def _row(**overrides: Any) -> dict[str, Any]:
     """One snapshot row in the module's canonical (JSON-safe) shape."""
     row: dict[str, Any] = {
-        "stock_id": 1,
-        "symbol": "600000",
-        "name": "浦发银行",
         "csrc_desc": "银行",
         "province": "上海",
-        "close": 9.1,
         "pct_chg": -0.8715,
         "amount": 656348.14,
         "total_mv": 30308312.85,
-        "circ_mv": 30308312.85,
-        "turnover_rate": 0.2172,
+        "basic_date": "2026-09-16",
     }
     row.update(overrides)
     return row
 
 
 def _db_row(**overrides: Any) -> dict[str, Any]:
-    """One row as the DB returns it: the numeric columns are ``Decimal``."""
+    """One row as the DB returns it: numbers are ``Decimal``, ``basic_date`` a ``date``."""
     row = _row(
-        close=Decimal("9.1000"),
         pct_chg=Decimal("-0.8715"),
         amount=Decimal("656348.14"),
         total_mv=Decimal("30308312.85"),
-        circ_mv=Decimal("30308312.85"),
-        turnover_rate=Decimal("0.2172"),
+        basic_date=D16,
     )
     row.update(overrides)
     return row
@@ -120,6 +117,22 @@ def test_snapshot_stmt_binds_the_requested_day_for_both_tables() -> None:
     assert "daily_basic_indicators.trade_date <= %(day)s" in sql
 
 
+def test_snapshot_stmt_selects_only_the_slim_row_contract() -> None:
+    """Task 8: the statement selects exactly ROW_KEYS — no dead columns on the wire.
+
+    A future re-addition of ``symbol``/``name``/``close``/``circ_mv``/``turnover_rate``
+    (or a silent drop of ``basic_date``) would put the 1.2MB / 6-column measurement back
+    and re-hide market-cap staleness, so both directions are pinned here.
+    """
+    stmt = mss._snapshot_stmt(D16)
+    selected = [str(col).split(".")[-1] for col in stmt.selected_columns]
+    assert selected == ["csrc_desc", "province", "pct_chg", "amount", "total_mv", "basic_date"]
+    assert tuple(selected) == mss.ROW_KEYS
+    # the daily_basic LATERAL must bring back its own trade_date, not just the value
+    sql = str(stmt.compile(dialect=postgresql.dialect()))
+    assert "daily_basic_indicators.trade_date AS basic_date" in sql
+
+
 # ---------------------------------------------------------------------------
 # group_by
 # ---------------------------------------------------------------------------
@@ -127,19 +140,19 @@ def test_snapshot_stmt_binds_the_requested_day_for_both_tables() -> None:
 
 def test_group_by_skips_none_and_empty_keys_and_preserves_row_order() -> None:
     rows = [
-        _row(stock_id=3, csrc_desc="银行"),
-        _row(stock_id=1, csrc_desc=None),
-        _row(stock_id=2, csrc_desc=""),
-        _row(stock_id=4, csrc_desc="医药"),
-        _row(stock_id=5, csrc_desc="银行"),
+        _row(amount=3.0, csrc_desc="银行"),
+        _row(amount=1.0, csrc_desc=None),
+        _row(amount=2.0, csrc_desc=""),
+        _row(amount=4.0, csrc_desc="医药"),
+        _row(amount=5.0, csrc_desc="银行"),
     ]
 
     groups = mss.group_by(rows, "csrc_desc")
 
     # skipped keys produce no bucket at all ("None"/"" must not show up as groups)
     assert list(groups) == ["银行", "医药"]
-    assert [r["stock_id"] for r in groups["银行"]] == [3, 5]
-    assert [r["stock_id"] for r in groups["医药"]] == [4]
+    assert [r["amount"] for r in groups["银行"]] == [3.0, 5.0]
+    assert [r["amount"] for r in groups["医药"]] == [4.0]
     assert sum(len(items) for items in groups.values()) == 3
 
 
@@ -200,29 +213,52 @@ def test_summarize_group_all_null_pct_chg_has_zero_mean() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_payload_round_trips_decimals_through_json() -> None:
-    """DB Decimals become floats on write; the cached bytes rebuild the same rows."""
+def test_payload_round_trips_decimals_and_dates_through_json() -> None:
+    """DB Decimals become floats and ``date`` becomes ISO on write; bytes rebuild the rows."""
     db_rows = [
-        _row(close=Decimal("9.1000"), pct_chg=Decimal("-0.8715"), amount=None),
+        _row(pct_chg=Decimal("-0.8715"), amount=None, total_mv=Decimal("1"), basic_date=D16),
     ]
 
     payload = mss._to_payload(db_rows)
 
-    assert payload == [_row(close=9.1, pct_chg=-0.8715, amount=None)]
-    assert isinstance(payload[0]["close"], float)
+    assert payload == [_row(pct_chg=-0.8715, amount=None, total_mv=1.0, basic_date="2026-09-16")]
+    assert isinstance(payload[0]["pct_chg"], float)
+    assert isinstance(payload[0]["basic_date"], str)
     cached = json.loads(json.dumps(payload))  # the real CacheClient boundary
     assert mss._from_payload(cached) == payload
 
 
+def test_basic_date_survives_as_iso_and_a_missing_cap_is_explicit() -> None:
+    """Market-cap staleness must be visible: ``basic_date`` is a real ISO date or None.
+
+    ``daily_basic`` has no row <= day for some stock/day (§H), and the LATERAL then
+    falls back to an older cap. ``basic_date`` is the only evidence of that, so it is
+    pinned both ways: an older date round-trips as-is and a missing cap keeps both
+    fields ``None`` instead of a fabricated 0 / today.
+    """
+    db_rows = [
+        _db_row(basic_date=date(2026, 9, 11), total_mv=Decimal("1.5")),
+        _db_row(basic_date=None, total_mv=None),
+    ]
+
+    payload = mss._to_payload(db_rows)
+
+    assert payload[0]["basic_date"] == "2026-09-11"  # strictly older than D16
+    assert payload[0]["total_mv"] == 1.5
+    assert payload[1]["basic_date"] is None
+    assert payload[1]["total_mv"] is None
+    assert set(payload[0]) == set(mss.ROW_KEYS)
+
+
 async def test_cache_hit_short_circuits_the_db(monkeypatch: pytest.MonkeyPatch) -> None:
     """A hit returns cached rows, never calls the DB seam, and never rewrites the entry."""
-    fetch = AsyncMock(return_value=[_row(stock_id=99)])
+    fetch = AsyncMock(return_value=[_row(csrc_desc="银行")])
     monkeypatch.setattr(mss, "_fetch_rows", fetch)
-    cache = _FakeCache(payload=[_row(stock_id=7)])
+    cache = _FakeCache(payload=[_row(csrc_desc="电子")])
 
     rows = await mss.load_day_rows(AsyncMock(), D16, cache=cache)
 
-    assert [r["stock_id"] for r in rows] == [7]
+    assert [r["csrc_desc"] for r in rows] == ["电子"]
     fetch.assert_not_awaited()
     assert cache.sets == []  # hits do not rewrite the entry
 
@@ -234,37 +270,44 @@ async def test_cache_hit_preserves_payload_row_order(monkeypatch: pytest.MonkeyP
     on the hit path would show up, and ``None`` string fields prove the
     ``str | None`` type check is not over-strict.
     """
-    fetch = AsyncMock(return_value=[_row(stock_id=1)])
+    fetch = AsyncMock(return_value=[_row(csrc_desc="银行")])
     monkeypatch.setattr(mss, "_fetch_rows", fetch)
     payload = [
-        _row(stock_id=9, name=None),
-        _row(stock_id=3),
-        _row(stock_id=5, csrc_desc=None),
+        _row(csrc_desc="电子", total_mv=None),
+        _row(csrc_desc="银行"),
+        _row(csrc_desc=None, basic_date=None),
     ]
     cache = _FakeCache(payload=payload)
 
     rows = await mss.load_day_rows(AsyncMock(), D16, cache=cache)
 
     assert rows == payload  # verbatim order
-    assert [r["stock_id"] for r in rows] == [9, 3, 5]
-    assert rows[0]["name"] is None
+    assert [r["csrc_desc"] for r in rows] == ["电子", "银行", None]
+    assert rows[0]["total_mv"] is None
     assert rows[2]["csrc_desc"] is None
+    assert rows[2]["basic_date"] is None
     fetch.assert_not_awaited()
     assert cache.sets == []
 
 
 async def test_cache_miss_writes_payload_with_key_and_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
-    fetch = AsyncMock(return_value=[_row(stock_id=1), _row(stock_id=2, symbol="600004")])
+    fetch = AsyncMock(
+        return_value=[_row(csrc_desc="银行"), _row(csrc_desc="电子", province="广东")]
+    )
     monkeypatch.setattr(mss, "_fetch_rows", fetch)
     cache = _FakeCache()
 
     rows = await mss.load_day_rows(AsyncMock(), D16, cache=cache)
 
     fetch.assert_awaited_once()
-    assert rows == [_row(stock_id=1), _row(stock_id=2, symbol="600004")]
+    assert rows == [_row(csrc_desc="银行"), _row(csrc_desc="电子", province="广东")]
     assert mss.SNAPSHOT_TTL == 300
     assert cache.sets == [
-        (DAY_KEY, [_row(stock_id=1), _row(stock_id=2, symbol="600004")], mss.SNAPSHOT_TTL)
+        (
+            DAY_KEY,
+            [_row(csrc_desc="银行"), _row(csrc_desc="电子", province="广东")],
+            mss.SNAPSHOT_TTL,
+        )
     ]
 
 
@@ -306,12 +349,12 @@ async def test_cold_path_normalizes_each_row_exactly_once(
 
     monkeypatch.setattr(mss, "_normalize_row", counting)
     db = AsyncMock()
-    db.execute = AsyncMock(return_value=_FakeResult([_db_row(), _db_row(stock_id=2)]))
+    db.execute = AsyncMock(return_value=_FakeResult([_db_row(), _db_row(csrc_desc="电子")]))
     cache = _FakeCache()
 
     rows = await mss.load_day_rows(db, D16, cache=cache)
 
-    assert [r["stock_id"] for r in rows] == [1, 2]
+    assert [r["csrc_desc"] for r in rows] == ["银行", "电子"]
     assert calls == 2  # not 4
 
 
@@ -343,11 +386,12 @@ async def test_empty_day_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     [
         {"not": "a list"},
         "market:day:rows",
-        [{"stock_id": 1}],  # missing keys
-        [{**_row(), "stock_id": "not-a-number"}],  # uncoercible id
-        [{**_row(), "close": "9.1"}],  # numeric field shipped as a string
+        [{"csrc_desc": "银行"}],  # missing keys
+        [{**_row(), "amount": "6.5e5"}],  # numeric field shipped as a string
         [{**_row(), "csrc_desc": {"a": 1}}],  # string field shipped as a dict
         [{**_row(), "province": 123}],  # string field shipped as an int
+        [{**_row(), "basic_date": 20260916}],  # date field shipped as an int
+        [{**_row(), "basic_date": "not-a-date"}],  # unparseable date string
         [_row(), ["not", "a", "dict"]],
     ],
 )
@@ -355,13 +399,13 @@ async def test_malformed_cache_payload_falls_back_to_db(
     monkeypatch: pytest.MonkeyPatch, bad_payload: Any
 ) -> None:
     """Any unusable payload is a miss — never an exception, never half-stale data."""
-    fetch = AsyncMock(return_value=[_row(stock_id=42)])
+    fetch = AsyncMock(return_value=[_row(csrc_desc="电子")])
     monkeypatch.setattr(mss, "_fetch_rows", fetch)
     cache = _FakeCache(payload=bad_payload)
 
     rows = await mss.load_day_rows(AsyncMock(), D16, cache=cache)
 
-    assert rows == [_row(stock_id=42)]
+    assert rows == [_row(csrc_desc="电子")]
     fetch.assert_awaited_once()
 
 
@@ -373,13 +417,13 @@ async def test_overflowing_json_number_payload_falls_back_to_db(
     That must degrade to a cache miss like every other unusable payload — it must
     not escape into the request path.
     """
-    fetch = AsyncMock(return_value=[_row(stock_id=42)])
+    fetch = AsyncMock(return_value=[_row(csrc_desc="电子")])
     monkeypatch.setattr(mss, "_fetch_rows", fetch)
-    cache = _FakeCache(payload=[{**_row(), "close": 10**400}])
+    cache = _FakeCache(payload=[{**_row(), "amount": 10**400}])
 
     rows = await mss.load_day_rows(AsyncMock(), D16, cache=cache)
 
-    assert rows == [_row(stock_id=42)]
+    assert rows == [_row(csrc_desc="电子")]
     fetch.assert_awaited_once()
 
 
@@ -392,11 +436,11 @@ async def test_empty_list_payload_is_treated_as_a_miss(
     stray ``[]`` would freeze a "no data" day for the whole TTL — the exact state
     the non-empty write rule exists to prevent.
     """
-    fetch = AsyncMock(return_value=[_row(stock_id=42)])
+    fetch = AsyncMock(return_value=[_row(csrc_desc="电子")])
     monkeypatch.setattr(mss, "_fetch_rows", fetch)
     cache = _FakeCache(payload=[])
 
     rows = await mss.load_day_rows(AsyncMock(), D16, cache=cache)
 
-    assert rows == [_row(stock_id=42)]
+    assert rows == [_row(csrc_desc="电子")]
     fetch.assert_awaited_once()

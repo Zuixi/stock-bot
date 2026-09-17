@@ -1,0 +1,37 @@
+{
+  "as_of": "2026-09-16",
+  "as_of_quality": "complete",
+  "as_of_reason": null,
+  "items": [
+    {
+      "id": "industry-林业",
+      "name": "林业",
+      "code": "",
+      "changePercent": 5.97,
+      "upCount": 4,
+      "flatCount": 0,
+      "downCount": 0,
+      "leaders": []
+    },
+    {
+      "id": "industry-半导体",
+      "name": "半导体",
+      "code": "",
+      "changePercent": 4.76,
+      "upCount": 191,
+      "flatCount": 1,
+      "downCount": 2,
+      "leaders": []
+    },
+    {
+      "id": "industry-红黄酒",
+      "name": "红黄酒",
+      "code": "",
+      "changePercent": 4.39,
+      "upCount": 8,
+      "flatCount": 1,
+      "downCount": 0,
+      "leaders": []
+    }
+  ]
+}

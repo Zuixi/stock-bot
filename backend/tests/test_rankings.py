@@ -82,6 +82,8 @@ class _FakeDb:
 
 @pytest.mark.asyncio
 async def test_get_rankings_cache_hit_skips_db(monkeypatch) -> None:
+    """Cache key carries the resolved day; a hit resolves the day but runs no ranking SQL."""
+    _patch_resolved_day(monkeypatch)
     cache = RecordingCache()
     cached = RankingResponseOut(
         as_of=date(2026, 9, 10),
@@ -89,7 +91,7 @@ async def test_get_rankings_cache_hit_skips_db(monkeypatch) -> None:
         type="gainers",
         items=[],
     )
-    cache.store["market:rankings:gainers:20"] = cached.model_dump(mode="json")
+    cache.store["market:rankings:gainers:20:2026-09-10"] = cached.model_dump(mode="json")
     db = _FakeDb([])
 
     out = await market_service.get_rankings(db, cache, "gainers", 20)  # type: ignore[arg-type]
@@ -138,7 +140,7 @@ async def test_get_rankings_computes_and_sets_cache(monkeypatch) -> None:
     assert out.as_of == date(2026, 9, 10)
     assert out.as_of_quality == "complete"
     # Ruling Q: cache payload is JSON-mode (as_of is a string).
-    assert cache.set_calls[0][0] == "market:rankings:gainers:5"
+    assert cache.set_calls[0][0] == "market:rankings:gainers:5:2026-09-10"
     assert cache.set_calls[0][1]["as_of"] == "2026-09-10"  # type: ignore[index]
     assert cache.set_calls[0][1]["as_of_quality"] == "complete"  # type: ignore[index]
     assert cache.set_calls[0][2] == market_service._MARKET_CACHE_TTL
@@ -202,18 +204,21 @@ async def test_latest_trade_date_helper_returns_none_on_empty(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_get_rankings_legacy_cache_payload_without_quality_reads_partial() -> None:
-    """Pre-deploy cache payloads have no ``as_of_quality`` key.
+async def test_get_rankings_legacy_cache_payload_without_quality_reads_partial(
+    monkeypatch,
+) -> None:
+    """Cache payloads without ``as_of_quality`` must not be read as ``"complete"``.
 
     The schema default (``"complete"``) would dress a stale payload up as a fresh
     complete day for up to ``_MARKET_CACHE_TTL``; an absent key means ``"partial"``.
     """
+    _patch_resolved_day(monkeypatch)
     cache = RecordingCache()
     legacy = RankingResponseOut(
         as_of=date(2026, 9, 10), is_latest_trading_day=True, type="gainers", items=[]
     ).model_dump(mode="json")
     del legacy["as_of_quality"]  # legacy shape: key absent, not null
-    cache.store["market:rankings:gainers:20"] = legacy
+    cache.store["market:rankings:gainers:20:2026-09-10"] = legacy
     db = _FakeDb([])
 
     out = await market_service.get_rankings(db, cache, "gainers", 20)  # type: ignore[arg-type]
@@ -221,3 +226,30 @@ async def test_get_rankings_legacy_cache_payload_without_quality_reads_partial()
     assert out.as_of_quality == "partial"
     assert out.as_of == date(2026, 9, 10)
     assert db.calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_rankings_does_not_reuse_another_days_payload(monkeypatch) -> None:
+    """Two poisons: the pre-Task-8 day-less key and the previous day's key.
+
+    A day-agnostic lookup would hit one of them and replay ``as_of=2026-09-09``; a
+    day-scoped key must miss both, run the ranking SQL for 2026-09-10 and write the
+    day-scoped key.
+    """
+    _patch_resolved_day(monkeypatch)
+    cache = RecordingCache()
+    for key in ("market:rankings:gainers:20", "market:rankings:gainers:20:2026-09-09"):
+        payload = RankingResponseOut(
+            as_of=date(2026, 9, 9), is_latest_trading_day=True, type="gainers", items=[]
+        ).model_dump(mode="json")
+        # wrong shape on purpose: a poisoned hit would blow up / return it
+        payload["items"] = [{"symbol": "STALE"}]
+        cache.store[key] = payload
+    db = _FakeDb([])
+
+    out = await market_service.get_rankings(db, cache, "gainers", 20)  # type: ignore[arg-type]
+
+    assert out.as_of == date(2026, 9, 10)
+    assert out.items == []
+    assert len(db.calls) == 1, "the ranking SQL must run for the resolved day"
+    assert cache.set_calls[0][0] == "market:rankings:gainers:20:2026-09-10"

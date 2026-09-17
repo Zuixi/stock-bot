@@ -106,7 +106,7 @@ def _install_repo_fakes(
 async def test_resolve_empty_daily_quotes_returns_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """无任何行情时返回 None（不抛，区别于 legacy get_latest_trade_date）。"""
+    """无任何行情时返回 None（不抛，区别于已删除的 legacy get_latest_trade_date）。"""
     _install_repo_fakes(monkeypatch, stats={}, candidate=None)
 
     assert await mds.resolve_latest_complete_day(_NullDb()) is None  # type: ignore[arg-type]
