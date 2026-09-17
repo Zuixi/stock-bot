@@ -269,9 +269,15 @@ async def test_hot_boards_industry_from_eastmoney_has_real_codes_and_money(
         assert item["mainNetInflow"] is not None and item["amount"] is not None
     # 新信封字段能过 Pydantic（schema 已随实现更新）
     assert HotBoardsOut.model_validate(payload).source == "eastmoney_boards"
-    # 缓存：键按今日（跨零点换键），TTL 300s
+    # 缓存：键按今日（跨零点换键），实时类 TTL = 60s（不是按日聚合的 300s）
     assert cache.reads == [f"market:hot-boards:em:industry:{D_TODAY.isoformat()}"]
-    assert cache.writes == [(f"market:hot-boards:em:industry:{D_TODAY.isoformat()}", payload, 300)]
+    assert cache.writes == [
+        (
+            f"market:hot-boards:em:industry:{D_TODAY.isoformat()}",
+            payload,
+            market_service._REALTIME_CACHE_TTL,
+        )
+    ]
 
 
 async def test_hot_boards_concept_returns_rows_and_never_touches_the_db(
@@ -359,7 +365,14 @@ async def test_hot_boards_eastmoney_failure_falls_back_and_is_marked(
     assert [c[0] for c in calls] == ["day", "rows"]
     out = HotBoardsOut.model_validate(payload)
     assert (out.source, out.degraded_reason) == ("local_grouping", "eastmoney_unavailable")
-    assert cache.writes[0][0] == f"market:hot-boards:industry:{D_PREV.isoformat()}"
+    # 回落 payload 是按日聚合（日键 + 判据日）→ 仍是 300s，别被实时 TTL 一起改小
+    assert cache.writes == [
+        (
+            f"market:hot-boards:industry:{D_PREV.isoformat()}",
+            payload,
+            market_service._MARKET_CACHE_TTL,
+        )
+    ]
 
 
 async def test_hot_boards_unmarked_cached_payloads_are_misses(
@@ -397,6 +410,79 @@ async def test_hot_boards_unmarked_cached_payloads_are_misses(
     assert [c[0] for c in calls] == ["day", "rows"], "两份无标注 payload 都必须重算"
     assert payload["source"] == "local_grouping"
     assert payload["items"][0]["id"] == "industry-电子"
+
+
+async def test_hot_boards_concept_fallback_is_empty_and_marked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """concept 无本地口径 → 东财炸时**空 items + 降级标注**，绝不回落到省份分组。
+
+    本地白名单只有 ``industry→csrc_desc`` / ``region→province``；旧写法
+    ``"csrc_desc" if category == "industry" else "province"`` 会给 concept 发一份
+    **省份**行（``id=concept-省XX``），跨口径冒充概念板块。这里喂的库行就带
+    ``province``：如果映射表被写回旧形态，items 立刻非空 → 红。
+    """
+    _patch_em(monkeypatch, _FailingEM())
+    _patch_today(monkeypatch)
+    calls = _patch_local_day(
+        monkeypatch,
+        [
+            {"province": "上海", "pct_chg": 5.0},
+            {"province": "上海", "pct_chg": -2.0},
+            {"province": "广东", "pct_chg": 1.0},
+        ],
+    )
+    cache = _RecordingCache()
+
+    payload = await market_service.get_hot_boards("concept", cache)
+
+    assert payload["items"] == [], "concept 没有本地口径，必须空而不是省份行"
+    assert [c[0] for c in calls] == ["day", "rows"], "回落路径仍走判据日（键含判据日）"
+    assert payload["source"] == "local_grouping"
+    assert payload["degraded_reason"] == "eastmoney_unavailable"
+    out = HotBoardsOut.model_validate(payload)
+    assert (out.source, out.degraded_reason, out.items) == (
+        "local_grouping",
+        "eastmoney_unavailable",
+        [],
+    )
+    # 降级 payload 仍缓存（按日键 + 按日 TTL），避免每次请求都重算
+    assert cache.writes == [
+        (
+            f"market:hot-boards:concept:{D_PREV.isoformat()}",
+            payload,
+            market_service._MARKET_CACHE_TTL,
+        )
+    ]
+
+
+async def test_realtime_board_caches_use_the_60s_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """两个实时键（板块榜 + 成分股）TTL = 60s；按日聚合仍是 300s。
+
+    spec §4.5「实时类 60s」：payload 的 ``as_of`` 只有日粒度，"快照多旧"无处可辨，
+    而 ``HotSectors`` 盘中 30s 轮询一次 —— 300s 会把同一份快照回放约 10 次。
+    """
+    client, _fake = _fixture_client(
+        {
+            FS_INDUSTRY: _raw("board_list_industry.json"),
+            "b:BK1518": _raw("board_stocks_bk1518.json"),
+        }
+    )
+    _patch_em(monkeypatch, client)
+    _patch_today(monkeypatch)
+    cache = _RecordingCache()
+
+    await market_service.get_hot_boards("industry", cache)
+    await market_service.get_board_stocks("BK1518", 3, cache)
+
+    assert market_service._REALTIME_CACHE_TTL == 60, "spec 实时类 = 60s"
+    assert market_service._MARKET_CACHE_TTL == 300, "按日聚合不得被一起改小"
+    assert {key: ttl for key, _value, ttl in cache.writes} == {
+        f"market:hot-boards:em:industry:{D_TODAY.isoformat()}": 60,
+        "market:board-stocks:BK1518:3": 60,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +533,7 @@ async def test_board_stocks_endpoint_returns_constituents_and_forwards_limit(
     assert fake.calls[0]["params"]["pz"] == 3
     assert cache.reads == ["market:board-stocks:BK1518:3"]
     assert cache.writes[0][0] == "market:board-stocks:BK1518:3"
+    assert cache.writes[0][2] == market_service._REALTIME_CACHE_TTL, "成分股是实时快照 → 60s"
 
     again = await client.get("/api/v1/market/boards/BK1518/stocks", params={"limit": 3})
     assert again.status_code == 200
