@@ -32,6 +32,7 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             "quotes_symbols_latest": 5485,
             "degraded_calendar": False,
             "apply": kw.get("apply", True),
+            "adj_factor_repaired": None,
             "domains": {
                 "daily_quotes": {
                     "latest_in_db": "2026-09-16",
@@ -54,6 +55,7 @@ async def test_data_freshness_is_dry_run(_env: dict[str, Any]) -> None:
     assert out.apply is False
     assert out.domains["daily_quotes"].status == "ok"
     assert out.domains["daily_quotes"].latest_in_db == "2026-09-16"
+    assert out.adj_factor_repaired is None  # 只读巡检：不补因子
 
 
 async def test_data_freshness_exposes_universe_lag(_env: dict[str, Any]) -> None:
@@ -66,3 +68,30 @@ async def test_data_freshness_exposes_universe_lag(_env: dict[str, Any]) -> None
     assert out.universe == 5546
     assert out.quotes_symbols_latest == 5485
     assert out.universe - out.quotes_symbols_latest == 61
+
+
+def test_data_freshness_schema_exposes_adj_factor_repair() -> None:
+    """对账补灌的新副作用字段必须经 DataFreshnessOut 透出，而非被 extra 静默丢弃。"""
+    from app.schemas.reconciliation import DataFreshnessOut
+
+    out = DataFreshnessOut(
+        **{
+            "as_of": "2026-09-17",
+            "expected_latest": "2026-09-16",
+            "expected_days": 10,
+            "universe": 5546,
+            "quotes_symbols_latest": 5485,
+            "degraded_calendar": False,
+            "apply": True,
+            "domains": {},
+            "adj_factor_repaired": {
+                "days": ["2026-09-16"],
+                "rows": 3,
+                "failed": 0,
+                "error": None,
+            },
+        }
+    )
+    assert out.adj_factor_repaired is not None
+    assert out.adj_factor_repaired.rows == 3
+    assert out.adj_factor_repaired.days == ["2026-09-16"]
