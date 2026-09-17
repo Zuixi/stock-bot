@@ -1,7 +1,9 @@
 """按日聚合端点必须带 as_of 质量标注，且 as_of 取自完整性判据而非 max(trade_date)。
 
-服务层用 seam 替换判据与取行（`_*_rows`），不打库、不打网；`_NullDb` 只是占位
-session —— 每个被触及的 DB 调用要么被 monkeypatch，要么根本不执行。
+服务层用 seam 替换判据与取行，不打库、不打网：按日聚合的四个端点自 Task 7 起共用
+``market_snapshot_service.load_day_rows``（本文件 patch 它），SW 业绩仍走自家的
+``_sw_performance_rows``；``None`` 只是占位 session —— 每个被触及的 DB 调用要么被
+monkeypatch，要么根本不执行。
 """
 
 from datetime import date
@@ -42,49 +44,56 @@ def _day(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_distribution_carries_as_of_quality(_day: None, monkeypatch) -> None:
-    async def _rows(_db: Any, _day_: date) -> list[dict]:
-        return [{"range": "0~1%", "count": 3}]
+def _patch_day_rows(monkeypatch: pytest.MonkeyPatch, rows: list[dict]) -> None:
+    """Patch the shared per-day snapshot loader (Task 7) used by the market plane."""
 
-    monkeypatch.setattr(market_service, "_distribution_rows", _rows)
+    async def _load(_db: Any, _day_: date, *, cache: Any = None) -> list[dict]:
+        return rows
+
+    monkeypatch.setattr(market_service, "load_day_rows", _load)
+
+
+async def test_distribution_carries_as_of_quality(_day: None, monkeypatch) -> None:
+    _patch_day_rows(monkeypatch, [{"pct_chg": 0.5}, {"pct_chg": 0.5}, {"pct_chg": 0.5}])
+
     out = await market_service.get_distribution(None)
+
     assert out["as_of"] == "2026-09-16"
     assert out["as_of_quality"] == "fallback"
     assert out["as_of_reason"] == "latest_day_incomplete"
-    assert out["items"] == [{"range": "0~1%", "count": 3}]
+    buckets = {item["range"]: item["count"] for item in out["items"]}
+    assert buckets["0~1%"] == 3
+    assert sum(buckets.values()) == 3
 
 
 async def test_sectors_carries_as_of_quality(_day: None, monkeypatch) -> None:
-    async def _rows(_db: Any, _day_: date) -> list[dict]:
-        return [{"name": "农林牧渔"}]
+    _patch_day_rows(monkeypatch, [{"csrc_desc": "农林牧渔", "pct_chg": 1.0, "amount": 1.0}])
 
-    monkeypatch.setattr(market_service, "_sector_rows", _rows)
     out = await market_service.get_sectors(None)
+
     assert out["as_of"] == "2026-09-16"
     assert out["as_of_quality"] == "fallback"
-    assert out["items"] == [{"name": "农林牧渔"}]
+    assert [item["name"] for item in out["items"]] == ["农林牧渔"]
 
 
 async def test_capital_flow_carries_as_of_quality(_day: None, monkeypatch) -> None:
-    async def _rows(_db: Any, _day_: date) -> list[dict]:
-        return [{"name": "电子", "inflow": 1.0, "outflow": -1.0}]
+    _patch_day_rows(monkeypatch, [{"csrc_desc": "电子", "pct_chg": 1.0, "amount": 100000.0}])
 
-    monkeypatch.setattr(market_service, "_capital_flow_rows", _rows)
     out = await market_service.get_capital_flow(None)
+
     assert out["as_of"] == "2026-09-16"
     assert out["as_of_quality"] == "fallback"
-    assert out["items"][0]["name"] == "电子"
+    assert out["items"][0] == {"name": "电子", "inflow": 1.0, "outflow": -0.0}
 
 
 async def test_hot_boards_carries_as_of_quality(_day: None, monkeypatch) -> None:
-    async def _rows(_db: Any, _day_: date, _category: str) -> list[dict]:
-        return [{"id": "industry-电子", "name": "电子"}]
+    _patch_day_rows(monkeypatch, [{"csrc_desc": "电子", "pct_chg": 1.0}])
 
-    monkeypatch.setattr(market_service, "_hot_board_rows", _rows)
     out = await market_service.get_hot_boards("industry", None)
+
     assert out["as_of"] == "2026-09-16"
     assert out["as_of_quality"] == "fallback"
-    assert out["items"][0]["name"] == "电子"
+    assert out["items"][0]["id"] == "industry-电子"
 
 
 async def test_hot_boards_concept_is_empty_envelope(monkeypatch) -> None:
@@ -103,7 +112,7 @@ async def test_empty_db_list_endpoint_never_raises(monkeypatch) -> None:
     async def _boom(*_a: Any, **_kw: Any) -> list[dict]:
         raise AssertionError("no resolved day => row loader must not run")
 
-    monkeypatch.setattr(market_service, "_distribution_rows", _boom)
+    monkeypatch.setattr(market_service, "load_day_rows", _boom)
     out = await market_service.get_distribution(None)
     assert out == {"as_of": None, "as_of_quality": "partial", "as_of_reason": None, "items": []}
 

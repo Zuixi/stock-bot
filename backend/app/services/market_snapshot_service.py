@@ -25,7 +25,10 @@ SQL 只读 ``daily_quotes.pct_chg``，**不再**对 ``daily_quotes`` 做前收 L
 - 收益在架构侧：(a) 市场平面 4~6 个端点从「各自一次 ~46ms SQL + 各自的 daily_basic 查询」
   收敛为**共用这 1 次取行 + 1 份缓存**；(b) 缓存命中约 **15ms**（1.2MB payload 的 JSON
   解析占大头）。故 Task 7 必须让**所有**市场平面端点都改走本 loader —— 只改部分端点会
-  让未改的端点从 ~46ms 退到 ~70ms。
+  让未改的端点从 ~46ms 退到 ~70ms。**唯一例外**：``get_sw_industry_performance`` 走申万
+  成员关系（``sw_industry_members`` → L3/L2/L1，且一只股票可属多个 L1），那不是「每股一条」
+  的日事实，硬塞进本行契约会把歧义带进每一次取行；它保留自家汇总语句，但同样只读存储列
+  ``pct_chg``（无前收 LATERAL），理由与取舍见 Task 7 报告。
 """
 
 from __future__ import annotations

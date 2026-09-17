@@ -33,6 +33,7 @@ from app.schemas.stock import StockOut
 from app.schemas.sw_performance import SwPerformanceItemOut, SwPerformanceResponseOut
 from app.services import market_day_service
 from app.services.market_data_service import _today_sh
+from app.services.market_snapshot_service import group_by, load_day_rows, summarize_group
 
 logger = logging.getLogger(__name__)
 
@@ -237,59 +238,86 @@ async def _fetch_indices_from_tushare() -> list[dict[str, Any]]:
     return results
 
 
-async def _distribution_rows(db: AsyncSession, day: date) -> list[dict[str, Any]]:
-    """Single-day up/down distribution rows (seam: unit tests monkeypatch this)."""
-    stmt = text("""
-        SELECT
-            CASE
-                WHEN pct_chg <= -9.5 THEN '跌停'
-                WHEN pct_chg < -7 THEN '>-7%'
-                WHEN pct_chg < -5 THEN '-5~-7%'
-                WHEN pct_chg < -3 THEN '-3~-5%'
-                WHEN pct_chg < -1 THEN '-1~-3%'
-                WHEN pct_chg < 0 THEN '0~-1%'
-                WHEN pct_chg < 1 THEN '0~1%'
-                WHEN pct_chg < 3 THEN '1~3%'
-                WHEN pct_chg < 5 THEN '3~5%'
-                WHEN pct_chg >= 9.5 THEN '涨停'
-                ELSE '>5%'
-            END AS range_label,
-            COUNT(*) AS cnt
-        FROM (
-            SELECT
-                dq.stock_id,
-                CASE WHEN dq.close > 0 AND prev.close > 0
-                     THEN ((dq.close - prev.close) / prev.close * 100)
-                     ELSE 0 END AS pct_chg
-            FROM daily_quotes dq
-            LEFT JOIN LATERAL (
-                SELECT close FROM daily_quotes dq2
-                WHERE dq2.stock_id = dq.stock_id
-                  AND dq2.trade_date < :trade_date
-                ORDER BY dq2.trade_date DESC
-                LIMIT 1
-            ) prev ON true
-            WHERE dq.trade_date = :trade_date
-        ) sub
-        GROUP BY range_label
-    """)
-    result = await db.execute(stmt, {"trade_date": day})
-    db_rows = {row.range_label: row.cnt for row in result}
+# ---------------------------------------------------------------------------
+# Day-aggregated endpoints — one shared day snapshot (Task 7)
+#
+# Every function below used to run its **own** "latest day + join stocks + group"
+# statement, each carrying a per-stock ``LEFT JOIN LATERAL`` that recomputed the
+# previous close to derive ``pct_chg``. They now share ONE
+# :func:`market_snapshot_service.load_day_rows` call (plus that module's 300s Redis
+# entry) and do the bucketing/grouping in Python over the same rows.
+#
+# The win is **page-level**, and it is modest (Task 7 measured, day 2026-09-16):
+# a page rendering all five costs 217ms → 189ms cold (median of 5) and 1.4ms → 1.4ms
+# warm (the endpoint result caches already covered the warm path), while the
+# Postgres statements behind it drop from 5 + 1 to 1 + 1. No single-query speedup is
+# claimed — each endpoint measured *in isolation* is slower than before (its own
+# ~46ms statement became a ~75ms full-market load or a ~14ms 1.2MB cache parse), so
+# the work moved from Postgres to the API process rather than disappearing. The
+# loader alone is slower than any one of the retired statements because it returns
+# all ~5,485 rows (see the loader's module docstring).
+# ---------------------------------------------------------------------------
 
-    ordered_ranges = [
-        "跌停",
-        ">-7%",
-        "-5~-7%",
-        "-3~-5%",
-        "-1~-3%",
-        "0~-1%",
-        "0~1%",
-        "1~3%",
-        "3~5%",
-        ">5%",
-        "涨停",
-    ]
-    return [{"range": r, "count": db_rows.get(r, 0)} for r in ordered_ranges]
+#: Distribution buckets in display order. Boundaries mirror the retired SQL CASE
+#: chain exactly (``<= -9.5`` 跌停 / ``>= 9.5`` 涨停; the rest on the integer edges,
+#: and ``[5, 9.5)`` is the CASE's trailing ELSE ``>5%``).
+_DISTRIBUTION_RANGES: tuple[str, ...] = (
+    "跌停",
+    ">-7%",
+    "-5~-7%",
+    "-3~-5%",
+    "-1~-3%",
+    "0~-1%",
+    "0~1%",
+    "1~3%",
+    "3~5%",
+    ">5%",
+    "涨停",
+)
+
+
+def _distribution_bucket(pct_chg: float | None) -> str:
+    """Bucket one ``pct_chg`` in the retired SQL CASE's own evaluation order.
+
+    Order matters: the negative side tests ``<= -9.5`` before ``< -7``, so -9.7 lands
+    in 跌停 while -8.0 lands in ``>-7%`` (the label is the legacy SQL's, kept as-is so
+    the frontend contract does not move).
+
+    ``None`` (no usable ``pct_chg``) maps to ``0~1%`` — exactly where the retired
+    SQL's ``ELSE 0`` coercion put it, and consistent with the shared summarizer's
+    convention that a missing ``pct_chg`` counts as flat.
+    """
+    if pct_chg is None:
+        return "0~1%"
+    if pct_chg <= -9.5:
+        return "跌停"
+    if pct_chg < -7:
+        return ">-7%"
+    if pct_chg < -5:
+        return "-5~-7%"
+    if pct_chg < -3:
+        return "-3~-5%"
+    if pct_chg < -1:
+        return "-1~-3%"
+    if pct_chg < 0:
+        return "0~-1%"
+    if pct_chg < 1:
+        return "0~1%"
+    if pct_chg < 3:
+        return "1~3%"
+    if pct_chg < 5:
+        return "3~5%"
+    if pct_chg < 9.5:
+        return ">5%"
+    return "涨停"
+
+
+def _distribution_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Count the day's rows into the 11 fixed buckets (zero-filled, display order)."""
+    counts: dict[str, int] = dict.fromkeys(_DISTRIBUTION_RANGES, 0)
+    for row in rows:
+        counts[_distribution_bucket(row.get("pct_chg"))] += 1
+    return [{"range": label, "count": counts[label]} for label in _DISTRIBUTION_RANGES]
 
 
 async def get_distribution(cache: CacheClient | None = None) -> dict[str, Any]:
@@ -302,57 +330,41 @@ async def get_distribution(cache: CacheClient | None = None) -> dict[str, Any]:
 
     async with async_session_factory() as db:
         md = await market_day_service.resolve_latest_complete_day(db)
-        rows = await _distribution_rows(db, md.day) if md is not None else []
+        rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
 
-    payload = _envelope(md, rows)
+    # No resolved day → ``items: []`` (an unresolved day must not render as eleven
+    # zero-count buckets). A resolved day always emits all 11, zero-filled — the shape
+    # the retired distribution statement had.
+    payload = _envelope(md, _distribution_items(rows) if md is not None else [])
     if cache and md is not None:
         await cache.set(cache_key, payload, _MARKET_CACHE_TTL)
     return payload
 
 
-async def _sector_rows(db: AsyncSession, day: date) -> list[dict[str, Any]]:
-    """CSRC-industry performance rows for one day (seam: unit tests monkeypatch this)."""
-    stmt = text("""
-        WITH latest_quotes AS (
-            SELECT dq.stock_id, dq.close, dq.amount,
-                   prev.close AS prev_close
-            FROM daily_quotes dq
-            LEFT JOIN LATERAL (
-                SELECT close FROM daily_quotes dq2
-                WHERE dq2.stock_id = dq.stock_id
-                  AND dq2.trade_date < :trade_date
-                ORDER BY dq2.trade_date DESC
-                LIMIT 1
-            ) prev ON true
-            WHERE dq.trade_date = :trade_date
-        )
-        SELECT
-            s.csrc_desc AS industry,
-            COUNT(*) AS stock_count,
-            SUM(lq.amount) AS total_amount,
-            AVG(CASE WHEN lq.prev_close > 0
-                THEN (lq.close - lq.prev_close) / lq.prev_close * 100
-                ELSE 0 END) AS avg_change_pct
-        FROM stocks s
-        JOIN latest_quotes lq ON lq.stock_id = s.id
-        WHERE s.csrc_desc IS NOT NULL AND s.csrc_desc != ''
-        GROUP BY s.csrc_desc
-        ORDER BY avg_change_pct DESC
-        LIMIT 30
-    """)
-    result = await db.execute(stmt, {"trade_date": day})
-    rows = result.fetchall()
+def _sector_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """CSRC-industry performance from the snapshot rows, top 30 by average change.
 
-    return [
-        {
-            "name": row.industry,
-            "changePercent": round(float(row.avg_change_pct or 0), 2),
-            "totalMarketCap": float(row.total_amount or 0) * 1000,
-            "stockCount": int(row.stock_count),
-            "topStocks": [],
-        }
-        for row in rows
-    ]
+    Same item keys as the retired SQL (``totalMarketCap`` is still the day's turnover
+    ``amount`` × 1000 for the existing 千元 → 元 conversion). Sorted by the
+    display-rounded mean: rounding is monotone, so this orders exactly like the SQL's
+    ``ORDER BY avg_change_pct DESC`` except for rounding ties, which Python's stable
+    sort resolves deterministically by first appearance (the loader's ``stock_id``
+    order) instead of Postgres' arbitrary one.
+    """
+    items: list[dict[str, Any]] = []
+    for name, group in group_by(rows, "csrc_desc").items():
+        stats = summarize_group(group)
+        items.append(
+            {
+                "name": name,
+                "changePercent": round(stats["avg_chg"], 2),
+                "totalMarketCap": float(sum(r.get("amount") or 0.0 for r in group)) * 1000,
+                "stockCount": stats["total"],
+                "topStocks": [],
+            }
+        )
+    items.sort(key=lambda item: item["changePercent"], reverse=True)
+    return items[:30]
 
 
 async def get_sectors(cache: CacheClient | None = None) -> dict[str, Any]:
@@ -365,52 +377,47 @@ async def get_sectors(cache: CacheClient | None = None) -> dict[str, Any]:
 
     async with async_session_factory() as db:
         md = await market_day_service.resolve_latest_complete_day(db)
-        rows = await _sector_rows(db, md.day) if md is not None else []
+        rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
 
-    payload = _envelope(md, rows)
+    payload = _envelope(md, _sector_items(rows))
     if cache and md is not None:
         await cache.set(cache_key, payload, _MARKET_CACHE_TTL)
     return payload
 
 
-async def _capital_flow_rows(db: AsyncSession, day: date) -> list[dict[str, Any]]:
-    """Sector inflow/outflow rows for one day (seam: unit tests monkeypatch this)."""
-    stmt = text("""
-        SELECT
-            s.csrc_desc AS industry,
-            SUM(CASE WHEN dq.close >= COALESCE(prev.close, dq.close)
-                THEN dq.amount ELSE 0 END) AS inflow_raw,
-            SUM(CASE WHEN dq.close < COALESCE(prev.close, dq.close)
-                THEN dq.amount ELSE 0 END) AS outflow_raw
-        FROM stocks s
-        JOIN daily_quotes dq ON dq.stock_id = s.id AND dq.trade_date = :trade_date
-        LEFT JOIN LATERAL (
-            SELECT close FROM daily_quotes dq2
-            WHERE dq2.stock_id = dq.stock_id
-              AND dq2.trade_date < :trade_date
-            ORDER BY dq2.trade_date DESC
-            LIMIT 1
-        ) prev ON true
-        WHERE s.csrc_desc IS NOT NULL AND s.csrc_desc != ''
-        GROUP BY s.csrc_desc
-        ORDER BY (SUM(dq.amount)) DESC
-        LIMIT 10
-    """)
-    result = await db.execute(stmt, {"trade_date": day})
-    rows = result.fetchall()
+def _capital_flow_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Top-10 CSRC industries by turnover, split into inflow / outflow (``amount``).
 
-    flows: list[dict[str, Any]] = []
-    for row in rows:
-        inflow = float(row.inflow_raw or 0) / 1e5
-        outflow = float(row.outflow_raw or 0) / 1e5
-        flows.append(
-            {
-                "name": row.industry,
-                "inflow": round(inflow, 2),
-                "outflow": round(-outflow, 2),
-            }
+    Direction now rides the stored ``pct_chg`` instead of ``close >= COALESCE(prev,
+    close)``: ``pct_chg >= 0`` → inflow, ``pct_chg < 0`` → outflow, and a **missing**
+    ``pct_chg`` → inflow — which is what the retired ``COALESCE(prev.close, dq.close)``
+    produced (no previous close made the comparison trivially true). Ranking is by the
+    group's unrounded total ``amount``; the payload then converts 千元 → 亿元 (``/1e5``)
+    and negates the outflow side, as before.
+    """
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for name, group in group_by(rows, "csrc_desc").items():
+        inflow = 0.0
+        outflow = 0.0
+        for row in group:
+            amount = row.get("amount") or 0.0
+            chg = row.get("pct_chg")
+            if chg is not None and chg < 0:
+                outflow += amount
+            else:  # pct_chg >= 0 or missing → inflow (legacy COALESCE behaviour)
+                inflow += amount
+        scored.append(
+            (
+                inflow + outflow,
+                {
+                    "name": name,
+                    "inflow": round(inflow / 1e5, 2),
+                    "outflow": round(-outflow / 1e5, 2),
+                },
+            )
         )
-    return flows
+    scored.sort(key=lambda entry: entry[0], reverse=True)
+    return [item for _total, item in scored[:10]]
 
 
 async def get_capital_flow(cache: CacheClient | None = None) -> dict[str, Any]:
@@ -423,65 +430,47 @@ async def get_capital_flow(cache: CacheClient | None = None) -> dict[str, Any]:
 
     async with async_session_factory() as db:
         md = await market_day_service.resolve_latest_complete_day(db)
-        rows = await _capital_flow_rows(db, md.day) if md is not None else []
+        rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
 
-    payload = _envelope(md, rows)
+    payload = _envelope(md, _capital_flow_items(rows))
     if cache and md is not None:
         await cache.set(cache_key, payload, _MARKET_CACHE_TTL)
     return payload
 
 
-async def _hot_board_rows(
-    db: AsyncSession, day: date, category: HotBoardCategory
-) -> list[dict[str, Any]]:
-    """Board breadth rows for one day + category (seam: unit tests monkeypatch this)."""
-    group_col = "csrc_desc" if category == "industry" else "province"
-    stmt = text(f"""
-        WITH latest_quotes AS (
-            SELECT dq.stock_id, dq.close,
-                   CASE WHEN prev.close > 0
-                        THEN (dq.close - prev.close) / prev.close * 100
-                        ELSE 0 END AS pct_chg
-            FROM daily_quotes dq
-            LEFT JOIN LATERAL (
-                SELECT close FROM daily_quotes dq2
-                WHERE dq2.stock_id = dq.stock_id
-                  AND dq2.trade_date < :trade_date
-                ORDER BY dq2.trade_date DESC
-                LIMIT 1
-            ) prev ON true
-            WHERE dq.trade_date = :trade_date
-        )
-        SELECT
-            s.{group_col} AS group_name,
-            COUNT(*) AS total,
-            SUM(CASE WHEN lq.pct_chg > 0 THEN 1 ELSE 0 END) AS up_count,
-            SUM(CASE WHEN lq.pct_chg = 0 THEN 1 ELSE 0 END) AS flat_count,
-            SUM(CASE WHEN lq.pct_chg < 0 THEN 1 ELSE 0 END) AS down_count,
-            AVG(lq.pct_chg) AS avg_chg
-        FROM stocks s
-        JOIN latest_quotes lq ON lq.stock_id = s.id
-        WHERE s.{group_col} IS NOT NULL AND s.{group_col} != ''
-        GROUP BY s.{group_col}
-        ORDER BY avg_chg DESC
-        LIMIT 10
-    """)  # noqa: S608
-    result = await db.execute(stmt, {"trade_date": day})
-    rows = result.fetchall()
+def _hot_board_key(category: HotBoardCategory) -> str:
+    """Row key a board category groups by (``concept`` never reaches this)."""
+    return "csrc_desc" if category == "industry" else "province"
 
-    return [
-        {
-            "id": f"{category}-{row.group_name}",
-            "name": row.group_name,
-            "code": "",
-            "changePercent": round(float(row.avg_chg or 0), 2),
-            "upCount": int(row.up_count or 0),
-            "flatCount": int(row.flat_count or 0),
-            "downCount": int(row.down_count or 0),
-            "leaders": [],
-        }
-        for row in rows
-    ]
+
+def _hot_board_items(
+    rows: list[dict[str, Any]], category: HotBoardCategory
+) -> list[dict[str, Any]]:
+    """Top-10 boards for one category, sorted by the display-rounded average change.
+
+    Phase 3 will swap the *data source* (East Money boards) behind these same item
+    keys; this task only moves the rows onto the shared snapshot. Counts come from
+    :func:`summarize_group`, so ``up + flat + down == total`` holds — the retired SQL
+    could leave suspended/no-quote rows out of all three counts.
+    """
+    key = _hot_board_key(category)
+    items: list[dict[str, Any]] = []
+    for name, group in group_by(rows, key).items():
+        stats = summarize_group(group)
+        items.append(
+            {
+                "id": f"{category}-{name}",
+                "name": name,
+                "code": "",
+                "changePercent": round(stats["avg_chg"], 2),
+                "upCount": stats["up_count"],
+                "flatCount": stats["flat_count"],
+                "downCount": stats["down_count"],
+                "leaders": [],
+            }
+        )
+    items.sort(key=lambda item: item["changePercent"], reverse=True)
+    return items[:10]
 
 
 async def get_hot_boards(
@@ -504,9 +493,9 @@ async def get_hot_boards(
 
     async with async_session_factory() as db:
         md = await market_day_service.resolve_latest_complete_day(db)
-        rows = await _hot_board_rows(db, md.day, category) if md is not None else []
+        rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
 
-    payload = _envelope(md, rows)
+    payload = _envelope(md, _hot_board_items(rows, category))
     if cache and md is not None:
         await cache.set(cache_key, payload, _MARKET_CACHE_TTL)
     return payload
