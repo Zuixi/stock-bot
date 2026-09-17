@@ -13,6 +13,8 @@ Usage:
     uv run python scripts/repair_market_day.py --purge-incomplete-today --yes
     # 幂等回填：对每个日期全市场重拉 daily_quotes（upsert in place）
     uv run python scripts/repair_market_day.py --backfill 2026-09-14 2026-09-15
+    # 回补区间内缺失的复权因子（加法式修复，无需 --yes）
+    uv run python scripts/repair_market_day.py --adj-factor 2026-09-01 2026-09-16
     # 复现某天的判断（默认 today）：--as-of 2026-09-17
 
 安全边界：
@@ -20,7 +22,13 @@ Usage:
   行数 < ``0.9 ×`` 在市标的数；已收盘的缺列日（行数满、pct_chg 空）只回填不删除。
 - 无 ``--yes`` 则只读；``--backfill`` 是 upsert，重复执行收敛到同一结果，且**拒绝**
   "未收盘的今天"（晚于最后一个已收盘工作日的日期一律跳过）。
-- 修复成功后 best-effort 失效 ``market:*`` 派生读缓存（Redis 故障不影响修复结果）。
+- ``--adj-factor`` 只 UPDATE 已有行（不插行、不删行），是**加法式**修复，因此不需要
+  ``--yes``：它最多把 NULL 因子填上，绝不可能让已有数据变少或变错。它只处理"已拉过
+  因子但个别日缺失"的股票（从未拉过的股票由线上懒加载路径一次拉全，见
+  ``quote_service.backfill_missing_adj_factors``）。
+- 修复成功后 best-effort 失效 ``market:*`` 派生读缓存（Redis 故障不影响修复结果）；
+  ``--adj-factor`` 另需失效 ``quote:kline:*``（K 线响应把 ``adjust_available=false``
+  一起缓存 600s，不清则控件最长 5 分钟仍显示禁用）。
 """
 
 from __future__ import annotations
@@ -73,6 +81,13 @@ def parse_args() -> argparse.Namespace:
         type=_parse_day,
         metavar="YYYYMMDD",
         help="对给定交易日全市场重拉 daily_quotes（幂等 upsert，修 pct_chg 等缺列）",
+    )
+    parser.add_argument(
+        "--adj-factor",
+        nargs=2,
+        type=_parse_day,
+        metavar=("START", "END"),
+        help="回补区间内缺失的 adj_factor（只 UPDATE 已有行，加法式修复，无需 --yes）",
     )
     parser.add_argument(
         "--as-of",
@@ -191,15 +206,20 @@ async def backfill_days(
     return coverage
 
 
+async def repair_adj_factors(start: date, end: date) -> dict[str, int]:
+    """调用 service 补洞（只 UPDATE 已有行）；返回 ``{stocks, rows, failed}``。"""
+    from app.services.quote_service import backfill_missing_adj_factors  # noqa: PLC0415
+
+    async with async_session_factory() as db:
+        return await backfill_missing_adj_factors(db, start=start, end=end)
+
+
 MARKET_CACHE_PATTERN = "market:*"
+KLINE_CACHE_PATTERN = "quote:kline:*"
 
 
-async def _invalidate_market_caches() -> int:
-    """失效派生读缓存（``market:day:*`` / ``market:rankings:*`` / SW 快照等）。
-
-    这些 payload 把 ``as_of``/``as_of_quality`` 一起缓存 300s；修复把
-    ``max(trade_date)`` 往回挪之后，若不清缓存，端点最长 5 分钟内还会返回
-    "脏日仍是 latest"的旧结论。
+async def _invalidate_pattern(pattern: str, *, label: str) -> int:
+    """按前缀失效读缓存，best-effort。
 
     Best-effort：Redis 不可用（或 ``get_redis_pool`` 构造失败）绝不能让已经落库
     的修复报错，一律吞掉并记 0。
@@ -208,21 +228,44 @@ async def _invalidate_market_caches() -> int:
 
     try:
         cache = CacheClient(await get_redis_pool())
-        dropped = await cache.delete_pattern(MARKET_CACHE_PATTERN)
+        dropped = await cache.delete_pattern(pattern)
     except Exception:
         logger.warning(
-            "repair: market cache invalidation failed (ignored — repair already committed)",
+            "repair: %s cache invalidation failed (ignored — repair already committed)",
+            label,
             exc_info=True,
         )
         return 0
-    logger.info("repair: invalidated %d market cache key(s)", dropped)
+    logger.info("repair: invalidated %d %s cache key(s)", dropped, label)
     return dropped
+
+
+async def _invalidate_market_caches() -> int:
+    """失效派生读缓存（``market:day:*`` / ``market:rankings:*`` / SW 快照等）。
+
+    这些 payload 把 ``as_of``/``as_of_quality`` 一起缓存 300s；修复把
+    ``max(trade_date)`` 往回挪之后，若不清缓存，端点最长 5 分钟内还会返回
+    "脏日仍是 latest"的旧结论。
+    """
+    return await _invalidate_pattern(MARKET_CACHE_PATTERN, label="market")
+
+
+async def _invalidate_kline_caches() -> int:
+    """失效 K 线响应缓存（``quote:kline:{exchange}:{symbol}:{start}:{end}:{adjust}``）。
+
+    ``get_kline`` 连 raw 分支也会把 ``adjust_available=false`` 一起缓存 600s；因子
+    补上之后若不清，端点最长 5 分钟内仍宣称"复权不可用"，控件继续禁用。
+    """
+    return await _invalidate_pattern(KLINE_CACHE_PATTERN, label="kline")
 
 
 async def main() -> None:
     args = parse_args()
-    if not args.purge_incomplete_today and not args.backfill:
-        logger.error("repair: nothing to do — pass --purge-incomplete-today and/or --backfill")
+    if not args.purge_incomplete_today and not args.backfill and not args.adj_factor:
+        logger.error(
+            "repair: nothing to do — pass --purge-incomplete-today and/or --backfill "
+            "and/or --adj-factor"
+        )
         sys.exit(2)
 
     asof = args.as_of or date.today()
@@ -253,6 +296,20 @@ async def main() -> None:
             logger.info("repair: %s now has rows=%d pct_chg_non_null=%d", day, rows, pct_rows)
         if coverage:
             await _invalidate_market_caches()
+
+    if args.adj_factor:
+        adj_start, adj_end = args.adj_factor
+        stats = await repair_adj_factors(adj_start, adj_end)
+        logger.info(
+            "repair: adj_factor %s..%s stocks=%d rows=%d failed=%d",
+            adj_start,
+            adj_end,
+            stats["stocks"],
+            stats["rows"],
+            stats["failed"],
+        )
+        if stats["rows"]:  # 有行被改写才需要失效 K 线缓存
+            await _invalidate_kline_caches()
 
 
 if __name__ == "__main__":
