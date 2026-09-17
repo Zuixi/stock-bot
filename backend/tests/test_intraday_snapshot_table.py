@@ -412,6 +412,9 @@ def test_list_intraday_snapshot_orders_by_captured_at_asc() -> None:
     # 承重断言：repo 发出的 SQL 自带排序与过滤（PG 方言编译）
     assert len(db.statements) == 1
     sql = str(db.statements[0].compile(dialect=postgresql.dialect()))
+    # 注：此断言耦合 SQLAlchemy 的**编译输出字符串**，不是语义检查——查询被包进子查询 /
+    # 列被别名化 / 新增含 DESC 的子句时需同步更新；执行顺序无法证伪（PG 与 SQLite 在无
+    # ORDER BY 时都返回索引顺序），故此处只做形状守卫。
     # PG 方言对 ASC 是默认值、不打印 " ASC"，所以显式排除 DESC
     assert "ORDER BY market_sentiment_intraday.captured_at" in sql, sql
     assert "DESC" not in sql, sql
