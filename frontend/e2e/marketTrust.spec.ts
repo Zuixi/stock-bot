@@ -208,3 +208,158 @@ test.describe("热门板块信任面（Task 15）", () => {
     await expect15s(page.getByText(/本地分组/).first()).toBeVisible();
   });
 });
+
+/**
+ * Task 16：可点击条目的**语义**与键盘可达性。
+ *
+ * 判据不是「能点」，而是「点了去做什么」：
+ * - 跳转（列表页/详情页）→ 真 `<a href>`（`<Link>`）：可 Tab 聚焦、Enter 触发、右键可新开标签；
+ * - 开抽屉（原地展示成分股）→ `<button>`：它不改变 URL，语义上不是链接，不得被读成「会跳走」。
+ * 因此本组用 `getByRole("link"|"button")` 断言角色，再用 `focus()` + `Enter` 断言**键盘**可达。
+ */
+
+/** 申万一级行业树最小样本（只保留被测字段；活栈数据随季度漂移，不依赖真实分类数）。 */
+const SW_TREE = [
+  {
+    code: "110000",
+    name: "农林牧渔",
+    stockCount: 107,
+    children: [{ code: "110100", name: "种植业", stockCount: 22, children: [] }],
+  },
+  { code: "770000", name: "食品饮料", stockCount: 60, children: [] },
+];
+
+async function mockSwTree(page: Page) {
+  await page.route("**/api/v1/market/sw-industry/tree*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(SW_TREE) })
+  );
+}
+
+test.describe("可点击条目语义与键盘可达（Task 16）", () => {
+  test("跳转型条目是真链接：普通 <a href> + Enter 可达", async ({ page }) => {
+    await mockHotBoards(page, { industry: INDUSTRY });
+    await mockSwTree(page);
+    await page.goto("/market");
+    await page.getByRole("tab", { name: "A股全景" }).click();
+
+    // 热门板块卡「查看全部」→ 列表页：必须是真 href（不是 onClick 的 <a>）
+    const boardCard = page.locator(".ant-card").filter({ hasText: "A股热门板块" });
+    const moreLink = boardCard.getByRole("link", { name: "查看全部" });
+    await expect15s(moreLink).toHaveAttribute("href", "/market/hot-sectors/industry");
+    await moreLink.focus();
+    await expect(moreLink).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\/market\/hot-sectors\/industry$/);
+
+    // 申万一级行业卡 → 二级页：整卡是链接，键盘 Enter 即进入
+    await page.goto("/market");
+    await page.getByRole("tab", { name: "A股全景" }).click();
+    const industryCard = page.locator(".ant-card").filter({ hasText: "行业分类（申万）" });
+    const level1 = industryCard.getByRole("link", { name: /农林牧渔/ });
+    await expect15s(level1).toHaveAttribute("href", "/market/industry/110000");
+    await level1.focus();
+    await expect(level1).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\/market\/industry\/110000/);
+  });
+
+  test("抽屉型条目是按钮而非链接：Enter 打开抽屉但不改 URL", async ({ page }) => {
+    await mockHotBoards(page, { industry: INDUSTRY });
+    await mockBoardStocks(page, BOARD_STOCKS);
+    await page.goto("/market");
+    await page.getByRole("tab", { name: "A股全景" }).click();
+
+    const card = page.locator(".ant-card").filter({ hasText: "A股热门板块" });
+    // 打开抽屉是「原地展开」，语义必须是 button；做成 link 会把用户读成「会跳走」
+    await expect(card.getByRole("link", { name: /种子/ })).toHaveCount(0);
+    const row = card.getByRole("button", { name: /种子/ });
+    await expect15s(row).toBeVisible();
+    await row.focus();
+    await expect(row).toBeFocused();
+    await page.keyboard.press("Enter");
+
+    const drawer = page.getByRole("dialog");
+    await expect15s(drawer).toBeVisible();
+    await expect15s(drawer.getByText("BK1518")).toBeVisible();
+    // 抽屉不该改 URL（与跳转型条目的分野）
+    await expect(page).toHaveURL(/\/market$/);
+  });
+
+  test("回落本地分组（无板块码）的行不是可点条目", async ({ page }) => {
+    const fallback = {
+      ...INDUSTRY,
+      source: "local_grouping",
+      degraded_reason: "eastmoney_unavailable",
+      items: INDUSTRY.items.map((item: Record<string, unknown>) => ({
+        ...item,
+        code: "",
+        leaders: [],
+      })),
+    };
+    await mockHotBoards(page, { industry: fallback });
+    await page.goto("/market");
+    await page.getByRole("tab", { name: "A股全景" }).click();
+
+    const card = page.locator(".ant-card").filter({ hasText: "A股热门板块" });
+    await expect15s(card.getByText("种子", { exact: true })).toBeVisible();
+    // 没有板块码就没有可下钻的成分股：不得渲染成按钮（谎报可点）
+    await expect(card.getByRole("button", { name: /种子/ })).toHaveCount(0);
+  });
+});
+
+/**
+ * Task 16：北向停更标注与数据版图降级。
+ * 北向（`moneyflow_hsgt`）上游已停更：卡片要能说「数据源已停更」**并给出最新数据日**，
+ * 日期必须取自 payload（`as_of`），换一天文案跟着变——写死日期就是假标注。
+ */
+test.describe("北向停更标注与数据版图降级（Task 16）", () => {
+  const NORTHBOUND_ITEMS = [
+    { date: "2026-09-06", net_amount: 12345.6 },
+    { date: "2026-09-07", net_amount: -7890.1 },
+  ];
+
+  async function mockNorthbound(page: Page, asOf: string, staleDays: number) {
+    await page.route("**/api/v1/market/northbound*", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          as_of: asOf,
+          stale_days: staleDays,
+          source_status: "discontinued",
+          items: NORTHBOUND_ITEMS,
+        }),
+      })
+    );
+  }
+
+  test("北向卡标注「数据源已停更（最新 09-07）」，日期随 payload 变化", async ({ page }) => {
+    await mockNorthbound(page, "2026-09-07", 11);
+    await page.goto("/market");
+    await page.getByRole("tab", { name: "资金流向" }).click();
+    const card = page.locator(".ant-card").filter({ hasText: "北向资金" });
+    await expect15s(card.getByText("数据源已停更（最新 09-07）")).toBeVisible();
+
+    // 换一个 as_of 重载：文案必须跟着走（证明日期来自 payload 而非硬编码）
+    await page.unroute("**/api/v1/market/northbound*");
+    await mockNorthbound(page, "2026-08-21", 28);
+    await page.reload();
+    await page.getByRole("tab", { name: "资金流向" }).click();
+    const card2 = page.locator(".ant-card").filter({ hasText: "北向资金" });
+    await expect15s(card2.getByText("数据源已停更（最新 08-21）")).toBeVisible();
+    await expect(card2.getByText("（最新 09-07）")).toHaveCount(0);
+  });
+
+  test("数据版图把北向一行标为「规划中」，且不冒充已上线数据域", async ({ page }) => {
+    await page.goto("/market");
+    const matrix = page.locator(".dc-table");
+    await expect15s(matrix).toBeVisible();
+
+    const northboundRow = matrix.locator(".dc-row").filter({ hasText: "北向资金" });
+    await expect15s(northboundRow.getByText("规划中")).toBeVisible();
+    // 规划中 ≠ 免费可用：该行不得出现「免费」徽章（否则等于宣称已覆盖）
+    await expect(northboundRow.locator(".dc-free-badge")).toHaveCount(0);
+    // 规划中只此一行，别把其它数据域一起降级
+    await expect(matrix.locator(".dc-planned-badge")).toHaveCount(1);
+  });
+});

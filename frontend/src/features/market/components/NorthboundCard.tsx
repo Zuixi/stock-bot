@@ -49,6 +49,10 @@ export function NorthboundCard() {
     refetchInterval,
   });
   const data = northbound?.items ?? [];
+  // 上游 `moneyflow_hsgt` 事实停更：卡片要给一句带**最新数据日**的结论，日期取 payload 的
+  // `as_of`（不写死，换一天文案跟着变）。`FreshnessNote` 的徽标按契约不复述日期，所以本卡
+  // 自己渲染整句，`source_status` 不再走徽标通道——同一句里已含「已停更」结论，不漏标注。
+  const latestDay = northbound?.asOf ? northbound.asOf.slice(5) : null;
   const last = data.length > 0 ? data[data.length - 1] : undefined;
   const total = data.reduce((acc, p) => acc + (p.netAmount ?? 0), 0);
   const lastColor = (last?.netAmount ?? 0) > 0 ? colors.up : (last?.netAmount ?? 0) < 0 ? colors.down : colors.flat;
@@ -60,12 +64,17 @@ export function NorthboundCard() {
       extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>盘后净流入 · 亿元</Typography.Text>}
     >
       <Spin spinning={isLoading}>
-        {/* 上游 `moneyflow_hsgt` 事实停更：`stale_days` + `source_status` 必须一并标注 */}
-        <FreshnessNote
-          asOf={northbound?.asOf}
-          staleDays={northbound?.staleDays}
-          sourceStatus={northbound?.sourceStatus}
-        />
+        {/* `stale_days` → 「N 天前」徽标；停更结论见下一行（带最新数据日） */}
+        <FreshnessNote asOf={northbound?.asOf} staleDays={northbound?.staleDays} />
+        {northbound?.sourceStatus === "discontinued" ? (
+          <Typography.Text
+            type="warning"
+            data-testid="northbound-discontinued"
+            style={{ display: "block", fontSize: 12, marginTop: 2 }}
+          >
+            数据源已停更{latestDay ? `（最新 ${latestDay}）` : ""}
+          </Typography.Text>
+        ) : null}
         <div style={{ display: "flex", gap: 24, marginBottom: 4, fontSize: 12 }}>
           <span>当日 <b style={{ color: lastColor, fontSize: 16 }}>{fmtNorthYi(last?.netAmount)}</b></span>
           <span>近30日累计 <b style={{ color: totalColor }}>{fmtNorthYi(total)}</b></span>
