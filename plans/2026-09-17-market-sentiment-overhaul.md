@@ -4,7 +4,7 @@
 
 **Goal:** 让行情中心的数据不再被单条脏行/缺列打坏、交易时段能看到盘中情绪、热门板块可下钻，且每张卡都能自证"数据截至何时、什么口径"。
 
-**Architecture:** 后端新增一个**日级完整性判据**（`market_day_service`）作为"最新交易日"的唯一来源，8 个按日聚合端点全部改走它并返回 `as_of_quality`；当日全市场派生数据只从**一次 Redis 快照**加载（消灭 5 处重复 597ms SQL）；情绪面引入**盘中（东财）/收盘（本地自算）双口径**并配 5 分钟分时快照表；热门板块换成东财真实板块体系并支持成分股下钻；前端用统一的 `useMarketPolling` + as_of/口径徽标收口刷新与标注。
+**Architecture:** 后端新增一个**日级完整性判据**（`market_day_service`）作为"最新交易日"的唯一来源，8 个按日聚合端点全部改走它并返回 `as_of_quality`；当日全市场派生数据只从**一次 Redis 快照**加载（把 4-6 个端点各自的同类聚合合并为 1 次取行；实施期实测旧形态 warm 43-46ms，计划初稿的 597ms 在本库复现不了，收益立论已改为页面级合并 + 缓存）；情绪面引入**盘中（东财）/收盘（本地自算）双口径**并配 5 分钟分时快照表；热门板块换成东财真实板块体系并支持成分股下钻；前端用统一的 `useMarketPolling` + as_of/口径徽标收口刷新与标注。
 
 **Tech Stack:** FastAPI + SQLAlchemy 2.0 (async) + PostgreSQL + Redis + APScheduler + Alembic（backend，uv 管理）；React 18 + TypeScript + Vite + Ant Design 5 + TanStack Query（frontend，npm 管理）；Playwright（e2e）。
 
@@ -550,7 +550,7 @@ Expected：`limit-up-ladder` 返回完整日的 5 档梯队；`data-freshness` �
 - [ ] **Step 2: 跑测试确认失败**
 - [ ] **Step 3: 实现**：SQL 改为**读 `dq.pct_chg` 存储列**（不再 LATERAL 回看前收），一次 join `stocks` + 最新 `daily_basic`（市值/换手）；`cache` 命中直接反序列化返回。
 - [ ] **Step 4: 跑测试确认通过**
-- [ ] **Step 5: 性能实测**（对比改造前 597ms）
+- [ ] **Step 5: 性能实测**（注意：计划原先声称的 597ms→15.9ms 基线在本库**复现不了**，实测旧形态 warm 43-46ms；收益立论已改为「页面级合并 + 缓存」，见 ledger ruling）
 
 ```bash
 cd backend && uv run python - <<'EOF'
@@ -564,7 +564,7 @@ async def main():
 asyncio.run(main())
 EOF
 ```
-Expected: < 100 ms（改造前同数据量 597 ms）
+Expected: 冷会话 ~200 ms / warm ~70 ms；判定标准是「同页 4-6 个端点合并为 1 次取行 + Redis 命中 ~15ms」，不是单查询提速
 
 - [ ] **Step 6: 提交**
 

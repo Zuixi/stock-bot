@@ -49,7 +49,7 @@
 | D4 | **失败可观测**：任务失败写 Redis 告警键并在 freshness 端点暴露 | APScheduler 的 "executed successfully" 只表示函数返回，不能作为成功信号 |
 | D5 | **完整性判据升级为日级三元组**：行数 ≥ 0.9×universe **且** `pct_chg` 非空率 ≥ 0.99 **且** 该日 `stock_price_limits` 存在 | 行数够但列全 NULL 的日子（09-14/15）必须被判为不完整并触发重拉 |
 | D6 | **列表型端点统一包成对象** `{as_of, as_of_quality, items}` | 现状 `distribution/sectors/capital-flow` 根本没有 as_of，无法在前端标注新鲜度 |
-| D7 | **当日全市场派生数据只从一次快照加载**（Redis `market:day:rows:{day}`，TTL 300s），各分组在服务端从该快照计算 | 消灭 5 个端点各跑一遍 597ms 的同类 SQL |
+| D7 | **当日全市场派生数据只从一次快照加载**（Redis `market:day:rows:{day}`，TTL 300s），各分组在服务端从该快照计算 | 把 4-6 个端点各自的同类聚合合并为 1 次取行（实施期实测：旧形态 warm 43-46ms；计划初稿声称的 597ms 复现不了） |
 | D8 | **读路径回落**：按"某张表今天有数据"过滤的读路径改为"该表最近可用日 + 标注" | 采集漏一天不该让卡片空一天 |
 
 ## 4. 架构与契约
