@@ -21,6 +21,7 @@ from app.scheduler.jobs import (
     financial_backfill_job,
     global_index_daily_job,
     industry_metrics_refresh_job,
+    intraday_sentiment_poll_job,
     market_moneyflow_daily_job,
     northbound_daily_job,
     price_limits_daily_job,
@@ -216,6 +217,19 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5", timezone="Asia/Shanghai"),
         id="sector_moneyflow_poll",
         name="Sector moneyflow intraday poll",
+        misfire_grace_time=INTRADAY_GRACE_SEC,
+        replace_existing=True,
+    )
+
+    # Intraday sentiment snapshot: Mon-Fri 9-14 every 5 min (cron already excludes
+    # 周末 + 收盘后；task 体内不另加 ``_is_workday()``/``_in_trading_hours()`` 守卫
+    # ——``job_defaults`` 的 ``coalesce=True`` + ``misfire_grace_time=None`` 兜住
+    # 宿主挂起的合并补跑；``INTRADAY_GRACE_SEC`` 把"睡太久追一堆过期点"卡在 5min。
+    scheduler.add_job(
+        intraday_sentiment_poll_job,
+        CronTrigger(day_of_week="mon-fri", hour="9-14", minute="*/5", timezone="Asia/Shanghai"),
+        id="intraday_sentiment_poll",
+        name="Intraday sentiment snapshot",
         misfire_grace_time=INTRADAY_GRACE_SEC,
         replace_existing=True,
     )
