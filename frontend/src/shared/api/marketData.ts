@@ -1,4 +1,13 @@
 import { apiGet } from "./client";
+import {
+  mapNorthboundList,
+  mapStaleList,
+  type AnnotatedList,
+  type BackendNorthboundEnvelope,
+  type BackendSnapshotEnvelope,
+  type NorthboundMeta,
+  type StaleMeta,
+} from "./marketEnvelope";
 
 // ---- 后端原始 payload（snake_case，勿直接外漏给 UI 层） ----
 
@@ -63,6 +72,10 @@ interface BackendMarketMoneyflow {
     pct_change: number | null;
     amount: number | null;
   }>;
+  /** 历史表最近日 ISO；表空时为 null（后端 Task 5 起返回）。 */
+  history_as_of?: string | null;
+  /** 历史表陈旧度（自然日差，可能为负）；表空时为 null。 */
+  history_stale_days?: number | null;
 }
 
 interface BackendNorthboundPoint {
@@ -192,6 +205,9 @@ export interface MarketMoneyflowMarket {
 }
 
 export interface MarketMoneyflow {
+  /** 历史序列最近日（`history` 的 asOf 口径）；表空时为 null。Phase 1 徽标消费。 */
+  historyAsOf: string | null;
+  historyStaleDays: number | null;
   today: {
     total: {
       amount: number | null;
@@ -283,6 +299,8 @@ const mapCard = (b: BackendGlobalIndexCard): GlobalIndexCard => ({
 });
 
 const mapMarketMoneyflow = (b: BackendMarketMoneyflow): MarketMoneyflow => ({
+  historyAsOf: b.history_as_of ?? null,
+  historyStaleDays: b.history_stale_days ?? null,
   today: b.today
     ? {
         total: b.today.total
@@ -404,17 +422,28 @@ export function fetchGlobalIndices(): Promise<GlobalIndexCard[]> {
   return apiGet<BackendGlobalIndexCard[]>("/api/v1/market/global-indices").then((rows) => rows.map(mapCard));
 }
 
+/**
+ * 板块主力资金流。后端返回快照 envelope，mapper 解包 `.items` 后仍返回数组；
+ * `asOf`（该快照实际最近日）与 `staleDays` 挂在返回的数组上，见 `marketEnvelope.ts`。
+ */
 export function fetchSectorMoneyflow(
   dimension: "industry" | "concept" | "region",
   limit = 15,
-): Promise<SectorMoneyflowItem[]> {
-  return apiGet<BackendSectorMoneyflowItem[]>("/api/v1/market/sector-moneyflow", { dimension, limit }).then((rows) =>
-    rows.map(mapSectorMoneyflow),
-  );
+): Promise<AnnotatedList<SectorMoneyflowItem, StaleMeta>> {
+  return apiGet<BackendSnapshotEnvelope<BackendSectorMoneyflowItem>>("/api/v1/market/sector-moneyflow", {
+    dimension,
+    limit,
+  }).then((b) => mapStaleList(b, mapSectorMoneyflow));
 }
 
-export function fetchNorthbound(days = 30): Promise<NorthboundPoint[]> {
-  return apiGet<BackendNorthboundPoint[]>("/api/v1/market/northbound", { days }).then((rows) => rows.map(mapNorthbound));
+/**
+ * 北向净流入序列。同 {@link fetchSectorMoneyflow}：返回数组 + `asOf` / `staleDays` /
+ * `sourceStatus`（上游停更时 `discontinued`）元数据。
+ */
+export function fetchNorthbound(days = 30): Promise<AnnotatedList<NorthboundPoint, NorthboundMeta>> {
+  return apiGet<BackendNorthboundEnvelope<BackendNorthboundPoint>>("/api/v1/market/northbound", { days }).then((b) =>
+    mapNorthboundList(b, mapNorthbound),
+  );
 }
 
 export function fetchDragonTiger(limit = 15): Promise<DragonTigerItem[]> {

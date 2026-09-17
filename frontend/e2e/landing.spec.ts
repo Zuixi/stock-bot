@@ -102,15 +102,21 @@ test.describe("宣传页数据区块", () => {
         body: JSON.stringify(MOCK_INDICES),
       })
     );
+    // Task 2 起 `/market/distribution` 返回 `{as_of, as_of_quality, as_of_reason, items}` 信封
     await page.route("**/api/v1/market/distribution", (route) =>
       route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([
-          { range: "1~3%", count: 80 }, { range: "3~5%", count: 30 }, { range: ">5%", count: 19 },
-          { range: "涨停", count: 5 }, { range: "0~1%", count: 100 },
-          { range: "0~-1%", count: 90 }, { range: "-1~-3%", count: 120 }, { range: "-3~-5%", count: 60 },
-        ]),
+        body: JSON.stringify({
+          as_of: "2026-09-11",
+          as_of_quality: "complete",
+          as_of_reason: null,
+          items: [
+            { range: "1~3%", count: 80 }, { range: "3~5%", count: 30 }, { range: ">5%", count: 19 },
+            { range: "涨停", count: 5 }, { range: "0~1%", count: 100 },
+            { range: "0~-1%", count: 90 }, { range: "-1~-3%", count: 120 }, { range: "-3~-5%", count: 60 },
+          ],
+        }),
       })
     );
     await page.route("**/api/v1/market/sw-industry/tree", (route) =>
