@@ -9,11 +9,14 @@ Data sources
 
 "最新交易日"的唯一判据是 :mod:`app.services.market_day_service`（行数 + pct_chg
 非空率 + 限价存在）。本模块不再直接 ``max(daily_quotes.trade_date)``：
-``_latest_trade_date`` 与 :func:`get_latest_trade_date` 都是它的薄封装，前者返回
-``None``、后者在库真空时保留 ``ValueError`` 契约（两个调用方 ``get_rankings`` /
-``get_sw_industry_performance`` 的非空库行为不变）。``get_latest_trade_date`` 的
-Redis 缓存由判据模块统一持有（``market:day:latest_complete``，TTL 60s），旧的
+``_latest_trade_date`` 是它的无缓存薄封装（返回 ``None``）。判据的 Redis 缓存由
+判据模块统一持有（``market:day:latest_complete``，TTL 60s）；旧的
 ``market:latest_trade_date`` / 300s 缓存已下线。
+
+按日结果缓存的键**一律带解析出的 ``as_of``**（``market:sectors:{day}`` 等，见
+:func:`_day_cache_key`）：补数/翻日之后旧 payload 不会再用旧标签冒充新一天，
+最坏情况从"5 分钟内返回错日"收敛为"下一次请求重新解析"。缓存读取因此排在
+解析日之后（解析本身有 60s 共享缓存，不是额外打库）。
 """
 
 from __future__ import annotations
@@ -39,6 +42,11 @@ logger = logging.getLogger(__name__)
 
 HotBoardCategory = Literal["industry", "concept", "region"]
 
+#: 按日结果缓存的 TTL（秒）。**与前端 staleTime 对齐**：首页按日聚合卡片
+#: （RankingMatrix / SectorHeatmap / NorthboundCard 等）统一 ``staleTime = 5*60_000``，
+#: 服务端 300s 与之同频，客户端过期时服务端条目也正好到期，不会出现"前端已刷新、
+#: 服务端仍回放旧 payload"的错位。键里带 ``as_of``（见 :func:`_day_cache_key`），
+#: 故补数/翻日只会让新键 miss，不会让旧标签继续冒充。
 _MARKET_CACHE_TTL = 300  # 5 minutes
 _SW_OTHER_LEVEL1_CODE = "OTHER"
 _SW_OTHER_LEVEL1_NAME = "其他"
@@ -101,22 +109,6 @@ def last_weekday(d: date) -> date:
     return d
 
 
-async def get_latest_trade_date(db: AsyncSession, cache: CacheClient | None = None) -> date:
-    """Return the resolved latest **complete-capable** trade date.
-
-    Kept for its two legacy callers (``get_rankings`` / ``get_sw_industry_performance``);
-    they now call the resolver directly so they can also surface ``as_of_quality``.
-    Empty ``daily_quotes`` still raises ``ValueError`` (callers degrade without a 500).
-    The Redis cache lives in :mod:`app.services.market_day_service`
-    (``market:day:latest_complete``, TTL 60s) — the old ``market:latest_trade_date``
-    300s date-string cache was retired with this change.
-    """
-    md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
-    if md is None:
-        raise ValueError("daily_quotes is empty — run ingest first")
-    return md.day
-
-
 def _envelope(
     md: market_day_service.MarketDay | None, rows: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -131,6 +123,17 @@ def _envelope(
         "as_of_reason": md.reason if md is not None else None,
         "items": rows,
     }
+
+
+def _day_cache_key(prefix: str, md: market_day_service.MarketDay | None) -> str:
+    """``{prefix}:{as_of}`` —— 每个解析出的交易日一份结果缓存。
+
+    Task 8 之前这些键不含日期（``market:sectors`` 等），补数或翻日之后旧 payload
+    最长 300s 仍会带着旧的 ``as_of``/``as_of_quality`` 被回放。日期进键后，新一天
+    必然 miss 并重算，旧 key 只会在 TTL 内自然过期（不读、不清理）。
+    ``md is None`` 的调用方（空库降级）本就不读/不写缓存，``none`` 后缀只是不变量。
+    """
+    return f"{prefix}:{md.day.isoformat() if md is not None else 'none'}"
 
 
 # ---------------------------------------------------------------------------
@@ -257,10 +260,15 @@ async def _fetch_indices_from_tushare() -> list[dict[str, Any]]:
 # No single-query speedup is claimed: measured in isolation, every endpoint was
 # already slower than its retired statement (pre-rewrite endpoint cold times were
 # distribution 198ms, sectors 64ms, capital-flow 47ms, hot-boards 52ms; the shared
-# loader alone is 76ms of SQL or a 15ms 1.2MB Redis parse). The work moved from
-# Postgres to the API process rather than disappearing — the loader runs heavier than
-# any one retired statement because it returns all ~5,485 rows (see the loader's
+# loader alone is 76ms of SQL or a Redis parse of the full payload). The work moved
+# from Postgres to the API process rather than disappearing — the loader runs heavier
+# than any one retired statement because it returns all ~5,485 rows (see the loader's
 # module docstring).
+#
+# Task 8 re-measured the same day after slimming the row contract to the columns the
+# four endpoints actually read (6 instead of 11): payload 1,275 KiB → 761 KiB, Redis
+# parse 14.4ms → 8.3ms, loader cache-hit ~14ms → ~9ms, page cold 172ms → 145ms.
+# The endpoint result caches still cover the warm page (both ~1-2ms).
 #
 # All four resolvers below are called ``cache=cache``. A bare call re-runs the
 # 5-statement completeness probe and re-reads ``market:day:latest_complete`` once per
@@ -330,15 +338,17 @@ def _distribution_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 async def get_distribution(cache: CacheClient | None = None) -> dict[str, Any]:
-    """Return market-wide up/down distribution as ``{as_of, as_of_quality, items}``."""
-    cache_key = "market:distribution"
-    if cache:
-        cached = await cache.get(cache_key)
-        if isinstance(cached, dict):  # bare-list payloads from before this change = miss
-            return cast(dict[str, Any], cached)
+    """Return market-wide up/down distribution as ``{as_of, as_of_quality, items}``.
 
+    Cache key carries the resolved day (``market:distribution:{as_of}``).
+    """
     async with async_session_factory() as db:
         md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
+        cache_key = _day_cache_key("market:distribution", md)
+        if md is not None and cache:
+            cached = await cache.get(cache_key)
+            if isinstance(cached, dict):  # bare-list payloads from before this change = miss
+                return cast(dict[str, Any], cached)
         rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
 
     # No resolved day → ``items: []`` (an unresolved day must not render as eleven
@@ -377,15 +387,17 @@ def _sector_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 async def get_sectors(cache: CacheClient | None = None) -> dict[str, Any]:
-    """Return industry sector performance as ``{as_of, as_of_quality, items}``."""
-    cache_key = "market:sectors"
-    if cache:
-        cached = await cache.get(cache_key)
-        if isinstance(cached, dict):  # bare-list payloads from before this change = miss
-            return cast(dict[str, Any], cached)
+    """Return industry sector performance as ``{as_of, as_of_quality, items}``.
 
+    Cache key carries the resolved day (``market:sectors:{as_of}``).
+    """
     async with async_session_factory() as db:
         md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
+        cache_key = _day_cache_key("market:sectors", md)
+        if md is not None and cache:
+            cached = await cache.get(cache_key)
+            if isinstance(cached, dict):  # bare-list payloads from before this change = miss
+                return cast(dict[str, Any], cached)
         rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
 
     payload = _envelope(md, _sector_items(rows))
@@ -430,15 +442,17 @@ def _capital_flow_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 async def get_capital_flow(cache: CacheClient | None = None) -> dict[str, Any]:
-    """Return sector-level turnover distribution as an ``as_of`` envelope."""
-    cache_key = "market:capital-flow"
-    if cache:
-        cached = await cache.get(cache_key)
-        if isinstance(cached, dict):  # bare-list payloads from before this change = miss
-            return cast(dict[str, Any], cached)
+    """Return sector-level turnover distribution as an ``as_of`` envelope.
 
+    Cache key carries the resolved day (``market:capital-flow:{as_of}``).
+    """
     async with async_session_factory() as db:
         md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
+        cache_key = _day_cache_key("market:capital-flow", md)
+        if md is not None and cache:
+            cached = await cache.get(cache_key)
+            if isinstance(cached, dict):  # bare-list payloads from before this change = miss
+                return cast(dict[str, Any], cached)
         rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
 
     payload = _envelope(md, _capital_flow_items(rows))
@@ -489,14 +503,13 @@ async def get_hot_boards(
     if category == "concept":
         return _envelope(None, [])
 
-    cache_key = f"market:hot-boards:{category}"
-    if cache:
-        cached = await cache.get(cache_key)
-        if isinstance(cached, dict):  # bare-list payloads from before this change = miss
-            return cast(dict[str, Any], cached)
-
     async with async_session_factory() as db:
         md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
+        cache_key = _day_cache_key(f"market:hot-boards:{category}", md)
+        if md is not None and cache:
+            cached = await cache.get(cache_key)
+            if isinstance(cached, dict):  # bare-list payloads from before this change = miss
+                return cast(dict[str, Any], cached)
         rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
 
     payload = _envelope(md, _hot_board_items(rows, category))
@@ -593,25 +606,18 @@ async def get_rankings(
 ) -> RankingResponseOut:
     """Return the public top-N ranking for ``rank_type`` as of the resolved day.
 
-    Cache-first (ruling S) mirroring ``get_distribution``; ``as_of`` and
+    Cache-first (ruling S) mirroring ``get_distribution``; the key carries the
+    resolved day (``market:rankings:{type}:{limit}:{as_of}``). ``as_of`` and
     ``as_of_quality`` come from the completeness predicate (Task 1) rather than a
     raw ``max(trade_date)`` — a dirty latest day must not blank the ranking.
     """
     if rank_type not in _RANKING_ORDER:
         raise ValueError(f"unknown ranking type: {rank_type}")
 
-    cache_key = f"market:rankings:{rank_type}:{limit}"
-    if cache:
-        cached = await cache.get(cache_key)
-        if isinstance(cached, dict):  # non-dict = foreign/legacy shape, treat as a miss
-            # Payloads written before ``as_of_quality`` existed lack the key, and the
-            # schema default is the optimistic "complete" — that would label a stale
-            # payload as a fresh complete day for up to _MARKET_CACHE_TTL. Absent key
-            # means the quality is unknown -> "partial" (never claim completeness).
-            return RankingResponseOut.model_validate(
-                {**cached, "as_of_quality": cached.get("as_of_quality", "partial")}
-            )
-
+    # Resolve the day *before* the cache read: the key carries the resolved ``as_of``
+    # (``market:rankings:{type}:{limit}:{as_of}``), so a repaired/rolled-over day can
+    # never be served from the previous day's payload. The resolver itself is Redis
+    # cached (60s), so this costs nothing on the warm path.
     md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
     if md is None:
         # Public homepage block: an empty daily_quotes must degrade to a coherent
@@ -625,6 +631,18 @@ async def get_rankings(
             type=cast(RankingType, rank_type),
             items=[],
         )
+
+    cache_key = f"market:rankings:{rank_type}:{limit}:{md.day.isoformat()}"
+    if cache:
+        cached = await cache.get(cache_key)
+        if isinstance(cached, dict):  # non-dict = foreign/legacy shape, treat as a miss
+            # Payloads written before ``as_of_quality`` existed lack the key, and the
+            # schema default is the optimistic "complete" — that would label a stale
+            # payload as a fresh complete day for up to _MARKET_CACHE_TTL. Absent key
+            # means the quality is unknown -> "partial" (never claim completeness).
+            return RankingResponseOut.model_validate(
+                {**cached, "as_of_quality": cached.get("as_of_quality", "partial")}
+            )
 
     rows = await _ranking_rows(db, rank_type, md.day, limit)
     out = RankingResponseOut(
@@ -696,10 +714,21 @@ async def get_sw_industry_performance(
     """Return Shenwan L1 industry performance as of the resolved day.
 
     Cache-first (ruling U) mirroring ``get_rankings``; the full L1 set is cached
-    under one key and ``limit`` is applied on read (the SQL returns all L1 rows).
-    ``as_of_quality`` comes from the completeness predicate (Task 1).
+    under one **day-scoped** key (``market:sw-performance:{as_of}``) and ``limit`` is
+    applied on read (the SQL returns all L1 rows). ``as_of_quality`` comes from the
+    completeness predicate (Task 1).
     """
-    cache_key = "market:sw-performance"
+    # Same ordering rule as ``get_rankings``: resolve first, because the key carries
+    # the resolved day (``market:sw-performance:{as_of}``).
+    md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
+    if md is None:
+        # Anonymous homepage block: an empty daily_quotes degrades to an empty
+        # payload (never 500) and is not cached, so it recovers after the first ingest.
+        return SwPerformanceResponseOut(
+            as_of=last_weekday(date.today()), as_of_quality="partial", items=[]
+        )
+
+    cache_key = f"market:sw-performance:{md.day.isoformat()}"
     if cache:
         cached = await cache.get(cache_key)
         if isinstance(cached, dict):  # non-dict = foreign/legacy shape, treat as a miss
@@ -709,14 +738,6 @@ async def get_sw_industry_performance(
                 {**cached, "as_of_quality": cached.get("as_of_quality", "partial")}
             )
             return out.model_copy(update={"items": out.items[:limit]})
-
-    md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
-    if md is None:
-        # Anonymous homepage block: an empty daily_quotes degrades to an empty
-        # payload (never 500) and is not cached, so it recovers after the first ingest.
-        return SwPerformanceResponseOut(
-            as_of=last_weekday(date.today()), as_of_quality="partial", items=[]
-        )
 
     rows = await _sw_performance_rows(db, md.day)
     out = SwPerformanceResponseOut(

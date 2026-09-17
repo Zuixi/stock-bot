@@ -10,7 +10,7 @@ import logging
 import math
 import sys
 from datetime import date, datetime, timedelta
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -165,6 +165,21 @@ async def _latest_snapshot_day(db: AsyncSession, model_day_col: Any, *filters: A
         stmt = stmt.where(*filters)
     value = (await db.execute(stmt)).scalar()
     return value if isinstance(value, date) else None
+
+
+def _stale_days(as_of: date | None) -> int | None:
+    """自然日陈旧度 ``今天(上海) - as_of``；无 ``as_of`` → ``None``。
+
+    派生量，**不是**缓存内容：payload 里的 ``stale_days`` 是按写入时刻算的，跨零点
+    后会冻结成旧值。读取缓存时一律用本函数按**当下**重算（见三条读路径），
+    避免"昨天写的 stale_days 一直报到 TTL 结束"。
+    """
+    return None if as_of is None else (_today_sh() - as_of).days
+
+
+def _iso_date(value: str | None) -> date | None:
+    """payload 里的 ISO 日期串 → ``date``；空/缺省 → ``None``。"""
+    return date.fromisoformat(value) if value else None
 
 
 def _f(v: Any) -> float | None:
@@ -398,8 +413,12 @@ async def get_sector_moneyflow(
     天的 ``as_of`` 配空 ``items``（"非空 as_of + 空列表"）。``stale_days`` 是**自然日**差
     ``(_today_sh() - as_of).days``——语义是"这批数据有多旧"，不是交易日计数。
     负值意味着表里存在未来日期的脏行（`trade_date` 无上界）：前端适配层应把负值当
-    异常暴露，而不是当作"比今天还新=最新鲜"。表内一行都没有 →
-    ``{"as_of": None, "stale_days": None, "items": []}``（不抛）。
+    异常暴露，而不是当作"比今天还新=最新鲜"。
+
+    元数据只描述**实际返回的 items**：明细为空时 ``as_of``/``stale_days`` 一并置
+    ``None``（理论上"按维度取 max"后明细不可能为空，这里只是把不变量显式化）。
+    表内一行都没有 → ``{"as_of": None, "stale_days": None, "items": []}``（不抛）。
+    缓存命中时 ``stale_days`` **按当下重算**（``as_of`` 在 payload 里，陈旧度不在）。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.models.market_data import SectorMoneyflowSnapshot  # noqa: PLC0415
@@ -416,7 +435,14 @@ async def get_sector_moneyflow(
         if cache is not None:
             cached = await cache.get(key)
             if cached:
-                return {**cached, "items": cached["items"][:limit]}
+                cached_as_of = _iso_date(cached["as_of"])
+                if not cached["items"]:  # 不变量：无行则无元数据
+                    return {"as_of": None, "stale_days": None, "items": []}
+                return {
+                    "as_of": cached["as_of"],
+                    "stale_days": _stale_days(cached_as_of),  # 跨零点按当下重算
+                    "items": cached["items"][:limit],
+                }
 
         items: list[dict[str, Any]] = []
         if as_of is not None:
@@ -425,15 +451,22 @@ async def get_sector_moneyflow(
             ):
                 items.append(_map_sector_moneyflow_row(snap))
 
-    stale_days = (_today_sh() - as_of).days if as_of is not None else None
-    payload: dict[str, Any] = {
-        "as_of": as_of.isoformat() if as_of is not None else None,
-        "stale_days": stale_days,
-        "items": items,
-    }
+    payload = _sector_moneyflow_payload(as_of, items)
     if cache is not None and items:
         await cache.set(key, payload, ttl=SECTOR_MONEYFLOW_TTL)
     return {**payload, "items": items[:limit]}
+
+
+def _sector_moneyflow_payload(as_of: date | None, items: list[dict[str, Any]]) -> dict[str, Any]:
+    """``as_of``/``stale_days`` 只描述**实际返回的** items；无行即无元数据。"""
+    if not items:
+        return {"as_of": None, "stale_days": None, "items": []}
+    # items 只可能来自某个已解析的 as_of（见调用点），故此处 as_of 必非 None。
+    return {
+        "as_of": as_of.isoformat() if as_of else None,
+        "stale_days": _stale_days(as_of),
+        "items": items,
+    }
 
 
 MARKET_MONEYFLOW_CACHE_KEY = "market:market-moneyflow:{history_as_of}"
@@ -458,6 +491,10 @@ async def get_market_moneyflow(cache: Any | None) -> dict[str, Any]:
     ``history_stale_days`` 为负值意味着表内存在未来日期的脏行，前端适配层应视为异常
     而非"最新鲜"。历史表为空 → 两者均 ``None``。缓存键含 ``history_as_of``，翻日后
     不会回放旧 payload。
+
+    与北向同一条 Task 8 口径：``history_as_of`` 由**返回的 history 末行**推导
+    （而不是另取一次表级 max），两者按构造不可能不一致；缓存命中时
+    ``history_stale_days`` 按当下重算（跨零点不冻结）。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.models.market_data import MarketMoneyflowDaily  # noqa: PLC0415
@@ -470,7 +507,11 @@ async def get_market_moneyflow(cache: Any | None) -> dict[str, Any]:
     if cache is not None:
         cached: dict[str, Any] | None = await cache.get(key)
         if cached:
-            return cached
+            cached_history: list[dict[str, Any]] = cached["history"]
+            return {
+                **cached,
+                **_history_meta(_iso_date(cached_history[-1]["date"]) if cached_history else None),
+            }
     try:
         today = await _get_eastmoney().fetch_market_moneyflow_today()
     except Exception:
@@ -497,14 +538,19 @@ async def get_market_moneyflow(cache: Any | None) -> dict[str, Any]:
     payload = {
         "today": today,
         "history": history,
-        "history_as_of": history_as_of.isoformat() if history_as_of is not None else None,
-        "history_stale_days": (
-            (_today_sh() - history_as_of).days if history_as_of is not None else None
-        ),
+        **_history_meta(_iso_date(history[-1]["date"]) if history else None),
     }
     if cache is not None and (history or today):
         await cache.set(key, payload, ttl=MARKET_MONEYFLOW_TTL)
     return payload
+
+
+def _history_meta(history_as_of: date | None) -> dict[str, Any]:
+    """历史段的元数据；两个字段成对出现，都只描述返回的 history。"""
+    return {
+        "history_as_of": history_as_of.isoformat() if history_as_of is not None else None,
+        "history_stale_days": _stale_days(history_as_of),
+    }
 
 
 def _map_top_list_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
@@ -605,9 +651,16 @@ async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> di
     表内存在未来日期的脏行（``trade_date`` 无上界）：此时 ``<= 5`` 会把它算成
     ``"live"``，前端适配层必须把负值识别为异常而不是"新鲜"，人工核查脏行。上游 TuShare
     ``moneyflow_hsgt`` 已停更（实测 30 天窗口最新只到 2026-08-21，表内最近日
-    2026-09-07），卡片必须能说"该源已停更"而不是画一条不带截止标注的线。表空 →
-    ``as_of=None``、``stale_days=None``、``source_status="discontinued"``（拿不到任何
-    数据就谈不上 live）。
+    2026-09-07），卡片必须能说"该源已停更"而不是画一条不带截止标注的线。
+
+    **元数据只描述实际返回的 ``items``（Task 8 修正）**：``items`` 由
+    ``trade_date >= 今天-days`` 的窗口过滤，而表内最大日可能早于该窗口——
+    旧实现用"表级 max"当 ``as_of``，于是 ``days=5`` 可以返回"非空 as_of + 空
+    items"。现在 ``as_of``/``stale_days``/``source_status`` 全部由 ``items`` 自己
+    的末行日期推导，无行即 ``as_of=None`` / ``stale_days=None`` /
+    ``source_status="discontinued"``（拿不到任何数据就谈不上 live）。缓存命中时
+    ``stale_days`` 与 ``source_status`` 按当下重算（``as_of`` 是 items 的属性、
+    不是 payload 的冻结字段）。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.models.market_data import NorthboundDaily  # noqa: PLC0415
@@ -620,15 +673,28 @@ async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> di
         if cache is not None:
             cached: Any = await cache.get(key)
             if cached:
-                return cast("dict[str, Any]", cached)
+                return _northbound_payload(
+                    _iso_date(cached["items"][-1]["date"]) if cached.get("items") else None,
+                    cached["items"],
+                )
 
         items: list[dict[str, Any]] = []
         if as_of is not None:  # 表空（as_of=None）时明细必然为空，不查
             for n in await market_data_repo.list_northbound(db, days):
                 items.append({"date": n.trade_date.isoformat(), "net_amount": n.net_amount})
 
-    stale_days = (_today_sh() - as_of).days if as_of is not None else None
-    payload: dict[str, Any] = {
+    # ``as_of`` 由 items 的末行（升序）推导，而不是回看表级 max：窗口过滤后可能
+    # 一行都不剩，此时元数据必须一起归零（见 docstring）。
+    payload = _northbound_payload(_iso_date(items[-1]["date"]) if items else None, items)
+    if cache is not None and items:
+        await cache.set(key, payload, ttl=NORTHBOUND_TTL)
+    return payload
+
+
+def _northbound_payload(as_of: date | None, items: list[dict[str, Any]]) -> dict[str, Any]:
+    """北向信封：``as_of``/``stale_days``/``source_status`` 全由返回的 items 推导。"""
+    stale_days = _stale_days(as_of)
+    return {
         "as_of": as_of.isoformat() if as_of is not None else None,
         "stale_days": stale_days,
         "source_status": (
@@ -638,9 +704,6 @@ async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> di
         ),
         "items": items,
     }
-    if cache is not None and items:
-        await cache.set(key, payload, ttl=NORTHBOUND_TTL)
-    return payload
 
 
 def _map_share_float_rows(df: pd.DataFrame) -> list[dict[str, Any]]:

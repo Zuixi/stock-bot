@@ -567,6 +567,148 @@ async def test_market_moneyflow_realtime_failure_still_serves_history(
 
 
 # ---------------------------------------------------------------------------
+# Task 8：元数据只描述返回的 items + 缓存命中按当下重算 stale_days
+# ---------------------------------------------------------------------------
+
+
+async def test_sector_moneyflow_stale_days_recomputed_on_cache_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """跨零点后命中的 payload 不得回放写入时冻结的 stale_days。"""
+    _patch_today(monkeypatch, date(2026, 9, 18))  # 缓存是 09-17 写的（stale_days=9）
+    _patch_latest_snapshot(monkeypatch, date(2026, 9, 8))
+    cache = RecordingCache()
+    cache.store["market:sector-moneyflow:industry:2026-09-08"] = {
+        "as_of": "2026-09-08",
+        "stale_days": 9,  # frozen at write time — must NOT be replayed
+        "items": [{"board_code": "CACHED"}],
+    }
+
+    async def _repo(*args: Any, **kwargs: Any) -> list[Any]:
+        raise AssertionError("cache hit must not query the table")
+
+    monkeypatch.setattr(mds.market_data_repo, "list_sector_moneyflow", _repo)
+
+    out = await mds.get_sector_moneyflow(cache, "industry", 15)
+
+    assert out["as_of"] == "2026-09-08"
+    assert out["stale_days"] == 10, "陈旧度必须按当下重算（09-18 - 09-08）"
+    assert out["items"][0]["board_code"] == "CACHED"
+
+
+async def test_northbound_stale_days_and_status_recomputed_on_cache_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """命中缓存时 stale_days / source_status 按当下重算（as_of 来自 items）。"""
+    _patch_today(monkeypatch, date(2026, 9, 18))
+    _patch_latest_snapshot(monkeypatch, date(2026, 9, 17))
+    cache = RecordingCache()
+    cache.store["market:northbound:30:2026-09-17"] = {
+        "as_of": "2026-09-17",
+        "stale_days": 1,  # frozen: 09-18 应为 1 天... 用 12 天前的一天才能看出差别
+        "source_status": "live",
+        "items": [{"date": "2026-09-06", "net_amount": -12.5}],
+    }
+
+    async def _repo(*args: Any, **kwargs: Any) -> list[Any]:
+        raise AssertionError("cache hit must not query the table")
+
+    monkeypatch.setattr(mds.market_data_repo, "list_northbound", _repo)
+
+    out = await mds.get_northbound_series(cache, 30)
+
+    assert out["as_of"] == "2026-09-06", "as_of 必须来自返回的 items"
+    assert out["stale_days"] == 12, "09-18 - 09-06"
+    assert out["source_status"] == "discontinued", ">5 天必须翻成停更"
+    assert out["items"][0]["net_amount"] == -12.5
+
+
+async def test_market_moneyflow_history_stale_recomputed_on_cache_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_today(monkeypatch, date(2026, 9, 20))
+    _patch_latest_snapshot(monkeypatch, date(2026, 9, 3))
+    cache = RecordingCache()
+    cache.store["market:market-moneyflow:2026-09-03"] = {
+        "today": None,
+        "history": [{"date": "2026-09-03", "main_net": -8.8e9}],
+        "history_as_of": "2026-09-03",
+        "history_stale_days": 14,  # frozen at write time
+    }
+
+    out = await mds.get_market_moneyflow(cache)
+
+    assert out["history_as_of"] == "2026-09-03", "历史元数据来自 history 末行"
+    assert out["history_stale_days"] == 17, "09-20 - 09-03"
+    assert out["history"][0]["date"] == "2026-09-03"
+
+
+async def test_northbound_window_without_rows_drops_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task 8 核心：表有更早日、但 days 窗口内一行都没有 → 不得返回"非空 as_of + 空 items"。
+
+    旧实现用表级 max 当 as_of：表内最近日 09-07、请求 days=5（窗口 09-12 起）时，
+    ``list_northbound`` 返回空列表而 as_of 仍是 09-07。现在元数据由 items 推导，
+    无行即全 None / discontinued。
+    """
+    _patch_today(monkeypatch, TODAY)
+    _patch_latest_snapshot(monkeypatch, date(2026, 9, 7))
+
+    async def _repo(db, days):  # noqa: ANN001
+        return []  # 09-07 早于 09-12 的窗口
+
+    monkeypatch.setattr(mds.market_data_repo, "list_northbound", _repo)
+    cache = RecordingCache()
+
+    out = await mds.get_northbound_series(cache, 5)
+
+    assert out == {
+        "as_of": None,
+        "stale_days": None,
+        "source_status": "discontinued",
+        "items": [],
+    }
+    assert cache.set_calls == [], "无行的 payload 不入缓存"
+
+
+async def test_sector_moneyflow_empty_items_drop_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """防御性不变量：解析出 as_of 但明细为空时，元数据一并归零。"""
+    _patch_today(monkeypatch)
+    _patch_latest_snapshot(monkeypatch, date(2026, 9, 8))
+
+    async def _repo(db, day, dimension, limit):  # noqa: ANN001
+        return []
+
+    monkeypatch.setattr(mds.market_data_repo, "list_sector_moneyflow", _repo)
+
+    out = await mds.get_sector_moneyflow(None, "industry", 15)
+
+    assert out == {"as_of": None, "stale_days": None, "items": []}
+
+
+async def test_market_moneyflow_history_metadata_derived_from_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """防御性不变量：表级 max 有值但 history 返回空 → 两个历史字段都是 None。"""
+    _patch_today(monkeypatch)
+    _patch_latest_snapshot(monkeypatch, date(2026, 9, 3))
+    monkeypatch.setattr(mds, "_get_eastmoney", lambda: _FakeEm({"total": {"main_net": 1.0}}))
+
+    async def _repo(db, days):  # noqa: ANN001
+        return []
+
+    monkeypatch.setattr(mds.market_data_repo, "list_market_moneyflow_daily", _repo)
+
+    out = await mds.get_market_moneyflow(None)
+
+    assert out["history_as_of"] is None and out["history_stale_days"] is None
+    assert out["history"] == []
+
+
+# ---------------------------------------------------------------------------
 # /market/rankings —— is_latest_trading_day 必须显式判据（不再恒真）
 # ---------------------------------------------------------------------------
 

@@ -119,7 +119,8 @@ async def resolve_latest_complete_day(db: AsyncSession, *, cache: Any = None) ->
     - 窗口内（含候选日，最多 ``FALLBACK_LOOKBACK_DAYS`` 个交易日）有完整日但非候选日
       → ``quality="fallback"``（脏候选日被跳过，端点不至于集体降级成 1 行）；
     - 窗口内全不完整 → 仍返回候选日，``quality="partial"``，让下游能提示数据不新鲜；
-    - ``daily_quotes`` 为空 → ``None``（不抛异常，与 legacy ``get_latest_trade_date`` 相反）。
+    - ``daily_quotes`` 为空 → ``None``（不抛异常，与已删除的 legacy
+      ``get_latest_trade_date`` 的 ``ValueError`` 契约相反）。
 
     ``cache`` 只要求 duck-typed ``async get`` / ``async set(key, value, ttl=...)``。
     """
