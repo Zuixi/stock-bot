@@ -1,8 +1,9 @@
 """``market_snapshot_service`` 契约：取行 SQL、分组/汇总纯函数、缓存 JSON 边界。
 
-Task 8 起行契约瘦身为 :data:`mss.ROW_KEYS`（6 列：四个消费方真正读到的
-``csrc_desc`` / ``province`` / ``pct_chg`` / ``amount`` / ``total_mv``，加
-``basic_date`` 标注市值来自哪一天），缓存 payload 相应从 11 列缩到 6 列。
+Task 8 起行契约瘦身为 :data:`mss.ROW_KEYS`（5 列：四个消费方真正读到的
+``csrc_desc`` / ``province`` / ``pct_chg`` / ``amount``，加 ``basic_date`` 标注
+``daily_basic`` 市值来自哪一天）。Fix round 1 又删掉了无人消费的 ``total_mv``，
+缓存 payload 相应从 11 列缩到 5 列。
 
 离线：``_fetch_rows`` 是 SQL seam，缓存用 JSON 边界替身，全程不碰库、不打网。
 """
@@ -30,7 +31,6 @@ def _row(**overrides: Any) -> dict[str, Any]:
         "province": "上海",
         "pct_chg": -0.8715,
         "amount": 656348.14,
-        "total_mv": 30308312.85,
         "basic_date": "2026-09-16",
     }
     row.update(overrides)
@@ -42,7 +42,6 @@ def _db_row(**overrides: Any) -> dict[str, Any]:
     row = _row(
         pct_chg=Decimal("-0.8715"),
         amount=Decimal("656348.14"),
-        total_mv=Decimal("30308312.85"),
         basic_date=D16,
     )
     row.update(overrides)
@@ -120,17 +119,20 @@ def test_snapshot_stmt_binds_the_requested_day_for_both_tables() -> None:
 def test_snapshot_stmt_selects_only_the_slim_row_contract() -> None:
     """Task 8: the statement selects exactly ROW_KEYS — no dead columns on the wire.
 
-    A future re-addition of ``symbol``/``name``/``close``/``circ_mv``/``turnover_rate``
-    (or a silent drop of ``basic_date``) would put the 1.2MB / 6-column measurement back
+    A future re-addition of ``symbol``/``name``/``close``/``circ_mv``/``turnover_rate``/
+    ``total_mv`` (or a silent drop of ``basic_date``) would put the 1.2MB measurement back
     and re-hide market-cap staleness, so both directions are pinned here.
     """
     stmt = mss._snapshot_stmt(D16)
     selected = [str(col).split(".")[-1] for col in stmt.selected_columns]
-    assert selected == ["csrc_desc", "province", "pct_chg", "amount", "total_mv", "basic_date"]
+    assert selected == ["csrc_desc", "province", "pct_chg", "amount", "basic_date"]
     assert tuple(selected) == mss.ROW_KEYS
     # the daily_basic LATERAL must bring back its own trade_date, not just the value
     sql = str(stmt.compile(dialect=postgresql.dialect()))
     assert "daily_basic_indicators.trade_date AS basic_date" in sql
+    # Fix round 1: ``total_mv`` had no consumer, so it is gone from both the outer
+    # select and the LATERAL select (``basic_date`` stands alone as the marker).
+    assert "total_mv" not in sql
 
 
 # ---------------------------------------------------------------------------
@@ -216,12 +218,12 @@ def test_summarize_group_all_null_pct_chg_has_zero_mean() -> None:
 def test_payload_round_trips_decimals_and_dates_through_json() -> None:
     """DB Decimals become floats and ``date`` becomes ISO on write; bytes rebuild the rows."""
     db_rows = [
-        _row(pct_chg=Decimal("-0.8715"), amount=None, total_mv=Decimal("1"), basic_date=D16),
+        _row(pct_chg=Decimal("-0.8715"), amount=None, basic_date=D16),
     ]
 
     payload = mss._to_payload(db_rows)
 
-    assert payload == [_row(pct_chg=-0.8715, amount=None, total_mv=1.0, basic_date="2026-09-16")]
+    assert payload == [_row(pct_chg=-0.8715, amount=None, basic_date="2026-09-16")]
     assert isinstance(payload[0]["pct_chg"], float)
     assert isinstance(payload[0]["basic_date"], str)
     cached = json.loads(json.dumps(payload))  # the real CacheClient boundary
@@ -229,25 +231,24 @@ def test_payload_round_trips_decimals_and_dates_through_json() -> None:
 
 
 def test_basic_date_survives_as_iso_and_a_missing_cap_is_explicit() -> None:
-    """Market-cap staleness must be visible: ``basic_date`` is a real ISO date or None.
+    """``basic_date`` is the only market-cap-freshness marker and must be ISO or None.
 
     ``daily_basic`` has no row <= day for some stock/day (§H), and the LATERAL then
-    falls back to an older cap. ``basic_date`` is the only evidence of that, so it is
-    pinned both ways: an older date round-trips as-is and a missing cap keeps both
-    fields ``None`` instead of a fabricated 0 / today.
+    falls back to an older day. ``basic_date`` is the only evidence of that, so it is
+    pinned both ways: an older date round-trips as-is and a missing row reads ``None``
+    instead of a fabricated today. ``total_mv`` is intentionally absent (no consumer).
     """
     db_rows = [
-        _db_row(basic_date=date(2026, 9, 11), total_mv=Decimal("1.5")),
-        _db_row(basic_date=None, total_mv=None),
+        _db_row(basic_date=date(2026, 9, 11)),
+        _db_row(basic_date=None),
     ]
 
     payload = mss._to_payload(db_rows)
 
     assert payload[0]["basic_date"] == "2026-09-11"  # strictly older than D16
-    assert payload[0]["total_mv"] == 1.5
     assert payload[1]["basic_date"] is None
-    assert payload[1]["total_mv"] is None
     assert set(payload[0]) == set(mss.ROW_KEYS)
+    assert "total_mv" not in payload[0]
 
 
 async def test_cache_hit_short_circuits_the_db(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -273,7 +274,7 @@ async def test_cache_hit_preserves_payload_row_order(monkeypatch: pytest.MonkeyP
     fetch = AsyncMock(return_value=[_row(csrc_desc="银行")])
     monkeypatch.setattr(mss, "_fetch_rows", fetch)
     payload = [
-        _row(csrc_desc="电子", total_mv=None),
+        _row(csrc_desc="电子", province=None),
         _row(csrc_desc="银行"),
         _row(csrc_desc=None, basic_date=None),
     ]
@@ -283,7 +284,7 @@ async def test_cache_hit_preserves_payload_row_order(monkeypatch: pytest.MonkeyP
 
     assert rows == payload  # verbatim order
     assert [r["csrc_desc"] for r in rows] == ["电子", "银行", None]
-    assert rows[0]["total_mv"] is None
+    assert rows[0]["province"] is None
     assert rows[2]["csrc_desc"] is None
     assert rows[2]["basic_date"] is None
     fetch.assert_not_awaited()

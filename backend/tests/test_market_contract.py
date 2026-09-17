@@ -22,7 +22,10 @@ tests never load — fixed their shape):
 Fixture resolution is **lazy** and skips when the frontend tree is absent: pytest
 imports a module to read its ``pytestmark`` before ``-m`` deselection applies, so a
 module-level path lookup that raised would turn a backend-only ``uv run pytest`` into a
-collection error.
+collection error. The skip is **only** for an absent fixtures *directory*: once the
+directory exists, a named file that is missing (renamed/deleted fixture) is a hard
+failure — a silent skip would make the contract lock evaporate exactly when it is
+needed.
 """
 
 import json
@@ -71,7 +74,9 @@ def _load(name: str) -> dict[str, Any]:
         pytest.skip("frontend/e2e/fixtures not present (backend-only checkout)")
     path = fixtures_dir / name
     if not path.is_file():
-        pytest.skip(f"fixture {name} not present (backend-only checkout)")
+        # Directory exists => this is a real checkout; a missing named fixture means it
+        # was renamed/deleted. Failing (not skipping) keeps the contract lock honest.
+        pytest.fail(f"fixture {name} is missing from {fixtures_dir}")
     return json.loads(path.read_text(encoding="utf-8"))
 
 

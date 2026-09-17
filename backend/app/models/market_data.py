@@ -10,6 +10,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Float,
+    Index,
     Integer,
     Numeric,
     String,
@@ -30,6 +31,11 @@ class SectorMoneyflowSnapshot(Base):
         UniqueConstraint(
             "trade_date", "dimension", "board_code", name="uq_sector_moneyflow_dim_code_date"
         ),
+        # Created by migration d7c8b9a0e1f2 (per-dimension max(trade_date) lookup);
+        # mirrored here so `alembic revision --autogenerate` does not emit drop_index.
+        # `ix_sector_moneyflow_date_dim` (migration 9d4e7a2c8b1f) predates the
+        # convention and is still unmirrored — pre-existing drift, not this task's.
+        Index("ix_sector_moneyflow_dim_date", "dimension", "trade_date"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)

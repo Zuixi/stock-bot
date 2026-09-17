@@ -8,8 +8,9 @@ Data sources
 - **TuShare Pro** (via ``TuShareClient``): fallback for indices when DB is empty.
 
 "最新交易日"的唯一判据是 :mod:`app.services.market_day_service`（行数 + pct_chg
-非空率 + 限价存在）。本模块不再直接 ``max(daily_quotes.trade_date)``：
-``_latest_trade_date`` 是它的无缓存薄封装（返回 ``None``）。判据的 Redis 缓存由
+非空率 + 限价存在）。本模块不再直接 ``max(daily_quotes.trade_date)``，也不再持有
+任何"最近日"薄封装（fix round 1 删掉了无调用方的 ``_latest_trade_date`` /
+``_latest_trade_date_str``）：需要日的调用方一律直接调判据。判据的 Redis 缓存由
 判据模块统一持有（``market:day:latest_complete``，TTL 60s）；旧的
 ``market:latest_trade_date`` / 300s 缓存已下线。
 
@@ -17,12 +18,17 @@ Data sources
 :func:`_day_cache_key`）：补数/翻日之后旧 payload 不会再用旧标签冒充新一天，
 最坏情况从"5 分钟内返回错日"收敛为"下一次请求重新解析"。缓存读取因此排在
 解析日之后（解析本身有 60s 共享缓存，不是额外打库）。
+
+``/market/indices`` 不经过判据（数据在 ``index_dailies``），它的日来自**行自己的
+``asof``**，缓存身份因此是 ``market:indices:{day}`` + 一个只存日期的 60s 指针
+（见 :func:`list_market_indices`）——同一个"带日标签的 payload 不得挂在无日键上"
+的规则，只是日的来源不同。
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any, Literal, cast
 
 from sqlalchemy import Subquery, TextClause, func, select, text, union
@@ -42,11 +48,16 @@ logger = logging.getLogger(__name__)
 
 HotBoardCategory = Literal["industry", "concept", "region"]
 
-#: 按日结果缓存的 TTL（秒）。**与前端 staleTime 对齐**：首页按日聚合卡片
-#: （RankingMatrix / SectorHeatmap / NorthboundCard 等）统一 ``staleTime = 5*60_000``，
-#: 服务端 300s 与之同频，客户端过期时服务端条目也正好到期，不会出现"前端已刷新、
-#: 服务端仍回放旧 payload"的错位。键里带 ``as_of``（见 :func:`_day_cache_key`），
-#: 故补数/翻日只会让新键 miss，不会让旧标签继续冒充。
+#: 按日结果缓存的 TTL（秒）= 300s，与首页**多数**按日聚合卡片的
+#: ``staleTime = 5*60_000``（RankingMatrix / SectorHeatmap / HotSectors /
+#: IndustryClassification / DistributionChart / NorthboundCard）同量级：客户端不
+#: 主动重取的窗口里，服务端条目也就不必重算。
+#:
+#: **这不是"同频到期"的不变量**——SectorFlow 对同一批按日端点
+#: （``/market/sw-industry/performance`` / ``/market/sectors`` / ``/market/capital-flow``）
+#: 用 ``staleTime = 60s`` 轮询，它重取时会读到最长 300s 的服务端条目；陈旧度由
+#: payload 自带的 ``as_of`` 显式暴露，不靠 TTL 对齐。键里带 ``as_of``（见
+#: :func:`_day_cache_key`），故补数/翻日只会让新键 miss，不会让旧标签继续冒充。
 _MARKET_CACHE_TTL = 300  # 5 minutes
 _SW_OTHER_LEVEL1_CODE = "OTHER"
 _SW_OTHER_LEVEL1_NAME = "其他"
@@ -67,31 +78,6 @@ _TARGET_INDICES: list[dict[str, str]] = [
 
 INDEX_NAME_MAP: dict[str, str] = {idx["ts_code"]: idx["name"] for idx in _TARGET_INDICES}
 INDEX_EXCHANGE_MAP: dict[str, str] = {idx["ts_code"]: idx["exchange"] for idx in _TARGET_INDICES}
-
-# ---------------------------------------------------------------------------
-# Helper: latest trade date = completeness-predicate delegate (single source)
-# ---------------------------------------------------------------------------
-
-
-async def _latest_trade_date(db: AsyncSession) -> date | None:
-    """Return the resolved latest trade date, or ``None`` when daily_quotes is empty.
-
-    Thin **uncached** delegate to :func:`market_day_service.resolve_latest_complete_day`
-    so the "which day is usable" decision exists in exactly one place. Callers that
-    also need the quality label call the resolver directly (see the ``get_*`` readers).
-    """
-    md = await market_day_service.resolve_latest_complete_day(db)
-    return md.day if md is not None else None
-
-
-async def _latest_trade_date_str() -> str:
-    """Return latest trade date as YYYYMMDD for TuShare calls."""
-    async with async_session_factory() as db:
-        d = await _latest_trade_date(db)
-    if d:
-        return d.strftime("%Y%m%d")
-    return datetime.now().strftime("%Y%m%d")
-
 
 # ---------------------------------------------------------------------------
 # "as of" helpers — the completeness predicate is the only source of truth
@@ -141,16 +127,44 @@ def _day_cache_key(prefix: str, md: market_day_service.MarketDay | None) -> str:
 # ---------------------------------------------------------------------------
 
 
+#: 指数 payload 的按日键与"当前是哪一天"指针（Minor 6）。
+#: 每行都自带 ``asof``，所以把它挂在无日键上时，"补数/翻日后新值看不见"的问题与
+#: 六个按日端点同源；这里改成 ``market:indices:{day}`` + 一个只存日期的短寿命指针。
+_INDICES_CACHE_KEY = "market:indices:{day}"
+_INDICES_DAY_POINTER_KEY = "market:indices:latest-day"
+#: 指针寿命。与判据模块自己的 60s 缓存同量级：无日键只能沿用 TTL 窗口，指针越短
+#: 新一天越快可见；60s 也把空库走 TuShare 兜底的频率从"每 300s"抬到"每 60s"，
+#: 这是刻意的取舍（见 task-8 报告 Minor 6）。
+_INDICES_DAY_POINTER_TTL = 60
+
+
+def _indices_payload_day(results: list[dict[str, Any]]) -> str | None:
+    """从**已取回的行**推导 payload 的日（``asof`` 的日期部分，取最大者）。
+
+    ``asof`` 由 ``row.trade_date``（DB 路径）或 TuShare 的 ``trade_date`` 生成，
+    所以这是"行自己的日"，与行一起缓存；都缺 ``asof`` 时返回 ``None``（此时不缓存）。
+    """
+    days = [asof[:10] for row in results if (asof := row.get("asof"))]
+    return max(days) if days else None
+
+
 async def list_market_indices(cache: CacheClient | None = None) -> list[dict[str, Any]]:
     """Return main market index snapshots from DB (index_dailies).
 
     Falls back to TuShare if DB has no data.
+
+    缓存身份按日（``market:indices:{day}``，day = 行的 ``asof`` 最大日），所以一个
+    带日标签的 payload 永远不会在另一天的键下回放；读路径先读 ``market:indices:
+    latest-day`` 指针再读当日键，命中即不碰库（指针 TTL 见常量注释：新一天最长
+    60s 内可见，旧的无日键不再被读取）。
     """
-    cache_key = "market:indices"
     if cache:
-        cached = await cache.get(cache_key)
-        if cached is not None:
-            return cast(list[dict[str, Any]], cached)
+        # 指针先于 payload：先问"现在缓存的是哪一天"，再看那一天的键有没有 payload。
+        cached_day = await cache.get(_INDICES_DAY_POINTER_KEY)
+        if isinstance(cached_day, str):
+            cached = await cache.get(_INDICES_CACHE_KEY.format(day=cached_day))
+            if cached is not None:
+                return cast(list[dict[str, Any]], cached)
 
     from app.repositories import index_repo  # noqa: PLC0415
 
@@ -185,8 +199,10 @@ async def list_market_indices(cache: CacheClient | None = None) -> list[dict[str
     else:
         results = await _fetch_indices_from_tushare()
 
-    if cache and results:
-        await cache.set(cache_key, results, _MARKET_CACHE_TTL)
+    payload_day = _indices_payload_day(results)
+    if cache and results and payload_day is not None:
+        await cache.set(_INDICES_CACHE_KEY.format(day=payload_day), results, _MARKET_CACHE_TTL)
+        await cache.set(_INDICES_DAY_POINTER_KEY, payload_day, _INDICES_DAY_POINTER_TTL)
     return results
 
 
@@ -268,6 +284,9 @@ async def _fetch_indices_from_tushare() -> list[dict[str, Any]]:
 # Task 8 re-measured the same day after slimming the row contract to the columns the
 # four endpoints actually read (6 instead of 11): payload 1,275 KiB → 761 KiB, Redis
 # parse 14.4ms → 8.3ms, loader cache-hit ~14ms → ~9ms, page cold 172ms → 145ms.
+# Fix round 1 dropped the last unconsumed column (``total_mv``, 6 → 5) and re-measured
+# (day 2026-09-16, n=5,485, real Redis): payload 761 KiB → **637 KiB**, Redis
+# parse ~7ms (6.3-6.5ms), loader cache-hit ~8.2ms (7.1-7.4ms), page cold ~130ms.
 # The endpoint result caches still cover the warm page (both ~1-2ms).
 #
 # All four resolvers below are called ``cache=cache``. A bare call re-runs the
@@ -724,8 +743,10 @@ async def get_sw_industry_performance(
     if md is None:
         # Anonymous homepage block: an empty daily_quotes degrades to an empty
         # payload (never 500) and is not cached, so it recovers after the first ingest.
+        # 与同函数主体/get_rankings 一致用上海判据日：宿主本地 date.today() 在翻日
+        # 窗口会错标标签（fix round 1, Minor 10）。
         return SwPerformanceResponseOut(
-            as_of=last_weekday(date.today()), as_of_quality="partial", items=[]
+            as_of=last_weekday(_today_sh()), as_of_quality="partial", items=[]
         )
 
     cache_key = f"market:sw-performance:{md.day.isoformat()}"

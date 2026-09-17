@@ -25,6 +25,7 @@ import pytest
 
 from app.services import market_day_service as mds
 from app.services import market_service
+from app.services import market_snapshot_service as mss
 
 D16 = date(2026, 9, 16)
 
@@ -35,22 +36,35 @@ D16 = date(2026, 9, 16)
 
 
 def _row(**overrides: Any) -> dict[str, Any]:
-    """One snapshot row as ``load_day_rows`` returns it (floats, JSON-safe)."""
+    """One snapshot row as ``load_day_rows`` returns it (floats, JSON-safe).
+
+    Exactly :data:`market_snapshot_service.ROW_KEYS` — pinned by
+    ``test_shared_row_fixture_matches_the_live_row_contract``. Row *order* is the
+    caller's list order (the loader's ``ORDER BY stock_id``), so tests that care
+    about ordering express it by position/column value, never by a ``stock_id``
+    key the contract no longer carries.
+    """
     row: dict[str, Any] = {
-        "stock_id": 1,
-        "symbol": "600000",
-        "name": "浦发银行",
         "csrc_desc": "银行",
         "province": "上海",
-        "close": 9.1,
         "pct_chg": 0.0,
         "amount": 100.0,
-        "total_mv": 1.0,
-        "circ_mv": 1.0,
-        "turnover_rate": 1.0,
+        "basic_date": "2026-09-16",
     }
     row.update(overrides)
     return row
+
+
+def test_shared_row_fixture_matches_the_live_row_contract() -> None:
+    """The shared row fixture must advertise exactly the loader's live key set.
+
+    It previously still built the pre-Task-8 11-key row (``stock_id`` / ``symbol`` /
+    ``name`` / ``close`` / ``circ_mv`` / ``turnover_rate`` / ``total_mv``), so it
+    claimed contract fidelity it no longer had while every endpoint test kept
+    passing on columns no consumer reads. Fix round 1 trimmed it; this pins both
+    sides together so a future column change cannot silently drift the fixture.
+    """
+    assert set(_row()) == set(mss.ROW_KEYS)
 
 
 def _resolved(quality: str = "complete", reason: str | None = None) -> mds.MarketDay:
@@ -160,11 +174,11 @@ async def test_distribution_end_to_end_counts_and_zero_fill(
     _patch_rows(
         monkeypatch,
         [
-            _row(stock_id=1, pct_chg=11.0),
-            _row(stock_id=2, pct_chg=-9.6),
-            _row(stock_id=3, pct_chg=0.0),
-            _row(stock_id=4, pct_chg=None),
-            _row(stock_id=5, pct_chg=2.5),
+            _row(pct_chg=11.0),
+            _row(pct_chg=-9.6),
+            _row(pct_chg=0.0),
+            _row(pct_chg=None),
+            _row(pct_chg=2.5),
         ],
     )
 
@@ -192,11 +206,11 @@ async def test_sectors_groups_counts_and_amount_conversion(monkeypatch: pytest.M
     _patch_rows(
         monkeypatch,
         [
-            _row(stock_id=1, csrc_desc="电子", pct_chg=2.0, amount=10.0),
-            _row(stock_id=2, csrc_desc="电子", pct_chg=4.0, amount=None),
-            _row(stock_id=3, csrc_desc="银行", pct_chg=-1.0, amount=5.0),
-            _row(stock_id=4, csrc_desc=None, pct_chg=99.0, amount=1.0),  # no bucket
-            _row(stock_id=5, csrc_desc="", pct_chg=99.0, amount=1.0),  # no bucket
+            _row(csrc_desc="电子", pct_chg=2.0, amount=10.0),
+            _row(csrc_desc="电子", pct_chg=4.0, amount=None),
+            _row(csrc_desc="银行", pct_chg=-1.0, amount=5.0),
+            _row(csrc_desc=None, pct_chg=99.0, amount=1.0),  # no bucket
+            _row(csrc_desc="", pct_chg=99.0, amount=1.0),  # no bucket
         ],
     )
 
@@ -218,7 +232,7 @@ async def test_sectors_groups_counts_and_amount_conversion(monkeypatch: pytest.M
 async def test_sectors_sorts_desc_and_keeps_top_30(monkeypatch: pytest.MonkeyPatch) -> None:
     """31 industries → the 30 best by average change; the weakest is dropped."""
     _patch_day(monkeypatch, _resolved())
-    rows = [_row(stock_id=i, csrc_desc=f"行业{i:02d}", pct_chg=float(i)) for i in range(31)]
+    rows = [_row(csrc_desc=f"行业{i:02d}", pct_chg=float(i)) for i in range(31)]
     _patch_rows(monkeypatch, rows)
 
     out = await market_service.get_sectors(None)
@@ -244,11 +258,11 @@ async def test_capital_flow_split_units_and_missing_pct_chg_is_inflow(
         monkeypatch,
         [
             # 电子: 2 inflow rows (one flat, one missing) + 1 outflow → total 300000
-            _row(stock_id=1, csrc_desc="电子", pct_chg=1.5, amount=100000.0),
-            _row(stock_id=2, csrc_desc="电子", pct_chg=None, amount=100000.0),
-            _row(stock_id=3, csrc_desc="电子", pct_chg=-2.0, amount=100000.0),
+            _row(csrc_desc="电子", pct_chg=1.5, amount=100000.0),
+            _row(csrc_desc="电子", pct_chg=None, amount=100000.0),
+            _row(csrc_desc="电子", pct_chg=-2.0, amount=100000.0),
             # 银行: smaller total → ranked second
-            _row(stock_id=4, csrc_desc="银行", pct_chg=-0.5, amount=50000.0),
+            _row(csrc_desc="银行", pct_chg=-0.5, amount=50000.0),
         ],
     )
 
@@ -268,10 +282,7 @@ async def test_capital_flow_ranks_by_total_turnover_and_keeps_top_10(
 ) -> None:
     """Ordering is by the group's total amount, not by net flow."""
     _patch_day(monkeypatch, _resolved())
-    rows = [
-        _row(stock_id=i, csrc_desc=f"行业{i:02d}", pct_chg=-1.0, amount=float(i * 1000))
-        for i in range(12)
-    ]
+    rows = [_row(csrc_desc=f"行业{i:02d}", pct_chg=-1.0, amount=float(i * 1000)) for i in range(12)]
     _patch_rows(monkeypatch, rows)
 
     out = await market_service.get_capital_flow(None)
@@ -295,11 +306,11 @@ async def test_hot_boards_industry_breadth_partitions_every_row(
     _patch_rows(
         monkeypatch,
         [
-            _row(stock_id=1, csrc_desc="电子", pct_chg=3.0),
-            _row(stock_id=2, csrc_desc="电子", pct_chg=0.0),
-            _row(stock_id=3, csrc_desc="电子", pct_chg=None),
-            _row(stock_id=4, csrc_desc="电子", pct_chg=-1.0),
-            _row(stock_id=5, csrc_desc="银行", pct_chg=-2.0),
+            _row(csrc_desc="电子", pct_chg=3.0),
+            _row(csrc_desc="电子", pct_chg=0.0),
+            _row(csrc_desc="电子", pct_chg=None),
+            _row(csrc_desc="电子", pct_chg=-1.0),
+            _row(csrc_desc="银行", pct_chg=-2.0),
         ],
     )
 
@@ -326,10 +337,7 @@ async def test_hot_boards_region_groups_by_province_and_keeps_top_10(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_day(monkeypatch, _resolved())
-    rows = [
-        _row(stock_id=i, csrc_desc="电子", province=f"省{i:02d}", pct_chg=float(i))
-        for i in range(12)
-    ]
+    rows = [_row(csrc_desc="电子", province=f"省{i:02d}", pct_chg=float(i)) for i in range(12)]
     _patch_rows(monkeypatch, rows)
 
     out = await market_service.get_hot_boards("region", None)

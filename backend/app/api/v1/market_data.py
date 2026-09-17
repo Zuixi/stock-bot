@@ -50,7 +50,9 @@ async def get_sector_moneyflow_endpoint(
     dimension: Literal["industry", "concept", "region"] = "industry",
     limit: int = Query(default=15, ge=1, le=100),
 ) -> SectorMoneyflowListOut:
-    """板块资金流榜；`as_of` 是快照表实际最近日（可能滞后），`stale_days` 自然日差。"""
+    """板块资金流榜；`as_of` 描述**返回的 items**：取该 dimension 自己持有的最近日
+    （各 dimension 可能不同）；无 items 时 `as_of`/`stale_days` 均为 None。
+    """
     payload = await market_data_service.get_sector_moneyflow(cache, dimension, limit)
     return SectorMoneyflowListOut.model_validate(payload)
 
@@ -59,7 +61,9 @@ async def get_sector_moneyflow_endpoint(
 async def get_northbound(
     cache: CacheDep, days: int = Query(default=30, ge=1, le=180)
 ) -> NorthboundSeriesOut:
-    """北向净流入序列；上游停更时 `source_status="discontinued"`（`as_of` 为表内最近日）。"""
+    """北向净流入序列；`as_of` 是**返回的 items 末项**的日期，窗口内无项时 None
+    （此时 `source_status="discontinued"`，上游停更也从该状态体现）。
+    """
     payload = await market_data_service.get_northbound_series(cache, days)
     return NorthboundSeriesOut.model_validate(payload)
 

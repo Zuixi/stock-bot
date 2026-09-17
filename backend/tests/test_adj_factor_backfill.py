@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.models.market_data import SectorMoneyflowSnapshot
 from app.models.quote import DailyQuote
 from app.repositories import quote_repo
 from app.services import quote_service
@@ -66,6 +67,46 @@ async def test_upsert_quotes_preserves_existing_adj_factor_on_conflict() -> None
     for col in ("open", "high", "low", "close", "pre_close", "pct_chg", "volume", "amount"):
         expr = update_set[col]
         assert (expr.table.name, expr.name) == ("excluded", col)
+
+
+@pytest.mark.parametrize(
+    ("table", "index_name", "columns", "where"),
+    [
+        # migration d1e2f3a4b5c6
+        (
+            DailyQuote,
+            "idx_daily_quotes_stock_id_adj_factor",
+            ["stock_id"],
+            "adj_factor IS NOT NULL",
+        ),
+        # migration d7c8b9a0e1f2 — the other index this task's commit created
+        (
+            SectorMoneyflowSnapshot,
+            "ix_sector_moneyflow_dim_date",
+            ["dimension", "trade_date"],
+            None,
+        ),
+    ],
+)
+def test_model_metadata_mirrors_the_indexes_this_task_migrated(
+    table: Any, index_name: str, columns: list[str], where: str | None
+) -> None:
+    """Task 8 的迁移建的索引必须镜像在模型元数据里（autogenerate 守卫）。
+
+    ``migrations/env.py`` 用 ``Base.metadata`` 且没有 ``include_object`` 过滤，所以
+    "只在迁移里存在"的索引会被 ``alembic revision --autogenerate`` 判成本地多余而生成
+    ``drop_index``（随后一次 autogenerate 迁移就会把索引删掉）。``quote.py`` 已按同一
+    约定镜像 ``cf4b8e317fe5`` 建的两个排行索引，本任务新建的两个也必须跟上；名字/列/
+    谓词三者任一对不上 autogenerate 就会漂移——partial index 一丢，
+    ``list_missing_adj_factor_pairs`` 的 index-only scan 就没了依据。
+
+    （同表更早的 ``ix_sector_moneyflow_date_dim`` 仍是历史遗留未镜像项，不在本任务范围。）
+    """
+    index = next((idx for idx in table.__table__.indexes if idx.name == index_name), None)
+    assert index is not None, f"migration index {index_name} is missing from {table.__name__}"
+    assert [column.name for column in index.columns] == columns
+    if where is not None:
+        assert str(index.dialect_options["postgresql"]["where"]) == where
 
 
 async def test_list_missing_adj_factor_pairs_query_shape() -> None:
