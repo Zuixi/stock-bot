@@ -250,7 +250,8 @@ async def test_distribution_carries_as_of_quality(_day: None, monkeypatch) -> No
     async def _rows(_db: Any, _day_: date) -> list[dict]:
         return [{"range": "0~1%", "count": 3}]
 
-    monkeypatch.setattr(market_service, "_distribution_rows", _rows)
+    # 注：Task 7 后该 seam 已删除，端点改为共用 load_day_rows；新样例见
+    # backend/tests/test_market_aggregations.py（patch market_snapshot_service.load_day_rows）
     out = await market_service.get_distribution(None)
     assert out["as_of"] == "2026-09-16"
     assert out["as_of_quality"] == "fallback"
