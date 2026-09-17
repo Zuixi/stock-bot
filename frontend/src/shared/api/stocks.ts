@@ -123,6 +123,8 @@ export interface BackendStockEnriched extends BackendStock {
     total_mv?: number | null;
     circ_mv?: number | null;
     turnover_rate?: number | null;
+    // 最新行情的 trade_date —— 行情口径"数据截至"（asof 是名录 ingest 时间）
+    latest_quote_date?: string | null;
     // Stock's own SW industry chain L1→L2→L3 (empty when unmapped)
     sw_chain?: SwChainNode[];
 }
@@ -146,6 +148,7 @@ export function mapBackendStockEnriched(item: BackendStockEnriched): StockRecord
         low: item.low ?? undefined,
         prevClose: item.prev_close ?? undefined,
         turnoverRate: item.turnover_rate ?? undefined,
+        latestQuoteDate: item.latest_quote_date ?? undefined,
         swChain: item.sw_chain ?? [],
     };
 }

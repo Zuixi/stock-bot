@@ -149,6 +149,7 @@ async def reconcile_market_data(
         "expected_latest": expected[-1].isoformat() if expected else None,
         "expected_days": len(expected),
         "universe": universe,
+        "quotes_symbols_latest": None,  # 下方按 daily_quotes 实际行数回填
         "degraded_calendar": degraded,
         "apply": apply,
         "domains": {},
@@ -191,8 +192,13 @@ async def reconcile_market_data(
             for d in expected
             if quotes_counts.get(d, 0) >= threshold and limits_counts.get(d, 0) >= threshold
         }
+        # 名录 vs 行情活跃数：上面的 threshold 用 stocks 表行数当分母，而该表可能长期
+        # 冻结（实测停在 5 月，65 只次新股的行被日线采集静默丢弃却始终过阈值）。两个数
+        # 并排暴露，"名录滞后"才能在巡检端点看见，而非只留一个 skipped 计数。
+        result["quotes_symbols_latest"] = quotes_counts.get(expected[-1], 0)
     else:
         base_complete = set()
+        result["quotes_symbols_latest"] = None
     sent_counts = await _row_counts(db, "sentiment", expected)
     sent_status = await _domain_status(sent_counts, expected, threshold=1)
     sent_todo = [d for d in sent_status["missing_days"] if d in base_complete]

@@ -1,3 +1,17 @@
+## 2026-09-17 - 本机数据卷恢复 + 全栈经 gateway 起全 + 垃圾清理（数据运维，无业务代码改动）
+- **事故与恢复**：`docker compose up -d api` 触发 compose 连带重建 postgres —— main 里 `73f40d7` 把卷 pin 成 `stock_bot_wt_p7_postgres_data`，而本机真实数据一直在项目前缀卷 `stock-bot_postgres_data`（4.2G），于是新集群 initdb、`data_init` 见空 `stocks` 表→全量重播 3 年行情（烧额度）。旧库完好（`pg_controldata` + 临时实例对账：5513 stocks / 4,347,642 quotes / max(trade_date)=2026-09-16）。修法：新增本机专属 `docker-compose.override.yml`（已 gitignore）把 `postgres_data` pin 回 `stock-bot_postgres_data`，`docker compose down && up -d` 后数据回来
+- **全栈经 gateway 起全**：之前只跑 api/worker/scheduler/frontend，本次补齐 `gateway(traefik) + auth-service + forward-auth + auth-db`，11 服务全 healthy；经 `:80` 实测 SPA 200 / 匿名 API 200（forward-auth 无 session 时旁路）/ `/auth/session` 401 / `/.well-known/jwks.json` 200
+- **清理**：构建缓存 18.23GB→2.3MB；19 个匿名空库卷（≈880MB，历史 postgres 镜像 VOLUME 残留）+ 本项目 3 个孤立卷（`stock_bot_wt_p7_postgres_data` 事故重播卷 324M、`stock-bot_redis_data`、`stock-bot_rabbitmq_data`）+ `stock-bot-task6-frontend` 旧实验镜像 + 3 个一次性容器全部删除；本地卷 31→9 且 reclaimable 归 0
+- **E2E**：经 gateway（`E2E_BASE_URL=http://localhost`）跑全套 63 例 → 60 passed；3 例失败（darkmode/limitUpSentiment/userIsolation）已用干净 main 前端重建做基线对账，**同样失败** → 存量/数据漂移问题，与本改动无关。`kline.spec` 5/5 通过，页面实际渲染 `数据截至 9月16日`
+- 涉及模块：.gitignore, docker-compose.override.yml(未入库), backend/*, frontend/*, docs/references/best-practices.md
+
+## 2026-09-17 - 个股页"数据截至"口径修复 + 名录冻结根治（拣选 fix/stock-asof-universe 内容重放，非 rebase）
+- **口径修复**：个股头部"数据截至"原本渲染 `stocks.asof`（名录 ingest 时间戳），实测被冻在 `2026-05-08T15:09:16.546850Z` 而行情已到 09-16——差 4 个月的虚假时效标注。enriched 响应新增 `latest_quote_date`（最新行情 `daily_quotes.trade_date`），前端改绑并复用 `@/shared/ui/date` 的 `formatCnDate`（与 SectionCard/RankingMatrix/SectorFlow 同款「9月16日」），e2e 正则同步
+- **名录冻结根治**（这才是真损失）：日线采集用 `stocks` 表把 `ts_code → stock_id`，映射不到的行 `skipped += 1; continue` **静默丢弃**。universe ingest 只在「空库首启」或手动 `/tasks/fetch-universe` 跑过，从不自动刷新 → 对账原始 JSONL 与 DB 得 **65 只次新股的行情从未落库**（`001232.SZ`…`603407.SH`，详情页 404），且每日 fetched 5550 / upserted 5485 的差额随上市递增。新增 `universe_refresh_job`（每周六 09:00 Asia/Shanghai，逐交易所失败隔离，与 `UniverseWorker` 共用 `ingest_stock_universe`，交易所清单复用 `models.stock.ExchangeName` 单一事实源而非另立常量）
+- **可观测性补刀**（原分支缺）：`skipped` 拆出 `unknown_ts_codes` 并升级为 warning（含 sample），`_build_stock_id_map` 为空时由 warning 升 error 并带丢弃行数——「名录滞后」不再只体现为一个数字；`daily_basic` 同源路径同步
+- **对账盲区修复**：`threshold = universe * 0.8` 的分母取自被冻结的 `stocks` 表，1.2% 缺失（65 只）永远过阈值。`/market/data-freshness` 新增 `quotes_symbols_latest`（最新期望日 daily_quotes 实际行数）与 `universe` 并排暴露，名录滞后在巡检端点可见
+- 涉及模块：backend/app/{scheduler/{jobs,runner}.py,services/{tushare_ingest,reconciliation_service}.py,schemas/{stock,reconciliation}.py}, frontend/src/{shared/{api/stocks,types/index,ui/date}.*,features/stock-detail/components/StockHeader.tsx}, frontend/e2e/kline.spec.ts, backend/tests
+
 ## 2026-09-17 - 对账式自愈数据面落地：misfire 硬化 + reconciliation_service + 新鲜度端点（Phase 1+2 全部实施并实机验收通过）
 - **L1 调度硬化**：`create_scheduler` 注入 `job_defaults={misfire_grace_time: None, coalesce: True, max_instances: 1}`（宿主挂起醒来补跑、堆积合并）；盘中五任务（SSE 快照×3/资金流轮询/公告轮询）例外 `grace=300` 防醒来堆积无意义快照。scheduler 注册 **18→21 任务**（+Startup reconcile/+Post-chain 17:45/+Weekend catch-up 10:00）
 - **L2/L3 对账收敛器**（新 `reconciliation_service.py`）：trade_cal 期望集（截止昨日 T-1 语义，不可用降级工作日启发式）× 行数阈值（≥0.8×stocks 全市场数）判完整，`missing ∪ partial` 逐日重拉（upsert 幂等解 partial 死锁）；sentiment 仅在 quotes+limits 完备日补；底座补数先 commit 再派生（get_snapshot 独立会话可见性）。16:30/16:45 job 重写为单域对账薄封装，`_fetch_yesterday_*` 与 exists-skip 语义删除；worker `market_data.fetch` 队列新增 `reconcile` 类型

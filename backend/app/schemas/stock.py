@@ -62,6 +62,9 @@ class StockEnrichedOut(StockOut):
     total_mv: float | None = None
     circ_mv: float | None = None
     turnover_rate: float | None = None
+    # 最新行情的 trade_date —— 行情展示口径的"数据截至"；
+    # stocks.asof 是名录元数据 ingest 时间，属另一条管道，不得混用
+    latest_quote_date: date | None = None
     # Stock's own SW industry chain L1→L2→L3 (empty when unmapped)
     sw_chain: list[SwChainNode] = Field(default_factory=list)
 

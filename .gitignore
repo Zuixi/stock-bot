@@ -71,3 +71,6 @@ frontend/tsconfig.tsbuildinfo
 
 # git worktrees
 .worktrees/
+
+# 本机专属 compose 覆盖（卷名等环境差异），不入库
+docker-compose.override.yml

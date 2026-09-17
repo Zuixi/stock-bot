@@ -1,6 +1,6 @@
 import { Typography, Tag, Button, Space, Descriptions } from "antd";
 import { StarOutlined, StarFilled } from "@ant-design/icons";
-import { ChangeText, NumberText } from "@/shared/ui";
+import { ChangeText, NumberText, formatCnDate } from "@/shared/ui";
 import { EXCHANGE_LABELS } from "@/shared/types";
 import { useWatchlist } from "@/features/watchlist/useWatchlist";
 import type { StockRecord } from "@/shared/types";
@@ -60,7 +60,10 @@ export function StockHeader({ stock }: Props) {
           </Descriptions.Item>
         </Descriptions>
         <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-          数据截至 {stock.asof}
+          {/* 行情口径的"数据截至"：绑最新行情 trade_date。stocks.asof 是名录 ingest
+              时间戳（另一条管道，且可能长期不刷新），不得再混用。全站同款文案统一走
+              formatCnDate（同 SectionCard/RankingMatrix/SectorFlow）。 */}
+          数据截至 {stock.latestQuoteDate ? formatCnDate(stock.latestQuoteDate) : "--"}
         </Typography.Text>
       </div>
       <Button

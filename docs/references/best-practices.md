@@ -56,6 +56,9 @@
 - 第三方行情先 curl 实测定字段与单位再写映射：东财 f62 是元、TuShare block_trade 是万元/万股、north_money 是万元、巨潮 announcementTime 是毫秒——单位/时间戳错一档，UI 就差四个数量级或 1970 年。
 - 回补窗口类参数（months）必须从 API schema → worker payload → service → fetcher 全链贯通并各自设默认值，任何一层残留硬编码窗口（如 `df.tail(45)`）都会让上游参数静默失效；生成演示序列时"末点精确等于基准值"要靠生成器结构保证并用纯单测钉死，不能依赖抖动碰巧为零。
 - 依赖第三方实时接口的功能必须先把口径落成自有数据再算（限价这类**有权威原值**的字段要用官方接口原值落表，别用名称/代码前缀推比例）：实测 2026-09-08 名称启发式把 75 只涨停误判成 83 只（9 只 ST 名称股真实限幅 10%）、而用 `LAG(close)` 当前收会把涨停数算成 142——外呼失败只降级"增强字段"（封板时间/封单），绝不降级主口径。**且要核到字段级**：TuShare 文档里"默认显示=N"的列（如 `stk_limit.pre_close`）不显式传 `fields` 就不返回，落库整列 NULL 而不报错；同理涨跌幅分母必须取**当日行**的 `pre_close`（取前一日行 = 静默多算一天，实测 2.82% → 13.95%）。附三条同源教训：候选集合取两日并集必须 `DISTINCT`（扇出会 75→94 并造出假连板）；gaps-and-islands 的 `grp = rn_all - rn_by_val` 只保证组内常量、**不保证组间唯一**，`PARTITION BY` 必须带上分组列本体（否则不同值的岛会合并且 streak 静默虚高）；以及"缺失 ≠ 零"在停牌股上必须显式回传 `missing_days` 而不是折算成 0%。
+- 同一页面聚合多条数据管道（名录元数据 vs 行情）时，"数据截至"必须绑定用户所见数据自身管道的最新业务时间（如行情 `trade_date`），不能借用元数据表的 ingest 时间戳冒充：实测个股头部绑 `stocks.asof` 渲染成 `2026-05-08T15:09:16.546850Z`，而行情已到 09-16 —— 差 4 个月的时效标注无任何报错；长期不自动刷新的管道要么补调度任务，要么不得在 UI 上承诺时效语义。
+- **「源表被别的管道当映射表」时，源表不刷新 = 下游静默丢数据，且丢的越多越隐蔽**：日线采集用 `stocks` 表把 `ts_code → stock_id`，映射不到就 `skipped += 1; continue`，而 universe ingest 只在「空库首启」或手动触发时跑过 —— 结果 65 只次新股的行情**每一天都被丢掉**（对账原始 JSONL 与 DB 才看得出来，日志里只是一个 `skipped=65`）。两个动作缺一不可：① 给映射表补自动刷新（`universe_refresh_job`，周六 09:00，与手动入口共用同一 ingest）；② 把 `skipped` 拆成 `unknown_ts_codes` 并升 warning（带 sample），否则「丢了多少、丢了谁」永远无法从日志回答。
+- **用某张表的行数当完整性阈值分母之前，先确认这张表本身是否可信**：`threshold = stocks 行数 × 0.8` 而 `stocks` 已冻结 4 个月，缺 65 只（1.2%）远够不着 20% 的容差，自愈巡检永远报 ok —— **分母取自被污染的表，等于把要检出的偏差写进了基准**。修法是把「基准数」与「实际数」并排暴露（`universe` vs `quotes_symbols_latest`）让人一眼看出漂移，而不是在原阈值上做微调。
 - 每日增量回补要带「补漏窗口」，而不是只拉「上一个工作日」：`_fetch_yesterday_daily_quotes` 只算一天且命中即跳过，调度器停摆一天就在 `daily_quotes` 留下**永久空洞**（本次缺 2026-09-10/09-11/09-14，而 `daily_basic_indicators` 同期完整——两条回补链路覆盖不一致，缺口极难察觉）；下游连板/榜单不会报错，只会把 `as_of_prev` 悄悄往前滑一位，看起来一切正常。正确形态是像 `ingest_stock_price_limits` 那样「取最近 N 个交易日 → 逐日判缺 → 只补缺的」（幂等、能自愈）；逐日对账要用 `SELECT trade_date, count(*) ... GROUP BY 1 ORDER BY 1 DESC`，只看 `max(trade_date)` 会漏掉中间的空洞。
 
 ## 二、数据库与性能
@@ -91,6 +94,7 @@
 - Python 镜像构建应使用 `uv.lock` 的 frozen 导出流程并配置国内默认源（如 TUNA）与更长 HTTP 超时，同时保留 BuildKit 缓存挂载，避免解析/下载抖动导致构建超时。
 - Docker 构建涉及种子文件时，需显式检查 `.dockerignore` 排除规则并为目标文件添加白名单（如 `!data/sw_seed.sql`），否则运行时会出现"容器内文件缺失"的隐蔽故障。
 - Docker Compose 场景下 Nginx 反向代理上游应启用 Docker DNS 动态解析（`resolver 127.0.0.11` + 变量 `proxy_pass`），避免后端容器重建后因缓存旧 IP 导致持续 502。
+- **`docker compose up -d <子集>` 会连带重建配置漂移的依赖服务（含 postgres），所以「卷名 pin」是环境假设、必须先与现网对账**：main 里 `volumes.postgres_data.name: stock_bot_wt_p7_postgres_data` 的预写前提是「数据在原 wt_p7 部署建的卷里」，而本机真实数据一直在项目前缀卷 `stock-bot_postgres_data`（4.2G）—— 一跑 `up` 就重建 postgres 并挂到同名空卷（或新建空卷），新集群 initdb 后 `data_init` 看到空 `stocks` 表→**全量重新播种 3 年行情**（烧 TuShare 额度、旧数据在 UI 上"消失"），而旧库其实完好无损。动手前先 `docker volume ls` + `docker volume inspect` 看哪个卷真有数据（`PG_VERSION`/`current_logfiles` 的 mtime、`du -sh` 量级一眼可辨），确认 pin 名与实际卷名一致再 `up`；事后确认旧库可用 `pg_controldata`（只读挂载即可）+ 起一个临时实例查 `count(*)` 对账，不用慌着 restore。
 - 对"体量大但更新频率低"的静态映射数据，推荐"首次解析源文件并自动导出 SQL 种子，后续部署优先导入 SQL"的策略，导入策略显式分层为"SQL 种子优先、源文件解析兜底"，并在启动日志打印实际命中路径，便于排查"文件存在但未生效"的环境问题。
 
 ## 四、前端（React / antd / ECharts）
@@ -218,3 +222,6 @@
 ---
 
 > 历史说明：本文件系 2026-09-03 由 `docs/references/best-practice.md` 与 `docs/references/best-practices.md` 两文件合并而来（此前近似命名并存导致经验分裂），条目按主题归档；继续沿用"每次任务沉淀一句"的约定向对应分类追加。
+- 数值型 tooltip 用「灰标签左 + 右对齐 tabular-nums 数值右」的两列式行布局（flex space-between + min-width），OHLC/涨跌随当日涨跌统一着色、量额中性——横排挤合（"开：x 高：x 低：x"）无对齐基准，是主流行情软件与其余 tooltip 的主要视觉分界。
+- 行业覆盖缺口的合并优先用三方分类接口交叉验证而非纯名称匹配：TuShare index_member_all 有 3000 行上限且不支持按股查询；东财 push2 接口 f127 字段与申万 2021 同名可直接映射（突发批量会被限流，push2delay 镜像 + 0.3s 间隔可绕），特例用同花顺 F10 双源核验；落库走幂等 custom tag 表而非改原始字段。
+- 人工策展数据进 repo 用"overlay 种子文件 + 加性 ON CONFLICT"而非追加进自动再生成的种子（会被下次导出抹掉），并同步补 .gitignore 的 data/* 豁免与 backend/.dockerignore 的 data/* 豁免——漏 dockerignore 会导致镜像内文件缺失、加载器静默返回 0。

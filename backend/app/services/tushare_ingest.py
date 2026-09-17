@@ -304,18 +304,26 @@ class TuShareIngestService:
 
         stock_id_map = await self._build_stock_id_map(db)
         if not stock_id_map:
-            logger.warning("No stocks in DB — run universe ingest first")
+            logger.error(
+                "No stocks in DB — run universe ingest first；全市场 %d 行行情被丢弃 trade_date=%s",
+                len(df),
+                trade_date,
+            )
             return {"saved": len(df), "upserted": 0, "trade_date": trade_date}
 
         parsed_date = _dt.strptime(trade_date, "%Y%m%d").date()
         quotes: list[DailyQuote] = []
         skipped = 0
+        # 行情里有、stocks 名录里没有的 ts_code：说明名录已滞后（新上市/未刷新）。
+        # 这些行的行情会被静默丢弃，必须留痕——否则"少 65 只"只体现为一个 skipped 数字。
+        unknown_ts_codes: list[str] = []
 
         for row in df.to_dict("records"):
             ts_code = str(row.get("ts_code", "")).strip()
             stock_id = stock_id_map.get(ts_code)
             if stock_id is None:
                 skipped += 1
+                unknown_ts_codes.append(ts_code)
                 continue
 
             close_val = _to_builtin(row.get("close"))
@@ -354,10 +362,19 @@ class TuShareIngestService:
             upserted,
             skipped,
         )
+        if unknown_ts_codes:
+            logger.warning(
+                "Daily ingest 丢弃 %d 行：ts_code 不在 stocks 名录中（名录滞后，需刷新 "
+                "universe）trade_date=%s sample=%s",
+                len(unknown_ts_codes),
+                trade_date,
+                unknown_ts_codes[:5],
+            )
         return {
             "saved": len(df),
             "upserted": upserted,
             "skipped": skipped,
+            "unknown_ts_codes": len(unknown_ts_codes),
             "trade_date": trade_date,
         }
 
@@ -609,7 +626,11 @@ class TuShareIngestService:
 
         stock_id_map = await self._build_stock_id_map(db)
         if not stock_id_map:
-            logger.warning("No stocks in DB — run universe ingest first")
+            logger.error(
+                "No stocks in DB — run universe ingest first；全市场 %d 行指标被丢弃 trade_date=%s",
+                len(df),
+                trade_date,
+            )
             return {"saved": len(df), "upserted": 0, "trade_date": trade_date}
 
         from datetime import datetime as _dt
@@ -664,6 +685,13 @@ class TuShareIngestService:
             upserted,
             skipped,
         )
+        if skipped:
+            logger.warning(
+                "Daily basic ingest 丢弃 %d 行：ts_code 不在 stocks 名录中（名录滞后，"
+                "需刷新 universe）trade_date=%s",
+                skipped,
+                trade_date,
+            )
         return {
             "saved": len(df),
             "upserted": upserted,
