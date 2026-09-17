@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from app.schemas.market import AsOfQuality
+
 
 class LadderStockOut(BaseModel):
     symbol: str
@@ -51,6 +53,7 @@ class SentimentKpisOut(BaseModel):
 class LimitUpLadderOut(BaseModel):
     as_of: date | None
     as_of_prev: date | None
+    as_of_quality: AsOfQuality = "partial"
     source: Literal["local_calc"]
     limits_present: bool
     is_partial: bool
@@ -75,6 +78,7 @@ class SectorLimitUpItemOut(BaseModel):
 
 class SectorLimitUpOut(BaseModel):
     as_of: date | None
+    as_of_quality: AsOfQuality = "partial"
     source: Literal["local_calc"]
     degraded_reason: str | None = None
     unclassified_count: int = 0
@@ -99,6 +103,7 @@ class YesterdayLimitUpItemOut(BaseModel):
 class YesterdayLimitUpOut(BaseModel):
     as_of: date | None
     as_of_prev: date | None
+    as_of_quality: AsOfQuality = "partial"
     source: Literal["local_calc"]
     degraded_reason: str | None = None
     kpis: dict[str, Any] = {}

@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.market import AsOfQuality
+
 # Ruling O: the five supported ranking types (amplitude excluded — expression only, no index).
 RankingType = Literal["gainers", "losers", "amount", "turnover_rate", "volume"]
 
@@ -28,6 +30,8 @@ class RankingItemOut(BaseModel):
 
 class RankingResponseOut(BaseModel):
     as_of: date
+    as_of_quality: AsOfQuality = "complete"
+    as_of_reason: str | None = None
     is_latest_trading_day: bool
     type: RankingType
     items: list[RankingItemOut]
