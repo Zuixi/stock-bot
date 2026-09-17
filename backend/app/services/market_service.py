@@ -32,6 +32,7 @@ from app.schemas.ranking import RankingItemOut, RankingResponseOut, RankingType
 from app.schemas.stock import StockOut
 from app.schemas.sw_performance import SwPerformanceItemOut, SwPerformanceResponseOut
 from app.services import market_day_service
+from app.services.market_data_service import _today_sh
 
 logger = logging.getLogger(__name__)
 
@@ -636,7 +637,9 @@ async def get_rankings(
         as_of=md.day,
         as_of_quality=md.quality,
         as_of_reason=md.reason,
-        is_latest_trading_day=md.day >= last_weekday(date.today()),
+        # "最新交易日"判据：resolved as_of 必须**等于**当前（上海时区）最近预期交易日。
+        # 回落日（quality="fallback"）必然不等 → False，不再恒真/乐观宣称。
+        is_latest_trading_day=md.day == last_weekday(_today_sh()),
         type=cast(RankingType, rank_type),
         items=[RankingItemOut(**row) for row in rows],
     )

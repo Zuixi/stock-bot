@@ -22,9 +22,9 @@ from app.schemas.market_data import (
     DragonTigerOut,
     GlobalIndexCardOut,
     MarketMoneyflowOut,
-    NorthboundPointOut,
+    NorthboundSeriesOut,
     RepurchaseOut,
-    SectorMoneyflowOut,
+    SectorMoneyflowListOut,
     ShareFloatOut,
 )
 from app.schemas.reconciliation import DataFreshnessOut
@@ -44,22 +44,24 @@ async def get_global_indices(cache: CacheDep) -> list[GlobalIndexCardOut]:
     return [GlobalIndexCardOut(**c) for c in cards]
 
 
-@router.get("/sector-moneyflow", response_model=list[SectorMoneyflowOut])
+@router.get("/sector-moneyflow", response_model=SectorMoneyflowListOut)
 async def get_sector_moneyflow_endpoint(
     cache: CacheDep,
     dimension: Literal["industry", "concept", "region"] = "industry",
     limit: int = Query(default=15, ge=1, le=100),
-) -> list[SectorMoneyflowOut]:
-    rows = await market_data_service.get_sector_moneyflow(cache, dimension, limit)
-    return [SectorMoneyflowOut(**r) for r in rows]
+) -> SectorMoneyflowListOut:
+    """板块资金流榜；`as_of` 是快照表实际最近日（可能滞后），`stale_days` 自然日差。"""
+    payload = await market_data_service.get_sector_moneyflow(cache, dimension, limit)
+    return SectorMoneyflowListOut.model_validate(payload)
 
 
-@router.get("/northbound", response_model=list[NorthboundPointOut])
+@router.get("/northbound", response_model=NorthboundSeriesOut)
 async def get_northbound(
     cache: CacheDep, days: int = Query(default=30, ge=1, le=180)
-) -> list[NorthboundPointOut]:
-    rows = await market_data_service.get_northbound_series(cache, days)
-    return [NorthboundPointOut(**r) for r in rows]
+) -> NorthboundSeriesOut:
+    """北向净流入序列；上游停更时 `source_status="discontinued"`（`as_of` 为表内最近日）。"""
+    payload = await market_data_service.get_northbound_series(cache, days)
+    return NorthboundSeriesOut.model_validate(payload)
 
 
 @router.get("/dragon-tiger", response_model=list[DragonTigerOut])
