@@ -64,6 +64,14 @@ async def test_expected_dates_never_include_today() -> None:
 
 UNIVERSE = 5546  # 全市场量级，阈值 = 0.8×UNIVERSE = 4436
 
+# `_get_tushare` 必须一并替掉：`reconcile_market_data` 开头的
+# `client = client or _get_tushare()` 比所有协作函数的 monkeypatch 都早执行，
+# 没 token 就直接 ValueError。本机 backend/.env 里有真实 TUSHARE_TOKEN，会把这个
+# 缺口完全掩盖（本地绿、CI 红 —— main 上实测已经红过一轮 7 例），所以这里不能
+# 依赖环境。同一断言钉住「注入的 client 必须透传给期望集计算」，
+# 避免只堵了默认分支而真正的注入路径仍是死角。
+_CLIENT = object()
+
 
 @pytest.fixture
 def _seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
@@ -83,6 +91,7 @@ def _seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     async def _expected(
         client: Any, *, window_days: int, today: Any = None
     ) -> tuple[list[date], bool]:
+        assert client is _CLIENT, "reconcile 必须把注入的 client 透传给期望集计算"
         return state["expected"], False
 
     async def _universe(db: Any) -> int:
@@ -94,6 +103,7 @@ def _seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     async def _commit(db: Any) -> None:
         state["commits"] += 1
 
+    monkeypatch.setattr(rc, "_get_tushare", lambda: _CLIENT)
     monkeypatch.setattr(rc, "expected_trade_dates", _expected)
     monkeypatch.setattr(rc, "_stock_universe_count", _universe)
     monkeypatch.setattr(rc, "_row_counts", _counts)

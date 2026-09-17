@@ -18,7 +18,7 @@
 
 | 分类 | 探测器关键词（`git diff | grep -i <key>`） |
 |------|---------------------------------------------|
-| 数据源与采集 | `source` · `registry` · `mock` · `trade_cal` · `ZoneInfo` · `Asia/Shanghai` · `to_thread` · `RUN_SCHEDULER` · `scheduler` · `worker` · `QUEUES` |
+| 数据源与采集 | `source` · `registry` · `mock` · `trade_cal` · `ZoneInfo` · `Asia/Shanghai` · `to_thread` · `RUN_SCHEDULER` · `scheduler` · `worker` · `QUEUES` · `_get_tushare` · `TUSHARE_TOKEN` |
 | 数据库与性能 | `DISTINCT ON` · `LATERAL` · `N+1` · `index(` · `ON CONFLICT` · `COALESCE` · `::date` · `SELECT` |
 | Docker 与部署 | `Dockerfile` · `dockerignore` · `COPY --from` · `resolver` · `target: runtime` · `seed` · `service_completed_successfully` |
 | 前端 | `antd` · `EChart`/`notMerge` · `toFixed` · `formatCap` · `unit` · `rowKey` · `CheckableTag` · `Segmented` · `Tooltip` |
@@ -157,6 +157,7 @@
 - JSX 表达式间字面空格（`{d.key} {expr}`）在末表达式为空串时会留下尾部空格文本（如 "MA60 "），而 Playwright `getByText` 正则匹配不做首尾 trim——行尾锚定（`/^MA60$/`）必失败；此类断言应放宽为 `\s?` 或在组件侧条件拼接避免悬空空格，卡死时先抓 error-context 快照看实际 DOM 文本再改正则。
 - 测试夹具按日历日生成序列时用"基准日 + timedelta(days=i)"而非手写 `date(y, m, d+1)`——月份天数溢出抛 ValueError 后若被测代码按设计静默兜底（per-item try/except），失败断言会指向兜底路径（spark 为空）而非夹具根因，排查方向被带偏。
 - Worker 单测要脱离真库时，把 session 工厂暴露为模块级变量供 monkeypatch 成假 async context manager，且 NullSession 必须带 `async def commit()`——service 被 patch 后虽不触库，成功路径的 commit 照常执行，漏了会在断言前炸 AttributeError。
+- **本机 `.env` 里的真实凭证会把「单测偷偷依赖真 client」的缺口完全掩盖（本地全绿、CI 全红），而且能藏一整轮无人发现**：`reconcile_market_data` 开头的 `client = client or _get_tushare()` 比所有协作函数的 monkeypatch 都早执行，测试只 patch 了 `expected_trade_dates`/`_row_counts`，于是有 token 时全绿、CI 无 token 时 8 例 `ValueError`。两条规矩照着做：① seam 必须把**构造点**一起替掉（`_get_tushare`/`get_*_client` 这类工厂），不能只替被它生产出来的对象；并在替身里断言「注入的 client 透传了」，否则只堵了默认分支而真正的注入路径仍是死角；② 本地门禁要按 **CI 口径**跑一遍（`TUSHARE_TOKEN= uv run pytest ...`，已写进 `scripts/self_review.sh --full`），因为本地环境比 CI “更丰富”本身就会制造假绿——定位手段是先 `gh run view --log-failed` 拿到 CI 命令与报错，再在本机用同一变量屏蔽条件复现。
 - 性能基准与单测必须 marker 隔离（`bench`）且**基线契约显式化**：合成输入的尺寸/seed 写成测试常量并注释"改动即失基线"，门禁按 median 相对退化而非绝对 ms；微基准（<1ms）rounds 多 median 稳，**大样本基准（>10ms/次）单次抖动可达 7-8%**——控制样本量让各基准处于同一量级（~1-5ms）比调阈值更治本；管道里验证 exit code 要看 `PIPESTATUS`，`cmd | tail` 后 `$?` 是 tail 的。
 - **wall-clock 性能基线绑定硬件，入库基线不能跨机器门禁**：本机生成的 baseline.json 在 CI runner 上全部基准慢 30-50%，相对阈值门禁必假红。CI 硬门禁的标准做法是**同 runner A/B**（同一 job 内先 checkout base commit 跑一遍存临时基线、再 checkout head 对比），入库 baseline.json 只作本机开发参考。配套两个坑：Windows 侧创建的脚本无执行位（git mode 644），Linux CI 直接执行报 exit 126，须经解释器调用；A/B 产物写 $RUNNER_TEMP 而非 tracked 的基线文件，否则 PR 改基线时 `git checkout` 拒切。
 - 测试模块里的跨目录资源查找（fixture 路径、数据文件）**不能在 import 期求值**：pytest 为读模块的 `pytestmark` 会先 import，再应用 `-m` 反选；若模块级上调 `Path(...)` 且目标不存在就抛异常，纯后端/CI 环境里默认 `uv run pytest` 会变成 collection ERROR 而非干净反选。把解析放进 test 或惰性 helper，缺失时 `pytest.skip("...not present")`——同类跨仓依赖（前端 fixture 等）必须允许"后端独立可收集"。抽共享 helper 时也要逐档对照被替换的旧实现，别在"等价重构"里静默丢掉边界分支（`≥1e12 → 万亿` 档）。
