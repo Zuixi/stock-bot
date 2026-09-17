@@ -220,8 +220,10 @@ async def get_data_freshness() -> DataFreshnessOut:
     复用对账器的期望集/行数判据（apply=False 路径），开销为几次聚合计数查询。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
-    from app.services import reconciliation_service  # noqa: PLC0415
+    from app.services import job_alert_service, reconciliation_service  # noqa: PLC0415
 
     async with async_session_factory() as db:
         result = await reconciliation_service.reconcile_market_data(db, apply=False)
+    # Redis 不可用 → 空列表（登记表是运行时告警，不影响"只读巡检"契约）
+    result["failed_jobs"] = await job_alert_service.list_job_failures()
     return DataFreshnessOut(**result)

@@ -17,6 +17,14 @@ class DomainFreshnessOut(BaseModel):
     status: str  # ok | refetched | stale
 
 
+class JobFailureOut(BaseModel):
+    """最近失败的调度任务（来自 job_alert_service 的 `job:failures` 登记表）。"""
+
+    job_id: str  # scheduler 注册 id（与 runner.py 的 add_job(id=...) 一致）
+    error: str  # repr(exc)：单行、含异常类型，够定位不必翻日志
+    at: str  # ISO8601（Asia/Shanghai）
+
+
 class DataFreshnessOut(BaseModel):
     as_of: str
     expected_latest: str | None
@@ -28,3 +36,6 @@ class DataFreshnessOut(BaseModel):
     degraded_calendar: bool
     apply: bool
     domains: dict[str, DomainFreshnessOut]
+    # 失败任务登记：APScheduler 的 "Job executed successfully" 只说明函数返回了，
+    # 函数内被 except 吞掉的失败只有这里看得见（Redis 不可用时为空列表）。
+    failed_jobs: list[JobFailureOut] = []

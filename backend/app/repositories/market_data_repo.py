@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
 from datetime import date, datetime, timedelta
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import desc, func, nullslast, select
@@ -22,6 +23,19 @@ from app.models.market_data import (
     StockRepurchase,
 )
 from app.models.stock import Stock
+
+# asyncpg 单条语句 bind 参数上限 32767（实测解禁任务 share_float 近 7 日窗口一次
+# 拉到数千行 × 8 列 → InterfaceError 静默崩了 13 天）。写多行的 upsert 必须显式分片，
+# 单批 500 行 × 8 列 = 4000 个参数，留足余量。
+UPSERT_CHUNK = 500
+
+RowT = TypeVar("RowT")
+
+
+def chunk_rows(rows: Sequence[RowT], size: int = UPSERT_CHUNK) -> Iterator[list[RowT]]:
+    """把多行 INSERT 的入参切成 ``size`` 行一批（asyncpg 绑定参数上限防护）。"""
+    for start in range(0, len(rows), size):
+        yield list(rows[start : start + size])
 
 
 async def upsert_sector_moneyflow(
@@ -284,15 +298,19 @@ async def upsert_share_floats(db: AsyncSession, rows: list[dict[str, Any]]) -> i
         }
         for r in rows
     ]
-    stmt = (
-        pg_insert(ShareFloat)
-        .values(values)
-        .on_conflict_do_nothing(constraint="uq_share_floats_dedupe")
-    )
-    # Core INSERT 的 execute 运行时返回 CursorResult（带 rowcount）；Result 存根无该属性
-    result = cast("CursorResult[Any]", await db.execute(stmt))
+    # 必须分片：近 7 日窗口的行数轻易越过 32767/8 行上限（见 UPSERT_CHUNK 注释）
+    upserted = 0
+    for batch in chunk_rows(values):
+        stmt = (
+            pg_insert(ShareFloat)
+            .values(batch)
+            .on_conflict_do_nothing(constraint="uq_share_floats_dedupe")
+        )
+        # Core INSERT 的 execute 运行时返回 CursorResult（带 rowcount）；Result 存根无该属性
+        result = cast("CursorResult[Any]", await db.execute(stmt))
+        upserted += int(result.rowcount)
     await db.flush()
-    return int(result.rowcount)
+    return upserted
 
 
 async def list_share_floats(
