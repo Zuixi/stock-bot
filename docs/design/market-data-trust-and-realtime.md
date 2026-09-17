@@ -104,7 +104,7 @@ async def list_job_failures(limit: int = 20) -> list[dict]         # → /market
 
 ### 4.5 前端刷新与标注
 
-- 新增 `useMarketPolling()`（`src/features/market/hooks/`）：以 `marketStatus()`（交易日 + 09:30–15:00 上海时区）决定 `refetchInterval`——盘中 30s，其余关闭。
+- 新增 `useMarketPolling()`（`src/features/market/hooks/`）：以 `marketStatus()`（交易日 + 09:30–15:00 上海时区）决定 `refetchInterval`——A 股卡盘中 30s、其余关闭；**全球指数卡常驻 300s 慢轮询**（不受 A 股时段支配，否则美股时段停更）。
 - 所有行情中心卡片接入；`staleTime` 与后端 TTL 对齐（快照类 300s、实时类 60s）。
 - 统一 query key（同一端点只用一个 key 前缀），消除 `sectors`/`hot-boards` 的重复请求。
 - 所有卡片显示 `as_of` + 口径徽标（实时/盘中/T-1/数据源停更）。
