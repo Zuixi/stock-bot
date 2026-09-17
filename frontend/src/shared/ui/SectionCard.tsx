@@ -11,7 +11,7 @@ export interface SectionCardProps {
   moreText?: string;
   /** 「数据截至 …」行（复用既有 .section-card__asof 样式，不新增 class） */
   asof?: string | null;
-  /** 日级完整性口径（后端 `as_of_quality`）：`complete`→收盘 / `partial`→未完整 / `fallback`→回落至 {asof} */
+  /** 日级完整性口径（后端 `as_of_quality`）：`complete`→收盘 / `partial`→未完整 / `fallback`→按最近完整日 */
   quality?: string | null;
   /** 快照陈旧度（后端 `stale_days`）：> 0 时显示「N 天前」 */
   staleDays?: number | null;

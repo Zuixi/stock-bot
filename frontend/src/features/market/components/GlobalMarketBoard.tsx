@@ -12,7 +12,7 @@ const REGIONS = [
 ] as const;
 
 export function GlobalMarketBoard() {
-  const { refetchInterval } = useMarketPolling();
+  const { refetchInterval } = useMarketPolling("global-index");
   const { data: indices = [], isLoading } = useQuery({
     queryKey: ["market", "global-indices"],
     queryFn: fetchGlobalIndices,

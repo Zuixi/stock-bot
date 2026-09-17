@@ -79,7 +79,7 @@ test.describe("市场数据面", () => {
  * Phase 1 Task 9：市场卡片必须自证「数据截至何时 + 什么口径」。
  *
  * 断言分两档：
- * - 活栈档（真实端点）：按日聚合卡显示「数据截至」+ 口径徽标（收盘/回落至/未完整三选一，
+ * - 活栈档（真实端点）：按日聚合卡显示「数据截至」+ 口径徽标（收盘/未完整/按最近完整日三选一，
  *   避免把「今天恰好不完整」写成假红）；纯实时卡（A股核心指数）不得谎报日级口径。
  * - mock 档：回落（`as_of_quality=fallback`）与北向停更（`source_status=discontinued`）
  *   两个分支当日数据形态不保证命中，故用 route mock 固定。
@@ -130,7 +130,7 @@ test.describe("市场卡片口径标注", () => {
     for (const title of ["A股涨跌分布", "板块热力图", "A股热门板块"]) {
       const card = page.locator(".ant-card").filter({ hasText: title });
       await expect15s(card.getByText(/数据截至/).first()).toBeVisible();
-      await expect15s(card.getByText(/收盘|回落至|未完整/).first()).toBeVisible();
+      await expect15s(card.getByText(/收盘|未完整|按最近完整日/).first()).toBeVisible();
     }
     await page.getByRole("tab", { name: "资金流向" }).click();
     const moneyflow = page.locator(".ant-card").filter({ hasText: "板块主力资金流" });
@@ -146,13 +146,17 @@ test.describe("市场卡片口径标注", () => {
     await expect(coreIndex.getByText(/数据截至/)).toHaveCount(0);
   });
 
-  test("回落口径卡片显示「回落至 {as_of}」", async ({ page }) => {
+  test("回落口径卡片标注「按最近完整日」且不重复判据日", async ({ page }) => {
     await mockFallbackDistribution(page);
     await page.goto("/market");
     await page.getByRole("tab", { name: "A股全景" }).click();
     const card = page.locator(".ant-card").filter({ hasText: "A股涨跌分布" });
     await expect15s(card.getByText(/数据截至\s*9月8日/).first()).toBeVisible();
-    await expect15s(card.getByText(/回落至\s*9月8日/).first()).toBeVisible();
+    await expect15s(card.getByText("按最近完整日").first()).toBeVisible();
+    // 去重裁决：日期归「数据截至」行独有，徽标不得复述（否则一屏两个日子）
+    const asofLine = card.locator(".section-card__asof").first();
+    expect((await asofLine.innerText()).match(/9月8日/g) ?? []).toHaveLength(1);
+    await expect(card.getByText(/回落至/)).toHaveCount(0);
   });
 
   test("北向停更分支显示「数据源已停更」", async ({ page }) => {
@@ -177,7 +181,7 @@ test.describe("市场卡片口径标注", () => {
     for (const title of ["连板梯队", "申万三级最高板", "昨日涨停今日表现"]) {
       const card = page.getByTestId(`section-${title}`);
       await expect15s(card.getByText(/数据截至/).first()).toBeVisible();
-      await expect15s(card.getByText(/收盘|回落至|未完整/).first()).toBeVisible();
+      await expect15s(card.getByText(/收盘|未完整|按最近完整日/).first()).toBeVisible();
     }
   });
 });

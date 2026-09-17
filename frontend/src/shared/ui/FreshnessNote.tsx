@@ -11,6 +11,8 @@ import "./SectionCard.css";
  * 诚实原则：
  * - `asOf` 为空（库内无行情）→ **整行不渲染**：没有判据日就谈不上「数据截至」，
  *   更不得回落到「今天」（缺失 ≠ 今天）。
+ * - 徽标只讲口径、**不复述日期**（`fallback` → 「按最近完整日」，不是「回落至 X」）：
+ *   日期是「数据截至 X」的职责，两处都写会读成两个不同的日子。
  * - `quality` 未知（非 complete/partial/fallback）→ 不加徽标，绝不默认「收盘」。
  * - `staleDays <= 0`（当天或表内有未来日）→ 不加陈旧徽标。
  */
@@ -25,7 +27,12 @@ export interface FreshnessNoteProps {
   sourceStatus?: string | null;
 }
 
-/** 口径徽标文案；未知口径返回 `null`（不猜、不默认「收盘」）。 */
+/**
+ * 口径徽标文案；未知口径返回 `null`（不猜、不默认「收盘」）。
+ *
+ * `fallback` 只讲**口径事实**（这是回落到最近完整日的数据），**不重复判据日**：
+ * 判据日已由同行「数据截至 X」提供，徽标再写一次日期会让读者以为是两个不同的日子。
+ */
 export function qualityBadgeText(quality?: string | null): string | null {
   switch (quality) {
     case "complete":
@@ -33,21 +40,17 @@ export function qualityBadgeText(quality?: string | null): string | null {
     case "partial":
       return "未完整";
     case "fallback":
-      return "回落至";
+      return "按最近完整日";
     default:
       return null;
   }
 }
 
-/** 组装完整徽标文案列表（`fallback` 需要判据日才能补出「回落至 X」）。 */
-export function freshnessBadges({ asOf, quality, staleDays, sourceStatus }: FreshnessNoteProps): string[] {
+/** 组装完整徽标文案列表。 */
+export function freshnessBadges({ quality, staleDays, sourceStatus }: FreshnessNoteProps): string[] {
   const badges: string[] = [];
   const qualityText = qualityBadgeText(quality);
-  if (qualityText === "回落至") {
-    badges.push(asOf ? `回落至 ${formatCnDate(asOf)}` : "回落");
-  } else if (qualityText) {
-    badges.push(qualityText);
-  }
+  if (qualityText) badges.push(qualityText);
   if (staleDays != null && staleDays > 0) badges.push(`${staleDays} 天前`);
   if (sourceStatus === "discontinued") badges.push("数据源已停更");
   return badges;
