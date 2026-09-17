@@ -2,11 +2,10 @@ import { apiGet } from "./client";
 import {
   mapNorthboundList,
   mapStaleList,
-  type AnnotatedList,
   type BackendNorthboundEnvelope,
   type BackendSnapshotEnvelope,
-  type NorthboundMeta,
-  type StaleMeta,
+  type NorthboundEnvelope,
+  type StaleEnvelope,
 } from "./marketEnvelope";
 
 // ---- 后端原始 payload（snake_case，勿直接外漏给 UI 层） ----
@@ -423,13 +422,13 @@ export function fetchGlobalIndices(): Promise<GlobalIndexCard[]> {
 }
 
 /**
- * 板块主力资金流。后端返回快照 envelope，mapper 解包 `.items` 后仍返回数组；
- * `asOf`（该快照实际最近日）与 `staleDays` 挂在返回的数组上，见 `marketEnvelope.ts`。
+ * 板块主力资金流。后端返回快照 envelope，mapper 解包后返回 `{items, asOf, staleDays}`，
+ * 消费端读 `.items`，`asOf`（该快照实际最近日）与 `staleDays` 见 `marketEnvelope.ts`。
  */
 export function fetchSectorMoneyflow(
   dimension: "industry" | "concept" | "region",
   limit = 15,
-): Promise<AnnotatedList<SectorMoneyflowItem, StaleMeta>> {
+): Promise<StaleEnvelope<SectorMoneyflowItem>> {
   return apiGet<BackendSnapshotEnvelope<BackendSectorMoneyflowItem>>("/api/v1/market/sector-moneyflow", {
     dimension,
     limit,
@@ -437,10 +436,10 @@ export function fetchSectorMoneyflow(
 }
 
 /**
- * 北向净流入序列。同 {@link fetchSectorMoneyflow}：返回数组 + `asOf` / `staleDays` /
- * `sourceStatus`（上游停更时 `discontinued`）元数据。
+ * 北向净流入序列。同 {@link fetchSectorMoneyflow}：返回 `{items, asOf, staleDays, sourceStatus}`
+ * 信封（上游停更时 `sourceStatus` 为 `discontinued`）。
  */
-export function fetchNorthbound(days = 30): Promise<AnnotatedList<NorthboundPoint, NorthboundMeta>> {
+export function fetchNorthbound(days = 30): Promise<NorthboundEnvelope<NorthboundPoint>> {
   return apiGet<BackendNorthboundEnvelope<BackendNorthboundPoint>>("/api/v1/market/northbound", { days }).then((b) =>
     mapNorthboundList(b, mapNorthbound),
   );

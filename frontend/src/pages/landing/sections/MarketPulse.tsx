@@ -85,7 +85,7 @@ export function MarketPulse() {
 
   const indices = indicesQuery.data ? pickCoreIndices(indicesQuery.data, TICKER_COUNT) : [];
 
-  const dist = distQuery.data ?? [];
+  const dist = distQuery.data?.items ?? [];
   // 空数组不是「全平盘」而是「分布不可用」——缺失与零值语义不同，不能渲染成 上涨 0 · 下跌 0
   const hasDistribution = dist.length > 0;
 

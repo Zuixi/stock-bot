@@ -54,6 +54,8 @@ const SW_PERFORMANCE_SAMPLE = JSON.parse(
   readFileSync(new URL("./fixtures/swPerformance.sample.json", import.meta.url), "utf8"),
 ) as {
   as_of: string;
+  as_of_quality: string;
+  as_of_reason: string | null;
   items: {
     code: string;
     name: string;

@@ -63,11 +63,12 @@ function BalanceBar({ up, flat, down }: { up: number; flat: number; down: number
 
 export function DistributionChart() {
   const { colors } = useTheme();
-  const { data = [], isLoading } = useQuery({
+  const { data: distribution, isLoading } = useQuery({
     queryKey: ["market-distribution"],
     queryFn: fetchDistribution,
     staleTime: STALE_TIME,
   });
+  const data = distribution?.items ?? [];
   // 成交额复用大盘资金流的实时查询（同 queryKey 共享缓存与轮询）
   const { data: mm } = useQuery({
     queryKey: ["market-moneyflow"],

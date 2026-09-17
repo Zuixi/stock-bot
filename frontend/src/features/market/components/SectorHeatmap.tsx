@@ -18,11 +18,12 @@ function heatColor(pct: number, c: ThemePalette): string {
 export function SectorHeatmap() {
   const navigate = useNavigate();
   const { colors } = useTheme();
-  const { data = [], isLoading } = useQuery({
+  const { data: sectors, isLoading } = useQuery({
     queryKey: ["market-sectors"],
     queryFn: fetchSectors,
     staleTime: STALE_TIME,
   });
+  const data = sectors?.items ?? [];
 
   const option = {
     tooltip: {

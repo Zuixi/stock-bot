@@ -49,10 +49,10 @@ export function SectorFlow() {
   });
 
   const swRows = (swQuery.data?.items ?? []).slice(0, ROWS); // 服务端已按 avg_pct_chg 降序
-  const csrcRows = [...(sectorsQuery.data ?? [])]
+  const csrcRows = [...(sectorsQuery.data?.items ?? [])]
     .sort((a, b) => b.changePercent - a.changePercent)
     .slice(0, ROWS);
-  const flows = (flowQuery.data ?? []).slice(0, ROWS);
+  const flows = (flowQuery.data?.items ?? []).slice(0, ROWS);
   const maxAbs = Math.max(1, ...flows.flatMap((f) => [Math.abs(f.inflow), Math.abs(f.outflow)]));
 
   const leftLoading = usingCsrc ? sectorsQuery.isLoading : swQuery.isLoading;
