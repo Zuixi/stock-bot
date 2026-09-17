@@ -142,17 +142,33 @@ async def _seed_database(skip_universe: bool) -> None:
     logger.info("data_init: seed complete")
 
 
+def last_completed_trading_day(today: date | None = None) -> date:
+    """最近一个**已收盘**的工作日（今天本身不算）。
+
+    这是单股覆盖任务的窗口上界。用 ``date.today()`` 当上界会在盘中取回半个市场，
+    把一条当日行写进 ``daily_quotes``，于是 ``max(trade_date)`` 指向未收盘的今天，
+    所有按日聚合的端点集体降级（实测 2026-09-17 只写入 1 行）。口径复用
+    :func:`app.services.market_service.last_weekday`，交易日历（节假日）仍不在
+    启发式范围内——节假日只会空跑一次拉取，不会再写脏行。
+    """
+    from app.services.market_service import last_weekday  # noqa: PLC0415 — 函数内导入避免耦合
+
+    return last_weekday((today or date.today()) - timedelta(days=1))
+
+
 def _chunked(items: list[dict], size: int) -> list[list[dict]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
 async def _ensure_trailing_three_year_daily_quotes(service: TuShareIngestService) -> None:
-    today = date.today()
+    # 上界 = 最后一个已收盘工作日；同值既当 fetch 窗口又当覆盖率期望，
+    # 否则 list_stocks_missing_daily_coverage 会把"今天"算进期望窗口。
+    asof_date = last_completed_trading_day()
     async with async_session_factory() as db:
         missing = await service.list_stocks_missing_daily_coverage(
             db,
             years=DAILY_BACKFILL_YEARS,
-            asof_date=today,
+            asof_date=asof_date,
         )
 
     if not missing:
@@ -221,16 +237,16 @@ async def _ensure_trailing_one_year_daily_basic(service: TuShareIngestService) -
     """
     from datetime import datetime as _dt
 
-    today = date.today()
+    asof_date = last_completed_trading_day()
     # Fetch up to 1 year back (250 trading days ≈ ~370 calendar days)
-    start = today - timedelta(days=370)
+    start = asof_date - timedelta(days=370)
 
     # Get the list of trading days in this range
     try:
         df_cal = await service.client.fetch_trade_cal(
             exchange="SSE",
             start_date=start.strftime("%Y%m%d"),
-            end_date=today.strftime("%Y%m%d"),
+            end_date=asof_date.strftime("%Y%m%d"),
             is_open="1",
         )
         if df_cal.empty:
