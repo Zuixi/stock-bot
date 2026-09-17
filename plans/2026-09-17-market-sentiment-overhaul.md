@@ -1,5 +1,8 @@
 # 市场数据可信度与实时化改造 Implementation Plan
 
+> **STATUS（2026-09-17 完成）：Phase 0–3 全部实施完毕并通过门禁。** 实现明细见 `docs/Changelog.md`（Phase 0/1/2/3 各一条）与 SDD ledger `.superpowers/sdd/2026-09-17-market-sentiment-overhaul/progress.md`（逐任务裁决/修复轮/遗留项）。总门禁：后端 `self_review.sh --full` 532 passed、`bench.sh` 全部在 12% 阈值内、前端 `tsc`/`check:design`/`build` ✓、经 gateway 全量 E2E **87 passed / 2 failed**（2 = `limitUpSentiment` +5 chip、`userIsolation` 自选股；本改造额外消除了既有的 `darkmode` 白底基线失败，基线由 3 降为 2，零回归）。
+> **已知遗留（未做，非门禁阻断）**：① 时段外 `mode=intraday` 仍返回东财最后一份池并标当时刻 `盘中 HH:MM`（真实但易误读，未加“非交易时段”提示）；② 分时曲线在非交易时段为空；③ `market_sentiment_intraday` 的 5 分钟采集任务尚未在真实盘中时段被观测过（任务已注册且 cron+守卫已测）；④ 仓库仍有 ~14 个历史遗留“未在模型镜像”的索引（`compare_metadata` 可复现 autogenerate drift）；⑤ `frontend/src/features/market/hooks/useMarketPolling.ts:4` 注释仍称“后端按日缓存 300s”（对两个实时 board 键已过时）；⑥ Task 13/15 残留覆盖缺口（分时 1 点分支、sector/yesterday 的 `mode` 透传、跨页深链高亮）。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 让行情中心的数据不再被单条脏行/缺列打坏、交易时段能看到盘中情绪、热门板块可下钻，且每张卡都能自证"数据截至何时、什么口径"。
