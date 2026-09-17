@@ -625,7 +625,8 @@ async def get_rankings(
         # empty payload (as get_distribution falls back), never a 500. Not cached —
         # so the block recovers on the first ingest after the DB is populated.
         return RankingResponseOut(
-            as_of=last_weekday(date.today()),
+            # 与同函数主体一致用上海判据日：宿主本地 date.today() 在翻日窗口会错标标签。
+            as_of=last_weekday(_today_sh()),
             as_of_quality="partial",
             is_latest_trading_day=False,
             type=cast(RankingType, rank_type),
@@ -637,8 +638,12 @@ async def get_rankings(
         as_of=md.day,
         as_of_quality=md.quality,
         as_of_reason=md.reason,
-        # "最新交易日"判据：resolved as_of 必须**等于**当前（上海时区）最近预期交易日。
-        # 回落日（quality="fallback"）必然不等 → False，不再恒真/乐观宣称。
+        # "最新交易日"判据：展示的 md.day 是否**等于**当前（上海时区）最近预期交易日。
+        # 与 as_of_quality 相互独立、不可互推：quality 讲"表内最新行是否被跳过"
+        # （回落/未来脏行场景），布尔只讲"展示的这一天是不是预期交易日"。二者可以
+        # 同时成立——例如候选 09-18 是未来脏行、resolver 回落到 09-17，而今天正是
+        # 09-17：展示日就是最新交易日（True），同时最新行被跳过（quality="fallback"）。
+        # 用 quality 去否掉布尔会把"正在展示的那一天"误标成"不是最新交易日"。
         is_latest_trading_day=md.day == last_weekday(_today_sh()),
         type=cast(RankingType, rank_type),
         items=[RankingItemOut(**row) for row in rows],

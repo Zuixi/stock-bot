@@ -99,7 +99,7 @@ class NorthboundSeriesOut(BaseModel):
 
     as_of: str | None = None  # ISO 日期（该表最近日）；表空时 None
     stale_days: int | None = None  # 自然日差（今天 - as_of）；表空时 None
-    source_status: Literal["live", "stale", "discontinued"] = "discontinued"
+    source_status: Literal["live", "discontinued"] = "discontinued"
     items: list[NorthboundPointOut] = Field(default_factory=list)
 
 

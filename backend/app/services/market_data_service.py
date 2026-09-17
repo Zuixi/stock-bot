@@ -147,15 +147,23 @@ def _today_sh() -> date:
     return datetime.now(_SH).date()
 
 
-async def _latest_snapshot_day(db: AsyncSession, model_day_col: Any) -> date | None:
+async def _latest_snapshot_day(db: AsyncSession, model_day_col: Any, *filters: Any) -> date | None:
     """某快照表最近有数据的日期（表空/列脏 → ``None``，不抛）。
 
     读路径的"最近可用日"必须来自数据本身（该表实际持有的最大 ``trade_date``），
     不能拿"今天"去查：盘中轮询表（sector_moneyflow_snapshots / northbound_daily /
     market_moneyflow_daily）滞后时，用今天查会返回空数组，端点只能显示"暂无数据"。
     后续任务复用此 seam（`_latest_snapshot_day(db, Model.trade_date)`）。
+
+    ``*filters`` 用于"最近日"本身带维度语义的表：``sector_moneyflow_snapshots``
+    一天可能只有 industry 行，若取全表 max 再按 dimension 过滤明细，concept 请求会
+    拿到 industry 的 as_of + 空 items（正是本次回落要消除的组合）。传
+    ``Model.dimension == dimension`` 让 max 与明细同口径；无过滤时不得加 WHERE。
     """
-    value = (await db.execute(select(func.max(model_day_col)))).scalar()
+    stmt = select(func.max(model_day_col))
+    if filters:
+        stmt = stmt.where(*filters)
+    value = (await db.execute(stmt)).scalar()
     return value if isinstance(value, date) else None
 
 
@@ -361,7 +369,7 @@ async def ingest_sector_moneyflow(db: AsyncSession) -> dict[str, int]:
 
 
 def _map_sector_moneyflow_row(snap: Any) -> dict[str, Any]:
-    """快照行 → 响应 dict（领涨股三列取 getattr：旧行/测试替身可能缺列）。"""
+    """快照行 → 响应 dict（直读属性：列被改名/拼错时必须炸，不静默降级成 None）。"""
     return {
         "board_code": snap.board_code,
         "board_name": snap.board_name,
@@ -372,9 +380,9 @@ def _map_sector_moneyflow_row(snap: Any) -> dict[str, Any]:
         "main_net_ratio": snap.main_net_ratio,
         "up_count": snap.up_count,
         "down_count": snap.down_count,
-        "lead_stock_name": getattr(snap, "lead_stock_name", None),
-        "lead_stock_code": getattr(snap, "lead_stock_code", None),
-        "lead_stock_pct": getattr(snap, "lead_stock_pct", None),
+        "lead_stock_name": snap.lead_stock_name,
+        "lead_stock_code": snap.lead_stock_code,
+        "lead_stock_pct": snap.lead_stock_pct,
     }
 
 
@@ -383,17 +391,25 @@ async def get_sector_moneyflow(
 ) -> dict[str, Any]:
     """最近可用日的板块主力资金流榜 + 陈旧度（Redis 60s 共享缓存，键含该快照日）。
 
-    ``as_of`` 取 ``sector_moneyflow_snapshots`` 实际持有的最近 ``trade_date``，而不是
-    "今天"：东财源随时能返回 100 行，但落表只在盘中轮询时发生，用今天查会在该表滞后
-    时返回空数组、前端只能显示"暂无数据"。``stale_days`` 是**自然日**差
+    ``as_of`` 取 ``sector_moneyflow_snapshots`` 中**该 ``dimension``** 实际持有的最近
+    ``trade_date``，而不是"今天"：东财源随时能返回 100 行，但落表只在盘中轮询时发生，
+    用今天查会在该表滞后时返回空数组、前端只能显示"暂无数据"。按维度取最近日还保证
+    ``as_of`` 与 ``items`` 同口径——否则某天只有 industry 行时，concept 请求会拿到该
+    天的 ``as_of`` 配空 ``items``（"非空 as_of + 空列表"）。``stale_days`` 是**自然日**差
     ``(_today_sh() - as_of).days``——语义是"这批数据有多旧"，不是交易日计数。
-    表内一行都没有 → ``{"as_of": None, "stale_days": None, "items": []}``（不抛）。
+    负值意味着表里存在未来日期的脏行（`trade_date` 无上界）：前端适配层应把负值当
+    异常暴露，而不是当作"比今天还新=最新鲜"。表内一行都没有 →
+    ``{"as_of": None, "stale_days": None, "items": []}``（不抛）。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.models.market_data import SectorMoneyflowSnapshot  # noqa: PLC0415
 
     async with async_session_factory() as db:
-        as_of = await _latest_snapshot_day(db, SectorMoneyflowSnapshot.trade_date)
+        as_of = await _latest_snapshot_day(
+            db,
+            SectorMoneyflowSnapshot.trade_date,
+            SectorMoneyflowSnapshot.dimension == dimension,
+        )
         key = SECTOR_MONEYFLOW_CACHE_KEY.format(
             dimension=dimension, as_of=as_of.isoformat() if as_of is not None else "none"
         )
@@ -438,8 +454,10 @@ async def get_market_moneyflow(cache: Any | None) -> dict[str, Any]:
 
     ``history_as_of`` / ``history_stale_days``（自然日差）单独标注 30 日历史段的
     最近日：实时档位来自东财 ulist，与历史表是两条来源，卡片必须能分别说明历史是
-    否陈旧（``market_moneyflow_daily`` 的 job 曾未注册，实测滞后 14 天）。历史表
-    为空 → 两者均 ``None``。缓存键含 ``history_as_of``，翻日后不会回放旧 payload。
+    否陈旧（``market_moneyflow_daily`` 的 job 曾未注册，实测滞后 14 天）。
+    ``history_stale_days`` 为负值意味着表内存在未来日期的脏行，前端适配层应视为异常
+    而非"最新鲜"。历史表为空 → 两者均 ``None``。缓存键含 ``history_as_of``，翻日后
+    不会回放旧 payload。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.models.market_data import MarketMoneyflowDaily  # noqa: PLC0415
@@ -583,7 +601,9 @@ async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> di
     """北向净流入日序列（升序）+ 数据源状态（Redis 300s 共享缓存，键含最近日）。
 
     ``source_status``：``stale_days <= 5`` → ``"live"``，否则 ``"discontinued"``
-    （``stale_days`` 为自然日差 ``_today_sh() - as_of``）。上游 TuShare
+    （``stale_days`` 为自然日差 ``_today_sh() - as_of``）。负的 ``stale_days`` 意味着
+    表内存在未来日期的脏行（``trade_date`` 无上界）：此时 ``<= 5`` 会把它算成
+    ``"live"``，前端适配层必须把负值识别为异常而不是"新鲜"，人工核查脏行。上游 TuShare
     ``moneyflow_hsgt`` 已停更（实测 30 天窗口最新只到 2026-08-21，表内最近日
     2026-09-07），卡片必须能说"该源已停更"而不是画一条不带截止标注的线。表空 →
     ``as_of=None``、``stale_days=None``、``source_status="discontinued"``（拿不到任何
