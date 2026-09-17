@@ -68,6 +68,13 @@
 - **回落的数据必须自证陈旧度，且 `as_of` 要忠实于 `items`**：按"今天有数据吗"过滤的读路径（板块资金流快照表停在 9 天前 → 端点返回 `[]`）会让卡片永久空白；改为"最近可用快照 + `stale_days` + `source_status`"后，同样的库状态能给出可用的 15 行并明确标注"9 天前/上游已停更"。注意 `as_of` 必须描述返回的数据本身：表级取日 + 维度过滤就会出现"`as_of` 非空而 `items` 为空"的自相矛盾（按维度取日才是对的）。
 - **不要用"给数组挂属性"的方式捎带元数据**：`AnnotatedList = T[] & Meta` 在读写两端都看不出问题，但 `[...arr]`、`.filter`、`.slice`、`structuredClone`、`JSON.parse` 任何一个都会静默丢掉标签，而保守兜底会把它变成**错标**（"complete" 说成 "partial"）而不是报错；同时它还会让 React Query 的结构共享失效。常规信封对象（`{items, asOf, ...}`）多写几行、但不会在半夜背叛你。
 
+- **单查询性能优化的"前后对比"必须在当前数据集上实测**——计划/历史里声称的 597ms→15.9ms（"读存储 pct_chg 列删 LATERAL"）在本库复现不了（实测旧形态 warm 43-46ms），切勿把"听起来合理"的提速直接照抄。 共享快照/缓存的真实收益通常是**页面级合并**（4-6 个端点各跑一次同类 SQL → 1 次取行 + 1 份缓存）而不是"单查询快 N×"；优化报告把两个数字（页面级 vs 单端点）分开写，避免读者把"测了一个就声称另一个"
+- **缓存键必须含数据自身的判据维度**：`as_of` 一定要进键，否则修补/换日/回灌后旧 payload 仍以"新日期的旧数据"形态被服务（常见有 `market:rankings` / `market:sw-performance` / `market:indices`）。**`stale_days` 写时冻结会跨日漂移 1**——它是"今天距离"，缓存里只能冻"数据日期"，**读时实时算**
+- **同端点不同消费节奏必须拆 key**：一个端点既给全球盘（常驻 300s 跟美股）又给 A 股核心指数卡（A 股节奏 30s/休市停）时，共用 query key 会让慢节奏拖慢快节奏或反向；`react-query` 的 `refetchInterval` 是**每个 observer 各起一个定时器**但**共享同一份 data**，所以"休市不轮询"会名存实亡。代价：同端点盘中多 ~1 次/30s 请求；可测、可接受
+- **本机性能/缓存测试的环境陷阱**：`backend/.env` 没设 `REDIS_URL`、代码默认 `localhost:6379`，本机容器把 redis 映射到 **6380**，`CacheClient` 把连接错误**静默**降级为 cache miss；任何"缓存命中/热路径"测量在没设 `REDIS_URL=redis://localhost:6380/0` 的 host-run 脚本里**全部失真**。本地性能门禁必须显式 export 该变量
+- **行契约的瘦化要追到"实际消费的列"**：共享快照最初 11 键（5485×11 列 ≈ 1.2MB），但 consumers 实际只读 `pct_chg/csrc_desc/province/amount`——保留 `total_mv/circ_mv/turnover_rate/close/stock_id/symbol/name` 全部是无消费者列 + 大 payload + 慢 parse。瘦化前先 grep 每个消费者的解构语句；砍完要同步：loader 行的 ROW_KEYS、LATERAL select、outer select、Task 6 的 ROW_KEYS 测试契约
+- **大批量 upsert 撞 asyncpg 32767 bind 上限是定时炸弹**：`share_float` 实测 6000 行×8 列 = 48000 > 32767 必炸。仓库惯例 `batch_size=500`；所有批量 upsert 必须分片 + 验证 `len(chunk) × params_per_row ≤ 30000`
+
 ## 二、数据库与性能
 
 - 列表页的批量金融数据展示应使用单次 JOIN 查询一次获取全部股票的行情/基本面字段，而非前端逐只股票 N+1 请求，避免首屏数据空白和 API 洪泛。
