@@ -41,6 +41,20 @@ export interface BackendSnapshotEnvelope<Raw> {
   items?: Raw[];
 }
 
+/** 热门板块 items 的产地，与后端 `app/schemas/market.py::HotBoardSource` 对齐。 */
+export type HotBoardSource = "eastmoney_boards" | "local_grouping";
+
+/**
+ * `app/schemas/market.py::HotBoardsOut` = `MarketListOut` + 产地判别。
+ *
+ * 后端换源（East Money 板块体系）后回落本地分组时会置 `source="local_grouping"` +
+ * `degraded_reason`，否则 `code=""`/`leaders=[]` 会被误读成"东财板块没有成分股"。
+ */
+export interface BackendHotBoardsOut<Raw> extends BackendMarketListOut<Raw> {
+  source?: HotBoardSource | null;
+  degraded_reason?: string | null;
+}
+
 /** `app/schemas/market_data.py::NorthboundSeriesOut`。 */
 export interface BackendNorthboundEnvelope<Raw> extends BackendSnapshotEnvelope<Raw> {
   source_status?: SourceStatus;
@@ -70,6 +84,13 @@ export interface NorthboundEnvelope<T> extends StaleEnvelope<T> {
   sourceStatus: SourceStatus;
 }
 
+/** 热门板块信封：`MarketListOut` 元数据 + 产地（东财板块 / 本地分组回落）。 */
+export interface HotBoardsEnvelope<T> extends MarketListEnvelope<T> {
+  source: HotBoardSource;
+  /** 回落原因码（东财不可用时 `eastmoney_unavailable`）；正常为 null。 */
+  degradedReason: string | null;
+}
+
 // ---- 解包（后端信封 → 前端信封） ----
 
 /**
@@ -84,6 +105,23 @@ export function mapMarketList<Raw, T = Raw>(
     asOf: b.as_of ?? null,
     asOfQuality: b.as_of_quality ?? "partial",
     asOfReason: b.as_of_reason ?? null,
+  };
+}
+
+/**
+ * 解包热门板块信封：`MarketListOut` 元数据之外再带 `source` / `degradedReason`。
+ *
+ * `source` 只认 `"eastmoney_boards"`，其余（缺字段、未知取值）一律按 `"local_grouping"`
+ * 保守兜底——宁可把东财数据说成降级，也不能把降级数据冒充成东财板块。
+ */
+export function mapHotBoards<Raw, T = Raw>(
+  b: BackendHotBoardsOut<Raw>,
+  map?: (raw: Raw) => T,
+): HotBoardsEnvelope<T> {
+  return {
+    ...mapMarketList(b, map),
+    source: b.source === "eastmoney_boards" ? "eastmoney_boards" : "local_grouping",
+    degradedReason: b.degraded_reason ?? null,
   };
 }
 

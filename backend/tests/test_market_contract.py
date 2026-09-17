@@ -15,9 +15,10 @@ had no backend contract lock, so only the frontend e2e mocks — which the backe
 tests never load — fixed their shape):
 
 - ``/market/rankings``, ``/market/sw-industry/performance`` — object envelopes;
-- ``/market/distribution``, ``/market/sectors``, ``/market/capital-flow``,
-  ``/market/hot-boards`` — ``MarketListOut`` envelopes
-  (``{as_of, as_of_quality, as_of_reason, items}``).
+- ``/market/distribution``, ``/market/sectors``, ``/market/capital-flow`` —
+  ``MarketListOut`` envelopes (``{as_of, as_of_quality, as_of_reason, items}``);
+  ``/market/hot-boards`` — ``HotBoardsOut`` = the same envelope **plus** the Task-14
+  provenance discriminator (``source`` / ``degraded_reason``).
 
 Fixture resolution is **lazy** and skips when the frontend tree is absent: pytest
 imports a module to read its ``pytestmark`` before ``-m`` deselection applies, so a
