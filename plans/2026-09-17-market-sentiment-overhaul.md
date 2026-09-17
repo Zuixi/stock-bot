@@ -474,7 +474,7 @@ git commit -m "fix(market-data): 解禁批量 upsert 分片（修 13 天静默�
 - Produces：
   - `async def latest_snapshot_day(db, table_day_col) -> date | None`（返回某表最近有数据的日期）
   - `/market/sector-moneyflow` 响应新增 `as_of`（该快照日）与 `stale_days: int`（今天 - as_of，交易日近似用自然日）
-  - `/market/northbound` 响应新增 `as_of`、`source_status: Literal["live","stale","discontinued"]`（`stale_days > 5` → `"discontinued"`）
+  - `/market/northbound` 响应新增 `as_of`、`source_status: Literal["live","discontinued"]`（实施中删去不可达的 `"stale"`，Task 5 修复轮）（`stale_days > 5` → `"discontinued"`）
   - `/market/rankings` 的 `is_latest_trading_day` 改为"该 as_of == 当前自然日/最近交易日"的显式判据（不再恒真）
 
 - [ ] **Step 1: 写失败测试**
