@@ -200,6 +200,8 @@
 - 跨端点共享的取值（如"数据截至日"）应收敛为**单一实现**（`max(trade_date)` 只写一处，其余调用方薄委托），但缓存是调用方各自选择的路径而非实现本身：不要为了"统一"给所有调用方强加缓存，也不要让薄委托顺手改掉老调用方的行为。空源降级责任在**使用层**：需要兜底语义的端点捕获实现抛出的异常并返回自洽空载荷（公开首页块绝不能因空库 500），只有确需该值的调用方才让异常穿透。把 `datetime.date` 放进 JSON 序列化的 `CacheClient` 时必须存 `isoformat()` 字符串并在读出侧 `date.fromisoformat` 兜底——直接存 `date` 依赖 `json.dumps(default=str)` 的隐式转换，读回是 str 而类型标注说 date，迟早出隐性类型错。
 - 定时同步类系统的正确性不能寄托在"调度触发"层（edge-triggered，"在时刻 T 执行 X"），任务语义应是 level-triggered 的"收敛到期望状态"（expected vs actual 对账 + 幂等补齐循环）：触发只负责 timeliness，完整性由对账兜底——宿主睡眠/容器挂起在任何开发机都是常态；完整性判据用**行数量级**（≥0.8×全市场数）而非存在性（partial 行会挡住补齐形成死锁），派生表写入须与读缓存失效内聚在同一服务方法（调用方记得清缓存是不可靠假设）。方案全文见 plans/2026-09-17-data-sync-self-healing.md——实机首跑即在 10 日窗口内发现 7 天情绪历史盲区并自动补齐：派生表任务上线若无历史回放，上线前的日子是永久盲区，只有跨域对账能发现。
 
+- **双口径（同源同形不同 source）必须严格分离"不污染"边界**：盘中与收盘同一份响应 schema 时，盘中分支**不**调任何会写入权威序列的副作用（落库/失效缓存等），且不变量用 `monkeypatch.setattr(boom)` 钉死（boom = "**如果**被调用就抛 AssertionError"）；落库仅在「fallback 到 close 路径」时走（即"反正已经走 close 路径了"才连带落盘），纯 close 路径本身的落库契约不变。缓存键必须独立（`market:limit-up:intra:{trade_date}` vs `market:limit-up:snapshot:{date}:{lookback}`），TTL 单独选（盘中 60s 对齐 30s 轮询半衰期），别为了"省一个 key"合并。schema 拓宽要在单次完整 pass 内做（intraday 路径会 None 的字段都改 Optional、source 拓宽到 union Literal），不要发半套；前端拿不到字段强转 `None` 会静默降级成"显示 --"，而不会报错。
+
 ## 七、指标建模与规则引擎
 
 - 跨行业可复制的产品（投研工作台）应"一套资产服务所有行业"：指标单表（industry_key + nullable stock_id + metric_key + source + period）+ 代码级指标注册表（metric registry）+ 派生指标统一落表 + 源适配器隔离；接入新行业 = 配置 + 采集器，而非新表新页面。会随政策修订的参考锚点（如能繁正常保有量 4100→3900→3750）必须入库带生效日期，禁止硬编码。
