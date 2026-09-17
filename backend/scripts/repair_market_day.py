@@ -18,7 +18,9 @@ Usage:
 安全边界：
 - 删除只命中"严格晚于最后一个已收盘工作日"的那**一个** ``trade_date``，且该日
   行数 < ``0.9 ×`` 在市标的数；已收盘的缺列日（行数满、pct_chg 空）只回填不删除。
-- 无 ``--yes`` 则只读；``--backfill`` 是 upsert，重复执行收敛到同一结果。
+- 无 ``--yes`` 则只读；``--backfill`` 是 upsert，重复执行收敛到同一结果，且**拒绝**
+  "未收盘的今天"（晚于最后一个已收盘工作日的日期一律跳过）。
+- 修复成功后 best-effort 失效 ``market:*`` 派生读缓存（Redis 故障不影响修复结果）。
 """
 
 from __future__ import annotations
@@ -147,14 +149,35 @@ async def purge_incomplete_latest_day(
     return day, int(result.rowcount or 0)
 
 
-async def backfill_days(days: list[date]) -> dict[date, tuple[int, int]]:
-    """按日期全市场重拉 ``daily_quotes``（幂等），返回每日期 ``(行数, pct_chg 非空行数)``。"""
+async def backfill_days(
+    days: list[date], *, today: date | None = None
+) -> dict[date, tuple[int, int]]:
+    """按日期全市场重拉 ``daily_quotes``（幂等），返回每日期 ``(行数, pct_chg 非空行数)``。
+
+    晚于最后一个已收盘工作日的日期（即"未收盘的今天"）一律跳过并告警：
+    ``--backfill <today>`` 盘中重拉只会把半个市场 upsert 回去，重新造出
+    ``--purge-incomplete-today`` 刚删掉的那种脏行。守卫放在本函数（而非 ``main``），
+    任何调用方都受保护。
+    """
+    cutoff = last_completed_trading_day(today)
+    for day in sorted(days):
+        if day > cutoff:
+            logger.warning(
+                "repair: refusing to backfill %s — later than last completed trading day %s "
+                "(market session unfinished)",
+                day,
+                cutoff,
+            )
+    safe_days = [day for day in sorted(days) if day <= cutoff]
+    if not safe_days:
+        return {}
+
     from app.core.providers.tushare_client import get_tushare_client  # noqa: PLC0415
     from app.services.tushare_ingest import TuShareIngestService  # noqa: PLC0415
 
     service = TuShareIngestService(client=get_tushare_client())
     coverage: dict[date, tuple[int, int]] = {}
-    for day in sorted(days):
+    for day in safe_days:
         async with async_session_factory() as db:
             result = await service.ingest_daily_quotes(db, day.strftime("%Y%m%d"))
             await db.commit()
@@ -166,6 +189,34 @@ async def backfill_days(days: list[date]) -> dict[date, tuple[int, int]]:
             *coverage[day],
         )
     return coverage
+
+
+MARKET_CACHE_PATTERN = "market:*"
+
+
+async def _invalidate_market_caches() -> int:
+    """失效派生读缓存（``market:day:*`` / ``market:rankings:*`` / SW 快照等）。
+
+    这些 payload 把 ``as_of``/``as_of_quality`` 一起缓存 300s；修复把
+    ``max(trade_date)`` 往回挪之后，若不清缓存，端点最长 5 分钟内还会返回
+    "脏日仍是 latest"的旧结论。
+
+    Best-effort：Redis 不可用（或 ``get_redis_pool`` 构造失败）绝不能让已经落库
+    的修复报错，一律吞掉并记 0。
+    """
+    from app.core.redis import CacheClient, get_redis_pool  # noqa: PLC0415
+
+    try:
+        cache = CacheClient(await get_redis_pool())
+        dropped = await cache.delete_pattern(MARKET_CACHE_PATTERN)
+    except Exception:
+        logger.warning(
+            "repair: market cache invalidation failed (ignored — repair already committed)",
+            exc_info=True,
+        )
+        return 0
+    logger.info("repair: invalidated %d market cache key(s)", dropped)
+    return dropped
 
 
 async def main() -> None:
@@ -193,10 +244,15 @@ async def main() -> None:
             async with async_session_factory() as db:
                 purged_day, deleted = await purge_incomplete_latest_day(db, today=asof)
             logger.info("repair: purged %d row(s) on %s", deleted, purged_day)
+            if deleted:
+                await _invalidate_market_caches()
 
     if args.backfill:
-        for day, (rows, pct_rows) in (await backfill_days(args.backfill)).items():
+        coverage = await backfill_days(args.backfill, today=asof)
+        for day, (rows, pct_rows) in coverage.items():
             logger.info("repair: %s now has rows=%d pct_chg_non_null=%d", day, rows, pct_rows)
+        if coverage:
+            await _invalidate_market_caches()
 
 
 if __name__ == "__main__":

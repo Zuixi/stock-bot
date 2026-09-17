@@ -117,27 +117,7 @@ async def _seed_database(skip_universe: bool) -> None:
     await asyncio.gather(quote_task, basic_task)
 
     # Step 3: Ingest index daily data (past year for dashboard indices)
-    from app.services.market_service import _TARGET_INDICES  # noqa: PLC0415
-
-    logger.info("data_init: seeding index daily data for %d indices", len(_TARGET_INDICES))
-    start_date = (date.today() - timedelta(days=365)).strftime("%Y%m%d")
-    end_date = date.today().strftime("%Y%m%d")
-    for idx in _TARGET_INDICES:
-        try:
-            async with async_session_factory() as db:
-                result = await service.ingest_index_daily(
-                    db,
-                    ts_code=idx["ts_code"],
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-                logger.info(
-                    "data_init: index %s -> upserted=%s",
-                    idx["ts_code"],
-                    result.get("upserted", 0),
-                )
-        except Exception:
-            logger.error("data_init: index ingest failed for %s", idx["ts_code"], exc_info=True)
+    await _ensure_trailing_one_year_index_daily(service)
 
     logger.info("data_init: seed complete")
 
@@ -227,6 +207,41 @@ async def _ensure_trailing_three_year_daily_quotes(service: TuShareIngestService
         total_upserted,
         failed,
     )
+
+
+async def _ensure_trailing_one_year_index_daily(service: TuShareIngestService) -> None:
+    """回填大盘指数近一年日线，窗口上界同个股覆盖任务一样只到"最后一个已收盘工作日"。
+
+    盘中用 ``date.today()`` 当上界会在 ``index_dailies`` 写入未收盘的当日行，
+    令 ``/market/indices`` 各卡片 ``as_of`` 不一致（实测 2026-09-17 只写入 14 个指数中的 11 个）。
+    """
+    from app.services.market_service import _TARGET_INDICES  # noqa: PLC0415
+
+    asof = last_completed_trading_day()
+    start_date = (asof - timedelta(days=365)).strftime("%Y%m%d")
+    end_date = asof.strftime("%Y%m%d")
+
+    logger.info(
+        "data_init: seeding index daily data for %d indices (through %s)",
+        len(_TARGET_INDICES),
+        end_date,
+    )
+    for idx in _TARGET_INDICES:
+        try:
+            async with async_session_factory() as db:
+                result = await service.ingest_index_daily(
+                    db,
+                    ts_code=idx["ts_code"],
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+                logger.info(
+                    "data_init: index %s -> upserted=%s",
+                    idx["ts_code"],
+                    result.get("upserted", 0),
+                )
+        except Exception:
+            logger.error("data_init: index ingest failed for %s", idx["ts_code"], exc_info=True)
 
 
 async def _ensure_trailing_one_year_daily_basic(service: TuShareIngestService) -> None:
