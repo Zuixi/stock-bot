@@ -61,7 +61,12 @@ if [ "$FULL" = 1 ]; then
   echo; echo "== [4/4] 全量门禁 (--full) =="
   [ -n "$PY" ] && { echo "  mypy app/ ..."; (cd backend && uv run mypy app)  || fail "mypy 未通过"; }
   echo "  pytest (not e2e, not bench) ..."
-  (cd backend && uv run pytest -m "not e2e and not bench" -q --no-cov) || fail "后端测试未通过"
+  # TUSHARE_TOKEN 显式清空：本机 backend/.env 有真实 token，会把「单测偷偷依赖真
+  # client / 真网络」的缺口盖住（出现本地全绿、CI 全红的假阳性）。CI 上本来就没这个
+  # 变量，清掉后两条路径才一致 —— 实测 test_reconciliation_service 的 `_get_tushare()`
+  # seam 缺失就是这么藏了一整轮。其余 .env 变量（DATABASE_URL/REDIS_URL）照常加载。
+  (cd backend && TUSHARE_TOKEN= uv run pytest -m "not e2e and not bench" -q --no-cov) \
+    || fail "后端测试未通过（已按 CI 口径清空 TUSHARE_TOKEN）"
   TS=$(ts_files)
   if [ -n "$TS" ]; then
     echo "  tsc --noEmit ..."

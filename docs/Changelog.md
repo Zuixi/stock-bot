@@ -1,3 +1,10 @@
+## 2026-09-17 - CI 修复：单测漏包 `_get_tushare()` seam（本机 .env 掩盖 → 本地绿 CI 全红）
+- **现象**：push 后 CI `Test (backend)` 红，8 failed / 266 passed，全部是 `ValueError: TuShare token is required`；**上一版 main 的 CI 同样红（7 failed）**，只是没被注意到
+- **根因**：`reconcile_market_data` 开头 `client = client or _get_tushare()` 比所有协作函数都早执行，而 `test_reconciliation_service.py` 的 `_seams` 只 patch 了 `expected_trade_dates`/`_row_counts`/`_refetch_*`，没包 client 构造点。本机 `backend/.env` 有真实 `TUSHARE_TOKEN` → 本地永远绿；CI 无该变量 → 必炸（经典「本地凭证掩盖 CI 缺口」）
+- **修复**：fixture 补 `monkeypatch.setattr(rc, "_get_tushare", lambda: _CLIENT)`，并在 `_expected` 里断言 `client is _CLIENT`（钉住「注入的 client 必须透传」，避免只堵默认分支）；用 `TUSHARE_TOKEN= uv run pytest` 先复现失败再转绿（8 failed → 11 passed）
+- **防御**：`scripts/self_review.sh --full` 的 pytest 改为 `TUSHARE_TOKEN= uv run pytest ...`——本地自检与 CI 同口径，同类“本地有凭证”的假阳性以后在门禁里就会被拦住
+- 涉及模块：backend/tests/test_reconciliation_service.py, scripts/self_review.sh, docs/{Changelog,references/best-practices}.md
+
 ## 2026-09-17 - 本机数据卷恢复 + 全栈经 gateway 起全 + 垃圾清理（数据运维，无业务代码改动）
 - **事故与恢复**：`docker compose up -d api` 触发 compose 连带重建 postgres —— main 里 `73f40d7` 把卷 pin 成 `stock_bot_wt_p7_postgres_data`，而本机真实数据一直在项目前缀卷 `stock-bot_postgres_data`（4.2G），于是新集群 initdb、`data_init` 见空 `stocks` 表→全量重播 3 年行情（烧额度）。旧库完好（`pg_controldata` + 临时实例对账：5513 stocks / 4,347,642 quotes / max(trade_date)=2026-09-16）。修法：新增本机专属 `docker-compose.override.yml`（已 gitignore）把 `postgres_data` pin 回 `stock-bot_postgres_data`，`docker compose down && up -d` 后数据回来
 - **全栈经 gateway 起全**：之前只跑 api/worker/scheduler/frontend，本次补齐 `gateway(traefik) + auth-service + forward-auth + auth-db`，11 服务全 healthy；经 `:80` 实测 SPA 200 / 匿名 API 200（forward-auth 无 session 时旁路）/ `/auth/session` 401 / `/.well-known/jwks.json` 200
