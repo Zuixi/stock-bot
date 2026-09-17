@@ -5,12 +5,16 @@ import { marketStatus, type MarketStatus } from "./marketStatus";
 export const OPEN_POLL_INTERVAL_MS = 30_000;
 
 /**
- * 指数卡（全球指数 / A股核心指数）的常驻慢轮询节奏：**不问 A 股时段**，全天 300s。
+ * 全球指数盘（`GlobalMarketBoard` + 首页指数条）的常驻慢轮询节奏：**不问 A 股时段**，全天 300s。
  *
- * 为什么不能跟 A 股时段：指数卡读的 `/market/global-indices` 同时含美股/欧股，
+ * 为什么不能跟 A 股时段：它们读的 `/market/global-indices` 含美股/欧股，
  * 美股时段在 A 股收盘之后；若跟着 A 股时段停摆，夜盘整晚不更新（此前是全天 60s，
  * 收盘后被 Task 9 的 A 股时段判据误伤成 false）。300s 是「仍能跟上美股」与
  * 「不必整夜 60s 打后端」之间的折中。
+ *
+ * A 股核心指数卡（`CoreIndexCards`）**不用本常量**：它读同一端点但只取 CN 子集、是市场页
+ * 主 Tab 的 A 股口径卡片，用默认 `"session"` 模式（开市 30s / 休市停）并持自己的 query key
+ * 与全球盘隔离（见 `CoreIndexCards.tsx` 顶部注释：同 key 会让两者的 data 共享，休市也照刷）。
  */
 export const INDEX_POLL_INTERVAL_MS = 300_000;
 
@@ -19,8 +23,10 @@ const STATUS_TICK_MS = 60_000;
 
 /**
  * 轮询模式：
- * - `"session"`（默认）：A 股按日聚合卡——开市 30s，其余 `false`（不轮询）；
- * - `"global-index"`：指数卡——常驻 300s（见 {@link INDEX_POLL_INTERVAL_MS}）。
+ * - `"session"`（默认）：A 股口径卡（涨跌分布/板块/资金/情绪/数据面 + **A股核心指数卡**）
+ *   ——开市 30s，其余 `false`（不轮询）；
+ * - `"global-index"`：全球指数盘（全球指数卡 + 首页指数条）——常驻 300s（见
+ *   {@link INDEX_POLL_INTERVAL_MS}），不受 A 股时段影响。
  */
 export type MarketPollMode = "session" | "global-index";
 
@@ -37,6 +43,10 @@ export type MarketPollMode = "session" | "global-index";
  * 空转（此前各卡各自 60s 轮询，收盘后依旧打后端）。
  *
  * `"global-index"` 模式不跟踪 A 股状态，也就没有 tick（状态与它无关）。
+ *
+ * 注意：`refetchInterval` 由每个 observer 各起一个定时器，但**缓存按 query key 共享**
+ * ——所以「同一端点两种节奏」必须同时拆 key，否则慢节奏的 observer 会看到快节奏
+ * observer 刷出来的新 data（`CoreIndexCards` 与 `GlobalMarketBoard` 即为此拆 key）。
  *
  * @param mode 轮询模式，见 {@link MarketPollMode}
  */
