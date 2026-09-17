@@ -4,7 +4,9 @@ import { useQuery } from "@tanstack/react-query";
 import { ChangeText, FreshnessNote } from "@/shared/ui";
 import { useNavigate } from "react-router-dom";
 import { fetchHotBoards, type HotBoardCategory } from "@/shared/api/market";
+import { hotBoardDegradedText } from "@/shared/api/marketEnvelope";
 import { useMarketPolling } from "../hooks/useMarketPolling";
+import { BoardDrilldownDrawer, type BoardDrilldownTarget } from "./BoardDrilldownDrawer";
 
 const HOT_BOARD_CATEGORIES: { key: HotBoardCategory; label: string }[] = [
   { key: "industry", label: "行业板块" },
@@ -21,6 +23,7 @@ function getHotBoardCategoryLabel(category: HotBoardCategory): string {
 export function HotSectors() {
   const navigate = useNavigate();
   const [category, setCategory] = useState<HotBoardCategory>("industry");
+  const [boardTarget, setBoardTarget] = useState<BoardDrilldownTarget | null>(null);
   const { refetchInterval } = useMarketPolling();
   const { data: boardEnvelope, isLoading } = useQuery({
     queryKey: ["market", "hot-boards", category],
@@ -33,6 +36,10 @@ export function HotSectors() {
     () => [...boardRows].sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent)).slice(0, 6),
     [boardRows]
   );
+  // 产地降级文案：东财来源为 null，只有回落本地分组才上屏
+  const degradedText = boardEnvelope
+    ? hotBoardDegradedText(boardEnvelope.source, boardEnvelope.degradedReason)
+    : null;
 
   return (
     <Card
@@ -53,13 +60,22 @@ export function HotSectors() {
         />
         <Spin spinning={isLoading}>
           <FreshnessNote asOf={boardEnvelope?.asOf} quality={boardEnvelope?.asOfQuality} />
+          {degradedText ? (
+            <Tag color="warning" style={{ marginTop: 4 }}>
+              {degradedText}
+            </Tag>
+          ) : null}
           <List
             size="small"
             dataSource={rows}
             renderItem={(item) => (
               <List.Item
-                style={{ cursor: "pointer", padding: "8px 0" }}
-                onClick={() => navigate(`/market/hot-sectors/${category}?board=${item.code}`)}
+                style={{ cursor: item.code ? "pointer" : "default", padding: "8px 0" }}
+                onClick={() => {
+                  // 回落本地分组时 `code` 为空串：没有真实板块码就没有可下钻的成分股，
+                  // 不打开抽屉（否则会拿空码去打 400）。
+                  if (item.code) setBoardTarget({ code: item.code, name: item.name });
+                }}
               >
                 <div style={{ display: "flex", alignItems: "center", width: "100%", gap: 12 }}>
                   <Typography.Text strong style={{ width: 96 }}>{item.name}</Typography.Text>
@@ -81,9 +97,14 @@ export function HotSectors() {
           />
         </Spin>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {getHotBoardCategoryLabel(category)}：点击条目可查看该类别下全部细分板块。
+          {getHotBoardCategoryLabel(category)}：点击条目可查看该板块成分股。
         </Typography.Text>
       </Space>
+      <BoardDrilldownDrawer
+        board={boardTarget}
+        open={boardTarget !== null}
+        onClose={() => setBoardTarget(null)}
+      />
     </Card>
   );
 }
