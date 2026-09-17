@@ -74,6 +74,7 @@
 - **本机性能/缓存测试的环境陷阱**：`backend/.env` 没设 `REDIS_URL`、代码默认 `localhost:6379`，本机容器把 redis 映射到 **6380**，`CacheClient` 把连接错误**静默**降级为 cache miss；任何"缓存命中/热路径"测量在没设 `REDIS_URL=redis://localhost:6380/0` 的 host-run 脚本里**全部失真**。本地性能门禁必须显式 export 该变量
 - **行契约的瘦化要追到"实际消费的列"**：共享快照最初 11 键（5485×11 列 ≈ 1.2MB），但 consumers 实际只读 `pct_chg/csrc_desc/province/amount`——保留 `total_mv/circ_mv/turnover_rate/close/stock_id/symbol/name` 全部是无消费者列 + 大 payload + 慢 parse。瘦化前先 grep 每个消费者的解构语句；砍完要同步：loader 行的 ROW_KEYS、LATERAL select、outer select、Task 6 的 ROW_KEYS 测试契约
 - **大批量 upsert 撞 asyncpg 32767 bind 上限是定时炸弹**：`share_float` 实测 6000 行×8 列 = 48000 > 32767 必炸。仓库惯例 `batch_size=500`；所有批量 upsert 必须分片 + 验证 `len(chunk) × params_per_row ≤ 30000`
+- **盘前窗口：5 分钟轮询不能用 `hour="9-14"` 封顶**。`CronTrigger(hour="9-14", minute="*/5")` 会在 **09:00–09:25 盘前**就触发（而本仓 `_in_trading_hours()` 定义的交易时段从 **09:25** 开盘集合竞价起，东财池里真实存在 `seal_time="09:25:00"` 行），并且**永不在 15:00 触发**。若 task 体无守卫，盘前空/半成品池会被真写入盘中序列，每日序列头部多出零点位，外呼失败还会在 `job:failures` 里多记 5 次。正确范式是错配两个维度：cron 用 `hour="9-15"`（保住 15:00 那次）+ task 体首行 `if not _is_workday() or not _in_trading_hours(): return`（挡住盘前）——见 `sector_moneyflow_job`。教训：新增周期任务前先找仓内**同频率**的既有任务抄它的 cron+守卫组合，不要从计划文档里的“09:30–15:00”反推 cron 表达式（cron 无法表达 09:30 起的 5 分边界，必须靠 task 体守卫）
 
 ## 二、数据库与性能
 
@@ -186,6 +187,11 @@
 
 - 本地自检脚本必须与 CI 跑的 lint 口径**逐条对齐**，不能只覆盖其中一个子命令：CI 的后端 lint job 跑 `ruff check app/ tests/` **加** `ruff format --check app/ tests/`，而 `scripts/self_review.sh` 原先只跑 `ruff check`（AGENTS.md 也只写了 check）——于是本特性 16 个改动文件从未被 format 过，本地每个任务都"全绿"、CI 的 `Lint (backend)` 必红，直到 PR 才暴露。补门禁时按"改动文件 + 与 CI 相同命令集"实现（本次已给 `self_review.sh` 加 `ruff format --check $PY`），并顺手核一遍脚本里的命令清单与 workflow 是否一一对应；`ruff check` 通过不等于代码已格式化。
 
+- **双口径并存必须同时标 `source` 与 `as_of_label`，且盘中数据绝不能写入收盘权威序列**。同一份“情绪”数据有了两个来源（收盘 `local_calc` 的日级完整口径 / 盘中 `eastmoney_intraday` 的实时池口径）后，只靠字段同构是不够的：① `source` 字面量必须双向拓宽（`Literal["local_calc", "eastmoney_intraday"]`），否则 `model_validate` 在字段层就抛错；② `as_of_label` 必须**逐字**透传到 UI，尤其回落文案（`盘中不可用，已回落收盘`）不得被格式化/截断/藏进徽标，否则回落数据会被当成新鲜盘中数据展示；③ 盘中分支**不得**调用写日级权威表的 `persist_snapshot`——用 `_boom` 替身守卫比“注意别写”这句注释可靠得多（本仓已用反向护栏 `test_intraday_branch_does_not_fall_through_to_close_path` 钉死）。④ 同构不代表可直接代入：盘中天然没有窗口语义，`yesterday`/`as_of_prev`/`stock_id` 应为 `None` 且 schema 同步改 `Optional`，**不得伪造**。⑤ 时段外 `mode=intraday` 仍会拿到东财的“最后一份池”并标当时刻的 `盘中 HH:MM`（如凌晨 01:27）——真实但易误读，已知遗留（见 plans 的 deferred 项），若要在 UI 上区分需额外加“非交易时段”提示
+- **同一上游函数必须被测试**：为幂等性写测试时，“用 inline 重实现 `ON CONFLICT DO NOTHING` 验证数据库行为”是假绿——删掉生产 repository 里的 `on_conflict_do_nothing` 它照样通过。正确做法是让测试调**生产函数**两次并断言行数不变（变异验证：真删生产的 ON CONFLICT → `UniqueViolationError`）。同理，“存在 `ORDER BY`”无法用**执行顺序**证伪——PG 与 SQLite 在无 `ORDER BY` 时都返回索引顺序，我实测旧版执行式断言在删掉 `.order_by` 后仍然绿；唯一确定性的守卫是断言**编译后的 SQL shape**（`"ORDER BY market_sentiment_intraday.captured_at" in compiled_sql`），代价是与编译器输出耦合，必须在注释里写明“查询被包进子查询/列被别名化时需同步更新”。
+- **迁移类测试的 teardown 必须把库恢复到 HEAD**：用 `alembic downgrade -1` 验证 `downgrade()` 后，若 fixture 收尾不重新 upgrade，本地 dev 库会停在缺表的中间态，后续手工验证/采集任务全部 500，而测试本身全绿。收尾用**绝对定位**（`downgrade <PREV_REVISION>` 而非 `-1`，避免多迁移时过度降级）+ `finally` 里 restore `head`；验收断言直接量化为“跑完 `alembic current` == `alembic heads`”
+- **`pytest` 一律在 `backend/` 下跑**：worktree **根目录**的 `pyproject.toml` 是早期 CLI 原型遗留（无 `pytest-cov`），在那儿执行 `uv run pytest --no-cov` 会以 `unrecognized arguments: --no-cov` 直接崩，看起来像测试挂了。子代理/脚本若在仓库根调用 pytest，必须显式 `cd backend`（或 `--rootdir`）；同理 `tsc`/`npm run build` 在 `frontend/`
+
 ## 六、架构与分层
 
 - 分类/标签等用户可编辑的多对多关系应独立建表并采用"先删后插"的全量替换策略，避免增量 diff 逻辑复杂化；合成分类节点（如"其他"）应复用现有字段自动分组，减少用户手动维护成本；自定义标签系统应与现有分类体系独立设计（独立建表 + 独立前端组件 + 专用聚合页），避免与分类逻辑耦合。
@@ -242,3 +248,4 @@
 - 数值型 tooltip 用「灰标签左 + 右对齐 tabular-nums 数值右」的两列式行布局（flex space-between + min-width），OHLC/涨跌随当日涨跌统一着色、量额中性——横排挤合（"开：x 高：x 低：x"）无对齐基准，是主流行情软件与其余 tooltip 的主要视觉分界。
 - 行业覆盖缺口的合并优先用三方分类接口交叉验证而非纯名称匹配：TuShare index_member_all 有 3000 行上限且不支持按股查询；东财 push2 接口 f127 字段与申万 2021 同名可直接映射（突发批量会被限流，push2delay 镜像 + 0.3s 间隔可绕），特例用同花顺 F10 双源核验；落库走幂等 custom tag 表而非改原始字段。
 - 人工策展数据进 repo 用"overlay 种子文件 + 加性 ON CONFLICT"而非追加进自动再生成的种子（会被下次导出抹掉），并同步补 .gitignore 的 data/* 豁免与 backend/.dockerignore 的 data/* 豁免——漏 dockerignore 会导致镜像内文件缺失、加载器静默返回 0。
+- **"实现者不得改 docs" 这类禁令必须在 review 时**核对**，不能只靠 brief 声明**：Task 11 的 brief 明确写了不得动 `docs/Changelog.md` / `best-practices.md`（由控制器按阶段批量收口、避免各任务各自漂移），但实现者仍在同一个 commit 里把两处都改了。因为内容是**准确的**、也没重复，所以不返工；但流程上记一次。可操作的做法：① 在 task brief 里把禁令写成**可检的硬约束**（如“你的 commit 的 `--name-only` 不得出现 `docs/`”）；② review 时把 `git show <commit> --stat` 当必查项，而非只看业务 diff；③ 控制器收口时对 `docs/` 做一次 `git log` 审查，发现夹带就并入本阶段批量（而不是回退重做）。放宽场景：若某任务确实需要同源同 commit 的文档改动（如新增 metric_key 需同步台账），应由控制器在 brief 里**显式开例**，而不是默认默认。
