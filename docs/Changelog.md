@@ -1,3 +1,14 @@
+## 2026-09-17 - Task 11: `mode=intraday` 端点接线（双口径并存，不污染收盘序列）
+- **`limit_up_service.get_snapshot(..., *, mode="close")` 增 `mode` 关键字**：`intraday` 走新私有 `_get_intraday_snapshot`（东财涨停池 → `intraday_sentiment_service.build_intraday_snapshot` 纯函数）；`close` 走原路径——**字节级一致**，现有 24 个 close-path 单测零修改全绿
+- **盘中缓存独立 key**：`market:limit-up:intra:{trade_date}` TTL=60s（与 30s 轮询半衰期对齐）；close 路径 `market:limit-up:snapshot:{date}:{lookback}` 维持原样。**关键不变量**：盘中分支**不**调 `persist_snapshot`（不污染 `market_sentiment_daily`），单测用 `_boom` 替身钉住
+- **东财池失败 → 回落 close 路径**：as_of_label 标 `"盘中不可用，已回落收盘"`，as_of_quality 由 close 路径给出（不强行 override），logger.warning 可观测；回落**仍**走 `persist_snapshot`（close 路径当天数据落盘契约不破）
+- **历史日期 400**：`mode=intraday` + 显式 `as_of != today` → ValueError（路由层 `except ValueError → HTTPException(400)`），盘中无历史意义
+- **Schema 拓宽（单次完整 pass）**：`LimitUpLadderOut` / `SectorLimitUpOut` / `YesterdayLimitUpOut` 的 `source` → `Literal["local_calc", "eastmoney_intraday"]`；`SectorLimitUpItemOut.l3_code/l3_name/l1_code/l1_name` 改 `Optional`；`LadderStockOut.days_span/boards_in_window/missing_days` 改 `Optional`（盘中无窗口语义）；三个响应新增 `as_of_label: str | None = None`（盘中="盘中 HH:MM"、回落="盘中不可用，已回落收盘"、close 默认 None）
+- **路由层**：`/market/limit-up-ladder` / `/sector-limit-up` / `/yesterday-limit-up` 增 `mode: Literal["close", "intraday"] = "close"` Query（默认 close，向后兼容）；`ValueError` 一律 400
+- **测试 11 个**：`backend/tests/test_intraday_endpoint.py`（非空性证据：反向护栏 `test_intraday_branch_does_not_fall_through_to_close_path` 把 close 路径 repo 替成 boom、池替空 + 不抛错 → 验证真走盘中分支；其余用 `assert calls == []` / `assert ttl == 300` / 改 as_of_label 字符串等临时变更跑红验证 assertion 真生效）
+- 验收：`TUSHARE_TOKEN= uv run pytest -q --no-cov -m "not e2e and not bench"` **501 passed**（490 + 11 新增）；`uv run --extra dev ruff check / ruff format --check / mypy app` 全绿；`self_review.sh` 通过
+- 涉及模块：`backend/app/{services/limit_up_service.py,api/v1/market_data.py,schemas/limit_up.py}`，`backend/tests/test_intraday_endpoint.py`
+
 ## 2026-09-17 - Phase 1 性能与一致性：共用日快照 + 缓存键带 as_of + 缺失列裁剪（市场数据可信度改造）
 - **`market_snapshot_service.load_day_rows`**（新）：从 `daily_quotes` 单次取全市场当日派生行，**改读已存储的 `pct_chg` 列**（不再 LATERAL 回看前收），返回 `csrc_desc/province/pct_chg/amount/basic_date`（行契约历经瘦身后共 5 键 + `basic_date`）。`group_by` / `summarize_group` 纯函数。**口径审批**：存储 NULL 的 `pct_chg` 记为 `flat` 且**从均值里剔除**——满足 `up + flat + down == total` 恒等式；旧 SQL 把 NULL 现收当 0% 参与 AVG（"小样本板块里凭空造 0"），已弃用
 - **5 个聚合端点改走 loader**（`distribution/sectors/capital-flow/hot-boards`，`sw-industry/performance` 因 SW L1 多对多保留自家语句但同样不再回看前收）：Postgres 语句 30→7；同页冷 217→165→**130ms**；热 1.4ms。**真实收益是"页面级"而非单查询级**（"597ms→15.9ms"计划初稿目标在本库复现不了，实测旧形态 warm 43-46ms；共享快照的真正价值是 4-6 个端点合并为 1 次取行 + 1 份缓存）

@@ -159,13 +159,23 @@ async def get_limit_up_ladder(
         default=None, alias="date", description="ISO 日期，缺省=库内最新交易日"
     ),
     lookback: int = Query(default=10, ge=5, le=30),
+    mode: Literal["close", "intraday"] = Query(
+        default="close",
+        description="close=本地口径（默认，权威、可回放）；intraday=盘中口径（仅今日，由东财涨停池兜底）",
+    ),
 ) -> LimitUpLadderOut:
-    """连板梯队 + 情绪温度计（本地 K 线自算为主，见 docs/design/limit-up-sentiment.md）。"""
+    """连板梯队 + 情绪温度计（本地 K 线自算为主，见 docs/design/limit-up-sentiment.md）。
+
+    `mode=intraday` 仅接受今日（无 as_of 或 as_of=今天）；历史日期会 400。
+    盘中口径**不写** market_sentiment_daily；东财池失败时回落收盘口径并把
+    `as_of_label` 标为 "盘中不可用，已回落收盘"。
+    """
     try:
-        snap = await limit_up_service.get_snapshot(cache, _iso(date_), lookback)
-    except ValueError:
+        snap = await limit_up_service.get_snapshot(cache, _iso(date_), lookback, mode=mode)
+    except ValueError as exc:
         raise HTTPException(
-            status_code=400, detail="date must be ISO format, e.g. 2026-09-08"
+            status_code=400,
+            detail=str(exc) or "date must be ISO format, e.g. 2026-09-08",
         ) from None
     return LimitUpLadderOut(
         as_of=snap["as_of"],
@@ -179,6 +189,7 @@ async def get_limit_up_ladder(
         degraded_reason=snap["degraded_reason"],
         kpis=snap["kpis"] or None,
         echelons=snap["echelons"],
+        as_of_label=snap.get("as_of_label"),
     )
 
 
@@ -187,12 +198,14 @@ async def get_sector_limit_up(
     cache: CacheDep,
     date_: str | None = Query(default=None, alias="date"),
     sw_l1: str | None = Query(default=None, description="按申万一级代码过滤，如 110000"),
+    mode: Literal["close", "intraday"] = Query(default="close"),
 ) -> SectorLimitUpOut:
     try:
-        snap = await limit_up_service.get_snapshot(cache, _iso(date_))
-    except ValueError:
+        snap = await limit_up_service.get_snapshot(cache, _iso(date_), mode=mode)
+    except ValueError as exc:
         raise HTTPException(
-            status_code=400, detail="date must be ISO format, e.g. 2026-09-08"
+            status_code=400,
+            detail=str(exc) or "date must be ISO format, e.g. 2026-09-08",
         ) from None
     payload = limit_up_service.sector_payload(snap, sw_l1)
     return SectorLimitUpOut(**payload)
@@ -200,13 +213,16 @@ async def get_sector_limit_up(
 
 @router.get("/yesterday-limit-up", response_model=YesterdayLimitUpOut)
 async def get_yesterday_limit_up(
-    cache: CacheDep, date_: str | None = Query(default=None, alias="date")
+    cache: CacheDep,
+    date_: str | None = Query(default=None, alias="date"),
+    mode: Literal["close", "intraday"] = Query(default="close"),
 ) -> YesterdayLimitUpOut:
     try:
-        snap = await limit_up_service.get_snapshot(cache, _iso(date_))
-    except ValueError:
+        snap = await limit_up_service.get_snapshot(cache, _iso(date_), mode=mode)
+    except ValueError as exc:
         raise HTTPException(
-            status_code=400, detail="date must be ISO format, e.g. 2026-09-08"
+            status_code=400,
+            detail=str(exc) or "date must be ISO format, e.g. 2026-09-08",
         ) from None
     return YesterdayLimitUpOut(**limit_up_service.yesterday_payload(snap))
 
