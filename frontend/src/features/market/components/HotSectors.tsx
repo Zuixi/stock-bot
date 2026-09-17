@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Card, List, Segmented, Space, Spin, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { ChangeText, FreshnessNote } from "@/shared/ui";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { fetchHotBoards, type HotBoardCategory } from "@/shared/api/market";
 import { hotBoardDegradedText } from "@/shared/api/marketEnvelope";
 import { useMarketPolling } from "../hooks/useMarketPolling";
@@ -21,7 +21,6 @@ function getHotBoardCategoryLabel(category: HotBoardCategory): string {
 }
 
 export function HotSectors() {
-  const navigate = useNavigate();
   const [category, setCategory] = useState<HotBoardCategory>("industry");
   const [boardTarget, setBoardTarget] = useState<BoardDrilldownTarget | null>(null);
   const { refetchInterval } = useMarketPolling();
@@ -46,9 +45,8 @@ export function HotSectors() {
       title="A股热门板块"
       size="small"
       extra={
-        <a onClick={() => navigate(`/market/hot-sectors/${category}`)}>
-          查看全部
-        </a>
+        // 跳转必须给真 href（<Link>）：非语义 <a onClick> 键盘不可达、读屏不报链接
+        <Link to={`/market/hot-sectors/${category}`}>查看全部</Link>
       }
     >
       <Space direction="vertical" size={12} style={{ width: "100%" }}>
@@ -68,16 +66,10 @@ export function HotSectors() {
           <List
             size="small"
             dataSource={rows}
-            renderItem={(item) => (
-              <List.Item
-                style={{ cursor: item.code ? "pointer" : "default", padding: "8px 0" }}
-                onClick={() => {
-                  // 回落本地分组时 `code` 为空串：没有真实板块码就没有可下钻的成分股，
-                  // 不打开抽屉（否则会拿空码去打 400）。
-                  if (item.code) setBoardTarget({ code: item.code, name: item.name });
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", width: "100%", gap: 12 }}>
+            renderItem={(item) => {
+              // 行内容是共用骨架；「可下钻」与否只决定外层用哪种语义元素。
+              const content = (
+                <div className="hot-board-row">
                   <Typography.Text strong style={{ width: 96 }}>{item.name}</Typography.Text>
                   <Typography.Text type="secondary" style={{ width: 52 }}>{item.code}</Typography.Text>
                   <ChangeText value={item.changePercent} style={{ width: 76 }} />
@@ -92,8 +84,27 @@ export function HotSectors() {
                     ))}
                   </div>
                 </div>
-              </List.Item>
-            )}
+              );
+              return (
+                <List.Item style={{ padding: "8px 0" }}>
+                  {item.code ? (
+                    // 打开抽屉是**原地展开**，不改变 URL：语义上是按钮而不是链接（Task 16）。
+                    // 真 <button> 自带 Tab 聚焦 + Enter/Space 触发，不需要手写 onKeyDown。
+                    <button
+                      type="button"
+                      className="hot-board-row__button"
+                      onClick={() => setBoardTarget({ code: item.code, name: item.name })}
+                    >
+                      {content}
+                    </button>
+                  ) : (
+                    // 回落本地分组时 `code` 为空串：没有真实板块码就没有可下钻的成分股。
+                    // 不渲染成按钮——不可点的行不该被读屏报成「有操作」。
+                    content
+                  )}
+                </List.Item>
+              );
+            }}
           />
         </Spin>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
