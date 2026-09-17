@@ -1,10 +1,13 @@
 import { apiGet } from "./client";
 import {
+  mapBoardStocks,
   mapHotBoards,
   mapMarketList,
   type AsOfQuality,
+  type BackendBoardStockOut,
   type BackendHotBoardsOut,
   type BackendMarketListOut,
+  type BoardStockRow,
   type HotBoardsEnvelope,
   type MarketListEnvelope,
 } from "./marketEnvelope";
@@ -46,6 +49,9 @@ export interface HotBoardItem {
 }
 
 export type HotBoardCategory = "industry" | "concept" | "region";
+
+/** 成分股行（`marketEnvelope.ts` 定义，这里转出给组件消费）。 */
+export type { BoardStockRow };
 
 // ---------------------------------------------------------------------------
 // 公开榜单（Task 2.7，切到专用 /market/rankings 端点）
@@ -174,6 +180,18 @@ export function fetchCapitalFlow(): Promise<MarketListEnvelope<CapitalFlowItem>>
 export function fetchHotBoards(category: HotBoardCategory): Promise<HotBoardsEnvelope<HotBoardItem>> {
   return apiGet<BackendHotBoardsOut<HotBoardItem>>("/api/v1/market/hot-boards", { category }).then(
     mapHotBoards
+  );
+}
+
+/**
+ * 东财板块成分股（主力净流入降序）。返回裸数组：空数组 = 该板块真的没有成分股。
+ *
+ * 上游不可用 → 后端 502（**不是**空数组），调用方必须把 `isError` 与 `items.length === 0`
+ * 区分开，否则会把故障谎报成「板块没有成分股」。
+ */
+export function fetchBoardStocks(boardCode: string, limit = 50): Promise<BoardStockRow[]> {
+  return apiGet<BackendBoardStockOut[]>(`/api/v1/market/boards/${boardCode}/stocks`, { limit }).then(
+    mapBoardStocks
   );
 }
 

@@ -1,0 +1,62 @@
+[
+    {
+        "symbol": "600354",
+        "name": "\u6566\u714c\u79cd\u4e1a",
+        "pct_change": 10.05,
+        "main_net_inflow": 81849363.0
+    },
+    {
+        "symbol": "300189",
+        "name": "\u795e\u519c\u79cd\u4e1a",
+        "pct_change": 8.62,
+        "main_net_inflow": 55299721.0
+    },
+    {
+        "symbol": "920087",
+        "name": "\u79cb\u4e50\u79cd\u4e1a",
+        "pct_change": 15.94,
+        "main_net_inflow": 46664962.0
+    },
+    {
+        "symbol": "002041",
+        "name": "\u767b\u6d77\u79cd\u4e1a",
+        "pct_change": 6.01,
+        "main_net_inflow": 39161257.0
+    },
+    {
+        "symbol": "000998",
+        "name": "\u9686\u5e73\u9ad8\u79d1",
+        "pct_change": 3.31,
+        "main_net_inflow": 26326487.0
+    },
+    {
+        "symbol": "000713",
+        "name": "\u56fd\u6295\u4e30\u4e50",
+        "pct_change": 7.88,
+        "main_net_inflow": 19425566.0
+    },
+    {
+        "symbol": "600371",
+        "name": "\u4e07\u5411\u5fb7\u519c",
+        "pct_change": 9.99,
+        "main_net_inflow": 14766088.0
+    },
+    {
+        "symbol": "300087",
+        "name": "ST\u8343\u94f6",
+        "pct_change": 3.38,
+        "main_net_inflow": 7068231.0
+    },
+    {
+        "symbol": "920403",
+        "name": "\u5eb7\u519c\u79cd\u4e1a",
+        "pct_change": 7.82,
+        "main_net_inflow": 4361905.0
+    },
+    {
+        "symbol": "600313",
+        "name": "\u519c\u53d1\u79cd\u4e1a",
+        "pct_change": 5.62,
+        "main_net_inflow": -13347120.0
+    }
+]

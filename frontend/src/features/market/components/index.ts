@@ -12,6 +12,8 @@ export { SectorMoneyflowCard } from "./SectorMoneyflowCard";
 export { MarketMoneyflowCard, MarketMoneyflowContent } from "./MarketMoneyflowCard";
 export { NorthboundCard } from "./NorthboundCard";
 export { HotSectors } from "./HotSectors";
+export { BoardDrilldownDrawer } from "./BoardDrilldownDrawer";
+export type { BoardDrilldownTarget } from "./BoardDrilldownDrawer";
 export { IndustryClassification } from "./IndustryClassification";
 export { MarketDataBoard } from "./MarketDataBoard";
 export { SwIndustryGrid } from "./SwIndustryGrid";

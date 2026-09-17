@@ -55,6 +55,20 @@ export interface BackendHotBoardsOut<Raw> extends BackendMarketListOut<Raw> {
   degraded_reason?: string | null;
 }
 
+/**
+ * `app/schemas/market.py::BoardStockOut`（东财板块成分股，snake_case 裸数组）。
+ *
+ * 该端点**不套信封**（`response_model=list[BoardStockOut]`）：上游失败时后端直接 502，
+ * 不会返回空数组——空数组只代表「这个板块真的没有成分股」。
+ */
+export interface BackendBoardStockOut {
+  symbol: string;
+  name?: string | null;
+  pct_change?: number | null;
+  /** 主力净流入（元）。 */
+  main_net_inflow?: number | null;
+}
+
 /** `app/schemas/market_data.py::NorthboundSeriesOut`。 */
 export interface BackendNorthboundEnvelope<Raw> extends BackendSnapshotEnvelope<Raw> {
   source_status?: SourceStatus;
@@ -91,6 +105,30 @@ export interface HotBoardsEnvelope<T> extends MarketListEnvelope<T> {
   degradedReason: string | null;
 }
 
+/** 成分股行前端形状（camelCase）。 */
+export interface BoardStockRow {
+  symbol: string;
+  name: string | null;
+  /** 涨跌幅（%）；缺报价时为 null（渲染 `--`，不回落到 0）。 */
+  pctChange: number | null;
+  /** 主力净流入（元）；缺值时为 null。 */
+  mainNetInflow: number | null;
+}
+
+/**
+ * 产地降级文案：东财来源（正常）返回 `null`，调用方据此决定是否上屏标注。
+ *
+ * 回落时 `code=""` / `leaders=[]`，若不上屏标注，读者会把「本地分组」误读成
+ * 「东财板块没有成分股」——这正是 Task 14 review 指出的悬空字段。
+ */
+export function hotBoardDegradedText(
+  source: HotBoardSource,
+  degradedReason: string | null,
+): string | null {
+  if (source !== "local_grouping") return null;
+  return degradedReason === "eastmoney_unavailable" ? "本地分组（东财板块不可用）" : "本地分组（降级）";
+}
+
 // ---- 解包（后端信封 → 前端信封） ----
 
 /**
@@ -123,6 +161,21 @@ export function mapHotBoards<Raw, T = Raw>(
     source: b.source === "eastmoney_boards" ? "eastmoney_boards" : "local_grouping",
     degradedReason: b.degraded_reason ?? null,
   };
+}
+
+/**
+ * 解包 `GET /market/boards/{code}/stocks` 的裸数组：统一 snake→camel，缺值为 `null`。
+ *
+ * 不做「空数组 → 错误」的转换：空数组是合法语义（板块真的没有成分股），
+ * 上游失败由 HTTP 502 表达，绝不能在这里把两种情况合并。
+ */
+export function mapBoardStocks(rows: BackendBoardStockOut[] | null | undefined): BoardStockRow[] {
+  return (rows ?? []).map((raw) => ({
+    symbol: raw.symbol,
+    name: raw.name ?? null,
+    pctChange: raw.pct_change ?? null,
+    mainNetInflow: raw.main_net_inflow ?? null,
+  }));
 }
 
 /** 解包快照 envelope：`.items` 逐项映射后附上 `asOf` / `staleDays`。 */
