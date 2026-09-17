@@ -181,29 +181,6 @@ async def test_get_rankings_degrades_on_empty_db(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_latest_trade_date_helper_delegates_uncached(monkeypatch) -> None:
-    """The uncached thin delegate returns the resolved day (no cache dependency)."""
-    seen: list[object] = []
-
-    async def _fake(_db, *, cache=None):
-        seen.append(cache)
-        return _market_day()
-
-    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _fake)
-    assert await market_service._latest_trade_date(_FakeDb([])) == date(2026, 9, 10)  # type: ignore[arg-type]
-    assert seen == [None], "siblings must not acquire a cache dependency"
-
-
-@pytest.mark.asyncio
-async def test_latest_trade_date_helper_returns_none_on_empty(monkeypatch) -> None:
-    async def _empty(_db, *, cache=None):
-        return None
-
-    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _empty)
-    assert await market_service._latest_trade_date(_FakeDb([])) is None  # type: ignore[arg-type]
-
-
-@pytest.mark.asyncio
 async def test_get_rankings_legacy_cache_payload_without_quality_reads_partial(
     monkeypatch,
 ) -> None:

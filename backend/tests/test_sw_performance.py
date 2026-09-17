@@ -195,18 +195,33 @@ async def test_sw_performance_does_not_reuse_another_days_payload(monkeypatch) -
 
 @pytest.mark.asyncio
 async def test_sw_performance_degrades_on_empty_db(monkeypatch) -> None:
-    """Public homepage block: empty daily_quotes must degrade, never 500, and not cache."""
+    """Public homepage block: empty daily_quotes must degrade, never 500, and not cache.
+
+    The label must come from the **Shanghai** wall clock, same as the non-empty branch
+    and as ``get_rankings`` (fix round 1, Minor 10): a host-local ``date.today()``
+    mislabels the rollover window. ``date`` is pinned to a Sunday and ``_today_sh`` to
+    a Saturday, so the two sources produce different Fridays (09-04 vs 09-18) and the
+    assertion can only pass on the Shanghai one.
+    """
+
+    class _PinnedDate(date):
+        @classmethod
+        def today(cls) -> date:
+            return date(2026, 9, 6)  # 宿主本地"今天"（周日）
 
     async def _empty(_db, *, cache=None):
         return None
 
+    monkeypatch.setattr(market_service, "date", _PinnedDate)
+    monkeypatch.setattr(market_service, "_today_sh", lambda: date(2026, 9, 19))  # 周六
     monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _empty)
     cache = RecordingCache()
 
     out = await market_service.get_sw_industry_performance(_FakeDb([]), cache, 31)  # type: ignore[arg-type]
 
     assert out.items == []
-    assert out.as_of == market_service.last_weekday(date.today())
+    assert out.as_of == date(2026, 9, 18), "周六的最近预期交易日是周五（上海时区）"
+    assert out.as_of == market_service.last_weekday(market_service._today_sh())
     assert out.as_of_quality == "partial"
     assert cache.set_calls == []
 

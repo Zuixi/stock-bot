@@ -827,3 +827,120 @@ async def test_rankings_future_dated_day_is_not_latest_trading_day(
 
     assert out.as_of == date(2026, 9, 18)
     assert out.is_latest_trading_day is False
+
+
+# ---------------------------------------------------------------------------
+# /market/indices — 带 asof 的行不能挂在"无日"键上（fix round 1, Minor 6）
+# ---------------------------------------------------------------------------
+
+_INDICES_DAY_KEY = "market:indices:latest-day"
+
+
+class _IndexRow:
+    """``index_repo.get_latest`` 返回的 ORM 行替身（只读属性足够）。"""
+
+    def __init__(self, ts_code: str, trade_date: date) -> None:
+        self.ts_code = ts_code
+        self.trade_date = trade_date
+        self.close = 3000.0
+        self.pre_close = 2990.0
+
+
+class _RepoSpy:
+    def __init__(self, rows: list[_IndexRow]) -> None:
+        self.rows = rows
+        self.calls = 0
+
+    async def __call__(self, _db: Any, _ts_codes: Any) -> list[_IndexRow]:
+        self.calls += 1
+        return list(self.rows)
+
+
+class _NullSession:
+    async def __aenter__(self) -> _NullSession:
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> bool:
+        return False
+
+
+def _patch_indices_repo(monkeypatch: pytest.MonkeyPatch, rows: list[_IndexRow]) -> _RepoSpy:
+    from app.repositories import index_repo
+
+    spy = _RepoSpy(rows)
+    monkeypatch.setattr(index_repo, "get_latest", spy)
+    monkeypatch.setattr(market_service, "async_session_factory", _NullSession)
+    return spy
+
+
+async def test_market_indices_degraded_when_repo_and_tushare_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """无行（DB 空 + TuShare 也不可用）→ 空列表且不写任何键（旧行为保持）。"""
+    spy = _patch_indices_repo(monkeypatch, [])
+
+    async def _no_tushare() -> list[dict[str, Any]]:
+        return []
+
+    monkeypatch.setattr(market_service, "_fetch_indices_from_tushare", _no_tushare)
+    cache = RecordingCache()
+
+    assert await market_service.list_market_indices(cache) == []
+    assert spy.calls == 1
+    assert cache.set_calls == []
+
+
+async def test_market_indices_cache_key_carries_the_payload_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """键必须带"行自己的日"：旧的无日键与昨日键都被毒化时仍要重取，且写回的是当日键。"""
+    day = date(2026, 9, 16)
+    spy = _patch_indices_repo(monkeypatch, [_IndexRow("000001.SH", day)])
+    stale = [{"tsCode": "000001.SH", "asof": "2026-09-15T15:00:00Z"}]
+    cache = RecordingCache()
+    cache.store["market:indices"] = stale  # Task 8 之前的无日键
+    cache.store["market:indices:2026-09-15"] = stale  # 上一天的日键
+
+    out = await market_service.list_market_indices(cache)
+
+    assert [r["asof"] for r in out] == ["2026-09-16T15:00:00Z"], "毒化的旧 payload 不得回放"
+    assert spy.calls == 1, "旧键命中就不该重取"
+    assert [key for key, _v, _t in cache.set_calls] == [
+        "market:indices:2026-09-16",
+        _INDICES_DAY_KEY,
+    ]
+
+
+async def test_market_indices_second_read_hits_the_day_key_without_the_repo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """首次写入后，指针 + 当日键必须让下一次请求不碰仓储（缓存仍在起作用）。"""
+    day = date(2026, 9, 16)
+    spy = _patch_indices_repo(monkeypatch, [_IndexRow("000001.SH", day)])
+    cache = RecordingCache()
+
+    first = await market_service.list_market_indices(cache)
+    second = await market_service.list_market_indices(cache)
+
+    assert second == first
+    assert spy.calls == 1, "指针命中后不得再读仓储"
+    assert cache.store[_INDICES_DAY_KEY] == "2026-09-16"
+
+
+async def test_market_indices_payload_is_written_under_the_max_row_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """多行日不一致时取最大日当键（响应仍是原顺序的原行）。"""
+    spy = _patch_indices_repo(
+        monkeypatch,
+        [_IndexRow("000001.SH", date(2026, 9, 14)), _IndexRow("399001.SZ", date(2026, 9, 15))],
+    )
+    cache = RecordingCache()
+
+    out = await market_service.list_market_indices(cache)
+
+    assert spy.calls == 1
+    assert [r["asof"] for r in out] == ["2026-09-14T15:00:00Z", "2026-09-15T15:00:00Z"]
+    assert cache.store[_INDICES_DAY_KEY] == "2026-09-15"
+    assert "market:indices:2026-09-15" in cache.store
+    assert "market:indices:2026-09-14" not in cache.store

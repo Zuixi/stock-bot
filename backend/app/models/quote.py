@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Index, Numeric, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, DateTime, Index, Numeric, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -20,6 +20,15 @@ class DailyQuote(Base):
         # `alembic revision --autogenerate` does not emit drop_index for them.
         Index("idx_daily_quotes_date_pct", "trade_date", "pct_chg"),
         Index("idx_daily_quotes_date_amount", "trade_date", "amount"),
+        # Partial index created by migration d1e2f3a4b5c6; mirrored here for the same
+        # reason. The predicate must be spelled exactly as the migration's
+        # ``sa.text("adj_factor IS NOT NULL")`` or autogenerate would emit
+        # drop_index + create_index instead of seeing them as the same index.
+        Index(
+            "idx_daily_quotes_stock_id_adj_factor",
+            "stock_id",
+            postgresql_where=text("adj_factor IS NOT NULL"),
+        ),
         # Partitioning is managed externally via ALTER TABLE partitioned by.
         # Do NOT put postgresql_partition_by here — it conflicts with
         # the auto-generated PrimaryKeyConstraint(id) and causes:

@@ -37,10 +37,12 @@ class SectorMoneyflowOut(BaseModel):
 
 
 class SectorMoneyflowListOut(BaseModel):
-    """板块资金流列表 envelope：`as_of` = 该快照表实际持有的最近日。"""
+    """板块资金流列表 envelope：`as_of` = **返回的 items** 自己持有的最近日
+    （该 dimension 的 per-dimension max，各维度可能不同）；items 为空时 None。
+    """
 
-    as_of: str | None = None  # ISO 日期；表空时 None
-    stale_days: int | None = None  # 自然日差（今天 - as_of）；表空时 None
+    as_of: str | None = None  # ISO 日期（返回 items 的日）；无 items 时 None
+    stale_days: int | None = None  # 自然日差（今天 - as_of）；无 items 时 None
     items: list[SectorMoneyflowOut] = Field(default_factory=list)
 
 
@@ -85,8 +87,8 @@ class MarketMoneyflowTodayOut(BaseModel):
 class MarketMoneyflowOut(BaseModel):
     today: MarketMoneyflowTodayOut | None = None
     history: list[MarketMoneyflowDayOut] = Field(default_factory=list)
-    history_as_of: str | None = None  # 历史表最近日 ISO；表空时 None
-    history_stale_days: int | None = None  # 自然日差；表空时 None
+    history_as_of: str | None = None  # 返回 history 末行的日 ISO；history 为空时 None
+    history_stale_days: int | None = None  # 自然日差；history 为空时 None
 
 
 class NorthboundPointOut(BaseModel):
@@ -97,8 +99,8 @@ class NorthboundPointOut(BaseModel):
 class NorthboundSeriesOut(BaseModel):
     """北向净流入序列 envelope；上游停更时由 `source_status` 显式标注。"""
 
-    as_of: str | None = None  # ISO 日期（该表最近日）；表空时 None
-    stale_days: int | None = None  # 自然日差（今天 - as_of）；表空时 None
+    as_of: str | None = None  # ISO 日期（返回 items 末项的日）；无 items 时 None
+    stale_days: int | None = None  # 自然日差（今天 - as_of）；无 items 时 None
     source_status: Literal["live", "discontinued"] = "discontinued"
     items: list[NorthboundPointOut] = Field(default_factory=list)
 
