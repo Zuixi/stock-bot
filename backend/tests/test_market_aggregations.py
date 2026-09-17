@@ -57,13 +57,21 @@ def _resolved(quality: str = "complete", reason: str | None = None) -> mds.Marke
     return mds.MarketDay(D16, quality, reason, 5485, 5513, 1.0, True)  # type: ignore[arg-type]
 
 
-def _patch_day(monkeypatch: pytest.MonkeyPatch, md: mds.MarketDay | None) -> None:
-    """Patch the completeness predicate at its single call site in ``market_service``."""
+def _patch_day(monkeypatch: pytest.MonkeyPatch, md: mds.MarketDay | None) -> list[tuple[Any, Any]]:
+    """Patch the day resolver; return the recorded ``(db, cache)`` call args.
 
-    async def _resolve(_db: Any, *, cache: Any = None) -> mds.MarketDay | None:
+    The resolver is the *other* Redis consumer on this page (``market:day:latest_complete``),
+    so recording its ``cache`` kwarg is what pins the fix for the 4x-uncached-probe bug:
+    every endpoint must forward its own cache object here, not call the resolver bare.
+    """
+    calls: list[tuple[Any, Any]] = []
+
+    async def _resolve(db: Any, *, cache: Any = None) -> mds.MarketDay | None:
+        calls.append((db, cache))
         return md
 
     monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _resolve)
+    return calls
 
 
 def _patch_rows(monkeypatch: pytest.MonkeyPatch, rows: list[dict[str, Any]]) -> list[Any]:
@@ -368,6 +376,14 @@ def test_per_endpoint_row_seams_are_gone(seam: str) -> None:
     assert not hasattr(market_service, seam)
 
 
+#: Statement-construction call sites, not SQL keywords: a bare ``SELECT``/``JOIN``
+#: substring in a comment or docstring is not SQL, so scanning for prose reds the
+#: suite for non-SQL reasons. Kept at all (rather than dropped in favour of the
+#: runtime half) because a statement built in a branch the happy path never reaches
+#: is invisible to ``_BoomSession``.
+_SQL_CALL_SITES = re.compile(r"\b(?:text|select|insert|update|delete)\s*\(|\.execute\s*\(")
+
+
 @pytest.mark.parametrize(
     "func",
     [
@@ -383,26 +399,26 @@ def test_rewritten_endpoint_bodies_hold_no_sql(func: Any) -> None:
 
     The runtime proof is ``test_rewritten_endpoints_never_execute_sql``; this is the
     static half — a query left behind in a retried-on-error branch that the happy path
-    never reaches would show up here.
+    never reaches would show up here. It matches call sites only, deliberately: a
+    docstring mentioning SQL keywords must not red the suite.
     """
-    source = inspect.getsource(func)
-    for marker in ("db.execute", "text(", "LATERAL", "SELECT", "JOIN"):
-        assert marker not in source, f"{marker!r} survived the Task 7 rewrite"
+    match = _SQL_CALL_SITES.search(inspect.getsource(func))
+    assert match is None, f"{match.group(0)!r} survived the Task 7 rewrite"
 
 
-@pytest.mark.parametrize(
-    ("endpoint", "cache_key", "call"),
-    [
-        ("distribution", "market:distribution", market_service.get_distribution),
-        ("sectors", "market:sectors", market_service.get_sectors),
-        ("capital-flow", "market:capital-flow", market_service.get_capital_flow),
-        (
-            "hot-boards",
-            "market:hot-boards:industry",
-            lambda cache: market_service.get_hot_boards("industry", cache),
-        ),
-    ],
-)
+_REWRITTEN_ENDPOINTS = [
+    ("distribution", "market:distribution", market_service.get_distribution),
+    ("sectors", "market:sectors", market_service.get_sectors),
+    ("capital-flow", "market:capital-flow", market_service.get_capital_flow),
+    (
+        "hot-boards",
+        "market:hot-boards:industry",
+        lambda cache: market_service.get_hot_boards("industry", cache),
+    ),
+]
+
+
+@pytest.mark.parametrize(("endpoint", "cache_key", "call"), _REWRITTEN_ENDPOINTS)
 async def test_rewritten_endpoints_never_execute_sql(
     monkeypatch: pytest.MonkeyPatch, endpoint: str, cache_key: str, call: Any
 ) -> None:
@@ -412,7 +428,9 @@ async def test_rewritten_endpoints_never_execute_sql(
     any surviving per-endpoint query fails loudly instead of quietly passing on a
     mocked-out DB. A recording cache exercises the envelope read/write path too.
     """
-    _patch_day(monkeypatch, _resolved(quality="fallback", reason="latest_day_incomplete"))
+    day_calls = _patch_day(
+        monkeypatch, _resolved(quality="fallback", reason="latest_day_incomplete")
+    )
     calls = _patch_rows(monkeypatch, [_row(pct_chg=1.0)])
     monkeypatch.setattr(market_service, "async_session_factory", _BoomSession)
     cache = _RecordingCache()
@@ -427,6 +445,11 @@ async def test_rewritten_endpoints_never_execute_sql(
     assert len(calls) == 1
     assert calls[0][1] == D16
     assert calls[0][2] is cache
+    # ... and so was the day resolver: a bare call here re-ran its ~5-statement
+    # completeness probe (re-reading market:day:latest_complete) once per endpoint,
+    # which is exactly the regression this pins.
+    assert len(day_calls) == 1
+    assert day_calls[0][1] is cache
     # this module reads/writes only its own result key; the snapshot key is the loader's
     assert cache.reads == [cache_key]
     assert [key for key, _value, _ttl in cache.writes] == [cache_key]
