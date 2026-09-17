@@ -23,9 +23,11 @@ Usage:
 - 无 ``--yes`` 则只读；``--backfill`` 是 upsert，重复执行收敛到同一结果，且**拒绝**
   "未收盘的今天"（晚于最后一个已收盘工作日的日期一律跳过）。
 - ``--adj-factor`` 只 UPDATE 已有行（不插行、不删行），是**加法式**修复，因此不需要
-  ``--yes``：它最多把 NULL 因子填上，绝不可能让已有数据变少或变错。它只处理"已拉过
-  因子但个别日缺失"的股票（从未拉过的股票由线上懒加载路径一次拉全，见
-  ``quote_service.backfill_missing_adj_factors``）。
+  ``--yes``：它最多把 NULL 因子填上，绝不可能让已有数据变少或变错。区间只用于发现
+  候选股票（区间内有缺口的"已拉过因子"股票）；一旦入选就把该股**全部历史**缺口补齐
+  （修就修完，避免"最新行有因子、中段 NULL"的锁死态）。从未拉过的股票由线上懒加载
+  路径一次拉全，见 ``quote_service.backfill_missing_adj_factors``。日期守卫同
+  ``--backfill``：``START > END`` 报错退出，晚于最后一个已收盘工作日的日期裁掉。
 - 修复成功后 best-effort 失效 ``market:*`` 派生读缓存（Redis 故障不影响修复结果）；
   ``--adj-factor`` 另需失效 ``quote:kline:*``（K 线响应把 ``adjust_available=false``
   一起缓存 600s，不清则控件最长 5 分钟仍显示禁用）。
@@ -206,10 +208,36 @@ async def backfill_days(
     return coverage
 
 
-async def repair_adj_factors(start: date, end: date) -> dict[str, int]:
-    """调用 service 补洞（只 UPDATE 已有行）；返回 ``{stocks, rows, failed}``。"""
+async def repair_adj_factors(
+    start: date, end: date, *, today: date | None = None
+) -> dict[str, int]:
+    """调用 service 补洞（只 UPDATE 已有行）。
+
+    日期守卫镜像 ``--backfill``：晚于最后一个已收盘工作日的日期一律裁掉（因子对
+    未来日期只会空跑外呼）；裁完若 ``start > end`` 则整段无事可做，直接返回零统计。
+    返回 service 的 ``{stocks, rows, failed, unfilled, remaining}``。
+    """
     from app.services.quote_service import backfill_missing_adj_factors  # noqa: PLC0415
 
+    cutoff = last_completed_trading_day(today)
+    if end > cutoff:
+        logger.warning(
+            "repair: adj_factor %s..%s extends past last completed trading day %s — "
+            "skipping the tail",
+            start,
+            end,
+            cutoff,
+        )
+        end = cutoff
+    if start > end:
+        logger.warning(
+            "repair: adj_factor %s..%s contains no completed trading day (cutoff %s) — "
+            "nothing to repair",
+            start,
+            end,
+            cutoff,
+        )
+        return {"stocks": 0, "rows": 0, "failed": 0, "unfilled": 0, "remaining": 0}
     async with async_session_factory() as db:
         return await backfill_missing_adj_factors(db, start=start, end=end)
 
@@ -299,16 +327,23 @@ async def main() -> None:
 
     if args.adj_factor:
         adj_start, adj_end = args.adj_factor
-        stats = await repair_adj_factors(adj_start, adj_end)
+        if adj_start > adj_end:
+            logger.error(
+                "repair: --adj-factor START (%s) must not be after END (%s)", adj_start, adj_end
+            )
+            sys.exit(2)
+        stats = await repair_adj_factors(adj_start, adj_end, today=asof)
         logger.info(
-            "repair: adj_factor %s..%s stocks=%d rows=%d failed=%d",
+            "repair: adj_factor %s..%s stocks=%d rows=%d failed=%d unfilled=%d remaining=%d",
             adj_start,
             adj_end,
-            stats["stocks"],
-            stats["rows"],
-            stats["failed"],
+            stats.get("stocks", 0),
+            stats.get("rows", 0),
+            stats.get("failed", 0),
+            stats.get("unfilled", 0),
+            stats.get("remaining", 0),
         )
-        if stats["rows"]:  # 有行被改写才需要失效 K 线缓存
+        if stats.get("rows"):  # 有行被改写才需要失效 K 线缓存
             await _invalidate_kline_caches()
 
 

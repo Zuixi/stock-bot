@@ -95,3 +95,13 @@ def test_data_freshness_schema_exposes_adj_factor_repair() -> None:
     assert out.adj_factor_repaired is not None
     assert out.adj_factor_repaired.rows == 3
     assert out.adj_factor_repaired.days == ["2026-09-16"]
+
+
+def test_adj_factor_repair_out_defaults_are_safe() -> None:
+    """字段缺省不得把端点打成 500：``error`` 默认 None，计数默认 0（M3）。"""
+    from app.schemas.reconciliation import AdjFactorRepairOut
+
+    out = AdjFactorRepairOut(days=["2026-09-16"], rows=3, failed=0)  # 未来 producer 省略 error
+    assert out.error is None
+    assert out.unfilled == 0
+    assert out.remaining == 0
