@@ -13,10 +13,11 @@ from __future__ import annotations
 
 from datetime import date
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 
+from app.schemas.market_data import NorthboundSeriesOut
 from app.services import market_data_service as mds
 from app.services import market_service
 
@@ -72,6 +73,29 @@ def _patch_latest_snapshot(monkeypatch: pytest.MonkeyPatch, day: date | None) ->
 
     monkeypatch.setattr(mds, "_latest_snapshot_day", _latest)
     return calls
+
+
+class _DimAwareCtx:
+    """`sector_moneyflow_snapshots` 的内存替身：``max(trade_date)`` 支持 dimension 过滤。
+
+    执行语句时按绑定参数里出现的 dimension 字面量挑子集；无过滤则取全表最大日。
+    """
+
+    def __init__(self, days_by_dim: dict[str, date]) -> None:
+        self.days_by_dim = days_by_dim
+        self.stmts: list[Any] = []
+
+    async def execute(self, stmt: Any) -> _ScalarResult:
+        self.stmts.append(stmt)
+        wanted = {v for v in stmt.compile().params.values() if isinstance(v, str)}
+        days = [d for dim, d in self.days_by_dim.items() if not wanted or dim in wanted]
+        return _ScalarResult(max(days) if days else None)
+
+    async def __aenter__(self) -> Any:
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
 
 
 def _snapshot(**overrides: Any) -> Any:
@@ -153,6 +177,25 @@ async def test_latest_snapshot_day_reads_max_and_is_none_when_empty() -> None:
 # ---------------------------------------------------------------------------
 
 
+async def test_latest_snapshot_day_applies_optional_filters() -> None:
+    """过滤参数必须进 WHERE：不带过滤时不得凭空加条件。"""
+    from app.models.market_data import SectorMoneyflowSnapshot
+
+    filtered = _NullDb(date(2026, 9, 8))
+    await mds._latest_snapshot_day(
+        filtered,
+        SectorMoneyflowSnapshot.trade_date,
+        SectorMoneyflowSnapshot.dimension == "concept",
+    )
+    sql = str(filtered.stmts[0])
+    assert "max" in sql.lower()
+    assert "dimension" in sql.lower(), "维度过滤必须进入聚合语句"
+
+    unfiltered = _NullDb(date(2026, 9, 9))
+    await mds._latest_snapshot_day(unfiltered, SectorMoneyflowSnapshot.trade_date)
+    assert "where" not in str(unfiltered.stmts[0]).lower(), "无过滤时不得带 WHERE"
+
+
 async def test_sector_moneyflow_falls_back_to_latest_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -174,6 +217,9 @@ async def test_sector_moneyflow_falls_back_to_latest_snapshot(
                         "up_count": 235,
                         "down_count": 87,
                         "main_net_ratio": 6.46,
+                        "lead_stock_name": "比亚迪",
+                        "lead_stock_code": "002594",
+                        "lead_stock_pct": 3.1,
                     },
                 )()
             ]
@@ -210,6 +256,37 @@ async def test_sector_moneyflow_queries_the_resolved_day(monkeypatch: pytest.Mon
     assert out["as_of"] == "2026-09-08"
     assert out["stale_days"] == 9
     assert out["items"][0]["lead_stock_name"] == "比亚迪"
+
+
+async def test_sector_moneyflow_latest_day_is_per_dimension(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """最新一天只有 industry 行时，concept 请求必须回落到 concept 自己的最近日。
+
+    否则会拿 industry 的最近日去查 concept（``as_of``/``stale_days`` 有值但 ``items``
+    为空），正是本次回落要消除的"非空 as_of + 空列表"组合。
+    """
+    _patch_today(monkeypatch)
+    ctx = _DimAwareCtx({"industry": date(2026, 9, 9), "concept": date(2026, 9, 8)})
+    monkeypatch.setattr("app.core.database.async_session_factory", lambda: ctx)
+    seen: list[tuple[Any, ...]] = []
+
+    async def _repo(db, day, dimension, limit):  # noqa: ANN001
+        seen.append((day, dimension, limit))
+        return [_snapshot()]
+
+    monkeypatch.setattr(mds.market_data_repo, "list_sector_moneyflow", _repo)
+
+    industry = await mds.get_sector_moneyflow(None, "industry", 15)
+    concept = await mds.get_sector_moneyflow(None, "concept", 15)
+
+    assert industry["as_of"] == "2026-09-09"
+    assert concept["as_of"] == "2026-09-08", "concept 的 as_of 必须是 concept 自己的最近日"
+    assert concept["stale_days"] == 9
+    assert seen == [
+        (date(2026, 9, 9), "industry", mds.SECTOR_MONEYFLOW_CACHE_LIMIT),
+        (date(2026, 9, 8), "concept", mds.SECTOR_MONEYFLOW_CACHE_LIMIT),
+    ], "明细查询日必须与各自维度解析出的最近日一致"
 
 
 async def test_sector_moneyflow_empty_table_is_explicit_not_empty_list(
@@ -259,7 +336,11 @@ async def test_sector_moneyflow_cache_key_carries_as_of_and_hit_skips_repo(
 async def test_sector_moneyflow_key_changes_with_snapshot_day(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """修复/翻日写入新快照后，旧 key 的同日 payload 不得再被服务。"""
+    """缓存键必须含快照日：旧日键与无日键的 payload 都不得再被服务。
+
+    两条毒饵都埋下（旧日 09-08 + 无日 legacy），只有"键含当日"的实现才会 miss 并
+    重新解析；任何丢掉日期的键都会命中无日毒饵，把 DAYLESS/STALE 当结果返回。
+    """
     _patch_today(monkeypatch)
     _patch_latest_snapshot(monkeypatch, date(2026, 9, 9))
     cache = RecordingCache()
@@ -267,6 +348,11 @@ async def test_sector_moneyflow_key_changes_with_snapshot_day(
         "as_of": "2026-09-08",
         "stale_days": 9,
         "items": [{"board_code": "STALE"}],
+    }
+    cache.store["market:sector-moneyflow:industry"] = {
+        "as_of": "2026-09-08",
+        "stale_days": 9,
+        "items": [{"board_code": "DAYLESS"}],
     }
 
     async def _repo(db, day, dimension, limit):  # noqa: ANN001
@@ -278,6 +364,24 @@ async def test_sector_moneyflow_key_changes_with_snapshot_day(
 
     assert out["as_of"] == "2026-09-09" and out["stale_days"] == 8
     assert out["items"][0]["board_code"] == "FRESH"
+    assert cache.set_calls[-1][0] == "market:sector-moneyflow:industry:2026-09-09"
+
+
+def test_map_sector_moneyflow_row_requires_lead_stock_columns() -> None:
+    """映射直读属性：列被改名/拼错时必须炸，不得静默降级成 ``None``（fail-loud）。"""
+    incomplete = SimpleNamespace(
+        board_code="BK1211",
+        board_name="汽车",
+        pct_change=1.35,
+        main_net_inflow=3.7e9,
+        super_large_net=2.7e9,
+        large_net=9.3e8,
+        up_count=235,
+        down_count=87,
+        main_net_ratio=6.46,
+    )
+    with pytest.raises(AttributeError):
+        mds._map_sector_moneyflow_row(incomplete)
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +457,12 @@ async def test_northbound_empty_table_is_discontinued_none_as_of(
         "items": [],
     }
     assert cache.set_calls == []
+
+
+def test_northbound_source_status_literal_has_no_unreachable_member() -> None:
+    """声明面只保留代码能产出的两个值：多一个 "stale" 会逼前端适配死分支。"""
+    members = get_args(NorthboundSeriesOut.model_fields["source_status"].annotation)
+    assert members == ("live", "discontinued")
 
 
 async def test_northbound_cache_key_carries_as_of(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -506,6 +616,25 @@ async def test_rankings_resolved_today_is_latest_trading_day(
     assert out.is_latest_trading_day is True
 
 
+async def test_rankings_latest_day_and_fallback_quality_coexist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """未来脏行顶起候选、resolver 回落到当前预期交易日时，两字段同时成立。
+
+    ``is_latest_trading_day`` 讲"展示的这一天是不是当前预期交易日"，``as_of_quality``
+    讲"表内最新行是不是被跳过了"——互不派生：这里展示日 09-17 就是今天且为 True，
+    而表内最新行是更脏的 09-18，故 quality="fallback"。不得用 quality 去否掉布尔。
+    """
+    monkeypatch.setattr(market_service, "_today_sh", lambda: TODAY)
+    _patch_rankings(monkeypatch, TODAY, "fallback")
+
+    out = await market_service.get_rankings(None, None, "gainers", 5)  # type: ignore[arg-type]
+
+    assert out.as_of == TODAY
+    assert out.is_latest_trading_day is True, "展示日就是当前预期交易日"
+    assert out.as_of_quality == "fallback", "表内最新行是另一个（更脏的）未来日"
+
+
 async def test_rankings_weekend_expects_friday(monkeypatch: pytest.MonkeyPatch) -> None:
     """周六/周日"最近交易日"= 周五；周五的 as_of 才算最新。"""
     monkeypatch.setattr(market_service, "_today_sh", lambda: date(2026, 9, 19))  # 周六
@@ -517,6 +646,32 @@ async def test_rankings_weekend_expects_friday(monkeypatch: pytest.MonkeyPatch) 
     _patch_rankings(monkeypatch, date(2026, 9, 17), "fallback")
     thursday = await market_service.get_rankings(None, None, "gainers", 5)  # type: ignore[arg-type]
     assert thursday.is_latest_trading_day is False
+
+
+async def test_rankings_empty_db_label_uses_shanghai_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`md is None` 的降级分支也必须用上海判据日做 as_of 标签（与同函数主体一致）。"""
+
+    class _PinnedDate(date):
+        @classmethod
+        def today(cls) -> date:
+            return date(2026, 9, 6)  # 宿主本地"今天"（周日），故意不等于上海判据日
+
+    monkeypatch.setattr(market_service, "date", _PinnedDate)
+    monkeypatch.setattr(market_service, "_today_sh", lambda: date(2026, 9, 19))  # 周六
+
+    async def _resolve(_db: Any, *, cache: Any = None) -> Any:
+        return None
+
+    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _resolve)
+
+    out = await market_service.get_rankings(None, None, "gainers", 5)  # type: ignore[arg-type]
+
+    assert out.as_of == date(2026, 9, 18), "周六的最近预期交易日是周五（上海时区）"
+    assert out.as_of_quality == "partial"
+    assert out.items == []
+    assert out.is_latest_trading_day is False
 
 
 async def test_rankings_future_dated_day_is_not_latest_trading_day(
