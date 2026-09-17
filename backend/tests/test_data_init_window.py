@@ -332,6 +332,7 @@ def _args(**overrides: object) -> argparse.Namespace:
         "purge_incomplete_today": False,
         "yes": False,
         "backfill": None,
+        "adj_factor": None,
         "as_of": TODAY,
     }
     base.update(overrides)
