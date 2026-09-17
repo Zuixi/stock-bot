@@ -192,3 +192,25 @@ async def test_latest_trade_date_helper_returns_none_on_empty(monkeypatch) -> No
 
     monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _empty)
     assert await market_service._latest_trade_date(_FakeDb([])) is None  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_get_rankings_legacy_cache_payload_without_quality_reads_partial() -> None:
+    """Pre-deploy cache payloads have no ``as_of_quality`` key.
+
+    The schema default (``"complete"``) would dress a stale payload up as a fresh
+    complete day for up to ``_MARKET_CACHE_TTL``; an absent key means ``"partial"``.
+    """
+    cache = RecordingCache()
+    legacy = RankingResponseOut(
+        as_of=date(2026, 9, 10), is_latest_trading_day=True, type="gainers", items=[]
+    ).model_dump(mode="json")
+    del legacy["as_of_quality"]  # legacy shape: key absent, not null
+    cache.store["market:rankings:gainers:20"] = legacy
+    db = _FakeDb([])
+
+    out = await market_service.get_rankings(db, cache, "gainers", 20)  # type: ignore[arg-type]
+
+    assert out.as_of_quality == "partial"
+    assert out.as_of == date(2026, 9, 10)
+    assert db.calls == []

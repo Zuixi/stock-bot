@@ -78,7 +78,12 @@ async def get_snapshot(
         if cache is not None:
             cached: dict[str, Any] | None = await cache.get(key)
             if cached:
-                return cached
+                # 缓存体只由 (target, lookback) 决定，as_of_quality 是**逐请求**标签：
+                # 同一 target 既可来自显式 ?date=（partial），也可来自判据（complete/fallback）。
+                # 若原样返回，先写缓存的那个请求会把标签固化到 TTL 结束（显式日期写下
+                # partial 会污染默认请求，反之默认请求的 complete 会让 ?date= 谎报完整度）。
+                # 故命中路径一律用**本次请求**已知的 quality 覆盖标签，两条分支互不串味。
+                return {**cached, "as_of_quality": quality}
         market_days = await limit_up_repo.list_recent_trade_dates(
             db, target, window_trade_days(lookback)
         )

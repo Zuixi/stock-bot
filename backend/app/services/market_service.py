@@ -609,8 +609,14 @@ async def get_rankings(
     cache_key = f"market:rankings:{rank_type}:{limit}"
     if cache:
         cached = await cache.get(cache_key)
-        if cached is not None:
-            return RankingResponseOut.model_validate(cached)
+        if isinstance(cached, dict):  # non-dict = foreign/legacy shape, treat as a miss
+            # Payloads written before ``as_of_quality`` existed lack the key, and the
+            # schema default is the optimistic "complete" — that would label a stale
+            # payload as a fresh complete day for up to _MARKET_CACHE_TTL. Absent key
+            # means the quality is unknown -> "partial" (never claim completeness).
+            return RankingResponseOut.model_validate(
+                {**cached, "as_of_quality": cached.get("as_of_quality", "partial")}
+            )
 
     md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
     if md is None:
@@ -695,8 +701,12 @@ async def get_sw_industry_performance(
     cache_key = "market:sw-performance"
     if cache:
         cached = await cache.get(cache_key)
-        if cached is not None:
-            out = SwPerformanceResponseOut.model_validate(cached)
+        if isinstance(cached, dict):  # non-dict = foreign/legacy shape, treat as a miss
+            # Same rule as get_rankings: a pre-deploy payload has no ``as_of_quality``
+            # and the schema default ("complete") must not be mistaken for real evidence.
+            out = SwPerformanceResponseOut.model_validate(
+                {**cached, "as_of_quality": cached.get("as_of_quality", "partial")}
+            )
             return out.model_copy(update={"items": out.items[:limit]})
 
     md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
