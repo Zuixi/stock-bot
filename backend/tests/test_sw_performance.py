@@ -189,3 +189,22 @@ async def test_sw_performance_degrades_on_empty_db(monkeypatch) -> None:
     assert out.as_of == market_service.last_weekday(date.today())
     assert out.as_of_quality == "partial"
     assert cache.set_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sw_performance_legacy_cache_payload_without_quality_reads_partial() -> None:
+    """Pre-deploy payloads lack ``as_of_quality``; the schema default ("complete") is a lie.
+
+    Absent key => "partial" (quality unknown), never the optimistic default.
+    """
+    cache = RecordingCache()
+    legacy = SwPerformanceResponseOut(
+        as_of=date(2026, 9, 9), items=[_row("110000", "农林牧渔")]
+    ).model_dump(mode="json")
+    del legacy["as_of_quality"]  # legacy shape: key absent, not null
+    cache.store["market:sw-performance"] = legacy
+
+    out = await market_service.get_sw_industry_performance(_FakeDb([]), cache, 31)  # type: ignore[arg-type]
+
+    assert out.as_of_quality == "partial"
+    assert out.items[0].code == "110000"

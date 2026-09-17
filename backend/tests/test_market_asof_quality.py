@@ -208,3 +208,74 @@ async def test_limit_up_projections_carry_as_of_quality(monkeypatch) -> None:
     }
     assert limit_up_service.sector_payload(snap)["as_of_quality"] == "fallback"
     assert limit_up_service.yesterday_payload(snap)["as_of_quality"] == "fallback"
+
+
+class _SeededCache:
+    """One preset payload for any key; records the keys asked for (no redis, no mock lib)."""
+
+    def __init__(self, payload: dict[str, Any] | None = None) -> None:
+        self.payload = payload
+        self.get_keys: list[str] = []
+
+    async def get(self, key: str) -> Any | None:
+        self.get_keys.append(key)
+        return self.payload
+
+    async def set(self, key: str, value: Any, ttl: int | None = None) -> None:  # pragma: no cover
+        raise AssertionError("cache-hit paths must not write")
+
+
+_SNAPSHOT_BODY: dict[str, Any] = {
+    "as_of": D16,
+    "as_of_prev": D15,
+    "source": "local_calc",
+    "limits_present": True,
+    "is_partial": False,
+    "sw_coverage": None,
+    "degraded_reason": None,
+    "market_days": [D15, D16],
+    "breadth": {"zt_count": 0, "dt_count": 0, "zb_count": 0, "quoted": 0},
+    "kpis": {},
+    "echelons": [],
+    "sectors": {"items": [], "unclassified_count": 0},
+    "yesterday": {"kpis": {}, "items": []},
+}
+
+
+async def test_snapshot_cache_hit_relabels_with_the_resolved_quality(monkeypatch) -> None:
+    """显式 ?date= 写下的 "partial" 标签不得污染后续默认请求。
+
+    快照体只由 (target, lookback) 决定，quality 是**逐请求**标签：显式日期请求先
+    写缓存、默认请求后命中时，必须用本次解析出的 quality 覆盖缓存里的旧标签。
+    """
+
+    async def _resolve(_db: Any, *, cache: Any = None) -> mds.MarketDay:
+        return mds.MarketDay(D16, "complete", None, 5485, 5513, 1.0, True)
+
+    monkeypatch.setattr(
+        limit_up_service.market_day_service, "resolve_latest_complete_day", _resolve
+    )
+    cache = _SeededCache({**_SNAPSHOT_BODY, "as_of_quality": "partial"})
+
+    snap = await limit_up_service.get_snapshot(cache)  # type: ignore[arg-type]
+
+    assert snap["as_of_quality"] == "complete"
+    assert snap["as_of"] == D16
+    assert cache.get_keys == [
+        f"market:limit-up:snapshot:{D16.isoformat()}:{limit_up_service.calc.LOOKBACK_TRADE_DAYS}"
+    ]
+
+
+async def test_snapshot_explicit_date_cache_hit_labels_partial(monkeypatch) -> None:
+    """反向：默认请求写下的 "complete" 也不得让显式 ?date= 谎报完整度。"""
+
+    async def _boom(*_a: Any, **_kw: Any) -> None:
+        raise AssertionError("explicit as_of must not consult the completeness predicate")
+
+    monkeypatch.setattr(limit_up_service.market_day_service, "resolve_latest_complete_day", _boom)
+    cache = _SeededCache({**_SNAPSHOT_BODY, "as_of_quality": "complete"})
+
+    snap = await limit_up_service.get_snapshot(cache, as_of=D16)  # type: ignore[arg-type]
+
+    assert snap["as_of"] == D16
+    assert snap["as_of_quality"] == "partial"
