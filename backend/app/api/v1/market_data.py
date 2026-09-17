@@ -275,18 +275,7 @@ async def get_sentiment_intraday(
 
     async with async_session_factory() as db:
         rows = await market_data_repo.list_intraday_snapshot(db, target)
-    out = [
-        SentimentIntradayPointOut(
-            id=r.id,
-            trade_date=r.trade_date,
-            captured_at=r.captured_at,
-            zt_count=r.zt_count,
-            dt_count=r.dt_count,
-            zb_count=r.zb_count,
-            max_streak=r.max_streak,
-        )
-        for r in rows
-    ]
+    out = [SentimentIntradayPointOut.model_validate(r, from_attributes=True) for r in rows]
     if cache is not None and out:
         await cache.set(cache_key, [p.model_dump(mode="json") for p in out], ttl=60)
     return out
