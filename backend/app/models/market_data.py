@@ -263,3 +263,28 @@ class MarketSentimentDaily(Base):
     max_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_streak_symbol: Mapped[str | None] = mapped_column(String(10))
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="local_calc")
+
+
+class MarketSentimentIntraday(Base):
+    """盘中分时序列缓存（Task 12）。
+
+    派生缓存：每 5 分钟 ``intraday_sentiment_poll`` 抓一次东财涨停池，池行数+max_streak
+    入同一 (trade_date, captured_at) 行；端点按 ``captured_at`` 升序取。
+    与 ``MarketSentimentDaily`` 并列——本表是盘中节拍、那张是日终聚合；都不是真相，
+    真源是 daily_quotes + 实时东财池。
+    """
+
+    __tablename__ = "market_sentiment_intraday"
+    __table_args__ = (
+        UniqueConstraint(
+            "trade_date", "captured_at", name="uq_market_sentiment_intraday_date_captured"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    zt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    dt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    zb_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

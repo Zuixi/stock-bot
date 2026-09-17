@@ -10,10 +10,12 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import CacheDep
+from app.repositories import market_data_repo
 from app.schemas.limit_up import (
     LimitUpLadderOut,
     SectorLimitUpOut,
     SentimentCalendarPointOut,
+    SentimentIntradayPointOut,
     YesterdayLimitUpOut,
 )
 from app.schemas.market_data import (
@@ -233,6 +235,61 @@ async def get_sentiment_calendar(
 ) -> list[SentimentCalendarPointOut]:
     rows = await limit_up_service.get_calendar(cache, days)
     return [SentimentCalendarPointOut(**r) for r in rows]
+
+
+@router.get("/sentiment/intraday", response_model=list[SentimentIntradayPointOut])
+async def get_sentiment_intraday(
+    cache: CacheDep,
+    date: str | None = Query(default=None, description="ISO 日期，缺省=今天（上海时区）"),
+) -> list[SentimentIntradayPointOut]:
+    """盘中分时点序列（升序），按 ``captured_at`` 升序返回 ``market_sentiment_intraday`` 表点。
+
+    缓存 key ``market:limit-up:intra-points:{date}`` TTL=60s：5min scheduler 轮询
+    + 60s 端点 cache 共同兜住前端 30s 轮询节拍。**未来日期** 400（避免上游被请求
+    时刻尚未落库导致的不一致）。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services.market_data_service import _today_sh  # noqa: PLC0415
+
+    today_sh = _today_sh()
+    if date is None:
+        target = today_sh
+    else:
+        try:
+            target = datetime.fromisoformat(date).date()
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="date must be ISO format, e.g. 2026-09-17"
+            ) from None
+    if target > today_sh:
+        raise HTTPException(
+            status_code=400,
+            detail=f"date must not be in the future (today_sh={today_sh.isoformat()})",
+        )
+
+    cache_key = f"market:limit-up:intra-points:{target.isoformat()}"
+    if cache is not None:
+        cached: list[dict] | None = await cache.get(cache_key)
+        if cached:
+            return [SentimentIntradayPointOut(**p) for p in cached]
+
+    async with async_session_factory() as db:
+        rows = await market_data_repo.list_intraday_snapshot(db, target)
+    out = [
+        SentimentIntradayPointOut(
+            id=r.id,
+            trade_date=r.trade_date,
+            captured_at=r.captured_at,
+            zt_count=r.zt_count,
+            dt_count=r.dt_count,
+            zb_count=r.zb_count,
+            max_streak=r.max_streak,
+        )
+        for r in rows
+    ]
+    if cache is not None and out:
+        await cache.set(cache_key, [p.model_dump(mode="json") for p in out], ttl=60)
+    return out
 
 
 @router.get("/data-freshness", response_model=DataFreshnessOut)

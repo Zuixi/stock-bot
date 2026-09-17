@@ -412,6 +412,42 @@ async def sentiment_daily_job() -> None:
         await _alert_job_failure("sentiment_daily", exc)
 
 
+async def intraday_sentiment_poll_job() -> None:
+    """盘中分时点入库（交易日 9:00-14:55 每 5 分钟，cron 表达式已排除周末与非交易时段）。
+
+    盘中"今日"语义固定为上海时区当前日期。东财涨停池抓取/DB 写入失败时整段静默
+    （``logger.exception`` + 登记 ``job:failures``），由下一次 5min 轮询自愈——任务
+    **不**触发对账路径（与其它盘中轮询的"失败非致命"约定一致）：一次 5min 轮询漏
+    一次不等于数据洞，cron 下一拍会补；只有真正阻塞整日的事件才升级到对账。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.repositories import market_data_repo  # noqa: PLC0415
+    from app.services import intraday_sentiment_service  # noqa: PLC0415
+
+    now_sh = datetime.now(_SH_TZ)
+    today = now_sh.date()
+    try:
+        pool_rows = await intraday_sentiment_service.fetch_intraday_pool(today.strftime("%Y%m%d"))
+        if not pool_rows:
+            logger.info("intraday_sentiment_poll skipped: empty pool (trade_date=%s)", today)
+            return
+        async with async_session_factory() as db:
+            await market_data_repo.upsert_intraday_snapshot(
+                db, today, captured_at=now_sh, rows=pool_rows
+            )
+            await db.commit()
+        logger.info(
+            "intraday_sentiment_poll upserted: trade_date=%s zt=%d captured_at=%s",
+            today,
+            len(pool_rows),
+            now_sh.isoformat(),
+        )
+    except Exception as exc:
+        logger.exception("intraday_sentiment_poll failed (trade_date=%s)", today)
+        await _alert_job_failure("intraday_sentiment_poll", exc)
+        return
+
+
 async def announcements_poll_job() -> None:
     """巨潮公告轮询（8-22 点每 10 分钟，DO NOTHING 去重近 3 日窗口）。
 

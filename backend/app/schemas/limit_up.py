@@ -13,7 +13,7 @@ missing_days` 全部 `None`；盘中无"昨日→今日"语义 → `YesterdayLim
 `as_of_label` 用于前端徽标（收盘="收盘"、盘中="盘中 HH:MM"、回落="盘中不可用，已回落收盘"）。
 """
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -140,3 +140,19 @@ class SentimentCalendarPointOut(BaseModel):
     promo_1to2: float | None = None
     promo_2to3: float | None = None
     max_streak: int = 0
+
+
+class SentimentIntradayPointOut(BaseModel):
+    """盘中分时点（Task 12 ``GET /market/sentiment/intraday`` 单行 schema）。
+
+    与 ``market_sentiment_intraday`` 表列 1:1 对齐；端点按 ``captured_at`` 升序返回
+    若干点，前端直接以 ``captured_at`` 为 X 轴渲染时序。
+    """
+
+    id: int
+    trade_date: date
+    captured_at: datetime
+    zt_count: int
+    dt_count: int
+    zb_count: int
+    max_streak: int
