@@ -1,6 +1,7 @@
 """SQLAlchemy ORM models."""
 
 from app.models.cluster import ClusterExplanation, ClusteringMember, ClusteringRun
+from app.models.concept import ConceptBoard, ConceptMember, ConceptMemberChange
 from app.models.daily_basic import DailyBasicIndicator
 from app.models.feature import StockFeature
 from app.models.financial import (
@@ -49,6 +50,9 @@ __all__ = [
     "ClusteringRun",
     "ClusteringMember",
     "ClusterExplanation",
+    "ConceptBoard",
+    "ConceptMember",
+    "ConceptMemberChange",
     "SwIndustryClass",
     "SwIndustryMember",
     "StockCustomSwTag",
