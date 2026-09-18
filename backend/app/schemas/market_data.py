@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -33,6 +34,16 @@ class SectorMoneyflowOut(BaseModel):
     lead_stock_name: str | None = None  # 主力净流入最大股
     lead_stock_code: str | None = None
     lead_stock_pct: float | None = None  # %
+
+
+class SectorMoneyflowListOut(BaseModel):
+    """板块资金流列表 envelope：`as_of` = **返回的 items** 自己持有的最近日
+    （该 dimension 的 per-dimension max，各维度可能不同）；items 为空时 None。
+    """
+
+    as_of: str | None = None  # ISO 日期（返回 items 的日）；无 items 时 None
+    stale_days: int | None = None  # 自然日差（今天 - as_of）；无 items 时 None
+    items: list[SectorMoneyflowOut] = Field(default_factory=list)
 
 
 class MarketMoneyflowTotalOut(BaseModel):
@@ -76,11 +87,22 @@ class MarketMoneyflowTodayOut(BaseModel):
 class MarketMoneyflowOut(BaseModel):
     today: MarketMoneyflowTodayOut | None = None
     history: list[MarketMoneyflowDayOut] = Field(default_factory=list)
+    history_as_of: str | None = None  # 返回 history 末行的日 ISO；history 为空时 None
+    history_stale_days: int | None = None  # 自然日差；history 为空时 None
 
 
 class NorthboundPointOut(BaseModel):
     date: str
     net_amount: float | None = None  # 万元
+
+
+class NorthboundSeriesOut(BaseModel):
+    """北向净流入序列 envelope；上游停更时由 `source_status` 显式标注。"""
+
+    as_of: str | None = None  # ISO 日期（返回 items 末项的日）；无 items 时 None
+    stale_days: int | None = None  # 自然日差（今天 - as_of）；无 items 时 None
+    source_status: Literal["live", "discontinued"] = "discontinued"
+    items: list[NorthboundPointOut] = Field(default_factory=list)
 
 
 class DragonTigerOut(BaseModel):

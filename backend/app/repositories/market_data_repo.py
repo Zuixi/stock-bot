@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
 from datetime import date, datetime, timedelta
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import desc, func, nullslast, select
@@ -16,12 +17,28 @@ from app.models.market_data import (
     BlockTrade,
     DragonTigerEntry,
     MarketMoneyflowDaily,
+    MarketSentimentIntraday,
     NorthboundDaily,
     SectorMoneyflowSnapshot,
     ShareFloat,
     StockRepurchase,
 )
 from app.models.stock import Stock
+
+# asyncpg 单条语句 bind 参数上限 32767（实测解禁任务 share_float 近 7 日窗口一次
+# 拉到数千行 × 8 列 → InterfaceError 静默崩了 13 天）。写多行的 upsert 必须显式分片，
+# 单批 500 行 × 8 列 = 4000 个参数，留足余量。
+UPSERT_CHUNK = 500
+
+RowT = TypeVar("RowT")
+
+
+def chunk_rows(rows: Sequence[RowT], size: int = UPSERT_CHUNK) -> Iterator[list[RowT]]:
+    """把多行 INSERT 的入参切成 ``size`` 行一批（asyncpg 绑定参数上限防护）。"""
+    if size <= 0:
+        raise ValueError(f"chunk size must be positive, got {size}")
+    for start in range(0, len(rows), size):
+        yield list(rows[start : start + size])
 
 
 async def upsert_sector_moneyflow(
@@ -284,15 +301,19 @@ async def upsert_share_floats(db: AsyncSession, rows: list[dict[str, Any]]) -> i
         }
         for r in rows
     ]
-    stmt = (
-        pg_insert(ShareFloat)
-        .values(values)
-        .on_conflict_do_nothing(constraint="uq_share_floats_dedupe")
-    )
-    # Core INSERT 的 execute 运行时返回 CursorResult（带 rowcount）；Result 存根无该属性
-    result = cast("CursorResult[Any]", await db.execute(stmt))
+    # 必须分片：近 7 日窗口的行数轻易越过 32767/8 行上限（见 UPSERT_CHUNK 注释）
+    upserted = 0
+    for batch in chunk_rows(values):
+        stmt = (
+            pg_insert(ShareFloat)
+            .values(batch)
+            .on_conflict_do_nothing(constraint="uq_share_floats_dedupe")
+        )
+        # Core INSERT 的 execute 运行时返回 CursorResult（带 rowcount）；Result 存根无该属性
+        result = cast("CursorResult[Any]", await db.execute(stmt))
+        upserted += int(result.rowcount)
     await db.flush()
-    return int(result.rowcount)
+    return upserted
 
 
 async def list_share_floats(
@@ -476,3 +497,63 @@ async def list_market_moneyflow_daily(db: AsyncSession, days: int) -> list[Marke
     rows = list((await db.execute(stmt)).scalars().all())
     rows.reverse()
     return rows
+
+
+async def upsert_intraday_snapshot(
+    db: AsyncSession,
+    trade_date: date,
+    captured_at: datetime,
+    rows: list[dict[str, Any]],
+) -> int:
+    """盘中分时点幂等 upsert（Task 12）。
+
+    池行数即 ``zt_count``；``max_streak`` 由池内 ``max(streak)`` 计算（实操里
+    scheduler 端已经算好再传，这里是接受 dict 输入的薄封装：取 ``zt_count`` /
+    ``max_streak`` 即可，其它计数盘中无源，固定为 0）。
+
+    ``ON CONFLICT (trade_date, captured_at) DO NOTHING``：scheduler 5min 节拍
+    上同一 ``captured_at`` 跑两遍（coalesce 合并/重启追跑）不产生重复行；
+    **不**用 ``DO UPDATE``——盘中点数据是"何时拍下的快照"，事后修正是新一行而非
+    改旧行。
+    """
+    if not rows:
+        return 0
+    zt_count = len(rows)
+    max_streak = 0
+    for r in rows:
+        try:
+            s = int(r.get("streak") or 0)
+        except (TypeError, ValueError):
+            s = 0
+        if s > max_streak:
+            max_streak = s
+    values = [
+        {
+            "trade_date": trade_date,
+            "captured_at": captured_at,
+            "zt_count": zt_count,
+            "dt_count": 0,  # 盘中无 daily_quotes partial day 信号
+            "zb_count": 0,  # 盘中无炸板率
+            "max_streak": max_streak,
+        }
+    ]
+    stmt = (
+        pg_insert(MarketSentimentIntraday)
+        .values(values)
+        .on_conflict_do_nothing(constraint="uq_market_sentiment_intraday_date_captured")
+    )
+    result = cast("CursorResult[Any]", await db.execute(stmt))
+    await db.flush()
+    return int(result.rowcount)
+
+
+async def list_intraday_snapshot(
+    db: AsyncSession, trade_date: date
+) -> list[MarketSentimentIntraday]:
+    """某交易日盘中分时点序列（按 ``captured_at`` 升序，端点契约）。"""
+    stmt = (
+        select(MarketSentimentIntraday)
+        .where(MarketSentimentIntraday.trade_date == trade_date)
+        .order_by(MarketSentimentIntraday.captured_at)
+    )
+    return list((await db.execute(stmt)).scalars().all())

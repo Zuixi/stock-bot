@@ -3,6 +3,7 @@ import type { ColumnsType } from "antd/es/table";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { fetchRepurchases, type RepurchaseItem } from "@/shared/api/marketData";
+import { useMarketPolling } from "../../hooks/useMarketPolling";
 import { fmtYi } from "../format";
 
 const NUM_FONT: React.CSSProperties = { fontVariantNumeric: "tabular-nums" };
@@ -14,10 +15,12 @@ const PROC_COLOR: Record<string, string> = {
 
 export function RepurchaseTable() {
   const navigate = useNavigate();
+  const { refetchInterval } = useMarketPolling();
   const { data = [], isLoading } = useQuery({
-    queryKey: ["repurchases"],
+    queryKey: ["market", "repurchases"],
     queryFn: () => fetchRepurchases(undefined, 30),
     staleTime: 5 * 60 * 1000,
+    refetchInterval,
   });
 
   const columns: ColumnsType<RepurchaseItem> = [

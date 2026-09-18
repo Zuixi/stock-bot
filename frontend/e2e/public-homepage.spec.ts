@@ -39,6 +39,8 @@ interface RankingSampleItem {
 
 interface RankingSampleResponse {
   as_of: string;
+  as_of_quality: string;
+  as_of_reason: string | null;
   is_latest_trading_day: boolean;
   type: string;
   items: RankingSampleItem[];
@@ -52,6 +54,8 @@ const SW_PERFORMANCE_SAMPLE = JSON.parse(
   readFileSync(new URL("./fixtures/swPerformance.sample.json", import.meta.url), "utf8"),
 ) as {
   as_of: string;
+  as_of_quality: string;
+  as_of_reason: string | null;
   items: {
     code: string;
     name: string;
@@ -104,7 +108,7 @@ test.describe("公开行情台首页", () => {
 });
 
 /** 全 11 桶分布（顺序即后端契约 跌停 → 涨停），用于校验分桶求和完整性 */
-const MOCK_DISTRIBUTION_11 = [
+const MOCK_DISTRIBUTION_11_ITEMS = [
   { range: "跌停", count: 12 },
   { range: ">-7%", count: 30 },
   { range: "-5~-7%", count: 73 },
@@ -117,6 +121,25 @@ const MOCK_DISTRIBUTION_11 = [
   { range: ">5%", count: 113 },
   { range: "涨停", count: 61 },
 ];
+
+/**
+ * 后端 Task 2 起 `/market/distribution` 返回 `{as_of, as_of_quality, as_of_reason, items}` 信封。
+ * mock 必须同形状：旧的裸数组会让前端读到 `undefined`（分布卡静默走空态）。
+ */
+const MOCK_DISTRIBUTION_11 = {
+  as_of: "2026-09-11",
+  as_of_quality: "complete",
+  as_of_reason: null,
+  items: MOCK_DISTRIBUTION_11_ITEMS,
+};
+
+/** 空态契约：信封在、`items` 为空（而不是整个响应是 `[]`）。 */
+const MOCK_DISTRIBUTION_EMPTY = {
+  as_of: null,
+  as_of_quality: "partial",
+  as_of_reason: null,
+  items: [],
+};
 
 /** down = 12+30+73+336+1839+1357 = 3647；up（含 0~1%）= 949+606+174+113+61 = 1903 */
 const MOCK_DIST_DOWN = 3647;
@@ -186,10 +209,14 @@ test.describe("公开行情台首页 · 脉搏区（Task 1.5）", () => {
     expect(sum).toBe(MOCK_DIST_UP + MOCK_DIST_DOWN);
   });
 
-  test("分布返回空数组时走不可用占位，而非 上涨 0 · 下跌 0", async ({ page }) => {
+  test("分布 items 为空时走不可用占位，而非 上涨 0 · 下跌 0", async ({ page }) => {
     // 后注册的路由优先，覆盖 beforeEach 的 11 桶 mock
     await page.route("**/api/v1/market/distribution", (route) =>
-      route.fulfill({ status: 200, contentType: "application/json", body: "[]" })
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(MOCK_DISTRIBUTION_EMPTY),
+      })
     );
     await page.goto("/#pulse");
     const pulse = page.getByTestId("section-pulse");
@@ -199,7 +226,8 @@ test.describe("公开行情台首页 · 脉搏区（Task 1.5）", () => {
   });
 });
 
-const MOCK_SECTORS = [
+/** 板块（CSRC 口径）信封：Task 2 起 `/market/sectors` 与 `/market/capital-flow` 同款包对象。 */
+const MOCK_SECTORS_ITEMS = [
   { name: "船舶", changePercent: 4.46, totalMarketCap: 1.14e10, stockCount: 11, topStocks: [] },
   { name: "水运", changePercent: 3.62, totalMarketCap: 1.36e10, stockCount: 19, topStocks: [] },
   { name: "煤炭开采", changePercent: 3.47, totalMarketCap: 1.45e10, stockCount: 25, topStocks: [] },
@@ -211,10 +239,17 @@ const MOCK_SECTORS = [
   { name: "水力发电", changePercent: 1.68, totalMarketCap: 5.68e9, stockCount: 20, topStocks: [] },
 ];
 
+const MOCK_SECTORS = {
+  as_of: "2026-09-11",
+  as_of_quality: "complete",
+  as_of_reason: null,
+  items: MOCK_SECTORS_ITEMS,
+};
+
 /** 申万一级行业聚合 mock 使用真实端点快照（见文件头 fixtures 说明）。 */
 const MOCK_SW_PERFORMANCE = SW_PERFORMANCE_SAMPLE;
 
-const MOCK_CAPITAL_FLOW = [
+const MOCK_CAPITAL_FLOW_ITEMS = [
   { name: "元器件", inflow: 1509.75, outflow: -724.07 },
   { name: "半导体", inflow: 443.88, outflow: -1357.9 },
   { name: "通信设备", inflow: 1140.21, outflow: -569.02 },
@@ -225,6 +260,13 @@ const MOCK_CAPITAL_FLOW = [
   { name: "小金属", inflow: 340.59, outflow: -102.47 },
   { name: "汽车配件", inflow: 164.78, outflow: -243.14 },
 ];
+
+const MOCK_CAPITAL_FLOW = {
+  as_of: "2026-09-11",
+  as_of_quality: "complete",
+  as_of_reason: null,
+  items: MOCK_CAPITAL_FLOW_ITEMS,
+};
 
 const MOCK_MONEYFLOW = {
   today: {
@@ -240,6 +282,8 @@ const MOCK_MONEYFLOW = {
       { code: "000001", name: "上证指数", main_net: -15_583_944_704, super_large_net: -7_581_204_480, large_net: -8_002_740_224, mid_net: 1_721_257_984, small_net: 13_862_682_624, main_ratio: -2 },
     ],
   },
+  history_as_of: "2026-09-11",
+  history_stale_days: 0,
   history: [
     { date: "2026-09-10", main_net: -20_000_000_000, super_large_net: -9e9, large_net: -1.1e10, mid_net: 1e9, small_net: 1.9e10, main_ratio: -1.2, close: 3900, pct_change: -0.5, amount: 1.5e12 },
     { date: "2026-09-11", main_net: -31_581_126_656, super_large_net: -1.6e10, large_net: -1.5e10, mid_net: 2e9, small_net: 2.9e10, main_ratio: -2, close: 3951, pct_change: 0.28, amount: 1.6e12 },

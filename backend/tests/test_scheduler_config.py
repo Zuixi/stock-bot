@@ -30,6 +30,7 @@ DAILY_JOB_IDS = (
     "share_float_daily",
     "repurchase_daily",
     "global_index_daily",
+    "market_moneyflow_daily",
 )
 
 
@@ -84,5 +85,28 @@ async def test_reconcile_triggers_registered_never_drop() -> None:
         catchup = scheduler.get_job("reconcile_weekend_catchup")
         assert catchup is not None and isinstance(catchup.trigger, CronTrigger)
         assert _job_misfire(scheduler, "reconcile_weekend_catchup") is None
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+async def test_market_moneyflow_daily_registered_post_close() -> None:
+    """大盘资金流日线必须真注册：docstring 声明的 16:20 盘后调度曾长期缺失。
+
+    `market_moneyflow_daily_job` 随 jobs.py 引入，但从未在 runner.py 注册 —— 它只在
+    worker 手动任务路径里被间接触发，scheduler 侧"每天 16:20 自动跑"从未发生，
+    这也是 market_moneyflow_daily 表自 2026-09-03 起陈旧的直接原因。
+    """
+    scheduler = create_scheduler()
+    scheduler.start()
+    try:
+        job = scheduler.get_job("market_moneyflow_daily")
+        assert job is not None, "market_moneyflow_daily job not registered"
+        assert isinstance(job.trigger, CronTrigger)
+        assert str(job.trigger.timezone) == "Asia/Shanghai"
+        fields = {f.name: str(f) for f in job.trigger.fields}
+        assert fields["day_of_week"] == "mon-fri"
+        assert fields["hour"] == "16"
+        assert fields["minute"] == "20"
+        assert _job_misfire(scheduler, "market_moneyflow_daily") is None
     finally:
         scheduler.shutdown(wait=False)

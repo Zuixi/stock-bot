@@ -3,16 +3,19 @@ import type { ColumnsType } from "antd/es/table";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { fetchBlockTrades, type BlockTradeItem } from "@/shared/api/marketData";
+import { useMarketPolling } from "../../hooks/useMarketPolling";
 import { fmtWanGu, fmtWanYi } from "../format";
 
 const NUM_FONT: React.CSSProperties = { fontVariantNumeric: "tabular-nums" };
 
 export function BlockTradeTable() {
   const navigate = useNavigate();
+  const { refetchInterval } = useMarketPolling();
   const { data = [], isLoading } = useQuery({
-    queryKey: ["block-trades"],
+    queryKey: ["market", "block-trades"],
     queryFn: () => fetchBlockTrades(undefined, 15),
     staleTime: 5 * 60 * 1000,
+    refetchInterval,
   });
 
   const columns: ColumnsType<BlockTradeItem> = [

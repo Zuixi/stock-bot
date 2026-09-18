@@ -3,16 +3,19 @@ import type { ColumnsType } from "antd/es/table";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { fetchShareFloats, type ShareFloatItem } from "@/shared/api/marketData";
+import { useMarketPolling } from "../../hooks/useMarketPolling";
 import { fmtYiGu } from "../format";
 
 const NUM_FONT: React.CSSProperties = { fontVariantNumeric: "tabular-nums" };
 
 export function ShareFloatTable() {
   const navigate = useNavigate();
+  const { refetchInterval } = useMarketPolling();
   const { data = [], isLoading } = useQuery({
-    queryKey: ["share-floats"],
+    queryKey: ["market", "share-floats"],
     queryFn: () => fetchShareFloats(undefined, 30),
     staleTime: 5 * 60 * 1000,
+    refetchInterval,
   });
 
   const columns: ColumnsType<ShareFloatItem> = [

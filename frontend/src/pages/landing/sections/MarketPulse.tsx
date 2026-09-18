@@ -3,11 +3,11 @@ import { fetchDistribution } from "@/shared/api/market";
 import { fetchGlobalIndices } from "@/shared/api/marketData";
 import type { GlobalIndexCard } from "@/shared/api/marketData";
 import { DistributionBars } from "@/features/market/components/DistributionBars";
+import { FreshnessNote } from "@/shared/ui";
 import type { DistributionBucket } from "@/features/market/components/DistributionBars";
 import { pickCoreIndices } from "@/features/market/components/coreIndices";
 import { useTheme } from "@/app/theme-context";
-
-const REFRESH_MS = 60_000;
+import { useMarketPolling } from "@/features/market/hooks/useMarketPolling";
 
 /** 恒定 8 格：优先核心 6 码，缺谁用任意市场的其余指数顺位补齐（共享选择器） */
 const TICKER_COUNT = 8;
@@ -63,29 +63,34 @@ function TickerSkeletons() {
 }
 
 /**
- * 实时脉搏卡内容：公开指数 8 格 + 涨跌分布柱 + 家数汇总，60s 轮询。
+ * 实时脉搏卡内容：公开指数 8 格 + 涨跌分布柱 + 家数汇总。指数条常驻 300s 轮询
+ * （含美股/欧股），涨跌分布随 A 股时段（开市 30s / 休市停）。
  *
  * 免登录可读；指数与分布两条查询各自降级，任一失败不影响另一块，也不抛到页面级
  * ErrorBoundary。外层由首页 `<SectionCard id="pulse">` 提供卡片壳与标题。
  */
 export function MarketPulse() {
   const { colors } = useTheme();
+  // 指数条含任意市场（核心 6 码缺谁就用非核心补齐，见 pickCoreIndices）→ 常驻 300s；
+  // 涨跌分布是 A 股按日口径 → 随 A 股时段启停。两者节奏不同，故分别取用。
+  const { refetchInterval: indexRefetchInterval } = useMarketPolling("global-index");
+  const { refetchInterval } = useMarketPolling();
 
   const indicesQuery = useQuery({
-    queryKey: ["global-indices"],
+    queryKey: ["market", "global-indices"],
     queryFn: fetchGlobalIndices,
-    refetchInterval: REFRESH_MS,
+    refetchInterval: indexRefetchInterval,
   });
 
   const distQuery = useQuery({
-    queryKey: ["market-distribution"],
+    queryKey: ["market", "distribution"],
     queryFn: fetchDistribution,
-    refetchInterval: REFRESH_MS,
+    refetchInterval,
   });
 
   const indices = indicesQuery.data ? pickCoreIndices(indicesQuery.data, TICKER_COUNT) : [];
 
-  const dist = distQuery.data ?? [];
+  const dist = distQuery.data?.items ?? [];
   // 空数组不是「全平盘」而是「分布不可用」——缺失与零值语义不同，不能渲染成 上涨 0 · 下跌 0
   const hasDistribution = dist.length > 0;
 
@@ -124,6 +129,8 @@ export function MarketPulse() {
       {buckets.length > 0 ? (
         <div className="landing-pulse-dist">
           <div className="landing-pulse-dist-title">当日涨跌分布（日度 / T+1）</div>
+          {/* 分布是唯一按日聚合的块：必须自证「数据截至 X + 口径」，与市场页同款 */}
+          <FreshnessNote asOf={distQuery.data?.asOf} quality={distQuery.data?.asOfQuality} />
           <DistributionBars buckets={buckets} />
         </div>
       ) : null}

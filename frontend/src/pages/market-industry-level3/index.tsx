@@ -32,7 +32,7 @@ export default function IndustryLevel3Page() {
   const [sort, setSort] = useState<SortState>({ sortBy: "symbol", sortOrder: "asc" });
 
   const { data: tree = [], isLoading: treeLoading } = useQuery({
-    queryKey: ["sw-industry-tree"],
+    queryKey: ["market", "sw-industry-tree"],
     queryFn: fetchSwIndustryTree,
   });
   const level1 = useMemo(() => tree.find((node) => node.code === level1Code), [tree, level1Code]);

@@ -1,14 +1,21 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Breadcrumb, Card, Segmented, Space, Table, Tag, Typography } from "antd";
+import { Breadcrumb, Card, Input, Segmented, Space, Table, Tag, Typography } from "antd";
+import { SearchOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnsType, TableProps } from "antd/es/table";
-import { ChangeText } from "@/shared/ui";
+import { ChangeText, NumberText } from "@/shared/ui";
 import {
   fetchHotBoards,
   type HotBoardCategory,
   type HotBoardItem,
 } from "@/shared/api/market";
+import { hotBoardDegradedText } from "@/shared/api/marketEnvelope";
+import { useMarketPolling } from "@/features/market/hooks/useMarketPolling";
+import {
+  BoardDrilldownDrawer,
+  type BoardDrilldownTarget,
+} from "@/features/market/components/BoardDrilldownDrawer";
 
 const HOT_BOARD_CATEGORIES: { key: HotBoardCategory; label: string }[] = [
   { key: "industry", label: "行业板块" },
@@ -44,16 +51,34 @@ function sortRows(rows: HotBoardItem[], sort: SortState): HotBoardItem[] {
 export default function MarketHotSectorsPage() {
   const navigate = useNavigate();
   const { category = "industry" } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const activeCategory: HotBoardCategory = isValidCategory(category) ? category : "industry";
   const [sort, setSort] = useState<SortState>({ sortBy: "changePercent", sortOrder: "desc" });
+  const [keyword, setKeyword] = useState("");
+  const [boardTarget, setBoardTarget] = useState<BoardDrilldownTarget | null>(null);
 
-  const { data: boardRows = [] } = useQuery({
-    queryKey: ["hot-boards-page", activeCategory],
+  const { refetchInterval } = useMarketPolling();
+  // 与 /market 的「A股热门板块」卡共用 key：同一端点全局只有一个缓存条目（此前
+  // `hot-boards-page` 与 `hot-boards` 双 key → 双请求、两份可能漂移的缓存）
+  const { data: boardEnvelope } = useQuery({
+    queryKey: ["market", "hot-boards", activeCategory],
     queryFn: () => fetchHotBoards(activeCategory),
+    refetchInterval,
   });
-  const rows = useMemo(() => sortRows(boardRows, sort), [boardRows, sort]);
+  const boardRows = boardEnvelope?.items ?? [];
   const selectedBoardCode = searchParams.get("board");
+  const degradedText = boardEnvelope
+    ? hotBoardDegradedText(boardEnvelope.source, boardEnvelope.degradedReason)
+    : null;
+
+  const filteredRows = useMemo(() => {
+    const q = keyword.trim().toLowerCase();
+    if (!q) return boardRows;
+    return boardRows.filter(
+      (item) => item.name.toLowerCase().includes(q) || item.code.toLowerCase().includes(q),
+    );
+  }, [boardRows, keyword]);
+  const rows = useMemo(() => sortRows(filteredRows, sort), [filteredRows, sort]);
 
   const columns: ColumnsType<HotBoardItem> = [
     {
@@ -64,7 +89,7 @@ export default function MarketHotSectorsPage() {
         <Space direction="vertical" size={0}>
           <Typography.Text strong>{record.name}</Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {record.code}
+            {record.code || "--"}
           </Typography.Text>
         </Space>
       ),
@@ -75,6 +100,20 @@ export default function MarketHotSectorsPage() {
       width: 120,
       sorter: true,
       render: (value: number) => <ChangeText value={value} />,
+    },
+    {
+      title: "成交额",
+      dataIndex: "amount",
+      width: 130,
+      sorter: true,
+      render: (value: number | null | undefined) => <NumberText value={value} unit="cap" />,
+    },
+    {
+      title: "主力净额",
+      dataIndex: "mainNetInflow",
+      width: 130,
+      sorter: true,
+      render: (value: number | null | undefined) => <NumberText value={value} unit="cap" />,
     },
     {
       title: "上涨家数",
@@ -132,14 +171,34 @@ export default function MarketHotSectorsPage() {
       <Card
         title="A股热门板块"
         size="small"
-        extra={<Typography.Text type="secondary">点击上方分类可切换细分板块列表</Typography.Text>}
+        extra={<Typography.Text type="secondary">点击行可查看该板块成分股</Typography.Text>}
       >
         <Space direction="vertical" size={12} style={{ width: "100%" }}>
           <Segmented
             block
             value={activeCategory}
             options={HOT_BOARD_CATEGORIES.map((item) => ({ label: item.label, value: item.key }))}
-            onChange={(value) => navigate(`/market/hot-sectors/${value as HotBoardCategory}`)}
+            onChange={(value) => {
+              // 切分类保留 `?board=`：选中板块切走再切回时高亮不能丢（"where meaningful"——
+              // 新分类里是否存在该 code 由行高亮自行判定，参数只负责不丢身份）。
+              const query = selectedBoardCode ? `?board=${selectedBoardCode}` : "";
+              navigate(`/market/hot-sectors/${value as HotBoardCategory}${query}`);
+            }}
+          />
+
+          {degradedText ? (
+            <Tag color="warning" style={{ margin: 0 }}>
+              {degradedText}
+            </Tag>
+          ) : null}
+
+          <Input
+            allowClear
+            prefix={<SearchOutlined />}
+            placeholder="搜索板块名称或代码"
+            value={keyword}
+            onChange={(event) => setKeyword(event.target.value)}
+            style={{ maxWidth: 320 }}
           />
 
           <Table<HotBoardItem>
@@ -149,11 +208,28 @@ export default function MarketHotSectorsPage() {
             dataSource={rows}
             pagination={{ pageSize: 10, showSizeChanger: false }}
             onChange={onTableChange}
-            rowClassName={(record) => (selectedBoardCode && selectedBoardCode === record.code ? "ant-table-row-selected" : "")}
-            scroll={{ x: 900 }}
+            rowClassName={(record) =>
+              selectedBoardCode && selectedBoardCode === record.code ? "ant-table-row-selected" : ""
+            }
+            onRow={(record) => ({
+              style: { cursor: record.code ? "pointer" : "default" },
+              onClick: () => {
+                // 回落本地分组的空 code 无可下钻身份：既不高亮也不打开抽屉
+                if (!record.code) return;
+                setBoardTarget({ code: record.code, name: record.name });
+                setSearchParams({ board: record.code });
+              },
+            })}
+            scroll={{ x: 1100 }}
           />
         </Space>
       </Card>
+
+      <BoardDrilldownDrawer
+        board={boardTarget}
+        open={boardTarget !== null}
+        onClose={() => setBoardTarget(null)}
+      />
     </Space>
   );
 }

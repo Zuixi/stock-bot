@@ -17,6 +17,20 @@ JITTER_SEC = 30
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 
 
+async def _alert_job_failure(job_ids: str | tuple[str, ...], exc: BaseException) -> None:
+    """把 job 失败登记到 `job:failures`（/market/data-freshness 的 failed_jobs）。
+
+    APScheduler 不把触发本次执行的 job id 传给函数，所以同一 callable 注册在多个 id 下时
+    （reconcile 3 个触发点、SSE 交易时段 2 个 tick）逐个登记：宁可多一行同源记录，也不要把
+    失败挂到一个这次并没有触发的 id 上。job_alert_service 自身吞掉 Redis 异常——告警绝不
+    能反过来把"已处理的 job 失败"升级成"未处理的崩溃"。
+    """
+    from app.services.job_alert_service import record_job_failure  # noqa: PLC0415
+
+    for job_id in (job_ids,) if isinstance(job_ids, str) else job_ids:
+        await record_job_failure(job_id, repr(exc))
+
+
 def _is_workday() -> bool:
     return datetime.now(_SH_TZ).weekday() < 5
 
@@ -29,14 +43,15 @@ def _in_trading_hours() -> bool:
     return start <= now <= end
 
 
-async def _collect_sse_snapshots() -> None:
+async def _collect_sse_snapshots(job_ids: str | tuple[str, ...] = "sse_trade_hours") -> None:
     from app.services import sse_scraper_service  # noqa: PLC0415
 
     try:
         count = await sse_scraper_service.fetch_and_save()
         logger.info("SSE snapshot collection complete: %d rows", count)
-    except Exception:
+    except Exception as exc:
         logger.exception("SSE snapshot collection failed")
+        await _alert_job_failure(job_ids, exc)
 
 
 async def sse_trade_hours_job() -> None:
@@ -55,7 +70,7 @@ async def sse_trade_hours_job() -> None:
     jitter = random.uniform(0, JITTER_SEC)
     logger.info("SSE trade-hours job triggered, jitter=%.1fs", jitter)
     await asyncio.sleep(jitter)
-    await _collect_sse_snapshots()
+    await _collect_sse_snapshots(("sse_trade_hours", "sse_trade_close"))
 
 
 async def sse_post_close_job() -> None:
@@ -68,7 +83,7 @@ async def sse_post_close_job() -> None:
         return
 
     logger.info("SSE post-close job triggered")
-    await _collect_sse_snapshots()
+    await _collect_sse_snapshots("sse_post_close")
 
 
 # ------------------------------------------------------------------
@@ -76,8 +91,8 @@ async def sse_post_close_job() -> None:
 # ------------------------------------------------------------------
 
 
-async def _run_reconcile(only: set[str] | None) -> None:
-    """对账薄封装：会话生命周期 + 异常边界统一在这里。"""
+async def _run_reconcile(only: set[str] | None, job_ids: str | tuple[str, ...]) -> None:
+    """对账薄封装：会话生命周期 + 异常边界统一在这里（job_ids = 注册它的 scheduler id）。"""
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.services import reconciliation_service  # noqa: PLC0415
 
@@ -89,8 +104,9 @@ async def _run_reconcile(only: set[str] | None) -> None:
             sorted(only) if only else "all",
             {k: v["status"] for k, v in result["domains"].items()},
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("Reconcile failed (only=%s)", sorted(only) if only else "all")
+        await _alert_job_failure(job_ids, exc)
 
 
 async def daily_quotes_backfill_job() -> None:
@@ -105,7 +121,7 @@ async def daily_quotes_backfill_job() -> None:
         return
 
     logger.info("Daily quotes backfill job triggered")
-    await _run_reconcile(only={"daily_quotes"})
+    await _run_reconcile(only={"daily_quotes"}, job_ids="daily_quotes_backfill")
 
 
 async def daily_basic_backfill_job() -> None:
@@ -115,7 +131,7 @@ async def daily_basic_backfill_job() -> None:
         return
 
     logger.info("Daily basic backfill job triggered")
-    await _run_reconcile(only={"daily_basic"})
+    await _run_reconcile(only={"daily_basic"}, job_ids="daily_basic_backfill")
 
 
 async def reconcile_market_data_job() -> None:
@@ -126,7 +142,11 @@ async def reconcile_market_data_job() -> None:
     挂起、周六开机是真实场景）。幂等：无缺口时零 TuShare 请求。
     """
     logger.info("Full reconcile job triggered")
-    await _run_reconcile(only=None)
+    # 同一 callable 挂在 3 个触发点（启动 +2min / 17:45 兜底 / 非交易日 10:00）上
+    await _run_reconcile(
+        only=None,
+        job_ids=("startup_reconcile", "reconcile_post_chain", "reconcile_weekend_catchup"),
+    )
 
 
 # ------------------------------------------------------------------
@@ -150,8 +170,9 @@ async def industry_metrics_refresh_job() -> None:
             result.get("upserted"),
             result.get("signal"),
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("Industry metrics refresh failed")
+        await _alert_job_failure("industry_metrics_refresh", exc)
 
 
 async def financial_backfill_job() -> None:
@@ -177,8 +198,9 @@ async def financial_backfill_job() -> None:
             result.get("processed"),
             result.get("failed"),
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("Financial backfill failed")
+        await _alert_job_failure("financial_backfill", exc)
 
 
 async def securities_refresh_job() -> None:
@@ -202,8 +224,9 @@ async def securities_refresh_job() -> None:
             result.get("etf_upserted"),
             result.get("cb_upserted"),
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("Securities refresh failed")
+        await _alert_job_failure("securities_refresh", exc)
 
 
 async def global_index_daily_job() -> None:
@@ -217,8 +240,9 @@ async def global_index_daily_job() -> None:
             result = await market_data_service.ingest_global_index_daily(db)
             await db.commit()
         logger.info("Global index daily done: %s", result)
-    except Exception:
+    except Exception as exc:
         logger.exception("Global index daily job failed")
+        await _alert_job_failure("global_index_daily", exc)
 
 
 async def sector_moneyflow_job() -> None:
@@ -233,8 +257,9 @@ async def sector_moneyflow_job() -> None:
             result = await market_data_service.ingest_sector_moneyflow(db)
             await db.commit()
         logger.info("Sector moneyflow poll done: %s", result)
-    except Exception:
+    except Exception as exc:
         logger.exception("Sector moneyflow poll failed")
+        await _alert_job_failure("sector_moneyflow_poll", exc)
 
 
 async def market_moneyflow_daily_job() -> None:
@@ -249,8 +274,9 @@ async def market_moneyflow_daily_job() -> None:
             result = await market_data_service.ingest_market_moneyflow_daily(db)
             await db.commit()
         logger.info("Market moneyflow daily done: %s", result)
-    except Exception:
+    except Exception as exc:
         logger.exception("Market moneyflow daily job failed")
+        await _alert_job_failure("market_moneyflow_daily", exc)
 
 
 async def northbound_daily_job() -> None:
@@ -265,8 +291,9 @@ async def northbound_daily_job() -> None:
             result = await market_data_service.ingest_northbound(db)
             await db.commit()
         logger.info("Northbound daily done: %s", result)
-    except Exception:
+    except Exception as exc:
         logger.exception("Northbound daily job failed")
+        await _alert_job_failure("northbound_daily", exc)
 
 
 async def dragon_tiger_daily_job() -> None:
@@ -281,8 +308,9 @@ async def dragon_tiger_daily_job() -> None:
             result = await market_data_service.ingest_dragon_tiger(db)
             await db.commit()
         logger.info("Dragon tiger daily done: %s", result)
-    except Exception:
+    except Exception as exc:
         logger.exception("Dragon tiger daily job failed")
+        await _alert_job_failure("dragon_tiger_daily", exc)
 
 
 async def block_trade_daily_job() -> None:
@@ -297,8 +325,9 @@ async def block_trade_daily_job() -> None:
             result = await market_data_service.ingest_block_trades(db)
             await db.commit()
         logger.info("Block trade daily done: %s", result)
-    except Exception:
+    except Exception as exc:
         logger.exception("Block trade daily job failed")
+        await _alert_job_failure("block_trade_daily", exc)
 
 
 async def share_float_daily_job() -> None:
@@ -313,8 +342,9 @@ async def share_float_daily_job() -> None:
             result = await market_data_service.ingest_share_floats(db)
             await db.commit()
         logger.info("Share float daily done: %s", result)
-    except Exception:
+    except Exception as exc:
         logger.exception("Share float daily job failed")
+        await _alert_job_failure("share_float_daily", exc)
 
 
 async def repurchase_daily_job() -> None:
@@ -329,8 +359,9 @@ async def repurchase_daily_job() -> None:
             result = await market_data_service.ingest_repurchases(db)
             await db.commit()
         logger.info("Repurchase daily done: %s", result)
-    except Exception:
+    except Exception as exc:
         logger.exception("Repurchase daily job failed")
+        await _alert_job_failure("repurchase_daily", exc)
 
 
 async def price_limits_daily_job() -> None:
@@ -354,8 +385,9 @@ async def price_limits_daily_job() -> None:
             result = await market_data_service.ingest_stock_price_limits(db)
             await db.commit()
         logger.info("Price limits daily done: %s", result)
-    except Exception:
+    except Exception as exc:
         logger.exception("Price limits daily job failed")
+        await _alert_job_failure("price_limits_daily", exc)
 
 
 async def sentiment_daily_job() -> None:
@@ -375,8 +407,56 @@ async def sentiment_daily_job() -> None:
             result = await limit_up_service.persist_snapshot(db, None)
             await db.commit()
         logger.info("Sentiment daily done: %s", result)
-    except Exception:
+    except Exception as exc:
         logger.exception("Sentiment daily job failed")
+        await _alert_job_failure("sentiment_daily", exc)
+
+
+async def intraday_sentiment_poll_job() -> None:
+    """盘中分时点入库（交易日 9:25-15:05 每 5 分钟，job 内交易时段守卫）。
+
+    cron 只圈住 ``mon-fri 9-15``（含 15:00 收盘 tick），非交易时段/非工作日由
+    ``_is_workday``/``_in_trading_hours`` 早返回拦掉——与 ``sector_moneyflow_job``
+    同款守卫：09:00-09:25 的盘前 tick 与 15:05 后的 tick 不落到网络调用。
+
+    盘中"今日"语义固定为上海时区当前日期。东财涨停池抓取/DB 写入失败时整段静默
+    （``logger.exception`` + 登记 ``job:failures``），由下一次 5min 轮询自愈——任务
+    **不**触发对账路径（与其它盘中轮询的"失败非致命"约定一致）：一次 5min 轮询漏
+    一次不等于数据洞，cron 下一拍会补；只有真正阻塞整日的事件才升级到对账。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.repositories import market_data_repo  # noqa: PLC0415
+    from app.services import intraday_sentiment_service  # noqa: PLC0415
+
+    if not _is_workday():
+        logger.debug("intraday_sentiment_poll skipped: not a workday")
+        return
+    if not _in_trading_hours():
+        logger.debug("intraday_sentiment_poll skipped: outside trading hours")
+        return
+
+    now_sh = datetime.now(_SH_TZ)
+    today = now_sh.date()
+    try:
+        pool_rows = await intraday_sentiment_service.fetch_intraday_pool(today.strftime("%Y%m%d"))
+        if not pool_rows:
+            logger.info("intraday_sentiment_poll skipped: empty pool (trade_date=%s)", today)
+            return
+        async with async_session_factory() as db:
+            await market_data_repo.upsert_intraday_snapshot(
+                db, today, captured_at=now_sh, rows=pool_rows
+            )
+            await db.commit()
+        logger.info(
+            "intraday_sentiment_poll upserted: trade_date=%s zt=%d captured_at=%s",
+            today,
+            len(pool_rows),
+            now_sh.isoformat(),
+        )
+    except Exception as exc:
+        logger.exception("intraday_sentiment_poll failed (trade_date=%s)", today)
+        await _alert_job_failure("intraday_sentiment_poll", exc)
+        return
 
 
 async def announcements_poll_job() -> None:
@@ -392,8 +472,9 @@ async def announcements_poll_job() -> None:
             result = await announcement_service.ingest_announcements(db)
             await db.commit()
         logger.info("Announcements poll done: %s", result)
-    except Exception:
+    except Exception as exc:
         logger.exception("Announcements poll failed")
+        await _alert_job_failure("announcements_poll", exc)
 
 
 # ------------------------------------------------------------------
@@ -429,13 +510,16 @@ async def universe_refresh_job() -> None:
                 result.get("inserted"),
                 result.get("skipped"),
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("Universe refresh failed for %s", exchange)
+            await _alert_job_failure("universe_refresh", exc)
 
     try:
         redis = await get_redis_pool()
         cache = CacheClient(redis)
         await cache.delete_pattern("stock:list:*")
         await cache.delete_pattern("stock:categories:*")
-    except Exception:
+    except Exception as exc:
         logger.exception("Universe refresh cache invalidation failed (non-fatal)")
+        # 降级但要可见：缓存未失效会让新名录在 TTL 内不可见
+        await _alert_job_failure("universe_refresh", exc)

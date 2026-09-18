@@ -47,7 +47,7 @@ CSS 变量挂在 `html[data-theme='light'|'dark']` 上，`src/app/theme.ts` 消�
 ## 3. Landing 页区块（9 区块，见 docs/design/landing-page-ux.md 草案）
 
 文案定稿：H1「把一个行业，研究透。」；信任行「申万 31 个一级行业 · 5,500+ 只个股 · 多源交叉验证」。
-实时脉搏卡调公开 API：`/api/v1/market/indices` + `/api/v1/market/distribution`（60s 轮询）。
+实时脉搏卡调公开 API：`/api/v1/market/indices` + `/api/v1/market/distribution`（60s staleTime；实现期修订：指数卡按市场状态轮询——A 股盘中 30s、全球指数常驻 300s）。
 行业网格调 `/api/v1/market/sw-industry/tree`（公开）。
 组件落 `src/pages/landing/`（sections/*.tsx），品牌色只用 accent/neutral，不引入新色。
 

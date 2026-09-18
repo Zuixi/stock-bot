@@ -30,7 +30,7 @@ export default function IndustryLevel2Page() {
   const [sort, setSort] = useState<SortState>({ sortBy: "symbol", sortOrder: "asc" });
 
   const { data: tree = [], isLoading: treeLoading } = useQuery({
-    queryKey: ["sw-industry-tree"],
+    queryKey: ["market", "sw-industry-tree"],
     queryFn: fetchSwIndustryTree,
   });
 

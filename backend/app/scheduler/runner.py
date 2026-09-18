@@ -21,6 +21,8 @@ from app.scheduler.jobs import (
     financial_backfill_job,
     global_index_daily_job,
     industry_metrics_refresh_job,
+    intraday_sentiment_poll_job,
+    market_moneyflow_daily_job,
     northbound_daily_job,
     price_limits_daily_job,
     reconcile_market_data_job,
@@ -216,6 +218,30 @@ def create_scheduler() -> AsyncIOScheduler:
         id="sector_moneyflow_poll",
         name="Sector moneyflow intraday poll",
         misfire_grace_time=INTRADAY_GRACE_SEC,
+        replace_existing=True,
+    )
+
+    # Intraday sentiment snapshot: Mon-Fri 9:00-15:55 every 5 min —— cron 圈住
+    # "含 15:00 收盘 tick 的盘中窗口"（hour=9-15），盘前 09:00-09:25 与 15:05 后
+    # 的 tick 由 task 体内 ``_is_workday()``/``_in_trading_hours()`` 早返回拦掉
+    # （与 sector_moneyflow_job 同款）；``INTRADAY_GRACE_SEC`` 把"宿主睡太久追一堆
+    # 过期点"卡在 5min（``job_defaults`` 的 ``coalesce=True`` 负责合并堆积）。
+    scheduler.add_job(
+        intraday_sentiment_poll_job,
+        CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5", timezone="Asia/Shanghai"),
+        id="intraday_sentiment_poll",
+        name="Intraday sentiment snapshot",
+        misfire_grace_time=INTRADAY_GRACE_SEC,
+        replace_existing=True,
+    )
+
+    # Market moneyflow daily (大盘资金流): Mon-Fri 16:20 post close (idempotent upsert)
+    # 曾长期漏注册 —— job 函数存在但 scheduler 从未触发，表自 2026-09-03 起陈旧。
+    scheduler.add_job(
+        market_moneyflow_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=20, timezone="Asia/Shanghai"),
+        id="market_moneyflow_daily",
+        name="Market moneyflow daily",
         replace_existing=True,
     )
 

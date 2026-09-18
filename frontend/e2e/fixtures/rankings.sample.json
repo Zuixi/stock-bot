@@ -37,7 +37,9 @@
         "turnover_rate": 14.755,
         "total_mv": 1408144.76
       }
-    ]
+    ],
+    "as_of_quality": "complete",
+    "as_of_reason": null
   },
   "losers": {
     "as_of": "2026-09-09",
@@ -77,7 +79,9 @@
         "turnover_rate": 13.2174,
         "total_mv": 882603.94
       }
-    ]
+    ],
+    "as_of_quality": "complete",
+    "as_of_reason": null
   },
   "amount": {
     "as_of": "2026-09-09",
@@ -117,7 +121,9 @@
         "turnover_rate": 8.9011,
         "total_mv": 16431105.5
       }
-    ]
+    ],
+    "as_of_quality": "complete",
+    "as_of_reason": null
   },
   "turnover_rate": {
     "as_of": "2026-09-09",
@@ -157,6 +163,8 @@
         "turnover_rate": 49.0678,
         "total_mv": 672945.0
       }
-    ]
+    ],
+    "as_of_quality": "complete",
+    "as_of_reason": null
   }
 }

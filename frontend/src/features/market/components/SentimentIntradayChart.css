@@ -1,0 +1,58 @@
+/*
+ * 盘中分时曲线：与情绪温度计趋势线同款纯 SVG 语言（viewBox 拉伸 + non-scaling-stroke），
+ * 颜色全走 CSS 变量随明暗切换。曲线只表达「涨停家数随时点变化」，不引入图表库。
+ */
+
+.intraday {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.intraday--pending {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.intraday__legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.intraday__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.intraday__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--up);
+}
+
+.intraday__note {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.intraday__svg {
+  display: block;
+  width: 100%;
+  height: 72px;
+}
+
+.intraday__line {
+  fill: none;
+  stroke: var(--up);
+  stroke-width: 2;
+}

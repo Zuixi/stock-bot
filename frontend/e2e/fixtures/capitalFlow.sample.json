@@ -1,0 +1,22 @@
+{
+  "as_of": "2026-09-16",
+  "as_of_quality": "complete",
+  "as_of_reason": null,
+  "items": [
+    {
+      "name": "元器件",
+      "inflow": 2296.13,
+      "outflow": -234.88
+    },
+    {
+      "name": "半导体",
+      "inflow": 2483.28,
+      "outflow": -8.5
+    },
+    {
+      "name": "通信设备",
+      "inflow": 1673.26,
+      "outflow": -94.43
+    }
+  ]
+}
