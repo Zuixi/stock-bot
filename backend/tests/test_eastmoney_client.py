@@ -192,7 +192,7 @@ async def test_fetch_market_moneyflow_daily_skips_broken_identity():
 
 
 def _board(code: str) -> dict:
-    return {"f12": code, "f14": code, "f104": 0, "f105": 0}
+    return {"f12": code, "f14": code, "f104": 0, "f105": 0, "f106": 0}
 
 
 def test_fetch_concept_boards_paginates_and_dedupes(monkeypatch):
@@ -209,6 +209,8 @@ def test_fetch_concept_boards_paginates_and_dedupes(monkeypatch):
     async def fake_get_json(self, base, path, params):
         calls.append(params["pn"])
         assert params["fid"] == "f12"  # 按代码排序，盘中翻页稳定
+        # f106(平盘家数) 必须在 fields 内，否则 member_total 低估（见 mapper 注释）
+        assert params["fields"] == "f12,f14,f104,f105,f106"
         return page1 if params["pn"] == 1 else page2
 
     monkeypatch.setattr(EastmoneyClient, "_get_json", fake_get_json)
@@ -240,18 +242,16 @@ def test_concept_member_fields_are_stable(monkeypatch):
     assert rows == [{"symbol": "601091", "name": "C沈鼓", "market_flag": 1}]
 
 
-def test_map_concept_board_member_total_sums_up_and_down():
-    """member_total = f104(上涨家数) + f105(下跌家数)；缺值 '-' 归一为 None 而非 0。"""
-    assert _map_concept_board({"f12": "BK0501", "f14": "猪肉概念", "f104": 156, "f105": 3}) == {
-        "board_code": "BK0501",
-        "board_name": "猪肉概念",
-        "member_total": 159,
-    }
-    # 单边缺值：另一侧照常计入
-    assert _map_concept_board({"f12": "BK1", "f14": "X", "f104": 5, "f105": "-"})[
+def test_map_concept_board_member_total_sums_up_down_flat():
+    """member_total = f104+f105+f106；实测 BK1753 55+6+2=63 = 成分真值。"""
+    assert _map_concept_board(
+        {"f12": "BK1753", "f14": "光刻胶", "f104": 55, "f105": 6, "f106": 2}
+    ) == {"board_code": "BK1753", "board_name": "光刻胶", "member_total": 63}
+    # 单边/多边缺值：缺的项按 0 计
+    assert _map_concept_board({"f12": "BK1", "f14": "X", "f104": 5, "f105": "-", "f106": "-"})[
         "member_total"
     ] == 5
-    # 两侧都缺：None（不造 0，避免把"未知"记成"空板块"）
-    assert _map_concept_board({"f12": "BK2", "f14": "Y", "f104": "-", "f105": "-"})[
-        "member_total"
-    ] is None
+    # 三项全缺：None（不造 0，避免把"未知"记成"空板块"）
+    assert _map_concept_board(
+        {"f12": "BK2", "f14": "Y", "f104": "-", "f105": "-", "f106": "-"}
+    )["member_total"] is None
