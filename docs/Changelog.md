@@ -1,3 +1,20 @@
+## 2026-09-18 - 概念板块计划 T0 执行：名录解冻（5579）+ 66 只新股行情/限价/基本面补齐（数据运维，无代码改动）
+- **名录解冻**：`stocks` 冻结在 2026-05-08（66 只 5-08 后上市新股无行）→ 逐交易所 `ingest_stock_universe` 重建：**5579 只**（+66）、`max(list_date)=2026-09-17`、`max(asof)=2026-09-18`、近一年上市 **162 只**（与东财概念板 `BK0501` 成分数完全一致）
+- **历史行情回填**：66 只完全无行情 + 19 只覆盖不足 → `_ensure_trailing_three_year_daily_quotes` 85 只、**upserted 15272、failed 0**；验证“无任何行情”从 66 → **0**，且首行 = 上市日（如 `601091` C沈鼓 只有 2026-09-17 一行）；09-17 行情行数 5487 → **5553**
+- **发现真缺陷（限价域漏新股，已绕过并修复数据）**：`ingest_stock_price_limits` 的补漏判据是“**该日无任何行**”，而 20 个期望日都有旧股票的行 → 任务报 `ok/fetched=0` 却把 66 只新股的限价**永久漏掉**（实测新股限价行 = 0，最新日“有行情无当日限价”恰为 66），直接让次新股的“未开板/涨停”不可判定。用显式 `trade_date` 逐日强制重拉 20 日 → **upserted 111120**，新股限价行 0 → **1140**，最新日缺限价 66 → **0**
+- **派生重算**：09-17 的情结行在缺 66 只的条件下算过 → `persist_snapshot(as_of=2026-09-17)` 重算（同时失效 calendar 读缓存）：**涨停 50 / 跌停 2 / 炋板 23 / 最高板 5**；`/market/data-freshness` 四域全 ok（`universe 5579` vs `quotes_symbols_latest 5553`）
+- **待办**：把限价域的存在性判据纳入对账体系（行数量级判据，与 quotes/basic 同口径），否则每新增一批股票就重现一次
+- 涉及模块：docs/{Changelog,references/best-practices}.md（仅文档）
+
+## 2026-09-18 - 概念板块成分 + 次新股追踪：实施计划入库（未实施，含 UI/UX 与解耦边界）
+- **计划**：`plans/2026-09-18-concept-boards-and-new-stocks.md`。决策拍板：数据源**东财为主**（同花顺兜底**明确不做**：实测容器内 `ak.stock_board_concept_name_ths()` → `OSError: Error loading shared library libstdc++.so.6`，`python3.13-alpine` 装不了 `py_mini_racer` 的 V8）；历史口径**只做当日/向前**（不回算历史成分）；次新股口径=**东财概念板块 `BK0501` 成分**，不自建时间窗
+- **实测依据（写进计划，勿再猜）**：东财概念板块共 **504** 个（`fs=m:90+t:3+f:!50`，`pz` 服务端硬上限 100、`fid=f12` 翻页稳定）；成分端点 `fs=b:BK0501` → `total=162`、**全部上市于 2025-09-19~2026-09-17**（与 TuShare 口径「近 1 年上市 162 只」完全一致）；首日新股 `stk_limit` 返回哨兵 `up_limit=99999.999/down_limit=0.01` 且 TuShare `pct_chg=373.8%` 与东财 `f3=177.74%` **基准不同**（禁止混源拼曲线）
+- **现状定性**：概念不是没有而是「半截」——快照表已有资金流/涨跌家数，但 `get_hot_boards("concept")` 硬编码 `return []`（前端 tab 永远空白）、**完全没有成分股成员表**、且快照只拉 `pz=100` 不分页 → 至少 250 个板块永不落库且每行涨跌幅是「最后一次进 Top100 那一刻」的值
+- **设计要点**：3 张新表（`concept_boards`/`concept_members`/`concept_member_changes`，成分表以 `symbol` 为业务键、`stock_id` 可空 → 名录滞后不再静默丢数，以 `unresolved_count` 暴露）；涨跌家数**本地聚合**消除样本偏差、资金流沿用东财快照且分字段不混算；读路径复用 `limit_up_service.get_snapshot()`（板内梯队与梯队卡同源）与 `market_service.get_stocks_enriched_by_symbols`（前端零改映射直接复用 `StockTable`）；采集复用 `market_data.fetch` 队列（不新增 worker 容器），每日 18:20，逐板失败隔离且失败**绝不表现为成分清空**；既有代码只改 4 个 seam
+- **UI 触点**（含字段/交互/降级/空态设计）：热门板块概念 tab（后端委托后前端零改动）→ 概念详情页 `/market/concept/:boardCode`（头部口径条 + 4 KPI + 板内梯队 + 成分股表）→ 个股详情「所属概念」标签（失败即零占位）→ 短线情绪 tab「次新股情绪」卡（含「高于首日开盘」替代口径声明，因发行价未采集）→ 数据版图/资金流样本注脚
+- **状态**：T0（解冻 `stocks` 名录，运维动作）+ T1–T16 待实施，T17 可选（成分变更历史入口，本期不做但差分表照写）
+- 涉及模块：plans/2026-09-18-concept-boards-and-new-stocks.md（新增）, docs/references/best-practices.md
+
 ## 2026-09-17 - CI 修复：单测漏包 `_get_tushare()` seam（本机 .env 掩盖 → 本地绿 CI 全红）
 - **现象**：push 后 CI `Test (backend)` 红，8 failed / 266 passed，全部是 `ValueError: TuShare token is required`；**上一版 main 的 CI 同样红（7 failed）**，只是没被注意到
 - **根因**：`reconcile_market_data` 开头 `client = client or _get_tushare()` 比所有协作函数都早执行，而 `test_reconciliation_service.py` 的 `_seams` 只 patch 了 `expected_trade_dates`/`_row_counts`/`_refetch_*`，没包 client 构造点。本机 `backend/.env` 有真实 `TUSHARE_TOKEN` → 本地永远绿；CI 无该变量 → 必炸（经典「本地凭证掩盖 CI 缺口」）
