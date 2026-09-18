@@ -1,8 +1,10 @@
 """EastmoneyClient 解析单测（不打真实网络，monkeypatch _get_json）。"""
 
+import asyncio
+
 import pytest
 
-from app.core.providers.eastmoney_client import EastmoneyClient
+from app.core.providers.eastmoney_client import EastmoneyClient, _map_concept_board
 
 
 class _FakeEM:
@@ -187,3 +189,69 @@ async def test_fetch_market_moneyflow_daily_skips_broken_identity():
     bad = "2026-09-02,-2.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,1.0,0.0"
     client.__dict__["_get_json"] = _FakeEM({"get": {"rc": 0, "data": {"klines": [bad]}}})._get_json
     assert await client.fetch_market_moneyflow_daily(5) == []
+
+
+def _board(code: str) -> dict:
+    return {"f12": code, "f14": code, "f104": 0, "f105": 0}
+
+
+def test_fetch_concept_boards_paginates_and_dedupes(monkeypatch):
+    """pz 服务端上限 100：必须翻页，且翻页抖动产生的重复行要去重（实测 504 板）。"""
+    page1 = {"data": {"total": 150, "diff": [_board(f"BK{i:04d}") for i in range(100)]}}
+    page2 = {
+        "data": {
+            "total": 150,
+            "diff": [_board("BK0099")] + [_board(f"BK{i:04d}") for i in range(100, 150)],
+        }
+    }
+    calls: list[int] = []
+
+    async def fake_get_json(self, base, path, params):
+        calls.append(params["pn"])
+        assert params["fid"] == "f12"  # 按代码排序，盘中翻页稳定
+        return page1 if params["pn"] == 1 else page2
+
+    monkeypatch.setattr(EastmoneyClient, "_get_json", fake_get_json)
+    boards = asyncio.run(EastmoneyClient().fetch_concept_boards())
+    assert calls == [1, 2]
+    assert len(boards) == 150 and boards[0]["board_code"] == "BK0000"
+
+
+def test_fetch_concept_boards_stops_on_empty_page(monkeypatch):
+    """total 报大但返回空页时必须收敛（防死循环把 5 分钟任务变成长驻）。"""
+
+    async def fake_get_json(self, base, path, params):
+        return {"data": {"total": 9999, "diff": []}}
+
+    monkeypatch.setattr(EastmoneyClient, "_get_json", fake_get_json)
+    assert asyncio.run(EastmoneyClient().fetch_concept_boards()) == []
+
+
+def test_concept_member_fields_are_stable(monkeypatch):
+    """字段形状实测钉住：f12 代码 / f14 名称 / f13 市场（1=沪,0=深）。"""
+
+    async def fake_get_json(self, base, path, params):
+        assert params["fs"] == "b:BK0501"
+        assert params["fields"] == "f12,f13,f14"
+        return {"data": {"total": 1, "diff": [{"f12": "601091", "f14": "C沈鼓", "f13": 1}]}}
+
+    monkeypatch.setattr(EastmoneyClient, "_get_json", fake_get_json)
+    rows = asyncio.run(EastmoneyClient().fetch_concept_members("BK0501"))
+    assert rows == [{"symbol": "601091", "name": "C沈鼓", "market_flag": 1}]
+
+
+def test_map_concept_board_member_total_sums_up_and_down():
+    """member_total = f104(上涨家数) + f105(下跌家数)；缺值 '-' 归一为 None 而非 0。"""
+    assert _map_concept_board({"f12": "BK0501", "f14": "猪肉概念", "f104": 156, "f105": 3}) == {
+        "board_code": "BK0501",
+        "board_name": "猪肉概念",
+        "member_total": 159,
+    }
+    # 单边缺值：另一侧照常计入
+    assert _map_concept_board({"f12": "BK1", "f14": "X", "f104": 5, "f105": "-"})[
+        "member_total"
+    ] == 5
+    # 两侧都缺：None（不造 0，避免把"未知"记成"空板块"）
+    assert _map_concept_board({"f12": "BK2", "f14": "Y", "f104": "-", "f105": "-"})[
+        "member_total"
+    ] is None

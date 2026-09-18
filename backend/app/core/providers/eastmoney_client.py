@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -27,6 +28,12 @@ _CLIST_BASE = "https://push2delay.eastmoney.com"
 _HIS_BASE = "https://push2his.eastmoney.com"
 _HIS_UT = "b2884a393a59ad64002292a3e90d46a5"  # push2his 历史端点固定 ut
 _MIN_INTERVAL = 0.3
+# clist 服务端 pz 硬上限（pz=500 仍只回 100 行，2026-09-18 实测）
+_PAGE_SIZE = 100
+# 翻页死循环护栏：total 撒谎 + 服务端永远返回同一页时，最多翻 20 页就收手
+_MAX_PAGES = 20
+# 概念板块（m:90 板块市场 / t:3 概念 / f:!50 去掉退市标记）
+_CONCEPT_FS = "m:90+t:3+f:!50"
 
 
 def _kf(v: str) -> float | None:
@@ -42,6 +49,31 @@ def _num(v: Any) -> float | None:
     if v is None or isinstance(v, str):
         return None
     return float(v)
+
+
+def _map_concept_board(d: dict[str, Any]) -> dict[str, Any]:
+    """概念板块 clist 行 → 归一字段。
+
+    ``member_total`` = f104(上涨家数) + f105(下跌家数)，不含 f106(平盘家数)，
+    因此可能略小于真实成分股数；成分真值以 ``fetch_concept_members`` 为准。
+    两侧都是 '-' 时给 None 而不是 0——"未知"不等于"空板块"。
+    """
+    up, down = _num(d.get("f104")), _num(d.get("f105"))
+    member_total = None if up is None and down is None else int(up or 0) + int(down or 0)
+    return {
+        "board_code": str(d.get("f12")),
+        "board_name": d.get("f14"),
+        "member_total": member_total,
+    }
+
+
+def _map_concept_member(d: dict[str, Any]) -> dict[str, Any]:
+    """成分股 clist 行 → 归一字段；f13 保持原始市场标志（1=沪, 0=深），不做交易所推断。"""
+    return {
+        "symbol": str(d.get("f12")),
+        "name": d.get("f14"),
+        "market_flag": d.get("f13"),
+    }
 
 
 class EastmoneyClient:
@@ -103,6 +135,58 @@ class EastmoneyClient:
             }
             for d in diff
         ]
+
+    async def _paged_clist(
+        self,
+        fs: str,
+        fields: str,
+        mapper: Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """clist 全量翻页（服务端 pz 上限 100，实测见 ``_PAGE_SIZE``）。
+
+        ``fid=f12``（按代码排）而非 f3（涨跌幅）：盘中按涨跌幅排序翻页会漏/重。
+        收敛条件：空页 / 去重后条数 >= total / pn 超过 ``_MAX_PAGES``。
+        按映射后的业务键去重（板块 board_code、成分 symbol）——翻页抖动会重复行。
+        """
+        rows: dict[str, dict[str, Any]] = {}
+        for pn in range(1, _MAX_PAGES + 1):
+            data = await self._get_json(
+                _CLIST_BASE,
+                "/api/qt/clist/get",
+                {
+                    "pn": pn,
+                    "pz": _PAGE_SIZE,
+                    "po": 1,
+                    "np": 1,
+                    "fltt": 2,
+                    "invt": 2,
+                    "fid": "f12",
+                    "fs": fs,
+                    "fields": fields,
+                    "ut": _EM_UT,
+                },
+            )
+            payload = data.get("data") or {}
+            diff = payload.get("diff") or []
+            if not diff:
+                break  # total 报大但返回空页：必须收敛，否则把定时任务变成长驻
+            for d in diff:
+                row = mapper(d)
+                rows.setdefault(str(row.get("board_code") or row.get("symbol")), row)
+            total = _num(payload.get("total"))
+            if total and len(rows) >= total:
+                break
+        else:
+            logger.warning("clist paging hit _MAX_PAGES=%d, fs=%s", _MAX_PAGES, fs)
+        return list(rows.values())
+
+    async def fetch_concept_boards(self) -> list[dict[str, Any]]:
+        """概念板块全量列表（实测 2026-09-18：total=504，pz 上限 100，需翻 6 页）。"""
+        return await self._paged_clist(_CONCEPT_FS, "f12,f14,f104,f105", _map_concept_board)
+
+    async def fetch_concept_members(self, board_code: str) -> list[dict[str, Any]]:
+        """单板成分股（实测 BK0501 total=162 → 2 页）。"""
+        return await self._paged_clist(f"b:{board_code}", "f12,f13,f14", _map_concept_member)
 
     async def fetch_sector_moneyflow(self, dimension: str) -> list[dict[str, Any]]:
         if dimension not in ("industry", "concept", "region"):
