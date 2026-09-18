@@ -44,7 +44,7 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
-        sa.Column("is_active", sa.Boolean(), nullable=False),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("board_code", name="uq_concept_boards_code"),
     )
