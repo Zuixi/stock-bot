@@ -1,0 +1,19 @@
+{
+  "as_of": "2026-09-16",
+  "as_of_quality": "complete",
+  "as_of_reason": null,
+  "items": [
+    {
+      "range": "跌停",
+      "count": 6
+    },
+    {
+      "range": ">-7%",
+      "count": 11
+    },
+    {
+      "range": "-5~-7%",
+      "count": 14
+    }
+  ]
+}

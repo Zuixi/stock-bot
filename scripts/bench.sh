@@ -48,7 +48,7 @@ fi
 PYTEST_ARGS=(tests/benchmarks -m bench --no-cov --benchmark-disable-gc --benchmark-warmup=on -q)
 if [ "$MODE" = quick ]; then PYTEST_ARGS+=(--benchmark-min-rounds=3); fi
 
-echo "== CPU 基准套件（mode=$MODE, threshold=$THRESHOLD）=="
+echo "== CPU 基准套件（mode=$MODE, threshold=${THRESHOLD}）=="
 # 注意：pyproject addopts 默认 -m 'not e2e and not bench'，此处命令行 -m bench 覆盖之
 (cd backend && uv run pytest "${PYTEST_ARGS[@]}" --benchmark-json="$CURRENT")
 
@@ -82,4 +82,4 @@ EXTRA_ARGS=()
 [ "$ALLOW_ADDED" = 1 ] && EXTRA_ARGS+=(--allow-added)
 # bench_compare.py 经解释器调用而非直接执行：Windows 上创建的文件无执行位，
 # Linux CI checkout 出来直接跑会 Permission denied (exit 126)
-(cd backend && uv run python "$ROOT/scripts/bench_compare.py" "$BASELINE" "$CURRENT" --threshold "$THRESHOLD" "${EXTRA_ARGS[@]}")
+(cd backend && uv run python "$ROOT/scripts/bench_compare.py" "$BASELINE" "$CURRENT" --threshold "$THRESHOLD" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"})

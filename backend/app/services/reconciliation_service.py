@@ -4,6 +4,11 @@
 （≥ 0.8×全市场数，防 partial 行挡住补齐的死锁）。cron 只负责 timeliness，
 任何停摆（宿主睡眠/容器挂起/任务异常）在下一个对账触发点自动收敛。
 设计与事故时间线见 plans/2026-09-17-data-sync-self-healing.md。
+
+补灌副作用：重拉某天时新插入的行只有 TuShare ``daily`` 的 OHLC（该接口不带因子），
+``adj_factor`` 为 NULL，而 upsert 的 COALESCE 只保已有值、懒加载只认最新行——中间
+交易日的洞两条路径都不会再碰。因此重拉 ``daily_quotes`` 后，对**本次重拉的日子**补
+一次因子缺口（见 :func:`_repair_adj_factors`），把缺陷消灭在产生点。
 """
 
 from __future__ import annotations
@@ -113,6 +118,66 @@ async def _commit(db: Any) -> None:
     await db.commit()
 
 
+def _contiguous_runs(days: list[date]) -> list[tuple[date, date]]:
+    """把升序日期聚成连续区间：``[10, 11, 16]`` → ``[(10, 11), (16, 16)]``。
+
+    补洞服务按 ``[start, end]`` 区间发现缺口；为了只碰"本次重拉的日子"不能直接取
+    ``min``/``max``（中间未重拉的日子会被顺带扫到）。连续段分组后每个区间恰好等于
+    一组重拉日，且保留"每股一次外呼覆盖整段"的批处理（非逐行、非逐日外呼）。
+    """
+    runs: list[tuple[date, date]] = []
+    for day in days:
+        if runs and day == runs[-1][1] + timedelta(days=1):
+            runs[-1] = (runs[-1][0], day)
+        else:
+            runs.append((day, day))
+    return runs
+
+
+async def _repair_adj_factors(db: Any, days: list[date]) -> dict[str, Any]:
+    """对本次重拉的交易日补 ``adj_factor`` 缺口（best-effort，绝不抛）。
+
+    为什么在这里：重拉插入的新行因子为 NULL，懒加载的判据是"最新行有无因子"，
+    补中间日的洞永远不会被它触发（Task 5c 的根因）。
+
+    失败可见性：本模块不持有 scheduler 的 ``job_id``（``record_job_failure`` 由
+    jobs.py 的 except 块调用），故按本模块既有约定记 WARNING（带 traceback），并把
+    失败写进结果的 ``adj_factor_repaired.error``。该结果随 worker 回执与 scheduler
+    日志外露；``/market/data-freshness`` 恒以 ``apply=False`` 调用，本字段在那里
+    恒为 ``null``（只读巡检不补洞），不要指望巡检端点看到它。
+    失败后主动 ``rollback`` 清会话：否则中断的事务会让随后的 sentiment 补数报
+    PendingRollbackError，把"补因子失败"升级成"对账失败"，违背非致命契约。
+    """
+    outcome: dict[str, Any] = {
+        "days": [d.isoformat() for d in days],
+        "rows": 0,
+        "failed": 0,
+        "unfilled": 0,
+        "remaining": 0,
+        "error": None,
+    }
+    try:
+        from app.services.quote_service import backfill_missing_adj_factors  # noqa: PLC0415
+
+        for start, end in _contiguous_runs(days):
+            stats = await backfill_missing_adj_factors(db, start=start, end=end)
+            outcome["rows"] += int(stats.get("rows", 0))
+            outcome["failed"] += int(stats.get("failed", 0))
+            outcome["unfilled"] += int(stats.get("unfilled", 0))
+            # 预算截断：本次没修完的股票数，透出到结果，避免"看起来全修完了"
+            outcome["remaining"] += int(stats.get("remaining", 0))
+        if outcome["failed"] or outcome["unfilled"] or outcome["remaining"]:
+            logger.warning("RECONCILE adj_factor repair partial: %s", outcome)
+    except Exception as exc:  # noqa: BLE001 — 加法式修复，失败不得反噬对账
+        outcome["error"] = f"{type(exc).__name__}: {exc}"
+        logger.warning("RECONCILE adj_factor repair failed (kept best-effort)", exc_info=True)
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001,S110 — 会话清理失败也只能记日志
+            logger.warning("RECONCILE adj_factor repair: session cleanup failed", exc_info=True)
+    return outcome
+
+
 async def _domain_status(
     counts: dict[date, int], expected: list[date], threshold: int
 ) -> dict[str, Any]:
@@ -152,11 +217,14 @@ async def reconcile_market_data(
         "quotes_symbols_latest": None,  # 下方按 daily_quotes 实际行数回填
         "degraded_calendar": degraded,
         "apply": apply,
+        # 补灌的副作用修复：本次重拉日的 adj_factor 缺口（apply=False 恒为 None）
+        "adj_factor_repaired": None,
         "domains": {},
     }
 
     # ── 底座域（quotes → basic → price_limits），sentiment 前统一 commit ──
     refetched_any = False
+    quotes_refetched: list[date] = []
     for domain in ("daily_quotes", "daily_basic", "price_limits"):
         counts = await _row_counts(db, domain, expected)
         status = await _domain_status(counts, expected, threshold)
@@ -170,6 +238,9 @@ async def reconcile_market_data(
             status["latest_in_db"] = max(
                 (d for d in expected if d in refetched or counts.get(d, 0) > 0), default=None
             )
+        if domain == "daily_quotes":
+            # 只取 daily_quotes 域本次真正重拉的日子（其余域与未重拉的日不补因子）
+            quotes_refetched = list(refetched)
         result["domains"][domain] = {
             "latest_in_db": status["latest_in_db"].isoformat() if status["latest_in_db"] else None,
             "missing_days": [d.isoformat() for d in status["missing_days"]],
@@ -182,6 +253,11 @@ async def reconcile_market_data(
     # 未提交的 upsert 对它不可见（READ COMMITTED），会把刚补的日子误判 partial。
     if apply and (refetched_any or "sentiment" in scope):
         await _commit(db)
+
+    # 因子补洞放在底座 commit 之后：补洞函数内部逐股 commit/rollback，若在重拉数据
+    # 尚未提交时运行，单股失败的 rollback 会把刚补灌的行情一起回滚掉。
+    if apply and quotes_refetched:
+        result["adj_factor_repaired"] = await _repair_adj_factors(db, quotes_refetched)
 
     # ── 派生域（sentiment）：仅 quotes + price_limits 完备的期望日才补 ──
     if expected:

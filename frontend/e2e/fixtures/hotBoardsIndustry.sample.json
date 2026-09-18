@@ -1,0 +1,199 @@
+{
+    "as_of": "2026-09-18",
+    "as_of_quality": "partial",
+    "as_of_reason": null,
+    "items": [
+        {
+            "id": "industry-BK1518",
+            "name": "\u79cd\u5b50",
+            "code": "BK1518",
+            "changePercent": 7.86,
+            "upCount": 10,
+            "flatCount": 0,
+            "downCount": 0,
+            "leaders": [
+                {
+                    "symbol": "600354",
+                    "name": "\u6566\u714c\u79cd\u4e1a",
+                    "changePercent": 10.05
+                }
+            ],
+            "mainNetInflow": 281576464.0,
+            "mainNetRatio": 3.69,
+            "amount": 7621248698.0
+        },
+        {
+            "id": "industry-BK1296",
+            "name": "\u89c6\u9891\u5a92\u4f53",
+            "code": "BK1296",
+            "changePercent": 6.58,
+            "upCount": 1,
+            "flatCount": 0,
+            "downCount": 0,
+            "leaders": [
+                {
+                    "symbol": "300413",
+                    "name": "\u8292\u679c\u8d85\u5a92",
+                    "changePercent": 6.58
+                }
+            ],
+            "mainNetInflow": 55417068.0,
+            "mainNetRatio": 2.18,
+            "amount": 2545700058.0
+        },
+        {
+            "id": "industry-BK1341",
+            "name": "\u623f\u4ea7\u79df\u8d41\u7ecf\u7eaa",
+            "code": "BK1341",
+            "changePercent": 5.28,
+            "upCount": 2,
+            "flatCount": 0,
+            "downCount": 1,
+            "leaders": [
+                {
+                    "symbol": "002285",
+                    "name": "\u4e16\u8054\u884c",
+                    "changePercent": 10.04
+                }
+            ],
+            "mainNetInflow": 112027456.0,
+            "mainNetRatio": 7.71,
+            "amount": 1453658348.0
+        },
+        {
+            "id": "industry-BK1510",
+            "name": "\u5176\u4ed6\u517b\u6b96",
+            "code": "BK1510",
+            "changePercent": 5.13,
+            "upCount": 3,
+            "flatCount": 0,
+            "downCount": 0,
+            "leaders": [
+                {
+                    "symbol": "002321",
+                    "name": "\u534e\u82f1\u519c\u4e1a",
+                    "changePercent": 10.1
+                }
+            ],
+            "mainNetInflow": 68579263.0,
+            "mainNetRatio": 10.9,
+            "amount": 628929110.0
+        },
+        {
+            "id": "industry-BK1261",
+            "name": "\u79cd\u690d\u4e1a",
+            "code": "BK1261",
+            "changePercent": 5.06,
+            "upCount": 21,
+            "flatCount": 0,
+            "downCount": 0,
+            "leaders": [
+                {
+                    "symbol": "600354",
+                    "name": "\u6566\u714c\u79cd\u4e1a",
+                    "changePercent": 10.05
+                }
+            ],
+            "mainNetInflow": 215388800.0,
+            "mainNetRatio": 1.57,
+            "amount": 13714575907.0
+        },
+        {
+            "id": "industry-BK1523",
+            "name": "\u6c7d\u8f66\u7ecf\u9500\u5546",
+            "code": "BK1523",
+            "changePercent": 3.96,
+            "upCount": 6,
+            "flatCount": 0,
+            "downCount": 0,
+            "leaders": [
+                {
+                    "symbol": "600822",
+                    "name": "\u4e0a\u6d77\u7269\u8d38",
+                    "changePercent": 9.96
+                }
+            ],
+            "mainNetInflow": 58068878.0,
+            "mainNetRatio": 17.96,
+            "amount": 323330065.0
+        },
+        {
+            "id": "industry-BK1547",
+            "name": "\u8de8\u5883\u7535\u5546",
+            "code": "BK1547",
+            "changePercent": 3.47,
+            "upCount": 7,
+            "flatCount": 0,
+            "downCount": 1,
+            "leaders": [
+                {
+                    "symbol": "002640",
+                    "name": "\u8de8\u5883\u901a",
+                    "changePercent": 9.91
+                }
+            ],
+            "mainNetInflow": 240094984.0,
+            "mainNetRatio": 8.7,
+            "amount": 2760188211.0
+        },
+        {
+            "id": "industry-BK1489",
+            "name": "\u5feb\u9012",
+            "code": "BK1489",
+            "changePercent": 3.32,
+            "upCount": 4,
+            "flatCount": 0,
+            "downCount": 0,
+            "leaders": [
+                {
+                    "symbol": "002468",
+                    "name": "\u7533\u901a\u5feb\u9012",
+                    "changePercent": 6.07
+                }
+            ],
+            "mainNetInflow": 115411931.0,
+            "mainNetRatio": 7.71,
+            "amount": 1497469895.0
+        },
+        {
+            "id": "industry-BK1342",
+            "name": "\u623f\u5730\u4ea7\u7efc\u5408\u670d\u52a1",
+            "code": "BK1342",
+            "changePercent": 3.26,
+            "upCount": 1,
+            "flatCount": 0,
+            "downCount": 0,
+            "leaders": [
+                {
+                    "symbol": "600684",
+                    "name": "\u73e0\u6c5f\u80a1\u4efd",
+                    "changePercent": 3.26
+                }
+            ],
+            "mainNetInflow": 4196803.0,
+            "mainNetRatio": 8.35,
+            "amount": 50240463.0
+        },
+        {
+            "id": "industry-BK1351",
+            "name": "\u5370\u67d3",
+            "code": "BK1351",
+            "changePercent": 3.13,
+            "upCount": 3,
+            "flatCount": 0,
+            "downCount": 1,
+            "leaders": [
+                {
+                    "symbol": "600448",
+                    "name": "\u534e\u7eba\u80a1\u4efd",
+                    "changePercent": 9.9
+                }
+            ],
+            "mainNetInflow": 32327949.0,
+            "mainNetRatio": 8.54,
+            "amount": 378477091.0
+        }
+    ],
+    "source": "eastmoney_boards",
+    "degraded_reason": null
+}
