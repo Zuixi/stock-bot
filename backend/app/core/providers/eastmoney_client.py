@@ -54,12 +54,16 @@ def _num(v: Any) -> float | None:
 def _map_concept_board(d: dict[str, Any]) -> dict[str, Any]:
     """概念板块 clist 行 → 归一字段。
 
-    ``member_total`` = f104(上涨家数) + f105(下跌家数)，不含 f106(平盘家数)，
-    因此可能略小于真实成分股数；成分真值以 ``fetch_concept_members`` 为准。
-    两侧都是 '-' 时给 None 而不是 0——"未知"不等于"空板块"。
+    ``member_total`` = f104(上涨家数) + f105(下跌家数) + f106(平盘家数)——三者之和才是
+    真实成分股数（实测 2026-09-18：BK1753 光刻胶 f104=55/f105=6/f106=2 → 63，
+    与 ``fs=b:BK1753`` 的 total 及 ``len(fetch_concept_members("BK1753"))``=63 一致；
+    漏掉 f106 会系统性低估平盘票）。缺的某项按 0 计入，三项全部为 '-' 时给 None
+    而不是 0——"未知"不等于"空板块"。
     """
-    up, down = _num(d.get("f104")), _num(d.get("f105"))
-    member_total = None if up is None and down is None else int(up or 0) + int(down or 0)
+    counts = [_num(d.get(f)) for f in ("f104", "f105", "f106")]
+    member_total = (
+        None if all(c is None for c in counts) else sum(int(c) for c in counts if c is not None)
+    )
     return {
         "board_code": str(d.get("f12")),
         "board_name": d.get("f14"),
@@ -182,7 +186,7 @@ class EastmoneyClient:
 
     async def fetch_concept_boards(self) -> list[dict[str, Any]]:
         """概念板块全量列表（实测 2026-09-18：total=504，pz 上限 100，需翻 6 页）。"""
-        return await self._paged_clist(_CONCEPT_FS, "f12,f14,f104,f105", _map_concept_board)
+        return await self._paged_clist(_CONCEPT_FS, "f12,f14,f104,f105,f106", _map_concept_board)
 
     async def fetch_concept_members(self, board_code: str) -> list[dict[str, Any]]:
         """单板成分股（实测 BK0501 total=162 → 2 页）。"""
