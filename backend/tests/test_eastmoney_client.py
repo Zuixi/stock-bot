@@ -229,6 +229,25 @@ def test_fetch_concept_boards_stops_on_empty_page(monkeypatch):
     assert asyncio.run(EastmoneyClient().fetch_concept_boards()) == []
 
 
+def test_paged_clist_stops_at_max_pages_when_total_never_reached(monkeypatch):
+    """翻页护栏：total 撒谎 + 服务端永远返回非空页时，最多 60 次请求就收手。
+
+    60 = `_MAX_PAGES`（20→60，2026-09-18：最大板 BK0596 member_total=3870，20×100=2000 拿不全）。
+    钉**行为**而非常量：每页返回一个不同的新 code（去重不收敛）且 total 恒为 999999。
+    """
+
+    pages_requested: list[int] = []
+
+    async def counting_get_json(self, base, path, params):
+        pages_requested.append(params["pn"])
+        return {"data": {"total": 999999, "diff": [_board(f"BK{params['pn']:04d}")]}}
+
+    monkeypatch.setattr(EastmoneyClient, "_get_json", counting_get_json)
+    boards = asyncio.run(EastmoneyClient().fetch_concept_boards())
+    assert pages_requested == list(range(1, 61)), "护栏必须在第 60 页收手（不请求第 61 页）"
+    assert len(boards) == 60
+
+
 def test_concept_member_fields_are_stable(monkeypatch):
     """字段形状实测钉住：f12 代码 / f14 名称 / f13 市场（1=沪,0=深）。"""
 
@@ -248,10 +267,16 @@ def test_map_concept_board_member_total_sums_up_down_flat():
         {"f12": "BK1753", "f14": "光刻胶", "f104": 55, "f105": 6, "f106": 2}
     ) == {"board_code": "BK1753", "board_name": "光刻胶", "member_total": 63}
     # 单边/多边缺值：缺的项按 0 计
-    assert _map_concept_board({"f12": "BK1", "f14": "X", "f104": 5, "f105": "-", "f106": "-"})[
-        "member_total"
-    ] == 5
+    assert (
+        _map_concept_board({"f12": "BK1", "f14": "X", "f104": 5, "f105": "-", "f106": "-"})[
+            "member_total"
+        ]
+        == 5
+    )
     # 三项全缺：None（不造 0，避免把"未知"记成"空板块"）
-    assert _map_concept_board(
-        {"f12": "BK2", "f14": "Y", "f104": "-", "f105": "-", "f106": "-"}
-    )["member_total"] is None
+    assert (
+        _map_concept_board({"f12": "BK2", "f14": "Y", "f104": "-", "f105": "-", "f106": "-"})[
+            "member_total"
+        ]
+        is None
+    )
