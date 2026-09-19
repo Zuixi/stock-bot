@@ -357,6 +357,70 @@ async def aggregate_boards(
     ]
 
 
+# 读路径的三个小查询（T6 list 端点专用；口径见 plans §2.2/§2.3）。
+# `latest_membership_date` 必须是**全表** max，而不是活跃板的 max：离线累计的成员行本身就是
+# "成分快照日"的证据，跟板块是否仍 active 无关。
+_MEMBERSHIP_DATE_SQL = "SELECT max(last_seen_on) FROM concept_members"
+_ACTIVE_BOARD_COUNT_SQL = "SELECT count(*) FROM concept_boards WHERE is_active"
+
+
+async def latest_membership_date(db: AsyncSession) -> date | None:
+    """成分快照日 = `max(last_seen_on)`（无成员 → None，service 据此降级 `no_members`）。"""
+    return (await db.execute(text(_MEMBERSHIP_DATE_SQL))).scalar_one_or_none()
+
+
+async def count_active_boards(db: AsyncSession) -> int:
+    """启用板块总数（= list 响应的 `total`，与分页无关、不受 items 过滤影响）。"""
+    return int((await db.execute(text(_ACTIVE_BOARD_COUNT_SQL))).scalar_one())
+
+
+# 领涨股必须一次查完整个分页：逐板查会是 N 条 SQL。`row_number()` 而不是 LATERAL
+# LIMIT 2 —— 同一 pct_chg 的并列必须由 `symbol ASC` 决定（UI 卡片会在请求间闪名）。
+# LEFT JOIN：无行情成分也占位（pct_chg IS NULL，排序 NULLS LAST），与 §2.3 的
+# "缺失 ≠ 0" 一致；前端卡片侧另有 null 过滤（见 concept_service.hot_board_rows）。
+_LEADERS_SQL = """
+WITH ranked AS (
+    SELECT cm.board_code, cm.symbol, cm.stock_name, q.pct_chg,
+           row_number() OVER (
+               PARTITION BY cm.board_code
+               ORDER BY q.pct_chg DESC NULLS LAST, cm.symbol ASC
+           ) AS rn
+    FROM concept_members cm
+    LEFT JOIN daily_quotes q ON q.stock_id = cm.stock_id AND q.trade_date = :as_of
+    WHERE cm.board_code = ANY(:codes)
+)
+SELECT board_code, symbol, stock_name, pct_chg
+FROM ranked WHERE rn <= 2
+ORDER BY board_code, rn
+"""
+
+
+async def board_leaders(
+    db: AsyncSession, as_of: date, board_codes: list[str]
+) -> dict[str, list[dict[str, Any]]]:
+    """分页内每板点击涨幅前 2 成分（`pct_chg DESC NULLS LAST, symbol ASC` 的确定性取前二）。
+
+    返回 `{board_code: [{"symbol","name","change_percent"}, ...]}`；空输入不发 SQL。
+    """
+    if not board_codes:
+        return {}
+    rows = (
+        (await db.execute(text(_LEADERS_SQL), {"as_of": as_of, "codes": list(board_codes)}))
+        .mappings()
+        .all()
+    )
+    leaders: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        leaders.setdefault(str(r["board_code"]), []).append(
+            {
+                "symbol": str(r["symbol"]),
+                "name": str(r["stock_name"]),
+                "change_percent": float(r["pct_chg"]) if r["pct_chg"] is not None else None,
+            }
+        )
+    return leaders
+
+
 # T10 次新股口径（plans §2.3）：listed_trade_days 只数"有行情"的交易日（停牌不计）；
 # never_broken 是"上市以来每一行都涨停"，任一行缺限价（limits_missing）则不可判 → NULL，
 # **绝不能写成 false**（false 会成为"已开板"的假信号）；first_open 取首日 open。

@@ -19,6 +19,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     clusters,
+    concepts,
     financials,
     industries,
     market,
@@ -68,3 +69,6 @@ router.include_router(watchlists.router, prefix="/watchlists", tags=["watchlists
 
 # Industry research workbench: /api/v1/industries/...
 router.include_router(industries.router, prefix="/industries", tags=["industry-research"])
+
+# Concept boards & new stocks: /api/v1/concepts/...（T6 只读列表）
+router.include_router(concepts.router, prefix="/concepts", tags=["concepts"])

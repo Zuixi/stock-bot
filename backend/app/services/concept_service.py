@@ -31,10 +31,12 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-from app.repositories import concept_repo
+from app.repositories import concept_repo, limit_up_repo, market_data_repo
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.core.redis import CacheClient
 
 logger = logging.getLogger(__name__)
 
@@ -203,3 +205,148 @@ async def ingest_concept_members(db: AsyncSession) -> dict[str, int]:
             dropped_members,
         )
     return result
+
+
+# ── 读路径：GET /api/v1/concepts（T6） ────────────────────────────────────────
+# 两源分离（plans §2.2）：涨跌/家数全部本地聚合（`price_source="local_agg"`），资金流来自
+# 东财快照（有匹配行才 `flow_source="em_clist"`）。**绝不做 SQL join**：快照一天只覆盖
+# 当日主力流入 Top-100 的震荡集，join 要么按 board_code 过滤丢行、要么一对多放大行数；
+# Python 侧按 `board_code` 取交集才是正确语义，缺行保持 None（= 缺失，不是 0）。
+CONCEPT_LIST_CACHE_KEY = "market:concept:list:{sort}:{limit}:{offset}"
+CONCEPT_LIST_TTL = 300
+CONCEPT_FLOW_LIMIT = 100  # 与 /market/sector-moneyflow 端点上限（le=100）一致
+HOT_BOARD_LIMIT = 10  # 与 market_service 行业分支的 LIMIT 10 对齐（卡片再按 |涨幅| 切 top6）
+
+
+def _degraded_reason(as_of: date | None, membership_as_of: date | None) -> str | None:
+    """§2.3 降级词表：无行情 → `no_quotes`；无成分 → `no_members`；有数据必须是 None。"""
+    if as_of is None:
+        return "no_quotes"
+    if membership_as_of is None:
+        return "no_members"
+    return None
+
+
+def _inflow_sort_key(item: dict[str, Any]) -> tuple[bool, float, str]:
+    """`main_net_inflow DESC NULLS LAST, board_code ASC`——缺资金流的排最后，同值按码升序。
+
+    Python 侧排序必须自带 `board_code` tiebreak：`sorted` 稳定但输入顺序来自 avg_pct 分页，
+    两个同流入板块的先后会随均价名次漂移，前端翻页就会重复/漏项。
+    """
+    inflow = item["main_net_inflow"]
+    return (inflow is None, -(inflow or 0.0), item["board_code"])
+
+
+async def list_boards(
+    db: AsyncSession,
+    cache: CacheClient | None,
+    sort: str = "pct",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """概念板块列表：`aggregate_boards`（本地聚合） + 东财资金流内存 join + Redis 300s。
+
+    `sort="pct"` 保留 repo 的 `avg_pct DESC NULLS LAST, board_code ASC`；`sort="inflow"` 只
+    对**当前分页**重排（repo 没有资金流列，全库按流入排序需要另一条 SQL——本期不做，见 plans
+    §2.3）：分页外的板块不参与流入排序，UI 需知这一点。
+
+    缓存**只在 items 非空时写**（"数据不完整时宁可不缓存"）：整页空/降级的响应若被缓存，
+    上游数据补齐后还要再等一个 TTL 才可见。
+    """
+    key = CONCEPT_LIST_CACHE_KEY.format(sort=sort, limit=limit, offset=offset)
+    if cache is not None:
+        cached: dict[str, Any] | None = await cache.get(key)
+        if cached:
+            return cached
+
+    as_of = await limit_up_repo.latest_quote_date(db)
+    membership_as_of = await concept_repo.latest_membership_date(db)
+    total = await concept_repo.count_active_boards(db)
+    degraded_reason = _degraded_reason(as_of, membership_as_of)
+
+    items: list[dict[str, Any]] = []
+    flow_source: str | None = None
+    if degraded_reason is None:
+        assert as_of is not None  # `_degraded_reason` 已保证；mypy 需要这个收窄
+        items = await concept_repo.aggregate_boards(db, as_of, limit, offset)
+        flow_map = {
+            snap.board_code: snap
+            for snap in await market_data_repo.list_sector_moneyflow(
+                db, as_of, "concept", CONCEPT_FLOW_LIMIT
+            )
+        }
+        leaders = await concept_repo.board_leaders(db, as_of, [i["board_code"] for i in items])
+        matched = False
+        for item in items:
+            snap = flow_map.get(item["board_code"])
+            matched = matched or snap is not None
+            item.update(
+                {
+                    "main_net_inflow": snap.main_net_inflow if snap else None,
+                    "main_net_ratio": snap.main_net_ratio if snap else None,
+                    "lead_stock_name": snap.lead_stock_name if snap else None,
+                    "lead_stock_code": snap.lead_stock_code if snap else None,
+                    "lead_stock_pct": snap.lead_stock_pct if snap else None,
+                    "leaders": leaders.get(item["board_code"], []),
+                }
+            )
+        if sort == "inflow":
+            items.sort(key=_inflow_sort_key)
+        if matched:
+            flow_source = "em_clist"
+
+    body: dict[str, Any] = {
+        "as_of": as_of.isoformat() if as_of is not None else None,
+        "membership_as_of": membership_as_of.isoformat() if membership_as_of is not None else None,
+        "price_source": "local_agg",
+        "flow_source": flow_source,
+        "total": total,
+        "degraded_reason": degraded_reason,
+        "items": items,
+    }
+    if cache is not None and items:
+        await cache.set(key, body, ttl=CONCEPT_LIST_TTL)
+    return body
+
+
+async def hot_board_rows(
+    cache: CacheClient | None, limit: int = HOT_BOARD_LIMIT
+) -> list[dict[str, Any]]:
+    """T7 委托入口：概念分类的热门板块行，形状与 `market_service.get_hot_boards` 的行业分支
+    **逐键一致**（`id/name/code/changePercent/upCount/flatCount/downCount/leaders`）。
+
+    自开 `async_session_factory()` 会话：`get_hot_boards(category, cache)` 没有 `db` 参数
+    （与 `market_data_service.get_sector_moneyflow` 同款）。`id` 用 `concept-{board_code}`
+    前缀，避免与行业（`industry-{名}`）/地域（`region-{名}`）的 id 撞车。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+
+    async with async_session_factory() as db:
+        body = await list_boards(db, cache, sort="pct", limit=limit, offset=0)
+
+    rows: list[dict[str, Any]] = []
+    for item in body["items"]:
+        rows.append(
+            {
+                "id": f"concept-{item['board_code']}",
+                "name": item["board_name"],
+                "code": item["board_code"],
+                # 行业分支同款 round(avg or 0, 2)：卡片契约是 number，缺均价渲染 0.00 而不是崩
+                "changePercent": round(float(item["avg_pct"] or 0), 2),
+                "upCount": int(item["up_count"]),
+                "flatCount": int(item["flat_count"]),
+                "downCount": int(item["down_count"]),
+                # 前端 HotBoardLeader.changePercent 是 number 并直接 `.toFixed(2)`：
+                # 无行情成分（change_percent=None）不得作为领涨股下发，否则卡片 TypeError。
+                "leaders": [
+                    {
+                        "symbol": leader["symbol"],
+                        "name": leader["name"],
+                        "changePercent": leader["change_percent"],
+                    }
+                    for leader in item["leaders"]
+                    if leader["change_percent"] is not None
+                ],
+            }
+        )
+    return rows
