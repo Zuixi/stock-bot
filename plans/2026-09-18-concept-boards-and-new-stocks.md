@@ -169,7 +169,7 @@ GET /api/v1/new-stocks
 | `membership_as_of` | 该板块成分快照日 = `max(last_seen_on)` | 无成分 → `degraded_reason="no_members"` |
 | `member_count` | `concept_members` 行数（含未解析） | — |
 | `unresolved_count` | `stock_id IS NULL` 的成分数（= 名录滞后暴露面） | 0 |
-| `priced_count` | 当日 `daily_quotes` 有行的成分数 | 0 |
+| `priced_count` | 当日 `pct_chg` 非空的成分数（= `up+flat+down`；停牌/无行情不计） | 0 |
 | `up/flat/down_count` | `pct_chg > 0 / = 0 / < 0` 家数 | 不计入任何一档 |
 | `avg_pct` | `pct_chg IS NOT NULL` 的成分均值（**不是**全成分口径，UI 注明"n=有行情家数"） | `null` |
 | `main_net_inflow` | 东财快照，单位**元** | `null`（快照只覆盖当日 Top100 震荡集，**允许缺失**） |
@@ -480,7 +480,7 @@ def test_concept_member_fields_are_stable(monkeypatch):
 - `list_member_symbols(db, board_code) -> list[tuple[str, str]]`（symbol, stock_name）
 - `upsert_members(db, board_code, rows, today) -> tuple[int, int, int]`（added, updated, removed）
 - `record_changes(db, observed_on, changes: list[dict]) -> int`
-- `aggregate_boards(db, as_of, sort, limit, offset) -> list[dict]`（§2.3 口径）
+- `aggregate_boards(db, as_of, limit, offset) -> list[dict]`（§2.3 口径；**无 `sort` 参数** —— 固定 `avg_pct DESC NULLS LAST, board_code ASC`，资金流排序在 T6 service 层做 Python 侧 join 后完成）
 - `member_history_stats(db, board_code) -> dict[str, dict]`（`listed_trade_days` / `never_broken` / `first_open`）
 - `symbol_to_stock_ids(db, symbols) -> dict[str, int]`
 - `diff_members(existing: dict[str, str], seen: dict[str, str], today: date) -> MemberDiff`（纯函数，`MemberDiff{added, removed, kept, degraded}`）
