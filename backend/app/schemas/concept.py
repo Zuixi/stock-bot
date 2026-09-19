@@ -111,3 +111,66 @@ class ConceptBySymbolOut(BaseModel):
     as_of: date | None
     membership_as_of: date | None
     items: list[ConceptBySymbolItemOut] = Field(default_factory=list)
+
+
+class NewStockKpisOut(BaseModel):
+    """`GET /api/v1/new-stocks` 的家数 KPI（全部由同一份 `items` 聚合，见 §2.3）。
+
+    `up/flat/down_count` 三档互斥且只统计 `pct_chg` 非空的家数，`unpriced_count` 是剩下的
+    （停牌/无行情）；四者之和恒等于 `len(items)`（KPI 与表格行数同源，不新造口径）。
+    `unbroken_count` **只数 `never_broken is True`**：`None`（限价缺失不可判）既不算未开板、
+    也不算已开板。`avg_pct` 的分母是非空 `pct_chg` 家数（≠ `len(items)`），全空时 `null`。
+    """
+
+    up_count: int
+    flat_count: int
+    down_count: int
+    unpriced_count: int
+    limit_up_count: int  # is_lu 家数（is_lu 来自梯队快照，不是第二次涨停查询）
+    unbroken_count: int
+    above_first_open_count: int
+    avg_pct: float | None = None
+
+
+class NewStockItemOut(BaseModel):
+    """次新股一行（§2.2 `NewStockItem`）：缺失一律 `null`，**绝不 0 填充**。
+
+    `pct_chg`/`close` = 本地行情快照的 `change_percent`/`latest_price`；`streak`/`is_lu` 来自
+    梯队快照（成分不在梯队里 → `streak=null`，缺失 ≠ 0）；`never_broken=null` 表示限价缺失
+    不可判（UI 渲染 `--`，不得读成"已开板"）；`above_first_open` 是**替代破发指标**
+    （发行价未采集，UI 必须写明"非破发口径"），任一侧缺失即为 `null`。
+    """
+
+    symbol: str
+    name: str
+    exchange: str
+    list_date: date | None = None
+    listed_trade_days: int
+    pct_chg: float | None = None
+    close: float | None = None
+    turnover_rate: float | None = None
+    circ_mv: float | None = None
+    amount: float | None = None
+    streak: int | None = None
+    is_lu: bool
+    never_broken: bool | None = None
+    first_open: float | None = None
+    above_first_open: bool | None = None
+
+
+class NewStocksOut(BaseModel):
+    """`GET /api/v1/new-stocks`（§2.2）：次新股情绪卡的单板信封。
+
+    `board_code`/`board_name` 由 service 下发（东财 BK0501 = 次新股）；`membership_as_of` 是
+    **该板**的 `max(last_seen_on)`（历史口径声明必须上屏）；`source` 是成分名录来源
+    （东财 clist），与涨停梯队（本地计算）不是同一条管道。
+    """
+
+    as_of: date | None
+    membership_as_of: date | None
+    board_code: str
+    board_name: str
+    source: Literal["em_clist"]
+    degraded_reason: str | None = None
+    kpis: NewStockKpisOut
+    items: list[NewStockItemOut] = Field(default_factory=list)

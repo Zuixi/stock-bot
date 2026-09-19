@@ -24,6 +24,7 @@ from app.api.v1 import (
     industries,
     market,
     market_data,
+    new_stocks,
     stocks,
     tags,
     tasks,
@@ -70,5 +71,8 @@ router.include_router(watchlists.router, prefix="/watchlists", tags=["watchlists
 # Industry research workbench: /api/v1/industries/...
 router.include_router(industries.router, prefix="/industries", tags=["industry-research"])
 
-# Concept boards & new stocks: /api/v1/concepts/...（T6 只读列表）
+# Concept boards: /api/v1/concepts/...（T6 列表 / T8 详情 / T9 成分·反查）
 router.include_router(concepts.router, prefix="/concepts", tags=["concepts"])
+
+# New-stock board: /api/v1/new-stocks（T10，东财 BK0501 成分 × 本地行情）
+router.include_router(new_stocks.router, prefix="/new-stocks", tags=["new-stocks"])
