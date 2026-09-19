@@ -1044,7 +1044,7 @@ bash scripts/self_review.sh                          # 改动多时加 --full
   1. 采集：`boards≈504 / added≈50000 / failed_boards=0`；
   2. 对拍：`/api/v1/new-stocks` 的 `up_count/down_count` 与东财 `fs=b:BK0501` 的 `f104/f105` 数量级一致（差异仅停牌/无行情）；
   3. UI：概念 tab 非空、`/market/concept/BK0501` 渲染 162 行成分 + 板内梯队 + 「成分截至」声明、个股页出现概念标签、情绪 tab 出现次新股卡；
-  4. 降级：`docker compose stop scheduler` 跨过 18:20 再 start → `misfire_grace_time=None` 补跑，`last_seen_on` 更新到当日。
+  4. 降级：**宿主睡眠但进程存活**跨过 18:20 → `misfire_grace_time=None` 补跑；**进程重启**（`docker compose stop/start`）会因 scheduler 用默认 MemoryJobStore 而忘掉错过的触发点 —— 此时靠次日 18:20 或 `POST /tasks/fetch-market-data {type:"concept_members"}` 手动补齐（ingest 幂等）。**不得把进程重启当成补跑验收项。**
 
 ## 7. 风险与边界
 
