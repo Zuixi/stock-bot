@@ -440,7 +440,12 @@ async def get_hot_boards(
 ) -> list[dict[str, Any]]:
     """Return hot boards for the given category from DB."""
     if category == "concept":
-        return []
+        # 概念是"当前成分 × 本地行情"的多对多聚合（concept_members），与 industry/region 的
+        # stocks.csrc_desc/province 单值分组 SQL 没有共同形状，故委托 concept_service；此处只做
+        # 形状适配（返回键集与之逐键一致），前端 HotBoardItem 无需改动。
+        from app.services import concept_service  # noqa: PLC0415
+
+        return await concept_service.hot_board_rows(cache, limit=10)
 
     cache_key = f"market:hot-boards:{category}"
     if cache:
