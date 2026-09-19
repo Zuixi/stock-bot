@@ -8,4 +8,5 @@ export { DataRow } from "./DataRow";
 export type { DataRowProps } from "./DataRow";
 export { SectionCard } from "./SectionCard";
 export type { SectionCardProps } from "./SectionCard";
+export { DegradedNotice, DEGRADED_REASON_TEXT } from "./DegradedNotice";
 export { formatCnDate } from "./date";

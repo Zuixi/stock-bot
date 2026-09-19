@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Alert, Card, Col, Row, Tabs, Typography } from "antd";
+import { Card, Col, Row, Tabs, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { SectionCard } from "@/shared/ui";
+import { DegradedNotice, SectionCard } from "@/shared/ui";
 import {
   fetchLimitUpLadder,
   fetchSectorLimitUp,
@@ -27,22 +27,6 @@ import {
   YesterdayLimitUp,
 } from "@/features/market/components";
 import "./market.css";
-
-/** `degraded_reason` → 中文文案；不同原因不同文案，未知原因回退原串，不静默吞掉。
- * 本映射仅用于「情绪温度计」卡（长文案），三张数据卡各自用短占位文案（见组件内）。
- */
-const DEGRADED_REASON_TEXT: Record<string, string> = {
-  price_limits_missing: "涨跌停价尚未回补，连板梯队暂不可用（每个交易日 16:50 自动补齐）",
-  partial_day: "当日行情未回补完整，暂不展示梯队",
-  no_quotes: "库内暂无行情数据",
-  no_limit_up_rows: "当日无涨停股（候选为空）",
-  insufficient_trade_days: "交易日不足 2 天",
-};
-
-function DegradedNotice({ reason }: { reason: string }) {
-  const text = DEGRADED_REASON_TEXT[reason] ?? reason;
-  return <Alert type="warning" showIcon message={text} />;
-}
 
 /**
  * 短线情绪 Tab：四个端点各自 `useQuery`，单点失败不牵连邻区。
