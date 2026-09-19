@@ -19,8 +19,12 @@ interface Props {
   sortBy?: keyof StockRecord;
   sortOrder?: "ascend" | "descend";
   /**
-   * 追加列（渲染在既有列之后）。仅用于「成分表按板块语境补一列」这类调用点
+   * 追加列（渲染在数据列之后、**固定自选列之前**）。仅用于「成分表按板块语境补一列」这类调用点
    * （如概念详情页的连板列，字段不在 `StockRecord` 上）；既有调用点不传即零变化。
+   *
+   * 顺序是硬约束（评审 Q1）：自选列是 `fixed: "right"` 的右缘 sticky 列，必须落在最后一列；
+   * 追加列若排在它之后，就会和这个 sticky 单元格争同一段右缘（元素都还在 DOM 里，只是被压住/错位，
+   * 只按 DOM 序断言的用例看不出来），故 e2e 额外钉住「连板列不是最后一列」。
    */
   extraColumns?: ColumnsType<StockRecord>;
 }
@@ -148,6 +152,7 @@ export function StockTable({ data, total, current, pageSize, loading, onChange, 
       align: "right" as const,
       render: (v: number | undefined) => <NumberText value={v} />,
     },
+    ...extraColumns,
     {
       title: "",
       key: "action",
@@ -170,7 +175,6 @@ export function StockTable({ data, total, current, pageSize, loading, onChange, 
         );
       },
     },
-    ...extraColumns,
   ];
 
   return (
