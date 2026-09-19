@@ -492,7 +492,16 @@ async def board_leaders(
 # （stock_price_limits 当时覆盖 245 个交易日）里 159 只有可判行，0 只 unbroken，且这 159 只
 # 失败**只**因为首日哨兵行（920298 腾信精密：2026-09-16 上市日 up_limit=99999.99 → is_lu
 # false；09-17 +8.24% 未涨停；09-18 close == up_limit → is_lu true，涨停判定本身是对的）。
-# 故只有 `has_real_limit`（up_limit 非空且 < 1000）的行才进 bool_and；`listed_trade_days`
+#
+# 判据必须是**相对**比较 `l.up_limit < q.close * 10`，绝不能用固定阈值（如 `< 1000`）：
+# 真实日涨停幅 ≤ 前收 ×1.31（主板 10% / 创业板·科创板 20% / 上市后 5 日的 30%），故真实限价
+# 至多 ≈ 现价 ×1.31，而哨兵恒 ≥ 10× 现价（99999.99 vs 现价 ~64），两者相差一个数量级以上，
+# `close × 10` 是天然分界。固定阈值会误伤高价股的真实限价：实测 `688808 联讯仪器`（BK0501
+# 成分）**102 行限价全部 > 1000**（前 5 个交易日是哨兵 99999.999；首个真实限价 2026-05-06
+# = 1240.00，真实限价区间 1221.60–3240.00，其中 2026-08-04 限价 1948.80 == close 涨停），
+# 被 `< 1000` 整体误判为哨兵 → 零个可判行 → never_broken 从 `False`（已开板）错退化为
+# `None`（不可判），**丢信号**（同类：贵州茅台 ~1393、中际旭创 ~1075）。
+# 故只有 `has_real_limit`（up_limit 非空且 < close × 10）的行才进 bool_and；`listed_trade_days`
 # 仍数**全部**行（口径 = 有行情的交易日数，含哨兵日）。
 #
 # 两条不可混淆的 NULL 语义：
@@ -506,7 +515,7 @@ WITH h AS (
     SELECT cm.stock_id, cm.symbol, q.trade_date, q.open,
            (l.up_limit IS NOT NULL AND q.close >= l.up_limit - 0.005) AS is_lu,
            (l.up_limit IS NULL) AS limits_missing,
-           (l.up_limit IS NOT NULL AND l.up_limit < 1000) AS has_real_limit
+           (l.up_limit IS NOT NULL AND l.up_limit < q.close * 10) AS has_real_limit
     FROM concept_members cm
     JOIN daily_quotes q ON q.stock_id = cm.stock_id
     LEFT JOIN stock_price_limits l ON l.stock_id = q.stock_id AND l.trade_date = q.trade_date
