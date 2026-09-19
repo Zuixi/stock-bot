@@ -455,3 +455,39 @@ async def member_history_stats(db: AsyncSession, board_code: str) -> dict[str, d
         }
         for r in rows
     }
+
+
+# ── 单板读路径的小查询（T8 详情 / T9 by-symbol 专用，口径见 plans §2.2/§2.3） ────────────
+_BOARD_MEMBERSHIP_DATE_SQL = (
+    "SELECT max(last_seen_on) FROM concept_members WHERE board_code = :board_code"
+)
+_BOARD_ROW_SQL = (
+    "SELECT board_code, board_name, is_active FROM concept_boards WHERE board_code = :board_code"
+)
+
+
+async def board_membership_date(db: AsyncSession, board_code: str) -> date | None:
+    """**单板**成分快照日 = 该板 `max(last_seen_on)`（无成分行 → None）。
+
+    与 `latest_membership_date`（全表 max）严格区分：详情页头部展示的是"这一板的成分截至"，
+    用全表值会让一个当天没刷到的板块显示别的板块的日期（口径漂移最隐蔽的一种）。
+    """
+    return (
+        await db.execute(text(_BOARD_MEMBERSHIP_DATE_SQL), {"board_code": board_code})
+    ).scalar_one_or_none()
+
+
+async def find_board(db: AsyncSession, board_code: str) -> dict[str, Any] | None:
+    """单板名录行（含停用板）→ 区分 **404（码不存在）** 与 `no_members`（板在、无成分）。
+
+    必须直接查 `concept_boards`：`aggregate_boards` 是 `JOIN concept_members`，空成分板和未知
+    板块码在它眼里完全一样，而两者响应必须不同（一个空态、一个 404）。
+    """
+    row = (await db.execute(text(_BOARD_ROW_SQL), {"board_code": board_code})).mappings().first()
+    if row is None:
+        return None
+    return {
+        "board_code": str(row["board_code"]),
+        "board_name": str(row["board_name"]),
+        "is_active": bool(row["is_active"]),
+    }

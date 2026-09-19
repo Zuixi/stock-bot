@@ -16,6 +16,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.limit_up import EchelonOut
+
 
 class BoardLeaderOut(BaseModel):
     """板块内涨幅前 2 成分（`pct_chg DESC NULLS LAST, symbol ASC` 的确定性取前二）。"""
@@ -56,3 +58,35 @@ class ConceptListOut(BaseModel):
     total: int  # 启用板块总数（与分页无关）
     degraded_reason: str | None = None
     items: list[BoardItemOut] = Field(default_factory=list)
+
+
+class ConceptKpisOut(BaseModel):
+    """`GET /api/v1/concepts/{board_code}` 的板内连板 KPI（口径 = 梯队快照，见 §2.3）。
+
+    `zt_count` / `max_streak` 是**同源**于 `/market/limit-up` 的快照：板内梯队被原样过滤，
+    service 绝不重算 streak。龙头按 `(-streak, -amount, symbol)` 确定性裁决；无涨停成员时
+    四个字段分别为 0/0/null/null（`max_streak=0` 是"无涨停"，不是缺失）。
+    """
+
+    zt_count: int
+    max_streak: int
+    leader_symbol: str | None = None
+    leader_name: str | None = None
+
+
+class ConceptDetailOut(BaseModel):
+    """`GET /api/v1/concepts/{board_code}`（§2.2）：单板 `BoardItem` + 板内梯队 + KPI。
+
+    `stock_count` / `unresolved_count` 与 `board.member_count` 同源（`concept_members` 行数）：
+    `stock_count = board.member_count - unresolved_count`（= `stock_id IS NOT NULL` 的成分数）。
+    """
+
+    as_of: date | None
+    membership_as_of: date | None  # **该板**的 max(last_seen_on)，不是全表值
+    source: Literal["em_clist"]  # 成分名录来源（东财 clist），与资金流快照源无关
+    degraded_reason: str | None = None  # "no_members" | "price_limits_missing" | None
+    board: BoardItemOut
+    kpis: ConceptKpisOut
+    echelons: list[EchelonOut] = Field(default_factory=list)  # 板内过滤，形状与梯队卡一致
+    unresolved_count: int
+    stock_count: int
