@@ -72,6 +72,8 @@ export interface NewStocksResponse {
   membership_as_of: string | null;
   source: string;
   degraded_reason: string | null;
+  /** `stock_id IS NULL` 的成分数（名录滞后披露）：既不在 items 也不进 KPI，>0 时卡片必须提示。 */
+  unresolved_count: number;
   kpis: NewStockKpis;
   items: NewStockItem[];
 }

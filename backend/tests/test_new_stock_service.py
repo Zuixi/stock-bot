@@ -39,6 +39,7 @@ NEW_STOCKS_KEYS = {
     "board_name",
     "source",
     "degraded_reason",
+    "unresolved_count",
     "kpis",
     "items",
 }
@@ -259,6 +260,8 @@ def _patch_board_reads(
     membership_as_of: date | None = date(2026, 9, 20),
     daily_pct_chg: dict[int, float | None] | None = None,
     pct_calls: list[tuple[Any, list[int]]] | None = None,
+    agg_unresolved: int = 0,
+    agg_calls: list[tuple[Any, list[str]]] | None = None,
 ) -> None:
     monkeypatch.setattr(concept_repo, "list_member_symbols", lambda db, code: _const(members))
     monkeypatch.setattr(concept_repo, "member_history_stats", lambda db, code: _const(stats))
@@ -270,6 +273,31 @@ def _patch_board_reads(
         market_service, "get_stocks_enriched_by_symbols", lambda db, s: _const(enriched)
     )
     monkeypatch.setattr(limit_up_service, "get_snapshot", lambda cache: _const(snap))
+
+    async def _fake_agg(db: Any, as_of: date, codes: list[str]) -> list[dict[str, Any]]:
+        if agg_calls is not None:
+            agg_calls.append((as_of, list(codes)))
+        return [
+            {
+                "board_code": new_stock_service.NEW_STOCK_BOARD_CODE,
+                "board_name": "次新股",
+                "member_count": len(members),
+                "unresolved_count": agg_unresolved,
+                "priced_count": 0,
+                "up_count": 0,
+                "flat_count": 0,
+                "down_count": 0,
+                "avg_pct": None,
+            }
+        ]
+
+    monkeypatch.setattr(concept_repo, "aggregate_boards_for_codes", _fake_agg)
+    # 无行情兜底路径也用同一份"已全部解析"的映射，避免把默认值误当成 unresolved。
+    monkeypatch.setattr(
+        concept_repo,
+        "symbol_to_stock_ids",
+        lambda db, symbols: _const({sym: i for i, sym in enumerate(symbols)}),
+    )
 
     async def _fake_daily_pct_chg(
         db: Any, as_of: date, stock_ids: list[int]
@@ -318,6 +346,7 @@ async def test_get_new_stock_board_merges_ladder_stats_and_membership(
     assert body["as_of"] == "2026-09-18"
     assert body["membership_as_of"] == "2026-09-20", "该板的成分快照日必须回传"
     assert body["degraded_reason"] is None
+    assert body["unresolved_count"] == 0
 
     by_symbol = {i["symbol"]: i for i in body["items"]}
     assert set(by_symbol) == {"601091", "688837"}, "items 覆盖全部可解析成分"
@@ -342,6 +371,38 @@ async def test_get_new_stock_board_merges_ladder_stats_and_membership(
     assert cache.written == [
         (new_stock_service.NEW_STOCK_CACHE_KEY, new_stock_service.NEW_STOCK_TTL)
     ]
+
+
+async def test_get_new_stock_board_exposes_unresolved_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """I3：`stock_id IS NULL` 的成分必须进 `unresolved_count`，且不得出现在 items/KPI 里。
+
+    这是名录滞后的唯一披露面：每周六才刷 `stocks` 名录，而概念成分每日采集，周一~周四上市的
+    新股会出现在 BK0501 但解析不到 `stock_id`。不披露 = 卡片家数与东财对不上且无从解释。
+    """
+    agg_calls: list[tuple[Any, list[str]]] = []
+    _patch_board_reads(
+        monkeypatch,
+        members=[("601091", "C沈鼓"), ("999999", "未收录")],
+        stats={},
+        # 只有已收录的 601091 能被 enriched 解析 → 未收录的 999999 不在 items
+        enriched=[_enriched("601091", "C沈鼓", stock_id=101, latest_price=20.8)],
+        snap={"as_of": date(2026, 9, 18), "echelons": [], "degraded_reason": None},
+        agg_unresolved=1,
+        agg_calls=agg_calls,
+    )
+    cache = _FakeCache()
+
+    body = await new_stock_service.get_new_stock_board(None, cache)
+
+    assert body["unresolved_count"] == 1
+    assert [i["symbol"] for i in body["items"]] == ["601091"], "未收录成员不得进 items"
+    # 与兄弟端点同源：复用聚合 SQL，且板码过滤进 SQL（不是全库聚合后 Python 过滤）
+    assert agg_calls == [(date(2026, 9, 18), ["BK0501"])]
+    assert body["kpis"]["up_count"] + body["kpis"]["flat_count"] + body["kpis"][
+        "down_count"
+    ] + body["kpis"]["unpriced_count"] == len(body["items"])
 
 
 async def test_get_new_stock_board_buckets_use_as_of_pct_chg_not_enriched_change(
@@ -556,6 +617,7 @@ async def test_new_stocks_contract_matches_dev_db() -> None:
     assert body["source"] == "em_clist"
     assert body["membership_as_of"] == membership_as_of.isoformat(), "历史口径声明必须回传"
     assert body["degraded_reason"] is None, "有数据时必须为 null"
+    assert body["unresolved_count"] == unresolved, "未收录成分数必须与库内 stock_id IS NULL 对拍"
 
     items = body["items"]
     assert len(items) == member_count - unresolved, "items = 全部可解析成分（未解析不参与统计）"

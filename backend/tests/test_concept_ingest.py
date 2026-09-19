@@ -68,9 +68,16 @@ class _FakeRepo:
     只用它验证 T4 的编排：某板是否进入写入路径、调用顺序、聚合计数。
     """
 
-    def __init__(self, stock_ids: dict[str, int] | None = None, fail_write_on: str | None = None):
+    def __init__(
+        self,
+        stock_ids: dict[str, int] | None = None,
+        fail_write_on: str | None = None,
+        active_boards: int = 0,
+    ):
         self.stock_ids = stock_ids or {}
         self.fail_write_on = fail_write_on
+        # 停用判据基线（本轮开始前库内启用板块数）；默认 0 = 空库，任何非空列表都可停用。
+        self.active_boards = active_boards
         self.boards_rows: list[dict[str, Any]] = []
         self.member_calls: list[tuple[str, list[dict[str, Any]]]] = []
         self.changes: list[dict[str, Any]] = []
@@ -108,6 +115,9 @@ class _FakeRepo:
         self.members[board_code] = seen
         return (len(added), len(seen) - len(added), len(removed))
 
+    async def count_active_boards(self, db: Any) -> int:
+        return self.active_boards
+
     async def deactivate_missing_boards(self, db: Any, codes: set[str]) -> int:
         self.deactivate_calls.append(set(codes))
         self.events.append("deactivate")
@@ -119,10 +129,13 @@ def make_fake_repo(monkeypatch: pytest.MonkeyPatch) -> Any:
     """构造并注入仓库替身（service 以模块属性调用 `concept_repo.<fn>`，可直接替换）。"""
 
     def _make(
-        stock_ids: dict[str, int] | None = None, fail_write_on: str | None = None
+        stock_ids: dict[str, int] | None = None,
+        fail_write_on: str | None = None,
+        active_boards: int = 0,
     ) -> _FakeRepo:
-        repo = _FakeRepo(stock_ids, fail_write_on)
+        repo = _FakeRepo(stock_ids, fail_write_on, active_boards)
         monkeypatch.setattr(concept_repo, "upsert_boards", repo.upsert_boards)
+        monkeypatch.setattr(concept_repo, "count_active_boards", repo.count_active_boards)
         monkeypatch.setattr(concept_repo, "symbol_to_stock_ids", repo.symbol_to_stock_ids)
         monkeypatch.setattr(concept_repo, "upsert_members", repo.upsert_members)
         monkeypatch.setattr(
@@ -360,6 +373,55 @@ async def test_ingest_dirty_row_makes_board_partial_and_skips_diff(
     assert not any(c["change_type"] == "remove" for c in repo.changes), "不得有幻影 remove"
     assert repo.members["BK0001"] == {"600000": "浦发银行", "600099": "旧名"}, "既有成分未被动过"
     assert "BK0001 has 1 dirty member row" in caplog.text
+
+
+async def test_ingest_short_board_list_skips_deactivation(
+    monkeypatch: pytest.MonkeyPatch, make_fake_repo: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """I1：列表短于库内启用板块数（分页被截断）→ 跳过 deactivate，绝不整批下架。
+
+    东财 total=504 但只翻到 200（第 3 页回空页）时，照常 `not_in(codes)` 会把剩下 304 个
+    板块判为"本轮下架"→ 从概念 tab / 列表 / by-symbol 全部消失且无回滚。接口侧必须自己
+    构造安全：短列表不构成"全部下架"的证据。
+    """
+    repo = make_fake_repo(active_boards=5)
+    monkeypatch.setattr(
+        concept_service,
+        "_get_eastmoney",
+        lambda: _FakeEm(
+            boards=[{"board_code": "BK0001", "board_name": "A", "member_total": 1}],
+            members={"BK0001": [{"symbol": "600000", "name": "浦发银行"}]},
+        ),
+    )
+    with caplog.at_level(logging.WARNING):
+        out = await concept_service.ingest_concept_members(db=None)  # type: ignore[arg-type]
+    assert repo.deactivate_calls == [], "短列表不得停用未出现在列表中的板块"
+    assert out["boards"] == 1 and out["added"] == 1
+    assert "shorter than active boards" in caplog.text
+    assert "fetched=1 < active=5" in caplog.text
+
+
+async def test_ingest_full_board_list_still_deactivates_missing(
+    monkeypatch: pytest.MonkeyPatch, make_fake_repo: Any
+) -> None:
+    """正例控制：列表 >= 库内启用板块数（含新板）时照常停用缺失板，守卫不得吞掉真下架。"""
+    repo = make_fake_repo(active_boards=1)
+    monkeypatch.setattr(
+        concept_service,
+        "_get_eastmoney",
+        lambda: _FakeEm(
+            boards=[
+                {"board_code": "BK0001", "board_name": "A", "member_total": 1},
+                {"board_code": "BK0002", "board_name": "B", "member_total": 1},
+            ],
+            members={
+                "BK0001": [{"symbol": "600000", "name": "浦发银行"}],
+                "BK0002": [{"symbol": "600001", "name": "邯郸钢铁"}],
+            },
+        ),
+    )
+    await concept_service.ingest_concept_members(db=None)  # type: ignore[arg-type]
+    assert repo.deactivate_calls == [{"BK0001", "BK0002"}]
 
 
 async def test_ingest_empty_board_list_warns_and_is_noop(

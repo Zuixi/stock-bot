@@ -126,11 +126,30 @@ test("概念详情 404：空态 + 回跳链接，且 4xx 不重试（只请求�
   expect(hits).toBe(1);
 });
 
-test("概念 tab 不再是空态，行点击进入概念详情", async ({ page }) => {
+test("概念 tab 声明本地聚合口径，不再是空态，行点击进入概念详情", async ({ page }) => {
   await page.route("**/api/v1/market/hot-boards**", (r) => r.fulfill({ json: [
     { id: "concept-BK0501", name: "次新股", code: "BK0501", changePercent: 4.66,
       upCount: 157, flatCount: 3, downCount: 5,
       leaders: [{ symbol: "601091", name: "C沈鼓", changePercent: 20.0 }] }] }));
+
+  // 触点 A（plans §3）：概念分类的口径声明必须是"本地成分聚合 + 每日 18:20 刷新"，
+  // 不能沿用行业/地域的「点击条目可查看…」泛化文案——卡片展示的 changePercent 是成分均值。
+  // A股全景 tab 的邻居卡各自取数（分布/热力/申万树/主力资金流）：本用例只关心 HotSectors，
+  // 故把邻居端点也 mock 成空载荷，避免依赖本机 gateway 的响应形状（e2e 只测本组件契约）。
+  await page.route("**/api/v1/market/distribution**", (r) => r.fulfill({ json: [] }));
+  await page.route("**/api/v1/market/sectors**", (r) => r.fulfill({ json: [] }));
+  await page.route("**/api/v1/market/sw-industry/tree**", (r) => r.fulfill({ json: [] }));
+  await page.route("**/api/v1/market/market-moneyflow**", (r) =>
+    r.fulfill({ json: { today: { total: null, markets: [] }, history: [] } }));
+  await page.goto("/market");
+  await page.getByRole("tab", { name: "A股全景" }).click();
+  const hotCard = page.locator(".ant-card").filter({ hasText: "A股热门板块" }).first();
+  await hotCard.getByText("概念板块", { exact: true }).click();
+  await expect(
+    hotCard.getByText("概念板块涨跌幅与家数按本地成分聚合，每日 18:20 刷新")
+  ).toBeVisible();
+
+  // 「查看全部」页：概念行点击进入详情（既有行为不回退）
   await page.goto("/market/hot-sectors/concept");
   const row = page.getByRole("row", { name: /次新股/ });
   await expect(row).toBeVisible();
@@ -152,7 +171,7 @@ const STOCK_600000 = {
  */
 const NEW_STOCKS_DEGRADED_SINGLE = {
   as_of: "2026-09-18", membership_as_of: null, source: "em_clist",
-  degraded_reason: null, board_code: "BK0501", board_name: "次新股",
+  degraded_reason: null, board_code: "BK0501", board_name: "次新股", unresolved_count: 0,
   // kpis 与 items 同源（1 只：涨停、不可判、高于首日开盘）
   kpis: { up_count: 1, flat_count: 0, down_count: 0, unpriced_count: 0,
     limit_up_count: 1, unbroken_count: 0, above_first_open_count: 1, avg_pct: 20.0 },
@@ -169,7 +188,7 @@ const NEW_STOCKS_DEGRADED_SINGLE = {
  */
 const NEW_STOCKS_MIXED = {
   as_of: "2026-09-18", membership_as_of: "2026-09-17", source: "em_clist",
-  degraded_reason: null, board_code: "BK0501", board_name: "次新股",
+  degraded_reason: null, board_code: "BK0501", board_name: "次新股", unresolved_count: 2,
   kpis: { up_count: 2, flat_count: 0, down_count: 1, unpriced_count: 0,
     limit_up_count: 1, unbroken_count: 1, above_first_open_count: 2, avg_pct: 7.17 },
   items: [
@@ -240,6 +259,8 @@ test("次新股情绪卡：KPI 与 items 同源、替代口径注脚、部分可
   await expect(card.getByText(/成分每日 18:20 刷新/)).toBeVisible();
   // 成分口径同样读 `membership_as_of`（09-17），不是 `as_of`（09-18）
   await expect(card.getByText(/成分截至 9月17日/)).toBeVisible();
+  // I3：未收录成分（stock_id IS NULL）既不在 items 也不进 KPI，必须显式披露（不得静默丢弃）
+  await expect(card.getByText("另有 2 只成分股未收录（名录待刷新），未参与统计")).toBeVisible();
   // 正向未开板：1 只 `never_broken: true` ⇒ `1家`（不得因为另有不可判行而变 `--`）
   const unbrokenTile = card.locator(".ant-statistic", { hasText: "未开板" });
   await expect(unbrokenTile.locator(".ant-statistic-content")).toHaveText("1家");

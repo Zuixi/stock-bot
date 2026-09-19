@@ -221,6 +221,21 @@ async def get_new_stock_board(db: AsyncSession, cache: CacheClient | None) -> di
     )
     snap = await limit_up_service.get_snapshot(cache)
     as_of = _as_of_date(snap.get("as_of"))
+    # 未收录成分（`stock_id IS NULL`）不在 enriched → 不在 items → 不进任何 KPI，必须显式披露，
+    # 否则每周六名录刷新前上市的新股会静默从卡片消失（解耦原则 #1）。**与兄弟端点同源**：
+    # 有 as_of 时复用同一份 `_AGG_SQL`（`aggregate_boards_for_codes`），无聚合可用（无行情 /
+    # 板停用）时退回 `get_board_detail` 的同款兜底（`symbol_to_stock_ids` 反解）。绝不另写
+    # 一条计数 SQL —— 两份口径会在 stock_id 解析规则上漂移。
+    aggregated = (
+        await concept_repo.aggregate_boards_for_codes(db, as_of, [NEW_STOCK_BOARD_CODE])
+        if as_of is not None
+        else []
+    )
+    if aggregated:
+        unresolved_count = int(aggregated[0]["unresolved_count"])
+    else:
+        resolved = await concept_repo.symbol_to_stock_ids(db, [symbol for symbol, _ in members])
+        unresolved_count = len(members) - len(resolved)
     # 涨跌幅一律取 as_of 当日的 `daily_quotes.pct_chg`（plans 全局约束），与 KPI 分档同一份值。
     # `as_of` 缺失（快照 `no_quotes`）时不发查询：没有当日行情就没有任何票可定价，全部 unpriced。
     daily_pct_chg = (
@@ -245,6 +260,7 @@ async def get_new_stock_board(db: AsyncSession, cache: CacheClient | None) -> di
         "board_name": board_meta["board_name"] if board_meta else NEW_STOCK_BOARD_NAME,
         "source": "em_clist",
         "degraded_reason": _degraded_reason(bool(members), snap.get("degraded_reason")),
+        "unresolved_count": unresolved_count,
         "kpis": kpis,
         "items": items,
     }
