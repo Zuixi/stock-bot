@@ -13,12 +13,13 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncGenerator
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import func, select, text
 
-from app.core.database import async_session_factory, engine
+from app.core.database import AsyncSession, async_session_factory, engine
 from app.models.quote import DailyQuote
 from app.repositories import concept_repo
 from app.repositories.concept_repo import diff_members
@@ -65,6 +66,24 @@ def test_diff_members_added_carries_stock_name_from_seen() -> None:
     )
     assert plan.added == [{"symbol": "601091", "stock_name": "C沈鼓"}]
     assert plan.kept == ["600000"]
+
+
+# ---------------------------------------------------------------------------
+# 默认门禁：deactivate_missing_boards 的失败隔离（不触库）
+# ---------------------------------------------------------------------------
+
+
+async def test_deactivate_missing_boards_empty_codes_is_a_noop() -> None:
+    """空 codes（板块列表抓取失败）必须 no-op：返回 0 **且不发出任何 SQL**。
+
+    旧实现把 `set()` 当"全部下架"（`WHERE is_active` 无条件 + `is_active=false`），会把
+    线上所有板块停用且无从回滚；本用例把"空集合绝不落库"钉在默认门禁里（不连库）。
+    """
+    db = cast(AsyncSession, AsyncMock())
+    assert await concept_repo.deactivate_missing_boards(db, set()) == 0
+    assert not db.execute.await_count and not db.flush.await_count, (
+        "空 codes 不得 execute/flush 任何语句"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -300,10 +319,13 @@ async def test_upsert_members_writes_diff_and_degrades_safely() -> None:
 
 @pytest.mark.e2e
 async def test_aggregate_plan_has_no_whole_table_probe() -> None:
-    """计划形状守卫：聚合不得全表扫 daily_quotes/stocks，也不得逐票 probe 整表。
+    """计划形状守卫：聚合不得全表扫 daily_quotes，也不得逐票 probe 整表。
 
     只断言**形状**（节点类型 / 索引条件包含的列），不断言具体索引名——同列等价索引
     （uq_/idx_）规划器按 OID 任选，钉名字会在换索引时误红（test_limit_up_repo 的教训）。
+    也**不**断言 `stocks`：`_AGG_SQL` 根本不引用它，"stocks not in seq_scans" 永远成立、
+    只会制造虚假的安全感（原版 M1 的死断言，已删）。`stocks` 的真实访问在
+    `symbol_to_stock_ids`（`WHERE symbol = ANY(...)`），那里也没有可钉的索引前缀。
     """
     async with async_session_factory() as db:
         as_of = await _latest_quote_date(db)
@@ -317,14 +339,19 @@ async def test_aggregate_plan_has_no_whole_table_probe() -> None:
     nodes: list[dict[str, Any]] = []
     _walk(plan[0]["Plan"], nodes)
 
-    seq_scans = {n.get("Relation Name") for n in nodes if n["Node Type"] == "Seq Scan"}
-    assert "stocks" not in seq_scans, f"stocks 全表扫描会随名录增长退化：{seq_scans}"
-    assert "daily_quotes" not in seq_scans, f"daily_quotes 全表扫描：{seq_scans}"
+    seq_scans = [n for n in nodes if n["Node Type"] == "Seq Scan"]
+    assert "daily_quotes" not in {n.get("Relation Name") for n in seq_scans}, (
+        f"daily_quotes 全表扫描：{seq_scans}"
+    )
 
     # daily_quotes 只能按日收敛（4.37M 行表，任何访问都必须带 trade_date 条件）。
-    for node in nodes:
-        if node.get("Relation Name") == "daily_quotes" and node["Node Type"].startswith("Index"):
-            assert "trade_date" in node.get("Index Cond", ""), node
+    # 先自证计划里真的出现 daily_quotes 节点，否则下面的循环会静默空转、守卫退化（M1）；
+    # 条件串兼容 Index Cond（Index/Bitmap Index Scan）与 Recheck Cond（Bitmap Heap Scan）。
+    quote_nodes = [n for n in nodes if n.get("Relation Name") == "daily_quotes"]
+    assert quote_nodes, f"计划里没有 daily_quotes 节点，日收敛守卫已空转：{nodes}"
+    for node in quote_nodes:
+        cond = node.get("Index Cond") or node.get("Recheck Cond") or ""
+        assert "trade_date" in cond, f"daily_quotes 未按 trade_date 收敛：{node}"
 
     # Nested Loop 的内侧不得是全表扫描；若它 probe daily_quotes，必须是 (stock_id, trade_date)
     # 唯一键点查（"逐票 probe" 只有在拿唯一键点时才是可接受的最坏情况）。
@@ -459,6 +486,30 @@ async def test_upsert_boards_refreshes_and_deactivates_missing() -> None:
         )
     assert state["TESTBKA"] == ("用例甲改", 5, True)
     assert state["TESTBKB"] == ("用例乙", None, False), "未出现 → 停用但保留行（成分也不删）"
+
+
+@pytest.mark.e2e
+async def test_deactivate_missing_boards_empty_set_leaves_boards_active() -> None:
+    """真库语义：空 codes（列表抓取失败）必须 no-op，在册板块全部保持 is_active。
+
+    `deactivate_missing_boards` 的返回值/无副作用在默认门禁已由 mock 用例钉死，这里补的是
+    真实 SQL 路径：一旦有人把早退分支删掉，本用例会在 dev DB 上直接抓到"全部下架"。
+    """
+    async with async_session_factory() as db:
+        await _insert_board(db, "TESTBKA", "用例甲")
+        await _insert_board(db, "TESTBKB", "用例乙")
+        got = await concept_repo.deactivate_missing_boards(db, set())
+        await db.commit()
+        active = (
+            await db.execute(
+                text(
+                    "SELECT count(*) FROM concept_boards "
+                    "WHERE board_code IN ('TESTBKA','TESTBKB') AND is_active"
+                )
+            )
+        ).scalar_one()
+    assert got == 0, "空集合必须 no-op 返回 0"
+    assert active == 2, "空集合绝不能把在册板块置为停用"
 
 
 def _walk(node: dict[str, Any], out: list[dict[str, Any]]) -> None:
