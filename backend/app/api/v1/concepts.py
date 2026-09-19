@@ -21,7 +21,13 @@ router = APIRouter(tags=["concepts"])
 async def list_concepts(
     db: DbDep,
     cache: CacheDep,
-    sort: Literal["pct", "inflow"] = Query(default="pct"),
+    sort: Literal["pct", "inflow"] = Query(
+        default="pct",
+        description=(
+            "pct = 全库 avg_pct 降序（NULLS LAST）；inflow = 只在**当前页切片内**按主力净流入"
+            "重排（缺快照行排最后），不是全库流入 Top-N。"
+        ),
+    ),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> ConceptListOut:

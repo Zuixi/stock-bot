@@ -49,9 +49,10 @@ class ConceptListOut(BaseModel):
     """`GET /api/v1/concepts`（§2.2）：分页 items + 数据集级元信息。"""
 
     as_of: date | None  # 行情最新交易日（无行情 → None + degraded_reason="no_quotes"）
-    membership_as_of: date | None  # 成分快照日 = max(last_seen_on)；无成分 → "no_members"
+    # 全体成分行的 max(last_seen_on)：全集口径，不保证是本页这些板块的日期；无成分 → "no_members"
+    membership_as_of: date | None
     price_source: Literal["local_agg"]
-    flow_source: Literal["em_clist"] | None  # 至少匹配到一行东财快照才是 em_clist
+    flow_source: Literal["em_clist"] | None  # 该 as_of 的东财快照是否有行（数据集级，非本页命中数）
     total: int  # 启用板块总数（与分页无关）
     degraded_reason: str | None = None
     items: list[BoardItemOut] = Field(default_factory=list)
