@@ -149,6 +149,13 @@ export default function MarketHotSectorsPage() {
             dataSource={rows}
             pagination={{ pageSize: 10, showSizeChanger: false }}
             onChange={onTableChange}
+            onRow={(record) => ({
+              style: { cursor: "pointer" },
+              // 仅概念分类跳概念详情：行业/地域板块没有对应的详情页，保持既有行为
+              onClick: () => {
+                if (activeCategory === "concept") navigate(`/market/concept/${record.code}`);
+              },
+            })}
             rowClassName={(record) => (selectedBoardCode && selectedBoardCode === record.code ? "ant-table-row-selected" : "")}
             scroll={{ x: 900 }}
           />
