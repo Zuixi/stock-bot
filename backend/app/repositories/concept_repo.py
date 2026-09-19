@@ -484,18 +484,40 @@ async def board_leaders(
 # T10 次新股口径（plans §2.3）：listed_trade_days 只数"有行情"的交易日（停牌不计）；
 # never_broken 是"上市以来每一行都涨停"，任一行缺限价（limits_missing）则不可判 → NULL，
 # **绝不能写成 false**（false 会成为"已开板"的假信号）；first_open 取首日 open。
+#
+# 哨兵限价行不参与 never_broken（2026-09-18 数据核对发现的**口径 bug**）：新股上市后的前 5
+# 个交易日（科创板/创业板/注册制主板）TuShare `stk_limit` 返回"无涨跌幅限制"哨兵，本库实测
+# 取值 99999.99 / 99999.999 / 999999.999；该行 close 永远 < 哨兵 → is_lu 恒 false，于是
+# "上市以来每一行都涨停"**结构性不可达**。2026-09-18 实测：BK0501 的 162 只成分
+# （stock_price_limits 当时覆盖 245 个交易日）里 159 只有可判行，0 只 unbroken，且这 159 只
+# 失败**只**因为首日哨兵行（920298 腾信精密：2026-09-16 上市日 up_limit=99999.99 → is_lu
+# false；09-17 +8.24% 未涨停；09-18 close == up_limit → is_lu true，涨停判定本身是对的）。
+# 故只有 `has_real_limit`（up_limit 非空且 < 1000）的行才进 bool_and；`listed_trade_days`
+# 仍数**全部**行（口径 = 有行情的交易日数，含哨兵日）。
+#
+# 两条不可混淆的 NULL 语义：
+#   1. 缺限价行（LEFT JOIN 未命中 → up_limit IS NULL）仍经 bool_or(limits_missing) 毒化为
+#      NULL；新过滤器只排除哨兵行，绝不把"缺限价"偷换成"忽略该行"（缺失 ≠ 0）。
+#   2. 一只票**没有任何**真实限价行（如 688837 上市前 5 个交易日全是哨兵）→
+#      count(*) FILTER (WHERE has_real_limit) = 0 → NULL（不可判）。绝不能因"零个可判行都
+#      涨停"而真值化为 true，更不能写成 false（false 会把"还没开始可判"误报成"已开板"）。
 _HISTORY_SQL = """
 WITH h AS (
     SELECT cm.stock_id, cm.symbol, q.trade_date, q.open,
            (l.up_limit IS NOT NULL AND q.close >= l.up_limit - 0.005) AS is_lu,
-           (l.up_limit IS NULL) AS limits_missing
+           (l.up_limit IS NULL) AS limits_missing,
+           (l.up_limit IS NOT NULL AND l.up_limit < 1000) AS has_real_limit
     FROM concept_members cm
     JOIN daily_quotes q ON q.stock_id = cm.stock_id
     LEFT JOIN stock_price_limits l ON l.stock_id = q.stock_id AND l.trade_date = q.trade_date
     WHERE cm.board_code = :board_code AND cm.stock_id IS NOT NULL
 )
 SELECT symbol, stock_id, count(*) AS listed_trade_days,
-       CASE WHEN bool_or(limits_missing) THEN NULL ELSE bool_and(is_lu) END AS never_broken,
+       CASE
+           WHEN bool_or(limits_missing) THEN NULL
+           WHEN count(*) FILTER (WHERE has_real_limit) = 0 THEN NULL
+           ELSE bool_and(is_lu) FILTER (WHERE has_real_limit)
+       END AS never_broken,
        (array_agg(open ORDER BY trade_date))[1] AS first_open
 FROM h GROUP BY symbol, stock_id
 """
@@ -504,7 +526,9 @@ FROM h GROUP BY symbol, stock_id
 async def member_history_stats(db: AsyncSession, board_code: str) -> dict[str, dict[str, Any]]:
     """某板块每只成分的上市以来统计：`listed_trade_days` / `never_broken` / `first_open`。
 
-    `never_broken` 为 `None` 表示限价缺失、不可判（UI 渲染 `--`），与 `False`（已开板）严格区分。
+    `never_broken` 为 `None` 表示不可判（UI 渲染 `--`）：任一行缺限价，或**没有任何**真实限价行
+    （全是哨兵，见 `_HISTORY_SQL` 注释）。`False` 只表示"确有非涨停的真实限价行"（已开板），
+    两者严格区分。
     """
     rows = (await db.execute(text(_HISTORY_SQL), {"board_code": board_code})).mappings().all()
     return {

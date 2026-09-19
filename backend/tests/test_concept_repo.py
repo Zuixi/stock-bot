@@ -111,6 +111,10 @@ async def _cleanup_seeded_rows_and_dispose(
                     text(f"DELETE FROM {table} WHERE board_code LIKE :prefix"),  # noqa: S608
                     {"prefix": f"{BOARD_PREFIX}%"},
                 )
+            # 哨兵限价用例的合成行情/限价行一律用负 stock_id（真库 id 恒为正），这里防御性
+            # 清理——用例本身不 commit，会话结束即回滚，但万一将来有人 commit 也不会留脏行。
+            for table in ("daily_quotes", "stock_price_limits"):
+                await db.execute(text(f"DELETE FROM {table} WHERE stock_id < 0"))  # noqa: S608
             await db.commit()
         await engine.dispose()
 
@@ -144,6 +148,52 @@ async def _insert_member(
         ),
         {"code": code, "symbol": symbol, "name": stock_name, "sid": stock_id, "seen": seen_on},
     )
+
+
+# 哨兵限价（"首日/前 5 个交易日无涨跌幅限制"）实测取值之一；用例只用这一个取值即可，
+# 其余变体（99999.999 / 999999.999）同样 >= 1000，走的是同一条 `has_real_limit` 分支。
+_SENTINEL_UP_LIMIT = 99999.99
+
+
+async def _insert_synth_quote(
+    db: Any, stock_id: int, day: date, *, open_: float, close: float, up_limit: float | None
+) -> None:
+    """插一条**合成**行情行；`up_limit=None` 表示**故意不插限价行**（LEFT JOIN 未命中 → NULL）。
+
+    `stock_id` 一律传负数：真库 id 恒为正，合成行既不会撞 `(stock_id, trade_date)` 唯一键，
+    也不会污染任何真实股票的统计。
+    """
+    await db.execute(
+        text(
+            "INSERT INTO daily_quotes (stock_id, trade_date, open, high, low, close, pct_chg) "
+            "VALUES (:sid, :day, :o, :h, :lo, :c, :p)"
+        ),
+        {
+            "sid": stock_id,
+            "day": day,
+            "o": open_,
+            "h": max(open_, close),
+            "lo": min(open_, close),
+            "c": close,
+            "p": 0.0,
+        },
+    )
+    if up_limit is not None:
+        await db.execute(
+            text(
+                "INSERT INTO stock_price_limits "
+                "(trade_date, stock_id, ts_code, pre_close, up_limit, down_limit) "
+                "VALUES (:day, :sid, :ts, :pc, :ul, :dl)"
+            ),
+            {
+                "day": day,
+                "sid": stock_id,
+                "ts": f"SYN{stock_id}",
+                "pc": close,
+                "ul": up_limit,
+                "dl": close,
+            },
+        )
 
 
 async def _quote_by_sign(db: Any, as_of: date, sign: str) -> Any:
@@ -434,6 +484,70 @@ async def test_member_history_stats_keeps_unknown_never_broken_as_none() -> None
     assert stats["XCOMPLETE"]["never_broken"] == ref.all_lu
     assert stats["XCOMPLETE"]["never_broken"] is False, "有非涨停交易日 → 确定已开板（false）"
     assert stats["XMISSING"]["never_broken"] is None, "任一行缺限价 → 不可判，必须是 None"
+
+
+@pytest.mark.e2e
+async def test_member_history_stats_excludes_sentinel_limit_rows_from_never_broken() -> None:
+    """哨兵限价行（上市前 5 个交易日"无涨跌幅限制"）不进 `never_broken`，缺限价行仍毒化为 None。
+
+    2026-09-18 数据核对发现的口径 bug：哨兵行（`up_limit=99999.99`）的 close 永远够不到限价 →
+    `is_lu` 恒 false → "上市以来每一行都涨停"**结构性不可达**（BK0501 实测 162 只里 0 只
+    unbroken，159 只有可判行且失败只因首日哨兵）。本用例用负 stock_id 合成四例（测试内不
+    commit，会话结束自动回滚），逐条钉住修复后的口径：
+
+    - XSENTLU：哨兵首日 + 之后两日真实限价且都涨停 → `True`（**修复前恒为 False**）
+    - XSENTBROKEN：哨兵首日 + 之后有一天未涨停 → `False`（哨兵被排除，但确已开板）
+    - XNULL：真实涨停行 + 之后一天缺限价行 → `None`（缺失 ≠ 忽略）
+    - XONLYSENT：只有哨兵行、无任何真实限价行 → `None`（不可判，绝不 false）
+    """
+    board = "TESTBKSENT"
+    d1, d2, d3 = date(2026, 9, 16), date(2026, 9, 17), date(2026, 9, 18)
+    async with async_session_factory() as db:
+        await _insert_board(db, board, "哨兵限价用例")
+        await _insert_member(db, board, "XSENTLU", "哨兵后全涨停", -99001, TODAY)
+        await _insert_member(db, board, "XSENTBROKEN", "哨兵后开板", -99002, TODAY)
+        await _insert_member(db, board, "XNULL", "缺限价行", -99003, TODAY)
+        await _insert_member(db, board, "XONLYSENT", "只有哨兵", -99004, TODAY)
+
+        # XSENTLU：首日哨兵（64.30 < 99999.99），后两日 close == up_limit。
+        await _insert_synth_quote(
+            db, -99001, d1, open_=50.0, close=64.30, up_limit=_SENTINEL_UP_LIMIT
+        )
+        await _insert_synth_quote(db, -99001, d2, open_=64.4, close=69.60, up_limit=69.60)
+        await _insert_synth_quote(db, -99001, d3, open_=72.5, close=90.48, up_limit=90.48)
+        # XSENTBROKEN：首日哨兵，次日 up_limit=22 但 close=21 → 真实限价行未涨停。
+        await _insert_synth_quote(
+            db, -99002, d1, open_=20.0, close=20.8, up_limit=_SENTINEL_UP_LIMIT
+        )
+        await _insert_synth_quote(db, -99002, d2, open_=20.8, close=21.0, up_limit=22.0)
+        # XNULL：首日真实涨停，次日有行情但**故意不插限价行** → up_limit IS NULL。
+        await _insert_synth_quote(db, -99003, d1, open_=10.0, close=11.0, up_limit=11.0)
+        await _insert_synth_quote(db, -99003, d2, open_=11.0, close=12.0, up_limit=None)
+        # XONLYSENT：只有哨兵首日，无任何真实限价行。
+        await _insert_synth_quote(
+            db, -99004, d1, open_=30.0, close=35.0, up_limit=_SENTINEL_UP_LIMIT
+        )
+
+        stats = await concept_repo.member_history_stats(db, board)
+
+    assert set(stats) == {"XSENTLU", "XSENTBROKEN", "XNULL", "XONLYSENT"}
+    assert stats["XSENTLU"]["never_broken"] is True, (
+        "哨兵首日必须排除：否则后续每一行都涨停的票也会恒为 False（口径结构性不可达）"
+    )
+    assert stats["XSENTLU"]["listed_trade_days"] == 3, (
+        "listed_trade_days 仍数全部行情行（含哨兵日）"
+    )
+    assert stats["XSENTLU"]["first_open"] == pytest.approx(50.0), "first_open 仍取首日 open"
+    assert stats["XSENTBROKEN"]["never_broken"] is False, (
+        "哨兵排除后仍有真实限价行未涨停 → 确定已开板（false）"
+    )
+    assert stats["XNULL"]["never_broken"] is None, (
+        "缺限价行必须毒化为 None，绝不能被新过滤器当作可忽略的行"
+    )
+    assert stats["XONLYSENT"]["never_broken"] is None, (
+        "无任何真实限价行 → 不可判（None），绝不能真值化为 true/false"
+    )
+    assert stats["XONLYSENT"]["listed_trade_days"] == 1
 
 
 @pytest.mark.e2e
