@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Card, Col, Empty, Row, Statistic, Table, Tag, Typography } from "antd";
+import { Alert, Card, Col, Empty, Row, Statistic, Table, Tag, Typography } from "antd";
 import type { ColumnsType, TableProps } from "antd/es/table";
 import { ChangeText, DegradedNotice, NumberText, formatCnDate } from "@/shared/ui";
 import type { NewStockItem, NewStocksResponse } from "@/shared/api/concept";
@@ -174,6 +174,17 @@ export function NewStockBoard({ data, degraded = false }: Props) {
 
   return (
     <div data-testid="new-stock-board">
+      {/* I3：名录滞后（stock_id IS NULL）的成分不在 items/KPI 里——必须显式披露，
+          否则每周六名录刷新前上市的新股会静默消失，KPI 与东财对不上且无从解释。 */}
+      {data?.unresolved_count ? (
+        <Alert
+          type="warning"
+          showIcon
+          data-testid="new-stock-unresolved"
+          style={{ marginBottom: 8 }}
+          message={`另有 ${data.unresolved_count} 只成分股未收录（名录待刷新），未参与统计`}
+        />
+      ) : null}
       <Row gutter={[8, 8]}>
         <Col xs={12} md={6}>
           <KpiTile title="次新涨停" note="口径同连板梯队">

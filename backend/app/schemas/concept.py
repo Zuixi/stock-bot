@@ -167,6 +167,10 @@ class NewStocksOut(BaseModel):
     `board_code`/`board_name` 由 service 下发（东财 BK0501 = 次新股）；`membership_as_of` 是
     **该板**的 `max(last_seen_on)`（历史口径声明必须上屏）；`source` 是成分名录来源
     （东财 clist），与涨停梯队（本地计算）不是同一条管道。
+
+    `unresolved_count` = 该板 `stock_id IS NULL` 的成分数（名录滞后暴露面，与 `/concepts`
+    列表/详情**同一份聚合 SQL**）：这些成员既不在 `items` 也不进任何 KPI，必须显式披露，
+    否则每周六名录刷新前，周一~周四上市的新股会在卡片上静默消失（解耦原则 #1）。
     """
 
     as_of: date | None
@@ -175,5 +179,6 @@ class NewStocksOut(BaseModel):
     board_name: str
     source: Literal["em_clist"]
     degraded_reason: str | None = None
+    unresolved_count: int
     kpis: NewStockKpisOut
     items: list[NewStockItemOut] = Field(default_factory=list)

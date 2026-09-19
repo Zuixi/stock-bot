@@ -76,7 +76,11 @@ export function HotSectors() {
           />
         </Spin>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {getHotBoardCategoryLabel(category)}：点击条目可查看该类别下全部细分板块。
+          {category === "concept"
+            ? // 触点 A 口径声明（plans §3）：概念卡展示的 `changePercent` 是**成分均值**
+              // （本地聚合 avg_pct），不写明会让用户把它读成东财板块涨跌幅。
+              "概念板块涨跌幅与家数按本地成分聚合，每日 18:20 刷新"
+            : `${getHotBoardCategoryLabel(category)}：点击条目可查看该类别下全部细分板块。`}
         </Typography.Text>
       </Space>
     </Card>

@@ -13,7 +13,7 @@ interface CoverageRow {
   planned?: boolean;
 }
 
-/** 数据覆盖矩阵：契约 docs/design/landing-market-theme.md §5 的 10 行 */
+/** 数据覆盖矩阵：契约 docs/design/landing-market-theme.md §5 的 11 行 */
 const COVERAGE_ROWS: CoverageRow[] = [
   { domain: "A股行情", content: "沪深北 5,500+ 只日线 OHLCV", freq: "日度（盘后）", source: "TuShare" },
   { domain: "估值指标", content: "PE/PB/换手/市值/量比", freq: "日度", source: "TuShare" },
@@ -33,12 +33,12 @@ const COVERAGE_ROWS: CoverageRow[] = [
 const HEADS = ["数据域", "内容", "频率", "来源"];
 
 /**
- * 统计带口径 = 实际已上线的 10 个数据域（11 行中北向为规划中，不计入）。
- * T16 新增「概念板块成分」行后由 9 上调为 10；公开文案只报「已上线」，
- * 不含规划中项，以免夸大口径（计数与行数的推导见 `COVERAGE_ROWS`/`planned`）。
+ * 统计带口径 = 实际已上线的数据域（11 行中北向为规划中，不计入；T16 新增「概念板块成分」
+ * 后由 9 上调为 10）。计数**从 `COVERAGE_ROWS` 推导**而不是写字面量：以前加行忘改数字，
+ * 公开文案就与矩阵行数不一致（契约 §5 要求两者同源）。公开文案只报「已上线」，不含规划中项。
  */
 const STATS: Array<{ num: string; label: string }> = [
-  { num: "10", label: "已上线数据域" },
+  { num: String(COVERAGE_ROWS.filter((row) => !row.planned).length), label: "已上线数据域" },
   { num: "5,500+", label: "标的" },
   { num: "4", label: "级数据权威分级" },
   { num: "100%", label: "已上线数据免费" },
@@ -50,7 +50,7 @@ interface Props {
 }
 
 /**
- * 数据版图：统计带（可选）+ 10 行覆盖矩阵（级别列统一绿色「免费」徽章，规划中为灰色）。
+ * 数据版图：统计带（可选）+ 11 行覆盖矩阵（级别列统一绿色「免费」徽章，规划中为灰色）。
  * Stage C 自 landing/sections/DataCoverage 提取为共享组件，宣传页与市场页共用。
  */
 export function DataCoverageMatrix({ withStats = true }: Props) {

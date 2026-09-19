@@ -12,7 +12,10 @@
 2. **单板失败隔离**：任一客户端/仓库异常只计入 `failed_boards` 并跳过该板，绝不删除既有成分、
    绝不写变更行。板块列表本身抓取失败则向上抛（T5 的调度任务负责记录）；列表为空同样不会造成
    "全部下架"——T3 的 `deactivate_missing_boards` 对空 set 是文档化 no-op（见其 docstring），
-   但空列表意味着整轮静默落空，故单独打 WARNING 让它可见。
+   但空列表意味着整轮静默落空，故单独打 WARNING 让它可见。列表**非空但短于库内启用板块数**
+   （分页被服务端截断）时同样跳过 `deactivate_missing_boards`：短列表不是"本轮在册全集"，
+   照常停用会把未出现在列表里的板块整批下架（静默、无回滚），故与列表失败同一条失败隔离
+   原则（I1）。
 3. **一次映射、不做交易所推断**：全 run 只用一条 `symbol_to_stock_ids` 建 `symbol → stocks.id`
    映射（`stocks` 名录会滞后），未命中的成员 `stock_id` 留 NULL 并计入 `unresolved`
    （见 docs/references/best-practices.md「源表被别的管道当映射表」条）。
@@ -90,6 +93,9 @@ async def ingest_concept_members(db: AsyncSession) -> dict[str, int]:
             "CONCEPT_INGEST board list empty; nothing ingested "
             "(deactivate_missing_boards is a no-op on empty set)"
         )
+    # 停用判据的基线：本轮开始前库内启用板块数。必须在 upsert_boards 之前读——upsert 会把
+    # 本轮新板置为 is_active=true，之后再读会把"新板"算进基线，掩盖截断。
+    active_boards = await concept_repo.count_active_boards(db)
     await concept_repo.upsert_boards(db, boards, today)
 
     failed_boards = 0
@@ -164,7 +170,19 @@ async def ingest_concept_members(db: AsyncSession) -> dict[str, int]:
         updated += board_updated
         removed += board_removed
 
-    await concept_repo.deactivate_missing_boards(db, {str(b["board_code"]) for b in boards})
+    # 列表短于库内启用板块数 = 抓到的是被截断的"半截全集"（客户端已在 `_paged_clist` 打
+    # WARNING）。此时照常 `deactivate_missing_boards` 会把没出现在列表里的活跃板块整批停用，
+    # 而停用板会从 `aggregate_boards` / 详情 / by-symbol 全部消失且无回滚手段 —— 跳过停用，
+    # 用 WARNING 说明原因（I1：接口应构造安全，而不是把责任推给调用方记得加守卫）。
+    if len(boards) < active_boards:
+        logger.warning(
+            "CONCEPT_INGEST board list shorter than active boards (fetched=%d < active=%d); "
+            "skipping deactivate_missing_boards to avoid mass deactivation",
+            len(boards),
+            active_boards,
+        )
+    else:
+        await concept_repo.deactivate_missing_boards(db, {str(b["board_code"]) for b in boards})
 
     members_upserted = added + updated
     result = {

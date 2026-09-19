@@ -101,8 +101,9 @@ async def deactivate_missing_boards(db: AsyncSession, codes: set[str]) -> int:
     **不变量：`codes` 为空一律 no-op（返回 0，一行不改）** —— 空集合只可能来自"板块列表
     抓取失败/空页"，绝不能解读成"全部下架"：停用板会从 `aggregate_boards` 的
     `WHERE b.is_active` 消失，这条路径没有任何回滚手段（旧代码会把线上全部板块停用）。
-    调用方若确实要停用全部，必须显式传在册 code 全集。与 `diff_members` 对空 `seen` 判
-    `degraded` 是同一条失败隔离原则。
+    `codes` 语义是**本轮在册板块的全集**（`board_code.not_in(codes)` 停用不在其中的板），
+    因此**传在册全集等于一行都不停用**——要真的停用某板，恰恰不能把它放进 `codes`。
+    与 `diff_members` 对空 `seen` 判 `degraded` 是同一条失败隔离原则。
     """
     if not codes:
         # 空集合 = 板块列表抓取失败，绝不能当作"全部下架"

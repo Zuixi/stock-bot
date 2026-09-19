@@ -1,6 +1,7 @@
 """EastmoneyClient 解析单测（不打真实网络，monkeypatch _get_json）。"""
 
 import asyncio
+import logging
 
 import pytest
 
@@ -227,6 +228,65 @@ def test_fetch_concept_boards_stops_on_empty_page(monkeypatch):
 
     monkeypatch.setattr(EastmoneyClient, "_get_json", fake_get_json)
     assert asyncio.run(EastmoneyClient().fetch_concept_boards()) == []
+
+
+def test_paged_clist_warns_when_short_of_total(monkeypatch, caplog):
+    """I1/M4：非空但短于 total 的列表（第 3 页回空页提前收敛）必须 WARNING。
+
+    这是唯一的可观测面：下游把短列表当"本轮在册全集"，少一页 = 一批板块被停用。空页收敛
+    只有在 ``len(rows) >= total`` 时才是干净退出，行数不足一律要留痕。
+    """
+
+    pages = {
+        1: {"data": {"total": 504, "diff": [_board(f"BK{i:04d}") for i in range(100)]}},
+        2: {"data": {"total": 504, "diff": [_board(f"BK{i:04d}") for i in range(100, 200)]}},
+        3: {"data": {"total": 504, "diff": []}},  # 服务端截断：total 仍报 504
+    }
+
+    async def fake_get_json(self, base, path, params):
+        return pages[params["pn"]]
+
+    monkeypatch.setattr(EastmoneyClient, "_get_json", fake_get_json)
+    with caplog.at_level(logging.WARNING):
+        boards = asyncio.run(EastmoneyClient().fetch_concept_boards())
+
+    assert len(boards) == 200, "空页即收敛（行为不变）"
+    assert "clist paging incomplete" in caplog.text
+    assert "rows=200 total=504" in caplog.text
+
+
+def test_paged_clist_warns_even_when_last_page_omits_total(monkeypatch, caplog):
+    """短列表告警不能依赖"空页仍带 total"：截断页常缺 total，必须沿用已解析到的值。"""
+    pages = {
+        1: {"data": {"total": 504, "diff": [_board(f"BK{i:04d}") for i in range(100)]}},
+        2: {"data": {"diff": []}},  # 空页且不带 total
+    }
+
+    async def fake_get_json(self, base, path, params):
+        return pages[params["pn"]]
+
+    monkeypatch.setattr(EastmoneyClient, "_get_json", fake_get_json)
+    with caplog.at_level(logging.WARNING):
+        boards = asyncio.run(EastmoneyClient().fetch_concept_boards())
+
+    assert len(boards) == 100
+    assert "rows=100 total=504" in caplog.text
+
+
+def test_paged_clist_no_warning_when_total_reached(monkeypatch, caplog):
+    """正例控制：到达 total 的完整翻页不得打 incomplete 告警（否则告警失去信号量）。"""
+    page1 = {"data": {"total": 150, "diff": [_board(f"BK{i:04d}") for i in range(100)]}}
+    page2 = {"data": {"total": 150, "diff": [_board(f"BK{i:04d}") for i in range(100, 150)]}}
+
+    async def fake_get_json(self, base, path, params):
+        return page1 if params["pn"] == 1 else page2
+
+    monkeypatch.setattr(EastmoneyClient, "_get_json", fake_get_json)
+    with caplog.at_level(logging.WARNING):
+        boards = asyncio.run(EastmoneyClient().fetch_concept_boards())
+
+    assert len(boards) == 150
+    assert "clist paging incomplete" not in caplog.text
 
 
 def test_paged_clist_stops_at_max_pages_when_total_never_reached(monkeypatch):

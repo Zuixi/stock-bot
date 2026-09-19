@@ -154,8 +154,14 @@ class EastmoneyClient:
         ``fid=f12``（按代码排）而非 f3（涨跌幅）：盘中按涨跌幅排序翻页会漏/重。
         收敛条件：空页 / 去重后条数 >= total / pn 超过 ``_MAX_PAGES``。
         按映射后的业务键去重（板块 board_code、成分 symbol）——翻页抖动会重复行。
+
+        **只要最终 ``len(rows) < total`` 就 WARNING**（含空页提前收敛）：服务端截断/抖动会
+        让一份"非空但短"的列表看起来完全正常，而下游的成分差分会把它当权威全集（少一页 =
+        一批板块被停用 / 一批成员被判"退出板块"）。空页收敛只在真正的 ``total`` 已到达时才是
+        干净退出；这里的告警是那个判据的唯一可观测面（I1 / 计划 T2 M4）。
         """
         rows: dict[str, dict[str, Any]] = {}
+        total: float | None = None
         for pn in range(1, _MAX_PAGES + 1):
             data = await self._get_json(
                 _CLIST_BASE,
@@ -175,16 +181,27 @@ class EastmoneyClient:
             )
             payload = data.get("data") or {}
             diff = payload.get("diff") or []
+            # total 先于空页判断读取，且只在解析出数时覆盖：服务端可以"报 total=504 却回
+            # 空页"，空页载荷还可能干脆不带 total —— 丢掉已知的 504 会让 incomplete 告警失效。
+            page_total = _num(payload.get("total"))
+            if page_total is not None:
+                total = page_total
             if not diff:
                 break  # total 报大但返回空页：必须收敛，否则把定时任务变成长驻
             for d in diff:
                 row = mapper(d)
                 rows.setdefault(str(row.get("board_code") or row.get("symbol")), row)
-            total = _num(payload.get("total"))
             if total and len(rows) >= total:
                 break
         else:
             logger.warning("clist paging hit _MAX_PAGES=%d, fs=%s", _MAX_PAGES, fs)
+        if total is not None and len(rows) < total:
+            logger.warning(
+                "clist paging incomplete: fs=%s rows=%d total=%d (list may be truncated)",
+                fs,
+                len(rows),
+                int(total),
+            )
         return list(rows.values())
 
     async def fetch_concept_boards(self) -> list[dict[str, Any]]:
