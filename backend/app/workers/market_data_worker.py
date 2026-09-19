@@ -20,7 +20,12 @@ def _opt_date(v: Any) -> date | None:
 
 
 async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
-    from app.services import announcement_service, limit_up_service, market_data_service
+    from app.services import (
+        announcement_service,
+        concept_service,
+        limit_up_service,
+        market_data_service,
+    )
 
     async with async_session_factory() as db:
         if job == "global_index_daily":
@@ -68,6 +73,8 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
         elif job == "sentiment_daily":
             # 盘后落库不需要缓存（cache=None）：避免命中 Redis JSON 后 as_of 变 str。
             result = await limit_up_service.persist_snapshot(db, None)
+        elif job == "concept_members":
+            result = await concept_service.ingest_concept_members(db)
         elif job == "reconcile":
             from app.services import reconciliation_service  # noqa: PLC0415
 
@@ -88,7 +95,8 @@ class MarketDataWorker(BaseWorker):
     async def process(self, task_id: uuid.UUID, payload: dict) -> dict:
         """Execute one ingest job; service exceptions propagate (BaseWorker marks the
         task failed). Expected payload keys (top-level or nested in "params"):
-        global_index_daily/sector_moneyflow — none; backfill_global_index — years(=2);
+        global_index_daily/sector_moneyflow/concept_members — none;
+        backfill_global_index — years(=2);
         northbound/share_floats/repurchases — days(=30/7/7); dragon_tiger/block_trades —
         trade_date(yyyymmdd, optional); announcements — days(=3). Unknown types return
         a failed dict without touching the DB.

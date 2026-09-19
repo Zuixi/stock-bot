@@ -57,3 +57,23 @@ async def test_worker_unknown_type_fails_cleanly():
     worker = MarketDataWorker()
     result = await worker.process(task_id=None, payload={"type": "nope"})
     assert result["status"] == "failed"
+
+
+async def test_worker_dispatches_concept_members(monkeypatch):
+    called: list = []
+
+    async def fake_ingest(db):
+        called.append(True)
+        return {"boards": 1, "members_upserted": 2}
+
+    from app.services import concept_service
+
+    monkeypatch.setattr(concept_service, "ingest_concept_members", fake_ingest)
+    monkeypatch.setattr(
+        "app.workers.market_data_worker.async_session_factory", _fake_session_factory
+    )
+    worker = MarketDataWorker()
+    result = await worker.process(task_id=None, payload={"type": "concept_members"})
+    assert result["status"] == "completed" and result["type"] == "concept_members"
+    assert result["boards"] == 1
+    assert called == [True]
