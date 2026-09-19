@@ -177,8 +177,8 @@ GET /api/v1/new-stocks
 | `up/flat/down_count` | `pct_chg > 0 / = 0 / < 0` 家数 | 不计入任何一档 |
 | `avg_pct` | `pct_chg IS NOT NULL` 的成分均值（**不是**全成分口径，UI 注明"n=有行情家数"） | `null` |
 | `main_net_inflow` | 东财快照，单位**元** | `null`（快照只覆盖当日 Top100 震荡集，**允许缺失**） |
-| `zt_count`（板内） | 板块成分 × 当日 `is_lu`（`close >= up_limit - 0.005`）家数 | 限价缺失 → 0 + `degraded_reason="price_limits_missing"` |
-| `max_streak` | 板内成分当日最大 `streak_upto` | 无涨停 → 0 |
+| `zt_count`（板内） | 板块成分 × 当日 `is_lu`（`close >= up_limit - 0.005`）家数 | `degraded_reason` **从 `get_snapshot()` 透传**（`no_quotes` / `price_limits_missing` / `partial_day` / `insufficient_trade_days`），`no_members` 优先；**例外（T8 评审 I2）：`no_limit_up_rows` 不透传** —— 全市场当日无涨停是合法空态，KPI 诚实为 0 |
+| `max_streak` | 板内成分当日最大 `streak` | 无涨停 → 0 |
 | `listed_trade_days` | 该股 `daily_quotes` 行数（上市以来有行情的交易日数，停牌不计） | 0 |
 | `never_broken` | 上市以来**每一行**都 `is_lu`（= 未开板新股） | `null`（限价缺失则不可判，**不得写成 false**） |
 | `first_open` | 上市首日 `open` | `null` |
@@ -678,8 +678,8 @@ async def test_board_detail_reuses_snapshot_echelons(monkeypatch):
     """板内梯队 = get_snapshot().echelons 按成分过滤；streak 不得来自第二套计算。"""
     snap = {"as_of": date(2026, 9, 18), "echelons": [
         {"streak": 2, "label": "2连板", "stocks": [
-            {"symbol": "600000", "name": "X", "streak_upto": 2},
-            {"symbol": "999999", "name": "Y", "streak_upto": 2}]}],
+            {"symbol": "600000", "name": "X", "streak": 2},
+            {"symbol": "999999", "name": "Y", "streak": 2}]}],
         "degraded_reason": None, "limits_present": True}
     monkeypatch.setattr(limit_up_service, "get_snapshot", async_fake(snap))
     out = await concept_service.get_board_detail(db, "BK0501", cache=None)
@@ -687,7 +687,7 @@ async def test_board_detail_reuses_snapshot_echelons(monkeypatch):
     assert out["kpis"]["max_streak"] == 2
 ```
 
-- [ ] **Step 2**：跑失败 → **Step 3**：实现 service：`snap = await limit_up_service.get_snapshot(cache)` → `members = set(concept_repo.list_member_symbols(...))` → 过滤 echelons → KPI（`zt_count`/`max_streak`/龙头按 `-streak, -amount, symbol` 确定性裁决）→ `membership_as_of`/`unresolved_count`；`degraded_reason` 为空但 `limits_present=false` 时置 `price_limits_missing`；无成分置 `no_members`。
+- [ ] **Step 2**：跑失败 → **Step 3**：实现 service：`snap = await limit_up_service.get_snapshot(cache)` → `members = set(concept_repo.list_member_symbols(...))` → 过滤 echelons（返回 **原对象**，保留 `seal_time/seal_fund/break_count`）→ KPI（`zt_count` = 过滤后梯队成分数；`max_streak` = 最大值；**龙头 = 最高梯队的第一个成分**，即梯队卡渲染的那一行，不得再按 `amount` 重排 —— `get_snapshot` 的 echelon 投影不含 `amount`，重排是死条件，见 T8 评审 I1）→ `membership_as_of`（**该板的** `max(last_seen_on)`）/`unresolved_count`/`stock_count`；`degraded_reason` **透传 `snap["degraded_reason"]`**（`no_limit_up_rows` 例外不透传），无成分置 `no_members`；未知板块码 404。
 - [ ] **Step 4**：`uv run pytest tests/test_concept_api.py -v`
 - [ ] **Step 5**：Commit `feat(concept): concept board detail with in-board ladder`
 
