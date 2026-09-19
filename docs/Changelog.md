@@ -1,3 +1,14 @@
+## 2026-09-18 - 概念板块 Phase 1 落地：三张表 + 东财成分采集（504 板 / 71928 成分）+ 每日 18:20 调度
+- **交付（T1–T5，分支 `feat/concept-boards`）**：① 三张表 `concept_boards` / `concept_members` / `concept_member_changes`（迁移 `d5b7c9e1a3f2`，成分表以 `symbol` 为业务键、`stock_id` 可空解析列、无 FK、无多余 `board_code` 索引）；② 东财客户端 `fetch_concept_boards` / `fetch_concept_members`（`pz` 服务端上限 100 → 翻页 + 去重 + `_MAX_PAGES` 守卫）；③ `concept_repo`（`diff_members` 纯函数 + `upsert_members` 整板应用 + 本地聚合 `_AGG_SQL` + `member_history_stats`）；④ `concept_service.ingest_concept_members`（逐板失败隔离 + 完整性闸门）；⑤ `concept_members_refresh_job`（mon-fri 18:20 Asia/Shanghai，避开 17:45 对账/18:00 龙虎榜）+ `MarketDataJobType` 新增 `concept_members` 手动触发（复用 `market_data.fetch` 队列，**不新增 worker 容器**）
+- **实机首跑（dev DB）**：`boards=504 / members_upserted=71928 / added=71928 / removed=0 / failed_boards=0 / partial_boards=0 / unresolved=110 / dropped_members=0`；二次跑幂等（0/0）。`unresolved=110`（≈95 B 股 + 约 15 只最新上市不在 `stocks`）正是“名录滞后”唯一暴露面
+- **两处设计缺陷在评审中被实测撞出来并修正**：
+  - **完整性闸门必须作用在清洗后的行上**：原来先用原始行数比 `member_total`、再过滤脏行（缺 `f14`）→ 脏行会让**仍在板上的成分**被写成 `change_type='remove'`，而 `concept_member_changes` 是追加式永久历史（幻影记录不可撤销），且脏行会抬高计数、把“少抓到的页”掩盖过去 → 改为 `_valid_members` 先于闸门，脏行使该板计为 `partial` 并整块跳过
+  - **翻页护栏的页数上限必须由真实最大分页数推导**：`_MAX_PAGES=20`（20×100=2000）< `BK0596 融资融券` 的 3870 成分 → 该板永远拿不到成分，且因读路径 inner join `concept_members` 而在**所有概念视图中完全不可见**（只汄1 条 WARNING + `partial_boards=1`）→ 提到 60（6000 覆盖最大板；小盘仍然空页即收敛），复跑后 `partial_boards` 1→0、`BK0596` 入库 3870 行
+- **降级语义订正**：`misfire_grace_time=None` 只在“宿主睡眠且进程存活”时补跑；scheduler 用默认 MemoryJobStore，**进程重启会忘掉错过的触发点**（原计划把它当验收项，已改）
+- **测试**：默认门禁 302 passed（新增 `diff_members` 纯函数、SQLite 内存的 `_AGG_SQL` 口径守卫 —— 使 `unresolved/priced/up-flat-down/avg_pct/is_active/tiebreak` 不再只靠 `-m e2e`；ingest 隔离与闸门；调度注册与 worker 分发）；真库 `-m e2e` 覆盖计划形状与聚合计数；ruff/mypy 绿
+- **待办**：Phase 2 读路径（概念列表/详情/成分/个股反查/次新股）与 Phase 3 UI；活库 `alembic_version` 仍停在另一分支的 `e1f2a3b4c5d6`（本分支三张表已用等价 DDL 手工建入，合并后需按正常迁移链校对）
+- 涉及模块：backend/app/{models/concept.py, migrations/versions/d5b7c9e1a3f2_add_concept_tables.py, core/providers/eastmoney_client.py, repositories/concept_repo.py, services/concept_service.py, scheduler/{jobs,runner}.py, schemas/task.py, workers/market_data_worker.py}, backend/tests/×6, plans/2026-09-18-concept-boards-and-new-stocks.md, docs/references/best-practices.md
+
 ## 2026-09-18 - 概念板块计划 T0 执行：名录解冻（5579）+ 66 只新股行情/限价/基本面补齐（数据运维，无代码改动）
 - **名录解冻**：`stocks` 冻结在 2026-05-08（66 只 5-08 后上市新股无行）→ 逐交易所 `ingest_stock_universe` 重建：**5579 只**（+66）、`max(list_date)=2026-09-17`、`max(asof)=2026-09-18`、近一年上市 **162 只**（与东财概念板 `BK0501` 成分数完全一致）
 - **历史行情回填**：66 只完全无行情 + 19 只覆盖不足 → `_ensure_trailing_three_year_daily_quotes` 85 只、**upserted 15272、failed 0**；验证“无任何行情”从 66 → **0**，且首行 = 上市日（如 `601091` C沈鼓 只有 2026-09-17 一行）；09-17 行情行数 5487 → **5553**
