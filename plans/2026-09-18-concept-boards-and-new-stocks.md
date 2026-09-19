@@ -1,6 +1,7 @@
 # 概念板块成分 + 次新股追踪 实施计划（Concept Boards & New Stocks）
 
-> 状态：**计划入库，未实施**（2026-09-18 制定）。
+> 状态：**已实施**（T0–T16 全部落地于分支 `feat/concept-boards`；Phase 2/3 实现提交 `026fa10`（本分支收尾文档提交为其直接后继））。T17（成分变更历史入口）为**刻意跳过的可选任务**，见 §5 末尾。
+> 说明：活库 `alembic_version` 仍停在另一分支的 `e1f2a3b4c5d6`（本分支三张表已用等价 DDL 手工建入）。
 > 决策已定：数据源**东财为主**（同花顺兜底明确不做，容器缺 libstdc++/py_mini_racer，见 §0.3）；历史口径**只做"当日/向前"**（选 1，不做历史成分回算）；次新股口径**以东财 `BK0501` 概念成分为准**，不自建时间窗。
 > 本文同时是本特性的 spec：§2 的字段名/口径/降级约定是权威，改名时须同步改本文与代码注释。实施完成后把 §2/§3 抽到 `docs/design/concept-boards.md`。
 
@@ -155,7 +156,7 @@ GET /api/v1/concepts/{board_code}/stocks
   # 额外两列以响应头方式给（见下），列表体保持既有形状
 GET /api/v1/new-stocks
   → { as_of, membership_as_of, board_code:"BK0501", board_name:"次新股",
-      source, degraded_reason,
+      source, degraded_reason, unresolved_count,
       kpis:{up_count, flat_count, down_count, unpriced_count, limit_up_count,
             unbroken_count, above_first_open_count, avg_pct},
       items:[NewStockItem] }
@@ -163,6 +164,7 @@ GET /api/v1/new-stocks
 
 - `BoardItem`：`{board_code, board_name, member_count, unresolved_count, priced_count, up_count, flat_count, down_count, avg_pct, main_net_inflow, main_net_ratio, lead_stock_name, lead_stock_code, lead_stock_pct, leaders:[{symbol,name,change_percent}]}`
 - `NewStockItem`：`{symbol, name, exchange, list_date|null, listed_trade_days, pct_chg|null, close|null, turnover_rate|null, circ_mv|null, amount|null, streak|null, is_lu, never_broken|null, first_open|null, above_first_open|null}`
+- `unresolved_count`（次新股信封）：该板 `stock_id IS NULL` 的成分数，与 `/concepts` 列表/详情**同一份聚合 SQL**（`_AGG_SQL`）——这些成员既不在 `items` 也不进任何 KPI，必须在 API 与 UI 同步披露（解耦原则 #1），否则每周六名录刷新前上市的新股会静默消失。
 - 概念成分列表的**分页外的元信息**（`membership_as_of` / `unresolved_count` / `degraded_reason`）以 `GET /concepts/{board_code}` 提供，`/stocks` 保持纯数组以便前端零改映射（**不要**为它造 envelope，否则 `mapBackendStockEnriched` 用不上）。
 
 ### 2.3 口径表（写法即定义，UI 文案对齐）
@@ -207,8 +209,8 @@ GET /api/v1/new-stocks
 │   ⓘ 成分截至 9月18日（东财）· 涨跌按本地聚合
 ├ KPI 四瓦片：板内涨停(家) | 最高板(N连板 · 龙头名) | 主力净流入(亿) | 今日上涨占比
 ├ 板内连板梯队（复用 LimitUpLadder；空态"今日板内无涨停"）
-└ 成分股表（复用 StockTable：代码/名称/最新价/涨跌幅/换手率/流通市值/上市日/连板/成交额，
-   默认按涨跌幅降序，行点击 → /stock/:symbol）
+└ 成分股表（复用 StockTable：代码/名称/交易所/行业/最新价/涨跌幅/成交额/总市值/PE(TTM)/自选列
+   + 追加「连板」列，默认按涨跌幅降序，行点击 → /stock/:symbol）
 ```
 
 - **连板列**：来自 `/concepts/{code}` 的 `echelons` 拍平成 `{symbol: streak}`，未在梯队中的成分渲染 `--`（缺失 ≠ 0）。
@@ -272,7 +274,7 @@ SectionCard title="次新股情绪" asof={as_of}
 
 **为什么必须先做**：`stocks` 冻结在 2026-05-08，66 只新上市股票无行（§0.2-4）。它们会以 `unresolved_count` 出现在概念板块上、且参与不了本地聚合。
 
-- [ ] **Step 1**：手动触发全量名录刷新
+- [x] **Step 1**：手动触发全量名录刷新
 
 ```bash
 cd backend && uv run python -c "
@@ -285,7 +287,7 @@ async def m():
 asyncio.run(m())"
 ```
 
-- [ ] **Step 2**：验证
+- [x] **Step 2**：验证
 
 ```bash
 docker compose exec -T postgres psql -U postgres -d stock_bot -c \
@@ -293,7 +295,7 @@ docker compose exec -T postgres psql -U postgres -d stock_bot -c \
 ```
 预期：`最新上市日` 为最近交易日、`总数` ≥ 5565-退市。
 
-- [ ] **Step 3**：若 `daily_quotes` 仍有缺口（新收录股票没有历史行情），在缺行情时补跑一次对账：
+- [x] **Step 3**：若 `daily_quotes` 仍有缺口（新收录股票没有历史行情），在缺行情时补跑一次对账：
 
 ```bash
 curl -X POST localhost/api/v1/tasks/fetch-market-data \
@@ -312,7 +314,7 @@ curl -X POST localhost/api/v1/tasks/fetch-market-data \
 
 **Interfaces (Produces):** `ConceptBoard` / `ConceptMember` / `ConceptMemberChange`（字段名见 §2.1）
 
-- [ ] **Step 1**：写模型
+- [x] **Step 1**：写模型
 
 ```python
 """概念板块与成分股 ORM models（东财口径）。
@@ -381,9 +383,9 @@ class ConceptMemberChange(Base):
     change_type: Mapped[str] = mapped_column(String(8), nullable=False)
 ```
 
-- [ ] **Step 2**：迁移文件（`upgrade` 建三表 + 索引；`downgrade` 逆序 drop），`revision="d5b7c9e1a3f2"`、`down_revision="c9e3f2d4a5b6"`。
-- [ ] **Step 3**：`app/models/__init__.py` 导入并加入 `__all__`（`ConceptBoard`, `ConceptMember`, `ConceptMemberChange`）。
-- [ ] **Step 4**：应用迁移并验证
+- [x] **Step 2**：迁移文件（`upgrade` 建三表 + 索引；`downgrade` 逆序 drop），`revision="d5b7c9e1a3f2"`、`down_revision="c9e3f2d4a5b6"`。
+- [x] **Step 3**：`app/models/__init__.py` 导入并加入 `__all__`（`ConceptBoard`, `ConceptMember`, `ConceptMemberChange`）。
+- [x] **Step 4**：应用迁移并验证
 
 ```bash
 cd backend && uv run alembic upgrade head && \
@@ -391,7 +393,7 @@ docker compose exec -T postgres psql -U postgres -d stock_bot -c "\d concept_mem
 ```
 预期：3 张表 + 索引 `idx_concept_members_symbol` / `idx_concept_members_stock_id` 存在。
 
-- [ ] **Step 5**：Commit `feat(concept): add concept board/member tables`
+- [x] **Step 5**：Commit `feat(concept): add concept board/member tables`
 
 #### T2 东财客户端：板块列表 + 成分（分页）
 
@@ -401,7 +403,7 @@ docker compose exec -T postgres psql -U postgres -d stock_bot -c "\d concept_mem
 - `EastmoneyClient.fetch_concept_boards() -> list[dict]` → `{board_code, board_name, member_total}`
 - `EastmoneyClient.fetch_concept_members(board_code: str) -> list[dict]` → `{symbol, name, market_flag}`
 
-- [ ] **Step 1**：先写失败测试（分页 + 去重 + 上限守卫）
+- [x] **Step 1**：先写失败测试（分页 + 去重 + 上限守卫）
 
 ```python
 def test_fetch_concept_boards_paginates_and_dedupes(monkeypatch):
@@ -431,14 +433,14 @@ def test_fetch_concept_boards_stops_on_empty_page(monkeypatch):
     assert asyncio.run(EastmoneyClient().fetch_concept_boards()) == []
 ```
 
-- [ ] **Step 2**：跑测试确认失败
+- [x] **Step 2**：跑测试确认失败
 
 ```bash
 cd backend && uv run pytest tests/test_eastmoney_client.py -k concept -v
 ```
 预期：`AttributeError: 'EastmoneyClient' object has no attribute 'fetch_concept_boards'`
 
-- [ ] **Step 3**：实现（含 `_PAGE_SIZE = 100`、`_MAX_PAGES = 20` 硬护栏、`_num()` 归一）
+- [x] **Step 3**：实现（含 `_PAGE_SIZE = 100`、`_MAX_PAGES = 20` 硬护栏、`_num()` 归一）
 
 ```python
 _CONCEPT_FS = "m:90+t:3+f:!50"
@@ -459,7 +461,7 @@ async def fetch_concept_members(self, board_code: str) -> list[dict[str, Any]]:
 
 `_paged_clist(fs, fields, mapper)` 统一实现：循环 `pn`、`pz=100`、`fid=f12`、累计去重（按映射后的 key）、`len(diff)==0 or len(out) >= total or pn > _MAX_PAGES` 时收敛。
 
-- [ ] **Step 4**：补一条实测断言（防字段名漂移）
+- [x] **Step 4**：补一条实测断言（防字段名漂移）
 
 ```python
 def test_concept_member_fields_are_stable(monkeypatch):
@@ -472,7 +474,7 @@ def test_concept_member_fields_are_stable(monkeypatch):
     assert rows == [{"symbol": "601091", "name": "C沈鼓", "market_flag": 1}]
 ```
 
-- [ ] **Step 5**：`uv run pytest tests/test_eastmoney_client.py -v` 全绿；Commit `feat(concept): eastmoney concept board + member client (paged)`
+- [x] **Step 5**：`uv run pytest tests/test_eastmoney_client.py -v` 全绿；Commit `feat(concept): eastmoney concept board + member client (paged)`
 
 #### T3 concept_repo：upsert / diff / 查询
 
@@ -489,7 +491,7 @@ def test_concept_member_fields_are_stable(monkeypatch):
 - `symbol_to_stock_ids(db, symbols) -> dict[str, int]`
 - `diff_members(existing: dict[str, str], seen: dict[str, str], today: date) -> MemberDiff`（纯函数，`MemberDiff{added, removed, kept, degraded}`）
 
-- [ ] **Step 1**：失败测试——**diff 语义 + 失败隔离**（本任务的核心不变量）
+- [x] **Step 1**：失败测试——**diff 语义 + 失败隔离**（本任务的核心不变量）
 
 ```python
 def test_diff_member_rows_adds_removes_and_keeps():
@@ -508,8 +510,8 @@ def test_diff_members_empty_seen_is_not_a_wipe():
     assert plan.removed == ["600000"] and plan.degraded is True
 ```
 
-- [ ] **Step 2**：跑测试确认失败 → `uv run pytest tests/test_concept_repo.py -v`
-- [ ] **Step 3**：实现 `diff_members(existing, seen, today)` 纯函数（`seen` 为空时置 `degraded=True`，调用方跳过落库）+ 上述 repo 函数。聚合 SQL 用 §2.3 口径：
+- [x] **Step 2**：跑测试确认失败 → `uv run pytest tests/test_concept_repo.py -v`
+- [x] **Step 3**：实现 `diff_members(existing, seen, today)` 纯函数（`seen` 为空时置 `degraded=True`，调用方跳过落库）+ 上述 repo 函数。聚合 SQL 用 §2.3 口径：
 
 ```sql
 WITH px AS (SELECT stock_id, pct_chg FROM daily_quotes WHERE trade_date = :as_of)
@@ -529,8 +531,8 @@ GROUP BY b.board_code, b.board_name
 ORDER BY avg_pct DESC NULLS LAST, b.board_code ASC
 ```
 
-- [ ] **Step 4**：计划守卫测试（沿用 `tests/test_limit_up_window_sql.py` 先例）：断言聚合查询在 `concept_members(board_code)` 上先收敛、`daily_quotes` 走 `(stock_id, trade_date)` 唯一键，无 Nested Loop 逐票探测。
-- [ ] **Step 5**：`uv run pytest tests/test_concept_repo.py -v` 全绿；Commit `feat(concept): concept repo with member diff + local aggregation`
+- [x] **Step 4**：计划守卫测试（沿用 `tests/test_limit_up_window_sql.py` 先例）：断言聚合查询在 `concept_members(board_code)` 上先收敛、`daily_quotes` 走 `(stock_id, trade_date)` 唯一键，无 Nested Loop 逐票探测。
+- [x] **Step 5**：`uv run pytest tests/test_concept_repo.py -v` 全绿；Commit `feat(concept): concept repo with member diff + local aggregation`
 
 #### T4 concept_service：采集
 
@@ -538,7 +540,7 @@ ORDER BY avg_pct DESC NULLS LAST, b.board_code ASC
 
 **Interfaces (Produces):** `ingest_concept_members(db) -> dict[str, int]`
 
-- [ ] **Step 1**：失败测试——单板失败隔离 + 统计字段
+- [x] **Step 1**：失败测试——单板失败隔离 + 统计字段
 
 ```python
 class _FakeEm:
@@ -565,9 +567,9 @@ async def test_ingest_isolates_single_board_failure(monkeypatch, fake_repo):
     assert [c["board_code"] for c in fake_repo.changes] == ["BK0001"]
 ```
 
-- [ ] **Step 2**：跑失败 → **Step 3**：实现（`_get_eastmoney()` 取客户端；逐板 try/except 记 `failed_boards`；`symbol → stock_id` 用一条 `SELECT symbol, id FROM stocks` 建映射，**不做交易所推断**）
-- [ ] **Step 4**：`uv run pytest tests/test_concept_ingest.py -v` 全绿
-- [ ] **Step 5**：实机跑一次全量（约 5 分钟）并记录真实数字
+- [x] **Step 2**：跑失败 → **Step 3**：实现（`_get_eastmoney()` 取客户端；逐板 try/except 记 `failed_boards`；`symbol → stock_id` 用一条 `SELECT symbol, id FROM stocks` 建映射，**不做交易所推断**）
+- [x] **Step 4**：`uv run pytest tests/test_concept_ingest.py -v` 全绿
+- [x] **Step 5**：实机跑一次全量（约 5 分钟）并记录真实数字
 
 ```bash
 cd backend && uv run python -c "
@@ -581,13 +583,13 @@ asyncio.run(m())"
 ```
 预期（2026-09-18 基线）：`boards≈504`、`added≈50000`、`removed=0`、`failed_boards=0`、`unresolved>0`（T0 未做时）。
 
-- [ ] **Step 6**：Commit `feat(concept): ingest concept members with per-board failure isolation`
+- [x] **Step 6**：Commit `feat(concept): ingest concept members with per-board failure isolation`
 
 #### T5 调度 + worker 手动入口
 
 **Files:** Modify `backend/app/scheduler/jobs.py`、`backend/app/scheduler/runner.py`、`backend/app/schemas/task.py`、`backend/app/workers/market_data_worker.py`；Test `backend/tests/test_scheduler_config.py`
 
-- [ ] **Step 1**：失败测试（注册断言，沿用既有写法）
+- [x] **Step 1**：失败测试（注册断言，沿用既有写法）
 
 ```python
 def test_concept_refresh_job_registered_after_close():
@@ -599,9 +601,9 @@ def test_concept_refresh_job_registered_after_close():
     assert job.misfire_grace_time is None          # 吃全局 job_defaults（停摆后补跑）
 ```
 
-- [ ] **Step 2**：跑失败 → **Step 3**：`jobs.py` 加 `concept_members_refresh_job()`（薄封装 `ingest_concept_members` + `db.commit()` + 结构化日志）；`runner.py` 注册 cron；`MarketDataJobType` 加 `"concept_members"`；`market_data_worker._run` 加分支。
-- [ ] **Step 4**：`uv run pytest tests/test_scheduler_config.py tests/test_market_data_worker.py -v` 全绿
-- [ ] **Step 5**：Commit `feat(concept): schedule daily concept member refresh + manual trigger`
+- [x] **Step 2**：跑失败 → **Step 3**：`jobs.py` 加 `concept_members_refresh_job()`（薄封装 `ingest_concept_members` + `db.commit()` + 结构化日志）；`runner.py` 注册 cron；`MarketDataJobType` 加 `"concept_members"`；`market_data_worker._run` 加分支。
+- [x] **Step 4**：`uv run pytest tests/test_scheduler_config.py tests/test_market_data_worker.py -v` 全绿
+- [x] **Step 5**：Commit `feat(concept): schedule daily concept member refresh + manual trigger`
 
 ---
 
@@ -616,7 +618,7 @@ def test_concept_refresh_job_registered_after_close():
 > 命名歧义澄清：`BoardItem.member_count` 一律指**本地 `concept_members` 行数**（权威）；`concept_boards.member_count` 只是采集时刻与东财 `total` 的对账值，不出现在 API 响应里。
 > 会话边界：`hot_board_rows(cache, limit)` 自开 `async_session_factory()` 会话（因为 `get_hot_boards(category, cache)` 无 `db` 参数，与 `market_data_service.get_sector_moneyflow` 同款）；`list_boards(db, cache, ...)` 吃外部会话，便于单测注入。
 
-- [ ] **Step 1**：失败测试（契约字段 + 排序确定性）
+- [x] **Step 1**：失败测试（契约字段 + 排序确定性）
 
 ```python
 async def test_concept_list_returns_membership_as_of_and_local_source(seeded_boards, cache):
@@ -633,15 +635,15 @@ async def test_concept_list_returns_membership_as_of_and_local_source(seeded_boa
     assert [i["board_code"] for i in again["items"]] == [i["board_code"] for i in body["items"]]
 ```
 
-- [ ] **Step 2**：跑失败 → **Step 3**：实现 service `list_boards(db, cache, sort, limit, offset)`：`concept_repo.aggregate_boards` + `market_data_repo.list_sector_moneyflow(as_of,'concept',limit=100)` 内存 join（**不是 SQL join**——快照只覆盖当日部分板块，left join 会放大行数风险）；`leaders` = 板块内 `pct_chg` 前 2（复用聚合结果或一次 `DISTINCT ON` 查询，二选一，测试钉住确定性）；Redis 缓存 TTL 300s。
-- [ ] **Step 4**：端点 + `api/v1/__init__.py` 注册（2 行 seam）；`uv run pytest tests/test_concept_api.py -v`
-- [ ] **Step 5**：Commit `feat(concept): concept board list endpoint`
+- [x] **Step 2**：跑失败 → **Step 3**：实现 service `list_boards(db, cache, sort, limit, offset)`：`concept_repo.aggregate_boards` + `market_data_repo.list_sector_moneyflow(as_of,'concept',limit=100)` 内存 join（**不是 SQL join**——快照只覆盖当日部分板块，left join 会放大行数风险）；`leaders` = 板块内 `pct_chg` 前 2（复用聚合结果或一次 `DISTINCT ON` 查询，二选一，测试钉住确定性）；Redis 缓存 TTL 300s。
+- [x] **Step 4**：端点 + `api/v1/__init__.py` 注册（2 行 seam）；`uv run pytest tests/test_concept_api.py -v`
+- [x] **Step 5**：Commit `feat(concept): concept board list endpoint`
 
 #### T7 修活「热门板块」概念 tab（1 行委托）
 
 **Files:** Modify `backend/app/services/market_service.py:445`；Test `backend/tests/test_market_contract.py`
 
-- [ ] **Step 1**：失败测试
+- [x] **Step 1**：失败测试
 
 ```python
 async def test_hot_boards_concept_is_not_empty_anymore():
@@ -651,7 +653,7 @@ async def test_hot_boards_concept_is_not_empty_anymore():
     assert {"id", "name", "code", "changePercent", "upCount", "flatCount", "downCount", "leaders"} <= set(rows[0])
 ```
 
-- [ ] **Step 2**：跑失败 → **Step 3**：把 `if category == "concept": return []` 改成委托（**保持返回形状与 industry 完全一致，前端零改动**）：
+- [x] **Step 2**：跑失败 → **Step 3**：把 `if category == "concept": return []` 改成委托（**保持返回形状与 industry 完全一致，前端零改动**）：
 
 ```python
     if category == "concept":
@@ -662,8 +664,8 @@ async def test_hot_boards_concept_is_not_empty_anymore():
         return await concept_service.hot_board_rows(cache, limit=10)
 ```
 
-- [ ] **Step 4**：`uv run pytest tests/test_market_contract.py -v`；前端人工确认 `A股全景 → A股热门板块 → 概念板块` 有数据
-- [ ] **Step 5**：Commit `fix(concept): wire concept category into hot boards`
+- [x] **Step 4**：`uv run pytest tests/test_market_contract.py -v`；前端人工确认 `A股全景 → A股热门板块 → 概念板块` 有数据
+- [x] **Step 5**：Commit `fix(concept): wire concept category into hot boards`
 
 #### T8 `GET /api/v1/concepts/{board_code}` 板块详情（含板内梯队）
 
@@ -671,7 +673,7 @@ async def test_hot_boards_concept_is_not_empty_anymore():
 
 **Interfaces (Consumes):** `limit_up_service.get_snapshot(cache)`；**Produces:** `ConceptDetailOut`
 
-- [ ] **Step 1**：失败测试——**口径同源**（板内梯队必须与梯队卡同源，不重算 streak）
+- [x] **Step 1**：失败测试——**口径同源**（板内梯队必须与梯队卡同源，不重算 streak）
 
 ```python
 async def test_board_detail_reuses_snapshot_echelons(monkeypatch):
@@ -687,9 +689,9 @@ async def test_board_detail_reuses_snapshot_echelons(monkeypatch):
     assert out["kpis"]["max_streak"] == 2
 ```
 
-- [ ] **Step 2**：跑失败 → **Step 3**：实现 service：`snap = await limit_up_service.get_snapshot(cache)` → `members = set(concept_repo.list_member_symbols(...))` → 过滤 echelons（返回 **原对象**，保留 `seal_time/seal_fund/break_count`）→ KPI（`zt_count` = 过滤后梯队成分数；`max_streak` = 最大值；**龙头 = 最高梯队的第一个成分**，即梯队卡渲染的那一行，不得再按 `amount` 重排 —— `get_snapshot` 的 echelon 投影不含 `amount`，重排是死条件，见 T8 评审 I1）→ `membership_as_of`（**该板的** `max(last_seen_on)`）/`unresolved_count`/`stock_count`；`degraded_reason` **透传 `snap["degraded_reason"]`**（`no_limit_up_rows` 例外不透传），无成分置 `no_members`；未知板块码 404。
-- [ ] **Step 4**：`uv run pytest tests/test_concept_api.py -v`
-- [ ] **Step 5**：Commit `feat(concept): concept board detail with in-board ladder`
+- [x] **Step 2**：跑失败 → **Step 3**：实现 service：`snap = await limit_up_service.get_snapshot(cache)` → `members = set(concept_repo.list_member_symbols(...))` → 过滤 echelons（返回 **原对象**，保留 `seal_time/seal_fund/break_count`）→ KPI（`zt_count` = 过滤后梯队成分数；`max_streak` = 最大值；**龙头 = 最高梯队的第一个成分**，即梯队卡渲染的那一行，不得再按 `amount` 重排 —— `get_snapshot` 的 echelon 投影不含 `amount`，重排是死条件，见 T8 评审 I1）→ `membership_as_of`（**该板的** `max(last_seen_on)`）/`unresolved_count`/`stock_count`；`degraded_reason` **透传 `snap["degraded_reason"]`**（`no_limit_up_rows` 例外不透传），无成分置 `no_members`；未知板块码 404。
+- [x] **Step 4**：`uv run pytest tests/test_concept_api.py -v`
+- [x] **Step 5**：Commit `feat(concept): concept board detail with in-board ladder`
 
 #### T9 `GET /api/v1/concepts/{board_code}/stocks` + `by-symbol`
 
@@ -697,7 +699,7 @@ async def test_board_detail_reuses_snapshot_echelons(monkeypatch):
 
 **Interfaces (Consumes):** `market_service.get_stocks_enriched_by_symbols(db, symbols)`；**Produces:** `concept_service.get_board_stocks(db, board_code) -> list[StockEnrichedOut]`、`concept_service.get_concepts_by_symbol(db, symbol) -> list[dict]`
 
-- [ ] **Step 1**：失败测试（形状 = `StockEnrichedOut`，前端才能零改映射复用 `StockTable`）
+- [x] **Step 1**：失败测试（形状 = `StockEnrichedOut`，前端才能零改映射复用 `StockTable`）
 
 ```python
 async def test_board_stocks_reuses_enriched_shape():
@@ -706,8 +708,8 @@ async def test_board_stocks_reuses_enriched_shape():
     assert rows == sorted(rows, key=lambda r: (r.get("change_percent") is None, -(r.get("change_percent") or 0)))
 ```
 
-- [ ] **Step 2**：跑失败 → **Step 3**：实现 `list_member_symbols` → `get_stocks_enriched_by_symbols` → 涨跌幅降序（`null` 最后，符号升序 tiebreak）；`by-symbol`：查该 symbol 的板块码 → 只对这些板块跑聚合（`WHERE board_code = ANY(...)`）→ 按 `pct_change DESC NULLS LAST, board_code` 排序。
-- [ ] **Step 4**：`uv run pytest tests/test_concept_api.py -v`；Commit `feat(concept): board member stocks + symbol→concepts lookups`
+- [x] **Step 2**：跑失败 → **Step 3**：实现 `list_member_symbols` → `get_stocks_enriched_by_symbols` → 涨跌幅降序（`null` 最后，符号升序 tiebreak）；`by-symbol`：查该 symbol 的板块码 → 只对这些板块跑聚合（`WHERE board_code = ANY(...)`）→ 按 `pct_change DESC NULLS LAST, board_code` 排序。
+- [x] **Step 4**：`uv run pytest tests/test_concept_api.py -v`；Commit `feat(concept): board member stocks + symbol→concepts lookups`
 
 #### T10 `GET /api/v1/new-stocks` 次新股
 
@@ -715,7 +717,7 @@ async def test_board_stocks_reuses_enriched_shape():
 
 **Interfaces (Consumes):** `concept_repo.member_history_stats`、`market_service.get_stocks_enriched_by_symbols`；**Produces:** `NEW_STOCK_BOARD_CODE`、`new_stock_service.get_new_stock_board(db, cache) -> dict`、`new_stock_service.build_kpis(items: list[dict], stats: dict[str, dict]) -> dict`
 
-- [ ] **Step 1**：失败测试（KPI 定义 + 缺失语义）
+- [x] **Step 1**：失败测试（KPI 定义 + 缺失语义）
 
 ```python
 def test_kpis_treat_missing_limits_as_unknown_not_broken():
@@ -733,7 +735,7 @@ def test_board_code_constant_is_single_source():
     assert NEW_STOCK_BOARD_CODE == "BK0501"
 ```
 
-- [ ] **Step 2**：跑失败 → **Step 3**：实现 `member_history_stats` SQL（§2.3 口径，`bool_and` 保留 NULL 语义）：
+- [x] **Step 2**：跑失败 → **Step 3**：实现 `member_history_stats` SQL（§2.3 口径，`bool_and` 保留 NULL 语义）：
 
 ```sql
 WITH h AS (
@@ -751,8 +753,8 @@ SELECT symbol, stock_id, count(*) AS listed_trade_days,
 FROM h GROUP BY symbol, stock_id
 ```
 
-- [ ] **Step 4**：service 合并 enriched 行 → `above_first_open = close >= first_open`，`streak` 从 `get_snapshot()` 拍平表取（缺失 → `None`）；端点 + 路由注册；`uv run pytest tests/test_new_stock_service.py -v`
-- [ ] **Step 5**：实机验收（数值对拍东财）
+- [x] **Step 4**：service 合并 enriched 行 → `above_first_open = close >= first_open`，`streak` 从 `get_snapshot()` 拍平表取（缺失 → `None`）；端点 + 路由注册；`uv run pytest tests/test_new_stock_service.py -v`
+- [x] **Step 5**：实机验收（数值对拍东财）
 
 ```bash
 docker compose exec -T api python -c "
@@ -765,7 +767,7 @@ asyncio.run(m())"
 ```
 与东财 `fs=b:BK0501` 的 `f104/f105`（实测 157 涨 / 5 跌）对拍：`up_count`/`down_count` 数量级一致（差异只应来自停牌/无行情）。
 
-- [ ] **Step 6**：Commit `feat(new-stock): eastmoney BK0501 based new-stock board endpoint`
+- [x] **Step 6**：Commit `feat(new-stock): eastmoney BK0501 based new-stock board endpoint`
 
 ---
 
@@ -775,7 +777,7 @@ asyncio.run(m())"
 
 **Files:** Create `frontend/src/shared/api/concept.ts`；Test 由 T13/T15 的 e2e 覆盖
 
-- [ ] **Step 1**：实现（形状对齐后端，复用既有 mapper）
+- [x] **Step 1**：实现（形状对齐后端，复用既有 mapper）
 
 ```ts
 import { apiGet } from "./client";
@@ -832,20 +834,20 @@ export function fetchNewStocks(): Promise<NewStocksResponse> {
 }
 ```
 
-- [ ] **Step 2**：`npm run lint`；Commit `feat(concept): frontend concept api layer`
+- [x] **Step 2**：`npm run lint`；Commit `feat(concept): frontend concept api layer`
 
 #### T12 提取 `DegradedNotice` 到 shared
 
 **Files:** Create `frontend/src/shared/ui/DegradedNotice.tsx`；Modify `frontend/src/shared/ui/index.ts`、`frontend/src/pages/market/index.tsx`
 
-- [ ] **Step 1**：把 `pages/market/index.tsx` 里的 `DEGRADED_REASON_TEXT` + `DegradedNotice` 原样搬到 `shared/ui/DegradedNotice.tsx`（文案一字不改，追加 `no_members: "成分数据尚未采集（每日 18:20 刷新）"` 与 `no_quotes` 复用）。
-- [ ] **Step 2**：`pages/market/index.tsx` 改为 import；`npm run build` 通过（证明无循环依赖）；Commit `refactor(ui): extract DegradedNotice to shared/ui`
+- [x] **Step 1**：把 `pages/market/index.tsx` 里的 `DEGRADED_REASON_TEXT` + `DegradedNotice` 原样搬到 `shared/ui/DegradedNotice.tsx`（文案一字不改，追加 `no_members: "成分数据尚未采集（每日 18:20 刷新）"` 与 `no_quotes` 复用）。
+- [x] **Step 2**：`pages/market/index.tsx` 改为 import；`npm run build` 通过（证明无循环依赖）；Commit `refactor(ui): extract DegradedNotice to shared/ui`
 
 #### T13 概念详情页
 
 **Files:** Create `frontend/src/pages/market-concept/index.tsx`；Modify `frontend/src/app/router/index.tsx`、`frontend/src/pages/market-hot-sectors/index.tsx`
 
-- [ ] **Step 1**：页面骨架（两个独立 query；KPI 用 `Row/Col` + `Statistic`，不用新图表）
+- [x] **Step 1**：页面骨架（两个独立 query；KPI 用 `Row/Col` + `Statistic`，不用新图表）
 
 ```tsx
 export default function ConceptBoardPage() {
@@ -862,8 +864,8 @@ export default function ConceptBoardPage() {
 }
 ```
 
-- [ ] **Step 2**：路由 `/market/concept/:boardCode`（懒加载，沿用既有写法）
-- [ ] **Step 3**：`MarketHotSectorsPage` 表格加行点击跳转（仅概念分类生效，避免影响行业/地域既有行为）：
+- [x] **Step 2**：路由 `/market/concept/:boardCode`（懒加载，沿用既有写法）
+- [x] **Step 3**：`MarketHotSectorsPage` 表格加行点击跳转（仅概念分类生效，避免影响行业/地域既有行为）：
 
 ```tsx
 onRow={(record) => ({
@@ -872,14 +874,14 @@ onRow={(record) => ({
 })}
 ```
 
-- [ ] **Step 4**：`npm run lint && npm run build`；手动验证 `/market/concept/BK0501` 渲染（成分表 162 行、板内梯队、KPI）
-- [ ] **Step 5**：Commit `feat(concept): concept board detail page`
+- [x] **Step 4**：`npm run lint && npm run build`；手动验证 `/market/concept/BK0501` 渲染（成分表 162 行、板内梯队、KPI）
+- [x] **Step 5**：Commit `feat(concept): concept board detail page`
 
 #### T14 个股详情「所属概念」
 
 **Files:** Create `frontend/src/features/concept/components/ConceptTags.tsx`、`frontend/src/features/concept/index.ts`；Modify `frontend/src/pages/stock-detail/index.tsx`
 
-- [ ] **Step 1**：组件（失败/空 → 返回 `null`，**零占位**）
+- [x] **Step 1**：组件（失败/空 → 返回 `null`，**零占位**）
 
 ```tsx
 export function ConceptTags({ symbol }: { symbol: string }) {
@@ -898,7 +900,7 @@ export function ConceptTags({ symbol }: { symbol: string }) {
 }
 ```
 
-- [ ] **Step 2**：在 `UserTags` 之后挂载（与既有两块同间距）
+- [x] **Step 2**：在 `UserTags` 之后挂载（与既有两块同间距）
 
 ```tsx
       <div style={{ marginTop: 8 }}>
@@ -906,14 +908,14 @@ export function ConceptTags({ symbol }: { symbol: string }) {
       </div>
 ```
 
-- [ ] **Step 3**：`npm run lint && npm run build`；手动验证个股页出现概念标签、点击跳转、abort 该请求时页面其余部分不受影响
-- [ ] **Step 4**：Commit `feat(concept): show concept tags on stock detail`
+- [x] **Step 3**：`npm run lint && npm run build`；手动验证个股页出现概念标签、点击跳转、abort 该请求时页面其余部分不受影响
+- [x] **Step 4**：Commit `feat(concept): show concept tags on stock detail`
 
 #### T15 「次新股情绪」卡
 
 **Files:** Create `frontend/src/features/concept/components/NewStockBoard.tsx`；Modify `frontend/src/features/market/components/index.ts`、`frontend/src/pages/market/index.tsx`
 
-- [ ] **Step 1**：组件（KPI 由同一 `items` 聚合，不新造口径；`CheckableTag` 过滤连板）
+- [x] **Step 1**：组件（KPI 由同一 `items` 聚合，不新造口径；`CheckableTag` 过滤连板）
 
 ```tsx
 export function NewStockBoard({ data, degraded }: { data?: NewStocksResponse; degraded: boolean }) {
@@ -926,14 +928,14 @@ export function NewStockBoard({ data, degraded }: { data?: NewStocksResponse; de
 }
 ```
 
-- [ ] **Step 2**：挂到 `SentimentTab`（「昨日涨停今日表现」之后，`Col span={24}`），使用 `SectionCard title="次新股情绪" asof={data?.as_of}`
-- [ ] **Step 3**：`npm run lint && npm run build`；Commit `feat(concept): new-stock sentiment card in sentiment tab`
+- [x] **Step 2**：挂到 `SentimentTab`（「昨日涨停今日表现」之后，`Col span={24}`），使用 `SectionCard title="次新股情绪" asof={data?.as_of}`
+- [x] **Step 3**：`npm run lint && npm run build`；Commit `feat(concept): new-stock sentiment card in sentiment tab`
 
 #### T16 e2e + 数据版图
 
 **Files:** Create `frontend/e2e/conceptBoard.spec.ts`；Modify `frontend/src/features/market/components/DataCoverageMatrix.tsx`
 
-- [ ] **Step 1**：e2e（沿用 `page.route` mock 风格，四段断言）
+- [x] **Step 1**：e2e（沿用 `page.route` mock 风格，四段断言）
 
 ```ts
 import { expect, test } from "@playwright/test";
@@ -1013,11 +1015,13 @@ test("次新股情绪卡渲染 KPI 与替代口径注脚", async ({ page }) => {
 });
 ```
 
-- [ ] **Step 2**：`DataCoverageMatrix` 加行 `概念板块成分 | 板块列表 + 成分股 | 每日 18:20 | 东财`；`SectorMoneyflowCard` 概念维度的 `extra` 加 `Tooltip`（「主力资金流为东财按净流入排序的 Top100 样本，非全量板块」）——两者都不改组件 props
-- [ ] **Step 3**：`npm run lint && npm run test:e2e -- conceptBoard`（后端与前端服务需已起，见 §6）
-- [ ] **Step 4**：Commit `test(concept): e2e for concept board + new-stock card`
+- [x] **Step 2**：`DataCoverageMatrix` 加行 `概念板块成分 | 板块列表 + 成分股 | 每日 18:20 | 东财`；`SectorMoneyflowCard` 概念维度的 `extra` 加 `Tooltip`（「主力资金流为东财按净流入排序的 Top100 样本，非全量板块」）——两者都不改组件 props
+- [x] **Step 3**：`npm run lint && npm run test:e2e -- conceptBoard`（后端与前端服务需已起，见 §6）
+- [x] **Step 4**：Commit `test(concept): e2e for concept board + new-stock card`
 
 #### T17（可选，可整块删除）成分变更的历史口径入口
+
+> **状态：本期刻意跳过、未实施**（§0.3 决策：只做当日/向前；差分表从第一天起照常写入）。
 
 **Files:** Modify `backend/app/api/v1/concepts.py`、`frontend/src/pages/market-concept/index.tsx`
 
