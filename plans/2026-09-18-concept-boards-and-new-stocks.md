@@ -99,6 +99,8 @@ concept_boards
   first_seen_at   timestamptz  NOT NULL
   last_seen_at    timestamptz  NOT NULL
   is_active       boolean      NOT NULL DEFAULT true   -- 本轮列表里没出现 → false（**不删成分**）
+  -- 不变式（T3 评审 I2）：codes 为空集 = 板块列表抓取失败 → deactivate_missing_boards 必须 no-op，
+  -- 绝不能把“抓取失败”写成“全部下架”（与成员侧 degraded 同一条失败隔离原则）
   UNIQUE (board_code)
 
 concept_members              -- 当前成分（覆盖式：存在即"仍在板上"，缺失即剔除）
