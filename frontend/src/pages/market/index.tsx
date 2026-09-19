@@ -8,6 +8,7 @@ import {
   fetchSentimentCalendar,
   fetchYesterdayLimitUp,
 } from "@/shared/api/limitUp";
+import { fetchNewStocks } from "@/shared/api/concept";
 import {
   GlobalMarketBoard,
   CoreIndexCards,
@@ -26,12 +27,13 @@ import {
   SwL3LimitUpBoard,
   YesterdayLimitUp,
 } from "@/features/market/components";
+import { NewStockBoard } from "@/features/concept";
 import "./market.css";
 
 /**
- * 短线情绪 Tab：四个端点各自 `useQuery`，单点失败不牵连邻区。
+ * 短线情绪 Tab：五个端点各自 `useQuery`，单点失败不牵连邻区。
  * 情绪周期日历（market_sentiment_daily）只喂温度计的环比 chip 与趋势线，缺失不阻断主数据。
- * 梯队/申万 L3/昨日涨停三块各自降级，卡头 `asof` 独立（梯队用 as_of，昨日用 as_of_prev）。
+ * 梯队/申万 L3/昨日涨停/次新股四块各自降级，卡头 `asof` 独立（梯队/次新用 as_of，昨日用 as_of_prev）。
  * 每张数据卡按各自端点的 `degradedReason` 独立门禁，避免降级态仍展示不完整数据。
  */
 function SentimentTab() {
@@ -55,9 +57,15 @@ function SentimentTab() {
     queryFn: () => fetchSentimentCalendar(30),
     staleTime: 300_000,
   });
+  const newStocks = useQuery({
+    queryKey: ["new-stocks"],
+    queryFn: () => fetchNewStocks(),
+    staleTime: 60_000,
+  });
   const degraded = ladder.data?.degradedReason;
   const sectorsDegraded = Boolean(sectors.data?.degradedReason);
   const yesterdayDegraded = Boolean(yesterday.data?.degradedReason);
+  const newStocksDegraded = Boolean(newStocks.data?.degraded_reason);
   return (
     <Row gutter={[16, 16]}>
       <Col span={24}>
@@ -88,6 +96,12 @@ function SentimentTab() {
             只标 as_of_prev 会被误读为数据落后（2026-09-15 用户反馈） */}
         <SectionCard title="昨日涨停今日表现" asof={yesterday.data?.asOf}>
           <YesterdayLimitUp data={yesterday.data} degraded={yesterdayDegraded} />
+        </SectionCard>
+      </Col>
+      <Col span={24}>
+        {/* 次新股情绪（§3 触点 D）：BK0501 成分 + 替代破发口径的声明在组件注脚内 */}
+        <SectionCard title="次新股情绪" asof={newStocks.data?.as_of}>
+          <NewStockBoard data={newStocks.data} degraded={newStocksDegraded} />
         </SectionCard>
       </Col>
     </Row>
