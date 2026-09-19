@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from app.repositories import concept_repo, limit_up_repo, market_data_repo
+from app.services import limit_up_service
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -237,6 +238,38 @@ def _inflow_sort_key(item: dict[str, Any]) -> tuple[bool, float, str]:
     return (inflow is None, -(inflow or 0.0), item["board_code"])
 
 
+async def _enrich_board_rows(db: AsyncSession, as_of: date, items: list[dict[str, Any]]) -> bool:
+    """就地补东财资金流快照 + 领涨股到 `aggregate_boards` 的行上，返回 `bool(flow_map)`。
+
+    T6 列表与 T8 详情共用本函数：字段映射只此一处，两个端点不可能各自漂移。**绝不做 SQL
+    join**（plans §2.2）：快照一天只覆盖当日主力流入 Top-100 的震荡集，join 要么过滤丢行、
+    要么按 board_code 一对多放大；Python 侧取交集、缺行保持 `None` 才正确。
+
+    `items` 为空时也要查快照：`flow_source` 是**数据集级**声明，offset 越界空页必须与首页
+    给出同一个值。领涨股查询对空 `items` 是文档化 no-op（`board_leaders` 自带空输入护栏）。
+    """
+    flow_map = {
+        snap.board_code: snap
+        for snap in await market_data_repo.list_sector_moneyflow(
+            db, as_of, "concept", CONCEPT_FLOW_LIMIT
+        )
+    }
+    leaders = await concept_repo.board_leaders(db, as_of, [i["board_code"] for i in items])
+    for item in items:
+        snap = flow_map.get(item["board_code"])
+        item.update(
+            {
+                "main_net_inflow": snap.main_net_inflow if snap else None,
+                "main_net_ratio": snap.main_net_ratio if snap else None,
+                "lead_stock_name": snap.lead_stock_name if snap else None,
+                "lead_stock_code": snap.lead_stock_code if snap else None,
+                "lead_stock_pct": snap.lead_stock_pct if snap else None,
+                "leaders": leaders.get(item["board_code"], []),
+            }
+        )
+    return bool(flow_map)
+
+
 async def list_boards(
     db: AsyncSession,
     cache: CacheClient | None,
@@ -269,28 +302,9 @@ async def list_boards(
     if degraded_reason is None:
         assert as_of is not None  # `_degraded_reason` 已保证；mypy 需要这个收窄
         items = await concept_repo.aggregate_boards(db, as_of, limit, offset)
-        flow_map = {
-            snap.board_code: snap
-            for snap in await market_data_repo.list_sector_moneyflow(
-                db, as_of, "concept", CONCEPT_FLOW_LIMIT
-            )
-        }
-        leaders = await concept_repo.board_leaders(db, as_of, [i["board_code"] for i in items])
         # 快照源声明是**数据集级**（与 as_of / total 同一个信封），不是"本页恰好命中几行"：
         # 逐页统计会让同一 as_of 的首页返回 "em_clist"、尾页（甚至 offset 越界空页）返回 null。
-        flow_source = "em_clist" if flow_map else None
-        for item in items:
-            snap = flow_map.get(item["board_code"])
-            item.update(
-                {
-                    "main_net_inflow": snap.main_net_inflow if snap else None,
-                    "main_net_ratio": snap.main_net_ratio if snap else None,
-                    "lead_stock_name": snap.lead_stock_name if snap else None,
-                    "lead_stock_code": snap.lead_stock_code if snap else None,
-                    "lead_stock_pct": snap.lead_stock_pct if snap else None,
-                    "leaders": leaders.get(item["board_code"], []),
-                }
-            )
+        flow_source = "em_clist" if await _enrich_board_rows(db, as_of, items) else None
         if sort == "inflow":
             items.sort(key=_inflow_sort_key)
 
@@ -349,3 +363,132 @@ async def hot_board_rows(
             }
         )
     return rows
+
+
+# ── 读路径：GET /concepts/{board_code}（T8，plans §2.2） ─────────────────────────────
+# 全库聚合一次的上限：dev 库 504 板，1k 留 2x 头寸。详情在 Python 侧按 board_code 过滤这份
+# 结果，绝不另写一条"单板聚合 SQL"（两份 SQL 会各自漂移，且与 avg_pct 的 NULLS LAST 顺序契约
+# 脱钩）。排序仍由 `aggregate_boards` 的 `avg_pct DESC NULLS LAST, board_code ASC` 保证。
+CONCEPT_AGG_LIMIT = 1000
+
+
+def _stock_streak(stock: dict[str, Any]) -> int:
+    """梯队票的连板数：正式快照用 `streak`，原始 ladder 行用 `streak_upto`（两处都收）。
+
+    服务层投影（`get_snapshot`）已把 `streak_upto` 规范成 `streak`；保留回退只是为了让
+    纯函数测试可以直接喂 `calc.ladder` 的原始形状，而不是再造一套夹具。
+    """
+    value = stock.get("streak")
+    if value is None:
+        value = stock.get("streak_upto")
+    return int(value or 0)
+
+
+def _filter_echelons(
+    echelons: list[dict[str, Any]], member_symbols: set[str]
+) -> list[dict[str, Any]]:
+    """把快照梯队按板内成分过滤（**原样透传**，绝不重算 streak/amount/封板字段）。
+
+    空档整档丢弃（前端 `<LimitUpLadder>` 不接受空 stocks）；有成员的档保持原顺序与形状，
+    这样前端可以把它直接交给梯队卡渲染。
+    """
+    filtered: list[dict[str, Any]] = []
+    for echelon in echelons:
+        stocks = [s for s in echelon.get("stocks", []) if str(s.get("symbol")) in member_symbols]
+        if stocks:
+            filtered.append({**echelon, "stocks": stocks})
+    return filtered
+
+
+def _ladder_kpis(echelons: list[dict[str, Any]]) -> dict[str, Any]:
+    """板内连板 KPI（**纯函数**）：`zt_count` / `max_streak` / 龙头 `(-streak, -amount, symbol)`。
+
+    龙头裁决必须确定性（与 `calc.sector_ladder` 同一个 key）：`min` 在并列时靠 symbol 兜底，
+    否则同一请求两次的"龙头"会跟着行序漂移。
+    """
+    rows = [s for echelon in echelons for s in echelon.get("stocks", [])]
+    if not rows:
+        return {"zt_count": 0, "max_streak": 0, "leader_symbol": None, "leader_name": None}
+    leader = min(
+        rows,
+        key=lambda s: (
+            -_stock_streak(s),
+            -(float(s.get("amount") or 0.0)),
+            str(s.get("symbol")),
+        ),
+    )
+    return {
+        "zt_count": len(rows),
+        "max_streak": max(_stock_streak(s) for s in rows),
+        "leader_symbol": str(leader.get("symbol")),
+        "leader_name": leader.get("name"),
+    }
+
+
+async def get_board_detail(
+    db: AsyncSession, board_code: str, cache: CacheClient | None
+) -> dict[str, Any] | None:
+    """板块详情（§2.2）：单板 `BoardItem` + 板内梯队 + KPI；未知板块码 → `None`（端点 404）。
+
+    板内梯队**同源于** `/market/limit-up` 的快照（`limit_up_service.get_snapshot`，模块属性
+    调用以便测试 monkeypatch），只按成分过滤，不重算 streak——板内口径与全市场梯队必须永远一致。
+
+    `membership_as_of` 用**该板**的 `max(last_seen_on)`，不是 T6 列表的全表值。降级词表：
+    无成分 → `no_members`；快照 `limits_present is False` → `price_limits_missing`（照抄情绪
+    口径，不自立门户）；否则 `None`（有梯队但为空是"今日板内无涨停"，不是降级）。
+    """
+    board_meta = await concept_repo.find_board(db, board_code)
+    if board_meta is None:
+        return None
+    members = await concept_repo.list_member_symbols(db, board_code)
+    member_symbols = {symbol for symbol, _ in members}
+    membership_as_of = await concept_repo.board_membership_date(db, board_code)
+    as_of = await limit_up_repo.latest_quote_date(db)
+
+    row: dict[str, Any] | None = None
+    if as_of is not None and members:
+        agg = await concept_repo.aggregate_boards(db, as_of, CONCEPT_AGG_LIMIT, 0)
+        row = next((r for r in agg if r["board_code"] == board_code), None)
+    if row is None:
+        # 无行情 / 停用板 / 聚合未覆盖：价格列留空，计数仍从成分行现算，保持 BoardItem 形状。
+        # 未解析数这里用当前 stocks 名录反解（symbol_to_stock_ids）而非 `stock_id IS NULL`：
+        # 只在聚合不可用时兜底，正常路径（有行情 + 活跃板）走 aggregate_boards 的精确计数。
+        resolved = await concept_repo.symbol_to_stock_ids(db, sorted(member_symbols))
+        row = {
+            "board_code": board_code,
+            "board_name": board_meta["board_name"],
+            "member_count": len(members),
+            "unresolved_count": len(members) - len(resolved),
+            "priced_count": 0,
+            "up_count": 0,
+            "flat_count": 0,
+            "down_count": 0,
+            "avg_pct": None,
+        }
+    if as_of is not None:
+        await _enrich_board_rows(db, as_of, [row])
+
+    snap = await limit_up_service.get_snapshot(cache)
+    echelons = _filter_echelons(snap.get("echelons") or [], member_symbols)
+    kpis = _ladder_kpis(echelons)
+    if not members:
+        degraded_reason: str | None = "no_members"
+    elif snap.get("limits_present") is False:
+        degraded_reason = "price_limits_missing"
+    else:
+        degraded_reason = None
+
+    unresolved_count = int(row["unresolved_count"])
+    return {
+        "as_of": as_of.isoformat() if as_of is not None else None,
+        "membership_as_of": (
+            membership_as_of.isoformat() if membership_as_of is not None else None
+        ),
+        "source": "em_clist",
+        "degraded_reason": degraded_reason,
+        "board": row,
+        "kpis": kpis,
+        "echelons": echelons,
+        "unresolved_count": unresolved_count,
+        "stock_count": int(row["member_count"]) - unresolved_count,
+    }
