@@ -165,10 +165,14 @@ export default function ConceptBoardPage() {
           <Row gutter={[16, 16]}>
             <Col xs={12} md={6}>
               <KpiTile title="板内涨停" note="口径同连板梯队">
-                <span>
-                  {kpis?.zt_count ?? 0}
-                  <span style={{ fontSize: 14, marginLeft: 4 }}>家</span>
-                </span>
+                {kpis ? (
+                  <span>
+                    {kpis.zt_count}
+                    <span style={{ fontSize: 14, marginLeft: 4 }}>家</span>
+                  </span>
+                ) : (
+                  <span>--</span>
+                )}
               </KpiTile>
             </Col>
             <Col xs={12} md={6}>
@@ -191,7 +195,12 @@ export default function ConceptBoardPage() {
 
         {data ? (
           <SectionCard title="板内连板梯队" asof={data.as_of}>
-            <LimitUpLadder echelons={ladderEchelons} degraded={Boolean(data.degraded_reason)} />
+            {/* 空态文案按 §3 触点 B：「今日板内无涨停」（非降级才可能是真空态；降级仍走组件的占位） */}
+            {ladderEchelons.length === 0 && !data.degraded_reason ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="今日板内无涨停" />
+            ) : (
+              <LimitUpLadder echelons={ladderEchelons} degraded={Boolean(data.degraded_reason)} />
+            )}
           </SectionCard>
         ) : null}
 
