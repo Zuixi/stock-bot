@@ -300,7 +300,6 @@ async def test_concept_list_contract_matches_dev_db() -> None:
         {i["board_code"] for i in items}
     ), "确定性顺序下相邻分页不得重叠"
 
-    matched = 0
     for item in items:
         assert set(item) == ITEM_KEYS
         assert item["member_count"] >= item["priced_count"]
@@ -315,14 +314,42 @@ async def test_concept_list_contract_matches_dev_db() -> None:
             assert item["lead_stock_code"] is None
             assert item["lead_stock_pct"] is None
         else:
-            matched += 1
             assert item["main_net_inflow"] == snap.main_net_inflow
             assert item["main_net_ratio"] == snap.main_net_ratio
             assert item["lead_stock_name"] == snap.lead_stock_name
             assert item["lead_stock_code"] == snap.lead_stock_code
             assert item["lead_stock_pct"] == snap.lead_stock_pct
-    # 两源分离：只要有一行匹配上就得声明 em_clist，否则 None
-    assert body["flow_source"] == ("em_clist" if matched else None)
+    # 两源分离，且 `flow_source` 是**数据集级**声明（快照表是否有行），不是"本页命中行数"：
+    # 逐页统计会让同一 as_of 的首页 = "em_clist"、offset 越界空页 = null。
+    assert body["flow_source"] == ("em_clist" if flow_map else None)
+
+
+@pytest.mark.e2e
+async def test_concept_list_offset_past_end_keeps_dataset_level_flow_source() -> None:
+    """`offset` 越过末尾（`items == []`）时 `total` 与 `flow_source` 仍须是数据集级的值。
+
+    这是 I1 的症状最明显处：逐页统计 `flow_source` 的旧实现里，越界空页永远返回 `null`，
+    哪怕快照表当天有行——同一个 `as_of` 的首页却是 `"em_clist"`，前端据此会误判"资金流源掉了"。
+    """
+    as_of = await _db_scalar("SELECT max(trade_date) FROM daily_quotes")
+    total = await _db_scalar("SELECT count(*) FROM concept_boards WHERE is_active")
+    assert as_of is not None, "dev DB 缺行情数据"
+    flow_map = await _concept_flow_rows(as_of)
+    expected_flow_source = "em_clist" if flow_map else None
+
+    async with _client() as client:
+        first = (await client.get("/api/v1/concepts", params={"limit": 5})).json()
+        past_end = (
+            await client.get("/api/v1/concepts", params={"limit": 5, "offset": total + 10})
+        ).json()
+
+    assert past_end["items"] == [], "offset 越界必须是空页"
+    assert past_end["total"] == total, "空页不得把 total 归零（total 与分页无关）"
+    assert past_end["as_of"] == as_of.isoformat()
+    assert past_end["flow_source"] == expected_flow_source
+    assert past_end["flow_source"] == first["flow_source"], (
+        "同一 as_of 的同一数据集，首页与越界空页必须给出同一个 flow_source"
+    )
 
 
 @pytest.mark.e2e

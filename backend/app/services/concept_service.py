@@ -276,10 +276,11 @@ async def list_boards(
             )
         }
         leaders = await concept_repo.board_leaders(db, as_of, [i["board_code"] for i in items])
-        matched = False
+        # 快照源声明是**数据集级**（与 as_of / total 同一个信封），不是"本页恰好命中几行"：
+        # 逐页统计会让同一 as_of 的首页返回 "em_clist"、尾页（甚至 offset 越界空页）返回 null。
+        flow_source = "em_clist" if flow_map else None
         for item in items:
             snap = flow_map.get(item["board_code"])
-            matched = matched or snap is not None
             item.update(
                 {
                     "main_net_inflow": snap.main_net_inflow if snap else None,
@@ -292,8 +293,6 @@ async def list_boards(
             )
         if sort == "inflow":
             items.sort(key=_inflow_sort_key)
-        if matched:
-            flow_source = "em_clist"
 
     body: dict[str, Any] = {
         "as_of": as_of.isoformat() if as_of is not None else None,
