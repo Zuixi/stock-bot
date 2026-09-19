@@ -464,6 +464,9 @@ _BOARD_MEMBERSHIP_DATE_SQL = (
 _BOARD_ROW_SQL = (
     "SELECT board_code, board_name, is_active FROM concept_boards WHERE board_code = :board_code"
 )
+_SYMBOL_BOARD_CODES_SQL = (
+    "SELECT board_code FROM concept_members WHERE symbol = :symbol ORDER BY board_code"
+)
 
 
 async def board_membership_date(db: AsyncSession, board_code: str) -> date | None:
@@ -491,3 +494,13 @@ async def find_board(db: AsyncSession, board_code: str) -> dict[str, Any] | None
         "board_name": str(row["board_name"]),
         "is_active": bool(row["is_active"]),
     }
+
+
+async def list_symbol_board_codes(db: AsyncSession, symbol: str) -> list[str]:
+    """个股所属全部板块码（`by-symbol` 的反向查，走 `concept_members(symbol)` 索引）。
+
+    按 `board_code` 升序：调用方还要按涨跌幅重排，但缺行情（`pct_change=null`）的并列必须靠
+    板块码兜底，否则同一请求两次的顺序会随计划漂移。
+    """
+    rows = (await db.execute(text(_SYMBOL_BOARD_CODES_SQL), {"symbol": symbol})).scalars().all()
+    return [str(code) for code in rows]
