@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   Alert,
@@ -13,6 +13,7 @@ import {
   Tag,
   Typography,
 } from "antd";
+import type { ColumnsType, TableProps } from "antd/es/table";
 import { useQuery } from "@tanstack/react-query";
 import { ChangeText, DegradedNotice, SectionCard, formatCnDate } from "@/shared/ui";
 import { LimitUpLadder } from "@/features/market/components";
@@ -20,9 +21,17 @@ import { StockTable } from "@/features/market/components/StockTable";
 import { ApiError } from "@/shared/api/client";
 import { fetchConceptDetail, fetchConceptStocks, type Echelon } from "@/shared/api/concept";
 import type { LadderStock } from "@/shared/api/limitUp";
+import type { StockRecord } from "@/shared/types";
 
 /** 概念板块列表页（点击行进入本页 / 404 返回） */
 const CONCEPT_LIST_PATH = "/market/hot-sectors/concept";
+
+/**
+ * 404 是终态（板块码不存在），重试三次只会让用户多等 ~7s 才看到空态；
+ * 5xx / 网络错误仍走默认 3 次重试。
+ */
+const retryExcept4xx = (failureCount: number, error: unknown) =>
+  !(error instanceof ApiError && error.status >= 400 && error.status < 500) && failureCount < 3;
 
 /**
  * `ConceptDetail.echelons`（后端 `EchelonOut`，snake_case 线协议）→ `<LimitUpLadder>` 的
@@ -52,6 +61,27 @@ function toLadderEchelons(
   }));
 }
 
+type SortState = { sortBy?: keyof StockRecord; sortOrder?: "asc" | "desc" };
+
+/**
+ * 成分表是客户端排序（分页仍由 `StockTable` 内部管）：`sortBy`/`sortOrder` 从表头点击来，
+ * 行序与表头箭头同源，避免"点了箭头数据不动"的死交互。
+ * 缺失值（渲染 `--`）一律排最后：它不参与比较，也不许伪装成 0 抢排位。
+ */
+function applySort(stocks: StockRecord[], sort: SortState): StockRecord[] {
+  if (!sort.sortBy) return stocks;
+  const key = sort.sortBy;
+  const direction = sort.sortOrder === "asc" ? 1 : -1;
+  return [...stocks].sort((a, b) => {
+    const av = a[key] as number | undefined;
+    const bv = b[key] as number | undefined;
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return av === bv ? 0 : av > bv ? direction : -direction;
+  });
+}
+
 function KpiTile({ title, children, note }: { title: string; children: ReactNode; note?: string }) {
   return (
     <Card size="small" style={{ height: "100%" }}>
@@ -73,11 +103,14 @@ function KpiTile({ title, children, note }: { title: string; children: ReactNode
 export default function ConceptBoardPage() {
   const navigate = useNavigate();
   const { boardCode = "" } = useParams();
+  // 默认按涨跌幅降序（§3 触点 B）；表头箭头与这个 state 同源
+  const [sort, setSort] = useState<SortState>({ sortBy: "changePercent", sortOrder: "desc" });
 
   const detail = useQuery({
     queryKey: ["concept-detail", boardCode],
     queryFn: () => fetchConceptDetail(boardCode),
     staleTime: 60_000,
+    retry: retryExcept4xx,
   });
   const stocks = useQuery({
     queryKey: ["concept-stocks", boardCode],
@@ -90,6 +123,40 @@ export default function ConceptBoardPage() {
   const board = data?.board;
   const kpis = data?.kpis;
   const ladderEchelons = useMemo(() => toLadderEchelons(data?.echelons ?? []), [data?.echelons]);
+
+  const onTableChange: TableProps<StockRecord>["onChange"] = (_pagination, _filters, sorter) => {
+    if (!Array.isArray(sorter) && sorter.field) {
+      setSort({
+        sortBy: sorter.field as keyof StockRecord,
+        sortOrder: sorter.order === "ascend" ? "asc" : "desc",
+      });
+    }
+  };
+
+  const displayStocks = useMemo(() => applySort(stocks.data ?? [], sort), [stocks.data, sort]);
+
+  // 连板列：`echelons` 拍平成 {symbol: streak}；不在梯队 → `--`（缺失 ≠ 0）。
+  // 字段不在 `StockRecord` 上，故不挂 sorter —— 排不了序的箭头就是假交互。
+  const extraColumns: ColumnsType<StockRecord> = useMemo(() => {
+    const streakBySymbol = new Map<string, number>();
+    for (const echelon of data?.echelons ?? []) {
+      for (const stock of echelon.stocks) {
+        streakBySymbol.set(stock.symbol, stock.streak);
+      }
+    }
+    return [
+      {
+        title: "连板",
+        key: "streak",
+        width: 72,
+        align: "right" as const,
+        render: (_: unknown, record: StockRecord) => {
+          const streak = streakBySymbol.get(record.symbol);
+          return streak == null ? "--" : `${streak}板`;
+        },
+      },
+    ];
+  }, [data?.echelons]);
 
   // KPI 全部来自同一份响应，不新造口径：占比的分母 = 有行情成分数（up+flat+down）。
   const pricedCount = board ? board.up_count + board.flat_count + board.down_count : 0;
@@ -177,7 +244,9 @@ export default function ConceptBoardPage() {
             </Col>
             <Col xs={12} md={6}>
               <KpiTile title="最高板" note={`龙头 ${kpis?.leader_name ?? "--"}`}>
-                <span>{kpis && kpis.max_streak > 0 ? `${kpis.max_streak}连板` : "--"}</span>
+                {/* 后端把 max_streak=0 定义为「无涨停」（是数据，不是缺失，呼应邻格 0 家）；
+                    只有整个 kpis 缺失才渲染 `--`（缺失 ≠ 0）。 */}
+                <span>{kpis ? `${kpis.max_streak}连板` : "--"}</span>
               </KpiTile>
             </Col>
             <Col xs={12} md={6}>
@@ -214,7 +283,14 @@ export default function ConceptBoardPage() {
                 description={stocks.error instanceof Error ? stocks.error.message : undefined}
               />
             ) : null}
-            <StockTable data={stocks.data ?? []} loading={stocks.isLoading} />
+            <StockTable
+              data={displayStocks}
+              loading={stocks.isLoading}
+              onChange={onTableChange}
+              sortBy={sort.sortBy}
+              sortOrder={sort.sortOrder === "asc" ? "ascend" : "descend"}
+              extraColumns={extraColumns}
+            />
           </SectionCard>
         ) : null}
       </Space>

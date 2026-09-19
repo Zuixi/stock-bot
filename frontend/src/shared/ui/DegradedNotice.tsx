@@ -1,7 +1,7 @@
 import { Alert } from "antd";
 
 /** `degraded_reason` → 中文文案；不同原因不同文案，未知原因回退原串，不静默吞掉。
- * 本映射仅用于「情绪温度计」卡（长文案），三张数据卡各自用短占位文案（见组件内）。
+ * 本映射被「情绪温度计」卡（长文案）、概念详情页与次新股情绪卡共用；三张数据卡各自用短占位文案（见组件内）。
  * `no_members`（概念板块无成分名录）与其余原因同一条原则：缺失要显式暴露，不静默空态。
  */
 export const DEGRADED_REASON_TEXT: Record<string, string> = {
