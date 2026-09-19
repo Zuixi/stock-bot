@@ -117,7 +117,8 @@ class NewStockKpisOut(BaseModel):
     """`GET /api/v1/new-stocks` 的家数 KPI（全部由同一份 `items` 聚合，见 §2.3）。
 
     `up/flat/down_count` 三档互斥且只统计 `pct_chg` 非空的家数，`unpriced_count` 是剩下的
-    （停牌/无行情）；四者之和恒等于 `len(items)`（KPI 与表格行数同源，不新造口径）。
+    （停牌/无行情；`pct_chg` 一律取 `daily_quotes.pct_chg @ as_of`，不用推导涨跌幅）；
+    四者之和恒等于 `len(items)`（KPI 与表格行数同源，不新造口径）。
     `unbroken_count` **只数 `never_broken is True`**：`None`（限价缺失不可判）既不算未开板、
     也不算已开板。`avg_pct` 的分母是非空 `pct_chg` 家数（≠ `len(items)`），全空时 `null`。
     """
@@ -135,7 +136,9 @@ class NewStockKpisOut(BaseModel):
 class NewStockItemOut(BaseModel):
     """次新股一行（§2.2 `NewStockItem`）：缺失一律 `null`，**绝不 0 填充**。
 
-    `pct_chg`/`close` = 本地行情快照的 `change_percent`/`latest_price`；`streak`/`is_lu` 来自
+    `pct_chg` = `daily_quotes.pct_chg WHERE trade_date = as_of`（**当日涨跌幅**，plans 全局
+    约束；停牌/无当日行情 → `null`，不等于平盘）；`close` = 本地行情快照的 `latest_price`
+    （最新一行收盘，停牌票可能早于 `as_of`，故与 `pct_chg=null` 同现）；`streak`/`is_lu` 来自
     梯队快照（成分不在梯队里 → `streak=null`，缺失 ≠ 0）；`never_broken=null` 表示限价缺失
     不可判（UI 渲染 `--`，不得读成"已开板"）；`above_first_open` 是**替代破发指标**
     （发行价未采集，UI 必须写明"非破发口径"），任一侧缺失即为 `null`。

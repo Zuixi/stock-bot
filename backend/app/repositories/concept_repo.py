@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, cast
 
-from sqlalchemy import Boolean, String, bindparam, delete, func, select, text, update
+from sqlalchemy import Boolean, Integer, String, bindparam, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -514,6 +514,46 @@ async def member_history_stats(db: AsyncSession, board_code: str) -> dict[str, d
             "first_open": float(r["first_open"]) if r["first_open"] is not None else None,
         }
         for r in rows
+    }
+
+
+# T10 KPI 的涨跌幅口径（plans 全局约束 + §2.3）：必须取 `daily_quotes.pct_chg` —— TuShare
+# 原生的当日涨跌幅（已含除权口径）。绝不用 enriched 行的 `change_percent`：它是"最新两行
+# close 相除"的推导值，既不带 `trade_date = :as_of` 过滤（as_of 停牌的票会被拿陈旧行情分档），
+# 也会在除权日与官方 pct_chg 分叉——两套"涨跌幅"会让 KPI 家数与东财对不上。
+# 单日 + stock_id 集合，走 daily_quotes 的 (stock_id, trade_date) 唯一索引。
+_DAILY_PCT_CHG_SQL = (
+    "SELECT stock_id, pct_chg FROM daily_quotes "
+    "WHERE trade_date = :as_of AND stock_id IN :stock_ids"
+)
+# expanding 绑定必须钉在 `bindparams`（与 `_AGG_STMT` 同款约定）：裸 `text()` 会把列表当单个
+# 标量。`type_` 不可省：无类型时 SQLAlchemy 把空列表渲染成 `CAST(NULL AS INTEGER)`。
+_DAILY_PCT_CHG_STMT = text(_DAILY_PCT_CHG_SQL).bindparams(
+    bindparam("stock_ids", expanding=True, type_=Integer)
+)
+
+
+async def daily_pct_chg_by_stock_ids(
+    db: AsyncSession, as_of: date, stock_ids: list[int]
+) -> dict[int, float | None]:
+    """`{stock_id: as_of 当日 pct_chg}`；**键存在**才代表该票有 as_of 行情行（值可为 `None`）。
+
+    调用方按 `.get(stock_id)` 取值：不在表里 ⇒ 当日停牌/无行情 ⇒ `pct_chg=None`（缺失 ≠ 0，
+    不能被算成"平盘"）。空输入不发 SQL（空列表的 expanding 绑定无意义）。
+    """
+    if not stock_ids:
+        return {}
+    rows = (
+        (
+            await db.execute(
+                _DAILY_PCT_CHG_STMT, {"as_of": as_of, "stock_ids": [int(s) for s in stock_ids]}
+            )
+        )
+        .mappings()
+        .all()
+    )
+    return {
+        int(r["stock_id"]): float(r["pct_chg"]) if r["pct_chg"] is not None else None for r in rows
     }
 
 
