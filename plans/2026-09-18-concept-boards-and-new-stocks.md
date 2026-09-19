@@ -253,8 +253,8 @@ SectionCard title="次新股情绪" asof={as_of}
   1. `boards = await em.fetch_concept_boards()`（5 页，去重；实测 504）
   2. upsert `concept_boards`（`last_seen_at=now`；本轮未出现的置 `is_active=false`）
   3. 逐板 `await em.fetch_concept_members(code)`（504 板 × ~1.6 页 ≈ 800 请求，`_MIN_INTERVAL=0.3` → **约 5 分钟**）
-  4. 逐板 diff + 写 `concept_member_changes`（§2.1 语义），单板失败 `failed_boards += 1` 并跳过
-  5. 返回 `{boards, members_upserted, added, removed, failed_boards, unresolved}`
+  4. 逐板 diff + 写 `concept_member_changes`（§2.1 语义），单板失败 `failed_boards += 1` 并跳过；※ 完整性闸门：`_valid_members` 清洗**先于**闸门，`len(valid) < member_total` 或存在被丢弃的脏行 → 该板 `partial_boards += 1` 且整块跳过（绝不得把“少抓到的行”写成 `remove`）
+  5. 返回 `{boards, members_upserted, added, removed, failed_boards, partial_boards, unresolved, dropped_members}`（**调用方不得位置解包，只按键取用**）
 - **调度**：`concept_members_refresh_job`，`CronTrigger(day_of_week="mon-fri", hour=18, minute=20, timezone="Asia/Shanghai")`（避开 17:45 对账、18:00 龙虎榜）。吃全局 `job_defaults`，即 `misfire_grace_time=None`（停摆后补跑，任务幂等）。
 - **手动**：`MarketDataJobType` 增 `"concept_members"`，`POST /api/v1/tasks/fetch-market-data {type:"concept_members"}`。**不新增队列、不新增 worker 进程。**
 - **限流/成本**：约 800-1000 请求/日、5 分钟。不做的优化：**不**分片多日拉（会让不同板块的 `membership_as_of` 不一致，破坏口径唯一性）。
