@@ -180,7 +180,7 @@ GET /api/v1/new-stocks
 | `zt_count`（板内） | 板块成分 × 当日 `is_lu`（`close >= up_limit - 0.005`）家数 | `degraded_reason` **从 `get_snapshot()` 透传**（`no_quotes` / `price_limits_missing` / `partial_day` / `insufficient_trade_days`），`no_members` 优先；**例外（T8 评审 I2）：`no_limit_up_rows` 不透传** —— 全市场当日无涨停是合法空态，KPI 诚实为 0 |
 | `max_streak` | 板内成分当日最大 `streak` | 无涨停 → 0 |
 | `listed_trade_days` | 该股 `daily_quotes` 行数（上市以来有行情的交易日数，停牌不计） | 0 |
-| `never_broken` | 上市以来**除首日外每一行**都 `is_lu`（= 未开板新股）。**必须排除哨兵限价行**（首日 `stk_limit.up_limit=99999.99`，`up_limit < 1000` 为真实限价；含首日则任何新股恒为 `False`，口径结构性不可达 —— 2026-09-18 数据核对发现） | `null`（限价缺失或无可判行则不可判，**不得写成 false**） |
+| `never_broken` | 上市以来**除首日外每一行**都 `is_lu`（= 未开板新股）。**必须排除哨兵限价行**（首日 `stk_limit.up_limit` 是哨兵 `99999.99/999999.999`；判据用**相对**比较 `up_limit < close * 10`（真实限幅 ≤ +31%，哨兵恒 ≥ 10×现价）—— 固定阈值会误伤高价股：实测 `688808 联讯仪器` 真实限价 1948.80、茅台 ~1393；含首日则任何新股恒为 `False`，口径结构性不可达 —— 2026-09-18 数据核对发现） | `null`（限价缺失或无可判行则不可判，**不得写成 false**） |
 | `first_open` | 上市首日 `open` | `null` |
 | `above_first_open` | 最新 `close >= first_open`（**替代破发指标**，发行价未采集，UI 必须写明"非破发口径"） | `null` |
 | `limit_up_count` | 板块内当日 `is_lu` 家数 | 同 `zt_count` |
