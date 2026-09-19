@@ -444,12 +444,14 @@ async def fetch_concept_boards(self) -> list[dict[str, Any]]:
 
     ``fid=f12``（按板块代码排）而非 f3（涨跌幅）：盘中按涨跌幅排序翻页会漏/重。
     """
-    return await self._paged_clist(_CONCEPT_FS, "f12,f14,f104,f105", _board_mapper)
+    return await self._paged_clist(_CONCEPT_FS, "f12,f14,f104,f105,f106", _map_concept_board)
 
 async def fetch_concept_members(self, board_code: str) -> list[dict[str, Any]]:
     """单板成分股（实测 BK0501 total=162 → 2 页）。"""
-    return await self._paged_clist(f"b:{board_code}", "f12,f13,f14", _member_mapper)
+    return await self._paged_clist(f"b:{board_code}", "f12,f13,f14", _map_concept_member)
 ```
+
+> **字段口径（T2 评审 I1 修正）**：`member_total` 必须 = `f104 + f105 + f106`（上涨 + 下跌 + **平盘**），不能用 `f104+f105`。实测证据（2026-09-18）：`BK1753 光刻胶` 列表行 `f104=55 / f105=6 / f106=2`，而 `fs=b:BK1753` 的 `total=63` —— 漏平盘会把 T4 的成分数对账长期算低并产生幻影差异告警（`BK0501` 平盘为 0，故该板看不出来）。三个计数全不可解析时 `member_total = None`（不得写 0）。
 
 `_paged_clist(fs, fields, mapper)` 统一实现：循环 `pn`、`pz=100`、`fid=f12`、累计去重（按映射后的 key）、`len(diff)==0 or len(out) >= total or pn > _MAX_PAGES` 时收敛。
 
