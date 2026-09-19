@@ -151,8 +151,13 @@ async def _insert_member(
 
 
 # 哨兵限价（"首日/前 5 个交易日无涨跌幅限制"）实测取值之一；用例只用这一个取值即可，
-# 其余变体（99999.999 / 999999.999）同样 >= 1000，走的是同一条 `has_real_limit` 分支。
+# 其余变体（99999.999 / 999999.999）同样 >= 10x 现价，走的是同一条 `has_real_limit` 分支。
 _SENTINEL_UP_LIMIT = 99999.99
+# 真实限价可以 > 1000（高价股）：`688808 联讯仪器`（BK0501 成分）97 行真实限价区间
+# 1221.60–3240.00（其中 2026-08-04 限价 1948.80 == close 涨停）。故哨兵判据必须是**相对**
+# 比较 `up_limit < close * 10`（哨兵恒 >= 10x 现价），固定阈值（如 `< 1000`）会把这类真实
+# 限价行整体误判成哨兵 → 零可判行 → 丢信号。
+_HIGH_PRICE_UP_LIMIT = 1948.80
 
 
 async def _insert_synth_quote(
@@ -548,6 +553,43 @@ async def test_member_history_stats_excludes_sentinel_limit_rows_from_never_brok
         "无任何真实限价行 → 不可判（None），绝不能真值化为 true/false"
     )
     assert stats["XONLYSENT"]["listed_trade_days"] == 1
+
+
+@pytest.mark.e2e
+async def test_member_history_stats_keeps_high_priced_real_limits() -> None:
+    """回归（T10 fix2）：真实限价 > 1000 的高价股不得被固定阈值误判为哨兵。
+
+    哨兵值是 `99999.99 / 99999.999 / 999999.999`，而真实限价可以很大：`688808 联讯仪器`
+    （BK0501 成分）97 行真实限价区间 1221.60–3240.00（2026-08-04 限价 1948.80 == close 涨停），
+    其 102 行限价全部 > 1000。若判据写成固定阈值 `up_limit < 1000`，该票零个可判行 →
+    `never_broken` 由 `False`（已开板）**错退化为** `None`（不可判，丢信号）。本用例用负
+    stock_id 合成：哨兵首日 + 之后每个交易日真实限价且全部涨停（1948.80 / 2000.00 均 > 1000）
+    → 必须是 `True`；**该断言在 `< 1000` 判据下必然失败**（合成票会退化成 `None`）。
+    """
+    board = "TESTBKHIPRICE"
+    d1, d2, d3 = date(2026, 9, 16), date(2026, 9, 17), date(2026, 9, 18)
+    async with async_session_factory() as db:
+        await _insert_board(db, board, "高价真实限价用例")
+        await _insert_member(db, board, "XHIPOINT", "高价真实限价", -99005, TODAY)
+
+        # 首日哨兵：1500.00 相对 99999.99 仍是哨兵（99999.99 >= 10x 现价 = 15000）。
+        await _insert_synth_quote(
+            db, -99005, d1, open_=1200.0, close=1500.0, up_limit=_SENTINEL_UP_LIMIT
+        )
+        # 后两日真实限价均 > 1000（1948.80 取自联讯仪器 2026-08-04 实测限价），close == up_limit。
+        await _insert_synth_quote(
+            db, -99005, d2, open_=1600.0, close=_HIGH_PRICE_UP_LIMIT, up_limit=_HIGH_PRICE_UP_LIMIT
+        )
+        await _insert_synth_quote(db, -99005, d3, open_=1950.0, close=2000.0, up_limit=2000.0)
+
+        stats = await concept_repo.member_history_stats(db, board)
+
+    assert stats["XHIPOINT"]["never_broken"] is True, (
+        "限价 > 1000 的真实涨停行不是哨兵：固定阈值 < 1000 会把本票错判成不可判（None），"
+        "把'已开板/未开板'的信号整个丢掉"
+    )
+    assert stats["XHIPOINT"]["listed_trade_days"] == 3, "listed_trade_days 仍数全部行情行"
+    assert stats["XHIPOINT"]["first_open"] == pytest.approx(1200.0), "first_open 仍取首日 open"
 
 
 @pytest.mark.e2e
