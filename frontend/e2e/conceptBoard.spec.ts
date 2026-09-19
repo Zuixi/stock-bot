@@ -1,21 +1,26 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * 概念板块详情页 E2E（契约 §2.3 / §3 触点 B）：
- * - 「成分截至 X（东财）」必须上屏 —— 历史口径声明是契约要求，不是装饰；
+ * 概念板块 E2E（契约 §2.3 / §3 触点 B/C/D/E）：
+ * - 「成分截至 X（东财）」必须用 `membership_as_of` 渲染（历史口径声明是契约要求，不是装饰）；
  * - 缺失 ≠ 0：无行情成分的涨跌幅/换手/市值渲染 `--`，不得渲染 0/0.00%；
  * - 板内梯队来自 `/concepts/{code}` 的 echelons（与连板梯队卡同形）；
- * - 连板列同样由 echelons 拍平：不在梯队的成分渲染 `--`（缺失 ≠ 0 板）。
+ * - 连板列同样由 echelons 拍平：不在梯队的成分渲染 `--`（缺失 ≠ 0 板）；
+ * - 追加列必须排在 `fixed: "right"` 的自选列**之前**（自选列是右缘 sticky 槽位，必须最后一列）；
+ * - 降级/404 各自空态；概念标签失败零占位；次新股卡 KPI 与 items 同源、替代口径上屏。
+ *
+ * 载荷自洽性：DETAIL 的 `as_of` 与 `membership_as_of` **刻意取不同值**（09-18 vs 09-17），
+ * 页面若误把 `as_of` 当成分口径，本文件的 `not.toContainText("9月18日")` 会红。
  *
  * 说明：T16 brief 的同一段断言里还有 `getByText("未开板")`，此处**刻意不含**：
  * `/concepts/{code}` 的响应（§2.2 ConceptKpisOut）没有未开板字段，mock 载荷里也没有，
- * 页面无从渲染；「未开板」属于次新股情绪卡（T15，见本文件第四个用例断言）。
+ * 页面无从渲染；「未开板」属于次新股情绪卡（T15，见本文件后两个用例断言）。
  * 在这里断言它只会得到一个假绿（或假红），不测任何真实行为。
  */
 const DETAIL = {
-  as_of: "2026-09-18", membership_as_of: "2026-09-18", source: "em_clist", degraded_reason: null,
-  board: { board_code: "BK0501", board_name: "次新股", member_count: 162, unresolved_count: 0,
-    priced_count: 162, up_count: 157, flat_count: 0, down_count: 5, avg_pct: 4.66,
+  as_of: "2026-09-18", membership_as_of: "2026-09-17", source: "em_clist", degraded_reason: null,
+  board: { board_code: "BK0501", board_name: "次新股", member_count: 165, unresolved_count: 0,
+    priced_count: 165, up_count: 157, flat_count: 3, down_count: 5, avg_pct: 4.66,
     main_net_inflow: 1234567890.0, main_net_ratio: 2.1, lead_stock_name: "某股",
     lead_stock_code: "601091", lead_stock_pct: 20.0,
     leaders: [{ symbol: "601091", name: "C沈鼓", change_percent: 20.0 }] },
@@ -23,7 +28,7 @@ const DETAIL = {
   echelons: [{ streak: 3, label: "3连板", stocks: [{ symbol: "601091", name: "C沈鼓", streak: 3,
     days_span: 3, boards_in_window: 3, missing_days: 0, amount: 1.0e8,
     seal_time: null, seal_fund: null, break_count: null }] }],
-  unresolved_count: 0, stock_count: 162,
+  unresolved_count: 0, stock_count: 165,
 };
 const STOCKS = [
   { symbol: "601091", name: "C沈鼓", exchange: "Shanghai_Stocks", category: "stock",
@@ -42,27 +47,46 @@ const STOCKS = [
     latest_quote_date: "2026-09-18" },
 ];
 
+/** 两条 mock 路由：详情在前、成分（更具体的路径）在后注册，注册顺序不影响最终匹配结果。
+ * 注意：本文件任何注释都不得写「星号星号斜杠」的 glob —— 它会提前闭合块注释（踩过）。
+ */
+async function routeConceptDetail(page: import("@playwright/test").Page, detail: unknown, stocks: unknown) {
+  await page.route("**/api/v1/concepts/BK0501", (r) => r.fulfill({ json: detail }));
+  await page.route("**/api/v1/concepts/BK0501/stocks", (r) => r.fulfill({ json: stocks }));
+}
+
 test("概念详情页展示成分与板内梯队，并宣布成分口径", async ({ page }) => {
-  await page.route("**/api/v1/concepts/BK0501/stocks", (r) => r.fulfill({ json: STOCKS }));
-  await page.route("**/api/v1/concepts/BK0501", (r) => r.fulfill({ json: DETAIL }));
+  await routeConceptDetail(page, DETAIL, STOCKS);
   await page.goto("/market/concept/BK0501");
   await expect(page.getByTestId("concept-board")).toBeVisible();
   await expect(page.getByRole("heading", { name: "次新股" })).toBeVisible();
-  await expect(page.getByText(/成分截至/)).toBeVisible();          // 历史口径声明必须在页面上
+  // 历史口径声明必须在页面上，且必须读 `membership_as_of`（09-17）而不是 `as_of`（09-18）：
+  // 两个值刻意不同，认错字段即红。分母 n 同时钉住 priced 口径 = up+flat+down（157+3+5）。
+  const asofLine = page.getByText(/成分截至/);
+  await expect(asofLine).toContainText("成分截至 9月17日（东财）");
+  await expect(asofLine).not.toContainText("9月18日");
+  await expect(asofLine).toContainText("n=165 有行情家数");
   // KPI 瓦片（同一响应的 items 口径，不新造指标）
   await expect(page.getByText("板内涨停")).toBeVisible();
   await expect(page.getByText("12.35 亿")).toBeVisible();          // 元 → 亿
-  await expect(page.getByText("96.9%")).toBeVisible();             // 157 / (157+0+5)
+  await expect(page.getByText("95.2%")).toBeVisible();             // 157 / (157+3+5)；flat≠0 才有意义
   // 板内梯队（复用 <LimitUpLadder>）
   const ladder = page.locator(".sentiment-ladder");
   await expect(ladder).toContainText("3连板");
   await expect(ladder).toContainText("C沈鼓");
   // 成分表：命中票渲染真实值；无行情票一律 `--`，不得渲染 0
   await expect(page.locator("tr", { hasText: "C沈鼓" })).toContainText("+20.00%");
-  // 连板列（§3 触点 B）：echelons 拍平；命中票 `3板`，不在梯队的成分 `--`（缺失 ≠ 0 板）。
-  // 断言收在**最后一格**（extraColumns 追加在既有列之后）：行内其它列也有 `--`，整行断言会假绿
+  // Q1（评审修复）：追加的连板列必须排在 `fixed: "right"` 的自选列之前 ——
+  // 排到 pin 之后时连板列会顶到右缘、与 pin 的 sticky 槽位（right:0 那一段）重叠，
+  // 而排错时连板列恰好就是最后一列 —— 旧的 `td:last` 断言取到的仍是同一个值，永远绿。
+  // 故按表头文案定位列号，并钉住「连板列不是最后一列」。
+  const heads = (await page.locator(".ant-table-thead th").allInnerTexts()).map((t) => t.trim());
+  const streakCol = heads.indexOf("连板");
+  expect(streakCol).toBeGreaterThan(-1);
+  expect(streakCol).toBeLessThan(heads.length - 1);   // 连板列不得是最后一列（最后一列是固定自选列）
+  // 连板列（§3 触点 B）：echelons 拍平；命中票 `3板`，不在梯队的成分 `--`（缺失 ≠ 0 板）
   const hitRow = page.locator("tr", { hasText: "C沈鼓" });
-  await expect(hitRow.locator("td").last()).toHaveText("3板");
+  await expect(hitRow.locator("td").nth(streakCol)).toHaveText("3板");
   const missingRow = page.locator("tr", { hasText: "C信诺维" });
   await expect(missingRow).toContainText("--");
   await expect(missingRow).not.toContainText("0.00%");
@@ -70,7 +94,48 @@ test("概念详情页展示成分与板内梯队，并宣布成分口径", async
   await expect(page.locator(".ant-table-tbody tr.ant-table-row").first()).toContainText("C复核");
   // 不在梯队的成分连板列 `--`（缺失 ≠ 0 板）
   const offLadderRow = page.locator("tr", { hasText: "C复核" });
-  await expect(offLadderRow.locator("td").last()).toHaveText("--");
+  await expect(offLadderRow.locator("td").nth(streakCol)).toHaveText("--");
+});
+
+test("概念详情降级：横幅写明原因，未收录成分单独告警，梯队不显示空态", async ({ page }) => {
+  // `no_members` + 未收录成分同时出现：两条文案必须各自上屏，不得互相吞掉
+  await routeConceptDetail(
+    page,
+    { ...DETAIL, degraded_reason: "no_members", unresolved_count: 7, echelons: [] },
+    STOCKS,
+  );
+  await page.goto("/market/concept/BK0501");
+  await expect(page.getByText("成分数据尚未采集（每日 18:20 刷新）")).toBeVisible();
+  await expect(page.getByTestId("concept-unresolved")).toContainText("另有 7 只成分股未收录");
+  // 降级时梯队走组件占位，不得显示「今日板内无涨停」（那是真空态的文案，会把降级读成无涨停）
+  await expect(page.locator(".sentiment-ladder")).toContainText("数据不完整，暂不展示梯队");
+  await expect(page.getByText("今日板内无涨停")).toHaveCount(0);
+});
+
+test("概念详情 404：空态 + 回跳链接，且 4xx 不重试（只请求一次）", async ({ page }) => {
+  let hits = 0;
+  await page.route("**/api/v1/concepts/BK9999", (r) => {
+    hits += 1;
+    return r.fulfill({ status: 404, json: { code: "NOT_FOUND", message: "概念板块不存在" } });
+  });
+  await page.goto("/market/concept/BK9999");
+  await expect(page.getByText("未找到该概念板块")).toBeVisible();
+  await expect(page.getByRole("link", { name: "返回概念板块列表" })).toBeVisible();
+  // 404 是终态：`retryExcept4xx` 必须拦住重试（重试会让用户多等约 7s 才看到空态）
+  await page.waitForTimeout(1_500);
+  expect(hits).toBe(1);
+});
+
+test("概念 tab 不再是空态，行点击进入概念详情", async ({ page }) => {
+  await page.route("**/api/v1/market/hot-boards**", (r) => r.fulfill({ json: [
+    { id: "concept-BK0501", name: "次新股", code: "BK0501", changePercent: 4.66,
+      upCount: 157, flatCount: 3, downCount: 5,
+      leaders: [{ symbol: "601091", name: "C沈鼓", changePercent: 20.0 }] }] }));
+  await page.goto("/market/hot-sectors/concept");
+  const row = page.getByRole("row", { name: /次新股/ });
+  await expect(row).toBeVisible();
+  await row.getByRole("cell", { name: /次新股/ }).first().click();
+  await expect(page).toHaveURL(/\/market\/concept\/BK0501$/);
 });
 
 /** 个股页用例共用的 enriched 载荷（申万映射为空 → 面包屑降级为「其他」，与本用例无关）。 */
@@ -82,18 +147,45 @@ const STOCK_600000 = {
 
 /**
  * 触点 C（个股详情「所属概念」）与触点 D（「次新股情绪」卡）的 e2e。
- * 两者的关键契约都是**零占位**：概念标签失败/为空时整块消失（`toHaveCount(0)`），
+ * 两者的关键契约都是**零占位**：概念标签失败/为空时整块消失（`所属概念` 文案与 testid 都必须是 0），
  * 次新股卡的 `--` 必须来自缺失（`never_broken === null` 不可判），不是 0。
  */
-const NEW_STOCKS = {
-  as_of: "2026-09-18", membership_as_of: "2026-09-18", source: "em_clist",
+const NEW_STOCKS_DEGRADED_SINGLE = {
+  as_of: "2026-09-18", membership_as_of: null, source: "em_clist",
   degraded_reason: null, board_code: "BK0501", board_name: "次新股",
-  kpis: { up_count: 157, flat_count: 0, down_count: 5, unpriced_count: 0,
-    limit_up_count: 9, unbroken_count: 3, above_first_open_count: 120, avg_pct: 4.66 },
+  // kpis 与 items 同源（1 只：涨停、不可判、高于首日开盘）
+  kpis: { up_count: 1, flat_count: 0, down_count: 0, unpriced_count: 0,
+    limit_up_count: 1, unbroken_count: 0, above_first_open_count: 1, avg_pct: 20.0 },
   items: [{ symbol: "601091", name: "C沈鼓", exchange: "Shanghai_Stocks",
     list_date: "2026-09-17", listed_trade_days: 2, pct_chg: 20.0, close: 20.8,
     turnover_rate: 89.08, circ_mv: 179664849567.0, amount: 2181187.373,
     streak: 2, is_lu: true, never_broken: null, first_open: 13.0, above_first_open: true }],
+};
+
+/**
+ * 触点 D 的混合载荷（T16 brief 用例 4）：3 只样本分别 `never_broken` = null / true / false，
+ * `kpis` 逐项由 `items` 推得（1 只 `is_lu` ⇒ `limit_up_count: 1`），
+ * `as_of` 与 `membership_as_of` 仍刻意不同（09-18 / 09-17）以钉住卡内成分口径。
+ */
+const NEW_STOCKS_MIXED = {
+  as_of: "2026-09-18", membership_as_of: "2026-09-17", source: "em_clist",
+  degraded_reason: null, board_code: "BK0501", board_name: "次新股",
+  kpis: { up_count: 2, flat_count: 0, down_count: 1, unpriced_count: 0,
+    limit_up_count: 1, unbroken_count: 1, above_first_open_count: 2, avg_pct: 7.17 },
+  items: [
+    { symbol: "601091", name: "C沈鼓", exchange: "Shanghai_Stocks", list_date: "2026-09-17",
+      listed_trade_days: 2, pct_chg: 20.0, close: 20.8, turnover_rate: 89.08,
+      circ_mv: 179664849567.0, amount: 2181187.373, streak: 2, is_lu: true,
+      never_broken: null, first_open: 13.0, above_first_open: true },
+    { symbol: "688837", name: "C信诺维", exchange: "Shanghai_Stocks", list_date: "2026-09-15",
+      listed_trade_days: 4, pct_chg: 5.0, close: 31.2, turnover_rate: 22.5,
+      circ_mv: 6.2e9, amount: 1.1e6, streak: null, is_lu: false,
+      never_broken: true, first_open: 28.0, above_first_open: true },
+    { symbol: "301234", name: "C复核", exchange: "Shenzen_Stocks", list_date: "2026-09-10",
+      listed_trade_days: 7, pct_chg: -3.5, close: 18.4, turnover_rate: 12.1,
+      circ_mv: 4.4e9, amount: 9.0e5, streak: null, is_lu: false,
+      never_broken: false, first_open: 19.5, above_first_open: false },
+  ],
 };
 
 test("个股页渲染所属概念标签：缺失涨跌幅只显示名字，点击进入概念详情", async ({ page }) => {
@@ -105,6 +197,7 @@ test("个股页渲染所属概念标签：缺失涨跌幅只显示名字，点�
       { board_code: "BK0714", board_name: "白酒概念", pct_change: null }] } }));
   await page.goto("/stock/600000");
   const tags = page.getByTestId("concept-tags");
+  await expect(tags).toContainText("所属概念");                  // 正路径确实渲染该文案 → 反路径 count 0 才非空谈
   await expect(tags).toContainText("次新股");
   await expect(tags).toContainText("+4.66%");                     // 涨跌色 + 两位小数
   await expect(tags).toContainText("白酒概念");                    // pct_change = null → 只有名字，不得 0.00%
@@ -116,23 +209,57 @@ test("个股页渲染所属概念标签：缺失涨跌幅只显示名字，点�
 test("概念标签请求失败时整块不渲染，页面其余部分正常", async ({ page }) => {
   await page.route("**/api/v1/exchanges/Shanghai_Stocks/stocks/600000/enriched", (r) =>
     r.fulfill({ json: STOCK_600000 }));
+  // 失败路径的断言必须在请求落地 + 一次渲染提交之后再下（见下方注释），先盯住失败事件
+  const failed = page.waitForEvent("requestfailed", (req) => req.url().includes("/concepts/by-symbol/"));
   await page.route("**/api/v1/concepts/by-symbol/**", (r) => r.abort());
   await page.goto("/stock/600000");
-  await expect(page.getByTestId("concept-tags")).toHaveCount(0);  // 零占位（不渲染空壳/占位）
+  await failed;
+  // `toHaveCount(0)` 不自动等待：紧跟 `goto` 断言会在 isLoading 期通过 ——
+  // 「因为还没渲染」而不是「因为不渲染」，反证实验（把路由换成成功载荷）实测仍绿。
+  // 双 rAF = 跨过 React 的提交与绘制，之后 DOM 已反映查询结果。
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null)))));
+  // 零占位：空壳/标题占位都不许留。断言**同时**收在 `所属概念` 文案与 testid 上 ——
+  // 只断 testid 时，若回归把 testid 去掉却仍渲染「所属概念」空壳，用例会假绿。
+  await expect(page.getByText("所属概念")).toHaveCount(0);
+  await expect(page.getByTestId("concept-tags")).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "概览" })).toBeVisible();
 });
 
-test("次新股情绪卡渲染 KPI、替代口径注脚与不可判的 `--`", async ({ page }) => {
-  await page.route("**/api/v1/new-stocks", (r) => r.fulfill({ json: NEW_STOCKS }));
+test("次新股情绪卡：KPI 与 items 同源、替代口径注脚、部分可判带出 n", async ({ page }) => {
+  await page.route("**/api/v1/new-stocks", (r) => r.fulfill({ json: NEW_STOCKS_MIXED }));
   await page.goto("/market");
   await page.getByRole("tab", { name: "短线情绪" }).click();
-  // 断言全部收在卡内：情绪 Tab 其他卡也有 `--`，全局断言会得到假绿
+  // 断言全部收在卡内：情绪 Tab 其他卡也有 `--`/同名文案，全局断言会得到假绿
   const card = page.getByTestId("new-stock-board");
   await expect(card.getByText("未开板")).toBeVisible();
   await expect(card.getByText("平均涨跌幅", { exact: true })).toBeVisible();
+  // T15 口径契约串（不得只在某处泛泛出现，必须收在本卡内）
   await expect(card.getByText(/非破发/)).toBeVisible();            // 替代口径必须声明
+  await expect(card.getByText(/BK0501/)).toBeVisible();
+  await expect(card.getByText(/上市 ≤1 年/)).toBeVisible();
+  await expect(card.getByText(/成分每日 18:20 刷新/)).toBeVisible();
+  // 成分口径同样读 `membership_as_of`（09-17），不是 `as_of`（09-18）
+  await expect(card.getByText(/成分截至 9月17日/)).toBeVisible();
+  // 正向未开板：1 只 `never_broken: true` ⇒ `1家`（不得因为另有不可判行而变 `--`）
+  const unbrokenTile = card.locator(".ant-statistic", { hasText: "未开板" });
+  await expect(unbrokenTile.locator(".ant-statistic-content")).toHaveText("1家");
+  // M-b（评审修复）：1 只不可判时瓦片数值之外必须带出可判家数（3 只里 2 只可判），
+  // 否则「未开板 1家」会被读成「没有一个不可判」——缺失 ≠ 0。
+  await expect(card.getByText("限价缺失不可判 → -- · n=2 可判家数")).toBeVisible();
+  // 不可判只影响「未开板」口径，不改写该行已有的行情：C沈鼓的连板照旧是 `2板`；
+  // 而真正缺失的字段（C信诺维 streak=null）渲染 `--`，不得渲染 0 板（缺失 ≠ 0）。
+  await expect(card.locator("tr", { hasText: "C沈鼓" }).locator("td").filter({ hasText: /^2板$/ })).toHaveCount(1);
+  await expect(card.locator("tr", { hasText: "C信诺维" }).locator("td").filter({ hasText: /^--$/ })).toHaveCount(1);
+});
+
+test("次新股情绪卡全量不可判：未开板渲染 `--` 而非 0 家", async ({ page }) => {
+  await page.route("**/api/v1/new-stocks", (r) => r.fulfill({ json: NEW_STOCKS_DEGRADED_SINGLE }));
+  await page.goto("/market");
+  await page.getByRole("tab", { name: "短线情绪" }).click();
+  const card = page.getByTestId("new-stock-board");
   // 唯一 item 的 never_broken = null ⇒ 未开板不可判 → 数值是 `--`，不得渲染 0 家/已开板。
   // 断言必须收在瓦片的数值槽里：注脚文案 "限价缺失不可判 → --" 也含 `--`，全局取 `--` 会假绿。
   const unbrokenTile = card.locator(".ant-statistic", { hasText: "未开板" });
   await expect(unbrokenTile.locator(".ant-statistic-content")).toHaveText("--");
+  await expect(card.getByText("限价缺失不可判 → -- · n=0 可判家数")).toBeVisible();
 });

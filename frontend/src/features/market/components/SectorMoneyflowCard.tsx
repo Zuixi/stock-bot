@@ -1,4 +1,4 @@
-import { Card, Segmented, Spin } from "antd";
+import { Card, Segmented, Spin, Tooltip } from "antd";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchSectorMoneyflow, type SectorMoneyflowItem } from "@/shared/api/marketData";
@@ -76,7 +76,16 @@ export function SectorMoneyflowCard() {
           onChange={(v) => setDimension(v as "industry" | "concept" | "region")}
           options={[
             { label: "行业", value: "industry" },
-            { label: "概念", value: "concept" },
+            {
+              // 口径声明挂在概念维度本身：东财概念资金流是按净流入排序的 Top100 样本，
+              // 不是全量约 500 个概念板块 —— 不声明就会让「板块榜」被读成全量。
+              label: (
+                <Tooltip title="主力资金流为东财按净流入排序的 Top100 样本，非全量板块">
+                  <span>概念</span>
+                </Tooltip>
+              ),
+              value: "concept",
+            },
             { label: "地域", value: "region" },
           ]}
         />

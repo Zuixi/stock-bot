@@ -19,6 +19,8 @@ const COVERAGE_ROWS: CoverageRow[] = [
   { domain: "估值指标", content: "PE/PB/换手/市值/量比", freq: "日度", source: "TuShare" },
   { domain: "全球指数", content: "上证/深证/创业板/恒生/日经/KOSPI/标普/纳指等", freq: "实时快照+日度", source: "东财/AKShare" },
   { domain: "行业体系", content: "申万 31 L1/全层级分类+成分", freq: "静态+季度", source: "申万 2021 版" },
+  // T16 触点 E：概念板块（东财 BK 代码）列表 + 成分股，与其他行同形（有源可溯才署名）
+  { domain: "概念板块成分", content: "板块列表 + 成分股", freq: "每日 18:20", source: "东财" },
   { domain: "资金流向", content: "大盘四档/板块/个股主力净流入", freq: "盘中+盘后", source: "东财" },
   // 规划中：北向 `northbound_daily` 0 行，首页已整卡移除，公开矩阵不宣称已覆盖
   { domain: "北向资金", content: "沪深港通净流入", freq: "—", source: "—", planned: true },
@@ -31,11 +33,12 @@ const COVERAGE_ROWS: CoverageRow[] = [
 const HEADS = ["数据域", "内容", "频率", "来源"];
 
 /**
- * 统计带口径 = 实际已上线的 9 个数据域（10 行中北向为规划中，不计入）。
- * 上游契约 §5 的「10 大数据域」含规划中一项，公开文案改为「已上线」以免夸大口径。
+ * 统计带口径 = 实际已上线的 10 个数据域（11 行中北向为规划中，不计入）。
+ * T16 新增「概念板块成分」行后由 9 上调为 10；公开文案只报「已上线」，
+ * 不含规划中项，以免夸大口径（计数与行数的推导见 `COVERAGE_ROWS`/`planned`）。
  */
 const STATS: Array<{ num: string; label: string }> = [
-  { num: "9", label: "已上线数据域" },
+  { num: "10", label: "已上线数据域" },
   { num: "5,500+", label: "标的" },
   { num: "4", label: "级数据权威分级" },
   { num: "100%", label: "已上线数据免费" },
