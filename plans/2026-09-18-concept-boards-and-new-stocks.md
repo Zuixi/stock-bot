@@ -139,6 +139,8 @@ concept_member_changes       -- 每日差分，追加式，永不更新/删除�
 
 ```
 GET /api/v1/concepts?sort=pct|inflow&limit=50&offset=0
+  # sort=inflow 仅在**当前页切片内**按主力净流入重排（不是全库流入 Top-N）；
+  # 若要全库 Top-N 需另加一条 SQL（见 T6 评审 M1，本期不做，已在 OpenAPI description 标注）
   → { as_of, membership_as_of, price_source:"local_agg", flow_source:"em_clist"|null,
       total, items:[BoardItem] }
 GET /api/v1/concepts/by-symbol/{symbol}
