@@ -27,8 +27,10 @@ import type { StockRecord } from "@/shared/types";
 const CONCEPT_LIST_PATH = "/market/hot-sectors/concept";
 
 /**
- * 404 是终态（板块码不存在），重试三次只会让用户多等 ~7s 才看到空态；
- * 5xx / 网络错误仍走默认 3 次重试。
+ * 404 是终态（板块码不存在），重试只是让用户多等几秒才看到空态 → 4xx 一律不重试；
+ * 5xx / 网络错误在本查询内最多重试 **3 次**（首次 + 3 = 4 次请求，退避约 1+2+4 ≈ 7s）。
+ * 注意这里**覆盖**了 `App.tsx` 的全局默认（`failureCount < 1`，即只重试 1 次）——概念详情是
+ * 低频导航页，值得多等；不要把本谓词说成「默认重试」。
  */
 const retryExcept4xx = (failureCount: number, error: unknown) =>
   !(error instanceof ApiError && error.status >= 400 && error.status < 500) && failureCount < 3;

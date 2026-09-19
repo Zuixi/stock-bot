@@ -57,15 +57,21 @@ export function NewStockBoard({ data, degraded = false }: Props) {
   const kpi = useMemo(() => {
     const pricedCount = items.filter((i) => i.pct_chg != null).length;
     const judged = items.filter((i) => i.never_broken != null);
+    const aboveJudged = items.filter((i) => i.above_first_open != null);
     const sum = items.reduce((acc, i) => acc + (i.pct_chg ?? 0), 0);
     return {
       // 同一份 items 聚合，与表格行数同源
       limitUp: items.filter((i) => i.is_lu).length,
       /** 全部成员都不可判（限价缺失）→ `null`（渲染 `--`）；不可判 ≠ 0 家未开板。 */
       unbroken: judged.length === 0 ? null : items.filter((i) => i.never_broken === true).length,
+      /** 可判家数（判据非 null 的行数）：部分可判时与瓦片数值一同上屏，缺失 ≠ 0。 */
+      unbrokenJudged: judged.length,
+      /** 同理：首日开盘价缺失的行不可判，不得计入「不高于开盘」也不得伪造成 0 家。 */
+      aboveFirstOpen:
+        aboveJudged.length === 0 ? null : items.filter((i) => i.above_first_open === true).length,
+      aboveFirstOpenJudged: aboveJudged.length,
       avgPct: pricedCount === 0 ? null : sum / pricedCount,
       pricedCount,
-      aboveFirstOpen: items.filter((i) => i.above_first_open === true).length,
     };
   }, [items]);
 
@@ -178,7 +184,13 @@ export function NewStockBoard({ data, degraded = false }: Props) {
           </KpiTile>
         </Col>
         <Col xs={12} md={6}>
-          <KpiTile title="未开板" note="限价缺失不可判 → --">
+          {/* 部分可判（有行限价缺失）时必须带出可判家数：否则瓦片数值会把「不可判」静默算作「未开板」 */}
+          <KpiTile
+            title="未开板"
+            note={`限价缺失不可判 → --${
+              kpi.unbrokenJudged < items.length ? ` · n=${kpi.unbrokenJudged} 可判家数` : ""
+            }`}
+          >
             {kpi.unbroken == null ? (
               <span>--</span>
             ) : (
@@ -195,11 +207,21 @@ export function NewStockBoard({ data, degraded = false }: Props) {
           </KpiTile>
         </Col>
         <Col xs={12} md={6}>
-          <KpiTile title="现价高于首日开盘" note="替代破发口径">
-            <span>
-              {kpi.aboveFirstOpen}
-              <span style={{ fontSize: 14, marginLeft: 4 }}>家</span>
-            </span>
+          {/* 同未开板：首日开盘价也缺失过，部分可判时带出可判家数 */}
+          <KpiTile
+            title="现价高于首日开盘"
+            note={`替代破发口径${
+              kpi.aboveFirstOpenJudged < items.length ? ` · n=${kpi.aboveFirstOpenJudged} 可判家数` : ""
+            }`}
+          >
+            {kpi.aboveFirstOpen == null ? (
+              <span>--</span>
+            ) : (
+              <span>
+                {kpi.aboveFirstOpen}
+                <span style={{ fontSize: 14, marginLeft: 4 }}>家</span>
+              </span>
+            )}
           </KpiTile>
         </Col>
       </Row>
