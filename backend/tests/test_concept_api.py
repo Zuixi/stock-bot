@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 import httpx
@@ -26,6 +26,7 @@ from app.core.database import async_session_factory, engine
 from app.core.redis import CacheClient, close_redis_pool, get_redis_pool
 from app.main import app
 from app.repositories import concept_repo, limit_up_repo, market_data_repo
+from app.schemas.stock import StockEnrichedOut
 from app.services import concept_service, limit_up_service
 
 # 前端卡片读取的完整键集（frontend/src/shared/api/market.ts HotBoardItem）
@@ -233,7 +234,9 @@ async def _clear_concept_cache_and_dispose(
     """
     is_e2e = request.node.get_closest_marker("e2e") is not None
     if is_e2e:
-        await CacheClient(await get_redis_pool()).delete_pattern("market:concept:list:*")
+        client = CacheClient(await get_redis_pool())
+        await client.delete_pattern("market:concept:list:*")
+        await client.delete_pattern("market:concept:by-symbol:*")
     try:
         yield
     finally:
@@ -642,6 +645,110 @@ async def test_board_detail_propagates_price_limits_missing(
     assert ok is not None and ok["degraded_reason"] is None
 
 
+def _enriched(symbol: str, change: float | None) -> StockEnrichedOut:
+    return StockEnrichedOut(
+        id=int(symbol),
+        exchange="SSE",
+        symbol=symbol,
+        name=f"name-{symbol}",
+        category="A股",
+        asof=datetime(2026, 9, 18),
+        change_percent=change,
+    )
+
+
+async def test_board_stocks_reuses_enriched_shape_and_orders_by_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """形状 = `StockEnrichedOut`（前端才能零改映射复用 `StockTable`）；排序确定。"""
+    captured: list[list[str]] = []
+
+    async def _fake_enriched(db: Any, symbols: list[str]) -> list[StockEnrichedOut]:
+        captured.append(list(symbols))
+        return [
+            _enriched("600000", None),
+            _enriched("000001", 5.0),
+            _enriched("000002", 5.0),
+            _enriched("000003", 9.9),
+        ]
+
+    monkeypatch.setattr(
+        concept_repo, "list_member_symbols", lambda db, code: _const([("600000", "X")])
+    )
+    monkeypatch.setattr(
+        concept_service.market_service, "get_stocks_enriched_by_symbols", _fake_enriched
+    )
+
+    rows = await concept_service.get_board_stocks(None, "BK0501")
+
+    assert captured == [["600000"]], "必须只查该板成分股"
+    assert {"symbol", "name", "exchange", "category", "asof"} <= set(rows[0])
+    assert [r["symbol"] for r in rows] == ["000003", "000001", "000002", "600000"]
+    assert rows[-1]["change_percent"] is None, "缺行情排最后（缺失 ≠ 0）"
+
+
+class _RecordingCache:
+    def __init__(self, preloaded: dict[str, Any] | None = None) -> None:
+        self.preloaded = preloaded or {}
+        self.written: list[tuple[str, int | None]] = []
+
+    async def get(self, key: str) -> Any:
+        return self.preloaded.get(key)
+
+    async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
+        self.written.append((key, ttl))
+
+
+async def test_concepts_by_symbol_orders_and_caches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`pct_change DESC NULLS LAST, board_code ASC`；非空结果进 Redis 300s，空结果不缓存。"""
+    monkeypatch.setattr(
+        concept_repo,
+        "list_symbol_board_codes",
+        lambda db, symbol: _const(["BK0002", "BK0001", "BK0003"]),
+    )
+    monkeypatch.setattr(
+        concept_repo,
+        "aggregate_boards",
+        lambda db, as_of, limit, offset: _const(
+            [
+                {"board_code": "BK0001", "board_name": "一", "avg_pct": 1.0},
+                {"board_code": "BK0002", "board_name": "二", "avg_pct": None},
+                {"board_code": "BK0003", "board_name": "三", "avg_pct": 3.0},
+                {"board_code": "BK9999", "board_name": "非本股", "avg_pct": 99.0},
+            ]
+        ),
+    )
+    monkeypatch.setattr(limit_up_repo, "latest_quote_date", lambda db: _const(date(2026, 9, 18)))
+    monkeypatch.setattr(
+        concept_repo, "latest_membership_date", lambda db: _const(date(2026, 9, 20))
+    )
+
+    cache = _RecordingCache()
+    body = await concept_service.get_concepts_by_symbol(None, "601091", cache)
+
+    assert [i["board_code"] for i in body["items"]] == ["BK0003", "BK0001", "BK0002"]
+    assert body["items"][-1]["pct_change"] is None
+    assert body["as_of"] == "2026-09-18" and body["membership_as_of"] == "2026-09-20"
+    assert cache.written == [("market:concept:by-symbol:601091", 300)]
+
+    # 缓存命中 → 直接返回，不再触库
+    def _no_codes(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("缓存命中不得再查库")
+
+    monkeypatch.setattr(concept_repo, "list_symbol_board_codes", _no_codes)
+    hit = await concept_service.get_concepts_by_symbol(
+        None, "601091", _RecordingCache({"market:concept:by-symbol:601091": body})
+    )
+    assert hit == body
+
+    # 未知 symbol → 空 items（不是 404），且不写缓存
+    monkeypatch.setattr(concept_repo, "list_symbol_board_codes", lambda db, symbol: _const([]))
+    empty_cache = _RecordingCache()
+    unknown = await concept_service.get_concepts_by_symbol(None, "999999999", empty_cache)
+    assert unknown["items"] == []
+    assert empty_cache.written == []
+
+
 # ---------------------------------------------------------------------------
 # `-m e2e`：T8 详情 / T9 成分与反查（真库 + FastAPI app，只读）
 # ---------------------------------------------------------------------------
@@ -658,6 +765,27 @@ DETAIL_KEYS = {
     "stock_count",
 }
 KPI_KEYS = {"zt_count", "max_streak", "leader_symbol", "leader_name"}
+BY_SYMBOL_KEYS = {"as_of", "membership_as_of", "items"}
+# 前端 `mapBackendStockEnriched` 会读取的核心键
+# （形状必须与既有 /sw-industry/.../stocks/enriched 逐键一致）
+ENRICHED_KEYS = {
+    "id",
+    "symbol",
+    "name",
+    "exchange",
+    "category",
+    "asof",
+    "latest_price",
+    "prev_close",
+    "change",
+    "change_percent",
+    "turnover_rate",
+    "circ_mv",
+    "amount",
+    "latest_quote_date",
+    "list_date",
+    "sw_chain",
+}
 
 
 async def _member_symbols(board_code: str) -> set[str]:
@@ -669,6 +797,17 @@ async def _member_symbols(board_code: str) -> set[str]:
             )
         ).scalars()
         return {str(s) for s in rows}
+
+
+async def _symbol_board_codes(symbol: str) -> set[str]:
+    async with async_session_factory() as db:
+        rows = (
+            await db.execute(
+                text("SELECT board_code FROM concept_members WHERE symbol = :symbol"),
+                {"symbol": symbol},
+            )
+        ).scalars()
+        return {str(c) for c in rows}
 
 
 @pytest.mark.e2e
@@ -738,3 +877,51 @@ async def test_concept_board_detail_unknown_code_404() -> None:
         resp = await client.get("/api/v1/concepts/BKNOSUCH")
     assert resp.status_code == 404, "未知板块码必须 404，不能与空成分板混淆"
     assert "BKNOSUCH" in resp.json()["detail"]
+
+
+@pytest.mark.e2e
+async def test_concept_board_stocks_returns_ordered_enriched_array() -> None:
+    """纯数组（无 envelope）+ `StockEnrichedOut` 形状 + `change_percent DESC NULLS LAST` 顺序。"""
+    members = await _member_symbols("BK0501")
+    async with _client() as client:
+        resp = await client.get("/api/v1/concepts/BK0501/stocks")
+
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert isinstance(rows, list) and rows, "BK0501 成分股非空"
+    for row in rows:
+        assert ENRICHED_KEYS <= set(row), "形状必须能直接交给 mapBackendStockEnriched"
+        assert row["symbol"] in members
+
+    keys = [(r["change_percent"] is None, -(r["change_percent"] or 0.0), r["symbol"]) for r in rows]
+    assert keys == sorted(keys), "change_percent DESC NULLS LAST, symbol ASC"
+
+    async with _client() as client:
+        unknown = await client.get("/api/v1/concepts/BKNOSUCH/stocks")
+    assert unknown.status_code == 200 and unknown.json() == []
+
+
+@pytest.mark.e2e
+async def test_concepts_by_symbol_returns_boards_and_empty_for_unknown() -> None:
+    """真实成分（601091 沈鼓）→ 至少一个板块；未知 symbol → 空 items（不是 404）。"""
+    codes = await _symbol_board_codes("601091")
+    assert codes, "dev DB 里 601091 应属于若干概念板块"
+
+    async with _client() as client:
+        resp = await client.get("/api/v1/concepts/by-symbol/601091")
+        unknown = await client.get("/api/v1/concepts/by-symbol/999999999")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert set(body) == BY_SYMBOL_KEYS
+    assert body["items"], "至少一个板块"
+    for item in body["items"]:
+        assert set(item) == {"board_code", "board_name", "pct_change"}
+        assert item["board_code"] in codes
+    keys = [
+        (i["pct_change"] is None, -(i["pct_change"] or 0.0), i["board_code"]) for i in body["items"]
+    ]
+    assert keys == sorted(keys), "pct_change DESC NULLS LAST, board_code ASC"
+
+    assert unknown.status_code == 200, "未知 symbol 不是 404"
+    assert unknown.json()["items"] == []

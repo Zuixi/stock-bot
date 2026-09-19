@@ -90,3 +90,19 @@ class ConceptDetailOut(BaseModel):
     echelons: list[EchelonOut] = Field(default_factory=list)  # 板内过滤，形状与梯队卡一致
     unresolved_count: int
     stock_count: int
+
+
+class ConceptBySymbolItemOut(BaseModel):
+    """个股所属板块的一行：`pct_change` = 该板本地聚合 `avg_pct`（口径见 §2.3）。"""
+
+    board_code: str
+    board_name: str
+    pct_change: float | None = None
+
+
+class ConceptBySymbolOut(BaseModel):
+    """`GET /api/v1/concepts/by-symbol/{symbol}`（§2.2）：未知 symbol 返回空 items，不是 404。"""
+
+    as_of: date | None
+    membership_as_of: date | None
+    items: list[ConceptBySymbolItemOut] = Field(default_factory=list)

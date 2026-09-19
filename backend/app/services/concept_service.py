@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from app.repositories import concept_repo, limit_up_repo, market_data_repo
-from app.services import limit_up_service
+from app.services import limit_up_service, market_service
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -365,11 +365,13 @@ async def hot_board_rows(
     return rows
 
 
-# ── 读路径：GET /concepts/{board_code}（T8，plans §2.2） ─────────────────────────────
-# 全库聚合一次的上限：dev 库 504 板，1k 留 2x 头寸。详情在 Python 侧按 board_code 过滤这份
-# 结果，绝不另写一条"单板聚合 SQL"（两份 SQL 会各自漂移，且与 avg_pct 的 NULLS LAST 顺序契约
-# 脱钩）。排序仍由 `aggregate_boards` 的 `avg_pct DESC NULLS LAST, board_code ASC` 保证。
+# ── 读路径：GET /concepts/{board_code} + /stocks + /by-symbol（T8/T9，plans §2.2） ──────
+# 全库聚合一次的上限：dev 库 504 板，1k 留 2x 头寸。详情/反向查都在 Python 侧按 board_code
+# 过滤这份结果，绝不另写一条"单板聚合 SQL"（两份 SQL 会各自漂移，且与 avg_pct 的 NULLS LAST
+# 顺序契约脱钩）。排序仍由 `aggregate_boards` 的 `avg_pct DESC NULLS LAST, board_code ASC` 保证。
 CONCEPT_AGG_LIMIT = 1000
+CONCEPT_BY_SYMBOL_CACHE_KEY = "market:concept:by-symbol:{symbol}"
+CONCEPT_BY_SYMBOL_TTL = 300
 
 
 def _stock_streak(stock: dict[str, Any]) -> int:
@@ -492,3 +494,73 @@ async def get_board_detail(
         "unresolved_count": unresolved_count,
         "stock_count": int(row["member_count"]) - unresolved_count,
     }
+
+
+def _stock_change_sort_key(row: dict[str, Any]) -> tuple[bool, float, str]:
+    """`change_percent DESC NULLS LAST, symbol ASC`——缺行情的成分排最后，同值按码升序。"""
+    change = row.get("change_percent")
+    return (change is None, -(float(change) if change is not None else 0.0), str(row["symbol"]))
+
+
+async def get_board_stocks(db: AsyncSession, board_code: str) -> list[dict[str, Any]]:
+    """板块成分股，**纯数组**（无 envelope）：前端复用 `mapBackendStockEnriched` 零改映射。
+
+    形状 = `StockEnrichedOut`（`market_service.get_stocks_enriched_by_symbols` 的产物）；
+    排序在 Python 侧做——成分最多几千只，不值得再写一条 SQL。未知板块码返回 `[]`（端点也是）。
+    """
+    members = await concept_repo.list_member_symbols(db, board_code)
+    rows = await market_service.get_stocks_enriched_by_symbols(db, [s for s, _ in members])
+    items = [row.model_dump() for row in rows]
+    items.sort(key=_stock_change_sort_key)
+    return items
+
+
+async def get_concepts_by_symbol(
+    db: AsyncSession, symbol: str, cache: CacheClient | None
+) -> dict[str, Any]:
+    """个股所属概念（触点 C）：items 为 `{board_code, board_name, pct_change}` 列表。
+
+    未知 symbol → `items: []`（前端据此整块不渲染），**不是 404**。板块涨跌幅复用同一次
+    `aggregate_boards` 全库聚合再按码过滤，不另写 SQL。Redis 300s：该查询在每次个股详情页
+    都会触发，且空结果不缓存（"数据不完整时宁可不缓存"，与 T6 列表同一条原则）。
+    """
+    key = CONCEPT_BY_SYMBOL_CACHE_KEY.format(symbol=symbol)
+    if cache is not None:
+        cached: dict[str, Any] | None = await cache.get(key)
+        if cached:
+            return cached
+
+    as_of = await limit_up_repo.latest_quote_date(db)
+    membership_as_of = await concept_repo.latest_membership_date(db)
+    items: list[dict[str, Any]] = []
+    codes = await concept_repo.list_symbol_board_codes(db, symbol)
+    if codes and as_of is not None:
+        target = set(codes)
+        rows = await concept_repo.aggregate_boards(db, as_of, CONCEPT_AGG_LIMIT, 0)
+        items = [
+            {
+                "board_code": r["board_code"],
+                "board_name": r["board_name"],
+                "pct_change": r["avg_pct"],
+            }
+            for r in rows
+            if r["board_code"] in target
+        ]
+        items.sort(
+            key=lambda i: (
+                i["pct_change"] is None,
+                -(float(i["pct_change"]) if i["pct_change"] is not None else 0.0),
+                i["board_code"],
+            )
+        )
+
+    body: dict[str, Any] = {
+        "as_of": as_of.isoformat() if as_of is not None else None,
+        "membership_as_of": (
+            membership_as_of.isoformat() if membership_as_of is not None else None
+        ),
+        "items": items,
+    }
+    if cache is not None and items:
+        await cache.set(key, body, ttl=CONCEPT_BY_SYMBOL_TTL)
+    return body
