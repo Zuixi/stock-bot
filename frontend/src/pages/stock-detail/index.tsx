@@ -3,6 +3,7 @@ import { Typography, Result, Button, Divider, Row, Col, Spin, Breadcrumb, Tabs }
 import type { BreadcrumbProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { StockHeader, FundamentalCards, CustomSwTags, UserTags, RelatedEvents, FinancialTab, ValuationTab } from "@/features/stock-detail/components";
+import { ConceptTags } from "@/features/concept";
 import { KlineChart } from "@/shared/ui/kline";
 import { fetchKlineBySymbol } from "@/shared/api/quotes";
 import { fetchStockEnrichedBySymbol } from "@/shared/api/stocks";
@@ -102,6 +103,9 @@ export default function StockDetailPage() {
       </div>
       <div style={{ marginTop: 8 }}>
         <UserTags exchange={stock.exchange} symbol={stock.symbol} />
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <ConceptTags symbol={stock.symbol} />
       </div>
 
       <Divider style={{ margin: "16px 0" }} />
