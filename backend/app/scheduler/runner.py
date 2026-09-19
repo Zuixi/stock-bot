@@ -15,6 +15,7 @@ from apscheduler.triggers.date import DateTrigger
 from app.scheduler.jobs import (
     announcements_poll_job,
     block_trade_daily_job,
+    concept_members_refresh_job,
     daily_basic_backfill_job,
     daily_quotes_backfill_job,
     dragon_tiger_daily_job,
@@ -261,6 +262,18 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(day_of_week="mon-fri", hour=18, minute=0, timezone="Asia/Shanghai"),
         id="dragon_tiger_daily",
         name="Dragon tiger daily",
+        replace_existing=True,
+    )
+
+    # Concept board members: Mon-Fri 18:20 post close.
+    # 避开 17:45 全量对账与 18:00 龙虎榜；东财成分表收盘后稳定；全量 500+ 板约 5 分钟
+    # 节流请求。不设 per-job misfire_grace_time → 继承 job_defaults(None)，停摆后补跑
+    # （ingest 幂等，重跑产生 0 变更行）。
+    scheduler.add_job(
+        concept_members_refresh_job,
+        CronTrigger(day_of_week="mon-fri", hour=18, minute=20, timezone="Asia/Shanghai"),
+        id="concept_members_refresh",
+        name="Concept members refresh",
         replace_existing=True,
     )
 

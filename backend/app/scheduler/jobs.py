@@ -397,6 +397,49 @@ async def announcements_poll_job() -> None:
 
 
 # ------------------------------------------------------------------
+# Concept board members (daily full snapshot + diff)
+# ------------------------------------------------------------------
+
+
+async def concept_members_refresh_job() -> dict[str, int] | None:
+    """概念板块成分刷新（交易日 18:20 盘后，幂等全量 upsert + 差分）。
+
+    时间选择：避开 17:45 全量对账与 18:00 龙虎榜；东财成分表收盘后稳定；全量 500+
+    板块约 5 分钟节流请求。**不设 per-job `misfire_grace_time`** → 继承全局
+    `job_defaults`（None），宿主挂起/栈停摆后迟到也补跑（ingest 幂等，重跑只产生
+    0 变更行）。不做缓存失效：概念读路径按 TTL 缓存，"写后不主动失效"是当前约定。
+
+    板块列表抓取失败时 `ingest_concept_members` 向上抛（见其 docstring）——此处
+    `logger.exception` 记录后吞掉，与其它盘后 job 一致（调度器不因单任务失败停摆）。
+    返回结果 dict（失败时 None）；日志按 key 取名，绝不位置解包（T4 契约 8 键）。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import concept_service  # noqa: PLC0415
+
+    logger.info("Concept members refresh job triggered")
+    try:
+        async with async_session_factory() as db:
+            result = await concept_service.ingest_concept_members(db)
+            await db.commit()
+        logger.info(
+            "Concept members refresh done: boards=%s members_upserted=%s added=%s removed=%s "
+            "failed_boards=%s partial_boards=%s unresolved=%s dropped_members=%s",
+            result.get("boards"),
+            result.get("members_upserted"),
+            result.get("added"),
+            result.get("removed"),
+            result.get("failed_boards"),
+            result.get("partial_boards"),
+            result.get("unresolved"),
+            result.get("dropped_members"),
+        )
+        return result
+    except Exception:
+        logger.exception("Concept members refresh failed")
+        return None
+
+
+# ------------------------------------------------------------------
 # Stock universe refresh (weekly —— 名录元数据变化慢，但它是日线采集的 ts_code 映射
 # 源：stocks 表冻结一天，当日全部新上市股票的行就被静默丢弃一天)
 # ------------------------------------------------------------------

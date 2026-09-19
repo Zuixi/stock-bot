@@ -86,3 +86,58 @@ async def test_reconcile_triggers_registered_never_drop() -> None:
         assert _job_misfire(scheduler, "reconcile_weekend_catchup") is None
     finally:
         scheduler.shutdown(wait=False)
+
+
+async def test_concept_refresh_job_registered_after_close() -> None:
+    """概念成分刷新：交易日 18:20（避开 17:45 对账、18:00 龙虎榜），吃全局 job_defaults。
+
+    断言 trigger 的字符串形式而非 APScheduler 内部表达式对象（见 test_limit_up_repo 教训）。
+    """
+    scheduler = create_scheduler()
+    scheduler.start()
+    try:
+        job = scheduler.get_job("concept_members_refresh")
+        assert job is not None, "concept_members_refresh not registered"
+        assert isinstance(job.trigger, CronTrigger)
+        trigger = str(job.trigger)
+        assert "day_of_week='mon-fri'" in trigger, trigger
+        assert "hour='18'" in trigger, trigger
+        assert "minute='20'" in trigger, trigger
+        # 不设 per-job 宽限 → 继承 job_defaults 的 None（停摆后迟到也补跑）
+        assert job.misfire_grace_time is None
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+async def test_concept_refresh_job_calls_service_and_commits(monkeypatch) -> None:
+    """job 薄封装：开会话 → 调 ingest_concept_members → commit → 原样返回结果 dict。"""
+    from contextlib import asynccontextmanager
+
+    committed: list[bool] = []
+    seen: list[object] = []
+
+    class _Session:
+        async def commit(self) -> None:
+            committed.append(True)
+
+    session = _Session()
+
+    @asynccontextmanager
+    async def fake_session_factory():
+        yield session
+
+    async def fake_ingest(db):
+        seen.append(db)
+        return {"boards": 1, "members_upserted": 2, "added": 2, "removed": 0}
+
+    from app.services import concept_service
+
+    monkeypatch.setattr(concept_service, "ingest_concept_members", fake_ingest)
+    monkeypatch.setattr("app.core.database.async_session_factory", fake_session_factory)
+
+    from app.scheduler import jobs
+
+    result = await jobs.concept_members_refresh_job()
+    assert result == {"boards": 1, "members_upserted": 2, "added": 2, "removed": 0}
+    assert seen == [session]
+    assert committed == [True]
