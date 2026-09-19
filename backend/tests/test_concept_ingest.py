@@ -7,6 +7,7 @@ tests/test_concept_repo.py 已单独钉过），故本文件留在默认 `uv run
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
@@ -61,6 +62,10 @@ class _FakeRepo:
     """记录写入的仓库替身：沿用真 repo 的差分语义，便于断言"某板一行未写"。
 
     `events` 记录调用顺序（boards → members → deactivate），`changes` 只由 add/remove 产生。
+
+    **注意**：`upsert_members` 的差分/守卫语义是 `concept_repo.upsert_members`（T3）的镜像，
+    T3 才是权威实现——两者可能漂移。这里刻意不覆盖 T3 的 DB 行为（见 tests/test_concept_repo.py），
+    只用它验证 T4 的编排：某板是否进入写入路径、调用顺序、聚合计数。
     """
 
     def __init__(self, stock_ids: dict[str, int] | None = None, fail_write_on: str | None = None):
@@ -256,11 +261,14 @@ async def test_ingest_counts_unresolved_members_and_maps_once(
     )
     out = await concept_service.ingest_concept_members(db=None)  # type: ignore[arg-type]
     assert out["unresolved"] == 1 and out["added"] == 2
+    # 真实契约：全 run 只查一次映射，入参是**所有待入库板块**成员的并集。
+    # 服务层不再把解析结果塞回行内（upsert_members 自行按 symbol 再解析，T3 权威），
+    # 故这里只钉"查了几次、查了哪些 symbol"，不钉行内字段（_FakeRepo 会保留该字段，
+    # 但真 repo 不会读它——钉它会得到假信心）。
     assert len(repo.mapped_symbols) == 1, "symbol → stock_id 必须全 run 只查一次"
-    assert sorted(repo.mapped_symbols[0]) == ["600000", "999999"]
-    by_board = {code: rows for code, rows in repo.member_calls}
-    assert by_board["BK0001"][0]["stock_id"] == 7
-    assert by_board["BK0002"][0]["stock_id"] is None, "未收录不得臆造 stock_id"
+    written_symbols = sorted(r["symbol"] for _, rows in repo.member_calls for r in rows)
+    assert written_symbols == ["600000", "999999"], "两个成员都进了写入路径"
+    assert sorted(repo.mapped_symbols[0]) == written_symbols, "映射入参 = 全 run 待入库成员并集"
 
 
 async def test_ingest_partial_board_members_do_not_inflate_unresolved(
@@ -313,3 +321,66 @@ async def test_ingest_upserts_boards_first_and_deactivates_last(
         "停用集合取列表全集（失败板仍在册），不得只传成功板"
     )
     assert out["members_upserted"] == 2, "members_upserted = added + updated"
+
+
+async def test_ingest_dirty_row_makes_board_partial_and_skips_diff(
+    monkeypatch: pytest.MonkeyPatch, make_fake_repo: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """I1：任一脏行（缺 name/symbol）即整板 partial 跳过——绝不写出幻影 remove。
+
+    "62 valid + 1 脏 == member_total=63"的凑数场景：对账必须用 `_valid_members` 清洗后的行数，
+    否则脏行既虚高门禁计数、又让 `seen` 少一个仍在该板的成员 → T3 写 append-only 的幻影 remove。
+    这里预置 BK0001 已有 `600099`，若该板进入差分它必然被判"退出板块"——钉死它一行未写。
+    """
+    repo = make_fake_repo()
+    repo.members["BK0001"] = {"600000": "浦发银行", "600099": "旧名"}
+    valid = [{"symbol": "600000", "name": "浦发银行"}, {"symbol": "600001", "name": "邯郸钢铁"}]
+    dirty = {"symbol": "600099", "name": ""}  # 源数据缺名 → NOT NULL 列无法入库
+    monkeypatch.setattr(
+        concept_service,
+        "_get_eastmoney",
+        lambda: _FakeEm(
+            boards=[
+                {"board_code": "BK0001", "board_name": "A", "member_total": 3},
+                {"board_code": "BK0002", "board_name": "B", "member_total": 1},
+            ],
+            members={
+                "BK0001": valid + [dirty],
+                "BK0002": [{"symbol": "600002", "name": "东北证券"}],
+            },
+        ),
+    )
+    with caplog.at_level(logging.WARNING):
+        out = await concept_service.ingest_concept_members(db=None)  # type: ignore[arg-type]
+    assert out["partial_boards"] == 1 and out["dropped_members"] == 1
+    assert out["failed_boards"] == 0 and out["removed"] == 0
+    assert out["added"] == 1, "只有干净的 BK0002 入库"
+    assert [code for code, _ in repo.member_calls] == ["BK0002"], "脏行板不得进入写入路径"
+    assert [c["board_code"] for c in repo.changes] == ["BK0002"]
+    assert not any(c["change_type"] == "remove" for c in repo.changes), "不得有幻影 remove"
+    assert repo.members["BK0001"] == {"600000": "浦发银行", "600099": "旧名"}, "既有成分未被动过"
+    assert "BK0001 has 1 dirty member row" in caplog.text
+
+
+async def test_ingest_empty_board_list_warns_and_is_noop(
+    monkeypatch: pytest.MonkeyPatch, make_fake_repo: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """M2：东财 rc=0 + 空 data 时列表为 []——不抛、不写成分，但必须 WARNING 让静默落空可见。"""
+    repo = make_fake_repo()
+    monkeypatch.setattr(concept_service, "_get_eastmoney", lambda: _FakeEm(boards=[]))
+    with caplog.at_level(logging.WARNING):
+        out = await concept_service.ingest_concept_members(db=None)  # type: ignore[arg-type]
+    assert out == {
+        "boards": 0,
+        "members_upserted": 0,
+        "added": 0,
+        "removed": 0,
+        "failed_boards": 0,
+        "partial_boards": 0,
+        "unresolved": 0,
+        "dropped_members": 0,
+    }
+    assert repo.member_calls == [] and repo.changes == []
+    # 空列表仍走到 deactivate，但真 repo 对空 set 是 no-op（不会"全部下架"）
+    assert repo.deactivate_calls == [set()]
+    assert "board list empty" in caplog.text
