@@ -18,9 +18,14 @@ interface Props {
   /** Controlled sort — parent owns the sort state, StockTable only shows the indicator. */
   sortBy?: keyof StockRecord;
   sortOrder?: "ascend" | "descend";
+  /**
+   * 追加列（渲染在既有列之后）。仅用于「成分表按板块语境补一列」这类调用点
+   * （如概念详情页的连板列，字段不在 `StockRecord` 上）；既有调用点不传即零变化。
+   */
+  extraColumns?: ColumnsType<StockRecord>;
 }
 
-export function StockTable({ data, total, current, pageSize, loading, onChange, sortBy, sortOrder }: Props) {
+export function StockTable({ data, total, current, pageSize, loading, onChange, sortBy, sortOrder, extraColumns = [] }: Props) {
   const navigate = useNavigate();
   const { items, toggle } = useWatchlist();
   const [paginationState, setPaginationState] = useState<{ current: number; pageSize: number }>({
@@ -165,6 +170,7 @@ export function StockTable({ data, total, current, pageSize, loading, onChange, 
         );
       },
     },
+    ...extraColumns,
   ];
 
   return (
