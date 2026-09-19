@@ -395,3 +395,51 @@ async def test_concept_list_missing_flow_rows_are_none_not_zero(
         assert item["lead_stock_name"] is None
         assert item["lead_stock_code"] is None
         assert item["lead_stock_pct"] is None
+
+
+# 卡片契约的 8 键（industry 分支现产物）；委托测试只钉"形状来自 concept_service"这件事
+_CONCEPT_ROWS: list[dict[str, Any]] = [
+    {
+        "id": "concept-BK0714",
+        "name": "CPO概念",
+        "code": "BK0714",
+        "changePercent": 3.14,
+        "upCount": 7,
+        "flatCount": 1,
+        "downCount": 2,
+        "leaders": [{"symbol": "300308", "name": "中际旭创", "changePercent": 9.99}],
+    }
+]
+
+
+async def test_get_hot_boards_concept_delegates_to_concept_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`category=concept` 必须**委托** concept_service.hot_board_rows（此前硬编码 return []）。
+
+    概念是"当前成分 × 本地行情"的聚合，和行业/地域分支的 `stocks.{csrc_desc,province}`
+    单值分组 SQL 没有共同形状；这条测试钉住"概念分支不再自己造行"：
+    返回对象是委托函数产物的**同一对象**（不是重新聚合/拼装），且恰好调一次。
+
+    同时钉住前端卡片读取的 8 键——键名漂移要在默认门禁就失败，而不是等前端渲染 undefined。
+    """
+    from app.services import market_service
+
+    calls: list[tuple[Any, int]] = []
+
+    async def _fake_hot_board_rows(cache: Any, limit: int = 10) -> list[dict[str, Any]]:
+        calls.append((cache, limit))
+        return _CONCEPT_ROWS
+
+    async def _explode() -> Any:
+        raise AssertionError("concept 分支不得另开 DB 会话自造行（必须委托 concept_service）")
+
+    monkeypatch.setattr(concept_service, "hot_board_rows", _fake_hot_board_rows)
+    monkeypatch.setattr("app.core.database.async_session_factory", _explode)
+
+    rows = await market_service.get_hot_boards("concept", cache=None)
+
+    assert rows is _CONCEPT_ROWS, "必须是委托产物的同一对象（委托，而非重新推导一份等价数据）"
+    assert len(calls) == 1, "恰好委托一次"
+    assert calls[0] == (None, 10), "cache 原样透传；limit 与行业分支 LIMIT 10 对齐"
+    assert set(rows[0]) == HOT_BOARD_KEYS, "键集必须与前端 HotBoardItem 完全一致"
