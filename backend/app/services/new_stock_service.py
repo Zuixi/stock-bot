@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from app.repositories import concept_repo
@@ -38,40 +39,51 @@ NEW_STOCK_TTL = 300
 
 
 def _streak_map(echelons: list[dict[str, Any]]) -> dict[str, int]:
-    """梯队 echelons 拍平成 `{symbol: streak}`；`streak` 缺失的行不进表（= 后续判为缺失）。
+    """梯队 echelons 拍平成 `{symbol: streak}`；非涨停行不进表（后续一律判为缺失）。
 
-    `streak=0` 是**合法值**（今天没涨停但仍在梯队投影里的票），必须与"缺失"区分：前者进表
-    后 `is_lu=False`、`streak=0`，后者 `streak=None`。
+    快照 echelons 只投影**涨停行**（`calc.ladder` → `_limit_up_rows`），故 `streak` 恒 ≥ 1：
+    "0 也是合法值"是生产不可达的容忍分支，已删（fix round 1 / M7，与 T8 `_stock_streak` 删
+    死分支同源）。不在表里 ⇒ `streak=None`、`is_lu=False`（缺失 ≠ 0）。
     """
     streaks: dict[str, int] = {}
     for echelon in echelons:
         for stock in echelon.get("stocks", []):
             streak = stock.get("streak")
-            if streak is None:
+            if not streak:
                 continue
             streaks[str(stock["symbol"])] = int(streak)
     return streaks
 
 
-def _build_items(rows: list[dict[str, Any]], streaks: dict[str, int]) -> list[dict[str, Any]]:
-    """enriched 行（`StockEnrichedOut.model_dump()`）+ 梯队表 → 次新股 item 基础字段。
+def _build_items(
+    rows: list[dict[str, Any]],
+    streaks: dict[str, int],
+    daily_pct_chg: dict[int, float | None],
+) -> list[dict[str, Any]]:
+    """enriched 行（`StockEnrichedOut.model_dump()`）+ 梯队表 + as_of 涨跌幅 → item 基础字段。
 
-    `pct_chg`/`close` 直接取 `change_percent`/`latest_price`：行情缺失时它们就是 `None`，
-    此处**不做 `or 0` 兜底**（缺失 ≠ 0）。`never_broken`/`first_open`/`above_first_open`/
-    `listed_trade_days` 由 `build_kpis` 从 `stats` 补齐——它们来自 `member_history_stats`，
-    与行情是两条数据源，放在同一个函数里合并会让"缺哪一边"不可见。
+    `pct_chg` 取 `daily_pct_chg[stock_id]`（= `daily_quotes.pct_chg WHERE trade_date = as_of`），
+    **不是** `change_percent`：后者是最新两行 close 的推导值（as_of 停牌的票会被拿陈旧行情分档、
+    除权日与官方值分叉）。`stock_id` 不在表里 ⇒ 当日无行情 ⇒ `None`（缺失 ≠ 0，不得 0 填充）。
+    `close` 仍取 enriched 的 `latest_price`：停牌票会呈现"`pct_chg=null` + 陈旧 close"，
+    这是诚实读数（前端据此渲染 `--`），而不是把陈旧涨跌幅伪装成当日值。
+
+    `never_broken`/`first_open`/`above_first_open`/`listed_trade_days` 由 `build_kpis` 从
+    `stats` 补齐——它们来自 `member_history_stats`，与行情是两条数据源，放在同一个函数里
+    合并会让"缺哪一边"不可见。
     """
     items: list[dict[str, Any]] = []
     for row in rows:
         symbol = str(row["symbol"])
         streak = streaks.get(symbol)
+        stock_id = row.get("id")
         items.append(
             {
                 "symbol": symbol,
                 "name": row.get("name"),
                 "exchange": row.get("exchange"),
                 "list_date": row.get("list_date"),
-                "pct_chg": row.get("change_percent"),
+                "pct_chg": (daily_pct_chg.get(int(stock_id)) if stock_id is not None else None),
                 "close": row.get("latest_price"),
                 "turnover_rate": row.get("turnover_rate"),
                 "circ_mv": row.get("circ_mv"),
@@ -155,6 +167,21 @@ def _degraded_reason(has_members: bool, snapshot_reason: Any) -> str | None:
     return None
 
 
+def _as_of_date(raw: Any) -> date | None:
+    """快照 `as_of` 归一成 `date`：**缓存命中时它来自 `CacheClient` 的 JSON**，是字符串。
+
+    `get_snapshot` 的命中路径直接返回 `json.loads` 的结果（`date` 被 `default=str` 序列化成
+    ISO 字符串），故消费方必须自己归一，绝不能假设 `snap["as_of"]` 一定是 `date`（否则新股票
+    端点会在快照缓存命中、自身缓存未命中时 `AttributeError`）。`as_of` 同时被用于
+    `daily_quotes` 的 `trade_date` 绑定，字符串直接下传会在 asyncpg 侧报类型错。
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, date):
+        return raw
+    return date.fromisoformat(str(raw))
+
+
 def _item_sort_key(item: dict[str, Any]) -> tuple[bool, float, str]:
     """`pct_chg DESC NULLS LAST, symbol ASC`——与 `/concepts/{code}/stocks` 同款确定性顺序。
 
@@ -173,8 +200,11 @@ async def get_new_stock_board(db: AsyncSession, cache: CacheClient | None) -> di
     为 NULL）的票**不在** items 里——它们是 `unresolved_count` 的暴露面，KPI 与表格同为"可统计
     成分"口径，故四档家数之和恒等于 `len(items)`。
 
-    缓存**只在 items 非空时写**（"数据不完整时宁可不缓存"）：降级/空响应若被缓存，上游数据
-    补齐后还要再等一个 TTL 才可见。
+    `pct_chg` 与 KPI 分档同源：`daily_quotes.pct_chg @ as_of`（见 `_build_items`），不由
+    enriched 行的推导涨跌幅代替。
+
+    缓存**只在 items 非空且未降级时写**（"数据不完整时宁可不缓存"）：降级/空响应若被缓存，
+    上游数据补齐后还要再等一个 TTL 才可见。
     """
     if cache is not None:
         cached: dict[str, Any] | None = await cache.get(NEW_STOCK_CACHE_KEY)
@@ -190,14 +220,22 @@ async def get_new_stock_board(db: AsyncSession, cache: CacheClient | None) -> di
         db, [symbol for symbol, _ in members]
     )
     snap = await limit_up_service.get_snapshot(cache)
+    as_of = _as_of_date(snap.get("as_of"))
+    # 涨跌幅一律取 as_of 当日的 `daily_quotes.pct_chg`（plans 全局约束），与 KPI 分档同一份值。
+    # `as_of` 缺失（快照 `no_quotes`）时不发查询：没有当日行情就没有任何票可定价，全部 unpriced。
+    daily_pct_chg = (
+        await concept_repo.daily_pct_chg_by_stock_ids(db, as_of, [row.id for row in enriched])
+        if as_of is not None
+        else {}
+    )
     items = _build_items(
         [row.model_dump() for row in enriched],
         _streak_map(snap.get("echelons") or []),
+        daily_pct_chg,
     )
     kpis = build_kpis(items, stats)
     items.sort(key=_item_sort_key)
 
-    as_of = snap.get("as_of")
     body: dict[str, Any] = {
         "as_of": as_of.isoformat() if as_of is not None else None,
         "membership_as_of": (
@@ -210,6 +248,9 @@ async def get_new_stock_board(db: AsyncSession, cache: CacheClient | None) -> di
         "kpis": kpis,
         "items": items,
     }
-    if cache is not None and items:
+    # 降级响应**从不缓存**（fix round 1 / I1）：`degraded_reason` 非空说明某一路数据不完整
+    # （如限价缺失使 is_lu 不可判、行情不完整使 unpriced 虚高），缓存 300s 会让上游补齐后
+    # 前端仍看到"两个涨停家数"式的自相矛盾读数。与 T6/T9 的裁决一致。
+    if cache is not None and items and not body["degraded_reason"]:
         await cache.set(NEW_STOCK_CACHE_KEY, body, ttl=NEW_STOCK_TTL)
     return body
