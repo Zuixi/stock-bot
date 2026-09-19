@@ -7,6 +7,11 @@
 `NULLS LAST`（SQLite 3.30+ 全部支持），故按 `test_limit_up_window_sql.py` 的先例，把这段 SQL
 **直接 import 进 SQLite 内存库**跑，钉在默认门禁里。
 
+可选板码过滤（`:all_boards` / expanding 的 `:board_codes`）也在这条 SQL 里：`by-symbol` 的
+收窄语义若退回 Python 侧过滤，同一个 symbol 的板块会在窗口/NULLS LAST 边界处静默消失，
+故这里同时钉"收窄真的发生"与"`board_codes=None` 仍返回全集"（`aggregate_params` 由仓库层提供，
+测试不自造绑定约定）。
+
 本文件只覆盖 `_AGG_SQL`；`_HISTORY_SQL` 用 `(array_agg(...))[1]` 取首日 open，SQLite 没有
 等价物（`group_concat` 需另写取首元素逻辑，测的就不是生产 SQL 了），其口径仍由
 `test_concept_repo.py` 的 `test_member_history_stats_keeps_unknown_never_broken_as_none`
@@ -98,13 +103,17 @@ def agg_engine() -> Iterator[Engine]:
     engine.dispose()
 
 
-def _run_agg(engine: Engine) -> list[dict[str, Any]]:
-    """跑生产 SQL 常量本体（不复制文本，见 `test_limit_up_window_sql.py` 的同一取舍）。"""
+def _run_agg(engine: Engine, board_codes: list[str] | None = None) -> list[dict[str, Any]]:
+    """跑生产语句本体（不复制文本，见 `test_limit_up_window_sql.py` 的同一取舍）。
+
+    绑定走仓库层的 `aggregate_params`（不是测试自造的字典）：expanding 列表 / `all_boards`
+    的约定只存在于一处，避免测试与生产在参数名或空列表语义上分叉。
+    """
     with engine.connect() as conn:
         rows = (
             conn.execute(
-                text(concept_repo._AGG_SQL),
-                {"as_of": AS_OF, "limit": 100, "offset": 0},
+                concept_repo._AGG_STMT,
+                concept_repo.aggregate_params(AS_OF, 100, 0, board_codes),
             )
             .mappings()
             .all()
@@ -147,3 +156,17 @@ def test_order_is_avg_desc_nulls_last_then_board_code_asc(agg_engine: Engine) ->
 def test_inactive_board_is_filtered(agg_engine: Engine) -> None:
     """`WHERE b.is_active`：停用板整体缺席（成分行保留也不得进聚合）。"""
     assert "BK0003" not in _by_code(_run_agg(agg_engine))
+
+
+def test_board_code_filter_narrows_but_never_bypasses_is_active(agg_engine: Engine) -> None:
+    """板码过滤进 SQL：命中码收窄，空列表匹配 0 行，且**不能**借此捞回停用板。"""
+    all_codes = set(_by_code(_run_agg(agg_engine)))
+    assert all_codes == {"BK0001", "BK0002", "BK0010", "BK0011", "BK0012"}, (
+        "board_codes=None 必须仍返回全部启用板块（停用板按 is_active 排除）"
+    )
+    narrowed = _by_code(_run_agg(agg_engine, board_codes=["BK0001", "BK0010"]))
+    assert set(narrowed) == {"BK0001", "BK0010"}, "只返回指定码的板块"
+    assert set(narrowed) <= all_codes
+    assert _run_agg(agg_engine, board_codes=[]) == [], "空码表 ≠ 不过滤（必须匹配 0 行）"
+    assert _run_agg(agg_engine, board_codes=["BK0003"]) == [], "停用板不得被码过滤复活"
+    assert _run_agg(agg_engine, board_codes=["BKNOSUCH"]) == []

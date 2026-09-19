@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, cast
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import Boolean, String, bindparam, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -301,7 +301,18 @@ async def upsert_members(
 # 没有 board_code ASC 时同一 avg_pct 的板块顺序随计划变化，前端分页会看到重复/漏项。
 # 计数口径：member_count 全部成分行；unresolved 只数 stock_id IS NULL；priced 只数非空
 # pct_chg（行存在但 pct_chg 为空不算"有行情"）；均值分母只有非空 pct_chg（n≠member_count）。
-_AGG_SQL = """
+# 可选板码过滤子句：`aggregate_boards`（全库）与 `aggregate_boards_for_codes`（按码收窄）
+# 共用**同一份**聚合 SQL，唯一差异就是这个 AND。绝不另写第二条聚合 SQL——两份 SQL 会各自漂移，
+# 且与 `avg_pct DESC NULLS LAST` 的分页顺序契约脱钩。
+#
+# 形态说明（取代 `(:board_codes IS NULL OR b.board_code = ANY(:board_codes))` 的等价写法）：
+# `= ANY(...)` 是 Postgres 专有语法，会让 `tests/test_concept_agg_sql.py`（SQLite 内存库、
+# 默认门禁）无法直接跑生产 SQL；`:param IS NULL` 配上 expanding 绑定还会在非空列表时被展开成
+# `(?, ?) IS NULL`（SQLite 报 "row value misused"）。故用 `:all_boards OR board_code IN :…`
+# ——SQLAlchemy expanding 绑定在 Postgres 与 SQLite 上都把列表展开成逐项占位符，语义完全等价。
+_AGG_BOARD_FILTER = "AND (:all_boards OR b.board_code IN :board_codes)"
+
+_AGG_SQL = f"""
 WITH px AS (
     SELECT stock_id, pct_chg FROM daily_quotes WHERE trade_date = :as_of
 )
@@ -317,15 +328,61 @@ FROM concept_boards b
 JOIN concept_members cm ON cm.board_code = b.board_code
 LEFT JOIN px ON px.stock_id = cm.stock_id
 WHERE b.is_active
+  {_AGG_BOARD_FILTER}
 GROUP BY b.board_code, b.board_name
 ORDER BY avg_pct DESC NULLS LAST, b.board_code ASC
 LIMIT :limit OFFSET :offset
 """
 
+# 生产语句：expanding 绑定必须钉在 `bindparams` 上（`text()` 默认把列表当单个标量）。
+# `type_=String` 不可省：无类型时 SQLAlchemy 把空列表渲染成 `CAST(NULL AS INTEGER)`，
+# Postgres 会因 `varchar = integer` 直接报 no operator。
+_AGG_STMT = text(_AGG_SQL).bindparams(
+    bindparam("board_codes", expanding=True, type_=String),
+    bindparam("all_boards", type_=Boolean),
+)
+
+
+def aggregate_params(
+    as_of: date, limit: int, offset: int, board_codes: list[str] | None
+) -> dict[str, Any]:
+    """`_AGG_STMT` 的绑定参数：`board_codes=None` → 不过滤（全库）。
+
+    暴露给 `tests/test_concept_agg_sql.py` 复用，避免测试自造一份会漂移的绑定约定。
+    `all_boards` 与列表分开传：空列表 ≠ 不过滤（空列表必须继续匹配 0 行）。
+    """
+    return {
+        "as_of": as_of,
+        "limit": limit,
+        "offset": offset,
+        "board_codes": list(board_codes) if board_codes is not None else [],
+        "all_boards": board_codes is None,
+    }
+
 
 def build_aggregate_sql_for_explain() -> str:
-    """给计划守卫测试用的同源 SQL（避免测试里复制一份会漂移的 SQL 文本）。"""
-    return _AGG_SQL
+    """给计划守卫测试用的同源 SQL（避免测试里复制一份会漂移的 SQL 文本）。
+
+    计划守卫只绑 `:as_of/:limit/:offset`（见 `test_concept_repo`），故这里去掉可选板码过滤
+    子句——**不是第二份聚合 SQL**，仍是从 `_AGG_SQL` 同一常量里摘出来的文本。`aggregate_boards`
+    传 `all_boards=True` 时 Postgres 的自定义计划同样会把这个恒真 OR 简化掉，计划形状一致。
+    """
+    return _AGG_SQL.replace(f"\n  {_AGG_BOARD_FILTER}\n", "\n")
+
+
+def _agg_row_dict(r: Any) -> dict[str, Any]:
+    """`_AGG_SQL` 一行的投影（两条调用路径共用，防止字段名/类型在两边漂移）。"""
+    return {
+        "board_code": r["board_code"],
+        "board_name": r["board_name"],
+        "member_count": int(r["member_count"]),
+        "unresolved_count": int(r["unresolved_count"]),
+        "priced_count": int(r["priced_count"]),
+        "up_count": int(r["up_count"]),
+        "flat_count": int(r["flat_count"]),
+        "down_count": int(r["down_count"]),
+        "avg_pct": float(r["avg_pct"]) if r["avg_pct"] is not None else None,
+    }
 
 
 async def aggregate_boards(
@@ -336,25 +393,28 @@ async def aggregate_boards(
     **不接 `sort`**：资金流（东财快照）不在这条 SQL 的数据源里，按资金流排序只能由 service
     在 Python 侧 join 后做；本函数只保证均价口径下的确定性顺序。
     """
-    rows = (
-        (await db.execute(text(_AGG_SQL), {"as_of": as_of, "limit": limit, "offset": offset}))
-        .mappings()
-        .all()
-    )
-    return [
-        {
-            "board_code": r["board_code"],
-            "board_name": r["board_name"],
-            "member_count": int(r["member_count"]),
-            "unresolved_count": int(r["unresolved_count"]),
-            "priced_count": int(r["priced_count"]),
-            "up_count": int(r["up_count"]),
-            "flat_count": int(r["flat_count"]),
-            "down_count": int(r["down_count"]),
-            "avg_pct": float(r["avg_pct"]) if r["avg_pct"] is not None else None,
-        }
-        for r in rows
-    ]
+    params = aggregate_params(as_of, limit, offset, None)
+    rows = (await db.execute(_AGG_STMT, params)).mappings().all()
+    return [_agg_row_dict(r) for r in rows]
+
+
+async def aggregate_boards_for_codes(
+    db: AsyncSession, as_of: date, board_codes: list[str]
+) -> list[dict[str, Any]]:
+    """**指定板块码**的当日聚合（同一份 `_AGG_SQL`，只是多了板码过滤）。
+
+    `by-symbol` 必须走这条路径：先全库聚合再在 Python 里按码过滤会让一个 symbol 的板块在
+    `is_active=false`、活跃板块数 > `limit`、或 NULL `avg_pct` 被 `NULLS LAST` 截断时**静默消失**
+    ——这是"查询参数没有进 SQL"的典型症状。板码过滤进 SQL 后，返回集合只由库内数据决定。
+
+    `is_active` 过滤**保留**（与 `aggregate_boards` 一致）：本轮东财列表已下架的板块不给可导航
+    链接，而不是让前端点进一个死板。空 `board_codes` → 空列表（空列表 ≠ 不过滤，不发 SQL）。
+    """
+    if not board_codes:
+        return []
+    params = aggregate_params(as_of, len(board_codes), 0, board_codes)
+    rows = (await db.execute(_AGG_STMT, params)).mappings().all()
+    return [_agg_row_dict(r) for r in rows]
 
 
 # 读路径的三个小查询（T6 list 端点专用；口径见 plans §2.2/§2.3）。
@@ -461,9 +521,7 @@ async def member_history_stats(db: AsyncSession, board_code: str) -> dict[str, d
 _BOARD_MEMBERSHIP_DATE_SQL = (
     "SELECT max(last_seen_on) FROM concept_members WHERE board_code = :board_code"
 )
-_BOARD_ROW_SQL = (
-    "SELECT board_code, board_name, is_active FROM concept_boards WHERE board_code = :board_code"
-)
+_BOARD_ROW_SQL = "SELECT board_code, board_name FROM concept_boards WHERE board_code = :board_code"
 _SYMBOL_BOARD_CODES_SQL = (
     "SELECT board_code FROM concept_members WHERE symbol = :symbol ORDER BY board_code"
 )
@@ -489,11 +547,7 @@ async def find_board(db: AsyncSession, board_code: str) -> dict[str, Any] | None
     row = (await db.execute(text(_BOARD_ROW_SQL), {"board_code": board_code})).mappings().first()
     if row is None:
         return None
-    return {
-        "board_code": str(row["board_code"]),
-        "board_name": str(row["board_name"]),
-        "is_active": bool(row["is_active"]),
-    }
+    return {"board_code": str(row["board_code"]), "board_name": str(row["board_name"])}
 
 
 async def list_symbol_board_codes(db: AsyncSession, symbol: str) -> list[str]:

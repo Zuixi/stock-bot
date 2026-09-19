@@ -366,24 +366,25 @@ async def hot_board_rows(
 
 
 # ── 读路径：GET /concepts/{board_code} + /stocks + /by-symbol（T8/T9，plans §2.2） ──────
-# 全库聚合一次的上限：dev 库 504 板，1k 留 2x 头寸。详情/反向查都在 Python 侧按 board_code
-# 过滤这份结果，绝不另写一条"单板聚合 SQL"（两份 SQL 会各自漂移，且与 avg_pct 的 NULLS LAST
-# 顺序契约脱钩）。排序仍由 `aggregate_boards` 的 `avg_pct DESC NULLS LAST, board_code ASC` 保证。
+# 全库聚合一次的上限：dev 库 504 板，1k 留 2x 头寸。详情（已知单板码）用 `aggregate_boards`
+# 全库取一份再按码挑行；`by-symbol` 必须走 `aggregate_boards_for_codes`（板码过滤进 SQL）——
+# 反向查在 Python 侧从"全库 top-N"里挑会让一个 symbol 的板块在停用/被窗口截断/NULLS LAST 边界
+# 处静默消失。两条路径共用 `_AGG_SQL` 同一份聚合（只有可选板码过滤子句不同），绝不另写
+# "单板聚合 SQL"。排序仍由 `avg_pct DESC NULLS LAST, board_code ASC` 保证。
 CONCEPT_AGG_LIMIT = 1000
 CONCEPT_BY_SYMBOL_CACHE_KEY = "market:concept:by-symbol:{symbol}"
 CONCEPT_BY_SYMBOL_TTL = 300
 
 
-def _stock_streak(stock: dict[str, Any]) -> int:
-    """梯队票的连板数：正式快照用 `streak`，原始 ladder 行用 `streak_upto`（两处都收）。
+def _stock_streak(stock: dict[str, Any]) -> int | None:
+    """梯队票的连板数：正式快照的 `streak`（`get_snapshot` 已把 `streak_upto` 规范成它）。
 
-    服务层投影（`get_snapshot`）已把 `streak_upto` 规范成 `streak`；保留回退只是为了让
-    纯函数测试可以直接喂 `calc.ladder` 的原始形状，而不是再造一套夹具。
+    **缺失返回 `None`，绝不回退成 0**：0 会被读成"未涨停"，而 `None` 是"不可判"（缺失 ≠ 0）。
+    原先的 `streak_upto` 回退是生产死分支（`get_snapshot` 的 echelons 一律带 `streak`），
+    只会让纯函数测试喂进生产永远看不到的形状，已删（fix round 1 / M2）。
     """
     value = stock.get("streak")
-    if value is None:
-        value = stock.get("streak_upto")
-    return int(value or 0)
+    return int(value) if value is not None else None
 
 
 def _filter_echelons(
@@ -403,25 +404,30 @@ def _filter_echelons(
 
 
 def _ladder_kpis(echelons: list[dict[str, Any]]) -> dict[str, Any]:
-    """板内连板 KPI（**纯函数**）：`zt_count` / `max_streak` / 龙头 `(-streak, -amount, symbol)`。
+    """板内连板 KPI（**纯函数**）：`zt_count` / `max_streak` / 龙头。
 
-    龙头裁决必须确定性（与 `calc.sector_ladder` 同一个 key）：`min` 在并列时靠 symbol 兜底，
-    否则同一请求两次的"龙头"会跟着行序漂移。
+    龙头 = 梯队顺序里**第一个最高板**的行，也就是前端梯队卡的第一行：快照的档位顺序是
+    `streak DESC`、档内是 `amount DESC, symbol ASC`（`calc.ladder`），卡片渲染的就是这个顺序。
+    "KPI 龙头 == 卡片首行"因此永不漂移，也不需要二次排序。
+
+    **不重排**：快照 echelons 的 stock 字典里没有 `amount`（`limit_up_service` 的 ladder 投影
+    只带 `streak/days_span/boards_in_window/missing_days/seal_*`），任何 `(-streak, -amount,
+    symbol)` 形式的排序 key 在生产中等价于按 symbol 升序，会选出与卡片首行不同的票（fix
+    round 1 / I1）。`max_streak` 只在有 `streak` 的行上取最大；全缺失时保持 0（= 不可判）。
     """
     rows = [s for echelon in echelons for s in echelon.get("stocks", [])]
     if not rows:
         return {"zt_count": 0, "max_streak": 0, "leader_symbol": None, "leader_name": None}
-    leader = min(
-        rows,
-        key=lambda s: (
-            -_stock_streak(s),
-            -(float(s.get("amount") or 0.0)),
-            str(s.get("symbol")),
-        ),
-    )
+    leader = rows[0]
+    max_streak = 0
+    for stock in rows:
+        streak = _stock_streak(stock)
+        if streak is not None and streak > max_streak:
+            max_streak = streak
+            leader = stock
     return {
         "zt_count": len(rows),
-        "max_streak": max(_stock_streak(s) for s in rows),
+        "max_streak": max_streak,
         "leader_symbol": str(leader.get("symbol")),
         "leader_name": leader.get("name"),
     }
@@ -435,9 +441,10 @@ async def get_board_detail(
     板内梯队**同源于** `/market/limit-up` 的快照（`limit_up_service.get_snapshot`，模块属性
     调用以便测试 monkeypatch），只按成分过滤，不重算 streak——板内口径与全市场梯队必须永远一致。
 
-    `membership_as_of` 用**该板**的 `max(last_seen_on)`，不是 T6 列表的全表值。降级词表：
-    无成分 → `no_members`；快照 `limits_present is False` → `price_limits_missing`（照抄情绪
-    口径，不自立门户）；否则 `None`（有梯队但为空是"今日板内无涨停"，不是降级）。
+    `membership_as_of` 用**该板**的 `max(last_seen_on)`，不是 T6 列表的全表值。`degraded_reason`
+    原样透传快照自己的词（`no_quotes` / `price_limits_missing` / `partial_day` /
+    `insufficient_trade_days`），不自立门户；例外有两个：板内无成分行时 `no_members` 优先，
+    以及 `no_limit_up_rows` **不**透传（市场级"今天没有涨停"是合法空态，KPI 诚实报 0）。
     """
     board_meta = await concept_repo.find_board(db, board_code)
     if board_meta is None:
@@ -473,12 +480,20 @@ async def get_board_detail(
     snap = await limit_up_service.get_snapshot(cache)
     echelons = _filter_echelons(snap.get("echelons") or [], member_symbols)
     kpis = _ladder_kpis(echelons)
+    # 降级词表**照抄快照**（`no_quotes` / `price_limits_missing` / `partial_day` /
+    # `insufficient_trade_days`）：本端点不重导口径，否则快照说"当前没有行情"，详情页却报
+    # "限价缺失"（把两种完全不同的退化来源混成一种）。`no_limit_up_rows` 是唯一例外——市场级
+    # "今天没有涨停"是合法的空态，KPI 诚实地报 0，不是概念数据的退化（见 schema 字段注释）。
+    # 板内无成分行优先置 `no_members`：那是本端点自己的一级空态。
     if not members:
         degraded_reason: str | None = "no_members"
-    elif snap.get("limits_present") is False:
-        degraded_reason = "price_limits_missing"
     else:
-        degraded_reason = None
+        snapshot_reason = snap.get("degraded_reason")
+        degraded_reason = (
+            str(snapshot_reason)
+            if snapshot_reason and snapshot_reason != "no_limit_up_rows"
+            else None
+        )
 
     unresolved_count = int(row["unresolved_count"])
     return {
@@ -520,9 +535,10 @@ async def get_concepts_by_symbol(
 ) -> dict[str, Any]:
     """个股所属概念（触点 C）：items 为 `{board_code, board_name, pct_change}` 列表。
 
-    未知 symbol → `items: []`（前端据此整块不渲染），**不是 404**。板块涨跌幅复用同一次
-    `aggregate_boards` 全库聚合再按码过滤，不另写 SQL。Redis 300s：该查询在每次个股详情页
-    都会触发，且空结果不缓存（"数据不完整时宁可不缓存"，与 T6 列表同一条原则）。
+    未知 symbol → `items: []`（前端据此整块不渲染），**不是 404**。板块涨跌幅来自
+    `aggregate_boards_for_codes`（与 `aggregate_boards` 共用同一份聚合 SQL，只多一个板码过滤），
+    不另写第二条 SQL。Redis 300s：该查询在每次个股详情页都会触发，且空结果不缓存
+    （"数据不完整时宁可不缓存"，与 T6 列表同一条原则）。
     """
     key = CONCEPT_BY_SYMBOL_CACHE_KEY.format(symbol=symbol)
     if cache is not None:
@@ -535,8 +551,9 @@ async def get_concepts_by_symbol(
     items: list[dict[str, Any]] = []
     codes = await concept_repo.list_symbol_board_codes(db, symbol)
     if codes and as_of is not None:
-        target = set(codes)
-        rows = await concept_repo.aggregate_boards(db, as_of, CONCEPT_AGG_LIMIT, 0)
+        # 板码过滤进 SQL（`aggregate_boards_for_codes`）：全库聚合再 Python 过滤会让该 symbol
+        # 的板块在停用/被窗口截断/NULLS LAST 边界处静默消失（fix round 1 / I3）。
+        rows = await concept_repo.aggregate_boards_for_codes(db, as_of, codes)
         items = [
             {
                 "board_code": r["board_code"],
@@ -544,7 +561,6 @@ async def get_concepts_by_symbol(
                 "pct_change": r["avg_pct"],
             }
             for r in rows
-            if r["board_code"] in target
         ]
         items.sort(
             key=lambda i: (

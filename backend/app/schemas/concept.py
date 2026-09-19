@@ -64,8 +64,9 @@ class ConceptKpisOut(BaseModel):
     """`GET /api/v1/concepts/{board_code}` 的板内连板 KPI（口径 = 梯队快照，见 §2.3）。
 
     `zt_count` / `max_streak` 是**同源**于 `/market/limit-up` 的快照：板内梯队被原样过滤，
-    service 绝不重算 streak。龙头按 `(-streak, -amount, symbol)` 确定性裁决；无涨停成员时
-    四个字段分别为 0/0/null/null（`max_streak=0` 是"无涨停"，不是缺失）。
+    service 绝不重算 streak。龙头 = 最高板那一档的**第一只**（= 梯队卡首行，档内已是
+    `amount DESC, symbol ASC`），不做二次排序。无涨停成员时四个字段分别为 0/0/null/null
+    （`max_streak=0` 是"无涨停"，不是缺失）。
     """
 
     zt_count: int
@@ -84,7 +85,11 @@ class ConceptDetailOut(BaseModel):
     as_of: date | None
     membership_as_of: date | None  # **该板**的 max(last_seen_on)，不是全表值
     source: Literal["em_clist"]  # 成分名录来源（东财 clist），与资金流快照源无关
-    degraded_reason: str | None = None  # "no_members" | "price_limits_missing" | None
+    # 闭集：板内无成分行时的 "no_members"，或快照原样透传的 "no_quotes" /
+    # "price_limits_missing" / "partial_day" / "insufficient_trade_days"，否则 None。
+    # **不含** "no_limit_up_rows"：市场级"今天没有涨停"是合法空态（KPI 诚实报 0），
+    # 不是概念数据的退化，故不透传——这条例外是刻意的。
+    degraded_reason: str | None = None
     board: BoardItemOut
     kpis: ConceptKpisOut
     echelons: list[EchelonOut] = Field(default_factory=list)  # 板内过滤，形状与梯队卡一致

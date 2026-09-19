@@ -26,6 +26,7 @@ from app.core.database import async_session_factory, engine
 from app.core.redis import CacheClient, close_redis_pool, get_redis_pool
 from app.main import app
 from app.repositories import concept_repo, limit_up_repo, market_data_repo
+from app.schemas.concept import ConceptDetailOut
 from app.schemas.stock import StockEnrichedOut
 from app.services import concept_service, limit_up_service
 
@@ -452,10 +453,10 @@ async def test_get_hot_boards_concept_delegates_to_concept_service(
 # 默认门禁：T8 详情（板内梯队同源 + KPI 裁决 + 降级词表）；T9 成分/反查（不触 DB）
 # ---------------------------------------------------------------------------
 
+# `find_board` 只回 board_code/board_name（is_active 无人读，已从仓库层删掉 —— M1）
 _BK0501_ROW_META: dict[str, Any] = {
     "board_code": "BK0501",
     "board_name": "次新股",
-    "is_active": True,
 }
 
 _BK0501_ROW: dict[str, Any] = {
@@ -516,8 +517,16 @@ async def test_board_detail_reuses_snapshot_echelons(
             "streak": 2,
             "label": "2连板",
             "stocks": [
-                {"symbol": "600000", "name": "X", "streak": 2, "amount": 100.0},
-                {"symbol": "999999", "name": "非本板", "streak": 2, "amount": 999.0},
+                {
+                    "symbol": "600000",
+                    "name": "X",
+                    "streak": 2,
+                    # Web 增强三件套：卡片要渲染，过滤必须原样带过去（M4）
+                    "seal_time": "09:41:03",
+                    "seal_fund": 1.23e8,
+                    "break_count": 2,
+                },
+                {"symbol": "999999", "name": "非本板", "streak": 2},
             ],
         }
     ]
@@ -539,6 +548,10 @@ async def test_board_detail_reuses_snapshot_echelons(
         "leader_symbol": "600000",
         "leader_name": "X",
     }
+    kept = out["echelons"][0]["stocks"][0]
+    assert (kept["seal_time"], kept["seal_fund"], kept["break_count"]) == ("09:41:03", 1.23e8, 2), (
+        "封板时间/封单/炸板次数是卡片渲染字段，过滤后必须逐键保留"
+    )
     assert out["membership_as_of"] == "2026-09-20", "必须是本板的成分快照日"
     assert out["source"] == "em_clist"
     assert out["degraded_reason"] is None
@@ -562,17 +575,49 @@ def test_filter_echelons_keeps_snapshot_stock_objects() -> None:
     assert concept_service._ladder_kpis(out)["max_streak"] == 2
 
 
-def test_ladder_kpis_leader_is_deterministic_and_streak_falls_back() -> None:
-    """龙头按 `(-streak, -amount, symbol)` 裁决；`streak` 缺失回退 `streak_upto`。"""
-    rows = [
-        {"symbol": "000002", "name": "B", "streak": 2, "amount": 500.0},
-        {"symbol": "000003", "name": "C", "streak_upto": 2},  # 无 amount → 0
-        {"symbol": "000001", "name": "A", "streak_upto": 2, "amount": 500.0},
-    ]
-    kpis = concept_service._ladder_kpis([{"streak": 2, "label": "2连板", "stocks": rows}])
-    assert kpis["zt_count"] == 3
+def test_stock_streak_missing_is_none_not_zero() -> None:
+    """`streak` 缺失 → `None`（不可判），绝不回退 `streak_upto`、绝不写成 0（M2 / 缺失 ≠ 0）。"""
+    assert concept_service._stock_streak({"symbol": "X", "streak": 3}) == 3
+    assert concept_service._stock_streak({"symbol": "X", "streak_upto": 3}) is None
+    assert concept_service._stock_streak({"symbol": "X"}) is None
+
+
+def test_ladder_kpis_leader_is_first_row_of_highest_echelon() -> None:
+    """龙头 = 最高板那一档的第一只（= 卡片首行），不重排。
+
+    快照档内顺序已经是 `amount DESC, symbol ASC`（`calc.ladder`），且**生产快照行不带
+    `amount`**。这里刻意用生产形状（无 `amount`）+ 成交额决定的档内顺序：`000002`（900 万）
+    排在 `000001`（100 万）前面。旧实现按 `(-streak, -amount, symbol)` 排序，`amount` 缺失时
+    退化成 symbol 升序 → 选出 `000001`，与卡片首行分叉（I1 回归）。
+    """
+    echelon = {
+        "streak": 2,
+        "label": "2连板",
+        "stocks": [
+            {"symbol": "000002", "name": "B", "streak": 2},  # 快照里 amount 900 > 100，故排前
+            {"symbol": "000001", "name": "A", "streak": 2},
+        ],
+    }
+    kpis = concept_service._ladder_kpis([echelon])
+    assert kpis["zt_count"] == 2
     assert kpis["max_streak"] == 2
-    assert kpis["leader_symbol"] == "000001", "同 streak/amount 必须由 symbol 升序兜底"
+    assert kpis["leader_symbol"] == "000002", "龙头必须是最高板档的第一行（金额更大的那只）"
+    assert kpis["leader_name"] == "B"
+
+    # 即使档内字典带上 amount，也不重排：顺序就是权威（新实现不看 amount）。
+    kpis_amounts = concept_service._ladder_kpis(
+        [
+            {
+                "streak": 2,
+                "label": "2连板",
+                "stocks": [
+                    {"symbol": "000002", "name": "B", "streak": 2, "amount": 900.0},
+                    {"symbol": "000001", "name": "A", "streak": 2, "amount": 100.0},
+                ],
+            }
+        ]
+    )
+    assert kpis_amounts["leader_symbol"] == "000002"
 
     kpis_high = concept_service._ladder_kpis(
         [
@@ -581,11 +626,11 @@ def test_ladder_kpis_leader_is_deterministic_and_streak_falls_back() -> None:
                 "label": "3连板",
                 "stocks": [{"symbol": "000009", "name": "D", "streak": 3}],
             },
-            {"streak": 2, "label": "2连板", "stocks": rows},
+            {"streak": 2, "label": "2连板", "stocks": echelon["stocks"]},
         ]
     )
     assert kpis_high["max_streak"] == 3
-    assert kpis_high["leader_symbol"] == "000009", "更高板优先于成交额"
+    assert kpis_high["leader_symbol"] == "000009", "更高板优先"
 
     empty = concept_service._ladder_kpis([])
     assert empty == {"zt_count": 0, "max_streak": 0, "leader_symbol": None, "leader_name": None}
@@ -621,28 +666,65 @@ async def test_board_detail_degrades_when_board_has_no_members(
     assert await concept_service.get_board_detail(None, "NOPE", cache=None) is None
 
 
-async def test_board_detail_propagates_price_limits_missing(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "snapshot_reason",
+    ["no_quotes", "price_limits_missing", "partial_day", "insufficient_trade_days"],
+)
+async def test_board_detail_propagates_snapshot_degraded_reason(
+    monkeypatch: pytest.MonkeyPatch, snapshot_reason: str
 ) -> None:
-    """限价缺失照抄情绪口径（`price_limits_missing`）；`no_limit_up_rows` 不是本端点的降级。"""
+    """快照的退化词**原样透传**，不得二次推导（尤其 `no_quotes` 不得被写成限价缺失，I2）。
+
+    这也覆盖了 `no_quotes` 详情态：无行情时板内梯队为空、KPI 全 0，退化原因必须来自快照自身。
+    """
     _patch_detail_reads(
         monkeypatch,
-        snap=_snap_with([], limits_present=False, reason="price_limits_missing"),
+        snap=_snap_with([], limits_present=False, reason=snapshot_reason),
         members=[("600000", "X")],
         membership_as_of=date(2026, 9, 20),
     )
     out = await concept_service.get_board_detail(None, "BK0501", cache=None)
-    assert out is not None and out["degraded_reason"] == "price_limits_missing"
 
-    # 限价齐全但没有涨停行：空梯队是"今日板内无涨停"，不得自造第二个降级词
+    assert out is not None
+    assert out["degraded_reason"] == snapshot_reason, "必须与快照逐字一致"
+    # schema 闭集注释声明的词都得能过 response_model
+    assert ConceptDetailOut(**out).degraded_reason == snapshot_reason
+
+
+async def test_board_detail_no_limit_up_rows_is_not_a_degradation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`no_limit_up_rows` **刻意不透传**：市场级"今天没有涨停"是合法空态（KPI 诚实报 0）。"""
     _patch_detail_reads(
         monkeypatch,
         snap=_snap_with([], limits_present=True, reason="no_limit_up_rows"),
         members=[("600000", "X")],
         membership_as_of=date(2026, 9, 20),
     )
-    ok = await concept_service.get_board_detail(None, "BK0501", cache=None)
-    assert ok is not None and ok["degraded_reason"] is None
+    out = await concept_service.get_board_detail(None, "BK0501", cache=None)
+
+    assert out is not None and out["degraded_reason"] is None, "空梯队不是概念数据的退化"
+    assert out["kpis"] == {
+        "zt_count": 0,
+        "max_streak": 0,
+        "leader_symbol": None,
+        "leader_name": None,
+    }
+
+
+async def test_board_detail_no_members_beats_snapshot_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """板内无成分行 → `no_members` 优先于快照自身的退化词（本端点自己的一级空态）。"""
+    _patch_detail_reads(
+        monkeypatch,
+        snap=_snap_with([], limits_present=False, reason="no_quotes"),
+        members=[],
+        membership_as_of=None,
+    )
+    out = await concept_service.get_board_detail(None, "BK0501", cache=None)
+
+    assert out is not None and out["degraded_reason"] == "no_members"
 
 
 def _enriched(symbol: str, change: float | None) -> StockEnrichedOut:
@@ -700,22 +782,34 @@ class _RecordingCache:
 
 
 async def test_concepts_by_symbol_orders_and_caches(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`pct_change DESC NULLS LAST, board_code ASC`；非空结果进 Redis 300s，空结果不缓存。"""
+    """板码过滤走 `aggregate_boards_for_codes`（单一 SQL 的可选过滤），排序确定，缓存 300s。
+
+    反向查必须在 SQL 里收窄（I3）：这里断言仓库层**收到了**该 symbol 的板码，而不是拿全库
+    聚合结果在 Python 侧过滤——后者会让板块在窗口/NULLS LAST 边界处静默消失。
+    """
+    filtered: list[list[str]] = []
+
+    async def _fake_agg_for_codes(
+        db: Any, as_of: date, board_codes: list[str]
+    ) -> list[dict[str, Any]]:
+        filtered.append(list(board_codes))
+        return [
+            {"board_code": "BK0001", "board_name": "一", "avg_pct": 1.0},
+            {"board_code": "BK0002", "board_name": "二", "avg_pct": None},
+            {"board_code": "BK0003", "board_name": "三", "avg_pct": 3.0},
+        ]
+
     monkeypatch.setattr(
         concept_repo,
         "list_symbol_board_codes",
         lambda db, symbol: _const(["BK0002", "BK0001", "BK0003"]),
     )
+    monkeypatch.setattr(concept_repo, "aggregate_boards_for_codes", _fake_agg_for_codes)
     monkeypatch.setattr(
         concept_repo,
         "aggregate_boards",
-        lambda db, as_of, limit, offset: _const(
-            [
-                {"board_code": "BK0001", "board_name": "一", "avg_pct": 1.0},
-                {"board_code": "BK0002", "board_name": "二", "avg_pct": None},
-                {"board_code": "BK0003", "board_name": "三", "avg_pct": 3.0},
-                {"board_code": "BK9999", "board_name": "非本股", "avg_pct": 99.0},
-            ]
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("by-symbol 不得全库聚合后在 Python 侧过滤")
         ),
     )
     monkeypatch.setattr(limit_up_repo, "latest_quote_date", lambda db: _const(date(2026, 9, 18)))
@@ -726,6 +820,7 @@ async def test_concepts_by_symbol_orders_and_caches(monkeypatch: pytest.MonkeyPa
     cache = _RecordingCache()
     body = await concept_service.get_concepts_by_symbol(None, "601091", cache)
 
+    assert filtered == [["BK0002", "BK0001", "BK0003"]], "板码必须进 SQL（只发一次收窄查询）"
     assert [i["board_code"] for i in body["items"]] == ["BK0003", "BK0001", "BK0002"]
     assert body["items"][-1]["pct_change"] is None
     assert body["as_of"] == "2026-09-18" and body["membership_as_of"] == "2026-09-20"
@@ -810,6 +905,26 @@ async def _symbol_board_codes(symbol: str) -> set[str]:
         return {str(c) for c in rows}
 
 
+async def _active_symbol_board_codes(symbol: str) -> set[str]:
+    """该 symbol 的**启用**板块码：聚合 SQL 的 `is_active` 过滤决定的可导航集合。
+
+    与 `_symbol_board_codes` 的差集恰是"已停止采集的板块"——`by-symbol` 不允许返回它们的链接，
+    但**也不允许**把启用板块悄悄漏掉（I3 的两种失败模式各钉一头）。
+    """
+    async with async_session_factory() as db:
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT cm.board_code FROM concept_members cm "
+                    "JOIN concept_boards b ON b.board_code = cm.board_code "
+                    "WHERE cm.symbol = :symbol AND b.is_active"
+                ),
+                {"symbol": symbol},
+            )
+        ).scalars()
+        return {str(c) for c in rows}
+
+
 @pytest.mark.e2e
 async def test_concept_board_detail_contract_matches_dev_db() -> None:
     """信封键集 + 与库内对拍（成分行数/未解析数/本板成分日）+ 梯队必须被成分过滤。"""
@@ -846,11 +961,21 @@ async def test_concept_board_detail_contract_matches_dev_db() -> None:
         "resolved + unresolved 必须等于成分行数（同一口径）"
     )
     assert body["unresolved_count"] == unresolved
-    # 降级词表：无成分才是 no_members；限价缺失只能是 price_limits_missing；否则 null
-    assert body["degraded_reason"] in (None, "price_limits_missing")
+    # 降级词表 = 本端点的闭集（快照原样透传 + no_members 优先；no_limit_up_rows 刻意不在集内）
+    assert body["degraded_reason"] in (
+        None,
+        "no_members",
+        "no_quotes",
+        "price_limits_missing",
+        "partial_day",
+        "insufficient_trade_days",
+    )
 
     ladder = [s for echelon in body["echelons"] for s in echelon["stocks"]]
     assert all(s["symbol"] in members for s in ladder), "板内梯队只能含本板成分"
+    assert all({"seal_time", "seal_fund", "break_count"} <= set(s) for s in ladder), (
+        "Web 增强三件套必须随梯队下发（本地路径可为 null，但键不能丢）"
+    )
     assert [e["streak"] for e in body["echelons"]] == sorted(
         (e["streak"] for e in body["echelons"]), reverse=True
     ), "梯队档位保持连板数降序（快照原序）"
@@ -903,8 +1028,13 @@ async def test_concept_board_stocks_returns_ordered_enriched_array() -> None:
 
 @pytest.mark.e2e
 async def test_concepts_by_symbol_returns_boards_and_empty_for_unknown() -> None:
-    """真实成分（601091 沈鼓）→ 至少一个板块；未知 symbol → 空 items（不是 404）。"""
+    """真实成分（601091 沈鼓）→ 恰为该 symbol 的**启用**板块；未知 symbol → 空 items（不是 404）。
+
+    板码进了 SQL 之后，"返回集合"由库内数据唯一决定：既不得多出非成员板块，也不得因窗口/排序
+    边界漏掉任何启用板块——故这里钉**相等**（≠ 只钉子集，子集会让静默消失继续通过）。
+    """
     codes = await _symbol_board_codes("601091")
+    active_codes = await _active_symbol_board_codes("601091")
     assert codes, "dev DB 里 601091 应属于若干概念板块"
 
     async with _client() as client:
@@ -915,9 +1045,14 @@ async def test_concepts_by_symbol_returns_boards_and_empty_for_unknown() -> None
     body = resp.json()
     assert set(body) == BY_SYMBOL_KEYS
     assert body["items"], "至少一个板块"
+    returned = set()
     for item in body["items"]:
         assert set(item) == {"board_code", "board_name", "pct_change"}
-        assert item["board_code"] in codes
+        returned.add(item["board_code"])
+    assert returned <= codes, "返回的板块必须是该 symbol 的 concept_members 行（⊆ 反查）"
+    assert returned == active_codes, (
+        "返回集合必须等于该 symbol 的成分板块 ∩ 启用板（停用板不给链接，启用板一个都不能漏）"
+    )
     keys = [
         (i["pct_change"] is None, -(i["pct_change"] or 0.0), i["board_code"]) for i in body["items"]
     ]
