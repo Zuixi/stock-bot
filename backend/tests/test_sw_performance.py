@@ -120,10 +120,12 @@ def _row(code: str, name: str, avg: float = 1.0) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_sw_performance_cache_hit_skips_db() -> None:
+async def test_sw_performance_cache_hit_skips_db(monkeypatch) -> None:
+    """Cache key carries the resolved day; a hit resolves the day but runs no rollup SQL."""
+    _patch_resolved_day(monkeypatch)
     cache = RecordingCache()
     cached = SwPerformanceResponseOut(as_of=date(2026, 9, 9), items=[_row("110000", "农林牧渔")])
-    cache.store["market:sw-performance"] = cached.model_dump(mode="json")
+    cache.store["market:sw-performance:2026-09-09"] = cached.model_dump(mode="json")
     db = _FakeDb([])
 
     out = await market_service.get_sw_industry_performance(db, cache, 31)  # type: ignore[arg-type]
@@ -132,33 +134,42 @@ async def test_sw_performance_cache_hit_skips_db() -> None:
     assert db.calls == []
 
 
+def _patch_resolved_day(monkeypatch, quality: str = "complete") -> None:
+    async def _resolve(_db, *, cache=None):
+        return market_service.market_day_service.MarketDay(
+            date(2026, 9, 9), quality, None, 5485, 5513, 1.0, True
+        )
+
+    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _resolve)
+
+
 @pytest.mark.asyncio
 async def test_sw_performance_computes_and_caches(monkeypatch) -> None:
-    async def _fake_latest(_db, _cache=None):
-        return date(2026, 9, 9)
-
-    monkeypatch.setattr(market_service, "get_latest_trade_date", _fake_latest)
+    _patch_resolved_day(monkeypatch)
     cache = RecordingCache()
     db = _FakeDb([_row("110000", "农林牧渔", avg=1.23)])
 
     out = await market_service.get_sw_industry_performance(db, cache, 31)  # type: ignore[arg-type]
 
     assert out.as_of == date(2026, 9, 9)
+    assert out.as_of_quality == "complete"
     assert out.items[0].avg_pct_chg == 1.23
     # Ruling U: anonymous endpoint must go through CacheClient with _MARKET_CACHE_TTL.
-    assert cache.set_calls[0][0] == "market:sw-performance"
+    assert cache.set_calls[0][0] == "market:sw-performance:2026-09-09"
     assert cache.set_calls[0][1]["as_of"] == "2026-09-09"  # type: ignore[index]
+    assert cache.set_calls[0][1]["as_of_quality"] == "complete"  # type: ignore[index]
     assert cache.set_calls[0][2] == market_service._MARKET_CACHE_TTL
 
 
 @pytest.mark.asyncio
-async def test_sw_performance_limit_applied_on_cache_hit() -> None:
+async def test_sw_performance_limit_applied_on_cache_hit(monkeypatch) -> None:
+    _patch_resolved_day(monkeypatch)
     cache = RecordingCache()
     cached = SwPerformanceResponseOut(
         as_of=date(2026, 9, 9),
         items=[_row("110000", "农林牧渔"), _row("220000", "基础化工"), _row("330000", "钢铁")],
     )
-    cache.store["market:sw-performance"] = cached.model_dump(mode="json")
+    cache.store["market:sw-performance:2026-09-09"] = cached.model_dump(mode="json")
 
     out = await market_service.get_sw_industry_performance(_FakeDb([]), cache, 2)  # type: ignore[arg-type]
 
@@ -166,17 +177,72 @@ async def test_sw_performance_limit_applied_on_cache_hit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_sw_performance_does_not_reuse_another_days_payload(monkeypatch) -> None:
+    """Day-less and previous-day keys are both poisoned; only a day-scoped key misses."""
+    _patch_resolved_day(monkeypatch)
+    cache = RecordingCache()
+    stale = SwPerformanceResponseOut(as_of=date(2026, 9, 8), items=[_row("999999", "旧日")])
+    cache.store["market:sw-performance"] = stale.model_dump(mode="json")
+    cache.store["market:sw-performance:2026-09-08"] = stale.model_dump(mode="json")
+    db = _FakeDb([_row("110000", "农林牧渔", avg=1.23)])
+
+    out = await market_service.get_sw_industry_performance(db, cache, 31)  # type: ignore[arg-type]
+
+    assert [i.code for i in out.items] == ["110000"]
+    assert len(db.calls) == 1, "the rollup SQL must run for the resolved day"
+    assert cache.set_calls[0][0] == "market:sw-performance:2026-09-09"
+
+
+@pytest.mark.asyncio
 async def test_sw_performance_degrades_on_empty_db(monkeypatch) -> None:
-    """Public homepage block: empty daily_quotes must degrade, never 500, and not cache."""
+    """Public homepage block: empty daily_quotes must degrade, never 500, and not cache.
 
-    async def _empty(_db, _cache=None):
-        raise ValueError("daily_quotes is empty — run ingest first")
+    The label must come from the **Shanghai** wall clock, same as the non-empty branch
+    and as ``get_rankings`` (fix round 1, Minor 10): a host-local ``date.today()``
+    mislabels the rollover window. ``date`` is pinned to a Sunday and ``_today_sh`` to
+    a Saturday, so the two sources produce different Fridays (09-04 vs 09-18) and the
+    assertion can only pass on the Shanghai one.
+    """
 
-    monkeypatch.setattr(market_service, "get_latest_trade_date", _empty)
+    class _PinnedDate(date):
+        @classmethod
+        def today(cls) -> date:
+            return date(2026, 9, 6)  # 宿主本地"今天"（周日）
+
+    async def _empty(_db, *, cache=None):
+        return None
+
+    monkeypatch.setattr(market_service, "date", _PinnedDate)
+    monkeypatch.setattr(market_service, "_today_sh", lambda: date(2026, 9, 19))  # 周六
+    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _empty)
     cache = RecordingCache()
 
     out = await market_service.get_sw_industry_performance(_FakeDb([]), cache, 31)  # type: ignore[arg-type]
 
     assert out.items == []
-    assert out.as_of == market_service.last_weekday(date.today())
+    assert out.as_of == date(2026, 9, 18), "周六的最近预期交易日是周五（上海时区）"
+    assert out.as_of == market_service.last_weekday(market_service._today_sh())
+    assert out.as_of_quality == "partial"
     assert cache.set_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sw_performance_legacy_cache_payload_without_quality_reads_partial(
+    monkeypatch,
+) -> None:
+    """Payloads lacking ``as_of_quality``; the schema default ("complete") is a lie.
+
+    Absent key => "partial" (quality unknown), never the optimistic default.
+    """
+    _patch_resolved_day(monkeypatch)
+    cache = RecordingCache()
+    legacy = SwPerformanceResponseOut(
+        as_of=date(2026, 9, 9), items=[_row("110000", "农林牧渔")]
+    ).model_dump(mode="json")
+    del legacy["as_of_quality"]  # legacy shape: key absent, not null
+    cache.store["market:sw-performance:2026-09-09"] = legacy
+
+    out = await market_service.get_sw_industry_performance(_FakeDb([]), cache, 31)  # type: ignore[arg-type]
+
+    assert out.as_of_quality == "partial"
+    assert out.items[0].code == "110000"

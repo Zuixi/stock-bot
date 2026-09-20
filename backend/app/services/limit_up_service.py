@@ -2,17 +2,22 @@
 
 source 由**数据可用性**决定，不由偏好决定：有完整限价 + 完整当日行情 → 本地自算（权威、
 可回放）；否则返回空 payload + degraded_reason，**不猜**。读路径只读，绝不外呼写库。
+
+`mode=intraday`（Task 11）：盘中口径（今日），源=东财涨停池，**不写** `market_sentiment_daily`。
+`mode=close`（默认）：原有本地口径，行为与今天字节级一致。
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import date
-from typing import TYPE_CHECKING, Any
+from datetime import date, datetime
+from typing import TYPE_CHECKING, Any, Literal
 
 from app.core.database import async_session_factory
 from app.repositories import limit_up_repo
 from app.services import limit_up_calculator as calc
+from app.services import market_day_service
+from app.services.market_data_service import _today_sh
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,10 +28,15 @@ logger = logging.getLogger(__name__)
 
 SNAPSHOT_TTL = 300
 CALENDAR_TTL = 900
+INTRADAY_TTL = 60  # 盘中缓存：与 30s 轮询半衰期对齐（Task 11）
 # 派生表（market_sentiment_daily）写入后须失效的读缓存键模式：失效内聚在
 # persist_snapshot 内，任何调用方（定时/手动/对账）都不依赖"记得清缓存"。
 _CALENDAR_CACHE_PATTERN = "market:limit-up:calendar:*"
 _WINDOW_BUFFER = 6  # gaps-and-islands 需要的前置上下文（lookback 之外多取的交易日）
+
+# 模式（Task 11）。`close` = 既有本地口径；`intraday` = 盘中口径（今日东财池）。
+# 由路由层 `mode: Literal["close", "intraday"] = "close"` 透传过来；历史日期 + 盘中 = 400。
+SnapshotMode = Literal["close", "intraday"]
 
 
 def window_trade_days(lookback: int) -> int:
@@ -38,10 +48,27 @@ def window_trade_days(lookback: int) -> int:
     return lookback + _WINDOW_BUFFER
 
 
+def _intraday_cache_key(trade_date: date) -> str:
+    """盘中缓存键（Task 11）——**仅**含 trade_date，**不**含 lookback。
+
+    与 close 路径 `market:limit-up:snapshot:{date}:{lookback}` 完全独立，不串味。
+    TTL=60s（INTRADAY_TTL）。
+    """
+    return f"market:limit-up:intra:{trade_date.isoformat()}"
+
+
+def _now_sh() -> datetime:
+    """当前上海时区时间。模块级函数让测试可 monkeypatch（钉死时钟）。"""
+    from zoneinfo import ZoneInfo  # noqa: PLC0415
+
+    return datetime.now(ZoneInfo("Asia/Shanghai"))
+
+
 def _empty(as_of: date | None, reason: str) -> dict[str, Any]:
     return {
         "as_of": as_of,
         "as_of_prev": None,
+        "as_of_quality": "partial",
         "source": "local_calc",
         "limits_present": False,
         "is_partial": False,
@@ -57,18 +84,57 @@ def _empty(as_of: date | None, reason: str) -> dict[str, Any]:
 
 
 async def get_snapshot(
-    cache: CacheClient | None, as_of: date | None = None, lookback: int = calc.LOOKBACK_TRADE_DAYS
+    cache: CacheClient | None,
+    as_of: date | None = None,
+    lookback: int = calc.LOOKBACK_TRADE_DAYS,
+    *,
+    mode: SnapshotMode = "close",
 ) -> dict[str, Any]:
-    """一次查询 → 一份快照 → 3 个端点共享，保证口径同源。"""
+    """一次查询 → 一份快照 → 3 个端点共享，保证口径同源。
+
+    Parameters
+    ----------
+    cache
+        Redis 客户端；None 时跳过所有缓存读写（close 路径行为不变）。
+    as_of
+        显式查询日（ISO date）；None 时 close 路径走 `resolve_latest_complete_day`，
+        intraday 路径固定为"今天"。
+    lookback
+        连板窗口交易日数（close 路径用）。intraday 路径忽略。
+    mode
+        `close`（默认）= 本地口径；`intraday` = 盘中口径（仅今日）。
+        intraday + 历史日期 → ValueError（端点转 400，盘中无历史意义）。
+    """
+    if mode == "intraday":
+        if as_of is not None and as_of != _today_sh():
+            raise ValueError(
+                f"mode=intraday does not accept historical as_of={as_of}; "
+                "intraday is today-only by design"
+            )
+        return await _get_intraday_snapshot(cache)
+    # 原 close 路径——保持字节级一致（不引入 mode/as_of_label 等副作用）。
     async with async_session_factory() as db:
-        target = as_of or await limit_up_repo.latest_quote_date(db)
+        quality: market_day_service.MarketQuality = "partial"
+        if as_of is not None:
+            target: date | None = as_of
+        else:
+            # 无显式日期 → 走完整性判据，脏的最新日不得把情绪面打成空快照。
+            md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
+            target = md.day if md is not None else None
+            if md is not None:
+                quality = md.quality
         if target is None:
             return _empty(None, "no_quotes")
         key = f"market:limit-up:snapshot:{target.isoformat()}:{lookback}"
         if cache is not None:
             cached: dict[str, Any] | None = await cache.get(key)
             if cached:
-                return cached
+                # 缓存体只由 (target, lookback) 决定，as_of_quality 是**逐请求**标签：
+                # 同一 target 既可来自显式 ?date=（partial），也可来自判据（complete/fallback）。
+                # 若原样返回，先写缓存的那个请求会把标签固化到 TTL 结束（显式日期写下
+                # partial 会污染默认请求，反之默认请求的 complete 会让 ?date= 谎报完整度）。
+                # 故命中路径一律用**本次请求**已知的 quality 覆盖标签，两条分支互不串味。
+                return {**cached, "as_of_quality": quality}
         market_days = await limit_up_repo.list_recent_trade_dates(
             db, target, window_trade_days(lookback)
         )
@@ -77,6 +143,7 @@ async def get_snapshot(
         breadth = await limit_up_repo.fetch_day_breadth(db, target)
         limits_present = await limit_up_repo.has_price_limits(db, target)
         snap = _empty(target, None)  # type: ignore[arg-type]
+        snap["as_of_quality"] = quality
         snap["as_of_prev"] = market_days[-2]
         snap["limits_present"] = limits_present
         snap["is_partial"] = calc.is_partial(breadth)
@@ -146,6 +213,76 @@ async def get_snapshot(
     return snap
 
 
+# ----- 盘中分支（Task 11）--------------------------------------------------------
+
+
+async def _get_intraday_snapshot(cache: CacheClient | None) -> dict[str, Any]:
+    """盘中分支：东财涨停池 → 与 close 路径同构的 snapshot。
+
+    不变量（Task 11 brief）：
+
+    - **不调 `persist_snapshot`**——盘中数据**不写** `market_sentiment_daily`。
+      兜底分支（fetch_intraday_pool 抛错）才允许走 close 路径落库。
+    - **历史日期不接**——`mode=intraday` + 显式 `as_of` 已在 `get_snapshot` 入口
+      抛 ValueError（端点转 400）。这里 `_today_sh()` 即"今天"。
+    - **缓存独立**——`market:limit-up:intra:{trade_date}` 60s，与 close 路径
+      `market:limit-up:snapshot:{date}:{lookback}` 不串味。
+    - **回落 close**——东财失败 → 走 close 路径，as_of_label 替换为回落标注，
+      `as_of_quality` 保持 close 路径的口径（不强行改成 "partial"）。
+    """
+    # 导入放在函数内避免 import cycle（intraday_sentiment_service 间接 import
+    # 链可能拖出 limit_up_service）；同时让 monkeypatch.fetch_intraday_pool 生效。
+    from app.services import intraday_sentiment_service  # noqa: PLC0415
+
+    today = _today_sh()
+    intra_key = _intraday_cache_key(today)
+
+    # 1) 缓存命中：直接返回盘中快照，**不**调 fetch_intraday_pool、**不**调
+    #    persist_snapshot。
+    if cache is not None:
+        cached: dict[str, Any] | None = await cache.get(intra_key)
+        if cached is not None:
+            return cached
+
+    # 2) 抓东财池 → build_intraday_snapshot；失败则回落 close 路径。
+    captured_at = _now_sh()
+    try:
+        pool_rows = await intraday_sentiment_service.fetch_intraday_pool(today.strftime("%Y%m%d"))
+    except Exception:  # noqa: BLE001 —— IO 失败可观测：回落 close，as_of_label 标不可用
+        logger.warning(
+            "intraday: eastmoney pool fetch failed; falling back to close path",
+            exc_info=True,
+        )
+        # 回落 close 路径——**走标准 close 路径**；as_of_label 后置覆盖。
+        # 落库也走：brief 要求 fallback 调用 persist_snapshot（intraday 自身**不**
+        # 落库，但 fallback 走 close 路径就按 close 口径处理——当天的 close 数据
+        # 提前被用户拉到，可顺便写盘）。
+        snap = await get_snapshot(cache, as_of=today, mode="close")
+        snap["as_of_label"] = "盘中不可用，已回落收盘"
+        # close 路径的 as_of_prev/yesterday/echelons 是收盘口径，保留。
+        # 落库：复用 close 路径的 persist_snapshot——它本身又会调 get_snapshot，
+        # 拿到同样的 snap，跳过自身已跳过的所有降级判据，最终走 upsert_sentiment_daily。
+        try:
+            await persist_snapshot(db=None, cache=cache, as_of=today)
+        except Exception:  # noqa: BLE001 —— 落库失败也不应挡住回落响应
+            logger.warning(
+                "intraday fallback: persist_snapshot failed; serving close snap only",
+                exc_info=True,
+            )
+        return snap
+
+    # 3) 正常盘中路径——build_intraday_snapshot 是纯函数，无 IO、无落库。
+    snap = intraday_sentiment_service.build_intraday_snapshot(
+        pool_rows, as_of=today, captured_at=captured_at
+    )
+
+    # 4) 写缓存（60s）。降级快照（degraded_reason 非 None）也缓存——前端应在徽标
+    #    渲染"无涨停"并避免 30s 雪崩重试；TTL 短到失效可接受。
+    if cache is not None:
+        await cache.set(intra_key, snap, ttl=INTRADAY_TTL)
+    return snap
+
+
 async def _fetch_web_pool(trade_date: str) -> list[dict[str, Any]]:
     from app.core.providers.eastmoney_client import get_eastmoney_client  # noqa: PLC0415
 
@@ -186,28 +323,42 @@ async def enrich_from_web(snapshot: dict[str, Any], trade_date: str) -> dict[str
 
 
 def sector_payload(snap: dict[str, Any], sw_l1: str | None = None) -> dict[str, Any]:
-    """申万 L3 最高板投影；`sw_l1` 过滤为客户端维度，缓存不受其影响。"""
+    """申万 L3 最高板投影；`sw_l1` 过滤为客户端维度，缓存不受其影响。
+
+    intraday 路径：sectors.items 内 `l1_code` 全 None，`sw_l1` 过滤会
+    命中空集——预期行为（前端 intraday 切到板块视图时显示"盘中无 SW 映射"）。
+    """
     items = snap["sectors"]["items"]
     if sw_l1:
         items = [i for i in items if i["l1_code"] == sw_l1]
     return {
         "as_of": snap["as_of"],
+        "as_of_quality": snap.get("as_of_quality", "partial"),
         "source": snap["source"],
         "degraded_reason": snap["degraded_reason"],
         "unclassified_count": snap["sectors"]["unclassified_count"],
         "items": items,
+        # 收盘路径不设、默认 None（api 端点构造时不传），intraday 路径 build 已带
+        "as_of_label": snap.get("as_of_label"),
     }
 
 
 def yesterday_payload(snap: dict[str, Any]) -> dict[str, Any]:
-    """昨日涨停今日表现投影。"""
+    """昨日涨停今日表现投影。
+
+    intraday 路径：`snap["yesterday"]` 是 None（盘中无"昨日→今日"语义），
+    走空 kpis/items；端点响应仍是合法 `YesterdayLimitUpOut`。
+    """
+    yest = snap.get("yesterday") or {"kpis": {}, "items": []}
     return {
         "as_of": snap["as_of"],
         "as_of_prev": snap["as_of_prev"],
+        "as_of_quality": snap.get("as_of_quality", "partial"),
         "source": snap["source"],
         "degraded_reason": snap["degraded_reason"],
-        "kpis": snap["yesterday"]["kpis"],
-        "items": snap["yesterday"]["items"],
+        "kpis": yest.get("kpis", {}),
+        "items": yest.get("items", []),
+        "as_of_label": snap.get("as_of_label"),
     }
 
 

@@ -5,6 +5,29 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Stock Bot</title>
+    <script>
+      /*
+       * 首帧主题引导：ThemeProvider 只能等到 React 挂载后（useEffect）才把 data-theme 写到
+       * <html>，在此之前页面按 :root 的浅色兜底渲染 —— 暗色用户每次加载都会先闪一帧白底，
+       * 再被 body 的 0.2s 过渡拉到暗色。这里在样式生效前用同一套判定规则先落一次属性，
+       * 保证首帧就是最终主题（判定规则与 src/app/theme-context.tsx 的 resolveInitialMode 一致，
+       * 二者都以 localStorage('stockbot-theme') > prefers-color-scheme 为序）。
+       */
+      (function () {
+        try {
+          var stored = localStorage.getItem("stockbot-theme");
+          var mode =
+            stored === "light" || stored === "dark"
+              ? stored
+              : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+          document.documentElement.dataset.theme = mode;
+        } catch (e) {
+          /* localStorage 不可用（隐私模式等）：留给 ThemeProvider 兜底 */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

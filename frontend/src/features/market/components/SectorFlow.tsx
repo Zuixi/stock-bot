@@ -1,9 +1,10 @@
 import { Skeleton } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchCapitalFlow, fetchSectors, fetchSwPerformance } from "@/shared/api/market";
-import { DataRow } from "@/shared/ui";
+import { DataRow, freshnessBadges } from "@/shared/ui";
 import { BreadthBar } from "./BreadthBar";
 import { fmtAmountParts, formatCnDate } from "./format";
+import { useMarketPolling } from "../hooks/useMarketPolling";
 import "./SectorFlow.css";
 
 const STALE_TIME = 60_000;
@@ -28,45 +29,57 @@ function flowNet(inflow: number, outflow: number): { net: number; label: string 
  * 外层由首页 `<SectionCard id="sectors">` 提供卡片壳与标题。
  */
 export function SectorFlow() {
+  const { refetchInterval } = useMarketPolling();
   const swQuery = useQuery({
-    queryKey: ["landing", "sw-performance"],
+    queryKey: ["market", "sw-performance"],
     queryFn: fetchSwPerformance,
     staleTime: STALE_TIME,
+    refetchInterval,
     // 首次失败即回退 CSRC 口径，不做指数退避重试（避免口径长时间悬空）
     retry: 0,
   });
   const usingCsrc = swQuery.isError;
   const sectorsQuery = useQuery({
-    queryKey: ["landing", "sectors"],
+    queryKey: ["market", "sectors"],
     queryFn: fetchSectors,
     staleTime: STALE_TIME,
+    refetchInterval,
     enabled: usingCsrc,
   });
   const flowQuery = useQuery({
-    queryKey: ["landing", "capital-flow"],
+    queryKey: ["market", "capital-flow"],
     queryFn: fetchCapitalFlow,
     staleTime: STALE_TIME,
+    refetchInterval,
   });
 
   const swRows = (swQuery.data?.items ?? []).slice(0, ROWS); // 服务端已按 avg_pct_chg 降序
-  const csrcRows = [...(sectorsQuery.data ?? [])]
+  const csrcRows = [...(sectorsQuery.data?.items ?? [])]
     .sort((a, b) => b.changePercent - a.changePercent)
     .slice(0, ROWS);
-  const flows = (flowQuery.data ?? []).slice(0, ROWS);
+  const flows = (flowQuery.data?.items ?? []).slice(0, ROWS);
   const maxAbs = Math.max(1, ...flows.flatMap((f) => [Math.abs(f.inflow), Math.abs(f.outflow)]));
 
   const leftLoading = usingCsrc ? sectorsQuery.isLoading : swQuery.isLoading;
   const leftError = usingCsrc ? sectorsQuery.isError : swQuery.isError;
   const hasLeft = usingCsrc ? csrcRows.length > 0 : swRows.length > 0;
   // T+1 行业行情必须标注数据截止日（与 RankingMatrix 的「数据截至 …」同款、同措辞）。
-  // CSRC 回退口径的 /market/sectors 不返回 as_of，故仅在申万口径下展示。
-  const asOf = usingCsrc ? undefined : swQuery.data?.as_of;
+  // 两个口径的信封都带 `as_of`/`as_of_quality`（后端 Task 2 起），故回退到证监会口径时
+  // 同样能自证数据截止日，绝不静默不标。
+  const asOf = usingCsrc ? sectorsQuery.data?.asOf : swQuery.data?.asOf;
+  const quality = usingCsrc ? sectorsQuery.data?.asOfQuality : swQuery.data?.asOfQuality;
+  const badges = freshnessBadges({ asOf, quality });
 
   return (
     <div className="sector-flow">
       <div className="sector-flow__basis">
         {`行业口径：${usingCsrc ? "证监会" : "申万一级"}`}
         {asOf ? ` · 数据截至 ${formatCnDate(asOf)}` : ""}
+        {badges.map((text) => (
+          <span className="section-card__quality" key={text}>
+            {text}
+          </span>
+        ))}
       </div>
       <div className="sector-flow__cols">
         <div className="sector-flow__col">

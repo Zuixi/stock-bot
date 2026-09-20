@@ -4,7 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { DataRow, SectionCard } from "@/shared/ui";
 import { fetchRankings } from "@/shared/api/market";
 import type { RankingType } from "@/shared/api/market";
-import { fmtAmountParts, formatCnDate } from "./format";
+import { fmtAmountParts } from "./format";
+import { useMarketPolling } from "../hooks/useMarketPolling";
 
 interface RankingTab {
   key: RankingType;
@@ -30,24 +31,30 @@ const TOP_N = 10;
 export function RankingMatrix() {
   const [active, setActive] = useState<RankingType>("gainers");
 
+  const { refetchInterval } = useMarketPolling();
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["home", "ranking", active],
+    queryKey: ["market", "rankings", active],
     queryFn: () => fetchRankings(active, TOP_N),
     staleTime: 5 * 60_000,
+    refetchInterval,
   });
 
   const rows = data?.items ?? [];
 
   return (
-    <SectionCard id="rankings" title="今日榜单" moreHref="/market" moreText="进入行情页">
+    <SectionCard
+      id="rankings"
+      title="今日榜单"
+      moreHref="/market"
+      moreText="进入行情页"
+      asof={data?.asOf}
+      quality={data?.asOfQuality}
+    >
       <Tabs
         activeKey={active}
         onChange={(k) => setActive(k as RankingType)}
         items={TABS.map((t) => ({ key: t.key, label: t.label }))}
       />
-      {data?.as_of ? (
-        <div className="section-card__asof">数据截至 {formatCnDate(data.as_of)}</div>
-      ) : null}
       {isLoading ? (
         <Skeleton active paragraph={{ rows: 6 }} />
       ) : isError ? (

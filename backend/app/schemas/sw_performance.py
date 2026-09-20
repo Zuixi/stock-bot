@@ -4,6 +4,8 @@ from datetime import date
 
 from pydantic import BaseModel
 
+from app.schemas.market import AsOfQuality
+
 
 class SwPerformanceItemOut(BaseModel):
     code: str
@@ -24,4 +26,6 @@ class SwPerformanceItemOut(BaseModel):
 
 class SwPerformanceResponseOut(BaseModel):
     as_of: date
+    as_of_quality: AsOfQuality = "complete"
+    as_of_reason: str | None = None
     items: list[SwPerformanceItemOut]

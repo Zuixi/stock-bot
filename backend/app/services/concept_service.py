@@ -234,7 +234,6 @@ async def ingest_concept_members(db: AsyncSession) -> dict[str, int]:
 CONCEPT_LIST_CACHE_KEY = "market:concept:list:{sort}:{limit}:{offset}"
 CONCEPT_LIST_TTL = 300
 CONCEPT_FLOW_LIMIT = 100  # 与 /market/sector-moneyflow 端点上限（le=100）一致
-HOT_BOARD_LIMIT = 10  # 与 market_service 行业分支的 LIMIT 10 对齐（卡片再按 |涨幅| 切 top6）
 
 
 def _degraded_reason(as_of: date | None, membership_as_of: date | None) -> str | None:
@@ -338,49 +337,6 @@ async def list_boards(
     if cache is not None and items:
         await cache.set(key, body, ttl=CONCEPT_LIST_TTL)
     return body
-
-
-async def hot_board_rows(
-    cache: CacheClient | None, limit: int = HOT_BOARD_LIMIT
-) -> list[dict[str, Any]]:
-    """T7 委托入口：概念分类的热门板块行，形状与 `market_service.get_hot_boards` 的行业分支
-    **逐键一致**（`id/name/code/changePercent/upCount/flatCount/downCount/leaders`）。
-
-    自开 `async_session_factory()` 会话：`get_hot_boards(category, cache)` 没有 `db` 参数
-    （与 `market_data_service.get_sector_moneyflow` 同款）。`id` 用 `concept-{board_code}`
-    前缀，避免与行业（`industry-{名}`）/地域（`region-{名}`）的 id 撞车。
-    """
-    from app.core.database import async_session_factory  # noqa: PLC0415
-
-    async with async_session_factory() as db:
-        body = await list_boards(db, cache, sort="pct", limit=limit, offset=0)
-
-    rows: list[dict[str, Any]] = []
-    for item in body["items"]:
-        rows.append(
-            {
-                "id": f"concept-{item['board_code']}",
-                "name": item["board_name"],
-                "code": item["board_code"],
-                # 行业分支同款 round(avg or 0, 2)：卡片契约是 number，缺均价渲染 0.00 而不是崩
-                "changePercent": round(float(item["avg_pct"] or 0), 2),
-                "upCount": int(item["up_count"]),
-                "flatCount": int(item["flat_count"]),
-                "downCount": int(item["down_count"]),
-                # 前端 HotBoardLeader.changePercent 是 number 并直接 `.toFixed(2)`：
-                # 无行情成分（change_percent=None）不得作为领涨股下发，否则卡片 TypeError。
-                "leaders": [
-                    {
-                        "symbol": leader["symbol"],
-                        "name": leader["name"],
-                        "changePercent": leader["change_percent"],
-                    }
-                    for leader in item["leaders"]
-                    if leader["change_percent"] is not None
-                ],
-            }
-        )
-    return rows
 
 
 # ── 读路径：GET /concepts/{board_code} + /stocks + /by-symbol（T8/T9，plans §2.2） ──────

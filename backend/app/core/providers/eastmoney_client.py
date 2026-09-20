@@ -4,6 +4,10 @@ Verified endpoints (2026-09-03):
 - ulist.np/get on push2delay (push2 proper returns empty in this environment)
 - clist/get on push2delay for sector money flow
   (push2 began refusing connections mid-day 2026-09-03)
+
+Verified endpoints (2026-09-18, host curl; same clist path the container uses):
+- clist/get `fs=m:90+t:2|t:3|t:1+f:!50` — 板块榜（行业 496 / 概念 504 / 地域 31 行）
+- clist/get `fs=b:BK####` — 板块成分股
 """
 
 from __future__ import annotations
@@ -13,7 +17,7 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -52,6 +56,23 @@ def _num(v: Any) -> float | None:
     if v is None or isinstance(v, str):
         return None
     return float(v)
+
+
+def _count(v: Any) -> int | None:
+    """家数字段（涨/平/跌）→ int；`fltt=2` 下无效值为 '-'（板块无成分股时）。"""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+#: 板块集合：行业 t:2 / 概念 t:3 / 地域 t:1（`f:!50` 剔退市整理）。板块榜与
+#: 资金流榜共用同一组 fs（2026-09-18 host 实测三套均返回行）。
+_BOARD_FS: dict[str, str] = {
+    "industry": "m:90+t:2+f:!50",
+    "concept": "m:90+t:3+f:!50",
+    "region": "m:90+t:1+f:!50",
+}
 
 
 def _map_concept_board(d: dict[str, Any]) -> dict[str, Any]:
@@ -215,11 +236,7 @@ class EastmoneyClient:
     async def fetch_sector_moneyflow(self, dimension: str) -> list[dict[str, Any]]:
         if dimension not in ("industry", "concept", "region"):
             raise ValueError(f"dimension must be industry|concept|region, got {dimension}")
-        fs = {
-            "industry": "m:90+t:2+f:!50",
-            "concept": "m:90+t:3+f:!50",
-            "region": "m:90+t:1+f:!50",
-        }[dimension]
+        fs = _BOARD_FS[dimension]
         data = await self._get_json(
             _CLIST_BASE,
             "/api/qt/clist/get",
@@ -251,6 +268,94 @@ class EastmoneyClient:
                 "lead_stock_name": d.get("f128"),
                 "lead_stock_code": d.get("f140"),
                 "lead_stock_pct": _num(d.get("f136")),
+            }
+            for d in diff
+        ]
+
+    @staticmethod
+    def _map_board_row(d: dict[str, Any]) -> dict[str, Any]:
+        """板块榜原始行 → 归一字段（金额单位：元）。
+
+        ``f104/f105/f106`` 是**成分股按方向的家数**（不是板块数），三者之和恒等于该
+        板块成分股总数：2026-09-18 host 实测 BK1211 汽车 235(涨)+11(平)+87(跌)=333
+        == ``fs=b:BK1211`` 的 ``data.total``。``f6`` 成交额、``f62`` 主力净流入均为元
+        （``fltt=2`` 下已是数值）。``f128/f136/f140`` 是东财"主力净流入最大股"
+        （领涨股），可能为 ``-``。
+        """
+        return {
+            "board_code": str(d.get("f12")),
+            "board_name": d.get("f14"),
+            "pct_change": _num(d.get("f3")),
+            "amount": _num(d.get("f6")),
+            "main_net_inflow": _num(d.get("f62")),
+            "main_net_ratio": _num(d.get("f184")),
+            "up_count": _count(d.get("f104")),
+            "flat_count": _count(d.get("f106")),
+            "down_count": _count(d.get("f105")),
+            "lead_stock_name": d.get("f128"),
+            "lead_stock_code": d.get("f140"),
+            "lead_stock_pct": _num(d.get("f136")),
+        }
+
+    async def fetch_board_list(
+        self, category: Literal["industry", "concept", "region"]
+    ) -> list[dict[str, Any]]:
+        """板块榜（行业/概念/地域三套，``fid=f3`` 降序）+ 真实 ``BK`` code。
+
+        实测（2026-09-18 host curl，push2delay；容器内同走 :data:`_CLIST_BASE`）：
+        industry=496 / concept=504 / region=31 个板块，单行含成分股涨跌家数、
+        主力净流入、成交额与领涨股。返回**归一字段**（见 :meth:`_map_board_row`），
+        调用方不要再解 ``f*``。
+        """
+        if category not in _BOARD_FS:
+            raise ValueError(f"category must be industry|concept|region, got {category}")
+        data = await self._get_json(
+            _CLIST_BASE,
+            "/api/qt/clist/get",
+            {
+                "pn": 1,
+                "pz": 100,
+                "po": 1,
+                "np": 1,
+                "fltt": 2,
+                "invt": 2,
+                "fid": "f3",
+                "fs": _BOARD_FS[category],
+                "fields": "f12,f14,f3,f6,f62,f104,f105,f106,f128,f136,f140,f184",
+            },
+        )
+        diff = (data.get("data") or {}).get("diff") or []
+        return [self._map_board_row(d) for d in diff]
+
+    async def fetch_board_stocks(self, board_code: str, limit: int = 50) -> list[dict[str, Any]]:
+        """板块成分股（``fs=b:BK####``，``fid=f62`` 主力净流入降序）。
+
+        ``board_code`` 必须是东财 ``BK`` 码（如 ``BK1518``）；**格式校验在端点侧**
+        （非法码 → 400）——客户端只透传 + 映射，不再自带一套正则。返回归一字段
+        ``symbol/name/pct_change/main_net_inflow``（``limit`` 即 ``pz``）。
+        """
+        data = await self._get_json(
+            _CLIST_BASE,
+            "/api/qt/clist/get",
+            {
+                "pn": 1,
+                "pz": limit,
+                "po": 1,
+                "np": 1,
+                "fltt": 2,
+                "invt": 2,
+                "fid": "f62",
+                "fs": f"b:{board_code}",
+                "fields": "f12,f14,f3,f62",
+            },
+        )
+        diff = (data.get("data") or {}).get("diff") or []
+        return [
+            {
+                "symbol": str(d.get("f12")),
+                "name": d.get("f14"),
+                "pct_change": _num(d.get("f3")),
+                "main_net_inflow": _num(d.get("f62")),
             }
             for d in diff
         ]

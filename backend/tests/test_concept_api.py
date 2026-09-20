@@ -1,10 +1,9 @@
-"""`GET /api/v1/concepts` 契约（T6）：默认门禁钉形状适配器，`-m e2e` 直连真库钉口径。
+"""`GET /api/v1/concepts` 契约（T6）：默认门禁钉不连库纯逻辑，`-m e2e` 直连真库钉口径。
 
 分两层：
 
-- **默认门禁（不连库）**：`hot_board_rows` 的形状适配器——T7 概念卡片直接消费它，
-  键名/`id` 前缀错一个前端就渲染 `undefined`。monkeypatch `list_boards` + 假 session，
-  所以 `uv run pytest` 在 dev DB 未启动时也全绿。
+- **默认门禁（不连库）**：T8 详情（板内梯队同源 + KPI 裁决 + 降级词表）与 T9 成分/反查，
+  monkeypatch 仓库层 + 假 session，所以 `uv run pytest` 在 dev DB 未启动时也全绿。
 - **`-m e2e`（真库 + FastAPI app）**：契约字段（`price_source` / `membership_as_of` / `total`）、
   `avg_pct DESC NULLS LAST` 顺序与分页不重叠、东财快照缺行必须 `None`（**绝不 0 填充**）。
   用例只读，且不依赖任何"今天恰好是多少"的数字：期望值全部现查 `concept_members` /
@@ -30,18 +29,6 @@ from app.schemas.concept import ConceptDetailOut
 from app.schemas.stock import StockEnrichedOut
 from app.services import concept_service, limit_up_service
 
-# 前端卡片读取的完整键集（frontend/src/shared/api/market.ts HotBoardItem）
-HOT_BOARD_KEYS = {
-    "id",
-    "name",
-    "code",
-    "changePercent",
-    "upCount",
-    "flatCount",
-    "downCount",
-    "leaders",
-}
-LEADER_KEYS = {"symbol", "name", "changePercent"}
 # §2.2 列表响应键集
 LIST_KEYS = {
     "as_of",
@@ -70,107 +57,6 @@ ITEM_KEYS = {
     "leaders",
 }
 LEADER_ITEM_KEYS = {"symbol", "name", "change_percent"}
-
-# 假 body：一块正常板 + 一块全未解析板（avg_pct=None / 领涨股无行情 → 前端侧必须被过滤）
-_CANNED_BODY: dict[str, Any] = {
-    "as_of": "2026-09-18",
-    "membership_as_of": "2026-09-20",
-    "price_source": "local_agg",
-    "flow_source": "em_clist",
-    "total": 504,
-    "degraded_reason": None,
-    "items": [
-        {
-            "board_code": "BK0714",
-            "board_name": "CPO概念",
-            "member_count": 12,
-            "unresolved_count": 1,
-            "priced_count": 10,
-            "up_count": 7,
-            "flat_count": 1,
-            "down_count": 2,
-            "avg_pct": 3.14159,
-            "main_net_inflow": 1234.5,
-            "main_net_ratio": 2.5,
-            "lead_stock_name": "中际旭创",
-            "lead_stock_code": "300308",
-            "lead_stock_pct": 9.99,
-            "leaders": [
-                {"symbol": "300308", "name": "中际旭创", "change_percent": 9.99},
-                {"symbol": "300502", "name": "新易盛", "change_percent": 5.5},
-            ],
-        },
-        {
-            "board_code": "BK0999",
-            "board_name": "全未解析",
-            "member_count": 2,
-            "unresolved_count": 2,
-            "priced_count": 0,
-            "up_count": 0,
-            "flat_count": 0,
-            "down_count": 0,
-            "avg_pct": None,
-            "main_net_inflow": None,
-            "main_net_ratio": None,
-            "lead_stock_name": None,
-            "lead_stock_code": None,
-            "lead_stock_pct": None,
-            "leaders": [{"symbol": "600000", "name": "浦发银行", "change_percent": None}],
-        },
-    ],
-}
-
-
-class _FakeSession:
-    """hot_board_rows 自开的会话替身：不连库（list_boards 已被 monkeypatch）。"""
-
-    async def __aenter__(self) -> object:
-        return object()
-
-    async def __aexit__(self, *exc: object) -> None:
-        return None
-
-
-# ---------------------------------------------------------------------------
-# 默认门禁：hot_board_rows 形状适配器（monkeypatch list_boards，不触 DB）
-# ---------------------------------------------------------------------------
-
-
-async def test_hot_board_rows_matches_frontend_card_contract(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """键集/`id` 前缀/单位全部对齐行业分支；无行情领涨股（null）不得下发。"""
-    calls: list[tuple[str, int, int]] = []
-
-    async def _fake_list_boards(
-        db: Any, cache: Any, sort: str, limit: int, offset: int
-    ) -> dict[str, Any]:
-        calls.append((sort, limit, offset))
-        return _CANNED_BODY
-
-    monkeypatch.setattr(concept_service, "list_boards", _fake_list_boards)
-    monkeypatch.setattr("app.core.database.async_session_factory", _FakeSession)
-
-    rows = await concept_service.hot_board_rows(None, 10)
-
-    assert calls == [("pct", 10, 0)], "热门板块按均价榜取数（与行业分支 avg_chg DESC 同序）"
-    assert len(rows) == 2
-    assert all(set(row) == HOT_BOARD_KEYS for row in rows), "键集必须与 HotBoardItem 完全一致"
-    assert all(set(leader) == LEADER_KEYS for row in rows for leader in row["leaders"])
-
-    first = rows[0]
-    assert first["id"] == "concept-BK0714", "id 必须带 concept- 前缀，避免与 industry-/region- 撞车"
-    assert first["code"] == "BK0714"
-    assert first["name"] == "CPO概念"
-    assert first["changePercent"] == pytest.approx(3.14)
-    assert (first["upCount"], first["flatCount"], first["downCount"]) == (7, 1, 2)
-    assert [le["symbol"] for le in first["leaders"]] == ["300308", "300502"]
-
-    # 全未解析板：avg_pct=None → 0.00（数字契约）；领涨股无行情 → 整个 leader 被丢弃
-    second = rows[1]
-    assert second["id"] == "concept-BK0999"
-    assert second["changePercent"] == 0.0
-    assert second["leaders"] == [], "changePercent 不可为 null（前端 .toFixed 会 TypeError）"
 
 
 async def _const(value: Any) -> Any:
@@ -399,54 +285,6 @@ async def test_concept_list_missing_flow_rows_are_none_not_zero(
         assert item["lead_stock_name"] is None
         assert item["lead_stock_code"] is None
         assert item["lead_stock_pct"] is None
-
-
-# 卡片契约的 8 键（industry 分支现产物）；委托测试只钉"形状来自 concept_service"这件事
-_CONCEPT_ROWS: list[dict[str, Any]] = [
-    {
-        "id": "concept-BK0714",
-        "name": "CPO概念",
-        "code": "BK0714",
-        "changePercent": 3.14,
-        "upCount": 7,
-        "flatCount": 1,
-        "downCount": 2,
-        "leaders": [{"symbol": "300308", "name": "中际旭创", "changePercent": 9.99}],
-    }
-]
-
-
-async def test_get_hot_boards_concept_delegates_to_concept_service(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """`category=concept` 必须**委托** concept_service.hot_board_rows（此前硬编码 return []）。
-
-    概念是"当前成分 × 本地行情"的聚合，和行业/地域分支的 `stocks.{csrc_desc,province}`
-    单值分组 SQL 没有共同形状；这条测试钉住"概念分支不再自己造行"：
-    返回对象是委托函数产物的**同一对象**（不是重新聚合/拼装），且恰好调一次。
-
-    同时钉住前端卡片读取的 8 键——键名漂移要在默认门禁就失败，而不是等前端渲染 undefined。
-    """
-    from app.services import market_service
-
-    calls: list[tuple[Any, int]] = []
-
-    async def _fake_hot_board_rows(cache: Any, limit: int = 10) -> list[dict[str, Any]]:
-        calls.append((cache, limit))
-        return _CONCEPT_ROWS
-
-    async def _explode() -> Any:
-        raise AssertionError("concept 分支不得另开 DB 会话自造行（必须委托 concept_service）")
-
-    monkeypatch.setattr(concept_service, "hot_board_rows", _fake_hot_board_rows)
-    monkeypatch.setattr("app.core.database.async_session_factory", _explode)
-
-    rows = await market_service.get_hot_boards("concept", cache=None)
-
-    assert rows is _CONCEPT_ROWS, "必须是委托产物的同一对象（委托，而非重新推导一份等价数据）"
-    assert len(calls) == 1, "恰好委托一次"
-    assert calls[0] == (None, 10), "cache 原样透传；limit 与行业分支 LIMIT 10 对齐"
-    assert set(rows[0]) == HOT_BOARD_KEYS, "键集必须与前端 HotBoardItem 完全一致"
 
 
 # ---------------------------------------------------------------------------

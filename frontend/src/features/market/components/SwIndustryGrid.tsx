@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchSwIndustryTree, type SwIndustryLevel1 } from "@/shared/api/swIndustry";
 import { useTheme } from "@/app/theme-context";
+import { useMarketPolling } from "../hooks/useMarketPolling";
 import "./SwIndustryGrid.css";
 
 /** accent 透明度阶梯区间：个股数最多的一级行业最深，最少的最浅 */
@@ -52,9 +53,11 @@ interface Props {
  * Stage C 自 landing/sections/IndustryGrid 提取为共享组件，宣传页与市场页共用。
  */
 export function SwIndustryGrid({ fallback = "暂无申万行业数据" }: Props) {
+  const { refetchInterval } = useMarketPolling();
   const { data, isLoading } = useQuery({
-    queryKey: ["sw-industry-tree"],
+    queryKey: ["market", "sw-industry-tree"],
     queryFn: fetchSwIndustryTree,
+    refetchInterval,
   });
 
   const industries = data ?? [];

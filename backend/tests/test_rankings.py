@@ -82,6 +82,8 @@ class _FakeDb:
 
 @pytest.mark.asyncio
 async def test_get_rankings_cache_hit_skips_db(monkeypatch) -> None:
+    """Cache key carries the resolved day; a hit resolves the day but runs no ranking SQL."""
+    _patch_resolved_day(monkeypatch)
     cache = RecordingCache()
     cached = RankingResponseOut(
         as_of=date(2026, 9, 10),
@@ -89,7 +91,7 @@ async def test_get_rankings_cache_hit_skips_db(monkeypatch) -> None:
         type="gainers",
         items=[],
     )
-    cache.store["market:rankings:gainers:20"] = cached.model_dump(mode="json")
+    cache.store["market:rankings:gainers:20:2026-09-10"] = cached.model_dump(mode="json")
     db = _FakeDb([])
 
     out = await market_service.get_rankings(db, cache, "gainers", 20)  # type: ignore[arg-type]
@@ -99,12 +101,22 @@ async def test_get_rankings_cache_hit_skips_db(monkeypatch) -> None:
     assert db.calls == []
 
 
+def _market_day(quality: str = "complete") -> object:
+    return market_service.market_day_service.MarketDay(
+        date(2026, 9, 10), quality, None, 5485, 5513, 1.0, True
+    )
+
+
+def _patch_resolved_day(monkeypatch) -> None:
+    async def _resolve(_db, *, cache=None):
+        return _market_day()
+
+    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _resolve)
+
+
 @pytest.mark.asyncio
 async def test_get_rankings_computes_and_sets_cache(monkeypatch) -> None:
-    async def _fake_latest(_db, _cache=None):
-        return date(2026, 9, 10)
-
-    monkeypatch.setattr(market_service, "get_latest_trade_date", _fake_latest)
+    _patch_resolved_day(monkeypatch)
     cache = RecordingCache()
     db = _FakeDb(
         [
@@ -126,9 +138,11 @@ async def test_get_rankings_computes_and_sets_cache(monkeypatch) -> None:
 
     assert [i.symbol for i in out.items] == ["600000"]
     assert out.as_of == date(2026, 9, 10)
+    assert out.as_of_quality == "complete"
     # Ruling Q: cache payload is JSON-mode (as_of is a string).
-    assert cache.set_calls[0][0] == "market:rankings:gainers:5"
+    assert cache.set_calls[0][0] == "market:rankings:gainers:5:2026-09-10"
     assert cache.set_calls[0][1]["as_of"] == "2026-09-10"  # type: ignore[index]
+    assert cache.set_calls[0][1]["as_of_quality"] == "complete"  # type: ignore[index]
     assert cache.set_calls[0][2] == market_service._MARKET_CACHE_TTL
 
 
@@ -140,12 +154,18 @@ async def test_get_rankings_rejects_unknown_type() -> None:
 
 @pytest.mark.asyncio
 async def test_get_rankings_degrades_on_empty_db(monkeypatch) -> None:
-    """Empty daily_quotes must return an empty payload, not propagate ValueError (500)."""
+    """Empty daily_quotes must return an empty payload, not propagate an error (500)."""
 
-    async def _empty(_db, _cache=None):
-        raise ValueError("daily_quotes is empty — run ingest first")
+    async def _empty(_db, *, cache=None):
+        return None
 
-    monkeypatch.setattr(market_service, "get_latest_trade_date", _empty)
+    # Production labels ``as_of`` from the Shanghai wall clock (``_today_sh()``),
+    # not the host local date; pin it so the assertion cannot flake on a host
+    # whose date lags/leads Asia/Shanghai (e.g. a UTC CI runner after 16:00 UTC).
+    # Pinned to a Saturday: the expected label is Friday, proving both the
+    # Shanghai-day source and the ``last_weekday`` roll-back are exercised.
+    monkeypatch.setattr(market_service, "_today_sh", lambda: date(2026, 9, 19))
+    monkeypatch.setattr(market_service.market_day_service, "resolve_latest_complete_day", _empty)
     cache = RecordingCache()
     db = _FakeDb([])
 
@@ -153,29 +173,60 @@ async def test_get_rankings_degrades_on_empty_db(monkeypatch) -> None:
 
     assert out.items == []
     assert out.is_latest_trading_day is False
-    assert out.as_of == market_service.last_weekday(date.today())
+    assert out.as_of == date(2026, 9, 18), "周六的最近预期交易日是周五（上海时区）"
+    assert out.as_of == market_service.last_weekday(market_service._today_sh())
+    assert out.as_of_quality == "partial"
     assert db.calls == []
     assert cache.set_calls == [], "empty fallback must not be cached (recover immediately)"
 
 
 @pytest.mark.asyncio
-async def test_latest_trade_date_helper_delegates_uncached(monkeypatch) -> None:
-    """The four dashboard readers keep using the uncached thin delegate."""
-    seen: list[object] = []
+async def test_get_rankings_legacy_cache_payload_without_quality_reads_partial(
+    monkeypatch,
+) -> None:
+    """Cache payloads without ``as_of_quality`` must not be read as ``"complete"``.
 
-    async def _fake(_db, _cache=None):
-        seen.append(_cache)
-        return date(2026, 9, 9)
+    The schema default (``"complete"``) would dress a stale payload up as a fresh
+    complete day for up to ``_MARKET_CACHE_TTL``; an absent key means ``"partial"``.
+    """
+    _patch_resolved_day(monkeypatch)
+    cache = RecordingCache()
+    legacy = RankingResponseOut(
+        as_of=date(2026, 9, 10), is_latest_trading_day=True, type="gainers", items=[]
+    ).model_dump(mode="json")
+    del legacy["as_of_quality"]  # legacy shape: key absent, not null
+    cache.store["market:rankings:gainers:20:2026-09-10"] = legacy
+    db = _FakeDb([])
 
-    monkeypatch.setattr(market_service, "get_latest_trade_date", _fake)
-    assert await market_service._latest_trade_date(_FakeDb([])) == date(2026, 9, 9)  # type: ignore[arg-type]
-    assert seen == [None], "siblings must not acquire a cache dependency"
+    out = await market_service.get_rankings(db, cache, "gainers", 20)  # type: ignore[arg-type]
+
+    assert out.as_of_quality == "partial"
+    assert out.as_of == date(2026, 9, 10)
+    assert db.calls == []
 
 
 @pytest.mark.asyncio
-async def test_latest_trade_date_helper_returns_none_on_empty(monkeypatch) -> None:
-    async def _empty(_db, _cache=None):
-        raise ValueError("empty")
+async def test_get_rankings_does_not_reuse_another_days_payload(monkeypatch) -> None:
+    """Two poisons: the pre-Task-8 day-less key and the previous day's key.
 
-    monkeypatch.setattr(market_service, "get_latest_trade_date", _empty)
-    assert await market_service._latest_trade_date(_FakeDb([])) is None  # type: ignore[arg-type]
+    A day-agnostic lookup would hit one of them and replay ``as_of=2026-09-09``; a
+    day-scoped key must miss both, run the ranking SQL for 2026-09-10 and write the
+    day-scoped key.
+    """
+    _patch_resolved_day(monkeypatch)
+    cache = RecordingCache()
+    for key in ("market:rankings:gainers:20", "market:rankings:gainers:20:2026-09-09"):
+        payload = RankingResponseOut(
+            as_of=date(2026, 9, 9), is_latest_trading_day=True, type="gainers", items=[]
+        ).model_dump(mode="json")
+        # wrong shape on purpose: a poisoned hit would blow up / return it
+        payload["items"] = [{"symbol": "STALE"}]
+        cache.store[key] = payload
+    db = _FakeDb([])
+
+    out = await market_service.get_rankings(db, cache, "gainers", 20)  # type: ignore[arg-type]
+
+    assert out.as_of == date(2026, 9, 10)
+    assert out.items == []
+    assert len(db.calls) == 1, "the ranking SQL must run for the resolved day"
+    assert cache.set_calls[0][0] == "market:rankings:gainers:20:2026-09-10"

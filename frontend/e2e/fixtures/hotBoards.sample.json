@@ -1,0 +1,66 @@
+{
+  "as_of": "2026-09-18",
+  "as_of_quality": "partial",
+  "as_of_reason": null,
+  "source": "eastmoney_boards",
+  "degraded_reason": null,
+  "items": [
+    {
+      "id": "industry-BK1518",
+      "name": "种子",
+      "code": "BK1518",
+      "changePercent": 7.86,
+      "upCount": 10,
+      "flatCount": 0,
+      "downCount": 0,
+      "leaders": [
+        {
+          "symbol": "600354",
+          "name": "敦煌种业",
+          "changePercent": 10.05
+        }
+      ],
+      "mainNetInflow": 281576464.0,
+      "mainNetRatio": 3.69,
+      "amount": 7621248698.0
+    },
+    {
+      "id": "industry-BK1296",
+      "name": "视频媒体",
+      "code": "BK1296",
+      "changePercent": 6.58,
+      "upCount": 1,
+      "flatCount": 0,
+      "downCount": 0,
+      "leaders": [
+        {
+          "symbol": "300413",
+          "name": "芒果超媒",
+          "changePercent": 6.58
+        }
+      ],
+      "mainNetInflow": 55417068.0,
+      "mainNetRatio": 2.18,
+      "amount": 2545700058.0
+    },
+    {
+      "id": "industry-BK1341",
+      "name": "房产租赁经纪",
+      "code": "BK1341",
+      "changePercent": 5.28,
+      "upCount": 2,
+      "flatCount": 0,
+      "downCount": 1,
+      "leaders": [
+        {
+          "symbol": "002285",
+          "name": "世联行",
+          "changePercent": 10.04
+        }
+      ],
+      "mainNetInflow": 112027456.0,
+      "mainNetRatio": 7.71,
+      "amount": 1453658348.0
+    }
+  ]
+}

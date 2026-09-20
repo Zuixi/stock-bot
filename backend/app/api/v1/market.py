@@ -1,12 +1,14 @@
 """Market endpoints for dashboard data."""
 
+import re
 from datetime import date, timedelta
 from typing import Literal, cast
 
-from fastapi import APIRouter, BackgroundTasks, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 
 from app.api.deps import CacheDep, DbDep, require_permissions
 from app.core.exceptions import not_found_response
+from app.schemas.market import BoardStockOut, HotBoardsOut, MarketListOut
 from app.schemas.quote import IndexDailyOut, IndexKlineResponse
 from app.schemas.ranking import RankingResponseOut, RankingType
 from app.schemas.sse_index import (
@@ -28,9 +30,9 @@ async def list_market_indices(cache: CacheDep) -> list[dict]:
     return await market_service.list_market_indices(cache=cache)
 
 
-@router.get("/distribution", response_model=list[dict])
-async def get_distribution(cache: CacheDep) -> list[dict]:
-    return await market_service.get_distribution(cache=cache)
+@router.get("/distribution", response_model=MarketListOut)
+async def get_distribution(cache: CacheDep) -> MarketListOut:
+    return MarketListOut.model_validate(await market_service.get_distribution(cache=cache))
 
 
 @router.get("/rankings", response_model=RankingResponseOut)
@@ -44,22 +46,50 @@ async def get_rankings(
     return await market_service.get_rankings(db, cache, type, limit)
 
 
-@router.get("/sectors", response_model=list[dict])
-async def get_sectors(cache: CacheDep) -> list[dict]:
-    return await market_service.get_sectors(cache=cache)
+@router.get("/sectors", response_model=MarketListOut)
+async def get_sectors(cache: CacheDep) -> MarketListOut:
+    return MarketListOut.model_validate(await market_service.get_sectors(cache=cache))
 
 
-@router.get("/capital-flow", response_model=list[dict])
-async def get_capital_flow(cache: CacheDep) -> list[dict]:
-    return await market_service.get_capital_flow(cache=cache)
+@router.get("/capital-flow", response_model=MarketListOut)
+async def get_capital_flow(cache: CacheDep) -> MarketListOut:
+    return MarketListOut.model_validate(await market_service.get_capital_flow(cache=cache))
 
 
-@router.get("/hot-boards", response_model=list[dict])
+@router.get("/hot-boards", response_model=HotBoardsOut)
 async def get_hot_boards(
     cache: CacheDep,
     category: Literal["industry", "concept", "region"] = Query(default="industry"),
-) -> list[dict]:
-    return await market_service.get_hot_boards(category, cache=cache)
+) -> HotBoardsOut:
+    """热门板块：东财板块体系（真实 BK code）；东财不可用时回落本地分组并标注。"""
+    return HotBoardsOut.model_validate(await market_service.get_hot_boards(category, cache=cache))
+
+
+#: 东财板块码：BK + 数字（如 BK1518）。其它一律 400——不把畸形码透给上游。
+_BOARD_CODE_PATTERN = re.compile(r"^BK\d+$")
+
+
+@router.get("/boards/{board_code}/stocks", response_model=list[BoardStockOut])
+async def get_board_stocks(
+    board_code: str,
+    cache: CacheDep,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[BoardStockOut]:
+    """东财板块成分股（主力净流入降序）；上游不可用 → 502（不返回假空列表）。"""
+    if _BOARD_CODE_PATTERN.fullmatch(board_code) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="board_code must look like an East Money board code, e.g. BK1518",
+        )
+    try:
+        rows = await market_service.get_board_stocks(board_code, limit=limit, cache=cache)
+    except Exception as exc:
+        # 无本地替代源：空列表会被前端当"该板块没有成分股"，比 502 更坏。
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="eastmoney board constituents unavailable",
+        ) from exc
+    return [BoardStockOut.model_validate(row) for row in rows]
 
 
 @router.get("/indices/{ts_code}/kline", response_model=IndexKlineResponse)
