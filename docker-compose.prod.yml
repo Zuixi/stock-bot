@@ -1,0 +1,49 @@
+# 服务器端 override：只做一件事 —— 把应用镜像从「本地构建」切成「ghcr.io 发布镜像」。
+#
+# 用法（在服务器仓库根目录，源树仍需存在，但只用来提供本文件与 gateway/ 配置）：
+#   IMAGE_TAG=0.0.1 docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#   IMAGE_TAG=0.0.1 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+#
+# 说明：
+#   - 服务器上**不构建任何镜像**（`--no-build`），全部来自 ghcr.io；因此不需要 npm/uv/Dockerfile 构建链。
+#   - IMAGE_TAG 必填（`${IMAGE_TAG:?…}`）：缺失时 compose 直接报错退出，避免静默跑在浮动 tag 上。
+#   - 基建镜像（traefik/postgres/redis/rabbitmq/alpine）保持 docker-compose.yml 里的华为 SWR 源，
+#     本文件不重复声明；数据卷、网络、healthcheck、环境变量、labels 一律不动。
+#   - 发布流程与数据迁移见 docs/build.md「服务器部署（发布镜像 + 数据迁移）」。
+services:
+
+  # ---- one-shot migrations ----
+  migrate:
+    image: "ghcr.io/zuixi/stock-bot/backend:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
+    pull_policy: always
+
+  migrate-auth:
+    image: "ghcr.io/zuixi/stock-bot/auth-service:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
+    pull_policy: always
+
+  # ---- auth microservice + forward-auth sidecar ----
+  auth-service:
+    image: "ghcr.io/zuixi/stock-bot/auth-service:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
+    pull_policy: always
+
+  forward-auth:
+    image: "ghcr.io/zuixi/stock-bot/forward-auth:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
+    pull_policy: always
+
+  # ---- backend api / worker / scheduler（同一 backend 镜像）----
+  api:
+    image: "ghcr.io/zuixi/stock-bot/backend:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
+    pull_policy: always
+
+  worker:
+    image: "ghcr.io/zuixi/stock-bot/backend:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
+    pull_policy: always
+
+  scheduler:
+    image: "ghcr.io/zuixi/stock-bot/backend:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
+    pull_policy: always
+
+  # ---- frontend ----
+  frontend:
+    image: "ghcr.io/zuixi/stock-bot/frontend:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
+    pull_policy: always
