@@ -641,6 +641,8 @@ async def test_concept_list_returns_membership_as_of_and_local_source(seeded_boa
 
 #### T7 修活「热门板块」概念 tab（1 行委托）
 
+> **⚠️ 已于 2026-09-20 合并 main 时作废**：并行分支 `feat/market-sentiment-overhaul` 已自带东财实时板块榜体系（`fetch_board_list` + 信封 + 60s 缓存），合并后该卡片由**东财实时数据**供数，本节要求的「委托 `concept_service.hot_board_rows`」与「本地成分聚合」文案**均已删除**（见 docs/Changelog.md 2026-09-20 条）。本分支保留的概念能力是：落库成分 + 每日差分、本地聚合（`/api/v1/concepts`）、概念详情页、个股所属概念、次新股 BK0501。
+
 **Files:** Modify `backend/app/services/market_service.py:445`；Test `backend/tests/test_market_contract.py`
 
 - [x] **Step 1**：失败测试
