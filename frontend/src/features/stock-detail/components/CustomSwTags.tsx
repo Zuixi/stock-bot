@@ -43,7 +43,7 @@ export function CustomSwTags({ exchange, symbol }: Props) {
     onSuccess: async (newTags) => {
       queryClient.setQueryData(["stock-sw-tags", exchange, symbol], newTags);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["sw-industry-tree"] }),
+        queryClient.invalidateQueries({ queryKey: ["market", "sw-industry-tree"] }),
         queryClient.invalidateQueries({ queryKey: ["sw-level1-stocks"] }),
         queryClient.invalidateQueries({ queryKey: ["sw-level2-stocks"] }),
         queryClient.invalidateQueries({ queryKey: ["sw-level3-stocks"] }),

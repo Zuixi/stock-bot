@@ -86,6 +86,13 @@ def _seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         },
         "refetch": {"daily_quotes": [], "daily_basic": [], "price_limits": [], "sentiment": []},
         "commits": 0,
+        # 因子补洞接缝：记录 (start, end) 调用；null_gaps = 该日仍为 NULL 的缺口行数；
+        # repair_error 非空时模拟补洞整体失败（外呼/DB 故障）。
+        "repairs": [],
+        "null_gaps": {},
+        "repair_error": None,
+        "repair_unfilled": 0,
+        "repair_remaining": 0,
     }
 
     async def _expected(
@@ -103,11 +110,27 @@ def _seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     async def _commit(db: Any) -> None:
         state["commits"] += 1
 
+    async def _repair(db: Any, *, start: date, end: date) -> dict[str, int]:
+        state["repairs"].append((start, end))
+        if state["repair_error"] is not None:
+            raise state["repair_error"]
+        rows = sum(n for d, n in state["null_gaps"].items() if start <= d <= end)
+        return {
+            "stocks": 1 if rows else 0,
+            "rows": rows,
+            "failed": 0,
+            "unfilled": state["repair_unfilled"],
+            "remaining": state["repair_remaining"],
+        }
+
     monkeypatch.setattr(rc, "_get_tushare", lambda: _CLIENT)
     monkeypatch.setattr(rc, "expected_trade_dates", _expected)
     monkeypatch.setattr(rc, "_stock_universe_count", _universe)
     monkeypatch.setattr(rc, "_row_counts", _counts)
     monkeypatch.setattr(rc, "_commit", _commit)
+    # 补洞服务的真实实现被换掉（离线）：它内部要查 DB / 外呼 TuShare。
+    # 从 quote_service 模块属性打补丁 —— 被测代码在函数体内 import，能拿到替身。
+    monkeypatch.setattr("app.services.quote_service.backfill_missing_adj_factors", _repair)
     for domain in state["refetch"]:
         name = f"_refetch_{domain}"
 
@@ -194,3 +217,100 @@ async def test_reconcile_commits_between_base_and_sentiment(_seams: dict[str, An
     _seams["counts"]["daily_quotes"] = {D14: UNIVERSE, D15: 2, D16: 0}
     await rc.reconcile_market_data(db=object())
     assert _seams["commits"] >= 1
+
+
+# ---------------------------------------------------------------- adj_factor 补洞挂载
+
+
+async def test_reconcile_repairs_adj_factor_for_refetched_quotes_day(
+    _seams: dict[str, Any],
+) -> None:
+    """重拉某天后必须补该天的因子缺口（新插入的行因子为 NULL，懒加载永远碰不到）。"""
+    _seams["expected"] = [D14]
+    _seams["counts"]["daily_quotes"] = {D14: 0}  # 整天缺失 → 重拉
+    _seams["null_gaps"] = {D14: 3}  # 该天 3 行因子为 NULL
+
+    result = await rc.reconcile_market_data(db=object())
+
+    assert _seams["refetch"]["daily_quotes"] == [D14]
+    assert _seams["repairs"] == [(D14, D14)]  # 恰好只补本次重拉的那天
+    assert result["adj_factor_repaired"] == {
+        "days": [D14.isoformat()],
+        "rows": 3,
+        "failed": 0,
+        "unfilled": 0,
+        "remaining": 0,
+        "error": None,
+    }
+
+
+async def test_reconcile_adj_repair_scoped_to_refetched_days_only(
+    _seams: dict[str, Any],
+) -> None:
+    """不重拉的中间日不得被顺带扫描：非连续重拉日 → 两次调用，各只覆盖一天。"""
+    _seams["counts"]["daily_quotes"] = {D14: 0, D15: UNIVERSE, D16: 0}  # 重拉 9/14 与 9/16
+    _seams["null_gaps"] = {D14: 1, D15: 9, D16: 2}  # 9/15 的缺口不属于本次范围
+
+    result = await rc.reconcile_market_data(db=object())
+
+    assert _seams["refetch"]["daily_quotes"] == [D14, D16]
+    assert _seams["repairs"] == [(D14, D14), (D16, D16)]  # 不是 (D14, D16) 的宽窗口
+    assert result["adj_factor_repaired"]["days"] == [D14.isoformat(), D16.isoformat()]
+    assert result["adj_factor_repaired"]["rows"] == 3  # 9/15 的 9 行不算
+
+
+async def test_reconcile_dry_run_never_repairs_adj_factor(_seams: dict[str, Any]) -> None:
+    """apply=False 是只读巡检（freshness 端点复用），绝不外呼/写库。"""
+    _seams["counts"]["daily_quotes"] = {D14: 0}
+    _seams["null_gaps"] = {D14: 3}
+
+    result = await rc.reconcile_market_data(db=object(), apply=False)
+
+    assert _seams["refetch"]["daily_quotes"] == []
+    assert _seams["repairs"] == []
+    assert result["adj_factor_repaired"] is None
+
+
+def test_contiguous_runs_merges_adjacent_days() -> None:
+    """连续重拉日必须聚成**一个**区间（每股一次外呼覆盖整段），非连续才拆（M6a）。"""
+    assert rc._contiguous_runs([D14, D15, D16]) == [(D14, D16)]  # 合并
+    assert rc._contiguous_runs([D14, D15, D17]) == [(D14, D15), (D17, D17)]  # 中段断开才拆
+    assert rc._contiguous_runs([]) == []
+
+
+async def test_reconcile_surfaces_adj_repair_remaining(_seams: dict[str, Any]) -> None:
+    """补洞被预算截断时，`remaining` 必须透出到 reconcile 结果（I2：截断可见）。"""
+    _seams["counts"]["daily_quotes"] = {D14: 0}
+    _seams["repair_remaining"] = 42
+
+    result = await rc.reconcile_market_data(db=object())
+
+    assert result["adj_factor_repaired"]["remaining"] == 42
+
+
+async def test_reconcile_survives_adj_repair_failure(_seams: dict[str, Any]) -> None:
+    """补洞失败不得让对账失败；失败写进结果 + 会话清理 + **后续域照常跑**。
+
+    会话不清理会让随后的 sentiment 补数报 PendingRollbackError —— 所以本测试除了
+    断言 rollback/no-raise，还要证明 sentiment 域在补洞失败后仍然执行了（M6b）。
+    """
+    _seams["counts"]["daily_quotes"] = {D14: UNIVERSE, D15: UNIVERSE, D16: 0}  # 重拉 9/16
+    _seams["counts"]["price_limits"] = {D14: UNIVERSE, D15: UNIVERSE, D16: UNIVERSE}
+    _seams["counts"]["sentiment"] = {D14: 1, D15: 0, D16: 0}  # 9/15 缺、底座完备
+    _seams["repair_error"] = RuntimeError("tushare 500")
+
+    class _DB:
+        def __init__(self) -> None:
+            self.rollbacks = 0
+
+        async def rollback(self) -> None:
+            self.rollbacks += 1
+
+    db = _DB()
+    result = await rc.reconcile_market_data(db=db)  # 不抛
+
+    assert db.rollbacks == 1
+    assert result["adj_factor_repaired"]["error"] == "RuntimeError: tushare 500"
+    assert result["adj_factor_repaired"]["rows"] == 0
+    assert result["domains"]["daily_quotes"]["status"] == "refetched"  # 对账本身仍算成功
+    assert _seams["refetch"]["sentiment"] == [D15]  # 补洞失败后 sentiment 域照常补

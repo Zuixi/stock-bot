@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react";
 import { Card, List, Segmented, Space, Spin, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { ChangeText } from "@/shared/ui";
-import { useNavigate } from "react-router-dom";
+import { ChangeText, FreshnessNote } from "@/shared/ui";
+import { Link } from "react-router-dom";
 import { fetchHotBoards, type HotBoardCategory } from "@/shared/api/market";
+import { hotBoardDegradedText } from "@/shared/api/marketEnvelope";
+import { useMarketPolling } from "../hooks/useMarketPolling";
+import { BoardDrilldownDrawer, type BoardDrilldownTarget } from "./BoardDrilldownDrawer";
 
 const HOT_BOARD_CATEGORIES: { key: HotBoardCategory; label: string }[] = [
   { key: "industry", label: "行业板块" },
@@ -18,26 +21,32 @@ function getHotBoardCategoryLabel(category: HotBoardCategory): string {
 }
 
 export function HotSectors() {
-  const navigate = useNavigate();
   const [category, setCategory] = useState<HotBoardCategory>("industry");
-  const { data: boardRows = [], isLoading } = useQuery({
-    queryKey: ["hot-boards", category],
+  const [boardTarget, setBoardTarget] = useState<BoardDrilldownTarget | null>(null);
+  const { refetchInterval } = useMarketPolling();
+  const { data: boardEnvelope, isLoading } = useQuery({
+    queryKey: ["market", "hot-boards", category],
     queryFn: () => fetchHotBoards(category),
     staleTime: STALE_TIME,
+    refetchInterval,
   });
+  const boardRows = boardEnvelope?.items ?? [];
   const rows = useMemo(
     () => [...boardRows].sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent)).slice(0, 6),
     [boardRows]
   );
+  // 产地降级文案：东财来源为 null，只有回落本地分组才上屏
+  const degradedText = boardEnvelope
+    ? hotBoardDegradedText(boardEnvelope.source, boardEnvelope.degradedReason)
+    : null;
 
   return (
     <Card
       title="A股热门板块"
       size="small"
       extra={
-        <a onClick={() => navigate(`/market/hot-sectors/${category}`)}>
-          查看全部
-        </a>
+        // 跳转必须给真 href（<Link>）：非语义 <a onClick> 键盘不可达、读屏不报链接
+        <Link to={`/market/hot-sectors/${category}`}>查看全部</Link>
       }
     >
       <Space direction="vertical" size={12} style={{ width: "100%" }}>
@@ -48,15 +57,19 @@ export function HotSectors() {
           onChange={(value) => setCategory(value as HotBoardCategory)}
         />
         <Spin spinning={isLoading}>
+          <FreshnessNote asOf={boardEnvelope?.asOf} quality={boardEnvelope?.asOfQuality} />
+          {degradedText ? (
+            <Tag color="warning" style={{ marginTop: 4 }}>
+              {degradedText}
+            </Tag>
+          ) : null}
           <List
             size="small"
             dataSource={rows}
-            renderItem={(item) => (
-              <List.Item
-                style={{ cursor: "pointer", padding: "8px 0" }}
-                onClick={() => navigate(`/market/hot-sectors/${category}?board=${item.code}`)}
-              >
-                <div style={{ display: "flex", alignItems: "center", width: "100%", gap: 12 }}>
+            renderItem={(item) => {
+              // 行内容是共用骨架；「可下钻」与否只决定外层用哪种语义元素。
+              const content = (
+                <div className="hot-board-row">
                   <Typography.Text strong style={{ width: 96 }}>{item.name}</Typography.Text>
                   <Typography.Text type="secondary" style={{ width: 52 }}>{item.code}</Typography.Text>
                   <ChangeText value={item.changePercent} style={{ width: 76 }} />
@@ -71,18 +84,38 @@ export function HotSectors() {
                     ))}
                   </div>
                 </div>
-              </List.Item>
-            )}
+              );
+              return (
+                <List.Item style={{ padding: "8px 0" }}>
+                  {item.code ? (
+                    // 打开抽屉是**原地展开**，不改变 URL：语义上是按钮而不是链接（Task 16）。
+                    // 真 <button> 自带 Tab 聚焦 + Enter/Space 触发，不需要手写 onKeyDown。
+                    <button
+                      type="button"
+                      className="hot-board-row__button"
+                      onClick={() => setBoardTarget({ code: item.code, name: item.name })}
+                    >
+                      {content}
+                    </button>
+                  ) : (
+                    // 回落本地分组时 `code` 为空串：没有真实板块码就没有可下钻的成分股。
+                    // 不渲染成按钮——不可点的行不该被读屏报成「有操作」。
+                    content
+                  )}
+                </List.Item>
+              );
+            }}
           />
         </Spin>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {category === "concept"
-            ? // 触点 A 口径声明（plans §3）：概念卡展示的 `changePercent` 是**成分均值**
-              // （本地聚合 avg_pct），不写明会让用户把它读成东财板块涨跌幅。
-              "概念板块涨跌幅与家数按本地成分聚合，每日 18:20 刷新"
-            : `${getHotBoardCategoryLabel(category)}：点击条目可查看该类别下全部细分板块。`}
+          {getHotBoardCategoryLabel(category)}：点击条目可查看该板块成分股。
         </Typography.Text>
       </Space>
+      <BoardDrilldownDrawer
+        board={boardTarget}
+        open={boardTarget !== null}
+        onClose={() => setBoardTarget(null)}
+      />
     </Card>
   );
 }

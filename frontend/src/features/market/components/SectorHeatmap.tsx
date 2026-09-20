@@ -4,8 +4,10 @@ import { useNavigate } from "react-router-dom";
 import { fetchSectors } from "@/shared/api/market";
 import { hexLerp } from "./DistributionChart";
 import { EChart } from "@/shared/ui/EChart";
+import { FreshnessNote } from "@/shared/ui";
 import { useTheme } from "@/app/theme-context";
 import type { ThemePalette } from "@/app/theme";
+import { useMarketPolling } from "../hooks/useMarketPolling";
 
 const STALE_TIME = 5 * 60 * 1000;
 
@@ -18,11 +20,14 @@ function heatColor(pct: number, c: ThemePalette): string {
 export function SectorHeatmap() {
   const navigate = useNavigate();
   const { colors } = useTheme();
-  const { data = [], isLoading } = useQuery({
-    queryKey: ["market-sectors"],
+  const { refetchInterval } = useMarketPolling();
+  const { data: sectors, isLoading } = useQuery({
+    queryKey: ["market", "sectors"],
     queryFn: fetchSectors,
     staleTime: STALE_TIME,
+    refetchInterval,
   });
+  const data = sectors?.items ?? [];
 
   const option = {
     tooltip: {
@@ -97,6 +102,7 @@ export function SectorHeatmap() {
       }
     >
       <Spin spinning={isLoading}>
+        <FreshnessNote asOf={sectors?.asOf} quality={sectors?.asOfQuality} />
         <EChart
           option={option}
           height={300}

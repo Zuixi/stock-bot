@@ -1,4 +1,16 @@
 import { apiGet } from "./client";
+import {
+  mapBoardStocks,
+  mapHotBoards,
+  mapMarketList,
+  type AsOfQuality,
+  type BackendBoardStockOut,
+  type BackendHotBoardsOut,
+  type BackendMarketListOut,
+  type BoardStockRow,
+  type HotBoardsEnvelope,
+  type MarketListEnvelope,
+} from "./marketEnvelope";
 import type { KLinePoint, KlineResult, MarketIndex, SectorSummary, SseIntradayResponse } from "@/shared/types";
 
 export interface DistributionItem {
@@ -21,15 +33,25 @@ export interface HotBoardLeader {
 export interface HotBoardItem {
   id: string;
   name: string;
+  /** 东财板块码（`BK####`）；本地分组回落时为空串（见 `HotBoardsEnvelope.source`）。 */
   code: string;
   changePercent: number;
   upCount: number;
   flatCount: number;
   downCount: number;
   leaders: HotBoardLeader[];
+  /** 主力净流入（元）；本地分组回落时不存在（undefined）。 */
+  mainNetInflow?: number | null;
+  /** 主力净流入占比（%）；本地分组回落时不存在（undefined）。 */
+  mainNetRatio?: number | null;
+  /** 成交额（元）；本地分组回落时不存在（undefined）。 */
+  amount?: number | null;
 }
 
 export type HotBoardCategory = "industry" | "concept" | "region";
+
+/** 成分股行（`marketEnvelope.ts` 定义，这里转出给组件消费）。 */
+export type { BoardStockRow };
 
 // ---------------------------------------------------------------------------
 // 公开榜单（Task 2.7，切到专用 /market/rankings 端点）
@@ -50,15 +72,37 @@ export interface RankingItem {
   total_mv?: number | null;
 }
 
-export interface RankingResponse {
+/** 后端原始 payload（snake_case；只在本文件的 mapper 里解包）。 */
+interface BackendRankingResponse {
   as_of: string;
+  as_of_quality?: AsOfQuality;
+  as_of_reason?: string | null;
   is_latest_trading_day: boolean;
   type: RankingType;
   items: RankingItem[];
 }
 
+/** 榜单响应的前端形状（camelCase，与 `marketEnvelope.ts` 的其它信封一致）。 */
+export interface RankingResponse {
+  asOf: string;
+  /** 判据日完整性口径（后端 Task 2 起返回）；Phase 1 徽标消费。 */
+  asOfQuality: AsOfQuality;
+  asOfReason: string | null;
+  isLatestTradingDay: boolean;
+  type: RankingType;
+  items: RankingItem[];
+}
+
 export function fetchRankings(type: RankingType, limit = 10): Promise<RankingResponse> {
-  return apiGet<RankingResponse>(`/api/v1/market/rankings?type=${type}&limit=${limit}`);
+  return apiGet<BackendRankingResponse>(`/api/v1/market/rankings?type=${type}&limit=${limit}`).then((b) => ({
+    asOf: b.as_of,
+    // 缺省回落 `partial`：口径未知时不得谎报「收盘」
+    asOfQuality: b.as_of_quality ?? "partial",
+    asOfReason: b.as_of_reason ?? null,
+    isLatestTradingDay: b.is_latest_trading_day,
+    type: b.type,
+    items: b.items,
+  }));
 }
 
 interface IndexKlineResponse {
@@ -79,12 +123,17 @@ export function fetchMarketIndices(): Promise<MarketIndex[]> {
   return apiGet<MarketIndex[]>("/api/v1/market/indices");
 }
 
-export function fetchDistribution(): Promise<DistributionItem[]> {
-  return apiGet<DistributionItem[]>("/api/v1/market/distribution");
+/**
+ * 涨跌分布。后端返回 `MarketListOut` 信封，mapper 解包后返回 `{items, asOf, asOfQuality, asOfReason}`，
+ * 消费端读 `.items`，口径元数据见 `marketEnvelope.ts`。
+ */
+export function fetchDistribution(): Promise<MarketListEnvelope<DistributionItem>> {
+  return apiGet<BackendMarketListOut<DistributionItem>>("/api/v1/market/distribution").then(mapMarketList);
 }
 
-export function fetchSectors(): Promise<SectorSummary[]> {
-  return apiGet<SectorSummary[]>("/api/v1/market/sectors");
+/** 板块涨跌（CSRC 口径）。同 {@link fetchDistribution}：返回 `{items, 口径元数据}` 信封。 */
+export function fetchSectors(): Promise<MarketListEnvelope<SectorSummary>> {
+  return apiGet<BackendMarketListOut<SectorSummary>>("/api/v1/market/sectors").then(mapMarketList);
 }
 
 // ---------------------------------------------------------------------------
@@ -107,21 +156,43 @@ export interface SwPerformanceItem {
   down_count: number;
 }
 
-export interface SwPerformanceResponse {
-  as_of: string;
-  items: SwPerformanceItem[];
+/**
+ * 申万一级行业行情。与 {@link fetchDistribution} 同款信封：`{items, asOf, asOfQuality, asOfReason}`
+ * （后端 Task 2 起返回 `as_of_quality`，Task 7 起走当日快照）。
+ */
+export function fetchSwPerformance(): Promise<MarketListEnvelope<SwPerformanceItem>> {
+  return apiGet<BackendMarketListOut<SwPerformanceItem>>(
+    "/api/v1/market/sw-industry/performance?limit=31",
+  ).then(mapMarketList);
 }
 
-export function fetchSwPerformance(): Promise<SwPerformanceResponse> {
-  return apiGet<SwPerformanceResponse>("/api/v1/market/sw-industry/performance?limit=31");
+/** 板块资金流（近似口径）。同 {@link fetchDistribution}：返回 `{items, 口径元数据}` 信封。 */
+export function fetchCapitalFlow(): Promise<MarketListEnvelope<CapitalFlowItem>> {
+  return apiGet<BackendMarketListOut<CapitalFlowItem>>("/api/v1/market/capital-flow").then(mapMarketList);
 }
 
-export function fetchCapitalFlow(): Promise<CapitalFlowItem[]> {
-  return apiGet<CapitalFlowItem[]>("/api/v1/market/capital-flow");
+/**
+ * 热门板块（Task 14 起走东财板块体系，真实 `BK` code）。
+ *
+ * 回落到本地分组时 `source === "local_grouping"`（`code` 为空串、`leaders` 为空数组），
+ * 消费端据此决定是否展示"降级"标注，不要假装它还是东财板块。
+ */
+export function fetchHotBoards(category: HotBoardCategory): Promise<HotBoardsEnvelope<HotBoardItem>> {
+  return apiGet<BackendHotBoardsOut<HotBoardItem>>("/api/v1/market/hot-boards", { category }).then(
+    mapHotBoards
+  );
 }
 
-export function fetchHotBoards(category: HotBoardCategory): Promise<HotBoardItem[]> {
-  return apiGet<HotBoardItem[]>("/api/v1/market/hot-boards", { category });
+/**
+ * 东财板块成分股（主力净流入降序）。返回裸数组：空数组 = 该板块真的没有成分股。
+ *
+ * 上游不可用 → 后端 502（**不是**空数组），调用方必须把 `isError` 与 `items.length === 0`
+ * 区分开，否则会把故障谎报成「板块没有成分股」。
+ */
+export function fetchBoardStocks(boardCode: string, limit = 50): Promise<BoardStockRow[]> {
+  return apiGet<BackendBoardStockOut[]>(`/api/v1/market/boards/${boardCode}/stocks`, { limit }).then(
+    mapBoardStocks
+  );
 }
 
 export function fetchSseIntraday(code: string, date?: string): Promise<SseIntradayResponse> {

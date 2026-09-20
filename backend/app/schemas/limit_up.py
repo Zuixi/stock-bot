@@ -1,23 +1,38 @@
 """连板梯队与市场情绪响应模型（字段名与 docs/design/limit-up-sentiment.md §5 对齐）。
 
-`source` 只允许 `local_calc`：本地口径是唯一权威、可回放的路径（决策 3）。
-东财 `hybk` 是**东财板块**口径，填不进申万 L3，所以 Web 不产出完整 payload，
-只给封板时间/封单/炸板次数三个增强字段（Task 6）；不要给它编一个 source="web"。
+`source` 双口径（Task 11）：
+
+- `local_calc`：本地口径（权威、可回放、写入 `market_sentiment_daily`）。
+- `eastmoney_intraday`：盘中口径（仅今日，由东财涨停池兜底，**不写**派生表）。
+
+盘中与收盘的**同构**由 `intraday_sentiment_service.build_intraday_snapshot` 保证：
+消费方用同一份 `LimitUpLadderOut` / `SectorLimitUpOut` / `YesterdayLimitUpOut` 解析
+路径同时吃下盘中与收盘两份快照。盘中无 SW L3 映射 → `SectorLimitUpItemOut.l3_*` /
+`l1_*` 全部 `None`；盘中无窗口语义 → `LadderStockOut.days_span / boards_in_window /
+missing_days` 全部 `None`；盘中无"昨日→今日"语义 → `YesterdayLimitUpOut.items = []`。
+`as_of_label` 用于前端徽标（收盘="收盘"、盘中="盘中 HH:MM"、回落="盘中不可用，已回落收盘"）。
 """
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel
+
+from app.schemas.market import AsOfQuality
+
+# source 双口径——见模块 docstring。盘中"source=eastmoney_intraday" 由 Task 11 引入；
+# `local_calc` 是既有口径，保留兼容。
+SentimentSource = Literal["local_calc", "eastmoney_intraday"]
 
 
 class LadderStockOut(BaseModel):
     symbol: str
     name: str
     streak: int
-    days_span: int
-    boards_in_window: int
-    missing_days: int
+    # 收盘=窗口语义给出 int；盘中=无窗口语义给 None。
+    days_span: int | None = None
+    boards_in_window: int | None = None
+    missing_days: int | None = None
     sw_l1_name: str | None = None
     sw_l3_name: str | None = None
     seal_time: str | None = None  # 本地路径恒 None（前端渲染 --）
@@ -51,7 +66,8 @@ class SentimentKpisOut(BaseModel):
 class LimitUpLadderOut(BaseModel):
     as_of: date | None
     as_of_prev: date | None
-    source: Literal["local_calc"]
+    as_of_quality: AsOfQuality = "partial"
+    source: SentimentSource
     limits_present: bool
     is_partial: bool
     sw_coverage: float | None = None
@@ -59,10 +75,15 @@ class LimitUpLadderOut(BaseModel):
     degraded_reason: str | None = None
     kpis: SentimentKpisOut | None = None
     echelons: list[EchelonOut] = []
+    # 收盘路径不设、默认 None（序列化时随 Pydantic 默认 include None 出现 null）；
+    # 盘中路径填 "盘中 HH:MM"；回落填 "盘中不可用，已回落收盘"。
+    as_of_label: str | None = None
 
 
 class SectorLimitUpItemOut(BaseModel):
-    l3_code: str
+    # 收盘路径：SW L3/L1 必须非空（按 limit_up_calculator.sector_ladder 逻辑）。
+    # 盘中路径：东财 hybk 体系不映射 SW，l3_*/l1_* 全 None。已在 Task 11 拓宽。
+    l3_code: str | None = None
     l3_name: str | None = None
     l1_code: str | None = None
     l1_name: str | None = None
@@ -75,10 +96,12 @@ class SectorLimitUpItemOut(BaseModel):
 
 class SectorLimitUpOut(BaseModel):
     as_of: date | None
-    source: Literal["local_calc"]
+    as_of_quality: AsOfQuality = "partial"
+    source: SentimentSource
     degraded_reason: str | None = None
     unclassified_count: int = 0
     items: list[SectorLimitUpItemOut] = []
+    as_of_label: str | None = None
 
 
 class YesterdayLimitUpItemOut(BaseModel):
@@ -99,10 +122,12 @@ class YesterdayLimitUpItemOut(BaseModel):
 class YesterdayLimitUpOut(BaseModel):
     as_of: date | None
     as_of_prev: date | None
-    source: Literal["local_calc"]
+    as_of_quality: AsOfQuality = "partial"
+    source: SentimentSource
     degraded_reason: str | None = None
     kpis: dict[str, Any] = {}
     items: list[YesterdayLimitUpItemOut] = []
+    as_of_label: str | None = None
 
 
 class SentimentCalendarPointOut(BaseModel):
@@ -115,3 +140,19 @@ class SentimentCalendarPointOut(BaseModel):
     promo_1to2: float | None = None
     promo_2to3: float | None = None
     max_streak: int = 0
+
+
+class SentimentIntradayPointOut(BaseModel):
+    """盘中分时点（Task 12 ``GET /market/sentiment/intraday`` 单行 schema）。
+
+    与 ``market_sentiment_intraday`` 表列 1:1 对齐；端点按 ``captured_at`` 升序返回
+    若干点，前端直接以 ``captured_at`` 为 X 轴渲染时序。
+    """
+
+    id: int
+    trade_date: date
+    captured_at: datetime
+    zt_count: int
+    dt_count: int
+    zb_count: int
+    max_streak: int

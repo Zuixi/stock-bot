@@ -12,13 +12,13 @@ export default function IndexDetailPage() {
   const navigate = useNavigate();
 
   const { data: indices = [], isLoading } = useQuery({
-    queryKey: ["market-indices"],
+    queryKey: ["market", "indices"],
     queryFn: fetchMarketIndices,
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: globalCards = [], isLoading: isGlobalLoading } = useQuery({
-    queryKey: ["global-indices"],
+    queryKey: ["market", "global-indices"],
     queryFn: fetchGlobalIndices,
     staleTime: 60 * 1000,
   });
