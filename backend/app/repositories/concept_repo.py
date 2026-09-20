@@ -438,7 +438,8 @@ async def count_active_boards(db: AsyncSession) -> int:
 # 领涨股必须一次查完整个分页：逐板查会是 N 条 SQL。`row_number()` 而不是 LATERAL
 # LIMIT 2 —— 同一 pct_chg 的并列必须由 `symbol ASC` 决定（UI 卡片会在请求间闪名）。
 # LEFT JOIN：无行情成分也占位（pct_chg IS NULL，排序 NULLS LAST），与 §2.3 的
-# "缺失 ≠ 0" 一致；前端卡片侧另有 null 过滤（见 concept_service.hot_board_rows）。
+# "缺失 ≠ 0" 一致；null 领涨股原样下发，概念板块前端暂无渲染面（东财热板块卡的 null
+# 过滤在 `market_service._hot_board_item`，与本查询无关）。
 _LEADERS_SQL = """
 WITH ranked AS (
     SELECT cm.board_code, cm.symbol, cm.stock_name, q.pct_chg,
