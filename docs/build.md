@@ -13,7 +13,8 @@
 stock_bot/
 ├── docker-compose.yml          # 根目录统一编排（本地：up --build）
 ├── docker-compose.prod.yml     # 服务器 override：应用镜像改走 ghcr.io 发布产物（见「服务器部署」）
-├── .env.docker.example         # 环境变量模板
+├── .env.docker.example         # 环境变量模板（本地开发）
+├── .env.production.example     # 环境变量模板（生产，带上线清单与自证命令）
 ├── data/                       # JSONL 数据备份（挂载卷）
 ├── backend/
 │   ├── Dockerfile              # 多阶段构建（uv 安装 → python:alpine）
@@ -31,29 +32,37 @@ stock_bot/
 
 | 文件 | 谁读它 | 放什么 |
 |------|-------|--------|
-| 根目录 `.env` | **docker compose 的 `${VAR}` 插值** | 网关/鉴权/基础设施：`APP_ENV`、`AUTH_JWT_PRIVATE_KEY_PEM`/`AUTH_JWT_PUBLIC_KEY_PEM`、`INTERNAL_API_TOKEN`、`AUTH_COOKIE_SECURE`、`AUTH_TRUST_FORWARDED_FOR`、`SESSION_TTL`、`RABBITMQ_DEFAULT_*`、`GATEWAY_HTTP_PORT`… |
-| `backend/.env` | api / worker / scheduler 容器的 `env_file`（`docker-compose.yml` 四处 `env_file: ./backend/.env`），以及本机 `uv run` 直起 | 后端运行时密钥与本地覆盖：`TUSHARE_TOKEN`、`INDUSTRY_DATA_SOURCE`、本机直连用的 `DATABASE_URL`/`REDIS_URL`… |
+| 根目录 `.env` | **docker compose 的 `${VAR}` 插值**（**只有这些键真正生效**）：`APP_ENV`、`AUTH_JWT_PRIVATE_KEY_PEM`/`AUTH_JWT_PUBLIC_KEY_PEM`、`INTERNAL_API_TOKEN`、`AUTH_COOKIE_SECURE`、`AUTH_TRUST_FORWARDED_FOR`、`ASSERTION_CACHE_TTL`、`JWT_ISSUER`/`JWT_AUDIENCE`、`RABBITMQ_DEFAULT_USER`/`_PASS` | 鉴权/网关/消息队列契约（其余键如 `POSTGRES_*`/`REDIS_*`/`SESSION_*` 在 compose 里**并未引用**，填了也不生效） |
+| `backend/.env` | api / worker / scheduler 容器的 `env_file`（`docker-compose.yml` 四处 `env_file: ./backend/.env`），以及本机 `uv run` 直起 | 后端运行时密钥与本地覆盖：`TUSHARE_TOKEN`、`INDUSTRY_DATA_SOURCE`、`APP_ENV`/`APP_DEBUG`、生产域名的 `CORS_ORIGINS`、本机直连用的 `DATABASE_URL`/`REDIS_URL`… |
 
 ```bash
-# 1. 根 .env —— compose 只从**项目根目录**的 .env 做 ${VAR} 插值（硬规则）
-cp .env.docker.example .env
+# —— 生产（推荐，带占位符与上线清单）——
+cp .env.production.example .env                    # compose 插值
+cp backend/.env.production.example backend/.env    # 后端运行时（填 TUSHARE_TOKEN）
 
-# 2. backend/.env —— 后端容器运行时密钥
-cp backend/.env.example backend/.env   # 然后填入真实 TUSHARE_TOKEN（https://tushare.pro）
+# —— 本地开发 ——
+cp .env.docker.example .env
+cp backend/.env.example backend/.env
 ```
 
-> 为什么必须分两个：`auth-service` / `forward-auth` 的密钥是通过 **compose 插值**（`${AUTH_JWT_PRIVATE_KEY_PEM}`）注入的，不是 `env_file`。把 `.env.docker.example` 复制到 `backend/.env` 时，compose 插值取不到任何值 → `AUTH_JWT_PRIVATE_KEY_PEM` / `INTERNAL_API_TOKEN` / `AUTH_COOKIE_SECURE` / `AUTH_TRUST_FORWARDED_FOR` / `APP_ENV` 全部为空或开发默认值：
+> **宿主侧键名 ≠ 容器内键名**（自证时别再搞错，否则会得出假结论）：`AUTH_JWT_PRIVATE_KEY_PEM` → 容器内 `JWT_PRIVATE_KEY_PEM`；`AUTH_COOKIE_SECURE` → `COOKIE_SECURE`；`AUTH_TRUST_FORWARDED_FOR` → `TRUST_FORWARDED_FOR`。
+>
+> 为什么必须分两个：`auth-service` / `forward-auth` 的密钥是通过 **compose 插值** 注入的，不是 `env_file`。把模板复制错位置时 compose 插值取不到值，于是（**一个错都不会报**）：
 > - `APP_ENV` 回落 `development` → auth-service **跳过**生产强校验（不再要求 HTTPS + `AUTH_COOKIE_SECURE=true`）
 > - JWT 私钥为空 → 开发模式自动生成密钥对（重启轮换，已签发断言失效）
 > - `INTERNAL_API_TOKEN` 为空 → forward-auth→auth-service 的 `X-Internal-Token` 不再发送
-> - `AUTH_TRUST_FORWARDED_FOR` 为空 → 不信任 `X-Forwarded-For`，审计日志记的是 Traefik 的 IP 而不是客户端 IP
 > - RabbitMQ 回落 `stockbot/stockbot_pass`
+> - 反面提醒：`AUTH_TRUST_FORWARDED_FOR` 的 compose 默认值是 **`true`**（Trusted Proxy 形态），不是空；只有显式设 `false` 才会不信任 `X-Forwarded-For`
+> - **`APP_ENV` 要写两处**：auth-service 读根 `.env`，api / worker / scheduler 只能读 `backend/.env`（compose 的 `environment:` 未注入它）——漏了后者会出现「网关侧 production、业务侧 development」的分裂
 >
-> 启动后必须核对一遍（与部署时同一套 `-f` 参数）：
+> 启动后必须核对一遍（与部署时同一套 `-f` 参数；第二行用的是**容器内**键名）：
 >
 > ```bash
-> docker compose config | grep -E "APP_ENV|AUTH_COOKIE_SECURE|INTERNAL_API_TOKEN|AUTH_JWT_PRIVATE_KEY_PEM|AUTH_TRUST_FORWARDED_FOR|RABBITMQ_DEFAULT_USER"
-> docker exec auth_service sh -c 'for v in APP_ENV AUTH_COOKIE_SECURE INTERNAL_API_TOKEN AUTH_JWT_PRIVATE_KEY_PEM AUTH_TRUST_FORWARDED_FOR; do eval "val=\$$v"; echo "$v=${val:+<set>}"; done'
+> docker compose -f docker-compose.yml -f docker-compose.prod.yml config \
+>   | grep -E "APP_ENV|COOKIE_SECURE|INTERNAL_API_TOKEN|JWT_PRIVATE_KEY_PEM|TRUST_FORWARDED_FOR|RABBITMQ_DEFAULT_USER"
+> docker exec auth_service sh -c 'for v in APP_ENV COOKIE_SECURE TRUST_FORWARDED_FOR INTERNAL_API_TOKEN JWT_PRIVATE_KEY_PEM JWT_PUBLIC_KEY_PEM; do eval "val=\$$v"; echo "$v=${val:+<set>}"; done'
+> docker exec backend_api sh -c 'echo "APP_ENV=$APP_ENV TUSHARE_TOKEN=${TUSHARE_TOKEN:+<set>} CORS_ORIGINS=$CORS_ORIGINS"'
+> curl -s localhost/api/v1/health | head -c 200   # ？见下「镜像构建」：/health 会回报 version/commit
 > ```
 >
 > 生产要求：`APP_ENV=production` + `AUTH_COOKIE_SECURE=true` + HTTPS，并用 `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048` / `openssl pkey -in private.pem -pubout` 生成并填好 JWT 密钥对（模板里已写命令）。
@@ -179,12 +188,40 @@ git push origin v0.0.1
 # 1. GHCR 拉取凭据（PAT 只需 read:packages）
 docker login ghcr.io -u <github-user> -p <PAT-with-read:packages>
 
-# 2. 环境变量模板（两个文件，角色不同；见上文「环境变量配置」）
-cp .env.docker.example .env              # compose 插值：APP_ENV / JWT 密钥 / INTERNAL_API_TOKEN / Cookie 与 XFF 开关
-cp backend/.env.example backend/.env     # 后端运行时：真实 TUSHARE_TOKEN（见下「开机回填 footgun」）
+# 2. 环境变量：用**生产模板**（带占位符与上线清单），两个文件角色不同；见上文「环境变量配置」
+cp .env.production.example .env                    # compose 插值：APP_ENV / JWT 密钥 / INTERNAL_API_TOKEN / Cookie 与 XFF 开关 / MQ 口令
+cp backend/.env.production.example backend/.env    # 后端运行时：TUSHARE_TOKEN / 业务侧 APP_ENV / CORS_ORIGINS
+
+# 3. 生成 JWT 密钥对（两个模板里都有同样的命令，二选一填）
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem
+openssl pkey -in private.pem -pubout -out public.pem
 ```
 
+**上线前必须处理的两个默认值**（模板末尾也列了）：
+
+1. **数据库口令硬编码**：`postgres` / `auth-db` 服务的 `POSTGRESQL_*` 与 api/worker/scheduler/migrate 的 `DATABASE_URL` 都写死在 `docker-compose.yml`（`stock_user/stock_pass`、`auth_user/auth_pass`）。根 `.env` 里的 `POSTGRES_*` **不会被消费** —— 要换口令得同时改这些行（新库部署时安全）。
+2. **导出到公网的端口**：`postgres` 绑 `5433:5432`、`redis` 绑 `6380:6379`。生产请**用防火墙关掉这两个端口**（或从 `docker-compose.yml` 删掉那两个 `ports:`），数据库与 Redis 无需对公网开放。
+
 若服务器无法访问 `ghcr.io`，可在能同时访问 ghcr 与华为 SWR 的机器上转推（`docker pull` → `docker tag` → `docker push`）到现有 `swr.cn-north-4.myhuaweicloud.com` 命名空间，再把 `docker-compose.prod.yml` 里的 `image:` 前缀换成 SWR 地址，其余不变。
+
+### 镜像构建（做了哪些优化，改 Dockerfile 前请先读）
+
+四个应用镜像（`backend` / `auth-service` / `forward-auth` / `frontend`）统一遵循下面几条，改构建时别把它们回退：
+
+| 约定 | 原因 / 实测效果 |
+|---|---|
+| **依赖层先于源码层**（先 `COPY pyproject.toml uv.lock` → 装依赖 → 最后 `COPY . .`） | 改业务代码只失效最后一层，依赖缓存命中 |
+| **runtime 只拷白名单 console script**（backend/auth-service：`uvicorn`+`alembic`；forward-auth：仅 `uvicorn`） | 整目录拷贝会把 builder 的 `uv`/`uvx`/`pip` 一起带进 runtime；实测 backend **513MB → 351MB**、auth-service 163→131MB、forward-auth 112→80.6MB |
+| **runtime 删 pip**、非 root `app` 用户、`PYTHONUNBUFFERED=1`、`PYTHONDONTWRITEBYTECODE=1` | 不写无用 `.pyc`、日志实时、降权限运行 |
+| **`TZ=Asia/Shanghai`** | 只影响**日志时间戳**（业务时间判断在代码里显式用 `ZoneInfo("Asia/Shanghai")`，别改成读容器时区） |
+| **OCI labels + `ARG VERSION/COMMIT/BUILD_DATE`**，由 CD 传入 `github.ref_name` / `github.sha` | 服务器上可回答“跑的是哪个版本”：`docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' stock-bot-backend:local`；`/health` 也会回报 `version`/`commit`（`backend/app/config.py` 的 `APP_VERSION`/`APP_COMMIT`） |
+| **服务级 `.dockerignore`** 排掉本地缓存/产物（`.mypy_cache`/`.pytest_cache`/`dist`/`e2e`/`test-results`…）与 `Dockerfile`/`docker-compose.yml` | 避免它们污染 `COPY . .` 的层缓存，也避免把构建文件塞进镜像 |
+
+**评估过但故意不做**（改回前请先测）：
+
+- 删 `py_mini_racer`（47.8MB）、`pandas`/`numpy`/`curl_cffi`（共 ~137MB）：它们是 `akshare` 的运行时传递依赖，删了会让行业投研取数断掉。
+- 预编译字节码（`compileall` / `UV_COMPILE_BYTECODE`）：启动略快但镜像涨约 10–20MB，而服务器部署的主要成本是 pull 体积，故不做。
+- 删 frontend 的 `npm i @rollup/rollup-linux-x64-gnu --no-save`：它是为绕开“npm 未安装平台专属 optional 依赖”的已知坑而加的，删掉本地能过但 arm64 双架构构建风险未知，保留。
 
 ### 拉取与启动（prod override）
 
