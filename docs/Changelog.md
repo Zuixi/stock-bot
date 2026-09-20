@@ -1,3 +1,9 @@
+## 2026-09-21 - 修正 Docker 部署的 env 示例落位：根 `.env`（compose 插值）与 `backend/.env`（运行时）必须分开
+- **问题**：示例文件本身是有的（根 `.env.docker.example` 36 键 + `backend/.env.example`），但文档与 AGENTS 一直教「`cp .env.docker.example backend/.env`」——而 compose 的 `${VAR}` 插值**只读项目根目录 `.env`**，`auth-service`/`forward-auth` 的密钥正是走插值注入。照文档做，`AUTH_JWT_PRIVATE_KEY_PEM`/`INTERNAL_API_TOKEN`/`AUTH_COOKIE_SECURE`/`AUTH_TRUST_FORWARDED_FOR`/`APP_ENV`/`RABBITMQ_DEFAULT_*` 全部回落默认值：生产表现为「auth-service 跳过 HTTPS+Secure-Cookie 强校验、JWT 私钥每次重启轮换（已签发断言失效）、内部调用不带 `X-Internal-Token`、审计日志记 Traefik IP 而非客户端 IP」。本机活栈实测即为此状态（根 `.env` 不存在 → `docker exec auth_service` 里上述变量全空）
+- **改动**：① `docs/build.md`「环境变量配置」重写为两文件对照表（谁读它 / 放什么）+「照旧做法会掉进什么默认值」清单 + 启动后自证命令（`docker compose config | grep` 与容器内变量自查）；② 「服务器部署」步骤同步改为 `cp .env.docker.example .env` + `cp backend/.env.example backend/.env`；③ `backend/.env.example` 补上缺失的 `TUSHARE_TOKEN`；④ AGENTS.md 部署约定同步
+- **验证**：文档里的自证命令与活栈实测输出一致（`APP_ENV=development`、`AUTH_JWT_PRIVATE_KEY_PEM=<empty>`、`INTERNAL_API_TOKEN=""`、`AUTH_TRUST_FORWARDED_FOR` 缺省）
+- 涉及模块：backend/.env.example, docs/build.md, AGENTS.md, docs/*
+
 ## 2026-09-21 - 修 CI 后端 lint 红：`ruff format` 违规 + self_review 改动集覆盖已提交提交
 - **问题**：推 main 后 CI 的 `Lint (backend)` 红 —— `ruff format --check app/ tests/` 报 `app/services/concept_service.py` 需重排（合并时 follow-up 加的 `_latest_complete_quote_day` 签名跨行）。本地之所以"全绿"：`self_review.sh` 只采集**工作区**改动，而当时已在 commit **之后**跑，改动集为空 → 整段 lint 跳过并打印绿勾（`ruff check` 与 `ruff format --check` 是两件事，前者一直通过）
 - **改动**：① `backend/app/services/concept_service.py` 按 formatter 重排（纯格式，4 行）；② `scripts/self_review.sh` 的改动集改为 **工作区 ∪ `origin/main..HEAD`**，commit 与否都覆盖，避免同类静默跳过

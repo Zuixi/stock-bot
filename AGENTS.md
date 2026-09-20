@@ -43,7 +43,7 @@ Agent 反复踩坑：起新服务不关旧服务，端口一路漂移堆积（�
 - [docs/Changelog.md](./docs/Changelog.md) / [docs/references/best-practices.md](./docs/references/best-practices.md) — 见下方约定
 
 ## 部署约定
-- Docker 部署用根目录 `docker-compose.yml` 统一编排；环境变量从 `.env.docker.example` 复制为 `backend/.env` 后填写真实 `TUSHARE_TOKEN`，模板默认值已适配容器内部网络（服务名 `postgres`/`redis`/`rabbitmq`）
+- Docker 部署用根目录 `docker-compose.yml` 统一编排；环境变量分**两个**文件（见 [docs/build.md](./docs/build.md)「环境变量配置」）：根目录 `.env`（从 `.env.docker.example` 复制，供 compose `${VAR}` 插值：`APP_ENV`/JWT 密钥/`INTERNAL_API_TOKEN`/Cookie 与 XFF 开关/RabbitMQ 口令）与 `backend/.env`（从 `backend/.env.example` 复制，填真实 `TUSHARE_TOKEN`，供 api/worker/scheduler 的 `env_file`）
 - 前端 Dockerfile 的 `runtime` 阶段只打包 `dist/`（`target: runtime`），网络受限时需先本地 `cd frontend && npm ci && npm run build`
 - 修改 compose 的服务名、端口、镜像名、表名或 `metric_key` 时，须同步核对 `docs/build.md`、`docs/ARCHITECTURE.md`、README 与相关组件 `AGENTS.md`，保持交叉引用一致
 
