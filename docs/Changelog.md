@@ -1,3 +1,10 @@
+## 2026-09-20 - 概念板块「查看全部」页改走本地聚合全量（504 板）+ 口径披露
+- **问题**：合并 main 后 `/market/hot-sectors/concept` 的"查看全部"只有 **10 行**（`_hot_board_items_from_eastmoney` 硬切 Top-`_HOT_BOARD_LIMIT`，东财 `pz` 上限 100），"查看全部"名不副实；而我们的 `/api/v1/concepts` 有全部 504 个板块 + 涨跌家数
+- **改动**：① 后端 `/api/v1/concepts` 的 `limit` 上限 100 → **1000**（页面一次取全 504；SQL 侧本就以 `CONCEPT_AGG_LIMIT=1000` 为上限，未放宽任何 SQL）；② 页面概念分类改接本地聚合端点（`fetchConceptList` 默认 `limit=1000`），行情来源从"东财实时 Top10"变为"**本地成分聚合（T-1）**"，并把 `refetchInterval` 设为 300s（对齐后端缓存 TTL，不再跟实时板块轮询）；③ 概念分类新增口径披露：**行情截至 A 日 / 成分快照 B 日（全库）** —— 列表页的 `membership_as_of` 是全表 max，措辞与详情页的按板口径区分开；④ 卡片（`/market` 热门板块）**仍走东财实时**，行业/地域分类与下钻抽屉行为不变
+- **评审修复轮（`f55f854`）**：① **缺失值排序恒排最后**（原 `?? 0` 会让"不可判"的板块按 0.00% 排在下跌板块之前，与"0≠不可判"的口径自相矛盾；e2e 原断言只是全正夹具的巧合）；② 补降级/请求失败两条 e2e（此前删掉分支也全绿）；③ `pagination.total` 断言改为与 `items.length` 不同值以证明由信封驱动；④ `marketTrust.spec` 补 `/api/v1/concepts` mock（此前会漏真实请求，违背该文件"全 mock"约定）；⑤ 概念分类隐藏恒为 `--` 的成交额列（保留其余分类）
+- **验证**：前端 `tsc -b` + `build` 绿、Playwright `conceptBoard` **11 passed** / `marketTrust` 12 passed；四处反证（缺失值排序、`total` 驱动、成交额列、降级/失败分支）均先红后复原；后端 598 passed 未受影响；实机 `GET /api/v1/concepts?limit=1000` → `total 504 / items 504`
+- 涉及模块：backend/app/api/v1/concepts.py, frontend/src/{shared/api/concept.ts, pages/market-hot-sectors/index.tsx, e2e/{conceptBoard,marketTrust}.spec.ts}, docs/*
+
 ## 2026-09-20 - 合并 main（feat/market-sentiment-overhaul）+ 指数 K 线历史回补 5 年
 - **合并**：`main` 先 fast-forward 到 `feat/market-sentiment-overhaul`（`c0adc80`），再并入 `feat/concept-boards`；7 个冲突文件按裁决解决，单提交 `a70983d`
 - **重要发现（必须记录）**：**该分支已自带一套东财板块体系**（`bb97226` Task 14：真实 BK code 板块榜 + 实时成分股下钻端点；`2069249` Task 15：板块卡/列表页/成分股抽屉；`b9496d9` 修复轮）。我开工时 `main` 上概念分类确实还是 `return []`，但那套东西在并行分支里已经建好了 —— 本次 T1–T9 的"板块榜/成分/榜端点"与之**功能重叠**。唯一属于本分支的是：落库成分 + 每日差分（历史口径）、本地聚合口径、概念详情页（连板/涨停 KPI/板内梯队）、个股所属概念、次新股（BK0501）
