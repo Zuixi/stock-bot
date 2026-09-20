@@ -45,6 +45,29 @@ async function mockHotBoards(page: Page, byCategory: Record<string, unknown>) {
   });
 }
 
+/**
+ * 概念分类列表端点（`GET /api/v1/concepts?limit=1000`，本地聚合全量）：切到「概念板块」分类时
+ * 会被请求。本文件的原则是**全部流量 mock**（活栈数据 T+1 漂移），故必须显式 mock 成空列表，
+ * 否则一次活栈请求会漏进用例（评审 Minor）。
+ */
+async function mockConceptList(page: Page) {
+  await page.route(/\/api\/v1\/concepts(\?|$)/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        as_of: null,
+        membership_as_of: null,
+        price_source: null,
+        flow_source: null,
+        total: 0,
+        degraded_reason: null,
+        items: [],
+      }),
+    })
+  );
+}
+
 async function mockBoardStocks(page: Page, payload: unknown, status = 200) {
   await page.route("**/api/v1/market/boards/*/stocks*", (route) =>
     route.fulfill({
@@ -166,6 +189,8 @@ test.describe("热门板块信任面（Task 15）", () => {
 
   test("?board= 深链高亮，切分类保留参数、切回恢复高亮", async ({ page }) => {
     await mockHotBoards(page, { industry: INDUSTRY, concept: CONCEPT });
+    // 概念分类现在打本地聚合列表端点：不 mock 就会漏一次活栈请求（本文件不允许）
+    await mockConceptList(page);
     await page.goto("/market/hot-sectors/industry?board=BK1518");
 
     const selected = page.locator("tbody tr.ant-table-row-selected");

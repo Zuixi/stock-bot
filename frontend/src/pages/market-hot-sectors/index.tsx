@@ -45,13 +45,21 @@ function isValidCategory(value: string): value is HotBoardCategory {
   return value === "industry" || value === "concept" || value === "region";
 }
 
+/**
+ * 缺失值（`null`/`undefined`）**恒排最后**，升序降序都一样。
+ *
+ * 不能拿 0 当占位：`changePercent: null` 是「不可判」，不是「平盘 0.00%」——按 0 参与降序
+ * 会把无行情的板块插在下跌板块之前，等于用排序谎报它的相对强弱（评审 Important）。
+ * 其余（tie / 数值序）语义不变。
+ */
 function sortRows(rows: HotBoardRow[], sort: SortState): HotBoardRow[] {
   if (!sort.sortBy) return rows;
   const direction = sort.sortOrder === "asc" ? 1 : -1;
+  const missing = direction < 0 ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY;
   const sorted = [...rows];
   sorted.sort((a, b) => {
-    const av = a[sort.sortBy!] ?? 0;
-    const bv = b[sort.sortBy!] ?? 0;
+    const av = a[sort.sortBy!] ?? missing;
+    const bv = b[sort.sortBy!] ?? missing;
     return av > bv ? direction : av < bv ? -direction : 0;
   });
   return sorted;
@@ -172,6 +180,7 @@ export default function MarketHotSectorsPage() {
     {
       title: "成交额",
       dataIndex: "amount",
+      key: "amount",
       width: 130,
       sorter: true,
       render: (value: number | null | undefined) => <NumberText value={value} unit="cap" />,
@@ -217,6 +226,10 @@ export default function MarketHotSectorsPage() {
     },
   ];
 
+  // 概念侧本地聚合不产成交额（`amount` 恒为 null）：整列隐藏，而不是留一个点了没反应的
+  // 排序表头（假交互比少一列更糟）。行业/地域仍由东财信封提供成交额，保持原样。
+  const visibleColumns = isConcept ? columns.filter((column) => column.key !== "amount") : columns;
+
   const onTableChange: TableProps<HotBoardRow>["onChange"] = (_pagination, _filters, sorter) => {
     if (!Array.isArray(sorter) && sorter.field) {
       setSort({
@@ -261,15 +274,18 @@ export default function MarketHotSectorsPage() {
           ) : null}
 
           {/* 概念分类口径披露（契约要求，不是装饰）：东财实时板块 ≠ 本地成分聚合。行情判据日
-              与**成分快照日**是两个独立口径，必须同时上屏；成分名录来自东财 clist，每日刷新。 */}
+              与**成分快照日**是两个独立口径，必须同时上屏；成分名录来自东财 clist，每日刷新。
+              列表页的 `membership_as_of` 是**全库**成分表的最大快照日，可能比某个板块自己的
+              快照更新 —— 故此处标注「全库」，不得读成「本板块成分截至该日」（详情页逐板口径
+              在 `/market/concept/:code`，措辞不同）。 */}
           {isConcept && conceptEnvelope ? (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               按本地成分聚合 · 行情截至{" "}
-              {conceptEnvelope.as_of ? formatCnDate(conceptEnvelope.as_of) : "--"} · 成分截至{" "}
+              {conceptEnvelope.as_of ? formatCnDate(conceptEnvelope.as_of) : "--"} · 成分快照{" "}
               {conceptEnvelope.membership_as_of
                 ? formatCnDate(conceptEnvelope.membership_as_of)
                 : "--"}
-              （东财）
+              （全库 · 东财）
             </Typography.Text>
           ) : null}
 
@@ -285,7 +301,7 @@ export default function MarketHotSectorsPage() {
           <Table<HotBoardRow>
             size="small"
             rowKey="id"
-            columns={columns}
+            columns={visibleColumns}
             dataSource={rows}
             pagination={{
               pageSize: 10,
