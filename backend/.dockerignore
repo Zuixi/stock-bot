@@ -13,3 +13,13 @@ tests/
 scripts/
 docs/
 !data/sw_custom_tags_seed.sql
+# 本地工具缓存（不该进 COPY . . 的层，否则每次跑测试/lint 都让镜像层失效）
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.benchmarks/
+# 构建/部署元文件与本地产物
+Dockerfile
+docker-compose.yml
+*.dump
+*.log
