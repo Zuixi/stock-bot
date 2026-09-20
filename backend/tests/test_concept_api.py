@@ -27,7 +27,7 @@ from app.main import app
 from app.repositories import concept_repo, limit_up_repo, market_data_repo
 from app.schemas.concept import ConceptDetailOut
 from app.schemas.stock import StockEnrichedOut
-from app.services import concept_service, limit_up_service
+from app.services import concept_service, limit_up_service, market_day_service
 
 # §2.2 列表响应键集
 LIST_KEYS = {
@@ -63,6 +63,19 @@ async def _const(value: Any) -> Any:
     return value
 
 
+def _market_day(day: date, *, quality: str = "complete", reason: str | None = None) -> Any:
+    """构造完整性判据的返回值（`market_day_service.MarketDay`），供 monkeypatch 用。"""
+    return market_day_service.MarketDay(
+        day=day,
+        quality=quality,  # type: ignore[arg-type]
+        reason=reason,
+        rows=5000,
+        universe=5400,
+        pct_chg_ratio=1.0,
+        limits_present=True,
+    )
+
+
 async def test_list_boards_degrades_on_missing_quotes_or_members(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -82,7 +95,11 @@ async def test_list_boards_degrades_on_missing_quotes_or_members(
     monkeypatch.setattr(concept_service.concept_repo, "count_active_boards", lambda db: _const(7))
     monkeypatch.setattr(concept_service.concept_repo, "aggregate_boards", _no_aggregate)
 
-    monkeypatch.setattr(concept_service.limit_up_repo, "latest_quote_date", lambda db: _const(None))
+    monkeypatch.setattr(
+        concept_service.market_day_service,
+        "resolve_latest_complete_day",
+        lambda db, *, cache=None: _const(None),
+    )
     monkeypatch.setattr(
         concept_service.concept_repo, "latest_membership_date", lambda db: _const(date(2026, 9, 20))
     )
@@ -93,7 +110,9 @@ async def test_list_boards_degrades_on_missing_quotes_or_members(
     assert no_quotes["items"] == [] and no_quotes["flow_source"] is None
 
     monkeypatch.setattr(
-        concept_service.limit_up_repo, "latest_quote_date", lambda db: _const(date(2026, 9, 18))
+        concept_service.market_day_service,
+        "resolve_latest_complete_day",
+        lambda db, *, cache=None: _const(_market_day(date(2026, 9, 18))),
     )
     monkeypatch.setattr(
         concept_service.concept_repo, "latest_membership_date", lambda db: _const(None)
@@ -343,7 +362,71 @@ def _patch_detail_reads(
     )
     monkeypatch.setattr(market_data_repo, "list_sector_moneyflow", lambda *a, **k: _const([]))
     monkeypatch.setattr(concept_repo, "board_leaders", lambda db, as_of, codes: _const({}))
-    monkeypatch.setattr(limit_up_repo, "latest_quote_date", lambda db: _const(date(2026, 9, 18)))
+    monkeypatch.setattr(
+        concept_service.market_day_service,
+        "resolve_latest_complete_day",
+        lambda db, *, cache=None: _const(_market_day(date(2026, 9, 18))),
+    )
+
+
+async def test_as_of_uses_snapshot_completeness_judge_not_raw_max(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """脏/半截的最新原始日必须被跳过：列表与详情的 `as_of` 都等于快照的完整日。
+
+    旧实现用裸 `max(daily_quotes.trade_date)`（`latest_quote_date`）：脏 D 日会把列表/详情的
+    `as_of` 顶到 D，而详情里的梯队来自 `get_snapshot`（走完整性判据、跳过 D 回落 D-1）——
+    一个信封两套最新日（聚合按 D、梯队按 D-1）且无 `degraded_reason`。这里钉"同源"。
+    """
+    raw_max = date(2026, 9, 18)  # 原始 max 是半截/脏日
+    complete = date(2026, 9, 17)  # 判据跳过脏日后落在这里
+
+    # 若服务仍读裸 max，下面断言 `as_of != raw_max` 会失败（patch 让"读裸 max"显形）。
+    monkeypatch.setattr(limit_up_repo, "latest_quote_date", lambda db: _const(raw_max))
+    monkeypatch.setattr(
+        concept_service.market_day_service,
+        "resolve_latest_complete_day",
+        lambda db, *, cache=None: _const(
+            _market_day(complete, quality="fallback", reason="latest_day_incomplete")
+        ),
+    )
+
+    # 列表：as_of 落在完整日，且聚合按同一个完整日取数
+    aggregated_on: list[date] = []
+
+    def _agg(db: Any, as_of: date, limit: int, offset: int) -> Any:
+        aggregated_on.append(as_of)
+        return _const([dict(_BK0501_ROW)])
+
+    monkeypatch.setattr(concept_service.concept_repo, "count_active_boards", lambda db: _const(1))
+    monkeypatch.setattr(
+        concept_service.concept_repo,
+        "latest_membership_date",
+        lambda db: _const(date(2026, 9, 20)),
+    )
+    monkeypatch.setattr(concept_service.concept_repo, "aggregate_boards", _agg)
+    monkeypatch.setattr(market_data_repo, "list_sector_moneyflow", lambda *a, **k: _const([]))
+    monkeypatch.setattr(concept_repo, "board_leaders", lambda db, as_of, codes: _const({}))
+
+    body = await concept_service.list_boards(None, None, "pct", 5, 0)
+    assert body["as_of"] == complete.isoformat(), "as_of 必须回落到完整日，不得用脏 raw max"
+    assert aggregated_on == [complete], "聚合也必须按同一个完整日取数"
+
+    # 详情：快照（同判据）同样拒绝脏日，信封的 as_of 必须与快照逐字一致
+    snap = {**_snap_with([], limits_present=True, reason=None), "as_of": complete}
+    monkeypatch.setattr(concept_repo, "find_board", lambda db, code: _const(dict(_BK0501_ROW_META)))
+    monkeypatch.setattr(
+        concept_repo, "list_member_symbols", lambda db, code: _const([("600000", "X")])
+    )
+    monkeypatch.setattr(
+        concept_repo, "board_membership_date", lambda db, code: _const(date(2026, 9, 20))
+    )
+    monkeypatch.setattr(limit_up_service, "get_snapshot", lambda cache: _const(snap))
+
+    out = await concept_service.get_board_detail(None, "BK0501", cache=None)
+    assert out is not None
+    assert out["as_of"] == snap["as_of"].isoformat(), "详情 as_of 必须与快照同源"
+    assert out["as_of"] != raw_max.isoformat(), "脏 raw max 日不得出现在信封里"
 
 
 async def test_board_detail_reuses_snapshot_echelons(
@@ -650,7 +733,11 @@ async def test_concepts_by_symbol_orders_and_caches(monkeypatch: pytest.MonkeyPa
             AssertionError("by-symbol 不得全库聚合后在 Python 侧过滤")
         ),
     )
-    monkeypatch.setattr(limit_up_repo, "latest_quote_date", lambda db: _const(date(2026, 9, 18)))
+    monkeypatch.setattr(
+        concept_service.market_day_service,
+        "resolve_latest_complete_day",
+        lambda db, *, cache=None: _const(_market_day(date(2026, 9, 18))),
+    )
     monkeypatch.setattr(
         concept_repo, "latest_membership_date", lambda db: _const(date(2026, 9, 20))
     )

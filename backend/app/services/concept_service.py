@@ -34,8 +34,8 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-from app.repositories import concept_repo, limit_up_repo, market_data_repo
-from app.services import limit_up_service, market_service
+from app.repositories import concept_repo, market_data_repo
+from app.services import limit_up_service, market_day_service, market_service
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -245,6 +245,22 @@ def _degraded_reason(as_of: date | None, membership_as_of: date | None) -> str |
     return None
 
 
+async def _latest_complete_quote_day(
+    db: AsyncSession, cache: CacheClient | None
+) -> date | None:
+    """概念端点信封的 `as_of`：与 `limit_up_service.get_snapshot` **同一个**最新日判据。
+
+    裸 `max(daily_quotes.trade_date)`（`limit_up_repo.latest_quote_date`）会把脏/半截的
+    最新日 D 顶成 `as_of`，而详情里的梯队来自 `get_snapshot`——后者走
+    `market_day_service.resolve_latest_complete_day`，脏 D 会被跳过回落到 D-1。结果是同一个
+    信封里聚合按 D、梯队按 D-1，还报 `as_of=D` 且无 `degraded_reason`。这里统一成快照的判据
+    （模块属性访问，测试可 monkeypatch）；无行情时 `resolve_latest_complete_day` 返回 `None`，
+    端点照旧降级 `no_quotes`。
+    """
+    md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
+    return md.day if md is not None else None
+
+
 def _inflow_sort_key(item: dict[str, Any]) -> tuple[bool, float, str]:
     """`main_net_inflow DESC NULLS LAST, board_code ASC`——缺资金流的排最后，同值按码升序。
 
@@ -302,6 +318,9 @@ async def list_boards(
 
     缓存**只在 items 非空时写**（"数据不完整时宁可不缓存"）：整页空/降级的响应若被缓存，
     上游数据补齐后还要再等一个 TTL 才可见。
+
+    `as_of` 来自 `_latest_complete_quote_day`（与 `get_snapshot` 同判据）：脏的最新日回落到
+    完整日，绝不让"聚合按 D、快照按 D-1"的两套最新日同时出现在一个信封里。
     """
     key = CONCEPT_LIST_CACHE_KEY.format(sort=sort, limit=limit, offset=offset)
     if cache is not None:
@@ -309,7 +328,7 @@ async def list_boards(
         if cached:
             return cached
 
-    as_of = await limit_up_repo.latest_quote_date(db)
+    as_of = await _latest_complete_quote_day(db, cache)
     membership_as_of = await concept_repo.latest_membership_date(db)
     total = await concept_repo.count_active_boards(db)
     degraded_reason = _degraded_reason(as_of, membership_as_of)
@@ -415,10 +434,12 @@ async def get_board_detail(
     板内梯队**同源于** `/market/limit-up` 的快照（`limit_up_service.get_snapshot`，模块属性
     调用以便测试 monkeypatch），只按成分过滤，不重算 streak——板内口径与全市场梯队必须永远一致。
 
-    `membership_as_of` 用**该板**的 `max(last_seen_on)`，不是 T6 列表的全表值。`degraded_reason`
-    原样透传快照自己的词（`no_quotes` / `price_limits_missing` / `partial_day` /
-    `insufficient_trade_days`），不自立门户；例外有两个：板内无成分行时 `no_members` 优先，
-    以及 `no_limit_up_rows` **不**透传（市场级"今天没有涨停"是合法空态，KPI 诚实报 0）。
+    `as_of` 与下面 `get_snapshot` 用同一个 `_latest_complete_quote_day` 判据（脏的最新日不得让
+    板聚合与板内梯队落在两个不同的日子）。`membership_as_of` 用**该板**的 `max(last_seen_on)`，
+    不是 T6 列表的全表值。`degraded_reason` 原样透传快照自己的词（`no_quotes` /
+    `price_limits_missing` / `partial_day` / `insufficient_trade_days`），不自立门户；例外有两个：
+    板内无成分行时 `no_members` 优先，以及 `no_limit_up_rows` **不**透传（市场级"今天没有涨停"
+    是合法空态，KPI 诚实报 0）。
     """
     board_meta = await concept_repo.find_board(db, board_code)
     if board_meta is None:
@@ -426,7 +447,7 @@ async def get_board_detail(
     members = await concept_repo.list_member_symbols(db, board_code)
     member_symbols = {symbol for symbol, _ in members}
     membership_as_of = await concept_repo.board_membership_date(db, board_code)
-    as_of = await limit_up_repo.latest_quote_date(db)
+    as_of = await _latest_complete_quote_day(db, cache)
 
     row: dict[str, Any] | None = None
     if as_of is not None and members:
@@ -520,7 +541,7 @@ async def get_concepts_by_symbol(
         if cached:
             return cached
 
-    as_of = await limit_up_repo.latest_quote_date(db)
+    as_of = await _latest_complete_quote_day(db, cache)
     membership_as_of = await concept_repo.latest_membership_date(db)
     items: list[dict[str, Any]] = []
     codes = await concept_repo.list_symbol_board_codes(db, symbol)

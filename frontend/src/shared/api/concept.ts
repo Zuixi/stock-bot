@@ -17,7 +17,7 @@ export interface ConceptBoardItem {
   lead_stock_name: string | null;
   lead_stock_code: string | null;
   lead_stock_pct: number | null;
-  leaders: { symbol: string; name: string; change_percent: number }[];
+  leaders: { symbol: string; name: string; change_percent: number | null }[];
 }
 
 export interface ConceptDetail {
