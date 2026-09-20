@@ -34,7 +34,10 @@ async def list_concepts(
             "重排（缺快照行排最后），不是全库流入 Top-N。"
         ),
     ),
-    limit: int = Query(default=50, ge=1, le=100),
+    # `le=1000`（不是 100）：「查看全部」概念列表页一次拉全量板块（dev 库 504 板）。这与
+    # `concept_service.CONCEPT_AGG_LIMIT = 1000`（全库聚合一次的上限）同量级，**不额外放大任何
+    # SQL**——limit 只是把已定上限传给 `aggregate_boards` 的 `LIMIT :limit`（仍是同一份聚合语句）。
+    limit: int = Query(default=50, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
 ) -> ConceptListOut:
     """概念板块列表：本地成分聚合 + 东财资金流快照内存 join（口径/降级见 plans §2.2/§2.3）。"""
