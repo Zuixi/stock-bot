@@ -126,9 +126,118 @@ test("概念详情 404：空态 + 回跳链接，且 4xx 不重试（只请求�
   expect(hits).toBe(1);
 });
 
-test("概念行点击进入概念详情（既有行为不回退）", async ({ page }) => {
-  // merge 后概念卡展示的是东财实时板块（`main` 的口径），不再有「本地成分聚合」声明；
-  // 本用例只钉行点击仍进概念详情页，口径声明的断言已随该声明一并删除。
+/**
+ * 概念**列表页**（`/market/hot-sectors/concept`）的口径载荷：12 个板块，刻意多于东财路径的
+ * Top-10（`_hot_board_items_from_eastmoney` 切片上限）。
+ *
+ * 三处刻意设下的反例：
+ * - `as_of`(09-18) 与 `membership_as_of`(09-17) **不同**：把行情判据日误当成分快照日会被日期断言抓住；
+ * - `BK9012` 的 `avg_pct: null` + 领涨股 `change_percent: null`：缺失必须渲染 `--`，绝不能 0 填充
+ *   成 `0.00%`（无行情成分进 tag 还会让 `toFixed` 崩）；
+ * - `BK9001.flat_count = 3`：平盘家数 > 0 才有意义（缺失 ≠ 0 的正样本）。
+ */
+const CONCEPT_BOARDS = {
+  as_of: "2026-09-18",
+  membership_as_of: "2026-09-17",
+  price_source: "local_agg",
+  flow_source: "em_clist",
+  total: 12,
+  degraded_reason: null,
+  items: Array.from({ length: 12 }, (_, i) => {
+    const n = i + 1;
+    const nn = String(n).padStart(2, "0");
+    return {
+      board_code: `BK90${nn}`,
+      board_name: `聚合概念${nn}`,
+      member_count: 50 + n,
+      unresolved_count: 0,
+      priced_count: 50 + n,
+      up_count: 30,
+      flat_count: n === 1 ? 3 : 0,
+      down_count: 20,
+      avg_pct: n === 12 ? null : 13 - n,
+      main_net_inflow: n === 12 ? null : n * 1.0e8,
+      main_net_ratio: n === 12 ? null : 1.5,
+      lead_stock_name: n === 12 ? null : `领涨${nn}`,
+      lead_stock_code: n === 12 ? null : `6000${nn}`,
+      lead_stock_pct: n === 12 ? null : 9.9,
+      leaders:
+        n === 12
+          ? [{ symbol: "600012", name: "无行情领涨", change_percent: null }]
+          : [{ symbol: `6000${nn}`, name: `领涨${nn}`, change_percent: 9.9 }],
+    };
+  }),
+};
+
+/**
+ * 概念列表端点（带 query string）的路由正则：`**` glob 会连 `/concepts/{code}` 详情一起吞掉，
+ * 用 `(\?|$)` 精确钉住「列表（有 query）/ 裸列表」两种形态，详情不被误 mock。
+ */
+const CONCEPT_LIST_ROUTE = /\/api\/v1\/concepts(\?|$)/;
+
+test("概念列表走本地聚合全量：口径披露 + 全量分页 + 缺行情渲染 `--` + 行点击进详情", async ({ page }) => {
+  const conceptRequests: string[] = [];
+  let liveHits = 0;
+  // 概念分类**不得**再打东财实时信封（`limit=1000` 的本地聚合列表才是「查看全部」的落点）
+  await page.route("**/api/v1/market/hot-boards**", (r) => {
+    liveHits += 1;
+    return r.fulfill({
+      json: {
+        as_of: null,
+        as_of_quality: "partial",
+        as_of_reason: null,
+        source: "eastmoney_boards",
+        degraded_reason: null,
+        items: [],
+      },
+    });
+  });
+  await page.route(CONCEPT_LIST_ROUTE, (r) => {
+    conceptRequests.push(r.request().url());
+    return r.fulfill({ json: CONCEPT_BOARDS });
+  });
+
+  await page.goto("/market/hot-sectors/concept");
+
+  // (a) 口径披露：行情判据日与**成分**快照日是两个口径，必须各自对位（认错字段即红）
+  const caption = page.getByText(/按本地成分聚合/);
+  await expect(caption).toBeVisible();
+  await expect(caption).toContainText("行情截至 9月18日");
+  await expect(caption).toContainText("成分截至 9月17日");
+
+  // (b) 全量 > 东财 Top-10：分页器必须出现第 2 页；东财路径 10 行时不会有 `.ant-pagination-item-2`
+  const pager = page.locator(".ant-pagination");
+  await expect(pager.locator(".ant-pagination-item-2")).toBeVisible();
+
+  // (c) 概念路径打的确实是我们的列表端点，且带 `limit=1000`（东财 hot-boards 永远没有这个参数）
+  expect(conceptRequests.length).toBeGreaterThan(0);
+  expect(conceptRequests.every((u) => new URL(u).searchParams.get("limit") === "1000")).toBe(true);
+  expect(liveHits).toBe(0);
+
+  // (e) `avg_pct: null` 的行在第 2 页（降序把 null 排到最后）：涨跌幅列必须是 `--`，不是 `0.00%`
+  await pager.locator(".ant-pagination-item-2").click();
+  const nullRow = page.locator("tbody tr", { hasText: "聚合概念12" });
+  await expect(nullRow).toBeVisible();
+  await expect(nullRow.locator("td").nth(1)).toHaveText("--");
+  await expect(nullRow).not.toContainText("0.00%");
+
+  // 平盘家数 > 0 的样本回到首页断言（nth(5) = 平盘家数列）
+  await pager.locator(".ant-pagination-item-1").click();
+  const flatRow = page.locator("tbody tr", { hasText: "聚合概念01" });
+  await expect(flatRow.locator("td").nth(5)).toHaveText("3");
+
+  // (d) 行点击仍进概念详情页（既有行为不回退），且概念分类不打开下钻抽屉
+  await flatRow.getByRole("cell", { name: /聚合概念01/ }).first().click();
+  await expect(page).toHaveURL(/\/market\/concept\/BK9001$/);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
+test("行业分类仍走东财实时信封（概念列表端点不得被行业/地域借用）", async ({ page }) => {
+  let conceptHits = 0;
+  await page.route(CONCEPT_LIST_ROUTE, (r) => {
+    conceptHits += 1;
+    return r.fulfill({ json: CONCEPT_BOARDS });
+  });
   await page.route("**/api/v1/market/hot-boards**", (r) =>
     r.fulfill({
       json: {
@@ -139,25 +248,33 @@ test("概念行点击进入概念详情（既有行为不回退）", async ({ pa
         degraded_reason: null,
         items: [
           {
-            id: "concept-BK0501",
-            name: "次新股",
-            code: "BK0501",
-            changePercent: 4.66,
-            upCount: 157,
-            flatCount: 3,
-            downCount: 5,
-            leaders: [{ symbol: "601091", name: "C沈鼓", changePercent: 20.0 }],
+            id: "industry-BK1261",
+            name: "种植业",
+            code: "BK1261",
+            changePercent: 2.5,
+            upCount: 10,
+            flatCount: 1,
+            downCount: 2,
+            mainNetInflow: 1.0e8,
+            amount: 3.0e8,
+            leaders: [{ symbol: "600011", name: "某股", changePercent: 5.0 }],
           },
         ],
       },
     })
   );
+  await page.route("**/api/v1/market/boards/*/stocks*", (r) => r.fulfill({ json: [] }));
 
-  await page.goto("/market/hot-sectors/concept");
-  const row = page.getByRole("row", { name: /次新股/ });
-  await expect(row).toBeVisible();
-  await row.getByRole("cell", { name: /次新股/ }).first().click();
-  await expect(page).toHaveURL(/\/market\/concept\/BK0501$/);
+  await page.goto("/market/hot-sectors/industry");
+  await expect(page.getByRole("row", { name: /种植业/ })).toBeVisible();
+  // 本地聚合口径披露是概念分类专属：行业页不得出现，也不得请求概念列表端点
+  await expect(page.getByText(/按本地成分聚合/)).toHaveCount(0);
+  expect(conceptHits).toBe(0);
+
+  // 行业语义未变：点击仍开成分股抽屉（概念路径的改动只影响概念分类）
+  await page.getByRole("row", { name: /种植业/ }).getByRole("cell", { name: /种植业/ }).first().click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByRole("dialog").getByText("该板块暂无成分股数据")).toBeVisible();
 });
 
 /** 个股页用例共用的 enriched 载荷（申万映射为空 → 面包屑降级为「其他」，与本用例无关）。 */
