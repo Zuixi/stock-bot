@@ -115,12 +115,14 @@ docker-compose.yml 中 `target: runtime` 使 Docker 跳过 Node.js 构建阶段�
 # 1. 合并到 main，等 CI 绿（main 的 CI 与发布是两条流程，tag 只触发 CD）
 git checkout main && git pull
 
-# 2. 打 tag 并推送（`0.0.1` 与 `v0.0.1` 等价，二选一）
-git tag 0.0.1          # 或 git tag v0.0.1
-git push origin 0.0.1
+# 2. 打 tag 并推送（**git tag 带 `v` 前缀**，与镜像 tag 区分开）
+git tag v0.0.1
+git push origin v0.0.1
 ```
 
-`.github/workflows/cd.yml` 的 tag filters 是 `["v*", "0.*"]`，推 tag 后为 4 个构建上下文各发一个镜像：
+> 命名约定：**git tag 带 `v`**（`v0.0.1`），**镜像 tag 不带 `v`**（`0.0.1`）。`metadata-action` 的 `type=semver` 用 loose 语义解析，会自动把 `v` 去掉（源码 `semver.parse(tag, {loose:true})`），所以 compose 侧 `IMAGE_TAG=0.0.1`。裸数字 git tag（`0.0.1`）**不会触发 CD**——`cd.yml` 的 filters 是 `["v*"]`，同一版本只允许一种写法，避免两套镜像。
+
+`.github/workflows/cd.yml` 的 tag filters 是 `["v*"]`，推 tag 后为 4 个构建上下文各发一个镜像：
 
 | 镜像 | 构建上下文 | 对应的 compose 服务 |
 |------|-----------|-------------------|
@@ -129,9 +131,9 @@ git push origin 0.0.1
 | `ghcr.io/zuixi/stock-bot/forward-auth` | `./forward-auth` | `forward-auth` |
 | `ghcr.io/zuixi/stock-bot/frontend` | `./frontend`（`target: runtime`） | `frontend` |
 
-每个镜像会打三个 tag：`0.0.1`、`0.0`（major.minor）与 `<short-sha>`。服务器部署**只用 `<version>`**（如 `0.0.1`），不要用 `0.0` 这类浮动 tag。发布后在 GitHub Actions 运行记录 / 仓库 Packages 页确认**四个**镜像都出现，再上服务器。
+每个镜像会打三个 tag：`0.0.1`、`0.0`（major.minor）与 `<short-sha>`（即 git tag `v0.0.1` → 镜像 tag `0.0.1`）。服务器部署**只用 `<version>`**（如 `0.0.1`），不要用 `0.0` 这类浮动 tag。发布后在 GitHub Actions 运行记录 / 仓库 Packages 页确认**四个**镜像都出现，再上服务器。
 
-> 坑：旧 filters 只有 `v*`，裸 tag `0.0.1` 不触发 CD —— 表现为「tag 推上去了但 ghcr 里没有镜像，服务器 `pull` 报 manifest unknown」。改 glob 后先推一个预发布 tag（如 `0.0.2-rc1`，同样命中 `0.*`）验证 4 个镜像齐全，再发正式版。
+> 坑：tag 必须在 `v*` 形状内 —— 推了裸数字 tag（如 `0.0.1`）CD **不会触发**，表现为「tag 推上去了但 ghcr 里没有镜像，服务器 `pull` 报 manifest unknown」。首次发版前建议先推一个预发布 tag（如 `v0.0.2-rc1`）走通全流程、确认 4 个镜像齐全，再发正式版。
 
 ### 服务器准备
 
