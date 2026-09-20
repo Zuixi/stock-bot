@@ -57,6 +57,23 @@ cp backend/.env.example backend/.env   # 然后填入真实 TUSHARE_TOKEN（http
 > ```
 >
 > 生产要求：`APP_ENV=production` + `AUTH_COOKIE_SECURE=true` + HTTPS，并用 `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048` / `openssl pkey -in private.pem -pubout` 生成并填好 JWT 密钥对（模板里已写命令）。
+>
+> **PEM 是多行值，写进 `.env` 的两种可行写法**（已实测 `docker compose config` 均能解析成真实换行，选一种即可）：
+>
+> ```dotenv
+> # 推荐：单行 + 转义换行（不易被编辑器搞坏，整体可复制）
+> AUTH_JWT_PRIVATE_KEY_PEM="-----BEGIN PRIVATE KEY-----\nMIIEv...\n-----END PRIVATE KEY-----\n"
+> ```
+>
+> ```dotenv
+> # 也可以：双引号内直接换行
+> AUTH_JWT_PRIVATE_KEY_PEM="-----BEGIN PRIVATE KEY-----
+> MIIEv...
+> -----END PRIVATE KEY-----
+> "
+> ```
+>
+> 根目录 `.env` 已被 `.gitignore` 忽略（`.env` / `.env.*`，仅 `!.env.example` / `!.env.docker.example` 白名单）—— 密钥不会被提交。
 
 ## 容器化部署
 
