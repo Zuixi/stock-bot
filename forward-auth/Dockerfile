@@ -18,13 +18,30 @@ FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/python:3.13-alpi
 
 WORKDIR /app
 
-RUN addgroup -S app && adduser -S app -G app
+ARG VERSION=dev
+ARG COMMIT=none
+ARG BUILD_DATE=unknown
+
+LABEL org.opencontainers.image.title="stock-bot-forward-auth" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
+
+# TZ 只影响日志时间戳格式（业务时区逻辑在代码内显式用 ZoneInfo("Asia/Shanghai")）
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    TZ=Asia/Shanghai
 
 COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# 白名单拷贝 console script：本服务只需要 uvicorn（无迁移、无 worker）
+COPY --from=builder /usr/local/bin/uvicorn /usr/local/bin/
 COPY . .
 
-RUN chown -R app:app /app
+RUN addgroup -S app && adduser -S app -G app \
+    && rm -rf /usr/local/lib/python3.13/site-packages/pip \
+       /usr/local/lib/python3.13/site-packages/pip-*.dist-info \
+       /usr/local/bin/pip* \
+    && chown -R app:app /app
 
 USER app
 

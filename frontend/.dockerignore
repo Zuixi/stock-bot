@@ -1,3 +1,12 @@
 node_modules
 .git
 *.md
+# 本地产物（builder 内重新生成，无需进构建上下文）
+dist/
+coverage/
+test-results/
+playwright-report/
+tsconfig.tsbuildinfo
+.vite/
+docs/
+e2e/

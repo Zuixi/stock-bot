@@ -22,6 +22,17 @@ RUN npm run build
 # ---- Stage 2: serve ----
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/nginx:alpine AS runtime
 
+ARG VERSION=dev
+ARG COMMIT=none
+ARG BUILD_DATE=unknown
+
+LABEL org.opencontainers.image.title="stock-bot-frontend" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
+
+ENV TZ=Asia/Shanghai
+
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Always copy build artifacts from builder stage
