@@ -27,15 +27,36 @@ stock_bot/
 
 ## 环境变量配置
 
-1. 从模板创建后端环境变量文件：
+**两个 env 文件，角色不同，别混用一个**（混用会让鉴权/网关类变量静默回落到开发默认值）：
+
+| 文件 | 谁读它 | 放什么 |
+|------|-------|--------|
+| 根目录 `.env` | **docker compose 的 `${VAR}` 插值** | 网关/鉴权/基础设施：`APP_ENV`、`AUTH_JWT_PRIVATE_KEY_PEM`/`AUTH_JWT_PUBLIC_KEY_PEM`、`INTERNAL_API_TOKEN`、`AUTH_COOKIE_SECURE`、`AUTH_TRUST_FORWARDED_FOR`、`SESSION_TTL`、`RABBITMQ_DEFAULT_*`、`GATEWAY_HTTP_PORT`… |
+| `backend/.env` | api / worker / scheduler 容器的 `env_file`（`docker-compose.yml` 四处 `env_file: ./backend/.env`），以及本机 `uv run` 直起 | 后端运行时密钥与本地覆盖：`TUSHARE_TOKEN`、`INDUSTRY_DATA_SOURCE`、本机直连用的 `DATABASE_URL`/`REDIS_URL`… |
 
 ```bash
-cp .env.docker.example backend/.env
+# 1. 根 .env —— compose 只从**项目根目录**的 .env 做 ${VAR} 插值（硬规则）
+cp .env.docker.example .env
+
+# 2. backend/.env —— 后端容器运行时密钥
+cp backend/.env.example backend/.env   # 然后填入真实 TUSHARE_TOKEN（https://tushare.pro）
 ```
 
-2. 编辑 `backend/.env`，填入真实的 `TUSHARE_TOKEN`（从 https://tushare.pro 获取）。
-
-其他默认值已适配容器内部网络（服务名 `postgres`、`redis`、`rabbitmq`）。
+> 为什么必须分两个：`auth-service` / `forward-auth` 的密钥是通过 **compose 插值**（`${AUTH_JWT_PRIVATE_KEY_PEM}`）注入的，不是 `env_file`。把 `.env.docker.example` 复制到 `backend/.env` 时，compose 插值取不到任何值 → `AUTH_JWT_PRIVATE_KEY_PEM` / `INTERNAL_API_TOKEN` / `AUTH_COOKIE_SECURE` / `AUTH_TRUST_FORWARDED_FOR` / `APP_ENV` 全部为空或开发默认值：
+> - `APP_ENV` 回落 `development` → auth-service **跳过**生产强校验（不再要求 HTTPS + `AUTH_COOKIE_SECURE=true`）
+> - JWT 私钥为空 → 开发模式自动生成密钥对（重启轮换，已签发断言失效）
+> - `INTERNAL_API_TOKEN` 为空 → forward-auth→auth-service 的 `X-Internal-Token` 不再发送
+> - `AUTH_TRUST_FORWARDED_FOR` 为空 → 不信任 `X-Forwarded-For`，审计日志记的是 Traefik 的 IP 而不是客户端 IP
+> - RabbitMQ 回落 `stockbot/stockbot_pass`
+>
+> 启动后必须核对一遍（与部署时同一套 `-f` 参数）：
+>
+> ```bash
+> docker compose config | grep -E "APP_ENV|AUTH_COOKIE_SECURE|INTERNAL_API_TOKEN|AUTH_JWT_PRIVATE_KEY_PEM|AUTH_TRUST_FORWARDED_FOR|RABBITMQ_DEFAULT_USER"
+> docker exec auth_service sh -c 'for v in APP_ENV AUTH_COOKIE_SECURE INTERNAL_API_TOKEN AUTH_JWT_PRIVATE_KEY_PEM AUTH_TRUST_FORWARDED_FOR; do eval "val=\$$v"; echo "$v=${val:+<set>}"; done'
+> ```
+>
+> 生产要求：`APP_ENV=production` + `AUTH_COOKIE_SECURE=true` + HTTPS，并用 `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048` / `openssl pkey -in private.pem -pubout` 生成并填好 JWT 密钥对（模板里已写命令）。
 
 ## 容器化部署
 
@@ -141,8 +162,9 @@ git push origin v0.0.1
 # 1. GHCR 拉取凭据（PAT 只需 read:packages）
 docker login ghcr.io -u <github-user> -p <PAT-with-read:packages>
 
-# 2. 环境变量模板（默认值已适配容器内部网络；真实 TUSHARE_TOKEN 见下「开机回填 footgun」）
-cp .env.docker.example backend/.env
+# 2. 环境变量模板（两个文件，角色不同；见上文「环境变量配置」）
+cp .env.docker.example .env              # compose 插值：APP_ENV / JWT 密钥 / INTERNAL_API_TOKEN / Cookie 与 XFF 开关
+cp backend/.env.example backend/.env     # 后端运行时：真实 TUSHARE_TOKEN（见下「开机回填 footgun」）
 ```
 
 若服务器无法访问 `ghcr.io`，可在能同时访问 ghcr 与华为 SWR 的机器上转推（`docker pull` → `docker tag` → `docker push`）到现有 `swr.cn-north-4.myhuaweicloud.com` 命名空间，再把 `docker-compose.prod.yml` 里的 `image:` 前缀换成 SWR 地址，其余不变。
