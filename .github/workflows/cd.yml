@@ -3,11 +3,16 @@ name: CD
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    # 数字 tag（如 0.0.1）与 v 前缀 tag（如 v0.0.1）都要触发 CD：
+    # metadata-action 的 type=semver 对两种写法都解析成功，都会产出
+    # <version> + <major>.<minor> + <short-sha> 三个镜像 tag（0.0.1 / 0.0 / abc1234）。
+    # 只用 "v*" 时裸 tag 0.0.1 会静默跳过 CD（无镜像、服务器 pull 失败），故保留数字 glob。
+    tags: ["v*", "0.*"]
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME_AUTH: ${{ github.repository }}/auth-service
+  IMAGE_NAME_FORWARD_AUTH: ${{ github.repository }}/forward-auth
   IMAGE_NAME_BACKEND: ${{ github.repository }}/backend
   IMAGE_NAME_FRONTEND: ${{ github.repository }}/frontend
 
@@ -47,6 +52,18 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=,format=short
 
+      - name: Docker metadata (forward-auth)
+        id: meta-forward-auth
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_FORWARD_AUTH }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=,format=short
+
       - name: Docker metadata (backend)
         id: meta-backend
         uses: docker/metadata-action@v5
@@ -79,6 +96,17 @@ jobs:
           push: true
           tags: ${{ steps.meta-auth.outputs.tags }}
           labels: ${{ steps.meta-auth.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push forward-auth
+        uses: docker/build-push-action@v6
+        with:
+          context: ./forward-auth
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-forward-auth.outputs.tags }}
+          labels: ${{ steps.meta-forward-auth.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

@@ -117,6 +117,8 @@
 - **`docker compose up -d <子集>` 会连带重建配置漂移的依赖服务（含 postgres），所以「卷名 pin」是环境假设、必须先与现网对账**：main 里 `volumes.postgres_data.name: stock_bot_wt_p7_postgres_data` 的预写前提是「数据在原 wt_p7 部署建的卷里」，而本机真实数据一直在项目前缀卷 `stock-bot_postgres_data`（4.2G）—— 一跑 `up` 就重建 postgres 并挂到同名空卷（或新建空卷），新集群 initdb 后 `data_init` 看到空 `stocks` 表→**全量重新播种 3 年行情**（烧 TuShare 额度、旧数据在 UI 上"消失"），而旧库其实完好无损。动手前先 `docker volume ls` + `docker volume inspect` 看哪个卷真有数据（`PG_VERSION`/`current_logfiles` 的 mtime、`du -sh` 量级一眼可辨），确认 pin 名与实际卷名一致再 `up`；事后确认旧库可用 `pg_controldata`（只读挂载即可）+ 起一个临时实例查 `count(*)` 对账，不用慌着 restore。
 - 对"体量大但更新频率低"的静态映射数据，推荐"首次解析源文件并自动导出 SQL 种子，后续部署优先导入 SQL"的策略，导入策略显式分层为"SQL 种子优先、源文件解析兜底"，并在启动日志打印实际命中路径，便于排查"文件存在但未生效"的环境问题。
 
+- 发布链路（CD → registry → 服务器 override）必须在打 tag 之前**端到端证明一次**："某服务的镜像根本没发"（CD 只发 3 个镜像而 `forward-auth` 缺失）与"tag glob 永不匹配"（filters 只有 `v*`，裸 tag `0.0.1` 不触发）这两类缺陷在 CI 里都不报错，只在服务器上表现为 manifest unknown / 容器起不来，于是"发布"变成事故；镜像是给谁用的也得成对交付——发布侧镜像清单（build-push 步骤 × registry 实际 tag）与消费侧 override（每个应用服务显式 `image` + `pull_policy: always`，tag 写成 `${IMAGE_TAG:?…}` 强制必填）对不上就是一条静默失败路径；落地前用 `docker compose -f <base> -f <prod> config` 断言镜像数与服务名即可在本地抓住，并顺手核对 `-f` 会**关闭** `docker-compose.override.yml` 自动加载（本机环境假设不会泄漏到服务器）。
+
 ## 四、前端（React / antd / ECharts）
 
 - 多级联动多选控件应以上层选项动态约束下层候选集，并在上层变更时剔除失效下层值，保证提交数据始终满足父子层级关系；联动筛选状态应直接由当前上层已选值派生（而非间接缓存变量），确保禁用态、placeholder 与候选集在同一次渲染中保持一致。
