@@ -22,16 +22,23 @@ Frontend Service:
 
 | 服务 | 镜像 | 职责 |
 |------|------|------|
-| frontend | nginx:alpine | 静态资源托管 + `/api` 反向代理到 api 服务 |
-| api | python:3.13-alpine (多阶段构建) | FastAPI REST API |
+| gateway | traefik:v3.6 | 唯一入口（宿主机 :80），按 `PathPrefix` 分发 `/`→frontend、`/api`→api、`/auth`→auth-service，并挂 `forward-auth` 中间件 |
+| frontend | nginx:alpine（镜像由 `frontend/Dockerfile` 的 runtime 阶段产出，非上游 nginx 镜像） | 静态资源托管（SPA 由 Traefik 转发，不由 nginx 反代 `/api`） |
+| api | python:3.13-alpine（多阶段构建） | FastAPI REST API |
 | worker | 同 api 镜像 | RabbitMQ 消费者，执行数据抓取/计算任务 |
-| scheduler | 同 api 镜像 | APScheduler 定时采集（SSE 指数快照等） |
+| scheduler | 同 api 镜像 | APScheduler 定时采集（SSE 指数快照、概念成分刷新等） |
 | migrate | 同 api 镜像 | 一次性容器，启动时执行 `alembic upgrade head` |
+| auth-service | 同 auth-service 镜像 | 注册/登录/会话/JWKS（`/auth`，内部 :8001） |
+| forward-auth | 同 forward-auth 镜像 | Traefik forward-auth sidecar：会话 cookie → Principal Assertion 注入 + CSRF 校验（内部 :9000） |
+| migrate-auth | 同 auth-service 镜像 | 一次性容器，auth 库 `alembic upgrade head` |
 | redis-init | alpine | 一次性容器，修正 redis 数据卷权限 |
-| postgres | postgresql-15-c9s | 持久化数据存储 |
-| redis | redis:v7 | 缓存层 |
+| postgres | postgresql-15-c9s | 主业务库（宿主机映射 5433） |
+| auth-db | postgresql-15-c9s | 账号/会话库（无宿主机映射） |
+| redis | redis:v7 | 缓存层 + 会话存储（宿主机映射 6380） |
 | rabbitmq | rabbitmq:4.2-management | 异步任务队列 |
 
-服务启动顺序：postgres/redis(+redis-init)/rabbitmq → migrate → api/worker/scheduler → frontend
+服务启动顺序：postgres/auth-db/redis(+redis-init)/rabbitmq → migrate(+migrate-auth) → api/worker/scheduler/auth-service/forward-auth → gateway/frontend
 
-详细构建说明参见 [build.md](build.md)。
+> 说明：`forward-auth` 对「带 `stockbot_session` 但解析不出 assertion」的请求 **fail-closed 返 503**（不是 401）——浏览器残留过期 cookie 时表现为「全站接口不可用、页面全空」，排查方法见 [references/best-practices.md](references/best-practices.md)。
+
+发布镜像到服务器（ghcr.io + `docker-compose.prod.yml`）与数据迁移见 [build.md](build.md)「服务器部署（发布镜像 + 数据迁移）」。详细构建说明同样参见 [build.md](build.md)。
