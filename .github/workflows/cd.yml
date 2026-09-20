@@ -3,11 +3,11 @@ name: CD
 on:
   push:
     branches: [main]
-    # 数字 tag（如 0.0.1）与 v 前缀 tag（如 v0.0.1）都要触发 CD：
-    # metadata-action 的 type=semver 对两种写法都解析成功，都会产出
-    # <version> + <major>.<minor> + <short-sha> 三个镜像 tag（0.0.1 / 0.0 / abc1234）。
-    # 只用 "v*" 时裸 tag 0.0.1 会静默跳过 CD（无镜像、服务器 pull 失败），故保留数字 glob。
-    tags: ["v*", "0.*"]
+    # 发版约定：git tag 用 `v` 前缀（如 v0.0.1），这也是本仓库唯一会触发 CD 的形式。
+    # metadata-action 的 type=semver 走 loose 语义（源码 semver.parse(v, {loose:true})），
+    # `v0.0.1` → 镜像 tag `0.0.1` + `0.0`（major.minor）+ `<short-sha>`；
+    # 裸数字 tag（0.0.1）**刻意不触发**，避免同一版本两种写法各发一套镜像。
+    tags: ["v*"]
 
 env:
   REGISTRY: ghcr.io
