@@ -24,10 +24,17 @@ warn() { echo "  ⚠ $*"; }
 fail() { echo "  ✘ $*"; fails=$((fails + 1)); }
 
 # 采集本次改动文件（含未跟踪新文件；路径含空格的项目不适用，本项目路径无空格）
-CHANGED=$(git status --porcelain --untracked-files=all 2>/dev/null)
-py_files() { printf '%s\n' "$CHANGED" | awk '{print $2}' | grep -E '^backend/.*\.py$'  | sed 's#^backend/##'; }
-ts_files() { printf '%s\n' "$CHANGED" | awk '{print $2}' | grep -E '^frontend/.*\.(ts|tsx)$'; }
-md_files() { printf '%s\n' "$CHANGED" | awk '{print $2}' | grep -E '\.md$'; }
+# 两个来源合并：① 工作区（含暂存/未跟踪）；② 已提交但未进 origin/main 的提交。
+# ② 不可省：只跑工作区时，「先 commit 再跑 self_review」会得到空改动集而整段跳过 lint，
+# 实测就这么漏掉了 app/services/concept_service.py 的 ruff format 违规 → 本地全绿、CI 必红。
+CHANGED=$(
+  { git status --porcelain --untracked-files=all 2>/dev/null | awk '{print $2}'
+    git diff --name-only "$(git merge-base origin/main HEAD 2>/dev/null)"..HEAD 2>/dev/null
+  } | grep -v '^$' | sort -u
+)
+py_files() { printf '%s\n' "$CHANGED" | grep -E '^backend/.*\.py$'  | sed 's#^backend/##'; }
+ts_files() { printf '%s\n' "$CHANGED" | grep -E '^frontend/.*\.(ts|tsx)$'; }
+md_files() { printf '%s\n' "$CHANGED" | grep -E '\.md$'; }
 
 echo "== [1/4] 空白与冲突标记 (git diff --check) =="
 git diff --check        || fail "工作区存在空白/冲突标记错误"

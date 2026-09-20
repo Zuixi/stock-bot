@@ -245,9 +245,7 @@ def _degraded_reason(as_of: date | None, membership_as_of: date | None) -> str |
     return None
 
 
-async def _latest_complete_quote_day(
-    db: AsyncSession, cache: CacheClient | None
-) -> date | None:
+async def _latest_complete_quote_day(db: AsyncSession, cache: CacheClient | None) -> date | None:
     """概念端点信封的 `as_of`：与 `limit_up_service.get_snapshot` **同一个**最新日判据。
 
     裸 `max(daily_quotes.trade_date)`（`limit_up_repo.latest_quote_date`）会把脏/半截的
