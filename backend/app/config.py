@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     app_debug: bool = False
     app_host: str = "0.0.0.0"
     app_port: int = 8000
+    # 构建可追溯性：Dockerfile 用 --build-arg VERSION/COMMIT 注入 APP_VERSION/APP_COMMIT
+    app_version: str = "dev"
+    app_commit: str = "none"
 
     # PostgreSQL
     database_url: str = "postgresql+asyncpg://stock_user:stock_pass@localhost:5432/stock_bot"

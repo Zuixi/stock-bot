@@ -13,3 +13,6 @@ async def test_health(client: AsyncClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
+    # 构建可追溯性：Dockerfile 注入的 APP_VERSION/APP_COMMIT 必须出现在 /health 上
+    assert "version" in data
+    assert "commit" in data
