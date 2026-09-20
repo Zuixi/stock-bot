@@ -130,18 +130,21 @@ test("概念详情 404：空态 + 回跳链接，且 4xx 不重试（只请求�
  * 概念**列表页**（`/market/hot-sectors/concept`）的口径载荷：12 个板块，刻意多于东财路径的
  * Top-10（`_hot_board_items_from_eastmoney` 切片上限）。
  *
- * 三处刻意设下的反例：
+ * 五处刻意设下的反例：
  * - `as_of`(09-18) 与 `membership_as_of`(09-17) **不同**：把行情判据日误当成分快照日会被日期断言抓住；
  * - `BK9012` 的 `avg_pct: null` + 领涨股 `change_percent: null`：缺失必须渲染 `--`，绝不能 0 填充
  *   成 `0.00%`（无行情成分进 tag 还会让 `toFixed` 崩）；
- * - `BK9001.flat_count = 3`：平盘家数 > 0 才有意义（缺失 ≠ 0 的正样本）。
+ * - `BK9001.flat_count = 3`：平盘家数 > 0 才有意义（缺失 ≠ 0 的正样本）；
+ * - `BK9011.avg_pct = -3`（负样本）：`null` 必须排在**下跌板块之后**。全正样本时「null 排最后」
+ *   与「null 当 0 排」同形（假绿），有了负样本，`?? 0` 会把 -3 挤到 null 之后 → 行序断言红；
+ * - `total: 504` ≠ `items.length`(12)：分页器必须读信封 `total`；读 `rows.length` 时只剩 2 页。
  */
 const CONCEPT_BOARDS = {
   as_of: "2026-09-18",
   membership_as_of: "2026-09-17",
   price_source: "local_agg",
   flow_source: "em_clist",
-  total: 12,
+  total: 504, // 全库启用板块数（刻意 ≠ items.length = 12）
   degraded_reason: null,
   items: Array.from({ length: 12 }, (_, i) => {
     const n = i + 1;
@@ -155,7 +158,7 @@ const CONCEPT_BOARDS = {
       up_count: 30,
       flat_count: n === 1 ? 3 : 0,
       down_count: 20,
-      avg_pct: n === 12 ? null : 13 - n,
+      avg_pct: n === 12 ? null : n === 11 ? -3 : 13 - n,
       main_net_inflow: n === 12 ? null : n * 1.0e8,
       main_net_ratio: n === 12 ? null : 1.5,
       lead_stock_name: n === 12 ? null : `领涨${nn}`,
@@ -203,33 +206,75 @@ test("概念列表走本地聚合全量：口径披露 + 全量分页 + 缺行�
   const caption = page.getByText(/按本地成分聚合/);
   await expect(caption).toBeVisible();
   await expect(caption).toContainText("行情截至 9月18日");
-  await expect(caption).toContainText("成分截至 9月17日");
+  // 列表页的 `membership_as_of` 是**全库**成分表最大快照日（可能新于某板块自身快照），
+  // 故措辞是「成分快照 X（全库 · 东财）」，与详情页逐板口径的「成分截至 X（东财）」区分。
+  await expect(caption).toContainText("成分快照 9月17日（全库 · 东财）");
 
   // (b) 全量 > 东财 Top-10：分页器必须出现第 2 页；东财路径 10 行时不会有 `.ant-pagination-item-2`
   const pager = page.locator(".ant-pagination");
   await expect(pager.locator(".ant-pagination-item-2")).toBeVisible();
+  // (b2) 分页总数必须读**信封** `total`(504)，不是 `items.length`(12)：读 rows.length 时只有
+  //      2 页，第 5 页与跳页器都不存在 → 本断言红（这是「查看全部」兑现与否的判据）。
+  await expect(pager.locator(".ant-pagination-item-5")).toBeVisible();
+  await expect(pager.locator(".ant-pagination-jump-next")).toBeVisible();
 
   // (c) 概念路径打的确实是我们的列表端点，且带 `limit=1000`（东财 hot-boards 永远没有这个参数）
   expect(conceptRequests.length).toBeGreaterThan(0);
   expect(conceptRequests.every((u) => new URL(u).searchParams.get("limit") === "1000")).toBe(true);
   expect(liveHits).toBe(0);
 
-  // (e) `avg_pct: null` 的行在第 2 页（降序把 null 排到最后）：涨跌幅列必须是 `--`，不是 `0.00%`
+  // 列号按表头文案现取：概念分类隐藏了成交额列（见 (f)），写死 nth 会把断言指到相邻列上。
+  const columnIndex = async (title: string) => {
+    const heads = (await page.locator(".ant-table-thead th").allInnerTexts()).map((t) => t.trim());
+    const index = heads.indexOf(title);
+    expect(index, `表头「${title}」必须存在`).toBeGreaterThan(-1);
+    return index;
+  };
+  const pctColumn = await columnIndex("板块涨跌幅");
+
+  // (e) `avg_pct: null` 必须排在**下跌板块之后**：第 2 页只有 -3.00%（聚合概念11）与 null
+  //     （聚合概念12）两行，行序即判据。全正样本时「null 排最后」与「null 当 0 排」同形，
+  //     负样本 + 顺序断言才可证伪：`?? 0` 会把 null 插到 -3 之前 → 本断言红。
   await pager.locator(".ant-pagination-item-2").click();
+  const pageTwoRows = page.locator(".ant-table-tbody tr.ant-table-row:not(.ant-table-measure-row)");
+  await expect(pageTwoRows).toHaveCount(2);
+  await expect(pageTwoRows.locator("td:first-child strong")).toHaveText(["聚合概念11", "聚合概念12"]);
+  await expect(pageTwoRows.first().locator("td").nth(pctColumn)).toHaveText("-3.00%");
   const nullRow = page.locator("tbody tr", { hasText: "聚合概念12" });
   await expect(nullRow).toBeVisible();
-  await expect(nullRow.locator("td").nth(1)).toHaveText("--");
+  await expect(nullRow.locator("td").nth(pctColumn)).toHaveText("--");
   await expect(nullRow).not.toContainText("0.00%");
 
-  // 平盘家数 > 0 的样本回到首页断言（nth(5) = 平盘家数列）
+  // (f) 概念侧没有成交额字段（恒 `--`）：整列隐藏，不留一个点了没反应的排序表头
+  await expect(page.getByRole("columnheader", { name: "成交额" })).toHaveCount(0);
+
+  // 平盘家数 > 0 的样本回到首页断言（列号同样按表头取）
   await pager.locator(".ant-pagination-item-1").click();
   const flatRow = page.locator("tbody tr", { hasText: "聚合概念01" });
-  await expect(flatRow.locator("td").nth(5)).toHaveText("3");
+  await expect(flatRow.locator("td").nth(await columnIndex("平盘家数"))).toHaveText("3");
 
   // (d) 行点击仍进概念详情页（既有行为不回退），且概念分类不打开下钻抽屉
   await flatRow.getByRole("cell", { name: /聚合概念01/ }).first().click();
   await expect(page).toHaveURL(/\/market\/concept\/BK9001$/);
   await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
+test("概念列表降级（no_quotes）：横幅如实上屏，不冒充空数据也不冒充失败", async ({ page }) => {
+  await page.route(CONCEPT_LIST_ROUTE, (r) =>
+    r.fulfill({ json: { ...CONCEPT_BOARDS, degraded_reason: "no_quotes", items: [] } })
+  );
+  await page.goto("/market/hot-sectors/concept");
+  // 全站 `degraded_reason` 词表的 `no_quotes` 文案必须落在页面上（删掉降级分支即红）
+  await expect(page.getByText("库内暂无行情数据")).toBeVisible();
+  // 降级 ≠ 请求失败：失败文案不得出现（两条分支不得互相吞掉）
+  await expect(page.getByText(/概念数据加载失败/)).toHaveCount(0);
+});
+
+test("概念列表请求失败：错误文案上屏（不是空表、也不是降级）", async ({ page }) => {
+  await page.route(CONCEPT_LIST_ROUTE, (r) => r.abort());
+  await page.goto("/market/hot-sectors/concept");
+  await expect(page.getByText("概念数据加载失败，稍后重试")).toBeVisible();
+  await expect(page.getByText("库内暂无行情数据")).toHaveCount(0);
 });
 
 test("行业分类仍走东财实时信封（概念列表端点不得被行业/地域借用）", async ({ page }) => {
@@ -267,6 +312,8 @@ test("行业分类仍走东财实时信封（概念列表端点不得被行业/�
 
   await page.goto("/market/hot-sectors/industry");
   await expect(page.getByRole("row", { name: /种植业/ })).toBeVisible();
+  // 成交额列只对概念分类隐藏：行业侧仍有东财成交额，列与排序表头必须保留
+  await expect(page.getByRole("columnheader", { name: "成交额" })).toBeVisible();
   // 本地聚合口径披露是概念分类专属：行业页不得出现，也不得请求概念列表端点
   await expect(page.getByText(/按本地成分聚合/)).toHaveCount(0);
   expect(conceptHits).toBe(0);
