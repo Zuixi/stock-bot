@@ -26,6 +26,18 @@ accessLog:
 entryPoints:
   web:
     address: ":80"
+    # 信任来自**边缘代理（Caddy）**的 X-Forwarded-*：Caddy 与本网关同处 compose 网络，
+    # 客户端 IP / 协议由它透传。不配这一段，Traefik 会忽略上游的 XFF，
+    # 于是审计日志与限流看到的是 Caddy 容器 IP、协议退化成 http。
+    # ⚠️ 只列可信网段（不要用 insecure: true）：列出的网段内的请求可以伪造 XFF。
+    #   172.16.0.0/12 = Linux 上 compose 默认网络（本环境实测 172.18.0.0/16）
+    #   192.168.0.0/16 = Docker Desktop（macOS 本地开发，实测 192.168.97.0/24）
+    #   （网关本身不绑宿主机端口时，能到达它的只有同网络容器，故这个列表是收紧的）
+    forwardedHeaders:
+      trustedIPs:
+        - "172.16.0.0/12"
+        - "192.168.0.0/16"
+        - "127.0.0.1/32"
   traefik:
     address: ":8080"
 

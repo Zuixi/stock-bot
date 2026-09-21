@@ -22,7 +22,8 @@ Frontend Service:
 
 | 服务 | 镜像 | 职责 |
 |------|------|------|
-| gateway | traefik:v3.6 | **对外唯一入口**（宿主机 `0.0.0.0:80`），按 `PathPrefix` 分发 `/`→frontend、`/api`→api、`/auth`→auth-service，并挂 `forward-auth` 中间件 |
+| caddy | caddy:2-alpine | **对外唯一入口**（宿主机 `0.0.0.0:80/443`）：TLS 自动签发续期 + 反代到 gateway（仅生产，见 `docker-compose.prod.yml` + `gateway/Caddyfile`） |
+| gateway | traefik:v3.6 | 路由/鉴权/限流/安全头（本地开发对外 `:80`；生产仅 compose 网络内 `:80`），按 `PathPrefix` 分发 `/`→frontend、`/api`→api、`/auth`→auth-service，并挂 `forward-auth` 中间件 |
 | frontend | nginx:alpine（镜像由 `frontend/Dockerfile` 的 runtime 阶段产出，非上游 nginx 镜像） | 静态资源托管（SPA 由 Traefik 转发，不由 nginx 反代 `/api`） |
 | api | python:3.13-alpine（多阶段构建） | FastAPI REST API |
 | worker | 同 api 镜像 | RabbitMQ 消费者，执行数据抓取/计算任务 |
@@ -37,7 +38,7 @@ Frontend Service:
 | redis | redis:v7 | 缓存层 + 会话存储（`127.0.0.1:6380`，仅回环） |
 | rabbitmq | rabbitmq:4.2-management | 异步任务队列 |
 
-服务启动顺序：postgres/auth-db/redis(+redis-init)/rabbitmq → migrate(+migrate-auth) → api/worker/scheduler/auth-service/forward-auth → gateway/frontend
+服务启动顺序：postgres/auth-db/redis(+redis-init)/rabbitmq → migrate(+migrate-auth) → api/worker/scheduler/auth-service/forward-auth → gateway/frontend →（生产）caddy
 
 > 说明：`forward-auth` 对「带 `stockbot_session` 但解析不出 assertion」的请求 **fail-closed 返 503**（不是 401）——浏览器残留过期 cookie 时表现为「全站接口不可用、页面全空」，排查方法见 [references/best-practices.md](references/best-practices.md)。
 

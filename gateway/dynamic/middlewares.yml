@@ -43,6 +43,10 @@ http:
           X-Robots-Tag: "noindex, nofollow, nosnippet, noarchive"
           X-Content-Type-Options: "nosniff"
           X-XSS-Protection: "1; mode=block"
+        # TLS 由边缘的 Caddy 终结（见 gateway/Caddyfile）；HSTS 在此下发。
+        # 先给 1 年、不含 includeSubdomains（域名下还有别的站点，避免一刀切波及子域）。
+        stsSeconds: 31536000
+        stsIncludeSubdomains: false
 
     # --------------------------------------------------------------------------
     # General API Rate Limiting
