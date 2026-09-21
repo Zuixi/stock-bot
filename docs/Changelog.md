@@ -1,3 +1,10 @@
+## 2026-09-21 - 基础镜像按 digest 固定（治「每次发版重下 300MB」）+ 服务器切到 v0.0.5
+- **问题**：v0.0.5 在服务器上拉取耗时 **14 分钟**，因为四个 Dockerfile 的基础镜像用的是浮动 tag（`python:3.13-alpine`/`node:22`/`nginx:alpine`/`uv:python3.13-alpine`），上游补丁版本一变，`uv pip install` 出来的依赖层 digest 就整层失效，服务器只能重下整套 site-packages（~300MB）
+- **改动**：四个 Dockerfile 的 8 处 `FROM` 与 `docker-compose.prod.yml` 的 caddy 镜像全部改为 `image:tag@sha256:<manifest digest>`（2026-09-21 取值），并在文件与 `docs/build.md`「镜像构建」里写明取新 digest 的命令；顺带把 caddy 也固定
+- **发现的既有问题（如实记录）**：华为 SWR `ddn-k8s` 源里的 `python:3.13-alpine`/`node:22`/`nginx:alpine` **只有 amd64** —— buildx 双平台构建时给出 `InvalidBaseImagePlatform: ... expected linux/arm64` 警告并继续用 amd64 基础层 + QEMU 产出 `arm64` 镜像，即**发布的 arm64 产物是名义多架构，真实 arm64 机器上会 `exec format error`**。本服务器为 amd64 故不受影响；要支持 arm64 需换基础镜像来源。已写入 `docs/build.md` 警示
+- **验证**：pinned digest 下 amd64/arm64 两种 `--platform` 构建均通过（arm64 仅报上述既有警告，与改动前一致 → 不会让 CI 变红）；本地 `docker compose build api auth-service forward-auth frontend` 四镜像重建成功；服务器侧 `v0.0.5` 切换完成（`/health` = `v0.0.5 @ f3e83ad`、`env=production`，12 容器全 healthy）
+- 涉及模块：backend/Dockerfile, auth-service/Dockerfile, forward-auth/Dockerfile, frontend/Dockerfile, docker-compose.prod.yml, docs/*
+
 ## 2026-09-21 - Caddyfile 改目录挂载（修「改了配置不生效」）+ 生产 HTTPS 全链路验收
 - **踩坑与修复**：Caddyfile 原先以**单文件** bind mount 挂进容器；用 tarball 就地更新（`tar xzf` 替换 inode）后，容器里 **仍是旧 inode 的内容** —— 表现为 `caddy reload` 回 `config is unchanged`、HSTS 死活不出现（实测容器内 `grep` 计数为 0，宿主侧为 1）。修复：Caddyfile 移到 `gateway/caddy/Caddyfile` 并**挂目录** `./gateway/caddy:/etc/caddy:ro`，从此宿主侧替换文件即时可见；同时把"改完如何生效"写进 `docs/build.md`（`docker exec caddy caddy reload --config /etc/caddy/Caddyfile`，热加载不断连、不重签证书）
 - **生产验收（全部实跑，外部视角）**：`https://qstock.tsingyen.site/` → **HTTP/2 200** + `alt-svc: h3`（HTTP/3 已通告）+ `strict-transport-security: max-age=31536000`；HTTP → **308** 跳 HTTPS；证书 **Let's Encrypt**（`CN=YE2`，`Sep 21 → Dec 20 2026`，自动续期）；`/market/concept/BK0501`、`/api/v1/concepts`、`/api/v1/new-stocks`、`/api/v1/market/hot-boards` 全 200，`/auth/session` 匿名 401、`/auth/csrf` 200；Traefik access log 里 `ClientHost` 与 `XFF` 均为真实客户端公网 IP（`trustedIPs` 生效，未退化成 Caddy 容器 IP）
