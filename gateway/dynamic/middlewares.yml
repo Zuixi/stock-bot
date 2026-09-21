@@ -45,7 +45,7 @@ http:
           X-XSS-Protection: "1; mode=block"
         # 注意：HSTS **不在这里**下发。TLS 由边缘的 Caddy 终结，Traefik 侧只看到明文 HTTP，
         # 它的 stsSeconds 不会生效（实测无 header）；而 forceSTSHeader: true 会在本地
-        # http://localhost 上也发 HSTS，把开发机浏览器钉到 HTTPS。故 HSTS 写在 gateway/Caddyfile。
+        # http://localhost 上也发 HSTS，把开发机浏览器钉到 HTTPS。故 HSTS 写在 gateway/caddy/Caddyfile。
 
     # --------------------------------------------------------------------------
     # General API Rate Limiting
