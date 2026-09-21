@@ -1,3 +1,9 @@
+## 2026-09-21 - 生产 HTTPS 上线：边缘层 Caddy（自动签发）+ Traefik 仍作路由/鉴权面（两跳）
+- **拓扑**：`Internet :80/:443 → caddy（TLS 终结，自动签发/续期）→ gateway:80（Traefik：路由/forward-auth/限流/安全头）→ api|frontend|auth-service`。选择**两跳**而非用户最初设想的「Caddy → Nginx → Traefik」三跳：Nginx 在本栈里的角色已由 `frontend` 容器内的静态服务占据，多一跳只增加 XFF/真实 IP 传歪的机会，收益为零
+- **改动**：① 新增 `gateway/Caddyfile`（站点块 `{$QSTOCK_DOMAIN}` + `reverse_proxy gateway:80`，域名为 `qstock.tsingyen.site`；含"再加站点"与"抽成独立 edge 项目"的说明）；② `docker-compose.prod.yml` 新增 `caddy` 服务（SWR 镜像源、80/443/443-udp、Caddyfile 挂载、`caddy_data`/`caddy_config` 卷、healthcheck），并用 **`ports: !override []`** 把宿主机 80 从 gateway 手上整体转交（追加会变成两个映射抢同一端口；该语法需 Compose ≥2.24，服务器实测 5.5.1 与本地均支持）；③ `gateway/traefik.yml` 加 `entryPoints.web.forwardedHeaders.trustedIPs`（compose 网段 + Docker Desktop 网段）—— 不配这一段，真实客户端 IP 会在审计/限流里退化成 Caddy 容器 IP；④ `middlewares.yml` 开 HSTS（1 年、不含 includeSubdomains，域名下还有别的站点）；⑤ `.env.production.example` 加 `QSTOCK_DOMAIN`/`ACME_EMAIL` 与 TLS 上线检查清单；⑥ 文档同步（`docs/build.md` 端口表拆「本地开发 / 服务器」两张 + 新增「边缘层」小节讲三处耦合与排障命令、`docs/ARCHITECTURE.md` 服务表与启动顺序）
+- **本地开发不受影响**：`caddy` 与端口转交只存在于 prod override，`docker compose up`（base）仍由 gateway 提供 `:80`，实测 base 渲染仍为 `80:80`、无 caddy 服务
+- 涉及模块：gateway/{Caddyfile,traefik.yml,dynamic/middlewares.yml}, docker-compose.prod.yml, .env.production.example, docs/{build.md,ARCHITECTURE.md}, docs/*
+
 ## 2026-09-21 - 首次生产部署：腾讯云服务器（tag v0.0.2）+ 本地数据全量迁移
 - **服务器**：`deploy@124.221.83.42:20515`（VM-0-15-debian / Debian 12 / x86_64 / 4C 3.7G / 49G 可用），Docker 29.8.1 + Compose v5.5.1，全新环境（无容器/无卷/端口空闲）
 - **发布**：打 tag **v0.0.2** → CD 发布 4 个镜像到 ghcr（仓库为 public → 服务器**匿名即可拉取**，实测 `docker manifest inspect` 与 `compose pull` 均无需登录；4 镜像合计拉取 14 分钟）

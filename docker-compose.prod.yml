@@ -1,16 +1,54 @@
-# 服务器端 override：只做一件事 —— 把应用镜像从「本地构建」切成「ghcr.io 发布镜像」。
+# 服务器端 override，做两件事：
+#   ① 把应用镜像从「本地构建」切成「ghcr.io 发布镜像」；
+#   ② 加**边缘层 Caddy**（TLS 自动签发/续期 + 反代到 Traefik），并把 gateway 的宿主机端口交给它。
 #
-# 用法（在服务器仓库根目录，源树仍需存在，但只用来提供本文件与 gateway/ 配置）：
-#   IMAGE_TAG=0.0.1 docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
-#   IMAGE_TAG=0.0.1 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+# 用法（在服务器仓库根目录，源树仍需存在，用来提供 compose/Caddyfile/gateway 配置）：
+#   IMAGE_TAG=0.0.3 docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#   IMAGE_TAG=0.0.3 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+#
+# 拓扑：Internet :80/:443 → caddy → gateway:80（仅 compose 网络内可达）→ api/frontend/auth …
 #
 # 说明：
 #   - 服务器上**不构建任何镜像**（`--no-build`），全部来自 ghcr.io；因此不需要 npm/uv/Dockerfile 构建链。
 #   - IMAGE_TAG 必填（`${IMAGE_TAG:?…}`）：缺失时 compose 直接报错退出，避免静默跑在浮动 tag 上。
 #   - 基建镜像（traefik/postgres/redis/rabbitmq/alpine）保持 docker-compose.yml 里的华为 SWR 源，
 #     本文件不重复声明；数据卷、网络、healthcheck、环境变量、labels 一律不动。
-#   - 发布流程与数据迁移见 docs/build.md「服务器部署（发布镜像 + 数据迁移）」。
+#   - **本地开发不受影响**：本文件只在服务器上与 docker-compose.yml 叠加使用，
+#     gateway 在此处用 `!override` 清空了宿主机端口映射（本地仍走 `docker compose up` 的 :80）。
+#   - 路由/鉴权/限流全部留在 Traefik；Caddy 只做 TLS 与透传，规则不重复（见 gateway/Caddyfile）。
+#   - 发布流程、数据迁移与「再加一个站点」见 docs/build.md「服务器部署」。
 services:
+
+  # ---- edge：Caddy 终结 TLS（自动签发/续期），Traefik 不再对外绑端口 ----
+  gateway:
+    # 宿主机 80/443 交给 caddy；Traefik 只在 compose 网络内提供 :80。
+    # 用 !override（Compose ≥2.24）整体替换 docker-compose.yml 里的 ["80:80"]，
+    # 而不是追加 —— 追加会变成两个映射抢同一个宿主机端口。
+    ports: !override []
+
+  caddy:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    environment:
+      # 站点域名（Caddyfile 用 {$QSTOCK_DOMAIN} 读取；可改，改完 restart caddy）
+      QSTOCK_DOMAIN: ${QSTOCK_DOMAIN:-qstock.tsingyen.site}
+      # 证书到期通知邮箱（可选，留空 = 匿名注册 ACME 账号）
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    ports:
+      - "80:80"        # ACME HTTP-01 挑战 + HTTP→HTTPS 跳转
+      - "443:443"      # HTTPS
+      - "443:443/udp"  # HTTP/3（QUIC）
+    volumes:
+      - ./gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data        # 证书与 ACME 账号（**必须持久化**，否则每次重建都重新签发，触发 LE 限流）
+      - caddy_config:/config
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2019/config/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # ---- one-shot migrations ----
   migrate:
@@ -47,3 +85,8 @@ services:
   frontend:
     image: "ghcr.io/zuixi/stock-bot/frontend:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
     pull_policy: always
+
+volumes:
+  # caddy_data 存证书与账号密钥：丢失会导致重新签发（Let's Encrypt 有每周重复签发上限）
+  caddy_data:
+  caddy_config:

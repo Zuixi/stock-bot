@@ -108,13 +108,23 @@ docker compose up --build -d
 
 ### 服务端口
 
+**本地开发**（`docker compose up`，只用 base compose）：
+
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| frontend | http://localhost:3000 | Web 前端 + API 反向代理 |
-| api | http://localhost:8000 | FastAPI 后端（含 /docs Swagger UI） |
+| gateway | http://localhost（:80） | Traefik 唯一入口，路由到前端/api/auth |
+| api | 容器内 :8000（未绑宿主机） | FastAPI 后端；经网关 `/api` 访问 |
 | postgres | localhost:5433（仅回环） | PostgreSQL（映射到 5433 避免冲突；`127.0.0.1` 绑定，外部不可达） |
 | redis | localhost:6380（仅回环） | Redis 缓存（映射到 6380 避免冲突；`127.0.0.1` 绑定，外部不可达） |
-| rabbitmq | localhost:5672 / 15672 | RabbitMQ（15672 为管理面板） |
+| rabbitmq | 容器内 :5672 / :15672（未绑宿主机） | RabbitMQ（管理面板走 `docker exec` 或临时端口转发） |
+
+**服务器（生产）**（`-f docker-compose.yml -f docker-compose.prod.yml`）：
+
+| 服务 | 端口 | 说明 |
+|------|------|------|
+| caddy | **0.0.0.0:80 / 0.0.0.0:443（+443/udp）** | **唯一对外入口**：TLS 自动签发续期 + 反代到 `gateway:80` |
+| gateway | 仅 compose 网络内 :80 | Traefik：路由 / 鉴权（forward-auth）/ 限流 / 安全头（prod override 用 `!override` 清空宿主机端口） |
+| postgres / redis | 127.0.0.1:5433 / 6380 | 仅回环，供宿主机本地工具与 pytest 使用 |
 
 ### 分步构建
 
@@ -203,6 +213,44 @@ openssl pkey -in private.pem -pubout -out public.pem
 2. **对外暴露面**：只有 `gateway` 绑 `0.0.0.0:80`（TLS 就绪后加 443）。`postgres`/`redis` 已改为**只绑回环**（`127.0.0.1:5433` / `127.0.0.1:6380`），宿主机上的本地开发与 `pytest` 照常可用，外部网络访问不到；若要彻底不绑，删掉 `docker-compose.yml` 里那两行 `ports:` 即可。核验：`docker compose ps` 应只见 gateway 有 `0.0.0.0:` 映射。
 
 若服务器无法访问 `ghcr.io`，可在能同时访问 ghcr 与华为 SWR 的机器上转推（`docker pull` → `docker tag` → `docker push`）到现有 `swr.cn-north-4.myhuaweicloud.com` 命名空间，再把 `docker-compose.prod.yml` 里的 `image:` 前缀换成 SWR 地址，其余不变。
+
+### 边缘层：Caddy 自动 HTTPS + Traefik 路由（**两跳**，不是三跳）
+
+生产拓扑：
+
+```
+Internet :80/:443 → caddy（TLS 终结、自动签发/续期）→ gateway:80（Traefik：路由/鉴权/限流）
+                  → api / frontend / auth-service / forward-auth …
+```
+
+**为什么这么分**：路由与鉴权规则（`forward-auth` 注入 Principal Assertion、`strip-assertion` 防伪造、三组限流、安全头）全在 Traefik 的 labels/动态配置里；Caddy 只做 TLS 与透传，**不重复任何路由规则**（两个代理各写一套规则必然长期漂移）。也曾评估过"Caddy → Nginx → Traefik"三跳：多一跳只增加 XFF/真实 IP 传歪的机会，且 Nginx 在本栈里的角色已经由 `frontend` 容器内的静态服务占据，收益为零。
+
+改配置时注意三处耦合：
+
+| 位置 | 作用 | 漏掉的后果 |
+|---|---|---|
+| `gateway/Caddyfile` | 站点块 + `reverse_proxy gateway:80` | 证书签发失败/站点 502 |
+| `gateway/traefik.yml` 的 `entryPoints.web.forwardedHeaders.trustedIPs` | 信任来自 Caddy 的 `X-Forwarded-*`（列了 compose 网段 `172.16.0.0/12` 与 Docker Desktop `192.168.0.0/16`） | 审计日志与限流记录的是 **Caddy 容器 IP**，协议退化成 http |
+| `docker-compose.prod.yml` 的 `gateway.ports: !override []` | 把宿主机 80/443 让给 Caddy | 两个容器抢同一端口，`up` 直接失败 |
+
+**部署/排障命令**：
+
+```bash
+export IMAGE_TAG=0.0.3
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+$COMPOSE up -d caddy gateway
+docker logs caddy 2>&1 | grep -iE "certificate obtained|error|challenge"   # 证书签发结果
+curl -sI https://qstock.tsingyen.site/ | head -3                          # 200/301 皆正常（301 是 HTTP→HTTPS）
+curl -s "https://qstock.tsingyen.site/api/v1/concepts?limit=1" | head -c 120
+```
+
+**前置条件与坑**：
+
+- DNS：站点域名必须有 **A 记录指向本机公网 IP**（Let's Encrypt 不给裸 IP 签证书）；`80` 必须开着（HTTP-01 挑战 + 跳转），`443` 也要在安全组/防火墙放行
+- **证书必须持久化**：存在 compose 卷 `stock-bot_caddy_data`，删了会触发重新签发，而 Let's Encrypt 有「同域名每周重复签发」上限；`docker compose down -v` 会连它一起删
+- HTTP/3 走 `443/udp`，安全组若只放行 TCP 不影响可用性（浏览器自动回落 HTTP/2）
+- **再加一个站点**：在 `gateway/Caddyfile` 追加一个块（`other.example.com { encode zstd gzip; reverse_proxy <那个栈的网关服务名>:80 }`）。跨栈要求同一 docker 网络（把该栈的网络指向本栈网络即可，或把 Caddy 抽成独立 edge 项目 —— 文件可原样搬走）
+- 上线后把 `APP_ENV` 翻成 `production`、`AUTH_COOKIE_SECURE=true`（两处 env 都要，见「环境变量配置」），并把 `CORS_ORIGINS` 改成 `https://<域名>`
 
 ### 镜像构建（做了哪些优化，改 Dockerfile 前请先读）
 

@@ -1,0 +1,33 @@
+# ==============================================================================
+# 边缘层（Edge）：Caddy —— TLS 自动签发/续期 + 反代到 Traefik 网关
+# ==============================================================================
+# 拓扑：Internet :80/:443 → Caddy → Traefik（:80，仅 compose 网络内可达）→ api / frontend / auth-service …
+#
+# 为什么 Caddy 只做「TLS + 透传」：所有路由、鉴权（forward-auth 注入 Principal Assertion）、
+# 限流、安全头都在 Traefik（gateway/traefik.yml + docker-compose.yml 的 labels），这里刻意
+# 不重复任何路由规则 —— 两个代理各写一套规则必然长期漂移。
+#
+# ⚠️ 与 Traefik 的耦合（改一处要想到另一处）：Traefik 必须信任本进程传来的 X-Forwarded-*
+#    （见 gateway/traefik.yml 的 entryPoints.web.forwardedHeaders.trustedIPs），
+#    否则真实客户端 IP 与 https 协议会退化成「Caddy 容器 IP + http」，
+#    审计日志与限流都会记错来源。
+#
+# 新增站点（每个块 Caddy 自动申请/续期一张证书，互不影响）：
+#   other.example.com {
+#       encode zstd gzip
+#       reverse_proxy <那个栈的网关服务名>:80    # 需与本栈同一 docker 网络（见 README/部署文档）
+#   }
+#    若站点较多，建议把本文件与 caddy 服务抽成独立的 edge compose 项目（各栈网关只挂 edge 外部网络、
+#    不绑宿主机端口），届时本文件原样搬过去即可。
+#
+# 站点域名来自环境变量 {$VAR}（Caddy 启动时替换，compose 里给了默认值）；
+# 冒号后是默认值，两端都留了兜底，避免变量缺失时 Caddy 起不来。
+# ==============================================================================
+
+# 证书到期/吊销通知邮箱（可选）：在服务器根 `.env` 里设 ACME_EMAIL 后启用下面一行
+# email {$ACME_EMAIL}
+
+{$QSTOCK_DOMAIN:qstock.tsingyen.site} {
+	encode zstd gzip
+	reverse_proxy gateway:80
+}
