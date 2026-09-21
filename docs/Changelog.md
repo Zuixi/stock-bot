@@ -1,3 +1,8 @@
+## 2026-09-21 - HSTS 归属修正：从 Traefik 移到 Caddy（边缘层）
+- **问题**：把 `stsSeconds` 加在 Traefik 的 `sec-headers` 中间件上**不生效** —— 实测 HTTPS 响应无 `strict-transport-security`。原因：TLS 由 Caddy 终结，Traefik 侧看到的是明文 HTTP，而其 STS 逻辑以「本层是否 TLS」为判据；备选 `forceSTSHeader: true` 更糟，它会在本地开发 `http://localhost` 上也发 HSTS，把开发机浏览器钉到 HTTPS（自伤）
+- **改动**：HSTS 移到 `gateway/Caddyfile` 站点块内（`header Strict-Transport-Security "max-age=31536000"`，不含 includeSubdomains —— 该域名下还要挂其他站点）；`gateway/dynamic/middlewares.yml` 移除无效配置并留注释说明为什么不在这里；`docs/build.md`「边缘层」耦合表补一行
+- 涉及模块：gateway/{Caddyfile,dynamic/middlewares.yml}, docs/{build.md,Changelog.md}
+
 ## 2026-09-21 - 生产 HTTPS 上线：边缘层 Caddy（自动签发）+ Traefik 仍作路由/鉴权面（两跳）
 - **拓扑**：`Internet :80/:443 → caddy（TLS 终结，自动签发/续期）→ gateway:80（Traefik：路由/forward-auth/限流/安全头）→ api|frontend|auth-service`。选择**两跳**而非用户最初设想的「Caddy → Nginx → Traefik」三跳：Nginx 在本栈里的角色已由 `frontend` 容器内的静态服务占据，多一跳只增加 XFF/真实 IP 传歪的机会，收益为零
 - **改动**：① 新增 `gateway/Caddyfile`（站点块 `{$QSTOCK_DOMAIN}` + `reverse_proxy gateway:80`，域名为 `qstock.tsingyen.site`；含"再加站点"与"抽成独立 edge 项目"的说明）；② `docker-compose.prod.yml` 新增 `caddy` 服务（SWR 镜像源、80/443/443-udp、Caddyfile 挂载、`caddy_data`/`caddy_config` 卷、healthcheck），并用 **`ports: !override []`** 把宿主机 80 从 gateway 手上整体转交（追加会变成两个映射抢同一端口；该语法需 Compose ≥2.24，服务器实测 5.5.1 与本地均支持）；③ `gateway/traefik.yml` 加 `entryPoints.web.forwardedHeaders.trustedIPs`（compose 网段 + Docker Desktop 网段）—— 不配这一段，真实客户端 IP 会在审计/限流里退化成 Caddy 容器 IP；④ `middlewares.yml` 开 HSTS（1 年、不含 includeSubdomains，域名下还有别的站点）；⑤ `.env.production.example` 加 `QSTOCK_DOMAIN`/`ACME_EMAIL` 与 TLS 上线检查清单；⑥ 文档同步（`docs/build.md` 端口表拆「本地开发 / 服务器」两张 + 新增「边缘层」小节讲三处耦合与排障命令、`docs/ARCHITECTURE.md` 服务表与启动顺序）

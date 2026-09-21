@@ -29,5 +29,12 @@
 
 {$QSTOCK_DOMAIN:qstock.tsingyen.site} {
 	encode zstd gzip
+
+	# HSTS 由**终结 TLS 的这一层**下发（上游 Traefik 看到的是明文 HTTP，它的 stsSeconds 不会生效）。
+	# 不含 includeSubdomains：本域名下还会挂别的站点，避免一刀切波及子域。
+	# 也刻意不用 Traefik 的 forceSTSHeader —— 那会在本地 http://localhost 上也发 HSTS，
+	# 把开发机的浏览器钉到 HTTPS，属于自伤。
+	header Strict-Transport-Security "max-age=31536000"
+
 	reverse_proxy gateway:80
 }

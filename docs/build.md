@@ -232,6 +232,7 @@ Internet :80/:443 → caddy（TLS 终结、自动签发/续期）→ gateway:80�
 | `gateway/Caddyfile` | 站点块 + `reverse_proxy gateway:80` | 证书签发失败/站点 502 |
 | `gateway/traefik.yml` 的 `entryPoints.web.forwardedHeaders.trustedIPs` | 信任来自 Caddy 的 `X-Forwarded-*`（列了 compose 网段 `172.16.0.0/12` 与 Docker Desktop `192.168.0.0/16`） | 审计日志与限流记录的是 **Caddy 容器 IP**，协议退化成 http |
 | `docker-compose.prod.yml` 的 `gateway.ports: !override []` | 把宿主机 80/443 让给 Caddy | 两个容器抢同一端口，`up` 直接失败 |
+| `gateway/Caddyfile` 的 `header Strict-Transport-Security` | HSTS 在**终结 TLS 的这一层**下发 | 放到 Traefik 的 `stsSeconds` 不生效（Traefik 只见明文 HTTP，实测无 header）；改用 `forceSTSHeader: true` 又会在本地 `http://localhost` 上发 HSTS，把开发机浏览器钉到 HTTPS |
 
 **部署/排障命令**：
 
