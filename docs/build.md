@@ -229,12 +229,12 @@ Internet :80/:443 → caddy（TLS 终结、自动签发/续期）→ gateway:80�
 
 | 位置 | 作用 | 漏掉的后果 |
 |---|---|---|
-| `gateway/Caddyfile` | 站点块 + `reverse_proxy gateway:80` | 证书签发失败/站点 502 |
+| `gateway/caddy/Caddyfile` | 站点块 + `reverse_proxy gateway:80` | 证书签发失败/站点 502 |
 | `gateway/traefik.yml` 的 `entryPoints.web.forwardedHeaders.trustedIPs` | 信任来自 Caddy 的 `X-Forwarded-*`（列了 compose 网段 `172.16.0.0/12` 与 Docker Desktop `192.168.0.0/16`） | 审计日志与限流记录的是 **Caddy 容器 IP**，协议退化成 http |
 | `docker-compose.prod.yml` 的 `gateway.ports: !override []` | 把宿主机 80/443 让给 Caddy | 两个容器抢同一端口，`up` 直接失败 |
-| `gateway/Caddyfile` 的 `header Strict-Transport-Security` | HSTS 在**终结 TLS 的这一层**下发 | 放到 Traefik 的 `stsSeconds` 不生效（Traefik 只见明文 HTTP，实测无 header）；改用 `forceSTSHeader: true` 又会在本地 `http://localhost` 上发 HSTS，把开发机浏览器钉到 HTTPS |
+| `gateway/caddy/Caddyfile` 的 `header Strict-Transport-Security` | HSTS 在**终结 TLS 的这一层**下发 | 放到 Traefik 的 `stsSeconds` 不生效（Traefik 只见明文 HTTP，实测无 header）；改用 `forceSTSHeader: true` 又会在本地 `http://localhost` 上发 HSTS，把开发机浏览器钉到 HTTPS |
 
-**部署/排障命令**：
+**改完 Caddyfile 怎么生效**：`docker exec caddy caddy reload --config /etc/caddy/Caddyfile`（热加载，不断连、不重签证书）。`gateway/caddy/` 是**目录挂载**，所以宿主侧替换文件也能被容器看到（单文件挂载会被 inode 替换坑到：tar 解开后容器仍读旧文件）。
 
 ```bash
 export IMAGE_TAG=0.0.3
@@ -250,7 +250,7 @@ curl -s "https://qstock.tsingyen.site/api/v1/concepts?limit=1" | head -c 120
 - DNS：站点域名必须有 **A 记录指向本机公网 IP**（Let's Encrypt 不给裸 IP 签证书）；`80` 必须开着（HTTP-01 挑战 + 跳转），`443` 也要在安全组/防火墙放行
 - **证书必须持久化**：存在 compose 卷 `stock-bot_caddy_data`，删了会触发重新签发，而 Let's Encrypt 有「同域名每周重复签发」上限；`docker compose down -v` 会连它一起删
 - HTTP/3 走 `443/udp`，安全组若只放行 TCP 不影响可用性（浏览器自动回落 HTTP/2）
-- **再加一个站点**：在 `gateway/Caddyfile` 追加一个块（`other.example.com { encode zstd gzip; reverse_proxy <那个栈的网关服务名>:80 }`）。跨栈要求同一 docker 网络（把该栈的网络指向本栈网络即可，或把 Caddy 抽成独立 edge 项目 —— 文件可原样搬走）
+- **再加一个站点**：在 `gateway/caddy/Caddyfile` 追加一个块（`other.example.com { encode zstd gzip; reverse_proxy <那个栈的网关服务名>:80 }`）。跨栈要求同一 docker 网络（把该栈的网络指向本栈网络即可，或把 Caddy 抽成独立 edge 项目 —— 文件可原样搬走）
 - 上线后把 `APP_ENV` 翻成 `production`、`AUTH_COOKIE_SECURE=true`（两处 env 都要，见「环境变量配置」），并把 `CORS_ORIGINS` 改成 `https://<域名>`
 
 ### 镜像构建（做了哪些优化，改 Dockerfile 前请先读）

@@ -1,3 +1,9 @@
+## 2026-09-21 - Caddyfile 改目录挂载（修「改了配置不生效」）+ 生产 HTTPS 全链路验收
+- **踩坑与修复**：Caddyfile 原先以**单文件** bind mount 挂进容器；用 tarball 就地更新（`tar xzf` 替换 inode）后，容器里 **仍是旧 inode 的内容** —— 表现为 `caddy reload` 回 `config is unchanged`、HSTS 死活不出现（实测容器内 `grep` 计数为 0，宿主侧为 1）。修复：Caddyfile 移到 `gateway/caddy/Caddyfile` 并**挂目录** `./gateway/caddy:/etc/caddy:ro`，从此宿主侧替换文件即时可见；同时把"改完如何生效"写进 `docs/build.md`（`docker exec caddy caddy reload --config /etc/caddy/Caddyfile`，热加载不断连、不重签证书）
+- **生产验收（全部实跑，外部视角）**：`https://qstock.tsingyen.site/` → **HTTP/2 200** + `alt-svc: h3`（HTTP/3 已通告）+ `strict-transport-security: max-age=31536000`；HTTP → **308** 跳 HTTPS；证书 **Let's Encrypt**（`CN=YE2`，`Sep 21 → Dec 20 2026`，自动续期）；`/market/concept/BK0501`、`/api/v1/concepts`、`/api/v1/new-stocks`、`/api/v1/market/hot-boards` 全 200，`/auth/session` 匿名 401、`/auth/csrf` 200；Traefik access log 里 `ClientHost` 与 `XFF` 均为真实客户端公网 IP（`trustedIPs` 生效，未退化成 Caddy 容器 IP）
+- **追加**：`APP_ENV=production` + `AUTH_COOKIE_SECURE=true` 已在服务器生效（auth-service 生产强校验通过并正常启动）；`CORS_ORIGINS=https://qstock.tsingyen.site`；证书材料在卷 `stock-bot_caddy_data`（重建 caddy 后实测未重签，`obtaining certificate` 计数为 0）
+- 涉及模块：gateway/{caddy/Caddyfile, dynamic/middlewares.yml}, docker-compose.prod.yml, docs/{build.md,ARCHITECTURE.md}, docs/*
+
 ## 2026-09-21 - HSTS 归属修正：从 Traefik 移到 Caddy（边缘层）
 - **问题**：把 `stsSeconds` 加在 Traefik 的 `sec-headers` 中间件上**不生效** —— 实测 HTTPS 响应无 `strict-transport-security`。原因：TLS 由 Caddy 终结，Traefik 侧看到的是明文 HTTP，而其 STS 逻辑以「本层是否 TLS」为判据；备选 `forceSTSHeader: true` 更糟，它会在本地开发 `http://localhost` 上也发 HSTS，把开发机浏览器钉到 HTTPS（自伤）
 - **改动**：HSTS 移到 `gateway/Caddyfile` 站点块内（`header Strict-Transport-Security "max-age=31536000"`，不含 includeSubdomains —— 该域名下还要挂其他站点）；`gateway/dynamic/middlewares.yml` 移除无效配置并留注释说明为什么不在这里；`docs/build.md`「边缘层」耦合表补一行

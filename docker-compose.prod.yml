@@ -15,7 +15,7 @@
 #     本文件不重复声明；数据卷、网络、healthcheck、环境变量、labels 一律不动。
 #   - **本地开发不受影响**：本文件只在服务器上与 docker-compose.yml 叠加使用，
 #     gateway 在此处用 `!override` 清空了宿主机端口映射（本地仍走 `docker compose up` 的 :80）。
-#   - 路由/鉴权/限流全部留在 Traefik；Caddy 只做 TLS 与透传，规则不重复（见 gateway/Caddyfile）。
+#   - 路由/鉴权/限流全部留在 Traefik；Caddy 只做 TLS 与透传，规则不重复（见 gateway/caddy/Caddyfile）。
 #   - 发布流程、数据迁移与「再加一个站点」见 docs/build.md「服务器部署」。
 services:
 
@@ -40,7 +40,10 @@ services:
       - "443:443"      # HTTPS
       - "443:443/udp"  # HTTP/3（QUIC）
     volumes:
-      - ./gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+      # 挂**目录**而不是单文件：tar/原子替换会把宿主侧文件换成新 inode，
+      # 而单文件 bind mount 在容器里仍指向旧 inode —— 表现为"改了配置 restart 也不生效"（实测踩过）。
+      # 目录挂载没有这个问题，所以 Caddyfile 单独放 gateway/caddy/。
+      - ./gateway/caddy:/etc/caddy:ro
       - caddy_data:/data        # 证书与 ACME 账号（**必须持久化**，否则每次重建都重新签发，触发 LE 限流）
       - caddy_config:/config
     healthcheck:
