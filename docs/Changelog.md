@@ -1,3 +1,13 @@
+## 2026-09-21 - 首次生产部署：腾讯云服务器（tag v0.0.2）+ 本地数据全量迁移
+- **服务器**：`deploy@124.221.83.42:20515`（VM-0-15-debian / Debian 12 / x86_64 / 4C 3.7G / 49G 可用），Docker 29.8.1 + Compose v5.5.1，全新环境（无容器/无卷/端口空闲）
+- **发布**：打 tag **v0.0.2** → CD 发布 4 个镜像到 ghcr（仓库为 public → 服务器**匿名即可拉取**，实测 `docker manifest inspect` 与 `compose pull` 均无需登录；4 镜像合计拉取 14 分钟）
+- **取源码**：服务器 `git clone` 被墙（`HTTP/2 stream not closed` / `GnuTLS recv error -110`），改用 **codeload tarball**（实测 1MB/s）拉 `refs/tags/v0.0.2` 解包 —— 副产品：tarball 天然不含 `.env`/未入库的 `docker-compose.override.yml`，正好避免把本机环境假设带上服务器
+- **数据迁移**：本地 `pg_dump -Fc` 501MB + auth 库 23KB → scp（约 1.3MB/s）→ `pg_restore` 2m33s。**先恢复数据再起应用**（顺序铁律）：`data_init` 的覆盖度检查只补了 **19 只新股 / 12,446 行 upsert / 0 失败**（约 15 秒），而非全量 3 年回填 —— 若空库直接起应用会烧一轮 TuShare 额度
+- **对账一致**：`daily_quotes` 4,377,954 / `stocks` 5,579 / `concept_boards(active)` 504 / `concept_members` 71,928 / `index_dailies` 16,979 / `daily_basic_indicators` 1,960,362 / `financial_metrics` 3,567,191 / `stock_price_limits` 1,345,177，`alembic_version=2614ed9a9ab4`（migrate 自动 no-op）
+- **验证**：外部访问 `http://124.221.83.42/` → 200（含 `/market`、`/market/concept/BK0501`、`/market/hot-sectors/concept` 等前端深链接与 `/api/v1/concepts*`、`/api/v1/new-stocks`、`/api/v1/market/hot-boards` 全部 200，`/auth/session` 匿名 401 符合预期）；BK0501 KPI 与本地一致（9 涨停 / 4 连板 / 龙头锡华科技），`/health` = `v0.0.2 @ d109af9`；对外监听面**只有 gateway 的 80**（5433/6380 仅回环）；13 个容器全 healthy / 无 error 日志
+- **与生产模板的两处有意偏差**：`APP_ENV=development` + `AUTH_COOKIE_SECURE=false`（暂无 TLS；production 模式会 fail-fast，而 Secure Cookie 在 HTTP 下会导致登录态丢失）。JWT 密钥对、`INTERNAL_API_TOKEN`、RabbitMQ 口令均为服务器上 `openssl` 生成的随机值；`TUSHARE_TOKEN` 经 stdin 从本地 `backend/.env` 管道写入，未出现在命令行/日志里。**待办：域名 + TLS 后翻回 production 模式**
+- 涉及模块：无仓库文件改动（部署动作）；tag v0.0.2；服务器 ~/stock-bot（tarball 解包）+ ~/full.dump
+
 ## 2026-09-21 - 收敛对外暴露面：postgres/redis 只绑回环，对外只剩 gateway
 - **问题**：`postgres` 绑 `0.0.0.0:5433`、`redis` 绑 `0.0.0.0:6380` —— 任何能访问服务器网络的人都可直连业务库（默认口令 `stock_user/stock_pass`）与无认证 Redis；网关侧的鉴权（`/api` 走 forward-auth）因此形同虚设：绕过 80 端口即可长驱直入
 - **改动**：① `docker-compose.yml` 两处 `ports:` 改为 **`127.0.0.1:5433:5432` / `127.0.0.1:6380:6379`**（宿主机上本地开发与 `pytest` 的真 PG 测试照常，外部不可达）；② 顺带把遗留的 `backend/docker-compose.yml`（未被任何现行文档引用的独立开发编排）同样改回环并加 `[LEGACY]` 头注 —— 它此前还漂移成 `redis 6379:6379`；③ 文档同步：`docs/build.md` 端口表 + 上线清单第 2 条、`docs/ARCHITECTURE.md` 服务表（gateway 标注为「对外唯一入口」）、`.env.production.example` 的「其他配置放哪里」
