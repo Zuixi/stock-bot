@@ -50,8 +50,10 @@ services:
       POSTGRESQL_DATABASE: stock_bot
     container_name: postgres
     restart: unless-stopped
+    # 只绑回环：宿主机上的本地开发/pytest（localhost:5433）照常可用，
+    # 外部网络访问不到。生产上若要彻底不绑，删掉这两行 ports 即可。
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/pgsql/data
     healthcheck:
@@ -85,8 +87,9 @@ services:
         condition: service_completed_successfully
     container_name: redis
     restart: unless-stopped
+    # 只绑回环（理由同 postgres）；外部只应能访问 gateway 的 80/443
     ports:
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"
     volumes:
       - redis_data:/data
     healthcheck:

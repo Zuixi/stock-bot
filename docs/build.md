@@ -112,8 +112,8 @@ docker compose up --build -d
 |------|------|------|
 | frontend | http://localhost:3000 | Web 前端 + API 反向代理 |
 | api | http://localhost:8000 | FastAPI 后端（含 /docs Swagger UI） |
-| postgres | localhost:5433 | PostgreSQL（映射到 5433 避免冲突） |
-| redis | localhost:6380 | Redis 缓存（映射到 6380 避免冲突） |
+| postgres | localhost:5433（仅回环） | PostgreSQL（映射到 5433 避免冲突；`127.0.0.1` 绑定，外部不可达） |
+| redis | localhost:6380（仅回环） | Redis 缓存（映射到 6380 避免冲突；`127.0.0.1` 绑定，外部不可达） |
 | rabbitmq | localhost:5672 / 15672 | RabbitMQ（15672 为管理面板） |
 
 ### 分步构建
@@ -200,7 +200,7 @@ openssl pkey -in private.pem -pubout -out public.pem
 **上线前必须处理的两个默认值**（模板末尾也列了）：
 
 1. **数据库口令硬编码**：`postgres` / `auth-db` 服务的 `POSTGRESQL_*` 与 api/worker/scheduler/migrate 的 `DATABASE_URL` 都写死在 `docker-compose.yml`（`stock_user/stock_pass`、`auth_user/auth_pass`）。根 `.env` 里的 `POSTGRES_*` **不会被消费** —— 要换口令得同时改这些行（新库部署时安全）。
-2. **导出到公网的端口**：`postgres` 绑 `5433:5432`、`redis` 绑 `6380:6379`。生产请**用防火墙关掉这两个端口**（或从 `docker-compose.yml` 删掉那两个 `ports:`），数据库与 Redis 无需对公网开放。
+2. **对外暴露面**：只有 `gateway` 绑 `0.0.0.0:80`（TLS 就绪后加 443）。`postgres`/`redis` 已改为**只绑回环**（`127.0.0.1:5433` / `127.0.0.1:6380`），宿主机上的本地开发与 `pytest` 照常可用，外部网络访问不到；若要彻底不绑，删掉 `docker-compose.yml` 里那两行 `ports:` 即可。核验：`docker compose ps` 应只见 gateway 有 `0.0.0.0:` 映射。
 
 若服务器无法访问 `ghcr.io`，可在能同时访问 ghcr 与华为 SWR 的机器上转推（`docker pull` → `docker tag` → `docker push`）到现有 `swr.cn-north-4.myhuaweicloud.com` 命名空间，再把 `docker-compose.prod.yml` 里的 `image:` 前缀换成 SWR 地址，其余不变。
 

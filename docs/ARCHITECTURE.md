@@ -22,7 +22,7 @@ Frontend Service:
 
 | 服务 | 镜像 | 职责 |
 |------|------|------|
-| gateway | traefik:v3.6 | 唯一入口（宿主机 :80），按 `PathPrefix` 分发 `/`→frontend、`/api`→api、`/auth`→auth-service，并挂 `forward-auth` 中间件 |
+| gateway | traefik:v3.6 | **对外唯一入口**（宿主机 `0.0.0.0:80`），按 `PathPrefix` 分发 `/`→frontend、`/api`→api、`/auth`→auth-service，并挂 `forward-auth` 中间件 |
 | frontend | nginx:alpine（镜像由 `frontend/Dockerfile` 的 runtime 阶段产出，非上游 nginx 镜像） | 静态资源托管（SPA 由 Traefik 转发，不由 nginx 反代 `/api`） |
 | api | python:3.13-alpine（多阶段构建） | FastAPI REST API |
 | worker | 同 api 镜像 | RabbitMQ 消费者，执行数据抓取/计算任务 |
@@ -32,9 +32,9 @@ Frontend Service:
 | forward-auth | 同 forward-auth 镜像 | Traefik forward-auth sidecar：会话 cookie → Principal Assertion 注入 + CSRF 校验（内部 :9000） |
 | migrate-auth | 同 auth-service 镜像 | 一次性容器，auth 库 `alembic upgrade head` |
 | redis-init | alpine | 一次性容器，修正 redis 数据卷权限 |
-| postgres | postgresql-15-c9s | 主业务库（宿主机映射 5433） |
+| postgres | postgresql-15-c9s | 主业务库（`127.0.0.1:5433`，仅回环） |
 | auth-db | postgresql-15-c9s | 账号/会话库（无宿主机映射） |
-| redis | redis:v7 | 缓存层 + 会话存储（宿主机映射 6380） |
+| redis | redis:v7 | 缓存层 + 会话存储（`127.0.0.1:6380`，仅回环） |
 | rabbitmq | rabbitmq:4.2-management | 异步任务队列 |
 
 服务启动顺序：postgres/auth-db/redis(+redis-init)/rabbitmq → migrate(+migrate-auth) → api/worker/scheduler/auth-service/forward-auth → gateway/frontend
