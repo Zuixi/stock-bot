@@ -1,3 +1,10 @@
+## 2026-09-21 - 修前端容器「Up 但 502」：官方 nginx 的 entrypoint 脚本卡死 + 补 healthcheck
+- **现象**：把服务器 frontend 切到 0.0.8 后站点 **502 Bad Gateway**；容器 `docker ps` 仍显示 Up，Traefik 日志报 `ServiceAddr 172.18.0.12:80`（旧容器 IP）。实测容器内 nginx **根本没在 listen**：进程树里 `10-listen-on-ipv6-by-default.sh` 的两个 `sh` **卡死不退**，`nginx` 从未被 exec。即：官方 `nginx:alpine` 的 docker-entrypoint 脚本 + 我们自定义的 `default.conf` 组合下会挂死（旧 SWR 单架构 nginx 没这问题 → 换官方源后暴露）
+- **修复**：frontend Dockerfile 加 `ENTRYPOINT []`（我们的 nginx 配置完全静态，不需要 envsubst/ipv6 改写/worker 调优），启动路径只剩「起 nginx」；并给 compose 的 `frontend` 服务加 **healthcheck**（`wget http://127.0.0.1/`）——此前「容器 Up 但服务不可用」可以静默存在几小时，现在 `docker ps` 会直接显示 unhealthy。本地用官方 nginx 基础镜像实建实跑验证：容器起来即 listen :80 且 serving 正确 bundle
+- **应急恢复（记录在案）**：线上先用 `docker exec frontend nginx` 手工拉起 nginx 恢复 200，再走正规镜像修复；Traefik 对「被删除容器的旧 IP」需要重启 gateway 才会重新发现
+- **生产验收**：`https://qstock.tsingyen.site` → 200；真实浏览器点「短线情绪 → 盘中」**无渲染错误**、标题「盘中板块（东财口径）」、列名「东财板块」、50 行渲染；行名暂显 `--`（后端仍是 0.0.5，缺 `board_name`，等 backend:0.0.8 落地后自动显示东财板块名）
+- 涉及模块：frontend/Dockerfile, docker-compose.yml, docs/*
+
 ## 2026-09-21 - 修 CD 前端 arm64 腿 EBADPLATFORM（换官方多架构基础镜像后暴露）
 - **问题**：v0.0.7 的 CD 在 `Build and push frontend` 失败：`npm error code EBADPLATFORM / Unsupported platform for @rollup/rollup-linux-x64-gnu: wanted cpu x64, current arm64`。根因是 frontend/Dockerfile 里写死的 `npm i @rollup/rollup-linux-x64-gnu --no-save` —— 在**旧 SWR 单架构基础镜像**下 arm64 腿其实跑的是 amd64 userland（QEMU），所以能装上；换成官方**真多架构** `node:22` 后，arm64 腿是真实 arm64，装 x64 专属包必然失败。即：换官方源把「多架构名不副实」这个隐藏前提摆到了台面上（本地 arm64 机用镜像源前缀的临时 Dockerfile 已 1:1 复现该失败）
 - **修复**：改为按 `uname -m` 选择平台包（`x86_64 → @rollup/rollup-linux-x64-gnu`、`aarch64 → @rollup/rollup-linux-arm64-gnu`，其它架构跳过），保留"补装 rollup 原生二进制"的原意；arm64 本地实建通过并核验产物（dist/index.html + assets）

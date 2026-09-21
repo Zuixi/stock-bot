@@ -59,4 +59,11 @@ COPY --from=builder /app/dist/ /usr/share/nginx/html/
 
 EXPOSE 80
 
+# 跳过基础镜像自带的 docker-entrypoint 脚本（`/docker-entrypoint.d/*`）：
+# 实测官方 `nginx:alpine` 的 `10-listen-on-ipv6-by-default.sh` 在容器内**卡死不退**
+# （进程树里两个 sh 挂在那里），结果 nginx **从未启动**、Traefik 一直 502 ——
+# 而容器状态看着是 Up。我们的 nginx 配置是完全静态的（不需要 envsubst / ipv6 改写 / worker 调整），
+# 所以直接 ENTRYPOINT [] + 现成 CMD，启动路径只剩“起 nginx”一件事。
+# （2026-09-21 从 SWR 单架构 nginx 换成官方 nginx:alpine 后暴露）
+ENTRYPOINT []
 CMD ["nginx", "-g", "daemon off;"]
