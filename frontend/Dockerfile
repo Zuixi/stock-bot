@@ -15,9 +15,18 @@ ENV HTTP_PROXY="" \
     no_proxy="*"
 
 COPY package.json package-lock.json ./
+# rollup 的原生二进制是平台专属包，跨平台 lockfile 下 `npm ci --include=optional` 偶尔漏装，故按当前架构补装。
+# ⚠️ **不能写死 x64**：官方基础镜像是真多架构（官方 `node:22` 同时有 amd64/arm64），
+# arm64 腿装 x64 包会直接 `EBADPLATFORM` 构建失败（2026-09-21 从 SWR 单架构换成官方源后暴露）。
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --include=optional \
-    && npm i @rollup/rollup-linux-x64-gnu --no-save
+    && ARCH=$(uname -m) \
+    && case "$ARCH" in \
+         x86_64) ROLLUP="@rollup/rollup-linux-x64-gnu" ;; \
+         aarch64) ROLLUP="@rollup/rollup-linux-arm64-gnu" ;; \
+         *) ROLLUP="" ;; \
+       esac \
+    && { [ -z "$ROLLUP" ] || npm i "$ROLLUP" --no-save; }
 
 COPY . .
 

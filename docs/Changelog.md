@@ -1,3 +1,9 @@
+## 2026-09-21 - 修 CD 前端 arm64 腿 EBADPLATFORM（换官方多架构基础镜像后暴露）
+- **问题**：v0.0.7 的 CD 在 `Build and push frontend` 失败：`npm error code EBADPLATFORM / Unsupported platform for @rollup/rollup-linux-x64-gnu: wanted cpu x64, current arm64`。根因是 frontend/Dockerfile 里写死的 `npm i @rollup/rollup-linux-x64-gnu --no-save` —— 在**旧 SWR 单架构基础镜像**下 arm64 腿其实跑的是 amd64 userland（QEMU），所以能装上；换成官方**真多架构** `node:22` 后，arm64 腿是真实 arm64，装 x64 专属包必然失败。即：换官方源把「多架构名不副实」这个隐藏前提摆到了台面上（本地 arm64 机用镜像源前缀的临时 Dockerfile 已 1:1 复现该失败）
+- **修复**：改为按 `uname -m` 选择平台包（`x86_64 → @rollup/rollup-linux-x64-gnu`、`aarch64 → @rollup/rollup-linux-arm64-gnu`，其它架构跳过），保留"补装 rollup 原生二进制"的原意；arm64 本地实建通过并核验产物（dist/index.html + assets）
+- **教训**：凡是硬编码平台/架构的构建步骤，在基础镜像从单架构换成多架构时都会立刻爆掉；"CI 双平台都成功"曾经只说明两腿用的是同一个（amd64）基础层
+- 涉及模块：frontend/Dockerfile, docs/*
+
 ## 2026-09-21 - 修盘中口径崩溃 + 板块卡改东财口径；基础镜像换官方源
 - **线上故障（用户报「切盘中页面崩溃、拿不到数据」）根因**：`mode=intraday` 时板块端点按后端契约返回 `l1_code/l3_code/l3_name/l1_name` **全为 null**（东财涨停池不映射申万），而前端 `SwL3LimitUpBoard.tsx` 的排序比较器里 `a.l3Code.localeCompare(b.l3Code)` 无空值保护 → `TypeError: Cannot read properties of null` → 当时只有全局 ErrorBoundary，于是**整个短线情绪 tab 被替换成「页面渲染出错」**。四个端点实测全部 200，属纯前端渲染异常
   - **第二处缺陷**：`SectorLimitUpItemOut` 少了 `board_name` 字段，把后端 `_sectors_by_board_name` 已经算好的东财板块名在序列化时丢掉了 → 盘中卡片即使不崩也只能显示 `--`
