@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Card, Col, Row, Segmented, Tabs, Typography } from "antd";
+import { Alert, Button, Card, Col, Row, Segmented, Tabs, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { DegradedNotice, SectionCard } from "@/shared/ui";
+import { DegradedNotice, ErrorBoundary, SectionCard } from "@/shared/ui";
 import {
   fetchLimitUpLadder,
   fetchSectorLimitUp,
@@ -33,6 +33,30 @@ import {
 import { useMarketPolling } from "@/features/market/hooks/useMarketPolling";
 import { NewStockBoard } from "@/features/concept";
 import "./market.css";
+
+/**
+ * 单卡降级渲染：一张卡渲染异常只坏这一张，不牵连邻卡与整页。
+ *
+ * 背景：2026-09-21 盘中口径 `l3Code` 为 null 时 `localeCompare` 抛 TypeError，
+ * 当时只有全局 ErrorBoundary，结果**整个短线情绪 tab 被换成「页面渲染出错」**，
+ * 用户看到的是「页面崩溃、拿不到任何数据」。现在卡级异常 = 卡级告警条 + 重试。
+ * 注：这是兵信（防扩散），不是免罪符 —— 渲染层仍然必须对 null 做空合并。
+ */
+const cardFallback =
+  (title: string) =>
+  (error: Error, reset: () => void) => (
+    <Alert
+      type="error"
+      showIcon
+      message={`${title}渲染失败`}
+      description={error.message || "组件渲染发生异常"}
+      action={
+        <Button size="small" onClick={reset}>
+          重试
+        </Button>
+      }
+    />
+  );
 
 /**
  * 短线情绪 Tab：五个端点各自 `useQuery`，单点失败不牵连邻区。
@@ -119,24 +143,40 @@ function SentimentTab() {
             {degraded ? (
               <DegradedNotice reason={degraded} />
             ) : (
-              <SentimentThermometer
-                kpis={ladder.data?.kpis}
-                history={calendar.data ?? []}
-                asOf={ladder.data?.asOf}
-              />
+              <ErrorBoundary fallback={cardFallback("情绪温度计")}>
+                <SentimentThermometer
+                  kpis={ladder.data?.kpis}
+                  history={calendar.data ?? []}
+                  asOf={ladder.data?.asOf}
+                />
+              </ErrorBoundary>
             )}
           </SectionCard>
         </Col>
         <Col span={24}>
           <SectionCard title="连板梯队" asof={ladder.data?.asOf} quality={ladder.data?.asOfQuality}>
             {/* 盘中口径才画分时曲线：收盘口径没有「分时」这一维度 */}
-            {isIntraday ? <SentimentIntradayChart points={intraday.data ?? []} /> : null}
-            <LimitUpLadder echelons={ladder.data?.echelons ?? []} degraded={Boolean(degraded)} />
+            {isIntraday ? (
+              <ErrorBoundary fallback={cardFallback("盘中分时")}>
+                <SentimentIntradayChart points={intraday.data ?? []} />
+              </ErrorBoundary>
+            ) : null}
+            <ErrorBoundary fallback={cardFallback("连板梯队")}>
+              <LimitUpLadder echelons={ladder.data?.echelons ?? []} degraded={Boolean(degraded)} />
+            </ErrorBoundary>
           </SectionCard>
         </Col>
         <Col xs={24} xl={12}>
-          <SectionCard title="申万三级最高板" asof={sectors.data?.asOf} quality={sectors.data?.asOfQuality}>
-            <SwL3LimitUpBoard data={sectors.data} degraded={sectorsDegraded} />
+          {/* 口径互斥：close = 申万三级（l3Name 有值）；intraday = 东财板块（boardName 有值）。
+              卡片自身按 data.source 判定列名，标题由这里按 mode 给出，两侧语义必须一致。 */}
+          <SectionCard
+            title={isIntraday ? "盘中板块（东财口径）" : "申万三级最高板"}
+            asof={sectors.data?.asOf}
+            quality={sectors.data?.asOfQuality}
+          >
+            <ErrorBoundary fallback={cardFallback("盘中板块")}>
+              <SwL3LimitUpBoard data={sectors.data} degraded={sectorsDegraded} />
+            </ErrorBoundary>
           </SectionCard>
         </Col>
         <Col xs={24} xl={12}>
@@ -147,13 +187,17 @@ function SentimentTab() {
             asof={yesterday.data?.asOf}
             quality={yesterday.data?.asOfQuality}
           >
-            <YesterdayLimitUp data={yesterday.data} degraded={yesterdayDegraded} />
+            <ErrorBoundary fallback={cardFallback("昨日涨停")}>
+              <YesterdayLimitUp data={yesterday.data} degraded={yesterdayDegraded} />
+            </ErrorBoundary>
           </SectionCard>
         </Col>
         <Col span={24}>
           {/* 次新股情绪（§3 触点 D）：BK0501 成分 + 替代破发口径的声明在组件注脚内 */}
           <SectionCard title="次新股情绪" asof={newStocks.data?.as_of}>
-            <NewStockBoard data={newStocks.data} degraded={newStocksDegraded} />
+            <ErrorBoundary fallback={cardFallback("次新股情绪")}>
+              <NewStockBoard data={newStocks.data} degraded={newStocksDegraded} />
+            </ErrorBoundary>
           </SectionCard>
         </Col>
       </Row>

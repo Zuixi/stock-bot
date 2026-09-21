@@ -27,9 +27,8 @@ services:
     ports: !override []
 
   caddy:
-    # 按 digest 固定（2026-09-21）：与 Dockerfile 里的基础镜像同一策略，避免上游浮动 tag 变动带来的意外拉取。
-    # 升级：docker buildx imagetools inspect swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/caddy:2-alpine --format '{{.Manifest.Digest}}'
-    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/caddy:2-alpine@sha256:ed66ea6bd84ed7abf40918c25316917dc6d664a3014cd93db41df2ab2e9edf99
+    # 官方源 + digest 固定（与 Dockerfile 基础镜像同策略）；升级见 docs/build.md「镜像构建」。
+    image: caddy:2-alpine@sha256:de23def33b17fb5d1290b0f6c2add1d70780e52341896c00a4c8a2a2fe9d355e
     container_name: caddy
     restart: unless-stopped
     environment:

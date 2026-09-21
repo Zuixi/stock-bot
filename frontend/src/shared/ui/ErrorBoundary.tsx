@@ -3,6 +3,12 @@ import { Button, Result } from "antd";
 
 interface Props {
   children: ReactNode;
+  /**
+   * 局部降级渲染（不传 = 全局兜底整页错误卡）。
+   * 单卡包一层，一张卡渲染异常只坏这一张，不牵连邻卡与整页
+   * （背景：2026-09-21 盘中口径 `null.localeCompare` 直接把整个短线情绪 tab 换成「页面渲染出错」）。
+   */
+  fallback?: (error: Error, reset: () => void) => ReactNode;
 }
 
 interface State {
@@ -30,6 +36,10 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.error) {
+      const { fallback } = this.props;
+      if (fallback) {
+        return fallback(this.state.error, this.handleReset);
+      }
       return (
         <Result
           status="error"

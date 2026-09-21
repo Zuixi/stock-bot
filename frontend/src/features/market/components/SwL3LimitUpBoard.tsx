@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Switch, Tag, Typography } from "antd";
 import { useNavigate } from "react-router-dom";
-import type { SectorLimitUp } from "@/shared/api/limitUp";
+import type { SectorLimitUp, SectorLimitUpItem } from "@/shared/api/limitUp";
 import "./SwL3LimitUpBoard.css";
 
 interface Props {
@@ -21,7 +21,15 @@ function heatClass(streak: number): string {
  * 申万三级最高板（热度榜重设计）：一级行业 CheckableTag 过滤（wrap 不截断，替代
  * 21 项挤一行只显示单字的 block Segmented）+「仅看 ≥2 板」开关 + 自绘行列表。
  * 行内：细分行业 / 板高格（4 格热度色阶，与梯队同语言）/ 龙头 / 涨停家数占比条。
- * 排序 板高 desc → 家数 desc → l3Code（确定性，避免同板高行抖动）；行点击跳龙头个股。
+ * 排序 板高 desc → 家数 desc → 板块名（确定性，避免同板高行抖动）；行点击跳龙头个股。
+ *
+ * 双口径（2026-09-21 修复）：
+ * - `close`：数据是 SW L3（`l3Code`/`l3Name` 有值），标题「申万三级最高板」；
+ * - `intraday`：东财涨停池口径，**SW 字段按后端契约全为 null，板块名在 `boardName`**，
+ *   标题改为「盘中板块（东财口径）」，行首列显示东财板块名。
+ * - 两者都不能假定板块名非空：排序/渲染/React key 一律走 `rowKey`/`rowLabel` 的 null 合并，
+ *   否则一个 null 就抛 `TypeError: Cannot read properties of null (reading 'localeCompare')`，
+ *   经渲染异常会直接把整个 tab 换成「页面渲染出错」（本次线上故障的根因）。
  */
 export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
   const navigate = useNavigate();
@@ -29,6 +37,11 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
   const [lianzOnly, setLianzOnly] = useState(false);
 
   const items = data?.items ?? [];
+  /** 盘中口径：东财涨停池不映射 SW，板块名看 boardName。 */
+  const isEastmoney = data?.source === "eastmoney_intraday";
+  /** 行主键/行名：SW 码优先，其次东财板块名 —— 两者都缺才回落到龙头代码（绝不返回 null）。 */
+  const rowKey = (i: SectorLimitUpItem): string => i.l3Code ?? i.boardName ?? i.leaderSymbol;
+  const rowLabel = (i: SectorLimitUpItem): string | null => i.l3Name ?? i.boardName ?? null;
 
   const l1Options = useMemo(() => {
     const seen = new Map<string, { name: string; count: number }>();
@@ -52,7 +65,7 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
           (a, b) =>
             b.maxStreak - a.maxStreak ||
             b.ztCount - a.ztCount ||
-            a.l3Code.localeCompare(b.l3Code),
+            rowKey(a).localeCompare(rowKey(b)),
         ),
     [items, l1, lianzOnly],
   );
@@ -97,7 +110,7 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
       </div>
 
       <div className="sw3-head" aria-hidden>
-        <span>细分行业</span>
+        <span>{isEastmoney ? "东财板块" : "细分行业"}</span>
         <span>最高板</span>
         <span>龙头</span>
         <span className="sw3-head__right">涨停家数</span>
@@ -108,19 +121,23 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
           type="secondary"
           style={{ display: "block", padding: "24px 0", textAlign: "center" }}
         >
-          {lianzOnly ? "当前筛选下无连板行业" : "无申万三级涨停数据"}
+          {lianzOnly
+            ? "当前筛选下无连板板块"
+            : isEastmoney
+              ? "盘中暂无板块映射数据"
+              : "无申万三级涨停数据"}
         </Typography.Text>
       ) : (
         <ul className="sw3-list">
           {rows.map((r) => (
-            <li key={r.l3Code}>
+            <li key={rowKey(r)}>
               <div
                 className={`sw3-row ${heatClass(r.maxStreak)}`}
                 onClick={() => navigate(`/stock/${r.leaderSymbol}`)}
-                title={`${r.l3Name ?? r.l3Code} · 龙头 ${r.leaderName ?? "--"} → 个股页`}
+                title={`${rowLabel(r) ?? "--"} · 龙头 ${r.leaderName ?? "--"} → 个股页`}
               >
                 <span className="sw3-row__names">
-                  <span className="sw3-row__l3">{r.l3Name ?? "--"}</span>
+                  <span className="sw3-row__l3">{rowLabel(r) ?? "--"}</span>
                   {r.l1Name && l1 === ALL ? <span className="sw3-row__l1">{r.l1Name}</span> : null}
                 </span>
                 <span className="sw3-row__streak">

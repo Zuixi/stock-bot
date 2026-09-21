@@ -153,6 +153,29 @@ const SECTOR_CLOSE = {
             leader_streak: 3, zt_count: 4 }],
 };
 
+/**
+ * 盘中口径板块 payload：**真实后端契约的字节级复刻** ——
+ * 东财涨停池不映射申万，`l3_code/l3_name/l1_code/l1_name` 全为 null，板块名只在 `board_name`。
+ *
+ * 2026-09-21 线上故障的根源就是这个契约没被任何用例覆盖：组件里 `a.l3Code.localeCompare(...)`
+ * 遇 null 抛 TypeError，而渲染异常边界只有全局那一层，于是整个短线情绪 tab 变成「页面渲染出错」。
+ * 以后**盘中用例一律用这个 payload**，收盘用 SECTOR_CLOSE，两者不得互借。
+ */
+const SECTOR_INTRADAY = {
+  as_of: "2026-09-08", source: "eastmoney_intraday", degraded_reason: null,
+  unclassified_count: 0, as_of_label: "盘中 10:35",
+  // ⚠️ 前两条 **故意在 (max_streak, zt_count) 上完全并列**：排序比较器是
+  // `streak → count → 名称`，只有走到最后一个子句才会读 l3Code/boardName。
+  // 若两条数据在数值上就分出胜负，null 分支永远不被执行 —— 测试会在缺陷存在时依然全绿
+  // （本次就踩过：夹具 5板/2家 vs 2板/3家，加缺陷也测不出来；改成 5/2 与 5/2 后立即变红）。
+  items: [
+    { l3_code: null, l3_name: null, l1_code: null, l1_name: null, board_name: "家居用品",
+      max_streak: 5, leader_symbol: "603816", leader_name: "顾家家居", leader_streak: 5, zt_count: 2 },
+    { l3_code: null, l3_name: null, l1_code: null, l1_name: null, board_name: "医疗服务",
+      max_streak: 5, leader_symbol: "300347", leader_name: "泰格医药", leader_streak: 5, zt_count: 2 },
+  ],
+};
+
 const YESTERDAY_CLOSE = {
   as_of: "2026-09-08", as_of_prev: "2026-09-07", source: "local_calc", degraded_reason: null,
   kpis: { n: 0, measured: 0 }, items: [],
@@ -175,7 +198,12 @@ async function routeSentiment(
     const mode = new URL(r.request().url()).searchParams.get("mode");
     return r.fulfill({ json: mode === "intraday" ? ladderIntraday : LADDER });
   });
-  await page.route("**/market/sector-limit-up*", (r) => r.fulfill({ json: SECTOR_CLOSE }));
+  await page.route("**/market/sector-limit-up*", (r) => {
+    const mode = new URL(r.request().url()).searchParams.get("mode");
+    // 按 mode 给**真实契约**：盘中=SW 全 null + board_name；收盘=SW 有值。
+    // （旧版这里恒返回 SECTOR_CLOSE，导致盘中用例实际拿的是收盘数据 → 掩盖了 null 崩溃）
+    return r.fulfill({ json: mode === "intraday" ? SECTOR_INTRADAY : SECTOR_CLOSE });
+  });
   await page.route("**/market/yesterday-limit-up*", (r) => r.fulfill({ json: YESTERDAY_CLOSE }));
   await page.route("**/market/sentiment/intraday*", (r) => r.fulfill({ json: points }));
   await routeCalendar(page, CALENDAR);
@@ -203,6 +231,41 @@ test("盘中/收盘切换默认收盘，切盘中后显示盘中口径与分时�
   await expect(page.locator(".section-card__asof-label")).toContainText(/盘中 \d\d:\d\d/);
   // (c) 分时曲线 svg 出现
   await expect(page.locator('[data-testid="sentiment-intraday-chart"] svg')).toBeVisible();
+});
+
+test("盘中口径板块卡按东财口径渲染且不崩（SW 字段为 null 的真实契约）", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (e) => pageErrors.push(String(e)));
+  await routeSentiment(page);
+  await page.goto("/market");
+  await page.getByRole("tab", { name: "短线情绪" }).click();
+
+  // 收盘口径：标题与列名都是申万语义
+  await expect(page.getByText("申万三级最高板", { exact: true })).toBeVisible();
+  await expect(page.locator(".sw3-head")).toContainText("细分行业");
+  await expect(page.locator(".sw3-row__l3").first()).toHaveText("生猪养殖");
+
+  // 切盘中：SW 字段全 null 的契约下也必须正常渲染
+  await page
+    .locator('[data-testid="sentiment-mode-switch"]')
+    .locator(".ant-segmented-item")
+    .filter({ hasText: "盘中" })
+    .click();
+
+  // (a) 绝不出现渲染错误（故障复现断言：旧代码此处会抛 null.localeCompare 并被兜底成错误页）
+  await expect(page.getByText(/页面渲染出错|渲染失败/)).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+  // (b) 标题与列名切成东财口径
+  await expect(page.getByText("盘中板块（东财口径）", { exact: true })).toBeVisible();
+  await expect(page.locator(".sw3-head")).toContainText("东财板块");
+  // (c) 板块名来自 board_name（不是 "" 或 "--"）；两条并列项都必须渲染
+  // 顺序不写死（浏览器本地化排序会变），但两条都必须在 —— 夹具并列就是为了强制走到名称比较子句
+  expect(await page.locator(".sw3-row__l3").allInnerTexts()).toEqual(
+    expect.arrayContaining(["家居用品", "医疗服务"]),
+  );
+  // (d) 邻卡不受影响（单卡降级 ≠ 整页白屏）
+  await expect(page.locator(".thermo")).toBeVisible();
+  await expect(page.locator(".sentiment-ladder")).toBeVisible();
 });
 
 test("盘中回落收盘时卡头如实显示回落文案", async ({ page }) => {

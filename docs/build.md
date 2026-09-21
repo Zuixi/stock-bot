@@ -264,10 +264,15 @@ curl -s "https://qstock.tsingyen.site/api/v1/concepts?limit=1" | head -c 120
 | **runtime 删 pip**、非 root `app` 用户、`PYTHONUNBUFFERED=1`、`PYTHONDONTWRITEBYTECODE=1` | 不写无用 `.pyc`、日志实时、降权限运行 |
 | **`TZ=Asia/Shanghai`** | 只影响**日志时间戳**（业务时间判断在代码里显式用 `ZoneInfo("Asia/Shanghai")`，别改成读容器时区） |
 | **OCI labels + `ARG VERSION/COMMIT/BUILD_DATE`**，由 CD 传入 `github.ref_name` / `github.sha` | 服务器上可回答“跑的是哪个版本”：`docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' stock-bot-backend:local`；`/health` 也会回报 `version`/`commit`（`backend/app/config.py` 的 `APP_VERSION`/`APP_COMMIT`） |
+| **基础镜像用官方上游源**（`python:3.13-alpine` / `node:22` / `nginx:alpine` / `ghcr.io/astral-sh/uv` / `caddy:2-alpine`，**不指定第三方镜像源**） | 与业内一致、来源可审计，且官方源是真多架构（第三方源常只有 amd64）。代价：国内本机构建需配 registry mirror（见上）；CI 在 GitHub 上直连 Docker Hub，无需处理 |
 | **基础镜像按 digest 固定**（`FROM <image>:<tag>@sha256:…`，见四个 Dockerfile 与 `docker-compose.prod.yml` 的 caddy） | 上游浮动 tag 一动，依赖层整层失效 —— 实测 v0.0.5 在服务器上重下了 ~300MB、耗时 14 分钟。固定后只要 lock 不变，依赖层 digest 就稳定，发版拉取只下几 MB。**升级姿势**：`docker buildx imagetools inspect <image> --format '{{.Manifest.Digest}}'` 取新 digest 替换（建议每季度或跟安全更新时做一次） |
 | **服务级 `.dockerignore`** 排掉本地缓存/产物（`.mypy_cache`/`.pytest_cache`/`dist`/`e2e`/`test-results`…）与 `Dockerfile`/`docker-compose.yml` | 避免它们污染 `COPY . .` 的层缓存，也避免把构建文件塞进镜像 |
 
-> ⚠️ **多架构发布是"名义上"的**：本仓库基础镜像走的是华为 SWR 的 `ddn-k8s` 镜像源，实测该源里 `python:3.13-alpine` / `node:22` / `nginx:alpine` **只有 amd64**（buildx 会给出 `InvalidBaseImagePlatform: ... expected linux/arm64` 警告）。也就是说 CD 发布的 `linux/arm64` 产物实际由 amd64 基础层 + QEMU 构建而成，**在真实 arm64 机器上跑不起来**（`exec format error`）。当前服务器是 amd64，不受影响；若以后要部署到 arm64 服务器，需要先把基础镜像换成真正多架构的来源（Docker Hub 官方或自建 mirror），再谈多架构。
+> **多架构现状（2026-09-21 起）**：四个 Dockerfile 的基础镜像已换成**官方上游**（`python:3.13-alpine` / `node:22` / `nginx:alpine` / `ghcr.io/astral-sh/uv`）+ digest 固定，官方源是**真多架构**（实测 digest 的 index 同时含 `linux/amd64` 与 `linux/arm64`），故 CD 的 arm64 产物是真 arm64。
+>
+> ⚠️ **但基建镜像仍来自华为 SWR 的 `ddn-k8s` 源**（`traefik` / `postgres` / `redis` / `rabbitmq`）+ `compose.prod` 之外的其它 image：实测这些源仍可能只有 amd64。所以**"整栈支持 arm64"这句话目前不成立** —— 若要部署到 arm64 服务器，需把基建镜像也换成官方多架构源（本次刻意没动：它们由服务器直接拉取，国内走 SWR 才快）。
+>
+> 国内**本机**构建官方基础镜像时 Docker Hub 通常不通，需要在 Docker Desktop → Settings → Docker Engine 配 `"registry-mirrors": ["https://docker.1ms.run"]`（digest 内容寻址，镜像源同样能命中同一份内容；服务器端不需要，因为服务器只拉 ghcr 的应用镜像与 SWR 的基建镜像，从不构建）。
 
 **评估过但故意不做**（改回前请先测）：
 
