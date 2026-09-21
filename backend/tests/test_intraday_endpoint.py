@@ -193,6 +193,9 @@ async def test_intraday_calls_fetch_intraday_pool_once(
         assert item["l3_name"] is None
         assert item["l1_code"] is None
         assert item["l1_name"] is None
+        # 但板块名必须在（东财口径）：前端卡片靠它渲染行标题，
+        # 少了它就是「有数据但没名字」（线上曾因 SW 字段为 null 且无 board_name 而崩溃/只能显示 --）
+        assert item["board_name"]
     # 收盘路径不该被走：limits_present=True 来自盘中池（close 路径不参与）
     assert snap["limits_present"] is True
     # kpis 计数：zt_count == len(pool) == 47
@@ -420,6 +423,9 @@ def test_intraday_payload_validates_against_ladder_out() -> None:
             assert it.l3_name is None
             assert it.l1_code is None
             assert it.l1_name is None
+            # 盘中口径的板块名走 board_name，**必须不被 schema 丢弃**
+            # （曾经 SectorLimitUpItemOut 少这个字段 → 前端拿不到任何可用名称）
+            assert it.board_name
             # 兜底字段
             assert it.max_streak >= 1
             assert it.leader_symbol

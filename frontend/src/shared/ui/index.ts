@@ -11,4 +11,5 @@ export { FreshnessNote, freshnessBadges, qualityBadgeText } from "./FreshnessNot
 export type { FreshnessNoteProps } from "./FreshnessNote";
 export type { SectionCardProps } from "./SectionCard";
 export { DegradedNotice, DEGRADED_REASON_TEXT } from "./DegradedNotice";
+export { ErrorBoundary } from "./ErrorBoundary";
 export { formatCnDate } from "./date";

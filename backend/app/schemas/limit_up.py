@@ -82,11 +82,14 @@ class LimitUpLadderOut(BaseModel):
 
 class SectorLimitUpItemOut(BaseModel):
     # 收盘路径：SW L3/L1 必须非空（按 limit_up_calculator.sector_ladder 逻辑）。
-    # 盘中路径：东财 hybk 体系不映射 SW，l3_*/l1_* 全 None。已在 Task 11 拓宽。
+    # 盘中路径：东财 hybk 体系不映射 SW，l3_*/l1_* 全 None —— 此时**板块名走 `board_name`**
+    # （东财板块名），前端据此把卡片口径切成「盘中板块（东财口径）」。
+    # 不再依赖前端“自己判断 null”，必须显式给出可渲染名（否则卡片只能显示 --）。
     l3_code: str | None = None
     l3_name: str | None = None
     l1_code: str | None = None
     l1_name: str | None = None
+    board_name: str | None = None
     max_streak: int
     leader_symbol: str
     leader_name: str | None = None

@@ -59,10 +59,13 @@ interface BackendLadder {
 }
 
 interface BackendSectorLimitUpItem {
-  l3_code: string;
+  /** 收盘口径为 SW L3 码；**盘中口径为 null**（东财体系），此时板块名看 `board_name`。 */
+  l3_code: string | null;
   l3_name: string | null;
   l1_code: string | null;
   l1_name: string | null;
+  /** 仅盘中口径有值：东财板块名（前端据此切「盘中板块（东财口径）」）。 */
+  board_name?: string | null;
   max_streak: number;
   leader_symbol: string;
   leader_name: string | null;
@@ -73,7 +76,7 @@ interface BackendSectorLimitUpItem {
 interface BackendSectorLimitUp {
   as_of: string | null;
   as_of_quality?: AsOfQuality;
-  source: "local_calc";
+  source: "local_calc" | "eastmoney_intraday";
   degraded_reason: string | null;
   unclassified_count: number;
   items: BackendSectorLimitUpItem[];
@@ -190,10 +193,13 @@ export interface LimitUpLadder {
 }
 
 export interface SectorLimitUpItem {
-  l3Code: string;
+  /** 收盘口径为 SW L3 码；**盘中口径为 null**（不能假定为非空字符串 —— 曾因此崩溃）。 */
+  l3Code: string | null;
   l3Name: string | null;
   l1Code: string | null;
   l1Name: string | null;
+  /** 仅盘中口径有值：东财板块名。 */
+  boardName: string | null;
   maxStreak: number;
   leaderSymbol: string;
   leaderName: string | null;
@@ -205,7 +211,8 @@ export interface SectorLimitUp {
   asOf: string | null;
   /** 判据日完整性口径（后端 Task 2 起返回，默认 partial）。 */
   asOfQuality: AsOfQuality;
-  source: "local_calc";
+  /** 收盘 = local_calc（本地自算）；盘中 = eastmoney_intraday（东财涨停池）。 */
+  source: "local_calc" | "eastmoney_intraday";
   degradedReason: string | null;
   unclassifiedCount: number;
   items: SectorLimitUpItem[];
@@ -302,6 +309,7 @@ const mapSectorItem = (s: BackendSectorLimitUpItem): SectorLimitUpItem => ({
   l3Name: s.l3_name,
   l1Code: s.l1_code,
   l1Name: s.l1_name,
+  boardName: s.board_name ?? null,
   maxStreak: s.max_streak,
   leaderSymbol: s.leader_symbol,
   leaderName: s.leader_name,
