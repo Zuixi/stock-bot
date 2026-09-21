@@ -1,5 +1,7 @@
 # ---- Stage 1: dependency install ----
-FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/ghcr.io/astral-sh/uv:python3.13-alpine AS builder
+# 基础镜像按 digest 固定（2026-09-21）：浮动 tag 一旦上游补丁版本变动，依赖层整层失效，
+# 服务器每次发版就得重下 ~300MB（实测 v0.0.5 拉取 14 分钟）。升级姿势见 docs/build.md「镜像构建」。
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/ghcr.io/astral-sh/uv:python3.13-alpine@sha256:18dec2f26aea61ec02c81eaab3a091f68c13ca1a14e4173d4e80584af43ca4bc AS builder
 
 WORKDIR /app
 
@@ -14,7 +16,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     && uv pip install --system --requirement /tmp/requirements.txt
 
 # ---- Stage 2: runtime ----
-FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/python:3.13-alpine AS runtime
+# 基础镜像按 digest 固定（2026-09-21）：浮动 tag 一旦上游补丁版本变动，依赖层整层失效，
+# 服务器每次发版就得重下 ~300MB（实测 v0.0.5 拉取 14 分钟）。升级姿势见 docs/build.md「镜像构建」。
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/python:3.13-alpine@sha256:2c47bbdacfc852288da0d4bb90eed805e58678608a2e68142a4a53bf8a81784b AS runtime
 
 WORKDIR /app
 
