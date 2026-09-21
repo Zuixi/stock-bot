@@ -329,6 +329,14 @@ services:
 
   # ---- frontend ----
   frontend:
+    # 健康检查：nginx 没起来时 `docker ps` 会直接显示 unhealthy，
+    # 而不是「容器 Up 但线上 502」（2026-09-21 官方 nginx 基础镜像的 entrypoint 卡死即此形态）
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     build:
       context: ./frontend
       target: runtime
