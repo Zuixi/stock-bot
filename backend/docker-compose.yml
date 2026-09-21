@@ -1,3 +1,6 @@
+# [LEGACY] backend 独立开发用 compose（仅起后端 + 依赖）。
+# 现行部署/联调一律用仓库根目录 docker-compose.yml（AGENTS.md 约定唯一编排入口）；
+# 本文件保留仅为历史习惯，端口一律只绑回环。
 services:
   api:
     build:
@@ -42,7 +45,7 @@ services:
       POSTGRESQL_PASSWORD: stock_pass
       POSTGRESQL_DATABASE: stock_bot
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -54,7 +57,7 @@ services:
   redis:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/quay.io/opstree/redis:v7.0.5
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
