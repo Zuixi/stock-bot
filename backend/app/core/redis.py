@@ -1,10 +1,10 @@
 """Redis client and cache helpers."""
 
-import json
 import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
+import orjson
 import redis
 import redis.asyncio as aioredis
 from redis.asyncio import Redis
@@ -42,7 +42,10 @@ async def get_redis() -> AsyncGenerator[Redis, None]:
 
 class CacheClient:
     """High-level cache operations with JSON serialization.
-    All operations are graceful — Redis unavailability is silently ignored.
+
+    All operations are graceful — Redis unavailability **and serialization failure** are
+    silently ignored (logged, then treated as a miss/skip). A cache is a read-through
+    optimization: never let it turn a 200 into a 500.
     """
 
     def __init__(self, redis: Redis, default_ttl: int = settings.redis_default_ttl) -> None:
@@ -54,11 +57,11 @@ class CacheClient:
             raw = await self._redis.get(key)
             if raw is None:
                 return None
-            return json.loads(raw)
+            return orjson.loads(raw)
         except (ConnectionError, redis.exceptions.ConnectionError, redis.exceptions.TimeoutError):
             logger.warning("Redis unavailable — cache miss for key %s", key)
             return None
-        except json.JSONDecodeError:
+        except orjson.JSONDecodeError:
             logger.warning("Cache value for key %s is not valid JSON", key)
             return None
 
@@ -66,11 +69,17 @@ class CacheClient:
         try:
             await self._redis.set(
                 key,
-                json.dumps(value, ensure_ascii=False, default=str),
+                orjson.dumps(value, default=str, option=orjson.OPT_NON_STR_KEYS),
                 ex=ttl if ttl is not None else self._default_ttl,
             )
         except (ConnectionError, redis.exceptions.ConnectionError, redis.exceptions.TimeoutError):
             logger.warning("Redis unavailable — cache set skipped for key %s", key)
+        except TypeError:
+            # orjson.JSONEncodeError is TypeError. stdlib json silently coerced int/bool/None
+            # dict keys (OPT_NON_STR_KEYS restores that); it also accepted ints ≥ 2**64 and
+            # circular refs, which orjson rejects outright. Uncaught, these raise *after* the
+            # data was already fetched — a 500 at the one point that must never fail.
+            logger.warning("Cache value for key %s is not serializable — set skipped", key)
 
     async def delete(self, *keys: str) -> int:
         try:
