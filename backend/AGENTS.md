@@ -33,4 +33,4 @@ Tushare API Reference: [Tushare API Reference](../docs/references/tushare/index.
 
 IMPORTANT:
 - UPDATE THIS FILE WHEN YOU MEET SOMETHING IMPORTANT AND USEFUL
-- AFTER EACH TASK COMPLETION, SUMMARIZE USEFUL EXPERIENCES AND ADD TO [THIS DOCUMENT](../docs/references/best-practices.md)
+- AFTER EACH TASK: promote enforceable rules to lint/doc_gate/tests; only add to [best-practices](../docs/references/best-practices.md) when not machine-checkable (see docs/index.md「变更写哪里」)

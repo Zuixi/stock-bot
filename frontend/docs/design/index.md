@@ -2,7 +2,7 @@
 
 - UX设计参考[this document](../../docs/frontend-ux-spec.md)
 - PRD设计参考[this document](../../docs/frontend-service-prd.md)
-- 架构设计参考[this document](../../docs/frontend-architecture.md)
+- 架构设计（当前态）参考 [docs/architecture/frontend/ARCHITECTURE.md](../../docs/architecture/frontend/ARCHITECTURE.md)（旧 `frontend-architecture.md` 已转发）
 
 ## 已实现模块结构（M1 MVP）
 

@@ -14,10 +14,10 @@ src/
 ```
 
 ### Data Flow
-1. **CLI** ([cli/universe.py](src/cli/universe.py)) - User-facing commands using typer
-2. **Fetcher** ([fetchers/sse/](src/fetchers/sse/)) - Exchange API client with pagination, rate limiting, retries
-3. **Normalizer** ([normalizers/sse.py](src/normalizers/sse.py)) - Converts raw exchange records to unified `StockRecord`
-4. **Storage** ([storage/universe.py](src/storage/universe.py)) - Writes JSONL files with manifest metadata
+1. **CLI** ([cli/universe.py](../../src/cli/universe.py)) - User-facing commands using typer
+2. **Fetcher** ([fetchers/sse/](../../src/fetchers/sse/)) - Exchange API client with pagination, rate limiting, retries
+3. **Normalizer** ([normalizers/sse.py](../../src/normalizers/sse.py)) - Converts raw exchange records to unified `StockRecord`
+4. **Storage** ([storage/universe.py](../../src/storage/universe.py)) - Writes JSONL files with manifest metadata
 
 ### Key Abstractions
 
@@ -44,7 +44,7 @@ Each JSONL file contains one `StockRecord` per line. Files are grouped by exchan
 
 ### Configuration System
 
-Exchange-specific YAML configs in [src/config/](src/config/):
+Exchange-specific YAML configs in [src/config/](../../src/config/):
 - `sse.yaml` - SSE fetcher config (requires cookies, never commit)
 - `sse.sample.yaml` - Template with documented fields
 
@@ -54,7 +54,7 @@ Config loading: `load_config("sse")` returns dict, then `SseConfig.from_yaml(dat
 
 ### Exchange Naming Convention
 
-**Critical**: Use these exact strings for `exchange` field (defined in [models/stock.py](src/models/stock.py)):
+**Critical**: Use these exact strings for `exchange` field (defined in [models/stock.py](../../src/models/stock.py)):
 - `Shanghai_Stocks` (SSE)
 - `Shenzen_Stocks` (SZSE) - note: "Shenzen" not "Shenzhen"
 - `Beijing_Stocks` (BSE)

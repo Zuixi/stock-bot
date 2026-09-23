@@ -1,20 +1,25 @@
-# stock bot
+# stock bot — 整体架构
+
+> 当前态文档。文档入口见 [`index.md`](./index.md)；架构演进史见 [`evolution.md`](./evolution.md)；决策理由见 [`decisions/`](./decisions/)。
+> **端口与服务的权威副本在 [`deployment/index.md`](./deployment/index.md)**（本节只描述“是什么/干什么”，不与它争家）。
 
 ## overview
 
-Stock bot is a automated tool for fetching data from the exchanges and use web service to display important info for the users.
+Stock bot is an automated tool for fetching data from the exchanges and using a web service to display important info for the users.
 
 ## architecture
 
 Backend Service:
 - Python 3.13, FastAPI, SQLAlchemy 2.0 (async), Alembic
 - PostgreSQL 15, Redis 7, RabbitMQ 4.2
-- TuShare Pro / AKShare / CNINFO 数据源
+- TuShare Pro / 东财 / 同花顺 / CNINFO 数据源（主源选型见 [ADR 0001](./decisions/0001-single-primary-source-tushare.md)）
 
 Frontend Service:
 - React 18, TypeScript, Vite 6
 - Ant Design 5, ECharts, TanStack Query, Zustand
-- nginx (生产环境 API 反向代理)
+- nginx（仅托管静态资源；`/api` 由 Traefik 转发，不由 nginx 反代）
+
+后端分层与依赖方向、API 前缀清单、队列注册表见 [`architecture/backend/ARCHITECTURE.md`](./architecture/backend/ARCHITECTURE.md)；前端目录、数据获取与路由见 [`architecture/frontend/ARCHITECTURE.md`](./architecture/frontend/ARCHITECTURE.md)。
 
 ## 容器化部署架构
 
@@ -42,4 +47,10 @@ Frontend Service:
 
 > 说明：`forward-auth` 对「带 `stockbot_session` 但解析不出 assertion」的请求 **fail-closed 返 503**（不是 401）——浏览器残留过期 cookie 时表现为「全站接口不可用、页面全空」，排查方法见 [references/best-practices.md](references/best-practices.md)。
 
-发布镜像到服务器（ghcr.io + `docker-compose.prod.yml`）与数据迁移见 [build.md](build.md)「服务器部署（发布镜像 + 数据迁移）」。详细构建说明同样参见 [build.md](build.md)。
+## 发布与运维
+
+发版链路（ghcr.io + `docker-compose.prod.yml`）、边缘层两跳、数据迁移与日常排障见 [`deployment/`](./deployment/)：
+
+- 发布流程与镜像构建： [`deployment/production.md`](./deployment/production.md)
+- 首次上线数据迁移： [`deployment/data-migration.md`](./deployment/data-migration.md)
+- 运维命令与排障清单： [`deployment/operations.md`](./deployment/operations.md)
