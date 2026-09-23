@@ -4,7 +4,7 @@
 # 被 AGENTS.md「完成前自检门禁」引用，并挂进 .pre-commit 兜底。
 #
 # 用法（在仓库根目录执行）：
-#   bash scripts/self_review.sh            # 快检：空白/冲突 + 改动文件 ruff(check+format) + 文档同步告警
+#   bash scripts/self_review.sh            # 快检：空白/冲突 + 改动文件 ruff(check+format) + 文档同步告警 + doc_gate
 #   bash scripts/self_review.sh --full     # 全量：快检 + 后端 mypy/pytest + 前端 tsc
 #
 # 退出码：0 = 通过；1 = 有硬性未过项（空白/ruff/mypy/test/tsc）。
@@ -52,16 +52,31 @@ else
   echo "  （无 backend Python 改动，跳过）"
 fi
 
+if [ -n "$CHANGED" ]; then
+  echo; echo "  slop_scan（探测器，告警）..."
+  bash scripts/slop_scan.sh || true
+fi
+
 echo; echo "== [3/4] 文档同步启发式（告警不计失败） =="
 MD=$(md_files)
 if [ -n "$MD" ]; then
-  if printf '%s\n' "$MD" | grep -q '^docs/Changelog.md$'; then
+  if grep -q '^docs/Changelog.md$' <<< "$MD"; then
     ok "Changelog 已在改动集中"
   else
     warn "改动涉及 .md 但未触及 docs/Changelog.md —— 若属功能/文档变更请按 AGENTS 约定补记"
   fi
 else
   echo "  （无文档改动）"
+fi
+
+# 文档系统硬门禁（全仓扫描，与本次改动集无关）：ADR 只增不改 / features 契约 /
+# 门禁矩阵↔CI job / 端口表↔compose / plans 头部 / 脚本身份 / 口径一致；e2e 术语为告警。
+# 逐项“故意破坏验证”方法写在 scripts/doc_gate.sh 的头部注释里。
+echo "  doc_gate（文档系统门禁）..."
+if bash scripts/doc_gate.sh > /tmp/doc_gate.out 2>&1; then
+  ok "doc_gate 通过（$(grep -c '✔' /tmp/doc_gate.out) 项）"
+else
+  fail "doc_gate 未通过"; grep '✘' /tmp/doc_gate.out | head -20
 fi
 
 if [ "$FULL" = 1 ]; then

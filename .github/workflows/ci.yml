@@ -217,23 +217,25 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-  # ── 文档一致性（AGENTS.md「自检门禁」的 CI 兜底；信息性，不阻断合并）──
+  # ── 文档一致性（空白/冲突 + doc_gate 阻断；Changelog 启发式仅告警）──
   docs-consistency:
-    name: "Docs consistency (informational)"
+    name: "Docs consistency"
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - name: Compute base ref
         id: base
         run: |
+          # 必须写进 GITHUB_OUTPUT；只 echo 到 stdout 不会产生 steps.base.outputs.*，
+          # 于是下游 `"$BASE"...HEAD` 变成 `...HEAD`，被 git 当 HEAD...HEAD 静默空 diff ——
+          # 即「空白/冲突标记」「Changelog 启发式」「doc_gate 的 ADR 基准」三个步骤全部空转。
           if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
-            echo "REF=${{ github.event.pull_request.base.sha }}"
+            echo "REF=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
           elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            echo "REF=${{ github.event.before }}"
+            echo "REF=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
           else
-            echo "REF=$(git rev-list --max-parents=0 HEAD)"
+            echo "REF=$(git rev-list --max-parents=0 HEAD)" >> "$GITHUB_OUTPUT"
           fi
         shell: bash
       - name: Whitespace / conflict markers (hard check)
@@ -260,6 +262,9 @@ jobs:
             echo "OK: 无文档变更，或已包含 docs/Changelog.md"
           fi
         shell: bash
+      - name: Documentation gate (doc_gate.sh)
+        # ADR「只增不改」需与 PR base 比：checkout 后工作区==HEAD，用 HEAD 比会恒为空。
+        run: DOC_GATE_ADR_BASE="${{ steps.base.outputs.REF }}" bash scripts/doc_gate.sh
 
   # ── Integration ──────────────────────────────────────────────
   docker-smoke:
