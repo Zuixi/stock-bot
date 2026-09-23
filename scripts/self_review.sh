@@ -37,9 +37,17 @@ ts_files() { printf '%s\n' "$CHANGED" | grep -E '^frontend/.*\.(ts|tsx)$'; }
 md_files() { printf '%s\n' "$CHANGED" | grep -E '\.md$'; }
 
 echo "== [1/4] 空白与冲突标记 (git diff --check) =="
-git diff --check        || fail "工作区存在空白/冲突标记错误"
-git diff --cached --check 2>/dev/null || fail "暂存区存在空白/冲突标记错误"
-ok "diff --check 通过"
+ws_bad=0
+git diff --check        || { fail "工作区存在空白/冲突标记错误"; ws_bad=1; }
+git diff --cached --check 2>/dev/null || { fail "暂存区存在空白/冲突标记错误"; ws_bad=1; }
+# 必须一并查**已提交但未推**的增量：CI 的阻断项用的是 `git diff --check BASE...HEAD`
+# （BASE=PR base），而只查工作区/暂存区时，「先 commit 再自检」会滑过去 —— 实测
+# 本仓库就这么让 CI 红在 docs/index.md 与 doc_gate.sh 的尾部空白上。
+BASE_REF=$(git merge-base origin/main HEAD 2>/dev/null || true)
+if [ -n "$BASE_REF" ]; then
+  git diff --check "$BASE_REF"..HEAD || { fail "已提交范围（origin/main..HEAD）存在空白/冲突标记错误"; ws_bad=1; }
+fi
+[ "$ws_bad" = 0 ] && ok "diff --check 通过（工作区 + 暂存区 + 已提交未推范围）"
 
 PY=$(py_files)
 echo; echo "== [2/4] 后端 lint（ruff，改动文件） =="

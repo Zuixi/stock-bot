@@ -162,7 +162,7 @@ fi
 echo; echo "== [5/11] 端口 ↔ compose =="
 if [ -f docker-compose.yml ] && [ -f "$DEPLOY_DOC" ]; then
   miss_port=0
-  # 映射形态如 "127.0.0.1:5433:5432" —— 
+  # 映射形态如 "127.0.0.1:5433:5432" ——
   # 取**宿主机侧**端口（倒数第二段），不是容器内端口
   for port in $(grep -oE '"[0-9.:]+:[0-9]+"' docker-compose.yml | tr -d '"' \
                  | awk -F: '{print $(NF-1)}' | sort -u); do
