@@ -1,150 +1,195 @@
 # stock bot
 
-一个记录与跟踪股票数据的分析工具：支持**上交所 / 深交所 / 北交所**三大交易所的股票数据获取，并按**申万行业分类**统计展示。可查看当前市场行情、股票类别、每个分类的具体股票信息与个股详情。
+**A 股市场数据分析工具**——采集三大交易所全量股票数据，按**申万行业分类**与**概念板块**组织，提供行情台、个股详情、市场情绪与**行业投研工作台**。
 
-正在产品化方向：**行业投研工作台**（首个实例：生猪养殖「猪智投」），实施计划见 [`plans/industry-research-workbench.md`](./plans/industry-research-workbench.md)。
+产品化方向：**行业投研工作台**（首个实例：生猪养殖「猪智投」）——把行业产业指标 + 规则引擎信号做成可回测的投研看板，接入新行业应"零新表、零新页面"。
 
-> 本文档是项目总览；具体部署步骤见 [`docs/build.md`](./docs/build.md)，架构设计见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)，变更记录见 [`docs/Changelog.md`](./docs/Changelog.md)。
+> 文档入口：[`docs/index.md`](./docs/index.md) · **首次运行：** [`docs/deployment/first-run.md`](./docs/deployment/first-run.md) · 概览：[`docs/overview.md`](./docs/overview.md) · 功能：[`docs/features.md`](./docs/features.md) · 部署：[`docs/deployment/`](./docs/deployment/) · 测试：[`docs/testing/`](./docs/testing/) · 决策：[`docs/decisions/`](./docs/decisions/)
 
-## 功能特性
+## 功能
 
-- **数据采集**：TuShare Pro 为主数据源（股票列表、日线、涨跌停、财务指标等），备用源包括 AKShare、yfinance、交易所爬虫（上交所 CNINFO）
-- **大盘行情**：上证指数、深证成指、创业板指、北证50、沪深300 等主要指数行情，SSE 指数快照、资金流、北向、龙虎榜、大宗交易等市场面数据
-- **个股详情**：日线 K 线、复权因子、资金流向、财务摘要与估值（PE/PB/市值）历史
-- **申万行业分类**：申万一级/二级/三级分类树、个股行业归属、行业成分统计
-- **行业投研工作台**：面向具体行业的指标看板（投产 / 价格 / 存栏等），支持指标注册表 + 源适配器扩展新行业
-- **定时任务**：APScheduler 定时增量回填 + RabbitMQ 队列手动触发，双轨制保证数据闭环
-- **聚类与标签**：股票行为相似性聚类，以及用户自定义标签分组
+- **行情台**：主要指数、涨跌分布、榜单、板块、资金流、热门板块（免登录可用）
+- **申万行业**：一级/二级/三级分类树、行业成分与表现
+- **概念板块**：板块列表/详情/成分股、次新股追踪
+- **市场情绪**：涨停梯队、板块涨停、情绪日历与盘中口径
+- **个股详情**：日线 K 线（含复权）、资金流、财务摘要与估值历史
+- **市场面**：北向、龙虎榜、大宗交易、解禁、回购、公告
+- **投研工作台**：指标注册表驱动的行业看板 + 规则引擎信号（可回测、可审计）
+- **多用户**：独立认证服务 + 网关鉴权 + 按 `user_id` 的数据隔离（自选股、标签）
 
 ## 技术栈
 
-**后端** `backend/`
-- FastAPI + SQLAlchemy 2.0（async）+ Alembic 迁移
-- PostgreSQL 15（存储）、Redis 7（缓存，默认 TTL 300s）、RabbitMQ 4.2（异步任务队列）
-- uv 管理依赖；ruff（line-length 100）+ mypy（pydantic plugin）静态检查
-
-**前端** `frontend/`
-- React 18 + TypeScript + Vite
-- Ant Design 5 + ECharts（echarts-for-react）数据可视化
-- TanStack React Query 数据获取 + Zustand 本地持久化
-- 生产环境由 nginx 托管静态资源并反向代理 `/api`
-
-## 项目结构
-
-```
-stock_bot/
-├── docker-compose.yml        # 根目录统一编排
-├── .env.docker.example       # Docker 部署环境变量模板
-├── backend/                  # FastAPI 数据服务后端
-│   ├── app/
-│   │   ├── api/v1/          # RESTful 路由（exchanges/stocks/market/financials/...）
-│   │   ├── core/            # 基础设施：DB、Redis、MQ、数据源客户端
-│   │   ├── models/          # SQLAlchemy ORM 模型
-│   │   ├── migrations/      # Alembic 迁移
-│   │   ├── repositories/    # 数据访问层
-│   │   ├── schemas/         # Pydantic 请求/响应模型
-│   │   ├── services/        # 业务逻辑层（ingest / market / industry ...）
-│   │   ├── scheduler/       # APScheduler 定时任务
-│   │   └── workers/         # RabbitMQ 异步任务 Worker
-│   ├── Dockerfile
-│   └── AGENTS.md
-├── frontend/                 # React 前端
-│   ├── src/app/             # 路由 / 布局 / 主题
-│   ├── src/pages/           # 页面
-│   ├── src/features/        # 功能模块
-│   ├── src/shared/          # api / ui / config
-│   ├── Dockerfile
-│   └── AGENTS.md
-├── docs/                     # 文档（架构 / 构建部署 / 设计 / 数据源调研）
-├── plans/                    # 功能实施计划（tracer-bullet 分阶段）
-└── AGENTS.md
-```
-
-> 说明：根目录 `src/`、`tests/` 与根 `pyproject.toml` 为早期 CLI 原型遗留，主项目在 `backend/` 与 `frontend/`。
+| 层 | 技术 |
+|---|---|
+| 后端 | FastAPI · SQLAlchemy 2.0 (async) · Alembic · PostgreSQL 15 · Redis 7 · RabbitMQ 4.2 · APScheduler |
+| 前端 | React 18 · TypeScript · Vite · Ant Design 5 · ECharts · TanStack Query · Zustand |
+| 安全 | Traefik（路由/限流/安全头）+ auth-service（JWKS）+ forward-auth（Principal Assertion） |
+| 部署 | Docker Compose · GitHub Actions → ghcr.io · Caddy（TLS）+ Traefik（两跳边缘） |
+| 数据源 | TuShare Pro（主源）· 东财 / 同花顺 / 巨潮（板块与公告） |
 
 ## 快速开始
 
-### 环境要求
-- Docker >= 24.0 与 Docker Compose V2（推荐，部署）
-- Python >= 3.11 + uv（仅本地开发）
-- Node.js >= 22（仅本地开发或预构建前端）
-
-### Docker Compose 部署（推荐）
-
-完整流程见 [`docs/build.md`](./docs/build.md)，核心步骤：
+完整 Day 1 单线见 [`docs/deployment/first-run.md`](./docs/deployment/first-run.md)。摘要：
 
 ```bash
-# 1. 准备后端环境变量（从模板复制）
-cp .env.docker.example backend/.env
+# 1. 环境变量：两个文件角色不同（见 docs/deployment/index.md）
+cp .env.docker.example .env
+cp backend/.env.example backend/.env        # 填入真实 TUSHARE_TOKEN
 
-# 2. 编辑 backend/.env，填入真实的 TuShare Token（https://tushare.pro）
-#    TUSHARE_TOKEN=your_token
-
-# 3. 网络受限时，先本地预构建前端（Dockerfile 的 runtime 阶段只打包 dist/）
+# 2. 网络受限时先本地预构建前端（Dockerfile 的 runtime 阶段只打包 dist/）
 cd frontend && npm ci && npm run build && cd ..
 
-# 4. 构建并启动全部服务（前后端 + 数据库 + Redis + RabbitMQ）
+# 3. 构建并启动全部服务
 docker compose up --build -d
 ```
 
-启动后访问：
-| 服务 | 地址 |
-|------|------|
-| 前端 | http://localhost:3000 |
-| API 文档（Swagger） | http://localhost:8000/docs |
-| RabbitMQ 管理面板 | http://localhost:15672（guest/guest） |
+启动后（**Docker 栈对外只有网关一个入口**）：
 
-服务编排会自动按依赖顺序启动：`postgres / redis / rabbitmq` → `migrate`（`alembic upgrade head`，一次性）→ `api` / `worker` / `scheduler` → `frontend`。
+| 访问 | 地址 | 说明 |
+|---|---|---|
+| 站点（前端 + API） | http://localhost（gateway :80） | 唯一入口，`/` → 前端、`/api` → API、`/auth` → 认证服务 |
+| API 在线文档 | 本地直起后端时 http://localhost:8000/docs | 容器栈内 API **未绑定宿主机**，经网关只有 `/api/...` 路径 |
+| 数据库 / Redis | `127.0.0.1:5433` / `127.0.0.1:6380`（仅回环） | 供宿主机工具与测试使用 |
+| RabbitMQ 管理面板 | 未绑定宿主机 | 需临时端口转发或 `docker exec` |
 
-### 本地开发
+服务按依赖顺序启动：`postgres / redis / rabbitmq` → `migrate` → `api` / `worker` / `scheduler` → `frontend` → `gateway`。
+
+## 本地开发
 
 ```bash
 # 后端（backend/ 下，uv 管理）
-cd backend
-uv pip install -e ".[dev]"
-docker compose up -d postgres redis rabbitmq   # 仅启动基础设施
+cd backend && uv pip install -e ".[dev]"
+docker compose up -d postgres redis rabbitmq
 alembic upgrade head
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 # 前端（frontend/ 下，npm 管理）
-cd frontend
-npm ci
-npm run dev   # http://localhost:3000，Vite 自动代理 /api → localhost:8000
+cd frontend && npm ci && npm run dev        # http://localhost:3000（Vite 代理 /api → 8000）
 ```
 
-### 常用命令
+详见 [`docs/deployment/local-dev.md`](./docs/deployment/local-dev.md)。
 
-- 后端测试：`uv run pytest`（backend/ 下）
-- 后端 lint / 类型检查：`uv run --extra dev ruff check .`、`uv run --extra dev mypy app`
-- 前端 lint / 构建：`npm run lint`、`npm run build`（frontend/ 下）
-- 整体构建启动：`docker compose build` + `docker compose up -d`
+## 常用命令
 
-## API 概览
-
-所有接口前缀为 `/api/v1`，完整在线文档见后端启动后的 `http://localhost:8000/docs`。
-
-| 模块 | 路径 | 说明 |
-|------|------|------|
-| 交易所/股票 | `/exchanges`、`/exchanges/{exchange}/stocks` | 交易所与类别、股票列表/搜索/详情（含 enriched 行情+基本面） |
-| 行情 | `/exchanges/{exchange}/stocks/{symbol}/quotes/daily`、`/quotes/latest` | 个股日线 K 线、最新价 |
-| 财务/估值 | `/exchanges/{exchange}/stocks/{symbol}/financial-*`、`/valuation-history` | 财务摘要、报表、估值历史 |
-| 大盘 | `/market` | 指数、分布、板块、资金流、热门板块、SSE 快照 |
-| 市场面 | `/market/global-indices`、`/sector-moneyflow`、`/northbound`、`/dragon-tiger`、`/block-trades`、`/announcements` 等 | 全球指数、板块资金、北向、龙虎榜、大宗、回购、公告 |
-| 申万行业 | `/market/sw-industry/*` | 申万一级/二级/三级树与成分股 |
-| 投研工作台 | `/industries/{industry_key}/...` | 行业看板、指标最新/历史、成分公司 |
-| 聚类 | `/clusters` | 股票聚类运行与解释 |
-| 标签 | `/tags` | 用户自定义标签 |
-| 任务 | `/tasks` | 数据抓取/回填任务查询与手动触发 |
-| 健康检查 | `/health` | 服务健康状态 |
+| 目的 | 命令 |
+|---|---|
+| 完成前自检（**每次收尾必跑**） | `bash scripts/self_review.sh`（加 `--full` 追加 mypy/pytest/tsc） |
+| 后端测试 | `cd backend && uv run pytest`（默认已排除 `e2e` 与 `bench`） |
+| 后端 lint / 类型 | `cd backend && uv run --extra dev ruff check . && uv run --extra dev ruff format --check app/ tests/ && uv run --extra dev mypy app` |
+| 前端静态校验 | `cd frontend && npx tsc --noEmit`（**无 eslint**；`npm run lint` 是失效脚本，见 [ADR 0006](./docs/decisions/0006-no-eslint-tsc-as-static-check.md)） |
+| 前端构建 / 前端 e2e | `cd frontend && npm run build` / `npm run test:e2e`（Playwright，手动档） |
+| 性能基准（Tier 1 硬门禁） | `bash scripts/bench.sh`（`--save-baseline` 刷新基线 / `--quick` 冒烟） |
+| 文档系统门禁 | `bash scripts/doc_gate.sh` |
+| 整体构建启动 | `docker compose build && docker compose up -d` |
 
 ## 文档地图
 
-- [`docs/build.md`](./docs/build.md) — 服务构建与部署指南（端口表、分步构建、迁移、数据验证、运维命令）
-- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — 整体架构与容器化部署架构
-- [`docs/design/`](./docs/design/) — 设计文档、原型与数据源调研（含 `data-source.md`、猪智投产品文档）
-- [`docs/Changelog.md`](./docs/Changelog.md) — 变更记录
-- [`plans/`](./plans/) — 功能实施计划
+| 想知道 | 去 |
+|---|---|
+| 按任务找文档 | [`docs/index.md`](./docs/index.md) |
+| 项目是什么 / 有哪些功能 | [`docs/overview.md`](./docs/overview.md) · [`docs/features.md`](./docs/features.md) |
+| 当前架构 / 怎么演进来的 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) · [`docs/architecture/`](./docs/architecture/) · [`docs/evolution.md`](./docs/evolution.md) |
+| 当初为什么这么选 | [`docs/decisions/`](./docs/decisions/) |
+| 部署 / 测试与门禁 | [`docs/deployment/`](./docs/deployment/) · [`docs/testing/`](./docs/testing/) |
+| 变更记录 / 实施计划 | [`docs/Changelog.md`](./docs/Changelog.md) · [`plans/`](./plans/) |
+| 踩过的坑 | [`docs/references/best-practices.md`](./docs/references/best-practices.md) |
 
-## Roadmap
+> 根目录 `src/`、`tests/` 与根 `pyproject.toml` 为早期 CLI 原型遗留（见 [`docs/evolution.md`](./docs/evolution.md) v0 段），主项目在 `backend/` 与 `frontend/`。
 
-产品需求与里程碑见 `product.md`；当前聚焦方向为**行业投研工作台**（[`plans/industry-research-workbench.md`](./plans/industry-research-workbench.md)）。
+---
+
+# stock bot (English)
+
+**An A-share market data analysis tool.** It ingests the full stock universe of the three Chinese exchanges, organizes everything by **Shenwan industry classification** and **concept boards**, and ships a market dashboard, stock detail pages, market-sentiment views, and an **industry research workbench**.
+
+Productization direction: the **Industry Research Workbench** (first instance: hog farming, "猪智投"). It turns industry fundamentals plus a rule-engine signal layer into an auditable research dashboard; adding a new industry should require **no new tables and no new pages** — just configuration and a fetch adapter.
+
+> Entry point for docs: [`docs/index.md`](./docs/index.md) · Overview: [`docs/overview.md`](./docs/overview.md) · Features: [`docs/features.md`](./docs/features.md) · Deployment: [`docs/deployment/`](./docs/deployment/) · Testing & gates: [`docs/testing/`](./docs/testing/) · Decision records: [`docs/decisions/`](./docs/decisions/)
+
+## Features
+
+- **Market dashboard**: major indices, advance/decline distribution, rankings, sectors, capital flow, hot boards (usable without login)
+- **Shenwan industries**: level-1/2/3 classification tree, constituents and performance
+- **Concept boards**: board list/detail/constituents, plus recently-listed stock tracking
+- **Market sentiment**: limit-up ladder, sector limit-ups, sentiment calendar and intraday basis
+- **Stock detail**: daily K-line (with adjustment), money flow, financial summary and valuation history
+- **Market-wide data**: northbound flow, dragon-tiger list, block trades, share unlocks, buybacks, announcements
+- **Research workbench**: metric-registry-driven industry dashboard plus a rule engine whose signals are backtestable and auditable
+- **Multi-user**: dedicated auth service, gateway-level authorization, per-`user_id` data isolation (watchlists, tags)
+
+## Tech stack
+
+| Layer | Stack |
+|---|---|
+| Backend | FastAPI · SQLAlchemy 2.0 (async) · Alembic · PostgreSQL 15 · Redis 7 · RabbitMQ 4.2 · APScheduler |
+| Frontend | React 18 · TypeScript · Vite · Ant Design 5 · ECharts · TanStack Query · Zustand |
+| Security | Traefik (routing/rate-limiting/security headers) + auth-service (JWKS) + forward-auth (Principal Assertion) |
+| Deployment | Docker Compose · GitHub Actions → ghcr.io · Caddy (TLS) + Traefik (two-hop edge) |
+| Data sources | TuShare Pro (primary) · Eastmoney / Tonghuashun / CNINFO (boards and announcements) |
+
+## Quick start
+
+```bash
+# 1. Environment: two files with different roles (see docs/deployment/index.md)
+cp .env.docker.example .env
+cp backend/.env.example backend/.env        # fill in a real TUSHARE_TOKEN
+
+# 2. On restricted networks, pre-build the frontend first (the runtime stage only packs dist/)
+cd frontend && npm ci && npm run build && cd ..
+
+# 3. Build and start everything
+docker compose up --build -d
+```
+
+Once up (**the gateway is the only externally exposed entry point**):
+
+| What | Where | Notes |
+|---|---|---|
+| Site (frontend + API) | http://localhost (gateway :80) | `/` → frontend, `/api` → API, `/auth` → auth service |
+| Interactive API docs | http://localhost:8000/docs when running the backend locally | Inside the Compose stack the API binds no host port; via the gateway only `/api/...` is reachable |
+| Postgres / Redis | `127.0.0.1:5433` / `127.0.0.1:6380` (loopback only) | For host-side tooling and tests |
+| RabbitMQ management UI | not bound to the host | Use a temporary port-forward or `docker exec` |
+
+Startup order follows dependencies: `postgres / redis / rabbitmq` → `migrate` → `api` / `worker` / `scheduler` → `frontend` → `gateway`.
+
+## Local development
+
+```bash
+# Backend (backend/, managed by uv)
+cd backend && uv pip install -e ".[dev]"
+docker compose up -d postgres redis rabbitmq
+alembic upgrade head
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Frontend (frontend/, managed by npm)
+cd frontend && npm ci && npm run dev        # http://localhost:3000 (Vite proxies /api → 8000)
+```
+
+See [`docs/deployment/local-dev.md`](./docs/deployment/local-dev.md).
+
+## Common commands
+
+| Goal | Command |
+|---|---|
+| Pre-completion self-review (**required before every hand-off**) | `bash scripts/self_review.sh` (add `--full` for mypy/pytest/tsc) |
+| Backend tests | `cd backend && uv run pytest` (excludes `e2e` and `bench` by default) |
+| Backend lint / types | `cd backend && uv run --extra dev ruff check . && uv run --extra dev ruff format --check app/ tests/ && uv run --extra dev mypy app` |
+| Frontend static check | `cd frontend && npx tsc --noEmit` (**no eslint**; `npm run lint` is a dead script, see [ADR 0006](./docs/decisions/0006-no-eslint-tsc-as-static-check.md)) |
+| Frontend build / frontend e2e | `cd frontend && npm run build` / `npm run test:e2e` (Playwright, manual tier) |
+| Performance benchmarks (Tier 1 hard gate) | `bash scripts/bench.sh` (`--save-baseline` to refresh the baseline, `--quick` for a smoke run) |
+| Documentation gate | `bash scripts/doc_gate.sh` |
+| Full stack build & start | `docker compose build && docker compose up -d` |
+
+## Documentation map
+
+| You want to know | Read |
+|---|---|
+| Find docs by task | [`docs/index.md`](./docs/index.md) |
+| What the project is / what it does | [`docs/overview.md`](./docs/overview.md) · [`docs/features.md`](./docs/features.md) |
+| Current architecture / how it evolved | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) · [`docs/architecture/`](./docs/architecture/) · [`docs/evolution.md`](./docs/evolution.md) |
+| Why a choice was made | [`docs/decisions/`](./docs/decisions/) |
+| Deployment / testing & gates | [`docs/deployment/`](./docs/deployment/) · [`docs/testing/`](./docs/testing/) |
+| Change log / implementation plans | [`docs/Changelog.md`](./docs/Changelog.md) · [`plans/`](./plans/) |
+| Pitfalls we have already hit | [`docs/references/best-practices.md`](./docs/references/best-practices.md) |
+
+> The root-level `src/`, `tests/` and `pyproject.toml` are leftovers from an early CLI prototype (see the v0 section of [`docs/evolution.md`](./docs/evolution.md)); the main project lives in `backend/` and `frontend/`.

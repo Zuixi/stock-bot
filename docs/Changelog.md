@@ -1,3 +1,25 @@
+## 2026-09-24 - 文档系统二期（Harness 对齐 Phase 1+2）
+- **权威与入口**：新增 `docs/authority.md`；`docs/index.md` 补「变更写哪里」与 first-run 链；`frontend-architecture.md` 压成转发，改前端任务指向 `architecture/frontend/ARCHITECTURE.md`
+- **Tutorial**：`docs/deployment/first-run.md`；README / overview / deployment/index 链入
+- **CI**：`docs-consistency` job 增加 blocking `scripts/doc_gate.sh`；`doc_gate` 增至 11 项（前端权威路由）+ 失败 `hint:` 行
+- **工具**：`scripts/slop_scan.sh`（探测器可执行化，挂 `self_review.sh`）；best-practices **退场 8 条**（规则进 doc_gate/ADR/测试，登记于 `process-docs.md`「已退场」表）
+- **计划**：`plans/2026-09-24-docs-system-phase2.md` completed
+
+## 2026-09-24 - 文档系统二期复核：修 3 处“检查形同虚设”+ 归档被删除的前端旧架构
+- **CI base ref 缺 `>> $GITHUB_OUTPUT`（既存隐患，二期把它变成阻断项后才致命）**：`Compute base ref` 只 `echo "REF=..."` 到 stdout，`steps.base.outputs.REF` 实为空串，于是下游 `"$BASE"...HEAD` 退化成 `...HEAD`，被 git 当 `HEAD...HEAD` **静默空 diff**（不报错！）—— 即「空白/冲突标记」「Changelog 启发式」「doc_gate 的 ADR 基准」三个步骤全部空转（之前靠 `continue-on-error: true` 掩住）。已修为写 `$GITHUB_OUTPUT`
+- **`doc_gate.sh` 的 ADR 只增不改在 CI 下恒为空**：checkout 后工作区==HEAD，`git diff HEAD` 永远为空。新增 `DOC_GATE_ADR_BASE`（默认 HEAD，CI 传 PR base），并对不可解析的基准直接报错（防“传错值 → 静默变 no-op”。已用“base 含 ADR + 改正文”与“只改 status 行”两个方向验证：前者红、后者绿）
+- **`slop_scan.sh` 在交互式终端会挂死**：`DIFF=$(cat)` 读继承的 tty stdin，等不到 EOF；而 `self_review.sh` 正是人手动跑的入口。已修为 `[ -t 0 ]` 时不读 stdin（改用工作区 diff），要扫任意 diff 则显式管道
+- **归档被删除的旧前端架构**：`docs/frontend-architecture.md` 由 260 行直接换成 11 行转发，旧内容（shadcn/Tailwind 时代分层 + 早期测试策略）未落地到历史层；按本仓库“归档而非删除”的约定补上 [`docs/archive/frontend-architecture-tailwind-202604.md`](archive/frontend-architecture-tailwind-202604.md) 并在转发件与 `authority.md` 双向指向
+- **验证**：`doc_gate.sh`（含二期新增的第 11 项前端权威路由）绿；死链 0；`docs/`+`plans/` 空文件 0；`slop_scan.sh` 在 tty 与 `/dev/null` 两种 stdin 下均不阻塞
+
+## 2026-09-23 - 文档系统落地：分层知识库 + 决策记录 + 部署/测试操作层 + 文档门禁（`doc_gate.sh`）
+- **改动**：按 `plans/2026-09-23-documentation-system.md` 建立五层文档体系：① 入口层 `docs/index.md`（按任务找文档）+ `plans/index.md`（20 份计划的状态表，依据只用可核对事实，推断项显式标 `unverified`）+ `plans/README.md`（文件头契约）；② 说明层 `docs/overview.md` · `docs/features.md`（每条带**代码入口**，可被机械校验）· 重写两份拼写错误的 `ARCHITERTURE.md` → `ARCHITECTURE.md`（后端补分层依赖方向/API 前缀清单/10 个队列注册表，前端补 feature-sliced 边界与 16 条路由）；③ 历史层 `docs/decisions/`（README 模板 + 7 篇追认补录 ADR + 索引，**只增不改**）· `docs/evolution.md`（v0 CLI 原型 → v7 工程门禁，每段 trigger/before→after/残骸/ADR）；④ 操作层 `docs/deployment/`（512 行 `build.md` 拆为 index/local-dev/production/data-migration/operations，`build.md` 压成 5 行转发以保历史链）· `docs/testing/`（门禁矩阵 + 后端/e2e/benchmarks，含 e2e 术语消歧）；⑤ 参考层 `best-practices.md` 286 行拆为 `best-practices/` 8 个分类（内容原样搬移）+ 写入门槛（能机械检测的必须升级为门禁并从文档删除）
+- **新增门禁 `scripts/doc_gate.sh`**（挂进 `self_review.sh` [3/4] 段）：10 项检查 = ADR 只增不改 · ADR 头部与编号连续 · features 契约（页面/API 前缀/路由引用）· 门禁矩阵↔CI job 单向一致 · 端口表↔compose 宿主机映射 · plans 头部 · 文档引用的脚本与 `npm run` script 存在 · QUEUES/compose 服务名口径一致 · e2e 术语歧义（告警）· **docs/ 与 plans/ 下不得有空文件**
+- **门禁当场抓到 3 个真问题**：① 我写的 `features.md`/后端架构文档把 `/api/v1/quotes|features|financials` 当成顶层前缀——实际它们挂在 `/exchanges/{exchange}/stocks/{symbol}/...` 下（已修正）；② `npm run lint` 是**死脚本**（`package.json` 声明 `eslint .` 但仓库未装 eslint、无配置文件），`AGENTS.md`/`README.md`/`build.md` 三处把它当常用命令 → 统一改为 `npx tsc --noEmit` 并落 [ADR 0006](decisions/0006-no-eslint-tsc-as-static-check.md)；③ 端口检查自身的宿主机/容器端口取值错误（已修为取映射倒数第二段）
+- **空文件清理（新增第 10 项检查防复发）**：删掉 `docs/design/webpage.md`（我上一步误把 0 字节文件“并入 design/”，实际无内容可并）、`src/main.py`（0 字节，且根 `pyproject.toml` 的入口是 `src.cli.main:app`，无任何引用）；连同本轮删的 `docs/plan.md`（0 行）与 `docs/designs/index.md`，共清掉 4 个空文件。新增门禁：`docs/` 与 `plans/` 下出现 0 字节文件即失败（`.gitkeep` 例外），避免“空文件把目录伪装成有内容”
+- **验证**：`scripts/doc_gate.sh` 各项均做过**故意破坏验证**（临时改 ADR 正文/删头部字段/指向不存在页面/加假 CI job/改端口/建无头部计划/引用不存在脚本或 npm script/加未登记队列 key/裸用 e2e/建空文件）——**均按预期变红**（e2e 那项为告警），还原后全绿；`bash scripts/self_review.sh` 通过
+- **本计划内故意未做**（列为后续）：`plans/**` 20 份不回填头部（实测仅 4 份写明状态，给其余 16 份补 `unverified` 是噪声，改为在 index 维护）；`slop_scan.sh` / `doctor.sh` / `dev_up.sh` / 分层依赖结构测试属工程环境计划
+
 ## 2026-09-23 - 缓存序列化换 orjson（真 Redis 实测 4.75ms/次）+ 补 `CacheClient` 边界测试
 - **改动**：`backend/app/core/redis.py` 的 `CacheClient.get/set` 由 stdlib `json` 换成本仓库已声明、但**从未被任何代码使用**的 `orjson`（`pyproject.toml` 里躺着 `orjson>=3.9.0`）。真实 5550 行快照 payload（664KB）实测：`dumps` 3.757→0.894ms、`loads` 3.094→1.210ms，**一次缓存往返省 4.75ms**；该 payload 冷 178ms / 热 7.2ms，且被 4~6 个端点共用。零接口变动、零调用方改动
 - **评审发现并修掉的 3 处语义分歧**（全部实测，非推断）：① `orjson.dumps` 对非 str dict 键（int/bool/None）抛 `TypeError`，而 stdlib 会静默字符串化 → 加 `OPT_NON_STR_KEYS` 恢复奇偶性；② orjson 只支持 64-bit int（stdlib 任意精度），`2**64` 抛 `TypeError`；③ **上述异常都不在原 `except` 里**（只捕网络错）→ 会从 `cache.set` 冒泡成 500，且失败点在“数据已查出来之后”。加 `except TypeError`（实测 `orjson.JSONEncodeError is TypeError`，一个 catch 覆盖全部编码失败模式，含循环引用），并把这层契约从“Redis 不可用优雅降级”扩写为“**序列化失败同样降级**”写进类 docstring

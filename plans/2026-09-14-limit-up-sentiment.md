@@ -8,7 +8,7 @@
 
 **Tech Stack:** FastAPI · SQLAlchemy 2.0 async · PostgreSQL（gaps-and-islands 窗口函数）· Alembic · APScheduler（`Asia/Shanghai`）· RabbitMQ Worker · Redis 缓存 · React 18 + antd 5 + TanStack Query · Playwright
 
-**Spec:** [docs/design/limit-up-sentiment.md](../../docs/design/limit-up-sentiment.md)（口径、字段名、降级矩阵、实测证据均以 spec 为准）
+**Spec:** [docs/design/limit-up-sentiment.md](../docs/design/limit-up-sentiment.md)（口径、字段名、降级矩阵、实测证据均以 spec 为准）
 
 ## Global Constraints
 

@@ -5,4 +5,4 @@
 结构：`src/app`（路由/布局/主题）、`src/pages/<路由>/`、`src/features/<域>/`、`src/shared/`（api/ui/config）。
 
 IMPORTANT:
-- 每次完成任务时，结合业内最佳实践，总结经验教训，用一句话沉淀到 [this document](../docs/references/best-practices.md)
+- 完成任务后：能机械化的规则进 lint/doc_gate/测试；**仅**无法机械化的教训才追加 [best-practices](../docs/references/best-practices.md)（见 docs/index.md「变更写哪里」）
