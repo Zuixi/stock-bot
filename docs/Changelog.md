@@ -1,3 +1,11 @@
+## 2026-09-28 - GitHub 历史重写：清除历史提交中的生产域名 / 服务器信息
+
+- **原因**：上一条只脱敏了 HEAD；`git log -S` 显示敏感串仍在 **4 个历史提交**里（`feat(edge)` 引入域名、首次生产部署提交引入服务器地址），而仓库是 public。已公开的内容按"已披露"处理，故同时安排服务器侧加固
+- **做法**：在 `/tmp` 的 mirror 克隆里跑 `git filter-repo --replace-text`（替换表：`deploy@<旧IP>:<旧端口>` / 旧 IP / 旧域名 / 云主机实例名 共 5 条），重写全部 refs 后强推 7 个分支 + 9 个 tag；本地仓库与 4 个 worktree 已同步到改写后历史
+- **影响（协作者必读）**：**所有提交 SHA 已变化**（428 → 415：13 个"仅剩被替换内容、改完等于空提交"的提交被裁剪）；任何本地克隆需 `git fetch --force` 或重新 `clone`，否则再次推送会把旧历史带回来。本地专有分支（`chore/*`、`feat/concept-boards`、`feature/p1-financial-foundation` 等）经核查不含敏感串（均早于该两次提交）
+- **遗留风险（如实记录）**：GitHub 仍保留**不可达对象**——知道旧 SHA 的人仍可通过 `api.github.com/repos/.../commits/<old-sha>` 读到（实测 200）。彻底清除需 GitHub Support 介入；由于内容此前已公开，应视为已披露
+- **验证**：全新克隆后全历史 `-S` 复检 4 个敏感串均为 **0 提交、HEAD 0 命中**；远端 refs 与改写后本地逐一对齐；`main` 上的 ruleset（`deletion` + `non_fast_forward`）在强推期间临时停用并**已恢复为 active**
+
 ## 2026-09-24 - 文档系统二期（Harness 对齐 Phase 1+2）
 - **权威与入口**：新增 `docs/authority.md`；`docs/index.md` 补「变更写哪里」与 first-run 链；`frontend-architecture.md` 压成转发，改前端任务指向 `architecture/frontend/ARCHITECTURE.md`
 - **Tutorial**：`docs/deployment/first-run.md`；README / overview / deployment/index 链入
@@ -22,7 +30,7 @@
 - **本计划内故意未做**（列为后续）：`plans/**` 20 份不回填头部（实测仅 4 份写明状态，给其余 16 份补 `unverified` 是噪声，改为在 index 维护）；`slop_scan.sh` / `doctor.sh` / `dev_up.sh` / 分层依赖结构测试属工程环境计划
 
 ## 2026-09-28 - 生产信息脱敏：域名 / 服务器地址 / 实例名改为占位符（本仓库为 public）
-- **背景**：仓库是公开的，而 `docs/Changelog.md`、`docs/deployment/production.md` 与几个部署配置里带着**真实生产域名**、**部署账号@服务器 IP:SSH 端口**、**云主机实例名与规格**（均为历史提交遗留，非本轮文档改造引入）。已公开的内容应视为已披露，故同步在服务器侧加固（仅密钥登录 + 限制来源）——见下方“历史重写”条目
+- **背景**：仓库是公开的，而 `docs/Changelog.md`、`docs/deployment/production.md` 与几个部署配置里带着**真实生产域名**、**部署账号@服务器 IP:SSH 端口**、**云主机实例名与规格**（均为历史提交遗留，非本轮文档改造引入）。已公开的内容应视为已披露，故同步在服务器侧加固（仅密钥登录 + 限制来源）——见本日“GitHub 历史重写”条目
 - **改动**：`gateway/caddy/Caddyfile` 去掉真实域名默认值 → `{$QSTOCK_DOMAIN}`；`docker-compose.prod.yml` → `${QSTOCK_DOMAIN:?...}` **必填**（宁可快速报错，也不静默回落某个错域名导致签发失败/路由错站）；`.env.production.example` 用 `<你的域名>` 占位；`docs/Changelog.md`、`docs/deployment/production.md` 内全部真实值占位化
 - **部署影响**：首次部署（或换机器）**必须显式设置 `QSTOCK_DOMAIN`**，未设置时 `docker compose` 会直接报错退出而不是默默用错域名；已在跑的服务器不受影响（其 `.env` 里本来就有该变量）
 - **验证**：`git grep` 在 HEAD 上已无真实域名/IP/实例名；`bash scripts/self_review.sh` 与 `bash scripts/doc_gate.sh` 均通过
