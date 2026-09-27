@@ -15,6 +15,7 @@
 #   8  当前态口径一致              —— 破坏：在 mq.py 的 QUEUES 加一个未写进架构文档的 key
 #   9  e2e 术语歧义（告警）        —— 破坏：在某篇 docs 里裸用 e2e
 #  10  文档目录不得有空文件         —— 破坏：`touch docs/empty.md`
+#  12  敏感串守卫（本地清单，仓库外）—— 破坏：把清单里的某个值写进任一文件并 git add
 #  11  前端架构权威路由             —— 破坏：index「先读」列仍含 frontend-architecture.md
 #
 # 退出码：0 = 通过（含仅有告警）；1 = 有硬性未过项。
@@ -51,7 +52,7 @@ fi
 
 # ── 1. 已入库 ADR 只增不改 ──────────────────────────────────
 # 允许的改动：仅 status: / superseded-by: 两行。其它任何正文改动都视为篡改历史。
-echo; echo "== [1/11] ADR 只增不改 =="
+echo; echo "== [1/12] ADR 只增不改 =="
 if [ -d "$DECISIONS_DIR" ]; then
   adr_changed=0
   while IFS= read -r f; do
@@ -73,7 +74,7 @@ else
 fi
 
 # ── 2. ADR 头部字段 / 编号连续 / superseded 双向引用 ────────
-echo; echo "== [2/11] ADR 头部与编号 =="
+echo; echo "== [2/12] ADR 头部与编号 =="
 if [ -d "$DECISIONS_DIR" ]; then
   expect=1
   head_bad=0
@@ -112,7 +113,7 @@ fi
 # 规则：反引号里出现的 frontend/src/{pages,features,shared}/<path> 必须存在；
 #       /api/v1/<seg> 的首段必须真实存在于 app/api/v1 的 include_router 前缀；
 #       出现的 frontend/src/pages/<dir> 必须被 app/router/index.tsx 引用。
-echo; echo "== [3/11] features.md 契约 =="
+echo; echo "== [3/12] features.md 契约 =="
 if [ -f "$FEATURES_DOC" ]; then
   missing=0
   for p in $(grep -oE '`frontend/src/(pages|features|shared)/[A-Za-z0-9_./-]+`' "$FEATURES_DOC" | tr -d '`' | sort -u); do
@@ -143,7 +144,7 @@ fi
 # ── 4. 门禁矩阵 ↔ CI job 单向一致 ──────────────────────────
 # 规则：ci.yml 里每个 job id 必须能在 docs/testing/index.md 中找到。
 # 反向不要求（矩阵会引用 self_review 步骤与 bench.sh，它们不是 CI job）。
-echo; echo "== [4/11] 门禁矩阵 ↔ CI job =="
+echo; echo "== [4/12] 门禁矩阵 ↔ CI job =="
 if [ -f ".github/workflows/ci.yml" ] && [ -f "$TESTING_DOC" ]; then
   miss_job=0
   for job in $(awk '/^jobs:/{f=1;next} f && /^  [a-z0-9-]+:$/{gsub(/[: ]/,"");print}' .github/workflows/ci.yml); do
@@ -159,7 +160,7 @@ else
 fi
 
 # ── 5. 端口权威表 ↔ compose 实际映射 ───────────────────────
-echo; echo "== [5/11] 端口 ↔ compose =="
+echo; echo "== [5/12] 端口 ↔ compose =="
 if [ -f docker-compose.yml ] && [ -f "$DEPLOY_DOC" ]; then
   miss_port=0
   # 映射形态如 "127.0.0.1:5433:5432" ——
@@ -179,7 +180,7 @@ else
 fi
 
 # ── 6. plans 头部契约（仅本规则生效日之后新建的计划） ──────
-echo; echo "== [6/11] plans 头部（新计划） =="
+echo; echo "== [6/12] plans 头部（新计划） =="
 NEW_PLAN_FROM="2026-09-23"
 if [ -d plans ]; then
   plan_bad=0
@@ -202,7 +203,7 @@ fi
 
 # ── 7. 文档引用的脚本必须存在（仅 docs/**） ────────────────
 # 只查 docs/**：plans/** 是历史与规划文档，允许引用尚未实施的脚本。
-echo; echo "== [7/11] 文档引用的脚本 =="
+echo; echo "== [7/12] 文档引用的脚本 =="
 script_bad=0
 # 引用可能是仓库根相对（scripts/x.py）或子项目相对（backend/scripts/x.py）——依次尝试多个根
 for ref in $(grep -rhoE '[A-Za-z0-9_./-]*scripts/[A-Za-z0-9_.-]+\.(sh|py)' docs --include='*.md' | sort -u); do
@@ -235,7 +236,7 @@ done
 [ "$npm_bad" = 0 ] && ok "docs/** 引用的 npm script 均已在 package.json 声明"
 
 # ── 8. 当前态口径一致（队列名 / 服务名） ───────────────────
-echo; echo "== [8/11] 口径一致（QUEUES / compose 服务名） =="
+echo; echo "== [8/12] 口径一致（QUEUES / compose 服务名） =="
 ARCH_DOC="docs/architecture/backend/ARCHITECTURE.md"
 if [ -f "$ARCH_DOC" ]; then
   q_bad=0
@@ -258,7 +259,7 @@ if [ -f docs/ARCHITECTURE.md ]; then
 fi
 
 # ── 9. e2e 术语歧义（告警，不阻断） ────────────────────────
-echo "== [9/11] e2e 术语消歧（告警） =="
+echo "== [9/12] e2e 术语消歧（告警） =="
 # 只看"当前态"文档；Changelog / design / archive / best-practices 属历史记录，不追改
 E2E_SCOPE="docs/index.md docs/overview.md docs/features.md docs/evolution.md docs/ARCHITECTURE.md docs/deployment docs/testing/index.md docs/decisions docs/architecture"
 ambiguous=$(grep -rniE '(^|[^A-Za-z])e2e' $E2E_SCOPE --include='*.md' \
@@ -275,7 +276,7 @@ fi
 # ── 10. 文档目录不得有空文件 ─────────────────────
 # 空文件在仓库里只会积累噪声（实测：`docs/plan.md` 0 行、`docs/designs/index.md` 0 字节、
 # `docs/design/webpage.md` 0 字节、`src/main.py` 0 字节）。空目录需要占位时用 .gitkeep（例外）。
-echo; echo "== [10/11] 无空文件（docs/ · plans/） =="
+echo; echo "== [10/12] 无空文件（docs/ · plans/） =="
 empty_files=$(find docs plans -type f -size 0 ! -name '.gitkeep' | sort)
 if [ -n "$empty_files" ]; then
   fail "以下文件为空（占位而无内容）—— 要么写内容，要么删掉：" \
@@ -286,7 +287,7 @@ else
 fi
 
 # ── 11. 前端架构权威路由（入口层） ─────────────────────────
-echo; echo "== [11/11] 前端架构权威路由 =="
+echo; echo "== [11/12] 前端架构权威路由 =="
 route_bad=0
 if [ -f docs/index.md ]; then
   if ! grep -q 'architecture/frontend/ARCHITECTURE.md' docs/index.md; then
@@ -306,6 +307,27 @@ if [ -f docs/index.md ]; then
   fi
 fi
 [ "$route_bad" = 0 ] && ok "改前端任务指向当前态架构文档"
+
+# ── 12. 敏感串守卫（清单在仓库外，避免"守卫自己泄露"）──────────
+# 清单：$HOME/.stock-bot/sensitive-patterns.txt（每行一条，如生产域名/服务器 IP/实例名）。
+# 只查**暂存内容**（git grep --cached）：pre-commit 时即为"即将提交的内容"，
+# 单独运行时等价于 HEAD。命中只打印 文件:行，绝不回显命中内容。
+echo; echo "== [12/12] 敏感串守卫（本地清单） =="
+PATFILE="${STOCKBOT_SENSITIVE_PATTERNS:-$HOME/.stock-bot/sensitive-patterns.txt}"
+if [ ! -f "$PATFILE" ]; then
+  warn "无本地敏感串清单 $PATFILE（建议写入生产域名/服务器 IP/实例名，提交前自动拦截）"
+else
+  if git ls-files --error-unmatch "$PATFILE" >/dev/null 2>&1; then
+    fail "敏感串清单被纳入版本控制（会把清单本身公开）：$PATFILE"
+  fi
+  pat_hits=$(git grep --cached -I -i -n -f "$PATFILE" -- . 2>/dev/null || true)
+  if [ -n "$pat_hits" ]; then
+    fail "暂存内容命中本地敏感串清单（只列位置，不回显内容）："
+    printf '%s\n' "$pat_hits" | awk -F: '{print "      "$1":"$2}' | sort -u | head -20
+  else
+    ok "暂存内容未命中敏感串清单（$(grep -cve '^$' "$PATFILE") 条规则）"
+  fi
+fi
 
 echo
 if [ "$fails" -eq 0 ]; then

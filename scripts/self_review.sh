@@ -60,6 +60,13 @@ else
   echo "  （无 backend Python 改动，跳过）"
 fi
 
+echo "  shell_hazard_check（scripts/*.sh 陷阱）..."
+if bash scripts/shell_hazard_check.sh > /tmp/hazard.out 2>&1; then
+  ok "shell 陷阱检查通过"
+else
+  fail "shell 陷阱检查未通过"; grep '✘' /tmp/hazard.out | head -10
+fi
+
 if [ -n "$CHANGED" ]; then
   echo; echo "  slop_scan（探测器，告警）..."
   bash scripts/slop_scan.sh || true

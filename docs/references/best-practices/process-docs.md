@@ -3,7 +3,7 @@
 > 2026-09-23 从 [`../best-practices.md`](../best-practices.md) 拆分（内容原样搬移，未改写）。
 > 检索方式（探测器映射表）与**写入门槛**见 [`../best-practices.md`](../best-practices.md)。
 
-## 已退场（规则进机器 · 2026-09-24）
+## 已退场（规则进机器 · 2026-09-24 / 2026-09-28）
 
 以下条目已删除，改由门禁/权威文档承担（勿在 best-practices 重写长文）：
 
@@ -17,8 +17,14 @@
 | ruff format 与 CI 对齐 | `self_review.sh` [2/4] · CI `backend-lint` |
 | pytest 须在 `backend/` 下跑 | `testing/backend.md` |
 | README/端口镜像型文档漂移 | `docs/authority.md` · `doc_gate` |
+| `pipefail` + 管道末尾 `grep -q` 导致 SIGPIPE 静默失效 | `scripts/shell_hazard_check.sh` #1（小输入不报错、大输入必错的那类“看起来总绿”的坑，已写在脚本头部注释） |
+| `declare -A` / `timeout` / `cat -A` 等平台差异写法 | `scripts/shell_hazard_check.sh` #2–#4 |
+| 生产域名 / 服务器地址 / 实例名不得进仓库 | `doc_gate` #12 敏感串守卫 · 清单 `~/.stock-bot/sensitive-patterns.txt`（**仓库外，不入库**） |
 
 - 调试数据空白问题时，优先直调后端 API 确认响应字段，再追代码。空字段可能来自三层中任意一层：后端未查 → schema 未定义 → 前端映射硬编码 undefined。
+- **因果结论必须来自一条能证伪的实测，而不是“听起来合理的机制”**：先写下待验证假设，再给命令与结果；无实测就明写“推断”。反面案例：曾把 GitHub SSH 失败归因给“fake-IP 命中直连规则”，而实测经假 IP 的 HTTPS 正常走代理，因果不成立（真因是 22 端口三条路径全不通）——**未验证的因果写进结论比不写更有害**。
+- **处理敏感信息的任务里，写入物（含 commit message、Changelog、plan）不得复述原文**：脱敏操作自身回写秘密是本仓库真实发生过的回退（守卫能拦下已入清单的值，但“不要在散文里复述”这条只能靠人守）。改完必须 `git grep` 原值 == 0。
+- **动手前先估检索范围，再选工具**：全仓文本检索用 `git grep`（索引级、毫秒），不要 `grep -r .`（会连 `.venv`/`node_modules`/worktree/data 一起扫）；历史检索用**本地** `git log -S`，禁止在 partial clone（`--filter=blob:none`）上跑 `-S`（每个提交都要回源拉 blob，上千次网络往返）。同理，搬运/迁移前先用 `ls -l`/`find -size 0`/`git for-each-ref` 列出清单，搬完对照——曾有 0 字节文件被“并入”却以为是合并内容。
 - Agent 起长驻服务（vite dev 等）必须"重启先清旧"：实测同一 worktree 的 vite 在 3000/3001 各挂一个无人认领，且 TaskStop/杀 npm 父进程会留下 vite 孤儿继续占端口导致下个会话端口漂移——查占用（`netstat -ano | grep :<port>`）→ 确认命令行身份（Get-CimInstance）→ `taskkill //F //T //PID`（`//T` 杀进程树，必加）再起新实例；规则已固化进 AGENTS.md「服务管理约定」。
 - Agent 指令文件（AGENTS.md/CLAUDE.md）必须保持单一事实来源：CLAUDE.md 用 symlink 或一行转发指向 AGENTS.md 而非拷贝；同类沉淀文档不可并存近似命名（`best-practice.md` vs `best-practices.md` 曾同时被更新导致经验分裂，本文件即两文件合并产物）；AGENTS.md 中的命令必须实跑验证后再写入（本次发现 ruff/mypy 需 `uv run --extra dev`、frontend eslint 需先 `npm install`）。
 - uv 的 `[project.optional-dependencies] dev`（ruff/mypy/pytest）默认不随 `uv sync` 安装：CI 与本地都必须显式 `uv sync --extra dev`（或 `uv run --extra dev`），否则 `uv run ruff/mypy` 报 "Failed to spawn"——这会让 Lint/TypeCheck 形同虚设并放行历史欠账；同理 pytest 若依赖真实运行 API，须标 `pytest.mark.e2e` 并在 CI 用 `-m "not e2e"` 避免测试 job 必挂。
@@ -47,4 +53,3 @@
 - 文档权威矩阵（`docs/authority.md`）与 CI 级 `doc_gate` 应同步落地：仅 pre-commit 校验时，绕过 hook 的 PR 仍会让 index 指向过期架构文（如 Tailwind 时代 `frontend-architecture.md`），Agent 按路由读到的栈与代码不一致。
 - **"实现者不得改 docs" 这类禁令必须在 review 时**核对**，不能只靠 brief 声明**：Task 11 的 brief 明确写了不得动 `docs/Changelog.md` / `best-practices.md`（由控制器按阶段批量收口、避免各任务各自漂移），但实现者仍在同一个 commit 里把两处都改了。因为内容是**准确的**、也没重复，所以不返工；但流程上记一次。可操作的做法：① 在 task brief 里把禁令写成**可检的硬约束**（如“你的 commit 的 `--name-only` 不得出现 `docs/`”）；② review 时把 `git show <commit> --stat` 当必查项，而非只看业务 diff；③ 控制器收口时对 `docs/` 做一次 `git log` 审查，发现夹带就并入本阶段批量（而不是回退重做）。放宽场景：若某任务确实需要同源同 commit 的文档改动（如新增 metric_key 需同步台账），应由控制器在 brief 里**显式开例**，而不是默认默认。
 - 新增或修改任何一门禁/检查脚本时，**必须当场做一次"故意破坏 → 确认它变红"的验证**并写进脚本注释：不做这一步的 checker 会在某个"看起来总绿"的路径上静默失效（同类先例：`self_review` 只扫工作区导致已提交文件漏检、文档里承诺的 `npm run lint` 实际不存在）。机器可检的检查项一旦建成，对应文档条目应从 best-practices 删除——规则进机器，不进文档。
-- **`set -o pipefail` 下不要在管道末尾用 `grep -q`**：grep 一旦命中就退出，写端（`printf`/`cat`/上游命令）随即吃到 **SIGPIPE(141)**，`pipefail` 把整条管道判为失败 → 条件恒假、检查静默失效；**输入越大越必然复现**（实测 308KB diff 下 `slop_scan.sh` 的 8 个分类全部不命中，而小输入因写入先完成而"看起来正常"，所以冒烟测不出来）。改为 here-string：`if grep -qiE "$pat" <<< "$VAR"; then`。未纳入门禁：可靠检出需要 shellcheck 级别的数据流分析，未在工具链内——写 shell 门禁时人工复核这一点。
