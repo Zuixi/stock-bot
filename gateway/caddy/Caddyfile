@@ -27,7 +27,7 @@
 # 证书到期/吊销通知邮箱（可选）：在服务器根 `.env` 里设 ACME_EMAIL 后启用下面一行
 # email {$ACME_EMAIL}
 
-{$QSTOCK_DOMAIN:<生产域名>} {
+{$QSTOCK_DOMAIN} {
 	encode zstd gzip
 
 	# HSTS 由**终结 TLS 的这一层**下发（上游 Traefik 看到的是明文 HTTP，它的 stsSeconds 不会生效）。

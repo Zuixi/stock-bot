@@ -43,7 +43,7 @@ stock_bot/
 
 | 文件 | 谁读它 | 放什么 |
 |------|-------|--------|
-| 根目录 `.env` | **docker compose 的 `${VAR}` 插值**（**只有这些键真正生效**）：`APP_ENV`、`AUTH_JWT_PRIVATE_KEY_PEM`/`AUTH_JWT_PUBLIC_KEY_PEM`、`INTERNAL_API_TOKEN`、`AUTH_COOKIE_SECURE`、`AUTH_TRUST_FORWARDED_FOR`、`ASSERTION_CACHE_TTL`、`JWT_ISSUER`/`JWT_AUDIENCE`、`RABBITMQ_DEFAULT_USER`/`_PASS` | 鉴权/网关/消息队列契约（其余键如 `POSTGRES_*`/`REDIS_*`/`SESSION_*` 在 compose 里**并未引用**，填了也不生效） |
+| 根目录 `.env` | **docker compose 的 `${VAR}` 插值**（**只有这些键真正生效**）：`APP_ENV`、**`QSTOCK_DOMAIN`（必填，Caddy 用它签发证书；未设置时 compose 直接报错退出）**、`AUTH_JWT_PRIVATE_KEY_PEM`/`AUTH_JWT_PUBLIC_KEY_PEM`、`INTERNAL_API_TOKEN`、`AUTH_COOKIE_SECURE`、`AUTH_TRUST_FORWARDED_FOR`、`ASSERTION_CACHE_TTL`、`JWT_ISSUER`/`JWT_AUDIENCE`、`RABBITMQ_DEFAULT_USER`/`_PASS` | 鉴权/网关/消息队列契约（其余键如 `POSTGRES_*`/`REDIS_*`/`SESSION_*` 在 compose 里**并未引用**，填了也不生效） |
 | `backend/.env` | api / worker / scheduler 容器的 `env_file`（`docker-compose.yml` 四处 `env_file: ./backend/.env`），以及本机 `uv run` 直起 | 后端运行时密钥与本地覆盖：`TUSHARE_TOKEN`、`INDUSTRY_DATA_SOURCE`、`APP_ENV`/`APP_DEBUG`、生产域名的 `CORS_ORIGINS`、本机直连用的 `DATABASE_URL`/`REDIS_URL`… |
 
 ```bash
@@ -113,7 +113,7 @@ cp backend/.env.example backend/.env
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| caddy | **0.0.0.0:80 / 0.0.0.0:443（+443/udp）** | **唯一对外入口**：TLS 自动签发续期 + 反代到 `gateway:80` |
+| caddy | **0.0.0.0:80 / 0.0.0.0:443（+443/udp）** | **唯一对外入口**：TLS 自动签发续期 + 反代到 `gateway:80`（站点域名来自根 `.env` 的 `QSTOCK_DOMAIN`，**必填**） |
 | gateway | 仅 compose 网络内 :80 | Traefik：路由 / 鉴权（forward-auth）/ 限流 / 安全头（prod override 用 `!override` 清空宿主机端口） |
 | postgres / redis | 127.0.0.1:5433 / 6380 | 仅回环，供宿主机本地工具与 pytest 使用 |
 

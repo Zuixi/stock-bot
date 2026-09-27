@@ -21,6 +21,12 @@
 - **验证**：`scripts/doc_gate.sh` 各项均做过**故意破坏验证**（临时改 ADR 正文/删头部字段/指向不存在页面/加假 CI job/改端口/建无头部计划/引用不存在脚本或 npm script/加未登记队列 key/裸用 e2e/建空文件）——**均按预期变红**（e2e 那项为告警），还原后全绿；`bash scripts/self_review.sh` 通过
 - **本计划内故意未做**（列为后续）：`plans/**` 20 份不回填头部（实测仅 4 份写明状态，给其余 16 份补 `unverified` 是噪声，改为在 index 维护）；`slop_scan.sh` / `doctor.sh` / `dev_up.sh` / 分层依赖结构测试属工程环境计划
 
+## 2026-09-28 - 生产信息脱敏：域名 / 服务器地址 / 实例名改为占位符（本仓库为 public）
+- **背景**：仓库是公开的，而 `docs/Changelog.md`、`docs/deployment/production.md` 与几个部署配置里带着**真实生产域名**、**部署账号@服务器 IP:SSH 端口**、**云主机实例名与规格**（均为历史提交遗留，非本轮文档改造引入）。已公开的内容应视为已披露，故同步在服务器侧加固（仅密钥登录 + 限制来源）——见下方“历史重写”条目
+- **改动**：`gateway/caddy/Caddyfile` 去掉真实域名默认值 → `{$QSTOCK_DOMAIN}`；`docker-compose.prod.yml` → `${QSTOCK_DOMAIN:?...}` **必填**（宁可快速报错，也不静默回落某个错域名导致签发失败/路由错站）；`.env.production.example` 用 `<你的域名>` 占位；`docs/Changelog.md`、`docs/deployment/production.md` 内全部真实值占位化
+- **部署影响**：首次部署（或换机器）**必须显式设置 `QSTOCK_DOMAIN`**，未设置时 `docker compose` 会直接报错退出而不是默默用错域名；已在跑的服务器不受影响（其 `.env` 里本来就有该变量）
+- **验证**：`git grep` 在 HEAD 上已无真实域名/IP/实例名；`bash scripts/self_review.sh` 与 `bash scripts/doc_gate.sh` 均通过
+
 ## 2026-09-23 - 缓存序列化换 orjson（真 Redis 实测 4.75ms/次）+ 补 `CacheClient` 边界测试
 - **改动**：`backend/app/core/redis.py` 的 `CacheClient.get/set` 由 stdlib `json` 换成本仓库已声明、但**从未被任何代码使用**的 `orjson`（`pyproject.toml` 里躺着 `orjson>=3.9.0`）。真实 5550 行快照 payload（664KB）实测：`dumps` 3.757→0.894ms、`loads` 3.094→1.210ms，**一次缓存往返省 4.75ms**；该 payload 冷 178ms / 热 7.2ms，且被 4~6 个端点共用。零接口变动、零调用方改动
 - **评审发现并修掉的 3 处语义分歧**（全部实测，非推断）：① `orjson.dumps` 对非 str dict 键（int/bool/None）抛 `TypeError`，而 stdlib 会静默字符串化 → 加 `OPT_NON_STR_KEYS` 恢复奇偶性；② orjson 只支持 64-bit int（stdlib 任意精度），`2**64` 抛 `TypeError`；③ **上述异常都不在原 `except` 里**（只捕网络错）→ 会从 `cache.set` 冒泡成 500，且失败点在“数据已查出来之后”。加 `except TypeError`（实测 `orjson.JSONEncodeError is TypeError`，一个 catch 覆盖全部编码失败模式，含循环引用），并把这层契约从“Redis 不可用优雅降级”扩写为“**序列化失败同样降级**”写进类 docstring
@@ -80,7 +86,7 @@
 - 涉及模块：gateway/{Caddyfile,traefik.yml,dynamic/middlewares.yml}, docker-compose.prod.yml, .env.production.example, docs/{build.md,ARCHITECTURE.md}, docs/*
 
 ## 2026-09-21 - 首次生产部署：腾讯云服务器（tag v0.0.2）+ 本地数据全量迁移
-- **服务器**：`deploy@<生产服务器>:<SSH端口>`（<云主机实例名> / Debian 12 / x86_64 / 4C 3.7G / 49G 可用），Docker 29.8.1 + Compose v5.5.1，全新环境（无容器/无卷/端口空闲）
+- **服务器**：`deploy@<生产服务器>:<SSH端口>`（<云主机实例名> / Debian 12 / x86_64 / <规格>），Docker 29.8.1 + Compose v5.5.1，全新环境（无容器/无卷/端口空闲）
 - **发布**：打 tag **v0.0.2** → CD 发布 4 个镜像到 ghcr（仓库为 public → 服务器**匿名即可拉取**，实测 `docker manifest inspect` 与 `compose pull` 均无需登录；4 镜像合计拉取 14 分钟）
 - **取源码**：服务器 `git clone` 被墙（`HTTP/2 stream not closed` / `GnuTLS recv error -110`），改用 **codeload tarball**（实测 1MB/s）拉 `refs/tags/v0.0.2` 解包 —— 副产品：tarball 天然不含 `.env`/未入库的 `docker-compose.override.yml`，正好避免把本机环境假设带上服务器
 - **数据迁移**：本地 `pg_dump -Fc` 501MB + auth 库 23KB → scp（约 1.3MB/s）→ `pg_restore` 2m33s。**先恢复数据再起应用**（顺序铁律）：`data_init` 的覆盖度检查只补了 **19 只新股 / 12,446 行 upsert / 0 失败**（约 15 秒），而非全量 3 年回填 —— 若空库直接起应用会烧一轮 TuShare 额度

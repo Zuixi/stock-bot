@@ -33,7 +33,7 @@ services:
     restart: unless-stopped
     environment:
       # 站点域名（Caddyfile 用 {$QSTOCK_DOMAIN} 读取；可改，改完 restart caddy）
-      QSTOCK_DOMAIN: ${QSTOCK_DOMAIN:-<生产域名>}
+      QSTOCK_DOMAIN: ${QSTOCK_DOMAIN:?未设置 QSTOCK_DOMAIN（见 docs/deployment/index.md）}
       # 证书到期通知邮箱（可选，留空 = 匿名注册 ACME 账号）
       ACME_EMAIL: ${ACME_EMAIL:-}
     ports:
