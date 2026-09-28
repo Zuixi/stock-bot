@@ -1,3 +1,10 @@
+## 2026-09-29 - 玄田增量门控 Task 2：`XuantianClient` 产能客户端 + 周期解析纯函数
+
+- **纯函数解析层**（`app/core/providers/xuantian_client.py`）：`parse_capacity_rows` 把玄田原始 5 列行（`[周期, 能繁, 猪肉产量, 生猪存栏, 生猪出栏]`）映射为标准行 `{period, freq, values, raw_period}`；周期串三态解析（`"2009"`→年度 12-31 / `"2025年二季度（末）"`→季度末 / `"2025年7月"`→月末日），0 值列剔除（月度行的哨兵语义）、全零行丢弃、无法解析的周期 log warning 后跳过（skip 语义，单行失败不牵连整批）
+- **HTTP 客户端**：`XuantianClient.fetch_capacity()` POST `xt.yangzhu.vip/data/getmapdata?ptype=7&areano=-1`（Referer/Origin/UA 头，15s 超时），非 200 code 与任何异常均 log warning 返回 None 不抛穿（与 CAAA 客户端同约定）；`get_xuantian_client()` 模块级懒加载单例
+- **防上游漂移**：真实响应 fixture `tests/fixtures/xuantian_capacity.json`（2026-09-29 实机快照，22 行 = 16 年度 + 3 季度 + 3 月度）入库；快照测试锁形状 + ASF 锚点（2018→3189.0 / 2019→3080.0，数值变化即人工复核信号）
+- **验证**：`tests/test_xuantian_client.py` 7 passed；`ruff check` + `ruff format --check` + `mypy app` 全绿
+
 ## 2026-09-29 - 玄田增量门控 Task 1：`industry_ingest_state` 表（模型 + 迁移 + 仓库层）
 
 - **三层门控的锚点表落地**：新增 `IndustryIngestState` ORM（唯一键 `(industry_key, source)`，字段含 `next_due_at`/`content_hash`/`last_period`/`stats`），迁移 `a9b3c7d1e5f2`（down_revision `2614ed9a9ab4`，`alembic heads` 单头验证通过）
