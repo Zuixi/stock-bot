@@ -72,6 +72,7 @@ def _require_industry(industry_key: str) -> IndustryConfig:
 if TYPE_CHECKING:
     from app.core.providers.akshare_client import AkShareClient
     from app.core.providers.caaa_client import CaaaClient
+    from app.core.providers.xuantian_client import XuantianClient
 
 # AKShare 真实源表驱动规格：(metric_key, source, client 方法, 日期列, 数值列, 数值上限护栏)。
 # 四个接口均于 2026-09-03 实机验证（akshare 1.18.94）：搜猪网 soozhu 现货（元/kg）+
@@ -181,6 +182,50 @@ async def _fetch_caaa_sow_row(cfg: IndustryConfig, client: CaaaClient | None = N
     ]
 
 
+async def _fetch_xuantian_capacity_rows(
+    cfg: IndustryConfig, client: XuantianClient | None = None
+) -> list[dict]:
+    """玄田产能四指标 → 标准 metric 行（每指标展开一行）.
+
+    客户端已做周期解析与哨兵剔除；本层只做 registry 对照展开。任何失败
+    返回空列表（不抛穿），未命中 registry 的指标键静默跳过。
+    """
+    if client is None:
+        from app.core.providers.xuantian_client import get_xuantian_client  # noqa: PLC0415
+
+        client = get_xuantian_client()
+
+    try:
+        parsed = await client.fetch_capacity()
+    except Exception as exc:  # 双保险：client 自身已兜底，此处防注入实现抛穿
+        logger.warning("Xuantian capacity fetch raised (skipped): %s", exc)
+        return []
+    if not parsed:
+        return []
+
+    rows: list[dict] = []
+    for item in parsed:
+        for metric_key, value in item["values"].items():
+            m = cfg.metric(metric_key)
+            if m is None:
+                continue
+            rows.append(
+                {
+                    "industry_key": cfg.key,
+                    "stock_id": 0,
+                    "metric_key": m.key,
+                    "source": "xuantian",
+                    "source_tier": m.tier,
+                    "freq": item["freq"],
+                    "period": item["period"],
+                    "value": value,
+                    "unit": m.unit or None,
+                    "extra": {"channel": "xuantian", "raw_period": item["raw_period"]},
+                }
+            )
+    return rows
+
+
 # ── Ingest ────────────────────────────────────────────────────────────
 
 # 派生指标 → 其全部基础输入；输入全部被真实源覆盖时，旧 mock 派生行一并清除
@@ -215,9 +260,10 @@ async def ingest_industry_metrics(
     if source == "mock":
         rows = build_industry_mock_points(cfg, months=months)
     elif source == "akshare":
-        # caaa 行在 upsert 前并入：sow_inventory 进入 covered_metrics → mock purge 覆盖
+        # caaa + xuantian 行在 upsert 前并入：进入 covered_metrics → mock purge 覆盖
         rows = await _fetch_akshare_rows(cfg, months=months)
         rows += await _fetch_caaa_sow_row(cfg)
+        rows += await _fetch_xuantian_capacity_rows(cfg)
     else:
         raise ValueError(f"Unknown industry data source: {source}")
 

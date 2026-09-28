@@ -1,3 +1,10 @@
+## 2026-09-29 - 玄田增量门控 Task 5：`_fetch_xuantian_capacity_rows` fetcher 接线 + ingest 主流程并轨
+
+- **fetcher 接线**（`app/services/industry_metric_service.py`，service 层，client 留 providers 分层不破）：`_fetch_xuantian_capacity_rows(cfg, client=None)` 把玄田解析行按 registry 对照展开为标准 metric 行（每指标一行），`extra={"channel": "xuantian", "raw_period": ...}` 溯源；`client` 可注入假对象做纯单测（不触网）
+- **防线双保险**：任何失败返回空列表不抛穿（client 已兜底，fetcher 再兜一层防注入实现抛穿）；registry 未命中的 metric_key 静默跳过（跨行业复用防线——他行业复用本 fetcher 时未定义指标不会炸）
+- **ingest 并轨**：`ingest_industry_metrics` 的 akshare 分支在 caaa 行之后并入玄田行（upsert 前合并 → 四产能指标进入 `covered_metrics` → mock purge 覆盖）
+- **验证**：`tests/test_industry_fetchers.py` 10 passed（新增 3：季度行 4+1 展开 / 失败→空列表 / 未注册指标跳过）；全量 `pytest -x -q` 630 passed / 0 failed；`ruff check` + `ruff format --check` + `mypy app` 全绿
+
 ## 2026-09-29 - 玄田增量门控 Task 4：行级 diff 纯函数 `compute_ingest_actions` + `canonical_content_hash` + `next_due` 节奏表
 
 - **纯函数 diff 核心**（`app/services/industry_ingest_diff.py`，零重依赖——不 import config/settings/DB/httpx，这正是 next_due 节奏表从 service 迁入本模块的原因）：`compute_ingest_actions(fetched, existing)` 按 `(metric_key, freq, period)` 键比对，四分类 `new`/`changed`/`unchanged_count`/`orphaned_count`；value 比较先 `float()` 归一（兼容 Numeric(18,4) 回读 Decimal）再 1e-6 容差；修订行 `revisions` 留痕 `metric_key/freq/period/old/new`（官方回修幅度本身是投研信号）；orphaned（库有响应无）只计数不删除（官方数据语义不镜像上游删除）
