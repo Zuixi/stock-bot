@@ -9,7 +9,7 @@ from __future__ import annotations
 import calendar
 import logging
 from dataclasses import asdict
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +38,12 @@ from app.schemas.industry import (
     TrendSeriesOut,
 )
 from app.services import cycle_engine
+from app.services.industry_ingest_diff import (
+    canonical_content_hash,
+    compute_ingest_actions,
+    is_due,
+    next_due,
+)
 from app.services.industry_mock_data import build_industry_mock_points
 from app.services.industry_registry import (
     TIER_DERIVED,
@@ -72,6 +78,7 @@ def _require_industry(industry_key: str) -> IndustryConfig:
 if TYPE_CHECKING:
     from app.core.providers.akshare_client import AkShareClient
     from app.core.providers.caaa_client import CaaaClient
+    from app.core.providers.xuantian_client import XuantianClient
 
 # AKShare 真实源表驱动规格：(metric_key, source, client 方法, 日期列, 数值列, 数值上限护栏)。
 # 四个接口均于 2026-09-03 实机验证（akshare 1.18.94）：搜猪网 soozhu 现货（元/kg）+
@@ -181,6 +188,50 @@ async def _fetch_caaa_sow_row(cfg: IndustryConfig, client: CaaaClient | None = N
     ]
 
 
+async def _fetch_xuantian_capacity_rows(
+    cfg: IndustryConfig, client: XuantianClient | None = None
+) -> list[dict]:
+    """玄田产能四指标 → 标准 metric 行（每指标展开一行）.
+
+    客户端已做周期解析与哨兵剔除；本层只做 registry 对照展开。任何失败
+    返回空列表（不抛穿），未命中 registry 的指标键静默跳过。
+    """
+    if client is None:
+        from app.core.providers.xuantian_client import get_xuantian_client  # noqa: PLC0415
+
+        client = get_xuantian_client()
+
+    try:
+        parsed = await client.fetch_capacity()
+    except Exception as exc:  # 双保险：client 自身已兜底，此处防注入实现抛穿
+        logger.warning("Xuantian capacity fetch raised (skipped): %s", exc)
+        return []
+    if not parsed:
+        return []
+
+    rows: list[dict] = []
+    for item in parsed:
+        for metric_key, value in item["values"].items():
+            m = cfg.metric(metric_key)
+            if m is None:
+                continue
+            rows.append(
+                {
+                    "industry_key": cfg.key,
+                    "stock_id": 0,
+                    "metric_key": m.key,
+                    "source": "xuantian",
+                    "source_tier": m.tier,
+                    "freq": item["freq"],
+                    "period": item["period"],
+                    "value": value,
+                    "unit": m.unit or None,
+                    "extra": {"channel": "xuantian", "raw_period": item["raw_period"]},
+                }
+            )
+    return rows
+
+
 # ── Ingest ────────────────────────────────────────────────────────────
 
 # 派生指标 → 其全部基础输入；输入全部被真实源覆盖时，旧 mock 派生行一并清除
@@ -202,22 +253,136 @@ def _covered_purge_keys(covered: set[str]) -> set[str]:
     return covered | derived
 
 
+# ── 增量门控（三层）──────────────────────────────────────────────────
+#
+# L1 调度门：next_due_at 未到 → 不发请求（scheduled 轨道；worker force=True 绕过）
+# L2 内容门：响应哈希与库内一致 → 零写入零重算，只 touch 检查时间
+# L3 行级 diff：只写 new/changed 行；修订 old→new 留痕（官方回修是常态，非异常）
+#
+# 依据：官方统计会修订历史（2023 畜禽监测样本轮换即实例），因此任何层都
+# 不以 last_period 水位跳过历史——水位仅审计用。
+#
+# 节奏表与 next_due() 定义在 industry_ingest_diff.py（纯函数模块），
+# service 只 import 使用（单测 import 链不拉起 settings）。
+
+
+def _as_row_dicts(rows: list[IndustryMetric]) -> list[dict]:
+    """ORM 行 → diff 输入 dict（键与 fetcher 产出的标准行对齐）."""
+    return [
+        {
+            "industry_key": r.industry_key,
+            "stock_id": r.stock_id,
+            "metric_key": r.metric_key,
+            "source": r.source,
+            "source_tier": r.source_tier,
+            "freq": r.freq,
+            "period": r.period,
+            "value": float(r.value) if r.value is not None else None,
+            "unit": r.unit,
+            "extra": r.extra,
+        }
+        for r in rows
+    ]
+
+
+async def _gated_xuantian_fetch(
+    db: AsyncSession, cfg: IndustryConfig, *, force: bool
+) -> tuple[list[dict], str, dict, list[dict]]:
+    """玄田通道三层门控：返回 (待写行, gating 状态, stats, revisions) 并维护状态表.
+
+    gating: "not_due"（L1 短路，返回空行）| "unchanged"（L2 短路）|
+            "full"（首抓全量）| "incremental"（有 new/changed）
+    短路时 stats/revisions 返回空 dict/list，主流程直接透传。
+    """
+    now = datetime.now(UTC)
+    state = await repo.get_ingest_state(db, cfg.key, "xuantian")
+
+    # L1：调度门（force 绕过；无状态/无到期时间/到期已过均放行，判定住纯模块）
+    if not is_due(state.next_due_at if state else None, now, force=force):
+        return [], "not_due", {}, []
+
+    parsed = await _fetch_xuantian_capacity_rows(cfg)
+    if not parsed:
+        return [], "not_due", {}, []  # 抓取失败视为本轮跳过（client 已 log）
+
+    new_hash = canonical_content_hash(parsed)
+
+    # L2：内容门（哈希一致 → 零下游）
+    if state and state.content_hash == new_hash:
+        await repo.touch_ingest_state(db, cfg.key, "xuantian", last_checked_at=now)
+        return [], "unchanged", {}, []
+
+    # L3：行级 diff（首抓 existing 为空 → 全部 new）
+    existing = await repo.list_metric_rows(db, cfg.key, source="xuantian")
+    actions = compute_ingest_actions(parsed, _as_row_dicts(existing))
+    to_write = actions["new"] + actions["changed"]
+    xt_stats = {
+        "new": len(actions["new"]),
+        "changed": len(actions["changed"]),
+        "unchanged": actions["unchanged_count"],
+        "orphaned": actions["orphaned_count"],
+    }
+
+    if to_write:
+        max_period = max(r["period"] for r in parsed)
+        await repo.upsert_ingest_state(
+            db,
+            {
+                "industry_key": cfg.key,
+                "source": "xuantian",
+                "last_success_at": now,
+                "last_period": max_period,
+                "content_hash": new_hash,
+                "next_due_at": next_due("xuantian", now),
+                "stats": xt_stats,
+            },
+        )
+    else:
+        # 空写但哈希已变（DB restore / 哈希被清 / 仅 orphaned 响应）：仍须武装状态，
+        # 否则 next_due_at 永不推进，调度任务每天重抓重 diff（MF-1）。
+        # last_success_at 语义 = "最近一次有写入的成功抓取"，空写轮保留原值。
+        await repo.upsert_ingest_state(
+            db,
+            {
+                "industry_key": cfg.key,
+                "source": "xuantian",
+                "last_success_at": state.last_success_at if state else None,
+                "last_period": max(r["period"] for r in parsed),
+                "content_hash": new_hash,
+                "next_due_at": next_due("xuantian", now),
+                "stats": xt_stats,
+            },
+        )
+    return to_write, ("full" if state is None else "incremental"), xt_stats, actions["revisions"]
+
+
 async def ingest_industry_metrics(
     db: AsyncSession,
     industry_key: str = "pig",
     source: str | None = None,
     months: int = 37,
+    *,
+    force: bool = False,
 ) -> dict:
-    """Fetch → upsert → purge（按覆盖指标）→ derive → signal，一次 ingest 完成整条链（幂等）."""
+    """Fetch → [L1/L2/L3 门控] → upsert → purge → derive → signal（幂等）.
+
+    force=True（worker 手动触发）绕过 L1 调度门——修订场景的人工兜底；
+    scheduled 轨道 force=False 吃满三层短路。
+    """
     cfg = _require_industry(industry_key)
     source = source or settings.industry_data_source
 
+    xt_stats: dict = {}
+    xt_revisions: list[dict] = []
     if source == "mock":
         rows = build_industry_mock_points(cfg, months=months)
+        gating = "full"
     elif source == "akshare":
-        # caaa 行在 upsert 前并入：sow_inventory 进入 covered_metrics → mock purge 覆盖
+        # 玄田通道独立过门（唯一带全量历史响应的源）；日价源照常滚动抓取：
+        xt_rows, gating, xt_stats, xt_revisions = await _gated_xuantian_fetch(db, cfg, force=force)
         rows = await _fetch_akshare_rows(cfg, months=months)
         rows += await _fetch_caaa_sow_row(cfg)
+        rows += xt_rows
     else:
         raise ValueError(f"Unknown industry data source: {source}")
 
@@ -234,17 +399,33 @@ async def ingest_industry_metrics(
         purged = await repo.delete_rows_by_source(
             db, cfg.key, ["mock", "derived"], metric_keys=sorted(purge_keys)
         )
-    derived_count = await _compute_derived_metrics(db, cfg)
-    signal = await evaluate_and_store_signal(db, cfg)
 
-    return {
+    # 短路条件看"本轮是否有任何写入"，不只看玄田 gating——玄田 unchanged 但
+    # soozhu 日价有新行时（常态），派生（猪粮比/sow_mom）必须照常重算
+    # （ponytail review 修正：原"gating != unchanged"会停掉日价源的派生链）
+    wrote_anything = upserted > 0
+    derived_count = 0
+    signal = None
+    if wrote_anything:
+        derived_count = await _compute_derived_metrics(db, cfg)
+        signal = await evaluate_and_store_signal(db, cfg)
+    else:
+        signal = await repo.latest_signal(db, cfg.key)
+
+    result = {
         "source": source,
+        "gating": gating,
         "upserted": upserted,
         "derived_upserted": derived_count,
         "purged": purged,  # 已覆盖指标下清除的 mock/derived 行数
         "covered_metrics": sorted(covered),
         "signal": signal.signal_type if signal else None,
     }
+    if source == "akshare":
+        # period 转 ISO 字符串：worker 把 result 落 JSONB（默认 json 序列化器不认 date）
+        result["stats"] = xt_stats
+        result["revisions"] = [{**rev, "period": rev["period"].isoformat()} for rev in xt_revisions]
+    return result
 
 
 async def _ensure_reference_points(db: AsyncSession, cfg: IndustryConfig) -> None:

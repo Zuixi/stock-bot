@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import delete, desc, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.industry_research import (
+    IndustryIngestState,
     IndustryMetric,
     IndustryReferencePoint,
     IndustrySignal,
@@ -249,3 +250,54 @@ async def delete_rows_by_source(
         stmt = stmt.where(IndustryMetric.metric_key.in_(metric_keys))
     result = await db.execute(stmt)
     return result.rowcount or 0  # type: ignore[attr-defined]
+
+
+async def list_metric_rows(
+    db: AsyncSession, industry_key: str, source: str
+) -> list[IndustryMetric]:
+    """按 industry+source 拉全量行（升序），供 L3 行级 diff 比对."""
+    stmt = (
+        select(IndustryMetric)
+        .where(
+            IndustryMetric.industry_key == industry_key,
+            IndustryMetric.source == source,
+        )
+        .order_by(IndustryMetric.period.asc())
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+# ── Ingest state（增量门控锚点，L1/L2/L3）───────────────────────────────
+
+
+async def get_ingest_state(
+    db: AsyncSession, industry_key: str, source: str
+) -> IndustryIngestState | None:
+    stmt = select(IndustryIngestState).where(
+        IndustryIngestState.industry_key == industry_key,
+        IndustryIngestState.source == source,
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def upsert_ingest_state(db: AsyncSession, row: dict) -> IndustryIngestState:
+    """按 (industry_key, source) 整行覆写（唯一写者是 _gated_xuantian_fetch，每次全字段）."""
+    state = await get_ingest_state(db, row["industry_key"], row["source"])
+    if state is None:
+        state = IndustryIngestState(industry_key=row["industry_key"], source=row["source"])
+        db.add(state)
+    for k, v in row.items():
+        if k not in ("industry_key", "source"):
+            setattr(state, k, v)
+    await db.flush()
+    return state
+
+
+async def touch_ingest_state(
+    db: AsyncSession, industry_key: str, source: str, *, last_checked_at: datetime
+) -> None:
+    """内容未变时只更新检查时间，不动哈希/水位（L2 短路的留痕）."""
+    state = await get_ingest_state(db, industry_key, source)
+    if state is not None:
+        state.last_checked_at = last_checked_at
+        await db.flush()

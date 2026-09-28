@@ -162,7 +162,8 @@ async def industry_metrics_refresh_job() -> None:
     logger.info("Industry metrics refresh job triggered")
     try:
         async with async_session_factory() as db:
-            result = await industry_metric_service.ingest_industry_metrics(db, "pig")
+            # force=False：定时轨道吃满三层门控（L1 调度门可短路玄田请求）
+            result = await industry_metric_service.ingest_industry_metrics(db, "pig", force=False)
             await db.commit()
         logger.info(
             "Industry metrics refresh done: source=%s upserted=%s signal=%s",

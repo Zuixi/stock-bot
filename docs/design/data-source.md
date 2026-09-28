@@ -39,9 +39,10 @@
 
 | metric_key | 指标 | 频率 | 渠道 | 说明 |
 |---|---|---|---|---|
-| `sow_inventory` | 能繁母猪存栏 | 月度环比 + 季度末绝对数 | **推荐抓中国畜牧业协会猪业分会**（pig.caaa.cn，每月转载"全国生猪产品数据"，HTML 规范好解析）；官方出口为五部门"生猪产品信息数据平台" | 月度多为**环比变化率**，**绝对数以统计局季度末为准**（data.stats.gov.cn）——两种口径分 source 存储 |
-| `hog_inventory` | 生猪存栏 | 季度 | 国家统计局 data.stats.gov.cn | 可抓可查 |
-| `hog_slaughter_quarterly` | 生猪出栏量 / 猪肉产量 | 季度/年度 | 国家统计局 | 长周期对比基准 |
+| `sow_inventory` | 能繁母猪存栏 | 月度环比 + 季度末绝对数 | **推荐抓中国畜牧业协会猪业分会**（pig.caaa.cn，每月转载"全国生猪产品数据"，HTML 规范好解析）；官方出口为五部门"生猪产品信息数据平台"；**已接入：xuantian 源**（玄田镜像，2009→now 年/季/月全历史，见 §六） | 月度多为**环比变化率**，**绝对数以统计局季度末为准**（data.stats.gov.cn）——两种口径分 source 存储 |
+| `hog_inventory` | 生猪存栏 | 季度 | 国家统计局 data.stats.gov.cn；**已接入：xuantian 源**（2009→now 年/季全历史） | 可抓可查 |
+| `hog_slaughter_quarterly` | 生猪出栏量 | 季度/年度 | 国家统计局；**已接入：xuantian 源**（2009→now 年/季全历史） | 长周期对比基准 |
+| `pork_output` | 猪肉产量 | 季度/年度 | 国家统计局；**已接入：xuantian 源**（2009→now 年/季全历史） | registry 新增指标，随玄田通道落库 |
 | `hog_slaughter_monthly` | 规模以上屠宰企业屠宰量 | 月度 | 农业农村部（协会转载） | |
 | `pork_import` | 猪肉及杂碎进口量 | 月度 | 海关总署 | 猪价高位时的重要边际变量 |
 
@@ -82,8 +83,8 @@
 ## 五、历史回补工作量
 
 - 价格类：AKShare 一次拉全（10 年+），无工作量。
-- 能繁存栏：2018 至今约 100 个月度点，协会网站/历史发布会一次性整理，约半天。
-- 出栏量/成本：随公告季滚动补，无集中回补。
+- 能繁存栏：~~2018 至今约 100 个月度点，协会网站/历史发布会一次性整理，约半天~~ 已完成——玄田直连一次返回 2009→now 全历史年/季/月序列（2026-09-29 实测落库 79 行 = 能繁 22 + 产量/存栏/出栏各 19）；月度环比历史仍需 CAAA 文章通道逐月回补。
+- 出栏量/成本：出栏量/存栏/猪肉产量已随玄田通道全历史落库（已完成）；成本随公告季滚动补，无集中回补。
 
 ## 六、参考链接
 
@@ -93,6 +94,7 @@
 - [AKShare 现货数据文档](https://akshare.akfamily.xyz/data/spot/spot.html) · [AKShare 数据字典（生猪信息专区）](https://akshare.akfamily.xyz/data/index.html)
 - [Tushare Pro](https://tushare.pro/document/2)
 - [博亚和讯（日度生猪市场评论，备用人工源）](https://www.boyar.cn/)
+- [玄田数据 · 产能数据（中国养猪网，2009→now 年/季/月产能四指标）](https://zhujia.zhuwang.com.cn)（API：`POST https://xt.yangzhu.vip/data/getmapdata?ptype=7&areano=-1`，Referer 必带；2026-09-29 实测可用，月度行产量/存栏/出栏为 0 哨兵）
 
 ## 七、市场数据面数据源（2026-09-03 实测）
 

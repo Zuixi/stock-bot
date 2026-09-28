@@ -1,3 +1,60 @@
+## 2026-09-29 - 玄田增量门控 final review 修正：空写轮武装状态 + L1 谓词测试补真
+
+- **MF-1 修复**（`_gated_xuantian_fetch`）：L2 哈希失配但 L3 零行可写时（DB restore / 哈希被清 / 仅 orphaned 响应）原来不写状态表 → `next_due_at` 永不推进，调度任务每天重抓重 diff 且 `last_checked_at` 冻结无告警；现在空写轮也 upsert 状态（新 `content_hash` + `next_due_at` + stats），`last_success_at` 保留原值（语义 = "最近一次有写入的成功抓取"），30 天 L1 节奏对该场景真正生效
+- **MF-3 修复**：原 `test_l1_not_due_skips_fetch` 断言 `now < now+30d` 是同义反复；抽出纯谓词 `is_due(next_due_at, now, *, force)`（住 `industry_ingest_diff.py`），四态直接断言（未到期→拦 / force→绕过 / 无状态→放行 / 已过期→放行）+ 编排层行为测试（mock repo 驱动 `_gated_xuantian_fetch`：零请求短路、force 放行、MF-1 空写轮武装回归）
+- 计划登记：`plans/2026-09-29-xuantian-capacity-ingest-gating.md` 头部 draft→active（实施完成待合并）+ 验收清单按 Task 7 实证勾选（前端卡片目视项未验证保持未勾）；`plans/index.md` 补登记行
+- 涉及模块：backend/app/services/industry_metric_service.py, backend/app/services/industry_ingest_diff.py, backend/tests/test_industry_ingest_gating.py, plans/, docs/Changelog.md
+
+## 2026-09-29 - 玄田增量门控 Task 7：真实 API 全链路验证 + 文档同步
+
+- 行业投研：接入玄田数据产能通道（`XuantianClient` 直连 xt.yangzhu.vip，2009→now 能繁/猪肉产量/生猪存栏/出栏全历史落库，registry 新增 `pork_output`/`hog_inventory`/`hog_slaughter_quarterly` 三指标 + `xuantian` source）；ingest 增量门控三层（调度门/内容哈希/行级 diff，新表 `industry_ingest_state`，修订 old→new 留痕），稳定态 ingest 近零成本
+- 实测（127.0.0.1:5433 真 PG + 真实 xt.yangzhu.vip API）：首抓 `gating=full`，`stats.new=79`；二跑 `gating=unchanged`（玄田零写入，state 表 `content_hash` 命中）；调度轨道 `gating=not_due`（L1 零请求）；篡改一行后 force 重抓 `gating=incremental`，`revisions` 留痕 `old=9999.0 → new=3080.0` 且自愈。DB 抽查：4 metric_key × (16 yearly + 3 quarterly) + sow_inventory 3 monthly = 79 行，min(period)=2009-12-31，ASF 锚点 2019-12-31 = 3080 ✓
+- 文档同步：`docs/design/data-source.md` §二 L2 表三指标标注"已接入：xuantian 源" + 新增 `pork_output` 行、§五 能繁回补改"已完成"、§六 补玄田参考链接；`plans/industry-research-workbench.md` 产能回补项勾选（注明玄田直连取代 stats_gov CSV 通道）
+
+## 2026-09-29 - 玄田增量门控 Task 6：三层门控接入 `ingest_industry_metrics` 主流程（集成任务）
+
+- **门控编排**（`app/services/industry_metric_service.py`）：`_gated_xuantian_fetch(db, cfg, *, force)` 四元组 `(rows, gating, stats, revisions)` 编排三层门——L1 调度门（`next_due_at` 未到零请求，force=True 绕过）/ L2 内容门（`canonical_content_hash` 一致 → 只 `touch_ingest_state` 不动哈希水位）/ L3 行级 diff（`compute_ingest_actions` 只写 new+changed，orphaned 只计数，修订留痕）；节奏表与 `next_due` 住纯模块 `industry_ingest_diff.py`，service 只 import
+- **短路条件裁定**（ponytail review 修正）：derive/signal 重算条件 = `upserted > 0`（全源零写入才跳过），**不是** `gating != "unchanged"`——玄田 unchanged 但 soozhu 日价有新行是常态，错误条件会停掉猪粮比/sow_mom 派生链；零写入时 signal 读 `latest_signal` 兜底
+- **双轨接线**：scheduler `industry_metrics_refresh_job` 传 `force=False`（吃满门控）；worker `IndustryMetricsWorker` 传 `force=True`（手动兜底修订场景）；两轨仍共用同一 service 方法。返回 dict 追加 `gating` 键 +（akshare 分支）`stats`/`revisions` 键（`revisions.period` 转 ISO 字符串——worker 把 result 落 JSONB，默认序列化器不认 `date`）
+- **配套件**：`repo.list_metric_rows(db, industry_key, source)` 按 industry+source 拉全量行供 L3 比对；`_as_row_dicts` ORM 行 → diff 输入 dict（键与 fetcher 标准行对齐）
+- **验证**：`tests/test_industry_ingest_gating.py` 2 passed（纯逻辑：L1 next_due 单调性 + L3 padded 行增量分类）；全量 `pytest -x -q` 632 passed / 0 failed（基线 630 无回归）；`ruff check` + `ruff format --check` + `mypy app` 全绿
+
+## 2026-09-29 - 玄田增量门控 Task 5：`_fetch_xuantian_capacity_rows` fetcher 接线 + ingest 主流程并轨
+
+- **fetcher 接线**（`app/services/industry_metric_service.py`，service 层，client 留 providers 分层不破）：`_fetch_xuantian_capacity_rows(cfg, client=None)` 把玄田解析行按 registry 对照展开为标准 metric 行（每指标一行），`extra={"channel": "xuantian", "raw_period": ...}` 溯源；`client` 可注入假对象做纯单测（不触网）
+- **防线双保险**：任何失败返回空列表不抛穿（client 已兜底，fetcher 再兜一层防注入实现抛穿）；registry 未命中的 metric_key 静默跳过（跨行业复用防线——他行业复用本 fetcher 时未定义指标不会炸）
+- **ingest 并轨**：`ingest_industry_metrics` 的 akshare 分支在 caaa 行之后并入玄田行（upsert 前合并 → 四产能指标进入 `covered_metrics` → mock purge 覆盖）
+- **验证**：`tests/test_industry_fetchers.py` 10 passed（新增 3：季度行 4+1 展开 / 失败→空列表 / 未注册指标跳过）；全量 `pytest -x -q` 630 passed / 0 failed；`ruff check` + `ruff format --check` + `mypy app` 全绿
+
+## 2026-09-29 - 玄田增量门控 Task 4：行级 diff 纯函数 `compute_ingest_actions` + `canonical_content_hash` + `next_due` 节奏表
+
+- **纯函数 diff 核心**（`app/services/industry_ingest_diff.py`，零重依赖——不 import config/settings/DB/httpx，这正是 next_due 节奏表从 service 迁入本模块的原因）：`compute_ingest_actions(fetched, existing)` 按 `(metric_key, freq, period)` 键比对，四分类 `new`/`changed`/`unchanged_count`/`orphaned_count`；value 比较先 `float()` 归一（兼容 Numeric(18,4) 回读 Decimal）再 1e-6 容差；修订行 `revisions` 留痕 `metric_key/freq/period/old/new`（官方回修幅度本身是投研信号）；orphaned（库有响应无）只计数不删除（官方数据语义不镜像上游删除）
+- **内容哈希**：`canonical_content_hash(rows)` 排序消除顺序敏感 + `round(v,4)` 定点化消除 float 表示漂移，sha256 取前 16 hex——三层门控 L2 的"内容门"判据
+- **源节奏表**：`_SOURCE_CADENCE_DAYS`（xuantian 30 / caaa 32 / akshare_soozhu 1 / akshare_sina 1），`next_due(source, now)` 未知源默认日更（宁多查不漏数据）——L1 调度门判据
+- **验证**：`tests/test_industry_ingest_diff.py` 10 passed（含容差边界 1e-7、orphaned 不删、哈希顺序稳定性）；`ruff check` + `ruff format --check` + `mypy app` 全绿
+
+## 2026-09-29 - 玄田增量门控 Task 3：registry 扩展 — 3 个产能 MetricDef + xuantian 源注册
+
+- **新指标**（`app/services/industry_registry.py`，supply 分组、紧跟 `sow_inventory` 之后）：`pork_output`（猪肉产量，万吨）/ `hog_inventory`（生猪存栏，万头）/ `hog_slaughter_quarterly`（生猪出栏量，万头），均 `freq="quarterly"` + `tier=TIER_OFFICIAL` + `sources=["xuantian", "mock"]`；查询端 `_pick_row` 注册频率优先保证 latest 展示取季度行、yearly 长历史背景共存（零迁移设计前提）
+- **sow_inventory 源扩展**：`["stats_gov", "caaa", "mock"]` → `["stats_gov", "caaa", "xuantian", "mock"]`——玄田为统计局口径门户镜像，排部委发布渠道 caaa 之后；`stats_gov` 保留占位（EasyQuery 直连大陆网络仍可用，后续接入优先级天然正确）
+- **mock 垫底不破坏**：新增 2 测试（`test_sow_inventory_registers_xuantian_source` / `test_capacity_metrics_registered_with_official_tier`）+ 既有 `test_mock_always_last_in_registry_sources` / `test_registry_registers_caaa_source_with_mock_last` 同步更新（后者原硬编码旧源列表，随源扩展同步为四源断言）
+- **新指标不配 mock_base**：mock builder 只为配置了 `mock_base` 的指标生成序列，未配置则跳过——mock 模式下无行，无害
+- **验证**：`tests/test_industry_source_priority.py` + `tests/test_industry_mock_data.py` 12 passed；全量 `pytest -x -q` 617 passed / 0 failed；`ruff check` + `ruff format --check` + `mypy app` 全绿
+
+## 2026-09-29 - 玄田增量门控 Task 2：`XuantianClient` 产能客户端 + 周期解析纯函数
+
+- **纯函数解析层**（`app/core/providers/xuantian_client.py`）：`parse_capacity_rows` 把玄田原始 5 列行（`[周期, 能繁, 猪肉产量, 生猪存栏, 生猪出栏]`）映射为标准行 `{period, freq, values, raw_period}`；周期串三态解析（`"2009"`→年度 12-31 / `"2025年二季度（末）"`→季度末 / `"2025年7月"`→月末日），0 值列剔除（月度行的哨兵语义）、全零行丢弃、无法解析的周期 log warning 后跳过（skip 语义，单行失败不牵连整批）
+- **HTTP 客户端**：`XuantianClient.fetch_capacity()` POST `xt.yangzhu.vip/data/getmapdata?ptype=7&areano=-1`（Referer/Origin/UA 头，15s 超时），非 200 code 与任何异常均 log warning 返回 None 不抛穿（与 CAAA 客户端同约定）；`get_xuantian_client()` 模块级懒加载单例
+- **防上游漂移**：真实响应 fixture `tests/fixtures/xuantian_capacity.json`（2026-09-29 实机快照，22 行 = 16 年度 + 3 季度 + 3 月度）入库；快照测试锁形状 + ASF 锚点（2018→3189.0 / 2019→3080.0，数值变化即人工复核信号）
+- **验证**：`tests/test_xuantian_client.py` 7 passed；`ruff check` + `ruff format --check` + `mypy app` 全绿
+
+## 2026-09-29 - 玄田增量门控 Task 1：`industry_ingest_state` 表（模型 + 迁移 + 仓库层）
+
+- **三层门控的锚点表落地**：新增 `IndustryIngestState` ORM（唯一键 `(industry_key, source)`，字段含 `next_due_at`/`content_hash`/`last_period`/`stats`），迁移 `a9b3c7d1e5f2`（down_revision `2614ed9a9ab4`，`alembic heads` 单头验证通过）
+- **仓库层三函数**（`industry_metric_repo.py`）：`get_ingest_state`（miss → None）、`upsert_ingest_state`（整行覆写，唯一写者是 `_gated_xuantian_fetch`）、`touch_ingest_state`（内容未变只动 `last_checked_at`，哈希/水位不动）
+- **测试策略**：不触真库——MagicMock/AsyncMock 打桩 AsyncSession，只锁接口形状与最小语义；真库读写验证按计划放在 Task 7 的 `alembic upgrade head` + 真实 API 全链路
+- **模型注册**：`IndustryIngestState` 补进 `app/models/__init__.py`（alembic autogenerate 读 `Base.metadata`，不注册则未来 autogenerate 会把该表判为多余）
+- **验证**：`tests/test_industry_ingest_state.py` 4 passed；全量 `pytest` 608 passed / 0 failed；`ruff check` + `ruff format --check` + `mypy app` 全绿
 ## 2026-09-29 - 玄田产能数据通道 + ingest 三层增量门控：实施计划定稿（plans/2026-09-29）
 
 - **背景**：针对"投研系统资格"评估确认的两大缺口（旗舰产能数据为 mock、无增量语义导致全量重写），经三轮设计对话（通道选型 → DB 直存表结构 → 增量门控）定稿实施计划 [plans/2026-09-29-xuantian-capacity-ingest-gating.md](./plans/2026-09-29-xuantian-capacity-ingest-gating.md)（7 Task，TDD 分步）
@@ -21,7 +78,6 @@
 - **验证**：`E2E_BASE_URL=http://localhost E2E_RESEARCH_USER=... npx playwright test` 全量 **102 passed / 0 failed**（打真栈、真权限登录，跑完 Redis 活跃会话零增长）；`npx tsc --noEmit`、`ruff`、`mypy app`、`pytest tests/test_auth_guard.py` 均绿；修 e2e 前先取基线（HEAD 上该用例 570ms 通过）
 - **文档**：新增 ADR 0008「投研板块读接口需 research:read 权限」（含为何不放边缘路径白名单、为何不用"只登录"、以及"仓内尚无分配角色接口"的遗留）；`features.md` 标注需 `research:read`；`frontend-e2e.md` 补凭据注入与账号准备步骤；`plans/2026-09-11-public-market-homepage.md` 加 supersede 注记
 - 涉及模块：backend/api/v1/industries, backend/tests/test_auth_guard, frontend/app/layouts/MainLayout, frontend/app/router, frontend/pages/market-industry-level3, frontend/e2e(research/auth/limitUpSentiment/userIsolation/marketDataFace), docs/decisions, docs/features.md, docs/testing/frontend-e2e.md, docs/references/best-practices/testing.md, plans
-
 ## 2026-09-28 - 命令陷阱与敏感信息入库：新增两个门禁（shell_hazard_check · doc_gate 敏感串守卫）
 
 - **背景（本次会话暴露的两类反**复**失败）**：① shell 写法陷阱 —— `set -o pipefail` + 管道末尾 `grep -q` 在大输入下因 SIGPIPE 静默失效（探测器 8 个分类全不命中却"看起来正常"）、macOS 无 `declare -A`/`timeout`/`cat -A`；② 在"脱敏"任务里把云主机实例名又写回 Changelog。前者靠人记不住，后者说明"知道要脱敏"不等于"不会复发"

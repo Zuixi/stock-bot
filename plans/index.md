@@ -27,6 +27,7 @@
 | [2026-09-18-concept-boards-and-new-stocks.md](./2026-09-18-concept-boards-and-new-stocks.md) | 2026-09-18 | 概念板块成分 + 次新股追踪 | completed | 正文声明：T0–T16 全部落地（T17 刻意跳过） |
 | [2026-09-23-documentation-system.md](./2026-09-23-documentation-system.md) | 2026-09-23 | 文档系统建设（分层知识库 · 决策记录 · 操作层） | completed | 正文头部与 §十 实施记录；偏离项已逐条说明 |
 | [2026-09-24-docs-system-phase2.md](./2026-09-24-docs-system-phase2.md) | 2026-09-24 | 文档系统二期（权威矩阵 · CI doc_gate · first-run · slop_scan） | completed | 正文 status: completed；Changelog 2026-09-24 |
+| [2026-09-29-xuantian-capacity-ingest-gating.md](./2026-09-29-xuantian-capacity-ingest-gating.md) | 2026-09-29 | 玄田产能数据直连 + ingest 三层增量门控 | active | 7 Task 全部完成+final review 修正 |
 
 ## 维护约定
 

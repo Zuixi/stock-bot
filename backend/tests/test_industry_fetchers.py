@@ -14,6 +14,7 @@ from app.services.industry_metric_service import (
     _AKSHARE_SPECS,
     _covered_purge_keys,
     _fetch_akshare_rows,
+    _fetch_xuantian_capacity_rows,
 )
 from app.services.industry_registry import PIG_INDUSTRY
 
@@ -172,3 +173,71 @@ def test_covered_purge_keys_adds_mom_when_sow_inventory_covered():
 def test_covered_purge_keys_adds_ratio_when_both_inputs_covered():
     covered = {"hog_price", "corn_price", "lh_future_main"}
     assert _covered_purge_keys(covered) == covered | {"hog_corn_ratio"}
+
+
+class _FakeXuantianClient:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def fetch_capacity(self):
+        return self._rows
+
+
+async def test_xuantian_rows_expand_to_metric_rows():
+    client = _FakeXuantianClient(
+        [
+            {
+                "period": date(2025, 6, 30),
+                "freq": "quarterly",
+                "values": {
+                    "sow_inventory": 4043.0,
+                    "pork_output": 1418.0,
+                    "hog_inventory": 42447.0,
+                    "hog_slaughter_quarterly": 17143.0,
+                },
+                "raw_period": "2025年二季度（末）",
+            },
+            {
+                "period": date(2025, 7, 31),
+                "freq": "monthly",
+                "values": {"sow_inventory": 4042.0},
+                "raw_period": "2025年7月",
+            },
+        ]
+    )
+    rows = await _fetch_xuantian_capacity_rows(PIG_INDUSTRY, client=client)
+    assert len(rows) == 5  # 季度行 4 指标 + 月度行 1 指标
+    by_key = {(r["metric_key"], r["period"].isoformat()): r for r in rows}
+    sow_q = by_key[("sow_inventory", "2025-06-30")]
+    assert sow_q["source"] == "xuantian"
+    assert sow_q["source_tier"] == "official"
+    assert sow_q["freq"] == "quarterly"
+    assert sow_q["value"] == 4043.0
+    assert sow_q["extra"]["raw_period"] == "2025年二季度（末）"
+    sow_m = by_key[("sow_inventory", "2025-07-31")]
+    assert sow_m["freq"] == "monthly"
+
+
+async def test_xuantian_fetch_failure_returns_empty():
+    class _Boom:
+        async def fetch_capacity(self):
+            raise RuntimeError("network down")
+
+    rows = await _fetch_xuantian_capacity_rows(PIG_INDUSTRY, client=_Boom())
+    assert rows == []
+
+
+async def test_xuantian_unknown_metric_skipped():
+    # registry 未定义的指标键静默跳过（跨行业复用防线）
+    client = _FakeXuantianClient(
+        [
+            {
+                "period": date(2025, 7, 31),
+                "freq": "monthly",
+                "values": {"nonexistent_metric": 1.0},
+                "raw_period": "2025年7月",
+            }
+        ]
+    )
+    rows = await _fetch_xuantian_capacity_rows(PIG_INDUSTRY, client=client)
+    assert rows == []

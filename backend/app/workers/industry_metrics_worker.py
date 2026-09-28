@@ -42,8 +42,9 @@ class IndustryMetricsWorker(BaseWorker):
         )
 
         async with async_session_factory() as db:
+            # force=True：手动触发绕过 L1 调度门（修订场景的人工兜底）
             result = await industry_metric_service.ingest_industry_metrics(
-                db, industry_key=industry_key, source=source, months=months
+                db, industry_key=industry_key, source=source, months=months, force=True
             )
             await db.commit()
         return {"status": "completed", **result}
