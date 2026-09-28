@@ -1,3 +1,11 @@
+## 2026-09-29 - 玄田增量门控 Task 1：`industry_ingest_state` 表（模型 + 迁移 + 仓库层）
+
+- **三层门控的锚点表落地**：新增 `IndustryIngestState` ORM（唯一键 `(industry_key, source)`，字段含 `next_due_at`/`content_hash`/`last_period`/`stats`），迁移 `a9b3c7d1e5f2`（down_revision `2614ed9a9ab4`，`alembic heads` 单头验证通过）
+- **仓库层三函数**（`industry_metric_repo.py`）：`get_ingest_state`（miss → None）、`upsert_ingest_state`（整行覆写，唯一写者是 `_gated_xuantian_fetch`）、`touch_ingest_state`（内容未变只动 `last_checked_at`，哈希/水位不动）
+- **测试策略**：不触真库——MagicMock/AsyncMock 打桩 AsyncSession，只锁接口形状与最小语义；真库读写验证按计划放在 Task 7 的 `alembic upgrade head` + 真实 API 全链路
+- **模型注册**：`IndustryIngestState` 补进 `app/models/__init__.py`（alembic autogenerate 读 `Base.metadata`，不注册则未来 autogenerate 会把该表判为多余）
+- **验证**：`tests/test_industry_ingest_state.py` 4 passed；全量 `pytest` 608 passed / 0 failed；`ruff check` + `ruff format --check` + `mypy app` 全绿
+
 ## 2026-09-28 - 命令陷阱与敏感信息入库：新增两个门禁（shell_hazard_check · doc_gate 敏感串守卫）
 
 - **背景（本次会话暴露的两类反**复**失败）**：① shell 写法陷阱 —— `set -o pipefail` + 管道末尾 `grep -q` 在大输入下因 SIGPIPE 静默失效（探测器 8 个分类全不命中却"看起来正常"）、macOS 无 `declare -A`/`timeout`/`cat -A`；② 在"脱敏"任务里把云主机实例名又写回 Changelog。前者靠人记不住，后者说明"知道要脱敏"不等于"不会复发"

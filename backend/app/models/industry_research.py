@@ -137,3 +137,33 @@ class IndustryKnowledge(Base):
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     sort: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IndustryIngestState(Base):
+    """Per (industry_key, source) ingest 增量门控状态.
+
+    三层门控的锚点：L1 调度门读 next_due_at，L2 内容门读 content_hash，
+    L3 行级 diff 的修订留痕落 stats。官方统计会修订历史（如 2023 畜禽监测
+    样本轮换），因此禁止以 last_period 水位跳过历史——last_period 仅作审计。
+
+    时间戳语义（排障时不可互换）：``last_success_at`` = 最近一次**有写入**的
+    成功抓取；``last_checked_at`` = 最近一次抓取（含 L2 短路"查了没变"）；
+    ``created_at``/``updated_at`` = 行级审计。
+    """
+
+    __tablename__ = "industry_ingest_state"
+    __table_args__ = (UniqueConstraint("industry_key", "source", name="uq_ingest_state_source"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    industry_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_period: Mapped[date | None] = mapped_column(Date)
+    content_hash: Mapped[str | None] = mapped_column(String(64))
+    next_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    stats: Mapped[dict | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

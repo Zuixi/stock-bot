@@ -14,6 +14,7 @@ from app.models.financial import (
 )
 from app.models.index_daily import IndexDaily
 from app.models.industry_research import (
+    IndustryIngestState,
     IndustryKnowledge,
     IndustryMetric,
     IndustryReferencePoint,
@@ -58,6 +59,7 @@ __all__ = [
     "StockCustomSwTag",
     "Task",
     "IndustryMetric",
+    "IndustryIngestState",
     "IndustryReferencePoint",
     "IndustrySignal",
     "IndustryKnowledge",
