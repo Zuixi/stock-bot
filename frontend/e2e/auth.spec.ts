@@ -33,6 +33,11 @@ test.describe("认证微服务与前端会话状态机", () => {
     await page.goto("/tags");
     await page.waitForURL(/\/login\?returnTo=%2Ftags/);
     await expect(page.getByText("用户登录")).toBeVisible();
+
+    // 3. 尝试访问投研板块（已需登录才可阅读，见 docs/decisions/0008）
+    await page.goto("/research");
+    await page.waitForURL(/\/login\?returnTo=%2Fresearch/);
+    await expect(page.getByText("用户登录")).toBeVisible();
   });
 
   test("登录与注册表单交互：Tab 切换与表单基础校验", async ({ page }) => {

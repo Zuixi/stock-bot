@@ -28,12 +28,14 @@ const LADDER = {
   ],
 };
 
-/** 两点历史：as_of=09-08 的前一交易日为 09-05，环比 chip 与趋势线都应出现。 */
+/** 两点历史：环比按设计文档 §5 取 `trade_date < as_of` 的最近一点（09-05），
+ *  故 as_of 当日那点写实时 KPI 值（75）保持自洽，前一点给对比值（70）——
+ *  不要把 as_of 当日那点当“前日”，它只喂趋势尾点。 */
 const CALENDAR = [
-  { trade_date: "2026-09-05", zt_count: 60, dt_count: 3, zb_count: 30, broken_rate: 0.3333,
+  { trade_date: "2026-09-05", zt_count: 70, dt_count: 3, zb_count: 30, broken_rate: 0.3333,
     yzt_avg_pct: 1.8, promo_1to2: 0.2, promo_2to3: 0.4, max_streak: 5 },
-  { trade_date: "2026-09-08", zt_count: 70, dt_count: 2, zb_count: 38, broken_rate: 0.35,
-    yzt_avg_pct: 2.5, promo_1to2: 0.16, promo_2to3: 0.3, max_streak: 4 },
+  { trade_date: "2026-09-08", zt_count: 75, dt_count: 1, zb_count: 39, broken_rate: 0.3421,
+    yzt_avg_pct: 2.82, promo_1to2: 0.1585, promo_2to3: 0.3077, max_streak: 4 },
 ];
 
 function routeCalendar(page: import("@playwright/test").Page, json: unknown) {

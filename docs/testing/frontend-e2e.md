@@ -26,6 +26,20 @@ E2E_BASE_URL=http://localhost npx playwright test
 
 涉及登录态与用户隔离的用例（`auth` / `userIsolation`）需要可用的 gateway 与 auth 链路，`E2E_BASE_URL` 必须指到**经网关**的地址，而不是 Vite dev server 直连 `:8000`（直连没有身份上下文）。
 
+**投研用例（`research`）必须用具 `research:read` 的账号真登录**：`/api/v1/industries*` 需该权限（[ADR 0008](../decisions/0008-research-read-requires-permission.md)），而**自注册账号拿不到它**（注册固定给 `trader`，仓里也没有分配角色的接口），所以只 mock `/auth/session` 或临时注册都行不通——没真 cookie/真权限时接口 401/403 会触发全局清态，用例必然失败。凭据由环境变量注入，缺失则该 spec 整体跳过：
+
+```bash
+# 一次性准备：注册一个账号 → 给它挂 researcher 角色（密码自定）
+#   POST /auth/register 之后执行：
+#   INSERT INTO auth_user_roles (user_id, role_id)
+#     SELECT id, 'researcher' FROM auth_users WHERE username = 'e2e_research';
+
+E2E_BASE_URL=http://localhost E2E_RESEARCH_USER=e2e_research E2E_RESEARCH_PASSWORD=... \
+  npx playwright test
+```
+
+该 spec 在 `beforeEach` 走 `/auth/csrf` → 登录拿 HttpOnly cookie，并在 `afterEach` 登出回收会话（否则单次全量会在 auth 库/Redis 积 10 个 24h TTL 会话）。
+
 ## 断言规范
 
 - 优先 role/text 语义选择器（`getByRole`、`getByText`），少用 CSS 类名 —— 设计令牌与类名会变

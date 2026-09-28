@@ -1,4 +1,5 @@
 import { test, expect as baseExpect } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 /**
  * 投研工作台浏览器级 E2E（依赖运行中的 docker 栈，数据为实盘/混合源，故断言只锚定结构与中文标签，不锚定具体数值）。
@@ -15,6 +16,40 @@ import { test, expect as baseExpect } from "@playwright/test";
 
 // 数据由 react-query 异步加载、图表异步渲染，统一放宽断言轮询窗口
 const expect = baseExpect.configure({ timeout: 15_000 });
+
+/**
+ * 投研接口需 **`research:read` 权限**（docs/decisions/0008），故必须用真登录（只 mock `/auth/session`
+ * 是假登录态：没真 cookie 时接口 401 → 全局 auth:unauthorized 清态 → 布局反复重挂、卡片永不出现）。
+ * 但**自注册账号拿不到该权限**（注册固定给 trader，仓里也没有分配角色的接口），故凭据由环境提供，
+ * 缺失则跳过本套件；本地准备方式与 `e2e_research` 示例见 docs/testing/frontend-e2e.md。
+ */
+const E2E_USER = process.env.E2E_RESEARCH_USER ?? "";
+const E2E_PASSWORD = process.env.E2E_RESEARCH_PASSWORD ?? "";
+
+/** 登出当前会话（非幂等方法需 csrf cookie 与 X-CSRF-Token 双提交相等）。 */
+async function logout(page: Page) {
+  const csrf = (await page.context().cookies()).find((c) => c.name === "stockbot_csrf")?.value;
+  if (!csrf) return;
+  await page.request.post("/auth/logout", { headers: { "X-CSRF-Token": csrf } });
+}
+
+test.beforeEach(async ({ page }) => {
+  test.skip(
+    !E2E_USER || !E2E_PASSWORD,
+    "需 E2E_RESEARCH_USER / E2E_RESEARCH_PASSWORD（具 research:read 的账号，见 docs/testing/frontend-e2e.md）"
+  );
+  const csrf = (await (await page.request.get("/auth/csrf")).json()).csrf_token as string;
+  const res = await page.request.post("/auth/login", {
+    headers: { "X-CSRF-Token": csrf },
+    data: { username_or_email: E2E_USER, password: E2E_PASSWORD },
+  });
+  expect(res.status(), "e2e 登录失败（凭据无效 / 无 research:read / auth-service 未就绪）").toBe(200);
+});
+
+// 收尾登出：每次 beforeEach 都会新建一个会话（TTL 24h），不收回会在 auth 库/Redis 里越积越多
+test.afterEach(async ({ page }) => {
+  await logout(page);
+});
 
 test("投研列表：生猪养殖行业卡片展示指标接入覆盖度", async ({ page }) => {
   await page.goto("/research");
@@ -237,4 +272,20 @@ test("工作台面包屑：投研项可点击返回行业列表", async ({ page 
 
   await page.waitForURL("**/research");
   await expect(page.locator(".ant-card").filter({ hasText: "生猪养殖" })).toBeVisible();
+});
+
+test("生猪养殖三级行业页：匿名不请求投研接口、不渲染 banner", async ({ page }) => {
+  // 先登出再清 cookie：否则收尾的 afterEach 拿不到 csrf cookie，会漏掉一个会话
+  await logout(page);
+  await page.context().clearCookies();
+  // 以下验证门禁的匿名侧（该页为公开行情页，不得因投研门禁打出 401）
+  const industryCalls: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/v1/industries")) industryCalls.push(r.url());
+  });
+
+  await page.goto("/market/industry/110000/110700");
+
+  await expect(page.locator(".ant-card").filter({ hasText: "进入投研工作台" })).toHaveCount(0);
+  expect(industryCalls).toEqual([]);
 });

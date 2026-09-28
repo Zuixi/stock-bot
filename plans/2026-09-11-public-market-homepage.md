@@ -2,6 +2,9 @@
 
 > **定位（2026-09-11 拍板）**：首页**以免登录行情为主**——打开即是一台可用的行情台（指数、榜单、板块、资金、日历、资讯），
 > 营销叙事收窄为页面尾部的一段收口。登录只解锁**个性化**（自选、标签、提醒），不解锁**数据可见性**。
+> ⚠️ **部分被推翻（2026-09-28）**：投研板块（`/research*` 与 `/api/v1/industries*`）改为**需 `research:read` 权限**才可读，
+> 见 [docs/decisions/0008](../docs/decisions/0008-research-read-requires-permission.md)。本文其余部分（尤其公开行情台首页）仍成立，
+> 本文与 §0.1 「行情页面本就无守卫」表中 `/research` 一行的描述已过时。
 > 设计参考：[附录 A](#附录-a-设计参考实测数据)（2026-09-11 chrome-devtools 实测，**内部参考，不得进对外文案**）。
 >
 > **任务级详细计划**：[2026-09-11-public-market-homepage-tasks.md](./2026-09-11-public-market-homepage-tasks.md)

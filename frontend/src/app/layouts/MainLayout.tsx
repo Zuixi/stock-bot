@@ -8,8 +8,9 @@ import {
 } from "@ant-design/icons";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { SearchBar } from "@/features/search/components/SearchBar";
-import { UserMenu } from "@/features/auth";
+import { UserMenu, useAuthStore } from "@/features/auth";
 import { ThemeToggle } from "@/shared/ui";
+import { useMemo } from "react";
 
 const { Header, Content, Footer } = Layout;
 
@@ -24,8 +25,14 @@ const NAV_ITEMS = [
 export function MainLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  // 投研入口只对具 research:read 的账号展示（普通账号没有这个功能，见 docs/decisions/0008）
+  const { hasPermission } = useAuthStore();
+  const navItems = useMemo(
+    () => NAV_ITEMS.filter((n) => n.key !== "/research" || hasPermission("research:read")),
+    [hasPermission]
+  );
 
-  const activeKey = NAV_ITEMS.find((n) => location.pathname.startsWith(n.key))?.key ?? "/market";
+  const activeKey = navItems.find((n) => location.pathname.startsWith(n.key))?.key ?? "/market";
 
   return (
     <Layout style={{ minHeight: "100vh", background: "var(--bg-page)" }}>
@@ -52,7 +59,7 @@ export function MainLayout() {
         <Menu
           mode="horizontal"
           selectedKeys={[activeKey]}
-          items={NAV_ITEMS}
+          items={navItems}
           onClick={({ key }) => navigate(key)}
           style={{ flex: 1, border: "none", background: "transparent" }}
         />

@@ -1,3 +1,27 @@
+## 2026-09-29 - 玄田产能数据通道 + ingest 三层增量门控：实施计划定稿（plans/2026-09-29）
+
+- **背景**：针对"投研系统资格"评估确认的两大缺口（旗舰产能数据为 mock、无增量语义导致全量重写），经三轮设计对话（通道选型 → DB 直存表结构 → 增量门控）定稿实施计划 [plans/2026-09-29-xuantian-capacity-ingest-gating.md](./plans/2026-09-29-xuantian-capacity-ingest-gating.md)（7 Task，TDD 分步）
+- **通道选型（实测驱动）**：统计局 EasyQuery API 海外 403（UrlACL）；玄田数据 `POST xt.yangzhu.vip/data/getmapdata?ptype=7` 实测可用——一次调用返回 2009→now 产能四指标（能繁母猪存栏/猪肉产量/生猪存栏/生猪出栏）年/季/月全历史（22 行全量解析验证），原"stats_gov CSV 通道"整条废弃，CSV→API→DB 直存
+- **表结构零迁移方案**：`industry_metrics` 唯一约束天然支持多 freq 混存，查询端 `_pick_row` 注册频率优先——yearly 长历史与 monthly 近端共存不破功能；registry 新增 `pork_output`/`hog_inventory`/`hog_slaughter_quarterly` 三 MetricDef + `xuantian` source（排序 stats_gov > caaa > xuantian > mock），零前端改动
+- **三层增量门控（核心设计）**：新表 `industry_ingest_state`（每 industry×source 一行：content_hash/last_period/next_due_at/stats）为锚点——L1 调度门（未到期不发请求，scheduled 轨道 force=False / worker 手动 force=True 绕过）、L2 内容哈希门（规范化 sha256 一致 → 零写入零派生重算）、L3 行级 diff（new/changed/unchanged 三分类，修订 old→new 留痕进 stats jsonb）。**刻意不做"水位跳过历史"**：官方统计会修订（2023 畜禽监测样本轮换即实例），正确语义是"内容没变零成本通过、变了对症下药"；上游 orphaned 行保留只计数（官方数据不镜像上游删除）
+- **防回归设计**：`test_xuantian_client.py` 内嵌 2026-09-29 实机响应快照 fixture（22 行 + ASF 锚点 2018=3189/2019=3080 断言），上游改版或数值修订时测试先红；0 哨兵（月度行未覆盖列）在解析层剔除，与既有 `0 < value` 护栏语义吻合
+- 涉及模块（计划 touches，待实施）：backend/core/providers/xuantian_client, backend/models/industry_research, backend/migrations, backend/repositories/industry_metric_repo, backend/services/industry_metric_service, backend/services/industry_registry, backend/scheduler/jobs, backend/workers/industry_metrics_worker, backend/tests, docs/design/data-source.md, plans/industry-research-workbench.md
+
+## 2026-09-28 - 投研板块改为 `research:read` 权限可见（公开行情不受影响）
+
+- **背景**：`/research` 承载的是推断结论（周期阶段 / 买卖信号 / 仓位建议 / 标的对比 / 知识库），且 `GET /api/v1/industries` 的列表响应本身就带 `phase / signal_type / signal_date`——与「免登录行情」不同类，原状态为完全公开
+- **口径定为「权限」而非「登录」**：`POST /auth/register` 对外完全开放（无邀请码/白名单/开关），新注册账号固定 `trader` —— 故"只要求登录"等于**任何人自助注册即可读投研**。而 RBAC 里 `research:read` 早已存在且定义就是本功能（`auth-data-model.md`："允许查看生猪等行业投研工作台"），授予 researcher/analyst/admin，刻意不给 trader/operator/viewer。该口径由用户拍板
+- **服务端（唯一权威）**：`backend/app/api/v1/industries.py` 改 `APIRouter(dependencies=[require_permissions("research:read")])`——**router 级一处依赖覆盖全部端点、新增端点自动继承**，替代逐端点挂 7 处；匿名经内层 `CurrentUserDep` 得 401、已登录无权限得 403；写接口 `research:manage` 在其上叠加
+- **前端按同一权限收敛体验**（非安全边界）：`/research*` 路由用 `RequireAuth permissions={["research:read"]}` 出 403 页（`returnTo` 回跳仍由 IsAuthenticated 分支负责）；顶部导航「投研」项对无权限账号隐藏（普通账号「没有这个功能」而非点了才报错）；公开的申万三级页复用 `GET /api/v1/industries` 渲染的投研 banner 改 `enabled: hasPermission("research:read")`，被动不发请求、不渲染；`/market/**`、`/stock/:symbol` 免登录定位不变
+- **活链路授权矩阵（经网关实测）**：匿名 `GET /api/v1/industries`+`/pig/dashboard` → **401**；新注册普通账号（trader，无 `research:read`）→ **403**；researcher（`e2e_research`）与 admin（`stocks`）→ **200**；公开 `/api/v1/market/indices` → 200 未被误伤。UI 侧同验：普通账号导航无「投研」项、直连 `/research` 落 403 页（「您缺少必要的操作权限」）
+- **测试**：`test_auth_guard.py::test_stock_api_endpoints_protected` 补三态——匿名 401、trader token（无 `research:read`）403、`research:read` token 非 401/403；`research.spec.ts` 凭据改由 `E2E_RESEARCH_USER/PASSWORD` 注入（**自注册拿不到权限，故不能再"注册即用"**），缺失整 spec `test.skip`，`beforeEach` 真登录 + `afterEach` 登出回收会话；`auth.spec.ts` 未登录重定向断言补 `/research`
+- **e2e 踩坑（已沉淀 best-practices/testing）**：① 门禁上线后 mock 会话必然失效——只 mock `/auth/session` 而没真 cookie 时 `/api/v1/watchlists`（及门禁后的投研接口）401 → 全局 `auth:unauthorized` 清空 store → `isAuthenticated` 反复翻转（症状：布局每秒重挂、卡片/banner 永不渲染、Playwright 报 "element was detached from the DOM" 而非断言失败，极易误判为被测代码问题）；② 换权限门禁后**临时注册也没用**（默认角色被 403）。诊断手法：一次性 Playwright spec 量 `MutationObserver` 计数与 header 文案，别凭猜
+- **顺带修掉一个假红**：`marketDataFace.spec.ts:121` 断言 `/\d+ 天前/` 只覆盖 `stale_days > 0` 分支，而 `FreshnessNote` 契约是 `staleDays <= 0` 时不加陈旧徽标——盘后采集写入当日资金流后（实测 `stale_days: 0`）必然假红。改为按 `stale_days` 分两个分支断言（>0 显示 / =0 必须不显示）
+- **另两个存量失败用例根因查清并修复**（fixture 与真契约不符，非产品代码缺陷）：`limitUpSentiment.spec.ts:43` 环比 chip 按设计文档 §5 取 `trade_date < as_of` 的最近一点，fixture 却把 as_of 当日的日历点当"前日" → 实测渲染 +15 而断言要 +5（组件与断言同 commit 引入后再未改动 → 自提交起就不可能绿），修 fixture 为 09-05:70 / 09-08:75 自洽；`userIsolation.spec.ts:77` `GET /api/v1/watchlists` 契约是 `WatchlistOut[]`（`items` 嵌套，Stage 5 早于该 e2e 提交），mock 却返回扁平 item 数组 → 前端 `wl.items?.forEach` 静默得 0 条，修 mock 形状。两者均以"只改 fixture 即转绿"验证（337ms / 285ms，改前超时）
+- **验证**：`E2E_BASE_URL=http://localhost E2E_RESEARCH_USER=... npx playwright test` 全量 **102 passed / 0 failed**（打真栈、真权限登录，跑完 Redis 活跃会话零增长）；`npx tsc --noEmit`、`ruff`、`mypy app`、`pytest tests/test_auth_guard.py` 均绿；修 e2e 前先取基线（HEAD 上该用例 570ms 通过）
+- **文档**：新增 ADR 0008「投研板块读接口需 research:read 权限」（含为何不放边缘路径白名单、为何不用"只登录"、以及"仓内尚无分配角色接口"的遗留）；`features.md` 标注需 `research:read`；`frontend-e2e.md` 补凭据注入与账号准备步骤；`plans/2026-09-11-public-market-homepage.md` 加 supersede 注记
+- 涉及模块：backend/api/v1/industries, backend/tests/test_auth_guard, frontend/app/layouts/MainLayout, frontend/app/router, frontend/pages/market-industry-level3, frontend/e2e(research/auth/limitUpSentiment/userIsolation/marketDataFace), docs/decisions, docs/features.md, docs/testing/frontend-e2e.md, docs/references/best-practices/testing.md, plans
+
 ## 2026-09-28 - 命令陷阱与敏感信息入库：新增两个门禁（shell_hazard_check · doc_gate 敏感串守卫）
 
 - **背景（本次会话暴露的两类反**复**失败）**：① shell 写法陷阱 —— `set -o pipefail` + 管道末尾 `grep -q` 在大输入下因 SIGPIPE 静默失效（探测器 8 个分类全不命中却"看起来正常"）、macOS 无 `declare -A`/`timeout`/`cat -A`；② 在"脱敏"任务里把云主机实例名又写回 Changelog。前者靠人记不住，后者说明"知道要脱敏"不等于"不会复发"

@@ -36,6 +36,10 @@
 
 ## 行业投研
 
+> **本板块需 `research:read` 权限才可读**（[ADR 0008](./decisions/0008-research-read-requires-permission.md)，仅 researcher / analyst / admin）：
+> `/research*` 路由与 `/api/v1/industries*` 读接口同样受限（匿名 401、无权限 403）；
+> 公开行情（行情台首页 / 个股 / 指数）不受影响。
+
 | 功能 | 说明 | 代码入口 |
 |---|---|---|
 | 行业列表 | 已产品化行业（当前：生猪养殖"猪智投"） | `frontend/src/pages/research` · `/api/v1/industries` |

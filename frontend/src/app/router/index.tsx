@@ -58,11 +58,15 @@ export function AppRouter() {
             </Suspense>
           }
         />
+        {/* 投研板块需 research:read 权限（docs/decisions/0008）：守卫只做体验（重定向/403 页），
+            真实门禁在后端 /api/v1/industries 的 router 级权限依赖 */}
         <Route
           path="/research"
           element={
             <Suspense fallback={<PageLoading />}>
-              <ResearchPage />
+              <RequireAuth permissions={["research:read"]}>
+                <ResearchPage />
+              </RequireAuth>
             </Suspense>
           }
         />
@@ -70,7 +74,9 @@ export function AppRouter() {
           path="/research/:industryKey"
           element={
             <Suspense fallback={<PageLoading />}>
-              <ResearchWorkbenchPage />
+              <RequireAuth permissions={["research:read"]}>
+                <ResearchWorkbenchPage />
+              </RequireAuth>
             </Suspense>
           }
         />

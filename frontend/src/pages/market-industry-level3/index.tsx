@@ -7,6 +7,7 @@ import { StockTable } from "@/features/market/components/StockTable";
 import type { StockRecord } from "@/shared/types";
 import { fetchSwIndustryTree, fetchSwLevel2Stocks, fetchSwLevel3Stocks, fetchSwLevel2StocksEnriched, fetchSwLevel3StocksEnriched } from "@/shared/api/swIndustry";
 import { fetchIndustries } from "@/shared/api/industryResearch";
+import { useAuthStore } from "@/features/auth";
 
 type SortState = {
   sortBy?: keyof StockRecord;
@@ -28,6 +29,7 @@ function applySort(stocks: StockRecord[], sort: SortState): StockRecord[] {
 export default function IndustryLevel3Page() {
   const navigate = useNavigate();
   const { level1Code = "", level2Code = "" } = useParams();
+  const { hasPermission } = useAuthStore();
   const [selectedLevel3Code, setSelectedLevel3Code] = useState<string | undefined>();
   const [sort, setSort] = useState<SortState>({ sortBy: "symbol", sortOrder: "asc" });
 
@@ -43,9 +45,11 @@ export default function IndustryLevel3Page() {
 
   // ── 已产品化行业导航：当前二级（或选中三级）命中 registry sw_l3_codes 时出 banner ──
   // 复用 /research 列表页的 "industries" 查询缓存
+  // 该接口需 research:read（docs/decisions/0008）：无权限者不发请求，banner 自然不渲染
   const { data: productizedIndustries = [] } = useQuery({
     queryKey: ["industries"],
     queryFn: fetchIndustries,
+    enabled: hasPermission("research:read"),
     staleTime: 5 * 60 * 1000,
   });
   const workbenchIndustry = useMemo(() => {

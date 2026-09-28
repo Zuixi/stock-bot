@@ -32,7 +32,10 @@ from app.services import industry_knowledge_service as knowledge_service
 from app.services import industry_metric_service as service
 from app.services import securities_service
 
-router = APIRouter()
+# 投研读接口需 research:read（docs/decisions/0008）：router 级依赖一处覆盖全部端点，
+# 新增端点自动继承（不会漏挂）；匿名走内层 CurrentUserDep 得 401，已登录但无权限得 403。
+# 写接口的 research:manage 在此之上叠加。
+router = APIRouter(dependencies=[require_permissions("research:read")])
 
 
 @router.get("", response_model=list[IndustrySummaryOut])

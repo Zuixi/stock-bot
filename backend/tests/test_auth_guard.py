@@ -423,7 +423,7 @@ async def test_stock_api_endpoints_protected(
     guard_app: FastAPI,
     rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
 ) -> None:
-    """Stock API sensitive endpoints (tasks trigger, batch metrics, sse backfill) require auth."""
+    """Stock API sensitive endpoints require auth (tasks, batch metrics, sse backfill, 投研读)."""
     priv, _, kid = rsa_key_pair
     transport = ASGITransport(app=guard_app)
 
@@ -466,3 +466,28 @@ async def test_stock_api_endpoints_protected(
             json={"start_date": "2026-01-01", "end_date": "2026-01-02"},
         )
         assert res5.status_code == status.HTTP_401_UNAUTHORIZED
+
+        # 6-7. 投研读接口路由级需 `research:read`（docs/decisions/0008）
+        #      锁的是内容而非个别端点，故抽查列表与看板两个代表（新端点由同一处依赖继承）
+        for path in ("/api/v1/industries", "/api/v1/industries/sw_pork/dashboard"):
+            anon = await client.get(path)
+            assert anon.status_code == status.HTTP_401_UNAUTHORIZED, path
+
+        # 8. 已登录但无 research:read（普通注册账号的默认角色）-> 403，不能只靠“登录”放行
+        trader_token = make_test_jwt(
+            priv, kid, roles=["trader"], permissions=["market:read", "stocks:read"]
+        )
+        res8 = await client.get(
+            "/api/v1/industries",
+            headers={"X-Principal-Assertion": trader_token},
+        )
+        assert res8.status_code == status.HTTP_403_FORBIDDEN
+
+        # 9. 带 research:read -> 门禁放行（非 401/403）；此处只验授权层，不验 payload
+        #    （DB 由其它测试覆盖，故不硬断言 200）
+        reader_token = make_test_jwt(priv, kid, roles=["researcher"], permissions=["research:read"])
+        authed = await client.get(
+            "/api/v1/industries",
+            headers={"X-Principal-Assertion": reader_token},
+        )
+        assert authed.status_code not in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN)

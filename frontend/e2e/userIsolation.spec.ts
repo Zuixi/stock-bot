@@ -116,13 +116,19 @@ test.describe("多用户数据归属与隔离验证", () => {
         return route.fulfill({
           status: 200,
           contentType: "application/json",
+          // 必须是后端真实契约 WatchlistOut[]（items 嵌套），不能是扁平的 item 数组：
+          // 前端按 wl.items 取 symbol，形状不符会静默得到空自选（见 best-practices/testing 的 mock 同源条）
           body: JSON.stringify([
             {
-              id: "wl-item-1",
-              symbol: "600519",
-              exchange: "Shanghai_Stocks",
-              sort_order: 1,
-              created_at: "2026-09-09T00:00:00Z",
+              id: "wl-1", user_id: userA.id, name: "我的自选", is_default: true,
+              created_at: "2026-09-09T00:00:00Z", updated_at: "2026-09-09T00:00:00Z",
+              items: [
+                {
+                  id: "wl-item-1", watchlist_id: "wl-1", symbol: "600519",
+                  exchange: "Shanghai_Stocks", sort_order: 1,
+                  created_at: "2026-09-09T00:00:00Z", updated_at: "2026-09-09T00:00:00Z",
+                },
+              ],
             },
           ]),
         });
@@ -132,11 +138,15 @@ test.describe("多用户数据归属与隔离验证", () => {
         contentType: "application/json",
         body: JSON.stringify([
           {
-            id: "wl-item-2",
-            symbol: "000001",
-            exchange: "Shenzen_Stocks",
-            sort_order: 1,
-            created_at: "2026-09-09T00:00:00Z",
+            id: "wl-2", user_id: userB.id, name: "我的自选", is_default: true,
+            created_at: "2026-09-09T00:00:00Z", updated_at: "2026-09-09T00:00:00Z",
+            items: [
+              {
+                id: "wl-item-2", watchlist_id: "wl-2", symbol: "000001",
+                exchange: "Shenzen_Stocks", sort_order: 1,
+                created_at: "2026-09-09T00:00:00Z", updated_at: "2026-09-09T00:00:00Z",
+              },
+            ],
           },
         ]),
       });

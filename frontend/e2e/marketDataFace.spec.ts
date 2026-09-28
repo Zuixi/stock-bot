@@ -135,8 +135,14 @@ test.describe("市场卡片口径标注", () => {
     await page.getByRole("tab", { name: "资金流向" }).click();
     const moneyflow = page.locator(".ant-card").filter({ hasText: "板块主力资金流" });
     await expect15s(moneyflow.getByText(/数据截至/).first()).toBeVisible();
-    // 快照回落口径：后端 stale_days 必须显示为「N 天前」
-    await expect15s(moneyflow.getByText(/\d+ 天前/).first()).toBeVisible();
+    // 快照陈旧度：`stale_days > 0` 才显示「N 天前」徽标，`= 0`（当日快照已写入）**按设计不加**
+    // （见 FreshnessNote 契约）。两个分支都要断言——只断 >0 分支会在盘后采集落当日数据后假红。
+    const mf = await (await page.request.get("/api/v1/market/sector-moneyflow")).json();
+    if ((mf?.stale_days ?? 0) > 0) {
+      await expect15s(moneyflow.getByText(/\d+ 天前/).first()).toBeVisible();
+    } else {
+      await expect15s(moneyflow.getByText(/\d+ 天前/)).toHaveCount(0);
+    }
   });
 
   test("纯实时卡不谎报日级口径", async ({ page }) => {
