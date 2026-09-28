@@ -1,9 +1,9 @@
 ---
-status: draft
+status: active
 scope: 玄田数据通道接入（XuantianClient + 产能四指标 + 2009→now 全历史回补）与 ingest 增量门控（三层：调度门/内容哈希门/行级 diff），消灭每次 ingest 全量重写与下游全表重算
 touches: backend/app/core/providers/xuantian_client.py, backend/app/models/industry_research.py, backend/app/migrations/versions/, backend/app/repositories/industry_metric_repo.py, backend/app/services/industry_metric_service.py, backend/app/services/industry_registry.py, backend/app/scheduler/jobs.py, backend/app/workers/industry_metrics_worker.py, backend/app/config.py, backend/tests/
 updated: 2026-09-29
-next-action: SDD 执行中——按 Task 1 开工（模型 + 迁移 + 状态表仓库层）；ponytail review 修正已并入（sqlite 测试废弃改 mock、derive 短路条件改 upserted>0、next_due 迁至纯函数模块、psql 凭据实证）
+next-action: 实施完成待合并——Task 1-7 全部落地并通过 final review（修正 MF-1 空写轮状态武装 / MF-2 计划登记 / MF-3 L1 谓词测试），合并后状态改 completed
 ---
 
 # 玄田产能数据直连 + ingest 增量门控 实施计划
@@ -1385,15 +1385,17 @@ git commit -m "docs(industry): xuantian channel + incremental gating; mark capac
 
 ## 验收清单（全 Task 完成后）
 
-- [ ] `uv run pytest`（backend，全量）绿
-- [ ] `uv run --extra dev ruff check .` / `uv run --extra dev mypy app` 绿
-- [ ] `bash scripts/self_review.sh` 绿（含 doc_gate）
-- [ ] DB 内 `source='xuantian'` 行数 ≥ 79，period 覆盖 2009-12-31 → 最近月
-- [ ] 重复 ingest：`gating=unchanged`、零写入、零派生重算
-- [ ] 未到期 ingest（scheduled 轨道）：`gating=not_due`、零请求
-- [ ] 手动改一行 DB value 后 ingest：`gating=incremental`、该行 changed、revisions 留痕 old→new
-- [ ] 前端工作台：supply 分组出现猪肉产量/生猪存栏/出栏三卡片（registry 驱动，零前端改动验证）
-- [ ] `plans/index.md` 本计划状态改 completed（依据：验收清单全勾）
+> 2026-09-29 回访勾选（依据：Task 7 真库真 API 验证记录 + final review）。
+
+- [x] `uv run pytest`（backend，全量）绿（632 passed；final-fix 后含新增门控测试复跑全绿）
+- [x] `uv run --extra dev ruff check .` / `uv run --extra dev mypy app` 绿（Task 7 门禁记录 + final-fix 复跑）
+- [x] `bash scripts/self_review.sh` 绿（含 doc_gate）（Task 7 Step 4：15 项 doc_gate 通过）
+- [x] DB 内 `source='xuantian'` 行数 ≥ 79，period 覆盖 2009-12-31 → 最近月（实测 79 行，2009-12-31 → 2025-10-31）
+- [x] 重复 ingest：`gating=unchanged`、零写入、零派生重算（玄田通道零写入 79→79；日价源照常滚动为裁定内行为）
+- [x] 未到期 ingest（scheduled 轨道）：`gating=not_due`、零请求
+- [x] 手动改一行 DB value 后 ingest：`gating=incremental`、该行 changed、revisions 留痕 old→new（old=9999.0 → new=3080.0 自愈）
+- [ ] 前端工作台：supply 分组出现猪肉产量/生猪存栏/出栏三卡片（registry 驱动，零前端改动验证）——**未实际目视验证**（Task 7 与 final-fix 均未起前端核对本项，合并前或回访时补）
+- [ ] `plans/index.md` 本计划状态改 completed（依据：验收清单全勾）——已登记为 active（实施完成待合并），合并后改 completed
 
 ## 已知限制与后续（不在本计划范围）
 

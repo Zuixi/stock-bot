@@ -41,6 +41,7 @@ from app.services import cycle_engine
 from app.services.industry_ingest_diff import (
     canonical_content_hash,
     compute_ingest_actions,
+    is_due,
     next_due,
 )
 from app.services.industry_mock_data import build_industry_mock_points
@@ -296,8 +297,8 @@ async def _gated_xuantian_fetch(
     now = datetime.now(UTC)
     state = await repo.get_ingest_state(db, cfg.key, "xuantian")
 
-    # L1：调度门（仅非 force；首抓无 state 时直接放行）
-    if not force and state and state.next_due_at and now < state.next_due_at:
+    # L1：调度门（force 绕过；无状态/无到期时间/到期已过均放行，判定住纯模块）
+    if not is_due(state.next_due_at if state else None, now, force=force):
         return [], "not_due", {}, []
 
     parsed = await _fetch_xuantian_capacity_rows(cfg)
@@ -331,6 +332,22 @@ async def _gated_xuantian_fetch(
                 "source": "xuantian",
                 "last_success_at": now,
                 "last_period": max_period,
+                "content_hash": new_hash,
+                "next_due_at": next_due("xuantian", now),
+                "stats": xt_stats,
+            },
+        )
+    else:
+        # 空写但哈希已变（DB restore / 哈希被清 / 仅 orphaned 响应）：仍须武装状态，
+        # 否则 next_due_at 永不推进，调度任务每天重抓重 diff（MF-1）。
+        # last_success_at 语义 = "最近一次有写入的成功抓取"，空写轮保留原值。
+        await repo.upsert_ingest_state(
+            db,
+            {
+                "industry_key": cfg.key,
+                "source": "xuantian",
+                "last_success_at": state.last_success_at if state else None,
+                "last_period": max(r["period"] for r in parsed),
                 "content_hash": new_hash,
                 "next_due_at": next_due("xuantian", now),
                 "stats": xt_stats,

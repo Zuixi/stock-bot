@@ -43,6 +43,17 @@ def next_due(source: str, now: datetime) -> datetime:
     return now + timedelta(days=_SOURCE_CADENCE_DAYS.get(source, 1))
 
 
+def is_due(next_due_at: datetime | None, now: datetime, *, force: bool = False) -> bool:
+    """L1 调度门判定：未到期 → False（拦下不发请求）；到期/无状态 → True.
+
+    force=True（worker 手动触发）绕过调度门——修订场景的人工兜底。
+    无状态（首抓）或 next_due_at 为空时放行：宁多查不漏数据。
+    """
+    if force:
+        return True
+    return next_due_at is None or now >= next_due_at
+
+
 def _diff_key(r: dict) -> tuple[str, str, date]:
     return (r["metric_key"], r["freq"], r["period"])
 

@@ -1,3 +1,10 @@
+## 2026-09-29 - 玄田增量门控 final review 修正：空写轮武装状态 + L1 谓词测试补真
+
+- **MF-1 修复**（`_gated_xuantian_fetch`）：L2 哈希失配但 L3 零行可写时（DB restore / 哈希被清 / 仅 orphaned 响应）原来不写状态表 → `next_due_at` 永不推进，调度任务每天重抓重 diff 且 `last_checked_at` 冻结无告警；现在空写轮也 upsert 状态（新 `content_hash` + `next_due_at` + stats），`last_success_at` 保留原值（语义 = "最近一次有写入的成功抓取"），30 天 L1 节奏对该场景真正生效
+- **MF-3 修复**：原 `test_l1_not_due_skips_fetch` 断言 `now < now+30d` 是同义反复；抽出纯谓词 `is_due(next_due_at, now, *, force)`（住 `industry_ingest_diff.py`），四态直接断言（未到期→拦 / force→绕过 / 无状态→放行 / 已过期→放行）+ 编排层行为测试（mock repo 驱动 `_gated_xuantian_fetch`：零请求短路、force 放行、MF-1 空写轮武装回归）
+- 计划登记：`plans/2026-09-29-xuantian-capacity-ingest-gating.md` 头部 draft→active（实施完成待合并）+ 验收清单按 Task 7 实证勾选（前端卡片目视项未验证保持未勾）；`plans/index.md` 补登记行
+- 涉及模块：backend/app/services/industry_metric_service.py, backend/app/services/industry_ingest_diff.py, backend/tests/test_industry_ingest_gating.py, plans/, docs/Changelog.md
+
 ## 2026-09-29 - 玄田增量门控 Task 7：真实 API 全链路验证 + 文档同步
 
 - 行业投研：接入玄田数据产能通道（`XuantianClient` 直连 xt.yangzhu.vip，2009→now 能繁/猪肉产量/生猪存栏/出栏全历史落库，registry 新增 `pork_output`/`hog_inventory`/`hog_slaughter_quarterly` 三指标 + `xuantian` source）；ingest 增量门控三层（调度门/内容哈希/行级 diff，新表 `industry_ingest_state`，修订 old→new 留痕），稳定态 ingest 近零成本
