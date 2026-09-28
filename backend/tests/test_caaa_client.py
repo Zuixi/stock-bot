@@ -237,4 +237,9 @@ def test_caaa_row_puts_sow_into_covered_purge():
 
 
 def test_registry_registers_caaa_source_with_mock_last():
-    assert PIG_INDUSTRY.metric("sow_inventory").sources == ["stats_gov", "caaa", "mock"]
+    assert PIG_INDUSTRY.metric("sow_inventory").sources == [
+        "stats_gov",
+        "caaa",
+        "xuantian",
+        "mock",
+    ]

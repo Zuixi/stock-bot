@@ -54,3 +54,22 @@ def test_fallback_prefers_most_recent_period():
         ]
     }
     assert _pick_latest(PIG_INDUSTRY, grouped, "hog_price").source == "other"
+
+
+def test_sow_inventory_registers_xuantian_source():
+    # 玄田 = 统计局口径的门户镜像，排在部委发布渠道 caaa 之后；mock 垫底
+    assert PIG_INDUSTRY.metric("sow_inventory").sources == [
+        "stats_gov",
+        "caaa",
+        "xuantian",
+        "mock",
+    ]
+
+
+def test_capacity_metrics_registered_with_official_tier():
+    for key in ("pork_output", "hog_inventory", "hog_slaughter_quarterly"):
+        m = PIG_INDUSTRY.metric(key)
+        assert m is not None, f"{key} not registered"
+        assert m.tier == "official"
+        assert "xuantian" in m.sources
+        assert m.sources[-1] == "mock"

@@ -1,3 +1,11 @@
+## 2026-09-29 - 玄田增量门控 Task 3：registry 扩展 — 3 个产能 MetricDef + xuantian 源注册
+
+- **新指标**（`app/services/industry_registry.py`，supply 分组、紧跟 `sow_inventory` 之后）：`pork_output`（猪肉产量，万吨）/ `hog_inventory`（生猪存栏，万头）/ `hog_slaughter_quarterly`（生猪出栏量，万头），均 `freq="quarterly"` + `tier=TIER_OFFICIAL` + `sources=["xuantian", "mock"]`；查询端 `_pick_row` 注册频率优先保证 latest 展示取季度行、yearly 长历史背景共存（零迁移设计前提）
+- **sow_inventory 源扩展**：`["stats_gov", "caaa", "mock"]` → `["stats_gov", "caaa", "xuantian", "mock"]`——玄田为统计局口径门户镜像，排部委发布渠道 caaa 之后；`stats_gov` 保留占位（EasyQuery 直连大陆网络仍可用，后续接入优先级天然正确）
+- **mock 垫底不破坏**：新增 2 测试（`test_sow_inventory_registers_xuantian_source` / `test_capacity_metrics_registered_with_official_tier`）+ 既有 `test_mock_always_last_in_registry_sources` / `test_registry_registers_caaa_source_with_mock_last` 同步更新（后者原硬编码旧源列表，随源扩展同步为四源断言）
+- **新指标不配 mock_base**：mock builder 只为配置了 `mock_base` 的指标生成序列，未配置则跳过——mock 模式下无行，无害
+- **验证**：`tests/test_industry_source_priority.py` + `tests/test_industry_mock_data.py` 12 passed；全量 `pytest -x -q` 617 passed / 0 failed；`ruff check` + `ruff format --check` + `mypy app` 全绿
+
 ## 2026-09-29 - 玄田增量门控 Task 2：`XuantianClient` 产能客户端 + 周期解析纯函数
 
 - **纯函数解析层**（`app/core/providers/xuantian_client.py`）：`parse_capacity_rows` 把玄田原始 5 列行（`[周期, 能繁, 猪肉产量, 生猪存栏, 生猪出栏]`）映射为标准行 `{period, freq, values, raw_period}`；周期串三态解析（`"2009"`→年度 12-31 / `"2025年二季度（末）"`→季度末 / `"2025年7月"`→月末日），0 值列剔除（月度行的哨兵语义）、全零行丢弃、无法解析的周期 log warning 后跳过（skip 语义，单行失败不牵连整批）
