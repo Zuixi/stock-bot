@@ -1,3 +1,9 @@
+## 2026-09-29 - 玄田增量门控 Task 7：真实 API 全链路验证 + 文档同步
+
+- 行业投研：接入玄田数据产能通道（`XuantianClient` 直连 xt.yangzhu.vip，2009→now 能繁/猪肉产量/生猪存栏/出栏全历史落库，registry 新增 `pork_output`/`hog_inventory`/`hog_slaughter_quarterly` 三指标 + `xuantian` source）；ingest 增量门控三层（调度门/内容哈希/行级 diff，新表 `industry_ingest_state`，修订 old→new 留痕），稳定态 ingest 近零成本
+- 实测（127.0.0.1:5433 真 PG + 真实 xt.yangzhu.vip API）：首抓 `gating=full`，`stats.new=79`；二跑 `gating=unchanged`（玄田零写入，state 表 `content_hash` 命中）；调度轨道 `gating=not_due`（L1 零请求）；篡改一行后 force 重抓 `gating=incremental`，`revisions` 留痕 `old=9999.0 → new=3080.0` 且自愈。DB 抽查：4 metric_key × (16 yearly + 3 quarterly) + sow_inventory 3 monthly = 79 行，min(period)=2009-12-31，ASF 锚点 2019-12-31 = 3080 ✓
+- 文档同步：`docs/design/data-source.md` §二 L2 表三指标标注"已接入：xuantian 源" + 新增 `pork_output` 行、§五 能繁回补改"已完成"、§六 补玄田参考链接；`plans/industry-research-workbench.md` 产能回补项勾选（注明玄田直连取代 stats_gov CSV 通道）
+
 ## 2026-09-29 - 玄田增量门控 Task 6：三层门控接入 `ingest_industry_metrics` 主流程（集成任务）
 
 - **门控编排**（`app/services/industry_metric_service.py`）：`_gated_xuantian_fetch(db, cfg, *, force)` 四元组 `(rows, gating, stats, revisions)` 编排三层门——L1 调度门（`next_due_at` 未到零请求，force=True 绕过）/ L2 内容门（`canonical_content_hash` 一致 → 只 `touch_ingest_state` 不动哈希水位）/ L3 行级 diff（`compute_ingest_actions` 只写 new+changed，orphaned 只计数，修订留痕）；节奏表与 `next_due` 住纯模块 `industry_ingest_diff.py`，service 只 import
