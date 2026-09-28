@@ -1394,8 +1394,8 @@ git commit -m "docs(industry): xuantian channel + incremental gating; mark capac
 - [x] 重复 ingest：`gating=unchanged`、零写入、零派生重算（玄田通道零写入 79→79；日价源照常滚动为裁定内行为）
 - [x] 未到期 ingest（scheduled 轨道）：`gating=not_due`、零请求
 - [x] 手动改一行 DB value 后 ingest：`gating=incremental`、该行 changed、revisions 留痕 old→new（old=9999.0 → new=3080.0 自愈）
-- [ ] 前端工作台：supply 分组出现猪肉产量/生猪存栏/出栏三卡片（registry 驱动，零前端改动验证）——**未实际目视验证**（Task 7 与 final-fix 均未起前端核对本项，合并前或回访时补）
-- [ ] `plans/index.md` 本计划状态改 completed（依据：验收清单全勾）——已登记为 active（实施完成待合并），合并后改 completed
+- [x] 前端工作台卡片（API 层验证）：2026-09-29 合并后容器化验证补充——dashboard API（网关→api 容器）返回 `trends.sow_inventory` 4 点真实序列（2025-07→2026-03，xuantian 3 + caaa 1，3750 参考线随 effective_from 正确生效）；quick_view 不含 supply 指标为既有分组设计。前端页面目视仍待人工打开核对
+- [ ] `plans/index.md` 本计划状态改 completed——2026-09-29 已合并至 main（afd412f）且容器化验证四态全过（full/incremental/unchanged/not_due），保留 active 待前端目视后翻 completed
 
 ## 已知限制与后续（不在本计划范围）
 

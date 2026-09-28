@@ -1,3 +1,11 @@
+## 2026-09-29 - 玄田增量门控合并 main + 容器化验证（补齐部署形态证据链）
+
+- **合并**：`feat/xuantian-ingest-gating` → main（`afd412f`，9 提交 + final-fix）；Changelog 冲突按倒序合并（实施条目前置）；合并后全量 635 passed、app/tests 范围 ruff+mypy 绿
+- **容器重建**：`docker compose build api worker scheduler` + `up -d`（新镜像 `34741d4d235e`；构建需 buildx 写 `~/.docker/buildx` 状态目录，沙箱内被拦需提权执行）；compose `migrate` 自动应用 `a9b3c7d1e5f2`；容器内核验 `scheduler force=False` / `worker force=True` 接线在位
+- **容器化四态验证**（此前缺口：Task 7 只验证了宿主机直调 service 层）：worker 轨道经网关 `POST /api/v1/tasks/fetch-industry-metrics`（临时 admin 账号走真登录+CSRF，测毕已删）→ MQ → worker 容器全链路 `completed`，`stats.unchanged=79`（玄田零写入）、`revisions` 落 JSONB 不炸；scheduler 轨道（容器内 force=False）`gating=not_due` 零玄田请求；宿主机 force 直跑 `unchanged` ✓。worker 首跑曾报 `full`——Task 7 宿主机会话的 state 行未持久化所致（metrics 79 行在、state 行不在），worker 重写 state 后不再复现；运维启示：**跨进程验证 state 写入必须核对行存在，不能只看返回 dict**
+- **dashboard API（网关→容器）**：`trends.sow_inventory` 返回 4 点真实月度序列（2025-07→2026-03，xuantian 3 + caaa 1 双源混存），3750 正常保有量参考线随 `effective_from` 正确挂载——多 freq 共存的查询端裁决在部署形态下成立
+- 遗留：前端页面目视核对（打开 /research 工作台看 supply 卡片）仍待人工；`plans/index.md` 状态翻 completed 待目视后
+
 ## 2026-09-29 - 玄田增量门控 final review 修正：空写轮武装状态 + L1 谓词测试补真
 
 - **MF-1 修复**（`_gated_xuantian_fetch`）：L2 哈希失配但 L3 零行可写时（DB restore / 哈希被清 / 仅 orphaned 响应）原来不写状态表 → `next_due_at` 永不推进，调度任务每天重抓重 diff 且 `last_checked_at` 冻结无告警；现在空写轮也 upsert 状态（新 `content_hash` + `next_due_at` + stats），`last_success_at` 保留原值（语义 = "最近一次有写入的成功抓取"），30 天 L1 节奏对该场景真正生效
