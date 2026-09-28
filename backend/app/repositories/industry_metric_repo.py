@@ -252,6 +252,21 @@ async def delete_rows_by_source(
     return result.rowcount or 0  # type: ignore[attr-defined]
 
 
+async def list_metric_rows(
+    db: AsyncSession, industry_key: str, source: str
+) -> list[IndustryMetric]:
+    """按 industry+source 拉全量行（升序），供 L3 行级 diff 比对."""
+    stmt = (
+        select(IndustryMetric)
+        .where(
+            IndustryMetric.industry_key == industry_key,
+            IndustryMetric.source == source,
+        )
+        .order_by(IndustryMetric.period.asc())
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
 # ── Ingest state（增量门控锚点，L1/L2/L3）───────────────────────────────
 
 

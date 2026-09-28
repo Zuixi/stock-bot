@@ -1,3 +1,11 @@
+## 2026-09-29 - 玄田增量门控 Task 6：三层门控接入 `ingest_industry_metrics` 主流程（集成任务）
+
+- **门控编排**（`app/services/industry_metric_service.py`）：`_gated_xuantian_fetch(db, cfg, *, force)` 四元组 `(rows, gating, stats, revisions)` 编排三层门——L1 调度门（`next_due_at` 未到零请求，force=True 绕过）/ L2 内容门（`canonical_content_hash` 一致 → 只 `touch_ingest_state` 不动哈希水位）/ L3 行级 diff（`compute_ingest_actions` 只写 new+changed，orphaned 只计数，修订留痕）；节奏表与 `next_due` 住纯模块 `industry_ingest_diff.py`，service 只 import
+- **短路条件裁定**（ponytail review 修正）：derive/signal 重算条件 = `upserted > 0`（全源零写入才跳过），**不是** `gating != "unchanged"`——玄田 unchanged 但 soozhu 日价有新行是常态，错误条件会停掉猪粮比/sow_mom 派生链；零写入时 signal 读 `latest_signal` 兜底
+- **双轨接线**：scheduler `industry_metrics_refresh_job` 传 `force=False`（吃满门控）；worker `IndustryMetricsWorker` 传 `force=True`（手动兜底修订场景）；两轨仍共用同一 service 方法。返回 dict 追加 `gating` 键 +（akshare 分支）`stats`/`revisions` 键（`revisions.period` 转 ISO 字符串——worker 把 result 落 JSONB，默认序列化器不认 `date`）
+- **配套件**：`repo.list_metric_rows(db, industry_key, source)` 按 industry+source 拉全量行供 L3 比对；`_as_row_dicts` ORM 行 → diff 输入 dict（键与 fetcher 标准行对齐）
+- **验证**：`tests/test_industry_ingest_gating.py` 2 passed（纯逻辑：L1 next_due 单调性 + L3 padded 行增量分类）；全量 `pytest -x -q` 632 passed / 0 failed（基线 630 无回归）；`ruff check` + `ruff format --check` + `mypy app` 全绿
+
 ## 2026-09-29 - 玄田增量门控 Task 5：`_fetch_xuantian_capacity_rows` fetcher 接线 + ingest 主流程并轨
 
 - **fetcher 接线**（`app/services/industry_metric_service.py`，service 层，client 留 providers 分层不破）：`_fetch_xuantian_capacity_rows(cfg, client=None)` 把玄田解析行按 registry 对照展开为标准 metric 行（每指标一行），`extra={"channel": "xuantian", "raw_period": ...}` 溯源；`client` 可注入假对象做纯单测（不触网）
