@@ -1,3 +1,10 @@
+## 2026-09-29 - 玄田增量门控 Task 4：行级 diff 纯函数 `compute_ingest_actions` + `canonical_content_hash` + `next_due` 节奏表
+
+- **纯函数 diff 核心**（`app/services/industry_ingest_diff.py`，零重依赖——不 import config/settings/DB/httpx，这正是 next_due 节奏表从 service 迁入本模块的原因）：`compute_ingest_actions(fetched, existing)` 按 `(metric_key, freq, period)` 键比对，四分类 `new`/`changed`/`unchanged_count`/`orphaned_count`；value 比较先 `float()` 归一（兼容 Numeric(18,4) 回读 Decimal）再 1e-6 容差；修订行 `revisions` 留痕 `metric_key/freq/period/old/new`（官方回修幅度本身是投研信号）；orphaned（库有响应无）只计数不删除（官方数据语义不镜像上游删除）
+- **内容哈希**：`canonical_content_hash(rows)` 排序消除顺序敏感 + `round(v,4)` 定点化消除 float 表示漂移，sha256 取前 16 hex——三层门控 L2 的"内容门"判据
+- **源节奏表**：`_SOURCE_CADENCE_DAYS`（xuantian 30 / caaa 32 / akshare_soozhu 1 / akshare_sina 1），`next_due(source, now)` 未知源默认日更（宁多查不漏数据）——L1 调度门判据
+- **验证**：`tests/test_industry_ingest_diff.py` 10 passed（含容差边界 1e-7、orphaned 不删、哈希顺序稳定性）；`ruff check` + `ruff format --check` + `mypy app` 全绿
+
 ## 2026-09-29 - 玄田增量门控 Task 3：registry 扩展 — 3 个产能 MetricDef + xuantian 源注册
 
 - **新指标**（`app/services/industry_registry.py`，supply 分组、紧跟 `sow_inventory` 之后）：`pork_output`（猪肉产量，万吨）/ `hog_inventory`（生猪存栏，万头）/ `hog_slaughter_quarterly`（生猪出栏量，万头），均 `freq="quarterly"` + `tier=TIER_OFFICIAL` + `sources=["xuantian", "mock"]`；查询端 `_pick_row` 注册频率优先保证 latest 展示取季度行、yearly 长历史背景共存（零迁移设计前提）
