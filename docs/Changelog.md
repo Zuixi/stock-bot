@@ -1,3 +1,12 @@
+## 2026-09-29 - 生产内存治理：回收遗留 agent 进程 951MB + 服务器专用容器内存上限
+
+- **背景实测**：服务器 3.8GB / **无 swap**、12 个容器**全部 `limit=0`**；`used 3011MB / available 710MB`。真正大头是宿主机上跑了 4~6 天的遗留 agent 进程（`hermes` ×2 + `pi` ×2 = **951MB**，住 tmux 会话 `code` 与 `systemd --user hermes-gateway`），与业务无关；其 `cron/executions.db` 自 Sep 22 起无执行记录，仅心跳空转
+- **回收**：`systemctl --user stop hermes-gateway`（**stop 不 disable**，可恢复）+ 结束 4 个 agent 进程 → `used 3011→2060MB`、`available 710→1662MB`（**-951MB**）；保留 tmux 会话滚动缓冲便于回溯
+- **容器限额**（`docker-compose.prod.yml`，服务器专用，本地不加载）：14 个服务加 `mem_limit` + `mem_swappiness: 0` —— api/scheduler/migrate 512m、worker 448m、postgres 768m、rabbitmq 320m、auth-service/auth-db/migrate-auth 256m、gateway/redis 192m、forward-auth 160m、caddy 128m、frontend 64m。口径 = 上线实测 `anon` ×2~4；**是天花板不是预留**，目的是把单服务失控的爆炸半径锁进 cgroup，而非"省内存"
+- **口径纠正（写进文档）**：`docker stats` 的 `MemUsage` **含容器页缓存** —— 实测 postgres 596MB 中 374MB 是可回收缓存（真实 `anon` 仅 207MB，`shared_buffers` 才 32MB），据此判"内存泄漏"会误判；判真实占用看 cgroup `memory.stat` 的 `anon`
+- **Swap 建议**：机器此前无任何 swap（`Committed_AS 6.6GB` vs `CommitLimit 1.9GB`，尖峰即 OOM kill 而非变慢），在 `operations.md` 给出 2GB swapfile + `vm.swappiness=10` 的标准做法（需 root，未代执行）
+- 涉及文件：docker-compose.prod.yml、docs/deployment/production.md、docs/deployment/operations.md、docs/Changelog.md
+
 ## 2026-09-29 - 玄田增量门控合并 main + 容器化验证（补齐部署形态证据链）
 
 - **合并**：`feat/xuantian-ingest-gating` → main（`afd412f`，9 提交 + final-fix）；Changelog 冲突按倒序合并（实施条目前置）；合并后全量 635 passed、app/tests 范围 ruff+mypy 绿

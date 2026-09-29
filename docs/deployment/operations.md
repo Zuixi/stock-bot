@@ -60,6 +60,8 @@ alembic downgrade -1
 | 两个容器抢同一端口 | `docker compose.prod.yml` 的 `gateway.ports: !override []` | 见 [`production.md`](./production.md#边缘层caddy-自动-https--traefik-路由两跳不是三跳) |
 | 证书重新签发/被限流 | `stock-bot_caddy_data` 卷是否被 `down -v` 删掉 | Let's Encrypt 同域名每周重复签发有限额 |
 | 定时任务全部被跳过 | job 内时间判断是否用了 naive `datetime.now()` | 容器默认 UTC，必须显式 `ZoneInfo("Asia/Shanghai")` 且与 `CronTrigger` 同源 |
+| 内存吃紧 / 服务随机 502 | 先看**宿主机非容器进程**（`ps -eo rss,etime,args --sort=-rss`），再看容器 cgroup `anon` | 实测宿主机遗留的 agent 进程曾占 951MB，比所有业务容器之和还多；`docker stats` 的 `MemUsage` 含页缓存，据此判"泄漏"会误判（见下节） |
+| 某容器循环重启、日志却无异常 | `docker inspect <c> --format '{{.State.OOMKilled}}'` + `dmesg -T \| grep -i oom` | 触到 `mem_limit` 会被 OOM kill，叠加 `restart: unless-stopped` 就变成"随机 502 + 反复重启" |
 
 ## 观察数据新鲜度
 
@@ -71,3 +73,42 @@ curl -s localhost/api/v1/health | head -c 200                  # version / commi
 ```
 
 对账式自愈的设计目标：宿主睡眠、Docker Desktop Resource Saver、容器重启、任务异常之后，系统**在恢复点自动收敛到完整状态**，不依赖"定时任务准点跑"。因此排查数据缺口的第一步不是找那条失败日志，而是看新鲜度端点报了哪些缺口。
+
+## 内存与 OOM 排障
+
+先分清**三层**，别一上来就"清缓存"：
+
+| 层 | 怎么看 | 说明 |
+|---|---|---|
+| 宿主机非容器进程 | `ps -eo rss,pmem,etime,args --sort=-rss \| head -20` | **最容易出意外的一层**：实测曾有 4 个与业务无关的 agent 进程（`hermes`/`pi`，跑了 4~6 天）合计 951MB，比全部业务容器加起来还多。回收后 `used 3011→2060MB` |
+| 容器真实占用 | `grep -m1 '^anon ' /sys/fs/cgroup/system.slice/docker-<id>.scope/memory.stat` | `docker stats` 的 `MemUsage` **含页缓存**：实测 postgres 显示 596MB，其中 374MB 是可回收页缓存（真实 `anon` 仅 207MB，`shared_buffers` 才 32MB）。判泄漏只看 `anon` |
+| 页缓存 | `free -h` 的 `buff/cache`（容器内同理） | **健康缓存，不要清** —— `drop_caches` 只是丢掉再慢慢读回来，反而更慢；`docker image prune` 只省磁盘不省内存 |
+
+容器 `mem_limit` 的取值口径与限值表见 [`production.md`](./production.md#内存上限服务器专用改之前先读)。
+
+```bash
+# OOM 是否发生过 / 谁被杀
+dmesg -T | grep -iE "oom|killed process" | tail -20
+docker inspect <container> --format '{{.State.OOMKilled}} restarts={{.RestartCount}}'
+
+# 各容器 当前 / 峰值 / 真实 anon（cgroup v2）
+for d in /sys/fs/cgroup/system.slice/docker-*.scope; do
+  id=$(basename "$d" | sed 's/docker-\(.*\)\.scope/\1/')
+  [ -e "$d/memory.current" ] || continue
+  printf '%s cur=%s peak=%s anon=%s\n' \
+    "$(docker inspect --format '{{.Name}}' "$id" 2>/dev/null | tr -d /)" \
+    "$(awk '{printf "%.0fM", $1/1048576}' "$d/memory.current")" \
+    "$(awk '{printf "%.0fM", $1/1048576}' "$d/memory.peak")" \
+    "$(grep -m1 '^anon ' "$d/memory.stat" | awk '{printf "%.0fM", $2/1048576}')"
+done
+```
+
+**没有 swap 是这台机器最大的结构性风险**：`Committed_AS` 曾达 6.6GB 而 `CommitLimit` 仅 1.9GB，一次内存尖峰会**直接 OOM kill**（而不是变慢）。加 2GB swap（需 root）：
+
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile
+sudo swapon /swapfile && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+sudo sysctl -w vm.swappiness=10 && echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swap.conf
+```
+
+容器侧已设 `mem_swappiness: 0` —— 即使宿主机有 swap，业务热数据也不会被换出（避免 P99 抖动）。

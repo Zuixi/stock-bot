@@ -13,6 +13,10 @@
 #   - IMAGE_TAG 必填（`${IMAGE_TAG:?…}`）：缺失时 compose 直接报错退出，避免静默跑在浮动 tag 上。
 #   - 基建镜像（traefik/postgres/redis/rabbitmq/alpine）保持 docker-compose.yml 里的华为 SWR 源，
 #     本文件不重复声明；数据卷、网络、healthcheck、环境变量、labels 一律不动。
+#   - **内存上限（服务器专用）**：给 14 个服务加 `mem_limit`（§内存上限），因为服务器只有 3.8GB
+#     内存且**无 swap**，任何单个服务失控都会把整机拖进 OOM。限额是「天花板」不是「预留」——
+#     取值 ≈ 上线实测 anon 用量 ×2~4，既保证行情全量回补不被杀，又能把爆炸半径锁在单个容器内。
+#     本地开发不加载本文件，故本机 `docker compose up` 完全不受影响。
 #   - **本地开发不受影响**：本文件只在服务器上与 docker-compose.yml 叠加使用，
 #     gateway 在此处用 `!override` 清空了宿主机端口映射（本地仍走 `docker compose up` 的 :80）。
 #   - 路由/鉴权/限流全部留在 Traefik；Caddy 只做 TLS 与透传，规则不重复（见 gateway/caddy/Caddyfile）。
@@ -25,12 +29,19 @@ services:
     # 用 !override（Compose ≥2.24）整体替换 docker-compose.yml 里的 ["80:80"]，
     # 而不是追加 —— 追加会变成两个映射抢同一个宿主机端口。
     ports: !override []
+    # ── 内存上限（实测 anon 21MB）──
+    mem_limit: 192m
+    # swappiness=0：加 swap 后也**不换出**热数据（避免 P99 抖动），只在真 OOM 前兜底
+    mem_swappiness: 0
 
   caddy:
     # 官方源 + digest 固定（与 Dockerfile 基础镜像同策略）；升级见 docs/build.md「镜像构建」。
     image: caddy:2-alpine@sha256:de23def33b17fb5d1290b0f6c2add1d70780e52341896c00a4c8a2a2fe9d355e
     container_name: caddy
     restart: unless-stopped
+    # ── 内存上限（实测 anon 15MB）──
+    mem_limit: 128m
+    mem_swappiness: 0
     environment:
       # 站点域名（Caddyfile 用 {$QSTOCK_DOMAIN} 读取；可改，改完 restart caddy）
       QSTOCK_DOMAIN: ${QSTOCK_DOMAIN:?未设置 QSTOCK_DOMAIN（见 docs/deployment/index.md）}
@@ -58,37 +69,83 @@ services:
   migrate:
     image: "ghcr.io/zuixi/stock-bot/backend:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
     pull_policy: always
+    # ── 一次性迁移容器（与 api 同镜像，留足 alembic 批量 DDL 头寸）──
+    mem_limit: 512m
+    mem_swappiness: 0
 
   migrate-auth:
     image: "ghcr.io/zuixi/stock-bot/auth-service:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
     pull_policy: always
+    mem_limit: 256m
+    mem_swappiness: 0
 
   # ---- auth microservice + forward-auth sidecar ----
   auth-service:
     image: "ghcr.io/zuixi/stock-bot/auth-service:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
     pull_policy: always
+    # ── 内存上限（实测 anon 71MB）──
+    mem_limit: 256m
+    mem_swappiness: 0
 
   forward-auth:
     image: "ghcr.io/zuixi/stock-bot/forward-auth:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
     pull_policy: always
+    # ── 内存上限（实测 anon 35MB）──
+    mem_limit: 160m
+    mem_swappiness: 0
 
   # ---- backend api / worker / scheduler（同一 backend 镜像）----
   api:
     image: "ghcr.io/zuixi/stock-bot/backend:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
     pull_policy: always
+    # ── 内存上限（实测 anon 171MB；含 pandas/akshare 依赖加载）──
+    mem_limit: 512m
+    mem_swappiness: 0
 
   worker:
     image: "ghcr.io/zuixi/stock-bot/backend:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
     pull_policy: always
+    # ── 内存上限（实测 anon 87MB；采集时按队列批次涨落）──
+    mem_limit: 448m
+    mem_swappiness: 0
 
   scheduler:
     image: "ghcr.io/zuixi/stock-bot/backend:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
     pull_policy: always
+    # ── 内存上限（实测 anon 116MB / peak 133MB；全量对账回补时最高）──
+    mem_limit: 512m
+    mem_swappiness: 0
 
   # ---- frontend ----
   frontend:
     image: "ghcr.io/zuixi/stock-bot/frontend:${IMAGE_TAG:?set IMAGE_TAG (e.g. 0.0.1)}"
     pull_policy: always
+    # ── 内存上限（实测 anon 4MB，nginx 静态托管）──
+    mem_limit: 64m
+    mem_swappiness: 0
+
+  # ---- 基建服务：镜像仍由 docker-compose.yml 提供（华为 SWR 源），此处只加内存上限 ----
+  postgres:
+    # ── 内存上限（实测 anon 207MB + 页缓存 374MB；shared_buffers 仅 32MB，
+    #     限额含页缓存，接近上限时内核先回收缓存而不是 OOM）──
+    mem_limit: 768m
+    mem_swappiness: 0
+
+  auth-db:
+    # ── 内存上限（实测 anon 4MB + 页缓存 16MB）──
+    mem_limit: 256m
+    mem_swappiness: 0
+
+  redis:
+    # ── 内存上限（实测 anon 7MB；缓存上限另有 maxmemory 兜底）──
+    mem_limit: 192m
+    mem_swappiness: 0
+
+  rabbitmq:
+    # ── 内存上限（实测 anon 71MB；Erlang 水位线默认 0.6×可用内存≈2.3GB 形同虚设，
+    #     这里用 cgroup 上限做真正的硬约束）──
+    mem_limit: 320m
+    mem_swappiness: 0
 
 volumes:
   # caddy_data 存证书与账号密钥：丢失会导致重新签发（Let's Encrypt 有每周重复签发上限）

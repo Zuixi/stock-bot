@@ -123,9 +123,31 @@ IMAGE_TAG=0.0.1 docker compose -f docker-compose.yml -f docker-compose.prod.yml 
 IMAGE_TAG=0.0.1 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
 ```
 
-`docker-compose.prod.yml` 只给 8 个应用服务指定 registry 镜像 + `pull_policy: always`（`migrate`/`migrate-auth`/`auth-service`/`forward-auth`/`api`/`worker`/`scheduler`/`frontend`），基建镜像仍走 `docker-compose.yml` 的 SWR 源，卷/网络/healthcheck/env 一律不动。`IMAGE_TAG` 是必填的（`${IMAGE_TAG:?…}`）：未设置时 compose 直接报 `required variable IMAGE_TAG is missing a value` 退出，避免静默停在旧镜像上。`--no-build` 保证服务器只消费镜像。
+`docker-compose.prod.yml` 给 8 个应用服务指定 registry 镜像 + `pull_policy: always`（`migrate`/`migrate-auth`/`auth-service`/`forward-auth`/`api`/`worker`/`scheduler`/`frontend`），并给 14 个服务（含 `postgres`/`auth-db`/`redis`/`rabbitmq`）加服务器专用内存上限（见下节）；基建镜像仍走 `docker-compose.yml` 的 SWR 源，卷/网络/healthcheck/env 一律不动。`IMAGE_TAG` 是必填的（`${IMAGE_TAG:?…}`）：未设置时 compose 直接报 `required variable IMAGE_TAG is missing a value` 退出，避免静默停在旧镜像上。`--no-build` 保证服务器只消费镜像。
 
 首次上线需要先迁数据，见 [`data-migration.md`](./data-migration.md)。
+
+## 内存上限（服务器专用，改之前先读）
+
+服务器是 **3.8GB / 无 swap** 的机器，因此 `docker-compose.prod.yml` 给 14 个服务加了 `mem_limit` + `mem_swappiness: 0`（本地不加载该文件，开发机完全不受影响）。取值口径 = **上线实测 anon 用量 ×2~4**：
+
+| 服务 | 实测 anon | mem_limit | 服务 | 实测 anon | mem_limit |
+|---|---|---|---|---|---|
+| postgres | 207MB | **768m** | migrate | —（一次性） | 512m |
+| api | 171MB | **512m** | migrate-auth | —（一次性） | 256m |
+| scheduler | 116MB | **512m** | auth-db | 4MB | 256m |
+| worker | 87MB | **448m** | auth-service | 71MB | 256m |
+| rabbitmq | 71MB | **320m** | gateway | 21MB | 192m |
+| redis | 7MB | **192m** | caddy | 15MB | 128m |
+| forward-auth | 35MB | **160m** | frontend | 4MB | 64m |
+
+三条口径：
+
+1. **`mem_limit` 是天花板，不是预留** —— 14 个上限之和（≈4.1GB）大于物理内存是**正常的**：它防的是"单个服务失控拖垮整机"，不是"总量配额"。真实水位观察与 OOM 排障见 [`operations.md`](./operations.md#内存与-oom-排障)。
+2. **cgroup 限额包含页缓存** —— 接近上限时内核先回收容器页缓存（DB 数据页），而不是立刻 OOM。这也是 `docker stats` 里 postgres 显示数百 MB 的原因（大部分可回收）。
+3. **收紧/放宽前先看实测**，别凭感觉调小 —— 触到上限的服务会被 OOM kill，叠加 `restart: unless-stopped` 表现为"随机 502 + 容器循环重启"，很难第一时间想到是限额。
+
+改完生效：`docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build`（只重建配置变化的容器，镜像不变）；核验 `docker inspect <容器> --format '{{.HostConfig.Memory}}'` 应非 0。
 
 ## 不要复制 `docker-compose.override.yml` 到服务器
 
