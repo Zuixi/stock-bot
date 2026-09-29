@@ -129,7 +129,7 @@ IMAGE_TAG=0.0.1 docker compose -f docker-compose.yml -f docker-compose.prod.yml 
 
 ## 内存上限（服务器专用，改之前先读）
 
-服务器是 **3.8GB / 无 swap** 的机器，因此 `docker-compose.prod.yml` 给 14 个服务加了 `mem_limit` + `mem_swappiness: 0`（本地不加载该文件，开发机完全不受影响）。取值口径 = **上线实测 anon 用量 ×2~4**：
+服务器是 **3.8GB / 无 swap** 的机器，因此 `docker-compose.prod.yml` 给 14 个服务加了 `mem_limit` + `memswap_limit`（**两者同值**，本地不加载该文件，开发机完全不受影响）。取值口径 = **上线实测 anon 用量 ×2~4**：
 
 | 服务 | 实测 anon | mem_limit | 服务 | 实测 anon | mem_limit |
 |---|---|---|---|---|---|

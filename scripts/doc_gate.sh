@@ -17,6 +17,7 @@
 #  10  文档目录不得有空文件         —— 破坏：`touch docs/empty.md`
 #  12  敏感串守卫（本地清单，仓库外）—— 破坏：把清单里的某个值写进任一文件并 git add
 #  11  前端架构权威路由             —— 破坏：index「先读」列仍含 frontend-architecture.md
+#  13  compose 静默丢弃键           —— 破坏：任取一个 docker-compose*.yml，在某服务下加 `mem_swappiness: 0`
 #
 # 退出码：0 = 通过（含仅有告警）；1 = 有硬性未过项。
 # 只覆盖 docs/** 与 plans/**，不检查源码（源码门禁在 self_review 的其它段）。
@@ -52,7 +53,7 @@ fi
 
 # ── 1. 已入库 ADR 只增不改 ──────────────────────────────────
 # 允许的改动：仅 status: / superseded-by: 两行。其它任何正文改动都视为篡改历史。
-echo; echo "== [1/12] ADR 只增不改 =="
+echo; echo "== [1/13] ADR 只增不改 =="
 if [ -d "$DECISIONS_DIR" ]; then
   adr_changed=0
   while IFS= read -r f; do
@@ -74,7 +75,7 @@ else
 fi
 
 # ── 2. ADR 头部字段 / 编号连续 / superseded 双向引用 ────────
-echo; echo "== [2/12] ADR 头部与编号 =="
+echo; echo "== [2/13] ADR 头部与编号 =="
 if [ -d "$DECISIONS_DIR" ]; then
   expect=1
   head_bad=0
@@ -113,7 +114,7 @@ fi
 # 规则：反引号里出现的 frontend/src/{pages,features,shared}/<path> 必须存在；
 #       /api/v1/<seg> 的首段必须真实存在于 app/api/v1 的 include_router 前缀；
 #       出现的 frontend/src/pages/<dir> 必须被 app/router/index.tsx 引用。
-echo; echo "== [3/12] features.md 契约 =="
+echo; echo "== [3/13] features.md 契约 =="
 if [ -f "$FEATURES_DOC" ]; then
   missing=0
   for p in $(grep -oE '`frontend/src/(pages|features|shared)/[A-Za-z0-9_./-]+`' "$FEATURES_DOC" | tr -d '`' | sort -u); do
@@ -144,7 +145,7 @@ fi
 # ── 4. 门禁矩阵 ↔ CI job 单向一致 ──────────────────────────
 # 规则：ci.yml 里每个 job id 必须能在 docs/testing/index.md 中找到。
 # 反向不要求（矩阵会引用 self_review 步骤与 bench.sh，它们不是 CI job）。
-echo; echo "== [4/12] 门禁矩阵 ↔ CI job =="
+echo; echo "== [4/13] 门禁矩阵 ↔ CI job =="
 if [ -f ".github/workflows/ci.yml" ] && [ -f "$TESTING_DOC" ]; then
   miss_job=0
   for job in $(awk '/^jobs:/{f=1;next} f && /^  [a-z0-9-]+:$/{gsub(/[: ]/,"");print}' .github/workflows/ci.yml); do
@@ -160,7 +161,7 @@ else
 fi
 
 # ── 5. 端口权威表 ↔ compose 实际映射 ───────────────────────
-echo; echo "== [5/12] 端口 ↔ compose =="
+echo; echo "== [5/13] 端口 ↔ compose =="
 if [ -f docker-compose.yml ] && [ -f "$DEPLOY_DOC" ]; then
   miss_port=0
   # 映射形态如 "127.0.0.1:5433:5432" ——
@@ -180,7 +181,7 @@ else
 fi
 
 # ── 6. plans 头部契约（仅本规则生效日之后新建的计划） ──────
-echo; echo "== [6/12] plans 头部（新计划） =="
+echo; echo "== [6/13] plans 头部（新计划） =="
 NEW_PLAN_FROM="2026-09-23"
 if [ -d plans ]; then
   plan_bad=0
@@ -203,7 +204,7 @@ fi
 
 # ── 7. 文档引用的脚本必须存在（仅 docs/**） ────────────────
 # 只查 docs/**：plans/** 是历史与规划文档，允许引用尚未实施的脚本。
-echo; echo "== [7/12] 文档引用的脚本 =="
+echo; echo "== [7/13] 文档引用的脚本 =="
 script_bad=0
 # 引用可能是仓库根相对（scripts/x.py）或子项目相对（backend/scripts/x.py）——依次尝试多个根
 for ref in $(grep -rhoE '[A-Za-z0-9_./-]*scripts/[A-Za-z0-9_.-]+\.(sh|py)' docs --include='*.md' | sort -u); do
@@ -236,7 +237,7 @@ done
 [ "$npm_bad" = 0 ] && ok "docs/** 引用的 npm script 均已在 package.json 声明"
 
 # ── 8. 当前态口径一致（队列名 / 服务名） ───────────────────
-echo; echo "== [8/12] 口径一致（QUEUES / compose 服务名） =="
+echo; echo "== [8/13] 口径一致（QUEUES / compose 服务名） =="
 ARCH_DOC="docs/architecture/backend/ARCHITECTURE.md"
 if [ -f "$ARCH_DOC" ]; then
   q_bad=0
@@ -259,7 +260,7 @@ if [ -f docs/ARCHITECTURE.md ]; then
 fi
 
 # ── 9. e2e 术语歧义（告警，不阻断） ────────────────────────
-echo "== [9/12] e2e 术语消歧（告警） =="
+echo "== [9/13] e2e 术语消歧（告警） =="
 # 只看"当前态"文档；Changelog / design / archive / best-practices 属历史记录，不追改
 E2E_SCOPE="docs/index.md docs/overview.md docs/features.md docs/evolution.md docs/ARCHITECTURE.md docs/deployment docs/testing/index.md docs/decisions docs/architecture"
 ambiguous=$(grep -rniE '(^|[^A-Za-z])e2e' $E2E_SCOPE --include='*.md' \
@@ -276,7 +277,7 @@ fi
 # ── 10. 文档目录不得有空文件 ─────────────────────
 # 空文件在仓库里只会积累噪声（实测：`docs/plan.md` 0 行、`docs/designs/index.md` 0 字节、
 # `docs/design/webpage.md` 0 字节、`src/main.py` 0 字节）。空目录需要占位时用 .gitkeep（例外）。
-echo; echo "== [10/12] 无空文件（docs/ · plans/） =="
+echo; echo "== [10/13] 无空文件（docs/ · plans/） =="
 empty_files=$(find docs plans -type f -size 0 ! -name '.gitkeep' | sort)
 if [ -n "$empty_files" ]; then
   fail "以下文件为空（占位而无内容）—— 要么写内容，要么删掉：" \
@@ -287,7 +288,7 @@ else
 fi
 
 # ── 11. 前端架构权威路由（入口层） ─────────────────────────
-echo; echo "== [11/12] 前端架构权威路由 =="
+echo; echo "== [11/13] 前端架构权威路由 =="
 route_bad=0
 if [ -f docs/index.md ]; then
   if ! grep -q 'architecture/frontend/ARCHITECTURE.md' docs/index.md; then
@@ -312,7 +313,7 @@ fi
 # 清单：$HOME/.stock-bot/sensitive-patterns.txt（每行一条，如生产域名/服务器 IP/实例名）。
 # 只查**暂存内容**（git grep --cached）：pre-commit 时即为"即将提交的内容"，
 # 单独运行时等价于 HEAD。命中只打印 文件:行，绝不回显命中内容。
-echo; echo "== [12/12] 敏感串守卫（本地清单） =="
+echo; echo "== [12/13] 敏感串守卫（本地清单） =="
 PATFILE="${STOCKBOT_SENSITIVE_PATTERNS:-$HOME/.stock-bot/sensitive-patterns.txt}"
 if [ ! -f "$PATFILE" ]; then
   warn "无本地敏感串清单 $PATFILE（建议写入生产域名/服务器 IP/实例名，提交前自动拦截）"
@@ -328,6 +329,26 @@ else
     ok "暂存内容未命中敏感串清单（$(grep -cve '^$' "$PATFILE") 条规则）"
   fi
 fi
+
+# ── 13. compose 静默丢弃键（写进去不报错、也不生效）────────────
+# 破坏验证：在任一 docker-compose*.yml 的某服务下加 `mem_swappiness: 0` → 应红。
+# 为什么需要它：compose v5.1/v5.5 对 `mem_swappiness` **无告警直接丢弃**
+# （`docker compose config` 不渲染该键、`docker inspect` 里仍是 nil）——"配置写了但没生效"的
+# 静默失败，与端口/服务名漂移同类；限制容器 swap 的正确写法是 `memswap_limit`。
+# 扩展方式：把新发现的黑名单键追加进 SILENT_KEYS（空格分隔）。
+echo; echo "== [13/13] compose 静默丢弃键 =="
+SILENT_KEYS="${SILENT_KEYS:-mem_swappiness}"
+silent_bad=0
+for k in $SILENT_KEYS; do
+  # 只看非注释行（compose 头部的说明注释允许提到这些键，正是用来解释这个坑）
+  hits=$(grep -rnE "^[[:space:]]*${k}[[:space:]]*:" docker-compose*.yml 2>/dev/null || true)
+  if [ -n "$hits" ]; then
+    fail "docker-compose*.yml 使用了会被 compose 静默丢弃的键 \`${k}\`（限 swap 请用 memswap_limit）："
+    printf '%s\n' "$hits" | awk -F: '{print "      "$1":"$2}' | head -5
+    silent_bad=1
+  fi
+done
+[ "$silent_bad" = 0 ] && ok "无静默丢弃键（检查项：${SILENT_KEYS}）"
 
 echo
 if [ "$fails" -eq 0 ]; then

@@ -21,7 +21,7 @@
 | CPU 基准 Tier 1 | `scripts/bench.sh` · CI `bench-cpu` | 手动 / PR | 是 | 见 [`benchmarks.md`](./benchmarks.md) |
 | 全栈冒烟（compose） | CI `docker-smoke` | PR | 是 | 起栈 + 网关路由 + 登录闭环；失败时 CI 会打印 Traefik rawdata 与日志 |
 | 文档一致性（Changelog 启发式） | `self_review.sh` [3/4] · CI `docs-consistency` | commit / PR | 否（告警） | 补 `docs/Changelog.md` |
-| 文档交叉引用 / ADR 只增不改 / 端口表 / 空文件 / **敏感串守卫** | `scripts/doc_gate.sh` · CI `docs-consistency` | commit / PR | 是（e2e 术语为告警） | 按报错 `hint:` 修；敏感串清单在 `~/.stock-bot/sensitive-patterns.txt`（仓库外） |
+| 文档交叉引用 / ADR 只增不改 / 端口表 / 空文件 / **敏感串守卫** / **compose 静默丢弃键** | `scripts/doc_gate.sh` · CI `docs-consistency` | commit / PR | 是（e2e 术语为告警） | 按报错 `hint:` 修；敏感串清单在 `~/.stock-bot/sensitive-patterns.txt`（仓库外）；`mem_swappiness` 改用 `memswap_limit` |
 | shell 陷阱（pipefail+`grep -q` / 平台差异写法） | `scripts/shell_hazard_check.sh` · `self_review.sh` [2/4] | commit / 手动 | 是 | 按提示换成 here-string / 原生超时参数 |
 | 改动探测器（slop_scan） | `scripts/slop_scan.sh` · `self_review.sh` [2/4] 后 | commit / 手动 | 否（告警） | 命中则复核 best-practices 对应分类 |
 | 后端 e2e（需 docker 栈） | `pytest -m e2e` | 手动 | — | 见 [`backend.md`](./backend.md) |

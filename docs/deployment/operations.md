@@ -111,4 +111,4 @@ sudo swapon /swapfile && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fs
 sudo sysctl -w vm.swappiness=10 && echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swap.conf
 ```
 
-容器侧已设 `mem_swappiness: 0` —— 即使宿主机有 swap，业务热数据也不会被换出（避免 P99 抖动）。
+容器侧 `memswap_limit` 与 `mem_limit` **同值** —— 容器内可用 swap 为 0，宿主机即使加了 swap，业务热数据也不会被换出（避免 P99 抖动），触顶时只 OOM kill 该容器自己。⚠️ 不要用 `mem_swappiness`：compose 会**静默丢弃**该键（无告警、`docker inspect` 仍是 nil），已由 `scripts/doc_gate.sh` 第 13 项机械拦截。
