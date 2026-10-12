@@ -14,8 +14,12 @@
 //   4. 8 条今日不存在的目标路由已建立；10 个一级导航根可达（`NAV_ROOTS` 即顶栏数据源）；
 //   5. 未落在契约内的路由不许出现（防"顺手加的"路由绕过权限口径）；
 //   6. **三类互斥**：redirect 集合 == 契约、保留行不得是 redirect、redirect 目标不得是占位页（`isPlaceholder`）；
+//      且**占位集合的成员与基数是被断言的契约**（`PLACEHOLDER_CONTRACT`）+ `/market/heatmap` 定点断言
+//      —— 旧版只守"集合非空"，摘掉一条 `isPlaceholder` 就假绿（Task 5 re-review 实测）；
 //   7. 站内链接不得再写已迁移的旧裸路径；不含 `/calendar`；
-//   8. **IA §4 文档 ↔ 清单契约 双向比对**（表行成员、净效果块分组合计与成员数、合计式、契约段声明数字）。
+//   8. **IA §4 文档 ↔ 清单契约 双向比对**（表行成员、净效果块分组合计与成员数、合计式、契约段声明数字）；
+//   9. **ARCHITECTURE（前端当前态权威）§6 路由一览 ↔ 清单 双向比对**（路径集合 + `kind` + 页面目录/组件 +
+//      redirect 去向 + 鉴权口径；详见文件尾）。
 
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -168,11 +172,14 @@ const layoutKeys = new Set(declaredRoutes.filter((r) => r.kind === "layout").map
 const badParent = declaredRoutes.filter((r) => r.parent && !layoutKeys.has(r.parent));
 if (badParent.length === 0) pass(`所有 parent 都指向已声明的 layout 路由（${layoutKeys.size} 个布局）`);
 else fail(`parent 指向不存在的 layout：${badParent.map((r) => `${r.path} → ${r.parent}`).join("、")}`);
-const notUnderLayout = declaredRoutes.filter(
-  (r) => r.kind !== "layout" && r.path !== "/" && r.parent !== "main"
-);
+// 计数**从实际参与断言的路由集合取数**：`mustBeUnderLayout` 就是被断言的集合本身。
+// 不要再写 `declaredPaths.length - 2` —— `getRoutePaths()` 本就不含无 path 的 layout 路由，
+// 再手工减 2 会少算一条（Task 5 re-review 实测：文案打印 29，实际 30 条满足断言）。
+// "手工 ± 常量"正是文案与断言各说各话的温床，三轮假绿里有它一份。
+const mustBeUnderLayout = declaredRoutes.filter((r) => r.kind !== "layout" && r.path !== "/");
+const notUnderLayout = mustBeUnderLayout.filter((r) => r.parent !== "main");
 if (notUnderLayout.length === 0) {
-  pass(`除以 \`/\`（landing 独立布局）外全部路由都嵌在 MainLayout 下（${declaredPaths.length - 2} 条）`);
+  pass(`除以 \`/\`（landing 独立布局）外全部路由都嵌在 MainLayout 下（${mustBeUnderLayout.length} 条）`);
 } else {
   fail(
     `以下路由未嵌在 MainLayout 下（顶栏/页脚不会渲染）：${notUnderLayout.map((r) => r.path).join("、")}` +
@@ -221,10 +228,47 @@ if (keepThatRedirect.length === 0) {
       ` —— 「保留（语义未变）」必须原地渲染真页面（Ruling 30/31）`
   );
 }
+/**
+ * 占位路由契约（与 `NEW_TARGETS` / `REDIRECTS` **同级**）：今日「规划中」的占位页清单。
+ *
+ * 为什么要有它（Task 5 re-review 实测的假绿）：旧版只断言"占位集合非空"，于是**只摘掉 `/company`
+ * 的 `isPlaceholder` 标志**（保留契约一致的 `/watchlist → /company` redirect）就能得到
+ * exit 0 + 「占位路由共 9 条」——而摘标志 = 占位通告壳消失 = 功能性回退。
+ * 故把**成员与基数**都变成被断言的契约：多一条、少一条都转红。
+ */
+const PLACEHOLDER_CONTRACT = [
+  "/market/heatmap",
+  "/company",
+  "/news",
+  "/macro",
+  "/sentiment",
+  "/valuegraph",
+  "/strategy",
+  "/risk",
+  "/trade",
+  "/search",
+];
+
 const placeholderPaths = getPlaceholderRoutes().map((r) => r.path);
-if (placeholderPaths.length === 0) {
-  fail("占位路由集合为空（清单里没有任何 isPlaceholder 路由，契约要求至少 10 个占位页）");
+const placeholderMissing = PLACEHOLDER_CONTRACT.filter((p) => !placeholderPaths.includes(p));
+const placeholderExtra = placeholderPaths.filter((p) => !PLACEHOLDER_CONTRACT.includes(p));
+if (placeholderMissing.length === 0 && placeholderExtra.length === 0) {
+  pass(`占位路由集合 == 契约（${PLACEHOLDER_CONTRACT.length} 条，成员逐条一致）`);
+} else {
+  fail(
+    `占位路由集合与契约不符（契约 ${PLACEHOLDER_CONTRACT.length} 条，实得 ${placeholderPaths.length} 条）` +
+      (placeholderMissing.length ? `\n      清单缺 isPlaceholder：${placeholderMissing.join("、")}` : "") +
+      (placeholderExtra.length ? `\n      清单多 isPlaceholder：${placeholderExtra.join("、")}` : "")
+  );
 }
+// 定点断言（旧脚本能力，Task 5 re-review 要求恢复）：`/market/heatmap` 是"真实现归 S1.5"的典型占位。
+// 它不在任何 redirect 目标里，上一版 ③ 对它是**完全无覆盖**的；这里给它一条不会随集合大小漂移的断言。
+if (placeholderPaths.includes("/market/heatmap")) {
+  pass("`/market/heatmap` 仍是占位路由（真热力图归 S1.5，不得摘标志冒充真页面）");
+} else {
+  fail("`/market/heatmap` 不再是占位路由 —— S1.5 真热力图落地前摘标志 = 假声明");
+}
+
 const placeholderTargets = [...routeRedirects.entries()].filter(([, to]) =>
   placeholderPaths.includes(to.split("?")[0])
 );
@@ -249,6 +293,8 @@ if (placeholderWithoutComponent.length === 0) {
 
 // 占位保护面（Ruling 33 回归）：占位路由里的**每一条页面**，其懒加载入口（`route-elements.tsx` 的 PAGES）
 // 必须存在；且 `route-elements.tsx` 的占位通告映射必须覆盖全部占位路由——两份清单不许漂移。
+// 注：注册表条目一律写单行 `Key: lazy(() => import("@/pages/<dir>"))`（这是本探针的输入格式）。
+// 若有人改成别的写法，这里**会响亮报成"未注册"**（而不是静默跳过）——保持这个失败模式，别去放宽它。
 const elementsSource = readFileSync(join(root, "src/app/router/route-elements.tsx"), "utf8");
 const noticeKeys = [...elementsSource.matchAll(/^\s*"([^"]+)":\s*\{/gm)].map((m) => m[1]);
 const missingNotice = placeholderPaths.filter((p) => !noticeKeys.includes(p));
@@ -257,7 +303,18 @@ if (missingNotice.length === 0) {
 } else {
   fail(`占位路由缺少 PLACEHOLDER_NOTICE 文案：${missingNotice.join("、")}`);
 }
+/** component 键 → 页面目录（`@/pages/<dir>`）：断言 9 用它核对 ARCHITECTURE §6 的"页面目录"列。
+ *  取不到目录时断言 9 会**响亮**报"页面目录不可解析"（而不是静默跳过）——注册项一律保持
+ *  单行 `Key: lazy(() => import("@/pages/<dir>"))` 形态。 */
+const pageModules = new Map(
+  [...elementsSource.matchAll(/^\s*(\w+):\s*lazy\(\(\) => import\("@\/pages\/([^"]+)"\)\)/gm)].map((m) => [
+    m[1],
+    m[2],
+  ])
+);
 const pageComponentKeys = new Set(
+  // 注册探针用**宽**正则（只认 `Key: lazy(`）：格式变化不该被误报成"没注册"；
+  // 目录解析用**窄**正则（上面那条），解析不到时由断言 9 明确报"不可解析"。
   [...elementsSource.matchAll(/^\s*(\w+):\s*lazy\(/gm)].map((m) => m[1])
 );
 const missingComponent = getPageRoutes()
@@ -400,6 +457,87 @@ if (contractNums) {
   }
 } else {
   fail("redirect 契约段缺少「N 条 redirect、M 条保留」的声明（无法机械比对）");
+}
+
+// 9：ARCHITECTURE（前端**当前态权威**，见 docs/authority.md）§6 路由一览 ↔ 清单**双向比对**。
+// 为什么要有这条：§6 是"路由当前态"的单点权威，Task 5 改完 15 条路由后它整表过期、表尾指针还写
+// 「以 app/router/index.tsx 为准」（那时 index.tsx 已不手写 `<Route>`）。靠人眼复核文档 = 又一处假绿，
+// 故把它机械化：**路径集合双向**（表里有清单没有 = 幽灵路由；清单有表里没有 = 文档漏记）+ 逐行字段
+// （kind / 页面目录 / 组件 / redirect 去向 / 鉴权）。破坏验证：删掉表里任一行、改任一 kind 或去向 → 应红。
+const ARCH_DOC = join(root, "..", "docs/architecture/frontend/ARCHITECTURE.md");
+const archDoc = readFileSync(ARCH_DOC, "utf8");
+const sec6 = archDoc.split(/^## /m).find((s) => s.startsWith("6. "));
+if (!sec6) {
+  fail("ARCHITECTURE.md 找不到「## 6. 路由一览」小节（前端当前态权威文档）");
+} else {
+  if (sec6.includes("route-manifest.ts")) pass("ARCHITECTURE §6 指向 `route-manifest.ts`（不再指向手写 `<Route>` 的 index.tsx）");
+  else fail("ARCHITECTURE §6 未指向 `route-manifest.ts` —— 路由清单才是唯一真相（index.tsx 只由它生成 `<Route>`）");
+
+  const docRows = new Map();
+  let layoutRow = null;
+  for (const line of sec6.split("\n")) {
+    if (!line.trim().startsWith("|")) continue;
+    const cells = line
+      .split("|")
+      .slice(1, -1)
+      .map((c) => c.trim());
+    if (cells.length < 5) continue;
+    const pathCell = cells[0].match(/`(\/[^`]*)`/);
+    if (pathCell) docRows.set(pathCell[1], cells);
+    else if (cells[1] === "layout") layoutRow = cells;
+  }
+  if (layoutRow) pass("ARCHITECTURE §6 含 `kind = layout` 的 MainLayout 外壳行");
+  else fail("ARCHITECTURE §6 缺少 `kind = layout` 的 MainLayout 外壳行");
+
+  const manifestPathList = declaredRoutes.filter((r) => r.kind !== "layout").map((r) => r.path);
+  const missingInDoc = manifestPathList.filter((p) => !docRows.has(p));
+  const extraInDoc = [...docRows.keys()].filter((p) => !manifestPathList.includes(p));
+  if (missingInDoc.length === 0 && extraInDoc.length === 0) {
+    pass(`ARCHITECTURE §6 表 ↔ 清单**路径集合双向一致**（表 ${docRows.size} 条 / 清单 ${manifestPathList.length} 条）`);
+  } else {
+    fail(
+      "ARCHITECTURE §6 表与清单路径集合不一致" +
+        (missingInDoc.length ? `\n      清单有、表里没有：${missingInDoc.join("、")}` : "") +
+        (extraInDoc.length ? `\n      表里有、清单没有：${extraInDoc.join("、")}` : "")
+    );
+  }
+
+  const docDrift = [];
+  for (const route of declaredRoutes) {
+    if (route.kind === "layout") continue;
+    const cells = docRows.get(route.path);
+    if (!cells) continue;
+    const expectKind = route.isPlaceholder ? "page（占位）" : route.kind;
+    if (cells[1] !== expectKind) docDrift.push(`${route.path}：kind 列 = ${cells[1]}，应为 ${expectKind}`);
+    if (route.kind === "page" && route.component) {
+      const dir = pageModules.get(route.component);
+      if (!dir) {
+        docDrift.push(`${route.path}：页面目录不可解析（${route.component} 未注册成 \`lazy(() => import("@/pages/<dir>"))\`）`);
+      } else if (!cells[2].includes(`pages/${dir}`)) {
+        docDrift.push(`${route.path}：页面目录应为 pages/${dir}`);
+      }
+      if (!cells[2].includes(`\`${route.component}\``)) docDrift.push(`${route.path}：未写出组件名 ${route.component}`);
+    }
+    if (route.kind === "redirect" && !cells[2].includes(`→ \`${route.redirectTo}\``)) {
+      docDrift.push(`${route.path}：去向应为 → \`${route.redirectTo}\``);
+    }
+    // 鉴权列**双向**核对：清单有门禁 → 表里必须写出来（防"代码加了门禁文档没写"）；
+    // 清单没有门禁 → 表里不许写（防"假声明"：文档承诺了代码并未兑现的 403）。
+    if (route.permission && !cells[3].includes(route.permission)) {
+      docDrift.push(`${route.path}：鉴权列缺 ${route.permission}`);
+    }
+    if (route.requiresAuth && !cells[3].includes("需登录")) docDrift.push(`${route.path}：鉴权列缺「需登录」`);
+    if (!route.permission && !route.requiresAuth) {
+      if (cells[3].includes("需登录")) docDrift.push(`${route.path}：鉴权列写了「需登录」，但清单未标 requiresAuth`);
+      const permLike = cells[3].match(/[a-z_]+:[a-z_]+/);
+      if (permLike) docDrift.push(`${route.path}：鉴权列写了权限 ${permLike[0]}，但清单未标 permission`);
+    }
+  }
+  if (docDrift.length === 0) {
+    pass(`ARCHITECTURE §6 逐行字段（kind / 页面目录 / 组件 / 去向 / 鉴权）与清单一致（${manifestPathList.length} 条）`);
+  } else {
+    fail(`ARCHITECTURE §6 逐行字段与清单不一致：\n      ${docDrift.join("\n      ")}`);
+  }
 }
 
 if (failed) {
