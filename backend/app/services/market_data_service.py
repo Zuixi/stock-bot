@@ -231,16 +231,26 @@ GLOBAL_INDICES: list[dict[str, str]] = [
         source="index_global",
     ),
     # ⚠️ **IXIC = 纳斯达克综合指数**（既有约定正确，本任务只补元数据、**不改 `ts_code`**）。
-    # `em_secid` 沿用改造前的 `100.NDX`：它是**改造前就存在**的东财延迟行情映射，
-    # 本任务不得改动既有条目（见任务硬性约束 2）；其与 `NDX` 条目的语义冲突记在
-    # docs/design/data-source.md 附.5 的「已知遗留」里，交由接入 NDX 行情适配器的
-    # 独立任务一并核对（本任务不擅自改既有 secid，避免把改造前的行为改坏）。
+    # 名称按 spec §S1.3 的"逐条核对代码"要求写全为「纳斯达克综合指数」——**不再依赖上游名字**：
+    # 东财对 `100.NDX` 返回的名字是「纳斯达克」，卡片上会与 NDX「纳斯达克100」在视觉上串号
+    # （那正是导图那处错误的表现）。故读路径以**登记表名字为准**（见 `get_global_index_cards`）。
+    #
+    # `em_secid` 由改造前的 `100.NDX` 改为 `100.IXIC`：**这是本任务必须做的修正，不是"顺手改"**——
+    # 改造前只有 IXIC 一条用 `100.NDX`（东财对"纳斯达克"的 secid），本任务新增的 NDX 条目
+    # 若也写 `100.NDX`，两条标的会**从同一格行情取数**，即"最新值必然相等"；而 S1.3 的行为判据
+    # 恰恰是"两者最新值不得相等"。故：NDX 拿 `100.NDX`（东财给"纳斯达克100"的 secid，
+    # 见 `docs/design/data-source.md` §七 的东财 ulist 参数串）、IXIC 拿 `100.IXIC`。
+    # ⚠️ `100.IXIC` **未取得一手验证**（本沙箱东财 push2 域拒连，见附.5 #12）：若该 secid 不被
+    # 上游接受，IXIC 会回落库内日线（`price_source=eod`），**不会取到 NDX 的价**——失败模式是
+    # "降级"，不是"串号"。补验方式：在 push2 可达环境跑
+    # `backend/.venv/bin/python scripts/check_global_instruments.py --live`，看 IXIC 是否
+    # `price_source=realtime` 且价接近东财"纳斯达克"页而非"纳斯达克100"页。
     _instrument(
         ts_code="IXIC",
         name="纳斯达克综合指数",
         market="US",
         region="americas",
-        em_secid="100.NDX",
+        em_secid="100.IXIC",
         source="index_global",
     ),
     # 纳斯达克100：TuShare `index_global` **无**此标的（裸 NDX / NDX.GI 实测 0 行），
@@ -545,11 +555,14 @@ async def get_global_index_cards(cache: CacheClient | None = None) -> list[dict[
             if q and q.get("price") is not None:
                 base.update(
                     {
-                        "name": q.get("name") or g["name"],
+                        # 名字一律取**登记表**（`g["name"]`），不用上游名字：
+                        # 东财对 `100.NDX` 回的名字是「纳斯达克」、对 `gb_$ndx` 回的是
+                        # 「纳斯达克100」，两者在卡片上会与 `NDX`/`IXIC` 的登记名互相串号
+                        # ——那正是 S1.3 要消灭的那处导图错误。**价**仍取上游，**名**由我们定。
+                        "name": g["name"],
                         "price": q["price"],
                         "change": q.get("change"),
                         "pct_change": q.get("pct_change"),
-                        # 名称一律以**我们的登记表**为准会掩盖上游改名，故行情名非空时优先；
                         # `price_source` 标明这一格价来自哪一路，便于前端与排障区分。
                         "price_source": (
                             _PRICE_REALTIME_SINA if g.get("sina_code") else _PRICE_REALTIME

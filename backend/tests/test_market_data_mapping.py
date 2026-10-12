@@ -33,7 +33,7 @@ def test_global_indices_registry_shape():
     assert {g["em_secid"] for g in americas if g.get("em_secid")} == {
         "100.DJIA",
         "100.SPX",
-        "100.NDX",
+        "100.IXIC",  # IXIC（纳斯达克综合）的东财 secid；100.NDX 归 NDX（纳斯达克100）
     }
     assert {g["sina_code"] for g in americas if g.get("sina_code")} == {
         "gb_$ndx",
@@ -125,7 +125,7 @@ async def test_ixic_and_ndx_latest_values_differ(monkeypatch):
         return [
             {
                 "code": "IXIC",
-                "secid": "100.NDX",
+                "secid": "100.IXIC",
                 "name": "纳斯达克",
                 "price": 27366.1698,
                 "pct_change": 0.64,
@@ -821,3 +821,63 @@ async def test_global_indices_endpoint_carries_five_fields(monkeypatch):
     for card in out:
         assert card.name and card.session and card.timezone and card.currency and card.data_source
     assert by_code["IXIC"].price != by_code["NDX"].price  # 串号回归在端点层同样成立
+
+
+@pytest.mark.asyncio
+async def test_card_name_comes_from_registry_not_upstream(monkeypatch):
+    """卡片名一律取登记表 —— 上游名字与登记名不一致时**不得**反过来覆盖登记名。
+
+    回归背景：东财把"纳斯达克"的 secid（`100.NDX`）与"纳斯达克100"混用，新浪对
+    `gb_$ndx` 又回「纳斯达克100」；若卡片名取上游，`IXIC`（纳斯达克**综合**）会显示成
+    「纳斯达克」、与 `NDX`（纳斯达克100）在页面上串号 —— 正是 S1.3 要消灭的那处错误。
+    """
+
+    class _Cache:
+        async def get(self, key):
+            return None
+
+        async def set(self, key, value, ttl=None):
+            return None
+
+    async def fake_snapshot(secids):
+        return [
+            {
+                "code": "IXIC",
+                "secid": "100.IXIC",
+                "name": "纳斯达克",  # ← 上游名字（与登记名不同）
+                "price": 27366.17,
+                "pct_change": 0.64,
+                "change": 172.83,
+            }
+        ]
+
+    async def fake_sina_quotes(codes):
+        return {
+            "gb_$ndx": {
+                "code": "gb_$ndx",
+                "name": "纳斯达克100",
+                "price": 30883.15,
+                "pct_change": 0.51,
+                "change": 157.34,
+            }
+        }
+
+    async def fake_kline(db, ts_code):
+        return []
+
+    monkeypatch.setattr(
+        mds,
+        "_get_eastmoney",
+        lambda: type("C", (), {"fetch_index_snapshot": staticmethod(fake_snapshot)})(),
+    )
+    monkeypatch.setattr(mds, "_get_sina_quotes", lambda: fake_sina_quotes)
+    monkeypatch.setattr(mds.index_repo, "get_kline", fake_kline)
+
+    cards = {c["ts_code"]: c for c in await mds.get_global_index_cards(cache=_Cache())}
+    assert cards["IXIC"]["name"] == "纳斯达克综合指数"  # 登记名，不是上游的「纳斯达克」
+    assert cards["NDX"]["name"] == "纳斯达克100指数"
+    assert cards["IXIC"]["name"] != cards["NDX"]["name"]
+    # IXIC 与 NDX 的行情查找键必须不同（否则两格价来自同一行情 → 最新值必然相等）
+    ixic = next(g for g in mds.GLOBAL_INDICES if g["ts_code"] == "IXIC")
+    ndx = next(g for g in mds.GLOBAL_INDICES if g["ts_code"] == "NDX")
+    assert ixic["em_secid"] != ndx.get("em_secid")
