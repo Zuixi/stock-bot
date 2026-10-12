@@ -1,3 +1,17 @@
+## 2026-10-12 - Wave 0 平台契约完成（S0.1–S0.4 + 门禁修复），投研工作台主线进入 Wave 1
+
+- **执行方式**：worktree `.worktrees/research-platform-ia`（分支 `feat/research-platform-ia`，基线 `25a6371`）+ subagent-driven-development —— 每任务 = 派实现 subagent → review package → 任务评审 → 修复循环 → ledger 记账。**16 提交 / 4 修复轮 / 6 次评审**，无一条 finding 被静默丢弃
+- **Task 1 · S0.1**（`dfedcc8`）：5 篇 ADR `0009-content-view-separation` / `0010-polymorphic-watch-and-tags` / `0011-point-in-time-data-contract`（含两条机械保证）/ `0012-no-automated-order-placement` / `0013-reuse-existing-signal-infrastructure`（含"加 2 列复用、不建 `metric_series`"附带裁定）+ `decisions/index.md` 登记
+- **Task 2 · S0.2**（`1e29c6d`→`a687ffc`，5 提交 2 修复轮）：新建 `docs/design/ia-investment-research-platform.md` —— 10 导航总表（权限三态：公开 2 / `research:read` 1 / 待定 7）、子模块树逐条转录、顶栏工具（不含 `/calendar`）、**15 条既有路由全量迁移表（10 redirect + 5 保留）**、三层布局 + 左侧树数据驱动约束
+- **Task 3 · S0.3**（`38aaf46`→`8928dbe`，1 修复轮）：`docs/design/data-source.md` 追加 7 项数据源 × 四栏三态结论（**5 核实 + 2 `blocked-on-verification`** 且各附「去哪查/查什么字段/判断标准」）+ 19 条实机调用记录 + 与计划 §8 的逐项一致性对照
+- **Task 4 · S0.4**（`428eeb2`→`76f4053`，3 修复轮）：新建 `docs/design/metric-dictionary.md`（§4.1 两种徽标语义并**删除 `A股市场 18`** / §4.2 `metric_key` 命名 / §4.3 `publisher_tier` 与既有 `source_tier` 的区别 / §4.4 口径版本 / §4.5 五处模块边界 / §4.6 条件式兜底）+ 登记 `docs/authority.md`
+- **Task 4.5 · 门禁修复（计划外，依 AGENTS.md 自检第 5 条）**（`8ca6e6f`）：`scripts/self_review.sh` 两个真实缺陷 —— ① 路径采集用 `git status --porcelain | awk '{print $2}'`，重命名的第 2 列是**旧路径**，导致**纯 `git mv` 的 `backend/**.py` 被静默跳过 lint**（Task 4 实测发生）；② `:67` 失败提示的裸反引号被 shell 当命令替换、`<files>` 被当重定向，**ruff 真失败时脚本以语法错崩掉并截断提示**。修法：采集改为 `git diff --name-only HEAD` + `git ls-files --others --exclude-standard` + 原 merge-base..HEAD（两条文档化不变量实测保留，b/c/d 场景新旧集合经 `comm` 双向比对逐字节相同）；提示改为 `\`` 转义（同 `doc_gate.sh` 房内写法）
+- **事实更正（Ruling 19，由 Task 3 复核发现）**：此前主张的「陆股通持仓**绝大部分是内地资金借道香港**」**缺乏权威证据且可核量级相反**（兴业证券 2021-12 按港交所托管机构口径：中资托管 3.54% / 外资银行 78.8% / 外资券商 17.66%；证监会令第 200 号第十三条明文「沪股通和深股通投资者不包括内地投资者」）。已从 `docs/specs/S0-platform-contracts.md`、`docs/specs/S1-market-sentiment.md`、计划 §8.2 与 §11-B2 **共 4 处删除**，替换为三条均有官方出处的降级理由（名义持有人汇总账户 / 持仓主体不可拆分 / 季度低频率）；**结论与替代口径不变**（`可得但降级`、具名「陆股通持仓（季度）」、移入公司·股东股权）。Changelog 追加更正条目，既有条目未改
+- **口径一致性收尾（Ruling 22 / 28）**：计划 §11-B1 去掉与 spec「不建通用裁定队列」冲突的旧措辞；§11-C 的 `source_tier=official` → `publisher_tier=official`；spec §S0.4 的 `已策展数` 改引字典唯一定义、§4.2 命名示例换成已注册的 `sow_inventory`
+- **新增机械检查**：`backend/scripts/check_metric_dictionary.py` —— 比对字典 §4.2 样例表与 `industry_registry` 的 name/unit/freq，并对"已注册键误入提案表"做反查；已落入 `self_review`/pre-commit 的 `^backend/` ruff 面（**未接入执行面**，接入方案见 plans 遗留）
+- **遗留**：13 条 minor/deferred（记于 `plans/2026-10-12-investment-research-platform-ia.md` §13 与 SDD ledger）。**含一条合并期待办**：本分支取 ADR 0009–0013，与 `feat/market-hotspot-persistence`（active、其 Task 3 声明要建 `0009-market-derived-fact-persistence.md`）在**合并时**编号碰撞，需人类定夺由谁改号
+- 涉及文件：docs/decisions/0009–0013 与 index、docs/design/{ia-investment-research-platform,data-source,metric-dictionary}.md、docs/specs/{S0-platform-contracts,S1-market-sentiment}.md、docs/authority.md、docs/Changelog.md、plans/2026-10-12-investment-research-platform-ia.md、scripts/self_review.sh、backend/scripts/check_metric_dictionary.py
+
 ## 2026-10-12 - 核对脚本移入 backend/scripts 并补 name/反查检查（Ruling 27）+ spec §4.1/§4.2 口径对齐（Ruling 28）
 
 - **背景**：Fix round 2 新增的核对脚本放在根 `scripts/` 下，**三层 lint 覆盖全无**（`scripts/self_review.sh` 的 `py_files()` 只认 `^backend/.*\.py$`；pre-commit 的 ruff hook 是 `files: ^backend/`；CI backend job 只跑 `ruff check app/ tests/`，唯一跑全目录的 job 是 auth-service），且 `ruff format --check` 未过

@@ -3,7 +3,7 @@ status:      active
 scope:       投研工作台的信息架构与数据模型主线——10 个一级导航、5 个横切地基（原料/视图分离 · 信号与因子【复用既有基建】 · PIT · 多态关注池 · 传导图）+ 1 个推迟（事件日历→Wave 3）、原料→视图映射、8 个 Wave 的分期路线图与 **57 个 spec** 的拆分（评审后由 59 收缩：S2 由 6 个并为 4 个）
 touches:     plans/, docs/specs/, docs/design/, docs/decisions/, docs/Changelog.md, backend/app/models/, backend/app/migrations/versions/, backend/app/api/v1/, backend/app/services/, backend/app/schemas/, backend/app/workers/, backend/app/scheduler/, backend/tests/, frontend/src/app/router/, frontend/src/app/layouts/, frontend/src/pages/, frontend/src/features/, frontend/src/shared/
 updated:     2026-10-12
-next-action: 执行 Wave 0 —— 按 [docs/specs/S0-platform-contracts.md](../docs/specs/S0-platform-contracts.md) 落 5 篇 ADR + IA 冻结 + 数据源复核 + 口径字典（§11 四项阻塞已定案）
+next-action: Wave 0 已关门（5 任务 / 16 提交 / 4 修复轮 / 6 次评审，见 §13）。执行 Wave 1：先 S1.1 导航骨架与路由迁移（前端，Task 5），再 S1.2 `industry_metrics` 加 2 列 + 统一读面（后端，Task 6）
 ---
 
 # 投研工作台：信息架构与数据模型主线 实施计划
@@ -562,4 +562,28 @@ graph_edges(
 
 ## 13. 实施记录
 
-_（待 Wave 0 启动后填写）_
+### Wave 0 平台契约 —— **完成**（worktree `.worktrees/research-platform-ia` / 分支 `feat/research-platform-ia` / 基线 `25a6371`）
+
+以 subagent-driven-development 模式执行：每任务 = 派实现 subagent → 生成 review package → 派任务评审 → 修复循环 → 记 ledger。**16 个提交、4 次修复轮、6 次评审（含 scoped re-review），无一条 finding 被静默丢弃。**
+
+| 任务 | 交付 | 提交 | 评审结论 |
+|---|---|---|---|
+| **Task 1** · S0.1 五篇 ADR | `docs/decisions/0009`–`0013`（原料/视图分离 · 多态关注与标签 · PIT · 不做自动下单 · 复用既有信号基建）+ index 登记 | `dfedcc8` | Spec ✅ / Approved |
+| **Task 2** · S0.2 IA 与路由契约 | `docs/design/ia-investment-research-platform.md`（10 导航总表 / 子模块树逐条转录 / 顶栏工具 / **15 条既有路由全量迁移表** / 三层布局）+ spec 两处授权修正 | `1e29c6d` `e2413ed` `030311f` `43b34a5` `a687ffc` | Spec ✅ / **2 修复轮后** All addressed |
+| **Task 3** · S0.3 数据源可行性复核 | `docs/design/data-source.md` 追加 7 项 × 四栏（**5 核实 + 2 `blocked-on-verification` 附验证方法**）+ 19 条实机调用记录 + §8 一致性对照 | `38aaf46` `ac8f58d` `8928dbe` | Spec ✅ / **1 修复轮后** 11/11 addressed + Ruling 21 |
+| **Task 4** · S0.4 命名与口径字典 | `docs/design/metric-dictionary.md`（§4.1–§4.6）+ **Ruling 19 事实更正 4 处** + Changelog 更正条目 | `428eeb2` `80e341c` `814d542` `8423ce5` `de3a40e` `76f4053` | Spec ✅ / **3 轮修复后** All addressed |
+| **Task 4.5** · 门禁修复（**计划外**，依 AGENTS.md 第 5 条） | `scripts/self_review.sh` 两个真缺陷：重命名漏采（纯 `git mv` 的 .py 被**静默跳过 lint**）、format 失败提示被 shell 误当重定向而崩溃 | `8ca6e6f` | Spec ✅ / Approved（无 Critical/Important）|
+
+**本 Wave 暴露并已修正的自身错误（留证，不掩盖）**：
+1. **spec 权限列写成"登录即可"** → 会同时放宽 `/industry`（进后端 403）与收紧本来就公开的 `/market`、`/company`（违 ADR 0008）。由 Task 2 实现方自报，裁定三态（Ruling 18）后修正。
+2. **"陆股通持仓绝大部分是内地资金借道香港"** 系无权威证据的事实错误（可核量级相反：中资托管 3.54% vs 外资 78.8%+17.66%；证监会令第 200 号明文禁止内地投资者参与沪深股通）。由 Task 3 复核发现，裁定删除该理由并替换为三条官方出处（Ruling 19），回写 4 处。
+3. **计划 §11 残留旧措辞**与已冻结口径冲突（"推广为通用 review queue" vs spec「不建」；`source_tier` vs `publisher_tier`）。Ruling 22 修正。
+4. **Task 2 两轮不一致**均源于"数字声明与成员枚举分离"；改为成对书写 + 可复跑机械计数后一次收敛（Ruling 23 沉淀为检查设计原则）。
+5. **Task 4 的"口径权威"文档含 3 处可被代码证伪的断言**（registry 单位/频率抄错、声称 `caliber_version` 列已存在、依据被代码反驳）。由评审发现，3 轮修复，并**机械化为 `backend/scripts/check_metric_dictionary.py`**（带负向测试，已落入 ruff 面）。
+
+**遗留（交终审 triage）**：5 条 Task 4 minor + 3 条 Task 2 minor + 2 条 Task 3 minor + 门禁类 3 条（`shell_hazard_check` 增「双引号串未转义反引号」规则 · CI ruff 面扩到 `backend/scripts/` · `check_metric_dictionary.py` 接入 self_review 执行面）。全部记于 `.superpowers/sdd/<plan>/progress.md`。
+
+**⚠️ 合并期待办（需人类定夺，见 Ruling 11）**：本分支取 ADR 编号 **0009–0013**，而 `.worktrees/market-hotspot-persistence`（分支 `feat/market-hotspot-persistence`，`status: active`、Task 1 实施中）的计划 `## Task 3` 声明 `Create: docs/decisions/0009-market-derived-fact-persistence.md`。两分支**各自** `doc_gate` 均绿，**合并时才会碰撞**；后合者需重命名（机械操作，约 10 分钟）。① 保持本分支 0009–0013、对方改号（其文件尚不存在，最便宜）；② 合并时重命名。**不得在对方 worktree 未确认前单方面改动对方文件。**
+
+**下一步**：Wave 1 —— Task 5（S1.1 导航骨架与路由迁移，前端）→ Task 6（S1.2 `industry_metrics` 加 2 列 + 统一读面，后端）→ S1.3–S1.14。
+**Wave 1 前置**：Ruling 20 —— `资金流四件套` 中 **ETF 份额取数路径尚未验证**（仓库 `fund_daily` 只有价格/成交、无份额），须在 S1.7 开工前完成验证，否则四件套只有三件。
