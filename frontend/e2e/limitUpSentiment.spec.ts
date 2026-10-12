@@ -318,3 +318,32 @@ test("分时序列涨停家数恒定时不产生 NaN 路径", async ({ page }) =
   await expect(chart.locator("svg")).toBeVisible();
   await expect(chart.locator("path.intraday__line")).not.toHaveAttribute("d", /NaN/);
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// 返回键必须回到「原来的界面」：Market 的分类 Tab 是 URL 状态（`?tab=`），不是组件内存态。
+// 回归背景（用户反馈）：/market → 短线情绪 → 点个股 → 浏览器返回，永远落回默认「指数总览」
+// —— 因为 `/market` 与 `/stock/:symbol` 是兄弟路由，进个股页会卸载 MarketPage，
+// 返回时组件以 `useState("overview")` 重新挂载。此用例把"返回后仍在原 Tab"钉死。
+// ───────────────────────────────────────────────────────────────────────────
+test("从短线情绪进个股，浏览器返回仍停在短线情绪 Tab", async ({ page }) => {
+  await routeSentiment(page);
+  await page.goto("/market");
+  // 默认 Tab 不写参数（`navigate("/market")` 与既有 `toHaveURL(/\/market$/)` 依赖这一条）
+  expect(new URL(page.url()).search).toBe("");
+  await page.getByRole("tab", { name: "短线情绪" }).click();
+  // Tab 必须写进 URL，否则返回时无从还原
+  await expect(page).toHaveURL(/[?&]tab=sentiment/);
+  const firstStock = page.locator(".ladder-stock").first();
+  await expect(firstStock).toBeVisible();
+
+  await firstStock.click();
+  await expect(page).toHaveURL(/\/stock\//);
+
+  await page.goBack();
+  await expect(page).toHaveURL(/[?&]tab=sentiment/);
+  await expect(
+    page.getByTestId("market-tabs").getByRole("tab", { name: "短线情绪" }),
+  ).toHaveAttribute("aria-selected", "true");
+  // 不只是 Tab 高亮：内容必须真的回来了
+  await expect(page.locator(".ladder-stock").first()).toBeVisible();
+});

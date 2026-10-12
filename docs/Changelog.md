@@ -1,3 +1,11 @@
+## 2026-10-12 - 修复「点个股后按返回键回不到原界面」：Market 分类 Tab 改为 URL 状态 + 错误边界随路由重置
+
+- **根因（用户反馈，Playwright 实测复现）**：`/market` 的分类 Tab 是 `useState("overview")` 组件内存态，而 `/market` 与 `/stock/:symbol` 是兄弟路由 —— 进个股页会卸载 `MarketPage`，浏览器返回只还原 URL，组件重新挂载即落回默认「指数总览」，用户永远回不到离开时的「短线情绪」（口径/展开态等页内状态一并丢失）。实测链路：`/market` → 短线情绪 → 点个股 → `goBack()` → `activeTab=指数总览`；既有 e2e 每条用例都得手动点回该 Tab，正是这个缺陷的化石
+- **修复（主）**：`pages/market/index.tsx` 用 `useSearchParams` 派生 `activeKey`（短线情绪 → `?tab=sentiment`），`onChange` 走 `setSearchParams(..., { replace: true })`；**默认 Tab 不写参数**（保住既有 `navigate("/market")` 与 `toHaveURL(/\/market$/)` 的语义），`replace` 让返回栈只留真正访问过的页面（实测连续切 Tab `history.length` 不变）
+- **修复（次生，同一症状的第二成因）**：`App.tsx` 的全局 `ErrorBoundary` 进入错误态后永不自愈 —— 个股页一旦渲染异常，按返回键只会反复看到同一张「页面渲染出错」，只能刷新。改为 `RouteErrorBoundary` 以 `location.pathname` 作 key（**不用** `location.key`，否则 `?tab=` 变化会整树重挂）；实测渲染异常后返回能正常回到行情中心
+- **门禁**：新增 e2e `limitUpSentiment.spec.ts`「从短线情绪进个股，浏览器返回仍停在短线情绪 Tab」；`marketTrust.spec.ts` 抽屉用例的 `toHaveURL(/\/market$/)` 放宽为「pathname=/market 且无 board 参数」（其本意是"抽屉不改 URL"，不因 Tab 入 URL 而误红）。本地（vite dev + mock）实测：limitUpSentiment / marketTrust / conceptBoard / marketDataFace / marketPolling / darkmode 共 50 例全绿，`npx tsc --noEmit` 通过
+- 涉及文件：frontend/src/pages/market/index.tsx、frontend/src/App.tsx、frontend/e2e/limitUpSentiment.spec.ts、frontend/e2e/marketTrust.spec.ts、docs/Changelog.md
+
 ## 2026-09-29 - 生产内存治理：回收遗留 agent 进程 951MB + 服务器专用容器内存上限
 
 - **背景实测**：服务器 3.8GB / **无 swap**、12 个容器**全部 `limit=0`**；`used 3011MB / available 710MB`。真正大头是宿主机上跑了 4~6 天的遗留 agent 进程（`hermes` ×2 + `pi` ×2 = **951MB**，住 tmux 会话 `code` 与 `systemd --user hermes-gateway`），与业务无关；其 `cron/executions.db` 自 Sep 22 起无执行记录，仅心跳空转
