@@ -68,6 +68,14 @@ SERIES_RANGE_UNITS: dict[str, int] = {"d": 1, "w": 7, "m": 31, "y": 366}
 SERIES_DEFAULT_RANGE = "1y"
 SERIES_MAX_LIMIT = 5000
 
+# 窗口天数硬上限（Ruling 36）。两个理由：
+# 1) `date.today() - timedelta(days=days)` 在超大 days 上抛 OverflowError
+#    （`100000y` / `999999999999y` 实测可复现），异常穿透路由 → HTTP 500。
+# 2) 再大的窗口在数据上等价于"全历史"，没有区分价值 —— 故超限**判非法（422）**，
+#    而不是悄悄钳成一个与请求不符的窗口（那会让 `range` 回显说谎，见 F4 教训）。
+# 999y ≈ 365,634 天 ≈ 1001 年前，仍在 Python date 范围内（不会下溢）。
+SERIES_MAX_DAYS = 999 * SERIES_RANGE_UNITS["y"]
+
 # PIT 实际可得日按中国市场日历判定（timestamptz 的 .date() 是 UTC 日，会早一天 = 偷看未来）
 _CN_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -85,7 +93,11 @@ class UnknownMetricError(ValueError):
 
 @dataclass(frozen=True)
 class SeriesRange:
-    """一个 range 字面量解析结果：真实时间窗下界 + 防御性行数上界。"""
+    """一个 range 字面量解析结果：真实时间窗下界 + 防御性行数上界。
+
+    ``limit = days + 1``：窗口下界是**含**的（``period >= today - days``），日频指标
+    在窗内最多有 ``days + 1`` 个点，上界少 1 会让完整序列被误判 ``truncated``。
+    """
 
     text: str
     days: int | None  # None = "all"（无窗）
@@ -94,15 +106,26 @@ class SeriesRange:
     def period_from(self, today: date | None = None) -> date | None:
         if self.days is None:
             return None
-        return (today or date.today()) - timedelta(days=self.days)
+        try:
+            return (today or date.today()) - timedelta(days=self.days)
+        except OverflowError:
+            # 双保险：解析层已按 SERIES_MAX_DAYS 拒绝超大天数，这里绝不把
+            # OverflowError 漏成 HTTP 500（宁可返回"无下界"也不 500）。
+            logger.warning(
+                "series range %s underflows date range; treating as unbounded", self.text
+            )
+            return None
 
 
 def parse_series_range(range_key: str) -> SeriesRange | None:
-    """range 语法 → SeriesRange；非法返回 None（路由层转 422）。
+    """range 语法 → SeriesRange；非法（含超大天数）返回 None（路由层转 422）。
 
     ``30d`` → 窗 30 天（canonical ``"30d"``）、``6w`` → 42（``"42d"``）、``3m`` → 93
     （``"93d"``）、``1y`` → 366（``"366d"``）、``all`` → 无窗。单位换算法只在
-    `SERIES_RANGE_UNITS` 一处；行数上界按 SERIES_MAX_LIMIT 钳制。
+    `SERIES_RANGE_UNITS` 一处。
+
+    两道钳制：天数超过 ``SERIES_MAX_DAYS`` → **None**（422，绝不 500）；行数上界按
+    ``SERIES_MAX_LIMIT`` 钳制。
     """
     key = range_key.strip().lower()
     if key == "all":
@@ -115,9 +138,14 @@ def parse_series_range(range_key: str) -> SeriesRange | None:
     if n <= 0:
         return None
     days = n * SERIES_RANGE_UNITS[unit]
+    if days > SERIES_MAX_DAYS:
+        # 超大窗口 = 无区分价值的"全历史"，且会让 date - timedelta 溢出（500）。
+        # 判非法（422）而不是悄悄钳小：钳小会让回显的 range 与实际窗口不符。
+        return None
     # 规范化文本按**换算后的天数**取：`1y` 与 `366d` 是同一个时间窗，回共同一个 canonical
     # 文本（缓存键与响应 range 都据此），不因字面量不同而各存一份 / 各报一个窗口。
-    return SeriesRange(text=f"{days}d", days=days, limit=min(days, SERIES_MAX_LIMIT))
+    # 上界 = days + 1（窗口下界含当天，日频最多 days+1 个点），再按 SERIES_MAX_LIMIT 封顶。
+    return SeriesRange(text=f"{days}d", days=days, limit=min(days + 1, SERIES_MAX_LIMIT))
 
 
 def _pit_as_of(row: IndustryMetric | None) -> tuple[date | None, str | None]:
@@ -1020,11 +1048,15 @@ async def get_series(
 
     - `range` 是时间窗：只取 ``period >= today - window`` 的行。原来的实现把它当行数
       传给 `get_metric_history`，于是 `range=30d` 对月度指标会给 30 个月 —— 参数名与
-      行为不符（F4）。现在窗口下界由 ``SeriesRange.period_from()`` 决定并原样回传
-      （``period_from``），`limit` 只作同窗内防御性上界，命中则 ``truncated=True``。
+      行为不符（F4）。窗口下界由 ``SeriesRange.period_from()`` 决定并回传为
+      ``period_from``。
+    - 回传的 ``range`` 是**规范化文本**（``1y`` → ``"366d"``），不是请求原样：同一窗口
+      的不同字面量（``1y`` / ``366d``）必须回同一个值，否则缓存与前端会各持一套口径。
+    - ``truncated`` 以**源过滤前**的取数为准（真正打满 DB 上界才算截断）；先过滤再判会
+      把"多源占用上界、过滤后剩得很少"误报成完整（F3）。
     - 序列**不跨源拼接**：同 period 多源共存时按 registry 优先级取一个源。若库里源的
       都不在 registry 优先级表里（登记与数据脱节），**返回空序列 + source_mismatch=True**
-      而不是悄悄丢掉全部点（F-minor：保证"单一源"这条不变量是显式兑现的）。
+      而不是悄悄丢掉全部点（保证"单一源"这条不变量是显式兑现的）。
     """
     parsed = parse_series_range(range_key)
     if parsed is None:
@@ -1032,7 +1064,7 @@ async def get_series(
     cfg = _require_industry(scope_key)
     m = _metric_def_or_raise(cfg, metric_key)
     period_from = parsed.period_from()
-    rows = await repo.get_metric_window(
+    fetched = await repo.get_metric_window(
         db,
         scope_key,
         m.key,
@@ -1040,14 +1072,13 @@ async def get_series(
         limit=parsed.limit,
         freq=m.freq,
     )
-    available = {r.source for r in rows}
+    # 截断判定必须在源过滤之前：命中 DB 上界 = 窗内还有更早的点没取回来
+    truncated = len(fetched) >= parsed.limit
+    available = {r.source for r in fetched}
     source = next((s for s in m.sources if s in available), None)
-    source_mismatch = source is None and bool(rows)
-    if source is not None:
-        rows = [r for r in rows if r.source == source]
-    else:
-        rows = []  # 单一源保证：认不出优先源就不给图（另有 source_mismatch 让调用方报警）
-    truncated = len(rows) >= parsed.limit
+    source_mismatch = source is None and bool(fetched)
+    rows = [r for r in fetched if r.source == source] if source is not None else []
+    # source is None：单一源保证下不给图（另有 source_mismatch 让调用方报警）
     stored = rows[-1].caliber_version if rows else None
     return MetricSeriesOut(
         scope_key=scope_key,

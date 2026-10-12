@@ -30,7 +30,7 @@ from typing import Any
 
 import asyncpg
 import pytest
-from sqlalchemy import MetaData, create_engine, select
+from sqlalchemy import MetaData, create_engine, func, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import Session
@@ -317,15 +317,22 @@ def test_reimport_omitting_published_at_preserves_stored_pit() -> None:
 
 @requires_pg
 def test_series_range_is_a_real_time_window_not_a_row_count() -> None:
-    """**F4 靶向测试**：`range=30d` 对月度指标只返回窗内点，不是 30 个月。
+    """**F4 靶向测试**：`range=30d` 是时间窗，不是"最近 30 行"。
 
-    月度指标给 5 个点：2026-06-30 / 07-31 / 08-31 / 09-30（窗内）与 2025-08-31（窗外）。
-    旧实现把 range 当行数（limit=30）→ 5 个点全给；现在窗口下界 = 今天-30 天，
-    2025-08-31 必须被排除，响应 `period_from` 与 `range` 如实回传。
+    **日期相对 today 构造**（上一版写死 2026-06~09，在 2026-10-12 之后看全部落在窗外，
+    只证明了"远古点被排除"，没有测边界）。现在给 5 个点，其中 3 个卡在窗口边界上：
+
+    - ``today``：窗内（下界之上）
+    - ``today - 30``：**正好落在下界**（窗口含下界 → 必须保留）
+    - ``today - 31``：刚刚出界 → 必须排除
+    - ``today - 400``：远出界 → 必须排除
+    - ``today + 1``：未来点（上界为空，不排除；此处用于证明过滤只按窗口不按其它）
+
+    旧实现把 range 当行数（limit=30）→ 5 个点全给，边界断言立刻红。
     """
     today = date.today()
-    in_window = [date(2026, 6, 30), date(2026, 7, 31), date(2026, 8, 31), today]
-    out_of_window = date(2025, 8, 31)
+    inside = [today, today - timedelta(days=30)]
+    outside = [today - timedelta(days=31), today - timedelta(days=400)]
 
     async def _scenario(db: Any) -> Any:
         rows = [
@@ -343,7 +350,7 @@ def test_series_range_is_a_real_time_window_not_a_row_count() -> None:
                 "published_at": None,
                 "caliber_version": None,
             }
-            for i, p in enumerate([*in_window, out_of_window])
+            for i, p in enumerate([*inside, *outside])
         ]
         await repo.upsert_metrics(db, rows)
         await db.commit()
@@ -354,10 +361,69 @@ def test_series_range_is_a_real_time_window_not_a_row_count() -> None:
     assert out.range == "30d"
     assert out.period_from == today - timedelta(days=30)
     got = [p.period for p in out.points]
-    assert out_of_window not in got, f"窗外点泄漏进来（range 被当成行数）: {got}"
     assert got == sorted(got), "序列必须升序"
-    assert set(got) <= set(in_window)
+    assert set(got) == set(inside), f"窗口边界不符（应含下界当天、排除下界之前）: {got}"
+    # 完整日频窗（31 个点）不得被误判截断：limit = days + 1（F3 差一）
+    assert out.truncated is False, "完整窗内序列被误判 truncated"
+    assert out.limit == 31
     assert all(p.as_of_source == service.AS_OF_FROM_PERIOD for p in out.points)
+
+
+@requires_pg
+def test_series_truncated_is_measured_before_source_filtering() -> None:
+    """`truncated` 按**源过滤前**的取数判定（F3）：多源占用上界时不得报"完整"。
+
+    `range=3d`（limit=4）。只放 ``manual`` 的 4 行（正好打满上界，且都在 3 天窗内）→
+    ``truncated=True``；再放 1 行 ``mock``（低优先源）也不改变结论。旧实现先按源过滤再
+    比上界，manual 恰好 4 行仍会 True —— 故这里额外验证"过滤后行数少于上界但**过滤前**
+    已打满"这一条：把 manual 减到 3 行、mock 加到 3 行（过滤前 6 ≥ 4，过滤后 3 < 4）。
+    """
+    metric_key = "pork_wholesale"  # sources = ["manual", "mock"]
+    today = date.today()
+    periods = [today - timedelta(days=i) for i in range(3)]  # 窗内（3d 窗 = 下界 today-3）
+
+    async def _scenario(db: Any) -> tuple[Any, int]:
+        rows = [
+            {
+                "industry_key": "pig",
+                "stock_id": 0,
+                "metric_key": metric_key,
+                "source": src,
+                "source_tier": "official",
+                "freq": "daily",
+                "period": p,
+                "value": 19.5,
+                "unit": "元/kg",
+                "extra": None,
+                "published_at": None,
+                "caliber_version": None,
+            }
+            for src in ("manual", "mock")
+            for p in periods
+        ]
+        await repo.upsert_metrics(db, rows)
+        await db.commit()
+        # 过滤前库里确有 6 行（2 源 × 3 天），且全部落在 3d 窗内
+        total = (
+            await db.execute(
+                select(func.count())
+                .select_from(IndustryMetric)
+                .where(
+                    IndustryMetric.industry_key == "pig", IndustryMetric.metric_key == metric_key
+                )
+            )
+        ).scalar_one()
+        return await service.get_series(db, "pig", metric_key, "3d"), int(total)
+
+    out, pre_filter_rows = asyncio.run(_with_rollback(_scenario))
+
+    assert pre_filter_rows == 6
+    assert out.limit == 4  # 3d 窗 → days+1
+    # 打满上界后只取回最新 4 行（2 天 × 2 源），源过滤后剩 2 个 manual 点
+    assert len(out.points) == 2
+    assert len(out.points) < out.limit
+    assert out.truncated is True, "过滤前已打满上界，必须报截断（F3）"
+    assert out.source == "manual"
 
 
 @requires_pg

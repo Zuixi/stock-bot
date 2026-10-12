@@ -7,8 +7,8 @@ from datetime import date, datetime
 from pydantic import BaseModel, Field, field_validator
 
 # PIT 时点口径：中国市场的"实际可得日"按 Asia/Shanghai 日历判定（timestamptz 的 .date()
-# 取的是 UTC 日期，北京 00:30 发布会被算成前一天 = 回测偷看未来，故一律先转上海再取日期）。
-CN_TZ_NAME = "Asia/Shanghai"
+# 取的是 UTC 日期，北京 00:30 发布会被算成前一天 = 回测偷看未来）。
+# 时区常量单点在 service 层的 `_CN_TZ`（此处不再重复声明，避免两处口径漂移）。
 
 
 class MetricDelta(BaseModel):
@@ -158,8 +158,10 @@ class MetricSeriesOut(BaseModel):
     """升序序列 + 四徽章（Redis 缓存）。
 
     ``range`` 是**真实时间窗**：``period_from`` 给出窗口下界（含），返回的点全部
-    ``period >= period_from``；``limit`` 只是防御性行数上界（防病态数据拉爆）。
-    请求什么 range 就回什么 range —— 上限截断发生时 ``truncated=True``，不假装完整。
+    ``period >= period_from``；``limit`` 只是防御性行数上界（防病态数据拉爆），
+    打满时 ``truncated=True``。
+    ``range`` 回传的是**规范化文本**（按天数：``1y`` → ``"366d"``、``3m`` → ``"93d"``、
+    ``all`` → ``"all"``），不是请求字面量 —— 同一窗口的不同写法必须回同一个值。
     """
 
     scope_key: str

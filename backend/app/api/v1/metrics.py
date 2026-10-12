@@ -44,6 +44,13 @@ def _unprocessable(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
 
 
+def _clean_keys(keys: list[str] | None) -> list[str] | None:
+    """剔除空白项并保序去重；``None`` 原样返回（None = "全部"，与空列表语义不同）。"""
+    if keys is None:
+        return None
+    return list(dict.fromkeys(k.strip() for k in keys if k.strip()))
+
+
 @router.get("/latest", response_model=list[MetricLatestOut])
 async def get_latest_metrics(
     db: DbDep,
@@ -57,7 +64,13 @@ async def get_latest_metrics(
     """每指标最新值 + `source/as_of/freq/caliber_version` 四徽章（registry 驱动）。
 
     `as_of_source` 标注 `as_of` 是 `published_at`（真 PIT）还是回退的 `period`。
+
+    空值归一：HTTP 层写不出真正的空列表（`?metric_keys=` 会被解析成 `[""]`），故先剔除
+    空白项；剔除后为空 → 422，而不是当成"未提供"而返回全部（那会把客户的参数拼装 bug
+    伪装成一次合法全量查询）。
     """
+    scope_keys = _clean_keys(scope_keys)
+    metric_keys = _clean_keys(metric_keys)
     if metric_keys is not None and not metric_keys:
         raise _unprocessable("metric_keys 不得为空列表：省略该参数才表示'全部已登记指标'")
     if scope_keys is not None and not scope_keys:
@@ -84,8 +97,9 @@ async def get_series(
 ) -> MetricSeriesOut:
     """**窗口内**升序序列（单一源 + 四徽章），Redis 缓存。
 
-    `range` 是时间窗（`period >= today - window`），响应原样回传 `range` 与 `period_from`，
-    窗口不因缓存而复用错配（键含 range 文本）。
+    `range` 是时间窗（`period >= today - window`）；响应回传**规范化后**的 `range`
+    （`1y` → `"366d"`，同一窗口的不同写法归一）与 `period_from`，缓存键也用规范化文本。
+    超大或畸形 range（如 `100000y`）→ 422，绝不 500。
     """
     parsed = service.parse_series_range(range)
     if parsed is None:

@@ -21,11 +21,12 @@ _METRIC_CONFLICT_COLS = ("industry_key", "stock_id", "metric_key", "source", "fr
 async def upsert_metrics(db: AsyncSession, rows: list[dict]) -> int:
     """Idempotent bulk upsert of metric rows. Returns affected row count.
 
-    ``published_at`` / ``caliber_version`` 用 ``coalesce(excluded, 既有)``：重导入**省略**
-    这两列时必须保留已记录的值（人工通道字段可选，默认 None；若直接取 excluded.*，
-    一次不带 PIT 的重发就会把已登记的 PIT 抹成 NULL —— 而保住 PIT 正是本表加列的目的）。
-    显式给了非 NULL 值时照常覆盖（修订留痕，ADR 0011）。
-    ``extra`` 同理保留既有值（人工导入 extra 恒 None）。
+    **只有** ``published_at`` / ``caliber_version`` 用 ``coalesce(excluded, 既有)``
+    （Ruling 36 明确只给这两列）：重导入**省略**它们时保留已记录的值（人工通道字段可选、
+    默认 None；直接取 ``excluded.*`` 会让一次不带 PIT 的重发把已登记的 PIT 抹成 NULL，
+    而保住 PIT 正是本表加列的目的）。显式给了非 NULL 值时照常覆盖（修订留痕，ADR 0011）。
+
+    ``unit`` / ``extra`` **保持** ``excluded.*`` 的直接覆盖语义（本任务无权改它们的行为）。
     """
     if not rows:
         return 0
@@ -37,8 +38,8 @@ async def upsert_metrics(db: AsyncSession, rows: list[dict]) -> int:
         set_={
             "source_tier": stmt.excluded.source_tier,
             "value": stmt.excluded.value,
-            "unit": func.coalesce(stmt.excluded.unit, IndustryMetric.unit),
-            "extra": func.coalesce(stmt.excluded.extra, IndustryMetric.extra),
+            "unit": stmt.excluded.unit,
+            "extra": stmt.excluded.extra,
             "published_at": func.coalesce(stmt.excluded.published_at, IndustryMetric.published_at),
             "caliber_version": func.coalesce(
                 stmt.excluded.caliber_version, IndustryMetric.caliber_version

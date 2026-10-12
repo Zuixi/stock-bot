@@ -12,9 +12,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi import HTTPException
@@ -70,6 +69,33 @@ def test_parse_series_range_period_from_is_calendar_window() -> None:
 @pytest.mark.parametrize("range_key", ["", "y", "1", "1x", "-3d", "0d", "1.5y", "1y2m"])
 def test_parse_series_range_rejects_garbage(range_key: str) -> None:
     assert service.parse_series_range(range_key) is None
+
+
+@pytest.mark.parametrize("range_key", ["100000y", "999999999999y", "1000y"])
+def test_parse_series_range_rejects_absurd_windows(range_key: str) -> None:
+    """Ruling 36：超大窗口必须**判非法**（调用方 422），绝不让 `date - timedelta` 溢出。
+
+    修复前 `100000y` → `days = 36_600_000` → `OverflowError`；`999999999999y` →
+    `timedelta` 自身抛 OverflowError —— 异常穿透路由变成 HTTP 500。
+    """
+    assert service.parse_series_range(range_key) is None
+
+
+def test_parse_series_range_accepts_boundary_window() -> None:
+    """上限内的最大窗口可用（`999y`），且 `period_from` 真能算出来（不溢出）。"""
+    parsed = service.parse_series_range("999y")
+    assert parsed is not None
+    assert parsed.days == service.SERIES_MAX_DAYS
+    assert parsed.period_from(date(2026, 10, 12)) == date(2026, 10, 12) - timedelta(
+        days=service.SERIES_MAX_DAYS
+    )
+
+
+def test_parse_series_range_limit_aligns_with_inclusive_window() -> None:
+    """`limit = days + 1`：窗口下界含当天，日频在窗内最多 days+1 个点（F3 差一）。"""
+    parsed = service.parse_series_range("30d")
+    assert parsed is not None
+    assert parsed.days == 30 and parsed.limit == 31
 
 
 def test_parse_series_range_clamps_limit_to_max() -> None:
@@ -166,12 +192,14 @@ def test_latest_out_carries_four_badges() -> None:
 def test_as_of_uses_shanghai_calendar_not_utc() -> None:
     """Ruling 35：`published_at` 的"实际可得日"按 Asia/Shanghai 判定。
 
-    北京 2026-10-09 00:30 = UTC 2026-10-08 16:30。用 `.date()` 直接取 UTC 日会得到
-    10-08（比真实可得日早一天 = 回测偷看未来）。
+    输入构造成 **UTC 2026-10-08 16:30**（= 北京 2026-10-09 00:30）——旧实现
+    `row.published_at.date()` 取 UTC 日历日会得到 10-08（比真实可得日早一天 =
+    回测偷看未来），故去掉 `astimezone(_CN_TZ)` 时本用例必然变红。
+    （上一版输入自带 `+08:00`，两种实现都给 10-09，是空断言 —— 已按 F6 重建。）
     """
-    beijing = datetime(2026, 10, 9, 0, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
-    assert beijing.astimezone(UTC).date() == date(2026, 10, 8)  # 证明这不是空断言
-    as_of, source = service._pit_as_of(_row(published_at=beijing))
+    utc_instant = datetime(2026, 10, 8, 16, 30, tzinfo=UTC)
+    assert utc_instant.date() == date(2026, 10, 8)  # 旧实现会给出的（错误）值
+    as_of, source = service._pit_as_of(_row(published_at=utc_instant))
     assert as_of == date(2026, 10, 9)
     assert source == service.AS_OF_FROM_PUBLISHED
 
@@ -289,6 +317,59 @@ async def test_latest_endpoint_rejects_empty_lists_with_422(
     with pytest.raises(HTTPException) as exc:
         await api.get_latest_metrics(db=None, **kwargs)  # type: ignore[arg-type]
     assert exc.value.status_code == 422
+
+
+@pytest.mark.parametrize("keys", [[""], ["", "  "], ["hog_price", ""]])
+async def test_latest_endpoint_normalises_blank_keys(
+    monkeypatch: pytest.MonkeyPatch, keys: list[str]
+) -> None:
+    """`?metric_keys=` 经 HTTP 解析成 `[""]`（不是 `[]`）——空白项必须被剔除。
+
+    剔除后为空 → 422（不许当成"未提供"而返回全部）；剔除后非空 → 用清洗过的列表查。
+    """
+    from app.api.v1 import metrics as api
+
+    seen: dict[str, Any] = {}
+
+    async def _fake(
+        _db: Any, scope_keys: list[str] | None = None, metric_keys: list[str] | None = None
+    ) -> list[Any]:
+        seen["metric_keys"] = metric_keys
+        return []
+
+    monkeypatch.setattr(service, "get_latest_metrics_across_scopes", _fake)
+    cleaned = [k for k in keys if k.strip()]
+    if cleaned:
+        await api.get_latest_metrics(db=None, scope_keys=None, metric_keys=keys)  # type: ignore[arg-type]
+        assert seen["metric_keys"] == cleaned
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await api.get_latest_metrics(db=None, scope_keys=None, metric_keys=keys)  # type: ignore[arg-type]
+        assert exc.value.status_code == 422
+
+
+@pytest.mark.parametrize("absurd", ["100000y", "999999999999y"])
+async def test_series_endpoint_returns_422_for_absurd_range_never_500(
+    monkeypatch: pytest.MonkeyPatch, absurd: str
+) -> None:
+    """Ruling 36 的靶向回归：超大 range → **422**，且**绝不抛异常**。
+
+    修复前这两个输入在 `SeriesRange.period_from()` 里抛 `OverflowError`
+    （`100000y` → days=36_600_000；`999999999999y` → timedelta 自身拒绝），路由的
+    except 分支不覆盖它 → HTTP 500。
+    """
+    from app.api.v1 import metrics as api
+
+    async def _never(*_a: Any, **_kw: Any) -> MetricSeriesOut:
+        raise AssertionError("非法 range 必须在触 service 前被拒（否则会 500）")
+
+    monkeypatch.setattr(service, "get_series", _never)
+    with pytest.raises(HTTPException) as exc:  # 注意：是 HTTPException，不是 OverflowError
+        await api.get_series(
+            db=None, cache=_NoneCache(), scope_key="pig", metric_key="hog_price", range=absurd
+        )  # type: ignore[arg-type]
+    assert exc.value.status_code == 422
+    assert "range" in str(exc.value.detail)
 
 
 async def test_series_endpoint_rejects_bad_range_with_422_not_404() -> None:
