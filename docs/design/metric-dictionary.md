@@ -169,6 +169,73 @@ cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -c \
 > **A/B/C 归类（ADR 0014）**：8 个全属 **B 类**（只用当日点内事实，可回算、允许回补，
 > 带 20 日窗口完备守卫）。无 A 类、无 C 类指标。
 
+**已注册（交易活跃度 · 杠杆资金 · 估值与风险溢价，scope = `market`；spec §S1.9 + §S1.11，2026-10-12 落地）**：
+
+> 单位 / 频率逐字抄自 `industry_registry.MARKET_ACTIVITY_METRICS`（本表只是转录）。
+> 13 个 key **同属一个命名空间**（规则 4）、落**同一张** `industry_metrics`、
+> `industry_key='market'`（与上面 §S1.8 的 8 个**同一个 scope**、同一个读面）。
+> `pe_csi300` 是 `erp_10y` 的**分子底座**（也注册、也落库），不计入 spec 承诺的 13 个。
+
+> 本表**刻意只有 4 列**（与上面的样例表同形）：`check_metric_dictionary.py` 用
+> "5 列表"识别「新增提案」表，给本表加第 5 列（如展示分组）会让它被误判成提案表
+> （已注册 key 出现在提案表 = 失败）。分组信息看 `MetricDef.group`。
+
+| `metric_key` | registry `name` | 单位 `unit` | 频率 `freq` |
+|---|---|---|---|
+| `market_turnover_amount` | 全市场成交额 | 亿元 | daily |
+| `idx_turnover_ratio_sse` | 上证指数换手率 | % | daily |
+| `idx_turnover_ratio_szse` | 深证成指换手率 | % | daily |
+| `idx_turnover_ratio_bse50` | 北证50换手率 | % | daily |
+| `idx_turnover_ratio_star` | 科创综指换手率 | % | daily |
+| `idx_turnover_ratio_chinext` | 创业板指换手率 | % | daily |
+| `idx_turnover_ratio_sse50` | 上证50换手率 | % | daily |
+| `idx_turnover_ratio_csi300` | 沪深300换手率 | % | daily |
+| `margin_financing_balance` | 融资余额 | 亿元 | daily |
+| `margin_financing_buy_ratio` | 融资买入额占比 | % | daily |
+| `margin_short_balance` | 融券余额 | 亿元 | daily |
+| `cn_treasury_yield_10y` | 10年期国债收益率 | % | daily |
+| `erp_10y` | 股债收益差（10年期） | % | daily |
+| `pe_csi300` | 沪深300市盈率（整体法） | 倍 | daily |
+
+> **换手率口径（spec §S1.9 验收判据：口径必须可查）**：7 个换手率**一律自由流通股本口径**。
+> 5 个直取指数取 TuShare `index_dailybasic.turnover_rate_f`（上游自身定义 = 成交量 /
+> 自由流通股本 `free_share`，**不做二次换算**）；北证50 与科创综指因
+> `index_dailybasic` **不覆盖**（实测返回 0 行且不报错）改**自建** = 成分股
+> `daily_basic.turnover_rate_f` 按 `index_weight.weight` 的权重加权平均。
+> 总股本口径 `turnover_rate` **不落库**，只在 `extra.turnover_rate_total` 留痕供对账。
+> 自建行的 `extra` 恒带 `caliber='free_float_weighted'`、`weight_period`、
+> `member_coverage`、`weight_coverage`、`attribution='current_index_weight_snapshot'`。
+>
+> **`erp_10y` 的 PE 口径与指数（spec §S1.11 验收判据：两者都必须在 UI 可查）**：
+> **整体法**（指数总市值 / 指数口径净利润，**不是成分中位数**）、**指数 = 沪深300
+> （`000300.SH`）**，取 TuShare `index_dailybasic.pe`。公式
+> `erp_10y = 1/PE × 100 − cn_treasury_yield_10y`（单位：百分点）。
+> PE 与收益率都落 `extra`（`pe` / `earnings_yield_pct` / `treasury_yield`），可逐日手算。
+> **PE 单独落 `pe_csi300`**，让 `1/PE` 这一半能从库里独立复原。
+>
+> **§S1.9 的杠杆资金口径**：`margin_financing_balance` / `margin_short_balance` 是交易所
+> 汇总口径（TuShare `margin`）**三所求和**（SSE + SZSE + BSE），原生单位**元**、
+> 落库换算**亿元**，逐所拆分落 `extra.by_exchange_yuan`；
+> `margin_financing_buy_ratio` = 融资买入额 / **当日全市场成交额**（`daily_quotes.amount`
+> 合计，亿元）× 100，分母缺失或为 0 → NULL。
+>
+> **PIT（ADR 0011 / Ruling 34-35）**：`published_at` 按**产地各自的可得出处**分三档
+> （不是一律 15:00，也不是回退 `period`）——行情类与 `erp_10y` 当日 **15:00**、
+> 三个 `margin_*` 当日 **18:00**（交易所收盘后清算发布）、`cn_treasury_yield_10y`
+> 当日 **19:00**（银行间收市后中债/东财发布）。均带 `Asia/Shanghai` 时区。
+>
+> **口径版本**：`caliber_version = 's1.9s1.11-v1'`。
+>
+> **A/B/C 归类（ADR 0014）**：13 个全属 **B 类**（只用当日点内事实，可回算、允许回补）。
+> 自建的两个换手率**含 C 类成分权重快照**，但只作**归属**用且**字段级标注**
+> （`attribution='current_index_weight_snapshot'`，权重取该日或之前最近一期，**不看未来**）
+> —— 符合 ADR 0014 第②③条：禁止用当前快照回算"成分本身"，允许用行情事实按成分聚合。
+> 无 A 类指标（本批次不消费"只给当下"的盘中明细）。
+>
+> **Step-0 实机结论 / 未验证余项**见 [`data-source.md` 附.7](./data-source.md#附7-s19--s111-段交易活跃度--杠杆资金--估值与风险溢价的数据源复核2026-10-12)。
+> **本批次没有新增/改动的 `metric_key` 提案**：`erp_10y` 与 `idx_turnover_ratio_sse`
+> 已从下方"新增提案"表**移入本表**（它们现在有代码可核）。
+
 **已注册因子（`factor_key` · spec §S2.1；登记地 = `industry_registry.FACTORS`）**：
 
 > **因子不是指标**：`metric_key` 描述**一条序列**，`factor_key` 描述**一次变换**
@@ -243,11 +310,8 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --project backend python backend/scripts/check
 | `metric_key` | 含义 | 单位 | 频率 | 备注 |
 |---|---|---|---|---|
 | `etf_share_change` | 宽基 ETF 份额变化 | 份 | 日 | 提案见 spec §S1.7（**不在 registry 中**）|
-| `margin_financing_balance` | 融资余额 | 元 | 日 | 提案见 spec §S1.7 / §S1.9（**不在 registry 中**，勿当既有 key 引用）|
 | `southbound_net_buy` | 南向资金净买入 | 元 | 日 | 提案见 spec §S1.7（**不在 registry 中**）|
 | `industrial_capital_net_change` | 产业资本净增减持 | 元 | 事件驱动 | 提案见 spec §S1.7，依赖 S3.2（**不在 registry 中**）|
-| `idx_turnover_ratio_sse` | 上证换手率 | % | 日 | 市场模块 |
-| `erp_10y` | 股债收益差（10 年期） | % | 日 | 情绪模块 |
 | `reverse_repo_7d_rate` | 7 天期逆回购操作利率（政策利率锚） | % | 日 | 与市场侧回购利率分 key（规则 5）|
 | `fr007` | 银行间 7 天回购定盘利率 | % | 日 | 市场侧成交口径 |
 | `fdr007` | 银银间 7 天回购定盘利率 | % | 日 | 市场侧成交口径 |

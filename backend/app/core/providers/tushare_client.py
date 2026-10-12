@@ -331,6 +331,174 @@ class TuShareClient(RateLimitedSyncProvider):
         return await self._query("cb_basic")
 
     # ------------------------------------------------------------------
+    # 两融 / 指数日度指标 / 指数成分权重（spec §S1.9 / §S1.11 底座）
+    # ------------------------------------------------------------------
+
+    async def fetch_margin(
+        self,
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        fields: str = "trade_date,exchange_id,rzye,rzmre,rzche,rqye,rqmcl,rzrqye,rqyl",
+    ) -> pd.DataFrame:
+        """融资融券**市场汇总**（TuShare ``margin``，交易所口径，2026-10-12 实机验证）.
+
+        一行 = 一个交易日 × 一个交易所（`exchange_id` ∈ {SSE, SZSE, BSE}）；
+        金额单位**元**（实测 20261009 SSE `rzye`=1.291437e12 元），`rqyl` 单位**股**。
+        单次返回上限 **4000 行**（约 8 年 × 3 交易所）→ 长区间回补必须分片。
+
+        字段：`rzye` 融资余额 / `rzmre` 融资买入额 / `rzche` 融资偿还额 /
+        `rqye` 融券余额 / `rqmcl` 融券卖出量 / `rzrqye` 融资融券余额 / `rqyl` 融券余量。
+        """
+        kwargs: dict[str, str] = {}
+        if trade_date:
+            kwargs["trade_date"] = trade_date
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        return await self._query("margin", fields=fields, **kwargs)
+
+    async def fetch_margin_detail(
+        self,
+        trade_date: str = "",
+        ts_code: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> pd.DataFrame:
+        """融资融券**个股明细**（TuShare ``margin_detail``，2026-10-12 实机验证）.
+
+        实测 20261009 = 4,455 行（沪深北全市场，单日）；单次返回上限 **6000 行**
+        → 按日拉取即可，区间拉取会被上限截断（实测两天窗口就撞 6000）。
+        **本任务的 spec §S1.9 只需要市场汇总**（`margin`），个股明细留作后续面。
+        """
+        kwargs: dict[str, str] = {}
+        if trade_date:
+            kwargs["trade_date"] = trade_date
+        if ts_code:
+            kwargs["ts_code"] = ts_code
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        return await self._query("margin_detail", **kwargs)
+
+    async def fetch_index_dailybasic(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        fields: str = (
+            "ts_code,trade_date,total_mv,float_mv,total_share,float_share,"
+            "free_share,turnover_rate,turnover_rate_f,pe,pe_ttm,pb"
+        ),
+    ) -> pd.DataFrame:
+        """指数日度指标（TuShare ``index_dailybasic``，2026-10-12 实机验证）.
+
+        **两个换手率口径并存，必须显式选一个**（spec §S1.9 验收判据）：
+
+        - ``turnover_rate``  = 成交量 / **总股本**
+        - ``turnover_rate_f`` = 成交量 / **自由流通股本**（free_share）
+
+        本任务的 registry 采用 **``turnover_rate_f``（自由流通股本口径）**，源即
+        TuShare 该列自身定义，不做二次换算。
+
+        ⚠️ **并非所有指数都有**：实测 `index_dailybasic` 只覆盖 15 个指数代码，
+        spec §S1.9 的 7 个里 **北证50（899050.BJ）与科创综指（000680.SH）返回 0 行**
+        （不报错），须由 `index_weight` + `daily_basic` 自建（见
+        `scripts/spike_s19_s111_sources.py` PROBE 2b 与 `docs/design/data-source.md` 附.7）。
+        单次返回上限实测 **3000 行**（`ts_code=000300.SH` 无窗口 = 3000 行，
+        最早只到 20140609）→ 长历史回补必须按日期分片。
+        """
+        kwargs: dict[str, str] = {}
+        if ts_code:
+            kwargs["ts_code"] = ts_code
+        if trade_date:
+            kwargs["trade_date"] = trade_date
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        return await self._query("index_dailybasic", fields=fields, **kwargs)
+
+    async def fetch_index_weight(
+        self,
+        index_code: str,
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> pd.DataFrame:
+        """指数成分权重（TuShare ``index_weight``，2026-10-12 实机验证）.
+
+        `index_code` 如 `899050.BJ`（北证50）/ `000680.SH`（科创综指）。返回
+        `index_code, con_code, trade_date, weight`，**月度快照**（实测北证50 自
+        20221130 起 47 个月度期、科创综指自 20250930 起 13 期）。
+
+        ⚠️ **必须传日期窗口或 trade_date**：不传窗口一次只返回最新一期（实测
+        北证50 不带窗口 = 上一期 50 行）。本任务是自建换手率的成分底座。
+        """
+        kwargs: dict[str, str] = {"index_code": index_code}
+        if trade_date:
+            kwargs["trade_date"] = trade_date
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        return await self._query("index_weight", **kwargs)
+
+    async def fetch_daily_basic_by_trade_date(
+        self,
+        trade_date: str,
+        *,
+        fields: str = "ts_code,trade_date,turnover_rate,turnover_rate_f,total_share,free_share",
+        page_size: int = 6000,
+        max_pages: int = 4,
+    ) -> pd.DataFrame:
+        """**按交易日**拉全市场 `daily_basic`（含 ``turnover_rate_f``），自动翻页.
+
+        为什么不是逐股票拉：`daily_basic` 单次上限实测 **6000 行**（全市场约 5559 行/日），
+        故"按日一次调用"即可覆盖全市场；逐 `ts_code` 拉 500 只票要多 500 倍调用。
+
+        **为什么必须显式翻页**：`ts_code` + 日期窗口的调用会撞 6000 行上限，
+        而北证50 有 349 只成分股 × 3 年 ≈ 26 万行——靠"逐日"而不是"逐股"才能不被截断。
+
+        `max_pages` 是防御：市场若涨到 > 24000 只票，本方法会**抛错**而不是静默丢行
+        （丢行会让自建换手率悄悄少算成分）。
+        """
+        frames: list[pd.DataFrame] = []
+        for page in range(max_pages):
+            df = await self._query(
+                "daily_basic",
+                fields=fields,
+                trade_date=trade_date,
+                offset=page * page_size,
+                limit=page_size,
+            )
+            if df is None or not len(df):
+                break
+            frames.append(df)
+            if len(df) < page_size:
+                break
+        else:  # pragma: no cover — 只有在页数用尽仍满页时才可能到
+            raise RuntimeError(
+                f"daily_basic({trade_date}) 超过 {max_pages} 页仍未取完 —— "
+                "请调大 max_pages，不要静默只用前几页（会少算成分）"
+            )
+        if not frames:
+            # **响亮失败**（Ruling 51 同类纪律）：调用方只在真实交易日调用本方法
+            # （交易日来自 `daily_quotes` 实际持有的日期），一个真交易日返回 0 行
+            # 只可能是上游异常/被限频/超时。返回空表会让调用方把它当成"这天没数据"
+            # 而静默落 NULL —— 实测 2026-09-01…10-09 有 23 天因此被记成
+            # `source_empty`（其实是 `Read timed out` 重试耗尽后的假缺口）。
+            raise RuntimeError(
+                f"daily_basic({trade_date}) 返回 0 行 —— 该日是真实交易日（来自 daily_quotes），"
+                "0 行意味着上游异常/限频/超时。**不得**把它当成缺数静默落 NULL，请重跑回补"
+                "（自建指标有增量缓存，重跑只补缺口）。"
+            )
+        return pd.concat(frames, ignore_index=True)
+
+    # ------------------------------------------------------------------
     # Shenwan industry classification APIs
     # ------------------------------------------------------------------
 

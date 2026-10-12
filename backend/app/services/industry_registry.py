@@ -1070,6 +1070,333 @@ MARKET_SENTIMENT = IndustryConfig(
     position_templates={},
 )
 
+# ── 全市场交易活跃度 / 杠杆 / 估值（spec §S1.9 + §S1.11）──────────────────
+#
+# 与 S1.8 同一个 scope 键（`industry_key='market'`）：S1.9 的 11 个 + S1.11 的 2 个
+# （外加 ERP 的 PE 底座 `pe_csi300`）全部落进同一张 `industry_metrics`、走同一个
+# `GET /api/v1/metrics/*` 读面。**没有第二张表、没有第二套读路。**
+#
+# 计算与落库在 `app/services/market_activity_service.py`；Step-0 实机结论见
+# `docs/design/data-source.md` 附.7。
+MARKET_ACTIVITY_CALIBER_VERSION = "s1.9s1.11-v1"
+
+#: 两融口径的产地（TuShare `margin` = 交易所官方汇总，三所求和）。
+MARGIN_SOURCE = "tushare_margin"
+#: 全市场成交额的产地（本地聚合 `daily_quotes.amount`）。
+MARKET_TURNOVER_AMOUNT_SOURCE = "local_calc"
+#: 10Y 国债收益率的产地（中债官方曲线；备源东财镜像，两源同日逐值相同）。
+TREASURY_YIELD_SOURCE = "chinabond_yield_curve"
+#: 指数日度指标的产地（5 个直取指数换手率的来源）。
+INDEX_DAILYBASIC_SOURCE = "tushare_index_dailybasic"
+#: 自建指数换手率的产地（成分权重 × 成分股 daily_basic）。
+SELF_BUILT_TURNOVER_SOURCE = "self_built_index_turnover"
+#: ERP 的 PE 底座产地（沪深300 整体法 PE）。
+ERP_PE_SOURCE = "tushare_index_dailybasic"
+
+#: §S1.9 / §S1.11 的 `extra.missing_reason` 缺数语义。**缺数恒 NULL，绝不填 0**：
+#: 0 元融券余额是"今天真的没有融券"这一事实断言，与"这天没有数据"完全相反。
+MARKET_ACTIVITY_MISSING_REASONS: dict[str, str] = {
+    "no_quote_rows": "该交易日 daily_quotes 无行（行情底座缺失）",
+    "source_empty": "上游当日/该区间没有任何值（未发布、未采集或本地无该日行情）",
+    "index_not_in_source": (
+        "该指数不在 index_dailybasic 的覆盖范围（实测 北证50/科创综指 返回 0 行且不报错）"
+    ),
+    "no_weight_snapshot": "该交易日之前没有任何 index_weight 月度快照（指数尚未发布）",
+    "partial_weight_coverage": (
+        "自建指数的权重覆盖率低于门槛（extra.weight_coverage < 0.95）—— 参与未达标，"
+        "不拿缺失成分拼出一个换手率"
+    ),
+    "partial_member_coverage": "自建指数的当日成分行情覆盖率不足",
+    "treasury_yield_missing": "该交易日 10Y 国债收益率缺数（中债曲线/东财镜像未发布）",
+    "pe_missing": "该交易日沪深300 整体法 PE 缺数（index_dailybasic 未发布或未回补）",
+    "zero_turnover_denominator": (
+        "该交易日全市场成交额为 0（分母为 0）—— 融资买入额占比数学上无定义，落 NULL"
+    ),
+}
+
+#: 换手率口径（spec §S1.9 硬性验收判据）：**自由流通股本**。
+TURNOVER_CALIBER_NOTE = (
+    "换手率口径 = **自由流通股本**：直取的 5 个指数取 index_dailybasic.turnover_rate_f"
+    "（上游自身定义 = 成交量 / 自由流通股本，free_share），不做二次换算；自建的 2 个指数"
+    "（北证50 / 科创综指）取成分股 daily_basic.turnover_rate_f 的权重加权平均"
+    "（权重 = index_weight.weight）。总股本口径 turnover_rate **不落库**，"
+    "只在 extra.turnover_rate_total 留痕供对账。"
+)
+
+
+def _turnover_def(
+    key: str, name: str, code: str, *, source: str, tier: str, note: str
+) -> MetricDef:
+    """7 个指数换手率的共同形状（口径文案统一，避免 7 份会腐烂的复制）。"""
+    return MetricDef(
+        key=key,
+        name=name,
+        unit="%",
+        freq="daily",
+        tier=tier,
+        sources=[source],
+        group="activity",
+        higher_is_better=None,
+        caliber_version=MARKET_ACTIVITY_CALIBER_VERSION,
+        description=(
+            f"{note}（{code}）。**换手率口径 = 自由流通股本**（详见同组其它指标与 "
+            "docs/design/metric-dictionary.md）。" + TURNOVER_CALIBER_NOTE
+        ),
+    )
+
+
+MARKET_ACTIVITY_METRICS: list[MetricDef] = [
+    # ── ① 全市场成交额（spec §S1.9「交易活跃度」）──────────────────────
+    MetricDef(
+        key="market_turnover_amount",
+        name="全市场成交额",
+        unit="亿元",
+        freq="daily",
+        tier=TIER_DERIVED,
+        sources=[MARKET_TURNOVER_AMOUNT_SOURCE],
+        group="activity",
+        higher_is_better=True,
+        caliber_version=MARKET_ACTIVITY_CALIBER_VERSION,
+        description=(
+            "当日 `daily_quotes.amount`（TuShare `daily.amount`，原生单位千元）全市场求和，"
+            "落库换算为**亿元**。只统计 `amount IS NOT NULL` 的行；`extra.n_rows` 记录参与"
+            "统计的标的家数。当日无行情行时**不落行**（不拿 0 伪造一天「全市场 0 元成交」）"
+        ),
+    ),
+    # ── ② 7 个指数换手率（spec §S1.9 逐字列出；口径：自由流通股本）──────
+    _turnover_def(
+        "idx_turnover_ratio_sse",
+        "上证指数换手率",
+        "000001.SH",
+        source=INDEX_DAILYBASIC_SOURCE,
+        tier=TIER_OFFICIAL,
+        note="上证指数（000001.SH）自由流通股本换手率，直取 index_dailybasic",
+    ),
+    _turnover_def(
+        "idx_turnover_ratio_szse",
+        "深证成指换手率",
+        "399001.SZ",
+        source=INDEX_DAILYBASIC_SOURCE,
+        tier=TIER_OFFICIAL,
+        note="深证成指（399001.SZ）自由流通股本换手率，直取 index_dailybasic",
+    ),
+    _turnover_def(
+        "idx_turnover_ratio_bse50",
+        "北证50换手率",
+        "899050.BJ",
+        source=SELF_BUILT_TURNOVER_SOURCE,
+        tier=TIER_DERIVED,
+        note=(
+            "北证50（899050.BJ）自由流通股本换手率。**index_dailybasic 不覆盖该指数"
+            "（返回 0 行且不报错）**，故自建：成分股 daily_basic.turnover_rate_f 按 "
+            "index_weight 权重加权平均（权重取该日或之前最近一期月度快照，无前视偏差）"
+        ),
+    ),
+    _turnover_def(
+        "idx_turnover_ratio_star",
+        "科创综指换手率",
+        "000680.SH",
+        source=SELF_BUILT_TURNOVER_SOURCE,
+        tier=TIER_DERIVED,
+        note=(
+            "科创综指（000680.SH）自由流通股本换手率。**index_dailybasic 不覆盖该指数**，"
+            "故与北证50同法自建（成分权重 × 成分股 daily_basic.turnover_rate_f）。"
+            "⚠️ 上游 index_weight 的科创综指快照自 2025-09-30 起（实测 13 期），"
+            "故本序列**短于 3 年**，缺头在 extra.weight_period 可见"
+        ),
+    ),
+    _turnover_def(
+        "idx_turnover_ratio_chinext",
+        "创业板指换手率",
+        "399006.SZ",
+        source=INDEX_DAILYBASIC_SOURCE,
+        tier=TIER_OFFICIAL,
+        note="创业板指（399006.SZ）自由流通股本换手率，直取 index_dailybasic",
+    ),
+    _turnover_def(
+        "idx_turnover_ratio_sse50",
+        "上证50换手率",
+        "000016.SH",
+        source=INDEX_DAILYBASIC_SOURCE,
+        tier=TIER_OFFICIAL,
+        note="上证50（000016.SH）自由流通股本换手率，直取 index_dailybasic",
+    ),
+    _turnover_def(
+        "idx_turnover_ratio_csi300",
+        "沪深300换手率",
+        "000300.SH",
+        source=INDEX_DAILYBASIC_SOURCE,
+        tier=TIER_OFFICIAL,
+        note="沪深300（000300.SH）自由流通股本换手率，直取 index_dailybasic",
+    ),
+    # ── ③ 杠杆资金三件套（spec §S1.9「杠杆资金」）──────────────────────
+    MetricDef(
+        key="margin_financing_balance",
+        name="融资余额",
+        unit="亿元",
+        freq="daily",
+        tier=TIER_OFFICIAL,
+        sources=[MARGIN_SOURCE],
+        group="leverage",
+        higher_is_better=None,
+        caliber_version=MARKET_ACTIVITY_CALIBER_VERSION,
+        description=(
+            "融资余额（TuShare `margin.rzye`，原生单位元）**三所求和**（SSE + SZSE + BSE），"
+            "落库换算为**亿元**。产地是交易所汇总口径（不是个股明细求和）；"
+            "逐所拆分落 `extra.by_exchange_yuan` 留痕"
+        ),
+    ),
+    MetricDef(
+        key="margin_financing_buy_ratio",
+        name="融资买入额占比",
+        unit="%",
+        freq="daily",
+        tier=TIER_DERIVED,
+        sources=[MARGIN_SOURCE],
+        group="leverage",
+        higher_is_better=None,
+        caliber_version=MARKET_ACTIVITY_CALIBER_VERSION,
+        description=(
+            "融资买入额 / 全市场成交额 × 100。分子 = TuShare `margin.rzmre` 三所求和"
+            "（原生单位元），分母 = 当日 `daily_quotes.amount` 全市场求和（亿元）。"
+            "分母缺失或为 0 → 落 NULL（**不落 0、不落无穷**）；分子分母都落 `extra` 可复核"
+        ),
+    ),
+    MetricDef(
+        key="margin_short_balance",
+        name="融券余额",
+        unit="亿元",
+        freq="daily",
+        tier=TIER_OFFICIAL,
+        sources=[MARGIN_SOURCE],
+        group="leverage",
+        higher_is_better=None,
+        caliber_version=MARKET_ACTIVITY_CALIBER_VERSION,
+        description=(
+            "融券余额（TuShare `margin.rqye`，原生单位元）**三所求和**，落库换算为**亿元**。"
+            "融券余额为 0 与缺数严格区分：0 是事实（当天真的没有融券余额），"
+            "缺数落 NULL + `extra.missing_reason`"
+        ),
+    ),
+    # ── ④ 10Y 国债收益率（spec §S1.11 的无风险利率底座）────────────────
+    MetricDef(
+        key="cn_treasury_yield_10y",
+        name="10年期国债收益率",
+        unit="%",
+        freq="daily",
+        tier=TIER_OFFICIAL,
+        sources=[TREASURY_YIELD_SOURCE],
+        group="valuation",
+        higher_is_better=None,
+        caliber_version=MARKET_ACTIVITY_CALIBER_VERSION,
+        description=(
+            "中债国债收益率曲线的 **10 年** 期限值（中国债券信息网官方口径，"
+            "`yield.chinabond.com.cn` 的 `qxId=ycqx` 历史查询；AKShare "
+            "`bond_china_yield` 逐年翻窗取数，窗口必须 < 1 年）。"
+            "⚠️ TuShare `yc_cb` 在本 token 上**权限不足**（`抱歉，您没有接口(yc_cb)访问权限`），"
+            "故走中债直取；备源东财 `bond_zh_us_rate` 的 `中国国债收益率10年` 列"
+            "（2002 起全历史），两源同日逐值相同（见 data-source.md 附.7 的 XCHK）"
+        ),
+    ),
+    # ── ⑤ ERP（spec §S1.11）──────────────────────────────────────────
+    MetricDef(
+        key="erp_10y",
+        name="股债收益差（10年期）",
+        unit="%",
+        freq="daily",
+        tier=TIER_DERIVED,
+        sources=[MARKET_TURNOVER_AMOUNT_SOURCE],
+        group="valuation",
+        higher_is_better=True,
+        caliber_version=MARKET_ACTIVITY_CALIBER_VERSION,
+        description=(
+            "`erp_10y = 1/PE × 100 − 10Y 国债收益率`（单位：百分点）。"
+            "**PE 口径 = 整体法**（指数总市值 / 指数口径净利润），**指数 = 沪深300"
+            "（000300.SH）**，取 TuShare `index_dailybasic.pe`（该列即整体法口径，"
+            "不是成分中位数）。PE 与收益率都落 `extra`，可逐日手算复核。"
+            "spec 允许「全A或沪深300」——实测 `index_dailybasic` **没有全A（中证全指）**，"
+            "故取沪深300；PE 本身另落 `pe_csi300` 一行，便于独立查询"
+        ),
+    ),
+    MetricDef(
+        key="pe_csi300",
+        name="沪深300市盈率（整体法）",
+        unit="倍",
+        freq="daily",
+        tier=TIER_OFFICIAL,
+        sources=[ERP_PE_SOURCE],
+        group="valuation",
+        higher_is_better=False,
+        caliber_version=MARKET_ACTIVITY_CALIBER_VERSION,
+        description=(
+            "沪深300 整体法市盈率，直取 TuShare `index_dailybasic.pe`（`extra.caliber` = "
+            "`aggregate_total_mv_over_net_profit`）。**它是 `erp_10y` 的分子底座**："
+            "单独落一行，才能让 ERP 的 `1/PE` 这一半被独立查询与手算核对。"
+            "`extra` 另带 `pe_ttm` / `pb` / `total_mv_wan` 便于对账"
+        ),
+    ),
+]
+
+#: 本批次（§S1.9 + §S1.11）**spec 承诺**的全部 `metric_key`（13 个）。
+#: `pe_csi300` **不在本元组里**：它是 `erp_10y` 的分子底座（同样落库、同样注册），
+#: 但不是 spec 列的指标，故不计入本批次的覆盖率对账。
+MARKET_ACTIVITY_METRIC_KEYS: tuple[str, ...] = (
+    "market_turnover_amount",
+    "idx_turnover_ratio_sse",
+    "idx_turnover_ratio_szse",
+    "idx_turnover_ratio_bse50",
+    "idx_turnover_ratio_star",
+    "idx_turnover_ratio_chinext",
+    "idx_turnover_ratio_sse50",
+    "idx_turnover_ratio_csi300",
+    "margin_financing_balance",
+    "margin_financing_buy_ratio",
+    "margin_short_balance",
+    "cn_treasury_yield_10y",
+    "erp_10y",
+)
+
+#: registry 里登记的**全部** key（= spec 的 13 个 + PE 底座 1 个）。
+MARKET_ACTIVITY_ALL_KEYS: tuple[str, ...] = tuple(m.key for m in MARKET_ACTIVITY_METRICS)
+
+
+def _assert_market_activity_keys() -> None:
+    """13 个 spec key 必须**恰好**是登记项去掉 PE 底座（防"少登记一个"静默通过）。"""
+    declared = set(MARKET_ACTIVITY_METRIC_KEYS)
+    registered = set(MARKET_ACTIVITY_ALL_KEYS)
+    if registered - declared != {"pe_csi300"}:
+        raise RuntimeError(
+            "MARKET_ACTIVITY_METRICS 与 MARKET_ACTIVITY_METRIC_KEYS 不一致："
+            f"只登记={sorted(registered - declared)} 只声明={sorted(declared - registered)}"
+        )
+    if len(MARKET_ACTIVITY_METRIC_KEYS) != 13:
+        raise RuntimeError(
+            "spec §S1.9+§S1.11 承诺 13 个指标（11 + 2），"
+            f"声明了 {len(MARKET_ACTIVITY_METRIC_KEYS)} 个"
+        )
+
+
+_assert_market_activity_keys()
+
+#: `INDUSTRIES['market']` **只有一个** `IndustryConfig`（scope 键必须唯一）：
+#: §S1.8 的 8 个指标与本批次的 14 个 key **合并登记在同一个 scope** 下
+#: —— 它们本来就落在同一张 `industry_metrics`、走同一个读面，`metrics` 只是白名单来源。
+#: `MARKET_SENTIMENT` 这个名字保留（既有测试断言 `INDUSTRIES["market"] is MARKET_SENTIMENT`），
+#: 语义从"全市场情绪"扩展为"全市场（情绪 + 活跃度 + 估值）"。
+MARKET_SENTIMENT = IndustryConfig(
+    key="market",
+    name="全市场情绪 · 活跃度 · 估值",
+    description=(
+        "全市场 scope（非行业）：情绪/市场宽度与动量（spec §S1.8）"
+        " + 交易活跃度与杠杆资金（spec §S1.9） + 估值与风险溢价（spec §S1.11）。"
+        "指标值与行业指标同表同读面，代码即配置"
+    ),
+    sw_l3_codes=[],  # 非行业 scope：不挂申万分类
+    metrics=[*MARKET_METRICS, *MARKET_ACTIVITY_METRICS],
+    phases=[],  # 周期判定是行业工作台的产物，全市场 scope 不参与
+    position_templates={},
+)
+
 
 INDUSTRIES: dict[str, IndustryConfig] = {
     PIG_INDUSTRY.key: PIG_INDUSTRY,

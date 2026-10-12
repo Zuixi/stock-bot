@@ -87,6 +87,33 @@ class AkShareClient(RateLimitedSyncProvider):
             "futures_zh_daily_sina", lambda: self._ak.futures_zh_daily_sina(symbol="LH0")
         )
 
+    # ------------------------------------------------------------------
+    # 中债国债收益率曲线（spec §S1.11 的 10Y 无风险利率底座）
+    # ------------------------------------------------------------------
+
+    async def fetch_china_bond_yield(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """**中债国债收益率曲线**（中国债券信息网，官方口径）日度全曲线.
+
+        已验证 2026-10-12 · akshare 1.18.94（`scripts/spike_s19_s111_sources.py`
+        PROBE 4）：AKShare `bond_china_yield` 直连
+        `yield.chinabond.com.cn/cbweb-pbc-web/pbc/historyQuery`（`qxId=ycqx`，HTML 表），
+        返回列 = `曲线名称, 日期, 3月, 6月, 1年, 3年, 5年, 7年, 10年, 30年`。
+        本任务只取 `曲线名称 == '中债国债收益率曲线'` 的 `10年` 列。
+
+        `start_date` / `end_date` 形如 `YYYYMMDD`。
+
+        ⚠️ **窗口必须 < 1 年**：上游对更长窗口**静默返回 0 行**（不报错）——实测
+        `20180101→20261016` / `20100101→…` / `20050101→…` 全部 0 行，而
+        `20250101→20251231` 返回 248 个国债曲线交易日。故回补必须**逐年翻窗**（调用方负责）。
+
+        ⚠️ 备源（本方法之外）：东财 `bond_zh_us_rate`（`中国国债收益率10年` 列，
+        2002-01-04 起全历史、一次可取）。两源同日实测**逐值相同**（附.7 的 XCHK）。
+        """
+        return await self.invoke_async(
+            "bond_china_yield",
+            lambda: self._ak.bond_china_yield(start_date=start_date, end_date=end_date),
+        )
+
 
 _default_client: AkShareClient | None = None
 
