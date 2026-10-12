@@ -119,6 +119,33 @@ cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -c \
 
 > 上表 `unit` 列的"（空串 = 无量纲比值）"对应 registry 里的 `unit=""`（`hog_corn_ratio` 是纯比值，没有量纲单位）——**这是 registry 的原值，不是省略**。
 
+**已存在（情绪 · 市场宽度与动量，scope = `market`；spec §S1.8，2026-10-12 落地）**：
+
+| `metric_key` | registry `name` | 单位 `unit` | 频率 `freq` |
+|---|---|---|---|
+| `advance_decline_ratio` | 涨跌比 | （**空串** = 无量纲比值） | daily |
+| `limit_up_down_ratio` | 涨跌停比 | （**空串** = 无量纲比值） | daily |
+| `above_ma20_ratio` | 站上 20 日均线占比 | % | daily |
+| `limit_up_break_ratio` | 炸板率 | % | daily |
+| `max_consecutive_limit_up` | 连板高度 | 板 | daily |
+| `first_board_promotion_ratio` | 首板晋级率 | % | daily |
+| `market_advance_count` | 上涨家数 | 家 | daily |
+| `market_decline_count` | 下跌家数 | 家 | daily |
+
+> 这 8 个 key 与上表**同属一个命名空间**（规则 4），落进**同一张** `industry_metrics`；
+> `industry_key='market'` 是通用 scope 键的第一个非行业取值（见 spec §S1.2 的
+> `industry_key` 泛化备注），读面复用 `GET /api/v1/metrics/*`，**没有第二张指标表**。
+> `market_advance_count` / `market_decline_count` 是 `advance_decline_ratio` 的分子分母，
+> 之所以**也注册成指标**：spec §S1.8 的行为判据要求"市场 `A股涨跌分布` 与情绪
+> `涨跌家数` 同源同值"，而分母为 0 的日子无法从 ratio 反推家数——家数必须自己可查。
+>
+> **PIT**：这 8 个 key 的每行 `published_at` 恒为"该交易日 15:00 Asia/Shanghai"
+> （`market_sentiment_service.published_at_for`），读面的 `as_of_source` 因此恒为
+> `published_at`，**不回退** `period`（ADR 0011 / Ruling 34-35）。
+>
+> **A/B/C 归类（ADR 0014）**：8 个全属 **B 类**（只用当日点内事实，可回算、允许回补，
+> 带 20 日窗口完备守卫）。无 A 类、无 C 类指标。
+
 **手动检查脚本（未接入门禁；接入方案见 deferred）**（§4.2 规则 3 的机械验证；本文件上表 = registry 的转录，此脚本专治"抄错"）：
 
 ```bash

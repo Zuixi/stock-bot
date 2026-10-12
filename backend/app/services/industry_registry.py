@@ -7,10 +7,15 @@ API 与前端组件均由其驱动：新增一列、换一个预警阈值、接�
 registry 同时是**未登记 key 的拒绝面**：metric_key 不在此登记即被读/写路径拒绝
 （`IndustryConfig.metric` 与 `find_metric` 都是白名单查询）。
 
-`industry_key` 语义已泛化为通用 scope 键（spec §S1.2）：INDUSTRIES 现在按**行业**
-登记（'pig' / 'broiler'），后续情绪/宏观指标会以 `industry_key='market'` 落进
-同一张 `industry_metrics` 表并复用 `GET /api/v1/metrics/*` 读面；届时在此登记
-非行业 scope 的 MetricDef 即可，无需新表。
+`industry_key` 语义已泛化为通用 scope 键（spec §S1.2）：INDUSTRIES 既登记**行业**
+scope（'pig' / 'broiler'），也登记**非行业** scope（'market' = 全市场情绪，
+spec §S1.8，2026-10-12 落地）—— 两者落进同一张 `industry_metrics` 表并复用
+`GET /api/v1/metrics/*` 读面，**没有第二张指标表、没有第二套读路**。
+
+注意 `IndustryConfig` 是**行业 + 全市场共用**的容器：非行业 scope 的
+`sw_l3_codes` / `phases` / `position_templates` 留空（'market' 即如此），
+只有 `metrics` 与 `reference_points` 对它有意义。消费方若假定"每个 scope 都是行业"
+（如数 `sw_l3_codes` 或取相位），必须先看该 scope 是否行业 scope。
 """
 
 from __future__ import annotations
@@ -506,9 +511,182 @@ BROILER_INDUSTRY = IndustryConfig(
     },
 )
 
+# ── 全市场情绪 scope：'market'（spec §S1.8 情绪/市场宽度与动量）────────────
+#
+# 这是 `industry_key` 泛化为通用 scope 键后的**第一个非行业 scope**（S1.2 Ruling 16
+# 就是为它准备的）：6 个 S1.8 指标 + 2 个底层家数指标全部落在同一张 `industry_metrics`
+# 表、走同一个 `GET /api/v1/metrics/*` 读面，**不为情绪另建表或另开读路**。
+#
+# 计算与落库在 `app/services/market_sentiment_service.py`；四徽章里的 `source` 恒为
+# `local_calc`（与 `market_sentiment_daily.source` 同值 —— 产地标签与底座保持一致，
+# 不另造一个只在读面出现的源名），`unit` / `freq` / `tier` 由本表登记。
+MARKET_SENTIMENT_SOURCE = "local_calc"
+MARKET_CALIBER_VERSION = "s1.8-v1"
+
+#: `extra` 里带 `missing_reason` 的缺数语义。**缺数恒 NULL，绝不填 0**（spec §S1.8
+#: 验收：涨停类指标的"缺数日"不能静默为 0）——0 在"涨跌停家数"上是"今天只有 0 家
+#: 涨停"这一**事实断言**，与"这天没有数据"完全相反。
+MARKET_METRIC_MISSING_REASONS: dict[str, str] = {
+    "no_sentiment_day": "该交易日 market_sentiment_daily 无行（涨停事实底座未回补或未采集）",
+    "source_null": "底座该字段为 NULL（上游口径下该日该值不可得）",
+    "no_quote_rows": "该交易日 daily_quotes 无行（行情底座缺失）",
+    "no_ma20_window": "无任何标的具备完整的 20 日窗口（上市不足 20 个交易日或 20 日窗口未取满）",
+}
+
+MARKET_METRICS: list[MetricDef] = [
+    # ── ① 涨跌家数（同源：与市场模块 A股涨跌分布共用 market_snapshot_service 的一日取行）──
+    MetricDef(
+        key="market_advance_count",
+        name="上涨家数",
+        unit="家",
+        freq="daily",
+        tier=TIER_DERIVED,
+        sources=[MARKET_SENTIMENT_SOURCE],
+        group="breadth",
+        higher_is_better=True,
+        caliber_version=MARKET_CALIBER_VERSION,
+        description=(
+            "全市场当日在市标的收盘 pct_chg > 0 的家数。"
+            "与市场模块 A股涨跌分布同一个 loader（market_snapshot_service.load_day_rows），"
+            "口径与分布正数桶之和按构造相等"
+        ),
+    ),
+    MetricDef(
+        key="market_decline_count",
+        name="下跌家数",
+        unit="家",
+        freq="daily",
+        tier=TIER_DERIVED,
+        sources=[MARKET_SENTIMENT_SOURCE],
+        group="breadth",
+        higher_is_better=False,
+        caliber_version=MARKET_CALIBER_VERSION,
+        description=(
+            "全市场当日在市标的收盘 pct_chg < 0 的家数；"
+            "平盘（pct_chg == 0 或 NULL）既不计涨也不计跌，与分布中桶一致"
+        ),
+    ),
+    # ── ② 涨跌比 ─────────────────────────────────────────────────────────
+    MetricDef(
+        key="advance_decline_ratio",
+        name="涨跌比",
+        unit="",
+        freq="daily",
+        tier=TIER_DERIVED,
+        sources=[MARKET_SENTIMENT_SOURCE],
+        group="breadth",
+        higher_is_better=True,
+        caliber_version=MARKET_CALIBER_VERSION,
+        description=(
+            "上涨家数 / 下跌家数（无量纲比值）。分母为 0（全市场无下跌）时落 NULL，"
+            "不落 0 也不落无穷；`extra` 同时带上涨/下跌/平盘原始家数可复核"
+        ),
+    ),
+    # ── ③ 涨跌停比（底座：market_sentiment_daily.zt_count / dt_count，直接读不重算）──
+    MetricDef(
+        key="limit_up_down_ratio",
+        name="涨跌停比",
+        unit="",
+        freq="daily",
+        tier=TIER_DERIVED,
+        sources=[MARKET_SENTIMENT_SOURCE],
+        group="breadth",
+        higher_is_better=True,
+        caliber_version=MARKET_CALIBER_VERSION,
+        description=(
+            "涨停家数 / 跌停家数，直接读 market_sentiment_daily 的 zt_count / dt_count。"
+            "跌停家数为 0 时落 NULL（不落无穷）"
+        ),
+    ),
+    # ── ④ 突破 20 日均线占比（新算：全仓此前无 MA20）─────────────────────
+    MetricDef(
+        key="above_ma20_ratio",
+        name="站上 20 日均线占比",
+        unit="%",
+        freq="daily",
+        tier=TIER_DERIVED,
+        sources=[MARKET_SENTIMENT_SOURCE],
+        group="breadth",
+        higher_is_better=True,
+        caliber_version=MARKET_CALIBER_VERSION,
+        description=(
+            "收盘价 > 该股截至当日的 20 日简单均线（含当日、前 19 个交易日）的标的占"
+            "**具备完整 20 日窗口**标的的比例，算术均值取存储列 close。"
+            "窗口不足 20 个交易日的标的整只剔除（不进分子也不进分母）——"
+            "新股按字面口径永远是 0%，会把新上市高峰期误读成情绪冰点"
+        ),
+    ),
+    # ── ⑤ 炸板率（底座：market_sentiment_daily.broken_rate，直接读不重算）──
+    MetricDef(
+        key="limit_up_break_ratio",
+        name="炸板率",
+        unit="%",
+        freq="daily",
+        tier=TIER_DERIVED,
+        sources=[MARKET_SENTIMENT_SOURCE],
+        group="breadth",
+        higher_is_better=False,
+        caliber_version=MARKET_CALIBER_VERSION,
+        description=(
+            "炸板家数 / 触板家数，直接读 market_sentiment_daily.broken_rate 并"
+            "×100 归一到百分数（库内该列为 0–1 小数）"
+        ),
+    ),
+    # ── ⑥ 连板高度（底座：market_sentiment_daily.max_streak）────────────
+    MetricDef(
+        key="max_consecutive_limit_up",
+        name="连板高度",
+        unit="板",
+        freq="daily",
+        tier=TIER_DERIVED,
+        sources=[MARKET_SENTIMENT_SOURCE],
+        group="breadth",
+        higher_is_better=True,
+        caliber_version=MARKET_CALIBER_VERSION,
+        description=(
+            "当日全市场最高连续涨停板数（截至该交易日），直接读 "
+            "market_sentiment_daily.max_streak。定义：连续涨停的首日为 1 板，"
+            "每多一个连续交易日 +1；当日未收盘涨停即归零。"
+            "最高连板标的代码在该行 `extra.max_streak_symbol`（非本指标值）"
+        ),
+    ),
+    # ── ⑦ 首板晋级率（底座：market_sentiment_daily.promo_1to2）───────────
+    MetricDef(
+        key="first_board_promotion_ratio",
+        name="首板晋级率",
+        unit="%",
+        freq="daily",
+        tier=TIER_DERIVED,
+        sources=[MARKET_SENTIMENT_SOURCE],
+        group="breadth",
+        higher_is_better=True,
+        caliber_version=MARKET_CALIBER_VERSION,
+        description=(
+            "昨日首板股中今日继续涨停的比例，直接读 market_sentiment_daily.promo_1to2 "
+            "并×100 归一到百分数。定义：首板 = 截至昨日连板数恰为 1 的标的；"
+            "分母（昨日首板家数 promo_1to2_n）在该行 `extra.denominator`，为 0 时落 NULL"
+        ),
+    ),
+]
+
+MARKET_SENTIMENT = IndustryConfig(
+    key="market",
+    name="全市场情绪",
+    description=(
+        "全市场 scope（非行业）：情绪/市场宽度与动量（spec §S1.8）。"
+        "指标值与行业指标同表同读面，代码即配置"
+    ),
+    sw_l3_codes=[],  # 非行业 scope：不挂申万分类
+    metrics=MARKET_METRICS,
+    phases=[],  # 周期判定是行业工作台的产物，全市场 scope 不参与
+    position_templates={},
+)
+
+
 INDUSTRIES: dict[str, IndustryConfig] = {
     PIG_INDUSTRY.key: PIG_INDUSTRY,
     BROILER_INDUSTRY.key: BROILER_INDUSTRY,
+    MARKET_SENTIMENT.key: MARKET_SENTIMENT,
 }
 
 
