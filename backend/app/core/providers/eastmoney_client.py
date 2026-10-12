@@ -234,6 +234,18 @@ class EastmoneyClient:
         return await self._paged_clist(f"b:{board_code}", "f12,f13,f14", _map_concept_member)
 
     async def fetch_sector_moneyflow(self, dimension: str) -> list[dict[str, Any]]:
+        """板块资金流榜（``fid=f62`` 主力净流入降序）→ 归一字段。
+
+        ``fields`` 是 :meth:`fetch_board_list`（``fid=f3``）的**超集**：除了资金流卡片
+        要的 ``f62/f66/f72/f184`` 与领涨股 ``f128/f136/f140``，还带了热门板块榜读表分支
+        需要的 ``f6``（成交额，元）与 ``f106``（平盘家数）—— Task 2 的硬约束是
+        **一次请求拿全**，不为这 2 列再发第二次 ``clist``。
+
+        家数字段（``f104/f105/f106``）统一走 :func:`_count`：``fltt=2`` 下无效值是字符串
+        ``-``（板块无成分股时），原样透传会落进 ``Integer`` 列 → asyncpg 直接报错，
+        整个三维度 upsert（含 A 类当日快照）全丢。``_count`` 的 docstring 本就是为这三个
+        字段写的；``_map_board_row`` 早已这么映射，这里对齐。
+        """
         if dimension not in ("industry", "concept", "region"):
             raise ValueError(f"dimension must be industry|concept|region, got {dimension}")
         fs = _BOARD_FS[dimension]
@@ -249,7 +261,7 @@ class EastmoneyClient:
                 "invt": 2,
                 "fid": "f62",
                 "fs": fs,
-                "fields": "f12,f14,f3,f62,f66,f72,f104,f105,f128,f136,f140,f184",
+                "fields": ("f12,f14,f3,f6,f62,f66,f72,f104,f105,f106,f128,f136,f140,f184"),
             },
         )
         diff = (data.get("data") or {}).get("diff") or []
@@ -258,11 +270,13 @@ class EastmoneyClient:
                 "board_code": str(d.get("f12")),
                 "board_name": d.get("f14"),
                 "pct_change": _num(d.get("f3")),
+                "amount": _num(d.get("f6")),
                 "main_net_inflow": _num(d.get("f62")),
                 "super_large_net": _num(d.get("f66")),
                 "large_net": _num(d.get("f72")),
-                "up_count": d.get("f104"),
-                "down_count": d.get("f105"),
+                "up_count": _count(d.get("f104")),
+                "flat_count": _count(d.get("f106")),
+                "down_count": _count(d.get("f105")),
                 "main_net_ratio": _num(d.get("f184")),
                 # data.eastmoney.com/bkzj/ 排行页同款"主力净流入最大股"
                 "lead_stock_name": d.get("f128"),

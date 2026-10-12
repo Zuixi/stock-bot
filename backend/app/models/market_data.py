@@ -25,7 +25,13 @@ from app.core.database import Base
 
 
 class SectorMoneyflowSnapshot(Base):
-    """东财板块主力资金流当日快照（盘中每 5 分钟 upsert 覆盖，跨日保留）。金额单位：元。"""
+    """东财板块主力资金流当日快照（盘中每 5 分钟 upsert 覆盖，跨日保留）。金额单位：元。
+
+    Task 2 追加的两列是热门板块榜（``/market/hot-boards`` 读表分支）与前端
+    ``HotBoardItem`` 契约消费的字段：``amount``（``f6`` 成交额，``Numeric(20,4)``）与
+    ``flat_count``（``f106`` 平盘家数；``f104+f105+f106`` 恒等于该板块成分股总数）。
+    上游对无成分股/停牌的板块给 ``-`` → 落 **NULL，绝不 0**（0 是"平盘 0 家"这一事实断言）。
+    """
 
     __tablename__ = "sector_moneyflow_snapshots"
     __table_args__ = (
@@ -55,6 +61,9 @@ class SectorMoneyflowSnapshot(Base):
     lead_stock_name: Mapped[str | None] = mapped_column(String(32))
     lead_stock_code: Mapped[str | None] = mapped_column(String(12))
     lead_stock_pct: Mapped[float | None] = mapped_column(Float)  # %
+    # Task 2 追加（迁移 e7b1c9d4a2f3）：上游缺值恒 NULL，绝不 0
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))  # 成交额，元（f6）
+    flat_count: Mapped[int | None] = mapped_column(Integer)  # 平盘家数（f106）
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

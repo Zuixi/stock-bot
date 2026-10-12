@@ -15,6 +15,8 @@ from apscheduler.triggers.date import DateTrigger
 from app.scheduler.jobs import (
     announcements_poll_job,
     block_trade_daily_job,
+    board_snapshot_eod_job,
+    board_snapshot_rewrite_job,
     concept_members_refresh_job,
     daily_basic_backfill_job,
     daily_quotes_backfill_job,
@@ -220,6 +222,28 @@ def create_scheduler() -> AsyncIOScheduler:
         id="sector_moneyflow_poll",
         name="Sector moneyflow intraday poll",
         misfire_grace_time=INTRADAY_GRACE_SEC,
+        replace_existing=True,
+    )
+
+    # 板块资金流**当日收盘终态**：Mon-Fri 15:05（A 类数据，东财无历史接口 —— 当天不落
+    # 就永久丢失）。盘中 9-15 点的 */5 轮询负责新鲜度，这一 tick 负责终态。
+    # 不设 per-job 宽限 → 继承 job_defaults(None)：容器重启/宿主睡醒后迟到也补跑
+    # （ingest 幂等，重跑只覆盖同一批行）。
+    scheduler.add_job(
+        board_snapshot_eod_job,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=5, timezone="Asia/Shanghai"),
+        id="board_snapshot_eod",
+        name="Board snapshot EOD",
+        replace_existing=True,
+    )
+
+    # 当日缺行的兜底补写：Mon-Fri 15:35。只承诺**当日**（跨日不可补）：15:05 那次因容器
+    # 重启错过时，这里看到当日无行才写一次；已有行则 no-op。
+    scheduler.add_job(
+        board_snapshot_rewrite_job,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=35, timezone="Asia/Shanghai"),
+        id="board_snapshot_rewrite",
+        name="Board snapshot rewrite",
         replace_existing=True,
     )
 

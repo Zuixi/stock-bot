@@ -263,6 +263,57 @@ async def sector_moneyflow_job() -> None:
         await _alert_job_failure("sector_moneyflow_poll", exc)
 
 
+async def board_snapshot_eod_job() -> None:
+    """板块资金流**当日收盘终态**落库（交易日 15:05；与 `board_snapshot_rewrite_job` 分工）。
+
+    为什么要有独立的 EOD 写点：盘中 `sector_moneyflow_poll` 每 5 分钟写一次（最近一 tick
+    约 15:00），但"收盘后的最终态"需要一次显式捕获；A 类数据（东财板块资金流**无历史
+    接口**）当天不落就永久丢失。`/market/hot-boards` 的读表分支正是读这批行。
+
+    双轨制：与 worker 的 `board_snapshot_eod` 分支调**同一个** service 方法
+    （`ingest_sector_moneyflow`），不各自实现抓取。失败登记 `job:failures`
+    （A 类静默丢失必须可见）。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_sector_moneyflow(db)
+            await db.commit()
+        logger.info("Board snapshot EOD done: %s", result)
+    except Exception as exc:
+        logger.exception("Board snapshot EOD job failed")
+        await _alert_job_failure("board_snapshot_eod", exc)
+
+
+async def board_snapshot_rewrite_job() -> None:
+    """**当日缺行才**补写（交易日 15:35；容器重启错过 15:05 时的兜底）。
+
+    只承诺**当日**：东财板块资金流没有历史接口（A 类），补写跨日无意义 —— 昨天没抓到就是
+    永久缺失，本 job 不会（也无法）去补昨天。当日已有行（含盘中轮询写的）→ no-op：
+    判据是日级的，见 `market_data_repo.sector_moneyflow_day_has_rows` 的已知边界。
+
+    双轨制：与 worker 的 `board_snapshot_rewrite` 分支调同一个 service 方法
+    （`ingest_sector_moneyflow_if_missing`）。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_sector_moneyflow_if_missing(db)
+            await db.commit()
+        logger.info("Board snapshot rewrite done: %s", result)
+    except Exception as exc:
+        logger.exception("Board snapshot rewrite job failed")
+        await _alert_job_failure("board_snapshot_rewrite", exc)
+
+
 async def market_moneyflow_daily_job() -> None:
     """大盘资金流日线（交易日 16:20 盘后，幂等 upsert 近 10 日窗口）。"""
     from app.core.database import async_session_factory  # noqa: PLC0415

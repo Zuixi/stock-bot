@@ -16,7 +16,8 @@
 上述两次请求的**裁剪原始响应**（保留 rc/data.total/diff 外形，diff 截 5 行）。
 
 **离线**：无真实 DB、无真实网络——东财侧用夹具喂 `_get_json`（解析/映射走真实
-代码路径），DB 侧 patch `load_day_rows` / `resolve_latest_complete_day`。
+代码路径），DB 侧 patch `load_day_rows` / `resolve_latest_complete_day`，以及 Task 2
+新增的板块快照读 seam `_hot_boards_snapshot_rows`（见 `_patch_no_snapshot`）。
 """
 
 from __future__ import annotations
@@ -110,6 +111,21 @@ def _patch_em(monkeypatch: pytest.MonkeyPatch, client: Any) -> None:
 
 def _patch_today(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(market_service, "_today_sh", lambda: D_TODAY)
+
+
+def _patch_no_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Task 2: ``get_hot_boards`` reads the day's ``sector_moneyflow_snapshots`` first.
+
+    These cases exercise the **East Money live** path, so the read-table seam is
+    stubbed to "the table has no rows for today" — otherwise every one of them would
+    hit the dev Postgres. The read-table branch has its own coverage in
+    ``tests/test_board_snapshot.py``.
+    """
+
+    async def _none(_category: str, _expected_day: date) -> None:
+        return None
+
+    monkeypatch.setattr(market_service, "_hot_boards_snapshot_rows", _none)
 
 
 class _RecordingCache:
@@ -241,6 +257,7 @@ async def test_hot_boards_industry_from_eastmoney_has_real_codes_and_money(
     client, _fake = _fixture_client({FS_INDUSTRY: _raw("board_list_industry.json")})
     _patch_em(monkeypatch, client)
     _patch_today(monkeypatch)
+    _patch_no_snapshot(monkeypatch)
     cache = _RecordingCache()
 
     payload = await market_service.get_hot_boards("industry", cache)
@@ -280,13 +297,19 @@ async def test_hot_boards_industry_from_eastmoney_has_real_codes_and_money(
     ]
 
 
-async def test_hot_boards_concept_returns_rows_and_never_touches_the_db(
+async def test_hot_boards_concept_returns_rows_without_the_daily_loader(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """概念板块**不再返回 []**：走 `t:3`，且完全不打库。"""
+    """概念板块**不再返回 []**：走 `t:3`，且完全不碰 `daily_quotes` 判据日/共享 loader。
+
+    Task 2 起 hot-boards 会先读**板块快照表**（那条 seam 已打桩成"当日无行"，见
+    ``_patch_no_snapshot``）—— 这里钉的是：东财实时路径不得顺手去解析判据日或读
+    个股日快照（那是另一个口径）。
+    """
     client, fake = _fixture_client({FS_CONCEPT: _raw("board_list_industry.json")})
     _patch_em(monkeypatch, client)
     _patch_today(monkeypatch)
+    _patch_no_snapshot(monkeypatch)
 
     async def _boom(*_a: Any, **_kw: Any) -> None:
         raise AssertionError("eastmoney path must not resolve a day or load rows")
@@ -328,6 +351,7 @@ async def test_hot_boards_sorts_by_change_and_keeps_top_ten(
     rows[1] = _row("BK0000", 99.0)
     _patch_em(monkeypatch, _StaticEM(rows))
     _patch_today(monkeypatch)
+    _patch_no_snapshot(monkeypatch)
 
     payload = await market_service.get_hot_boards("industry", None)
 
@@ -342,6 +366,7 @@ async def test_hot_boards_eastmoney_failure_falls_back_and_is_marked(
     """东财炸 → 本地分组 + `source`/`degraded_reason` 双标注（可被判据日口径消费）。"""
     _patch_em(monkeypatch, _FailingEM())
     _patch_today(monkeypatch)
+    _patch_no_snapshot(monkeypatch)
     calls = _patch_local_day(
         monkeypatch,
         [
@@ -381,6 +406,7 @@ async def test_hot_boards_unmarked_cached_payloads_are_misses(
     """换源前写入的老 payload（无 `source`）一律当 miss——否则会回放"无产地标注"的 items。"""
     _patch_em(monkeypatch, _FailingEM())
     _patch_today(monkeypatch)
+    _patch_no_snapshot(monkeypatch)
     calls = _patch_local_day(monkeypatch, [{"csrc_desc": "电子", "pct_chg": 1.0}])
     cache = _RecordingCache(
         {
@@ -424,6 +450,7 @@ async def test_hot_boards_concept_fallback_is_empty_and_marked(
     """
     _patch_em(monkeypatch, _FailingEM())
     _patch_today(monkeypatch)
+    _patch_no_snapshot(monkeypatch)
     calls = _patch_local_day(
         monkeypatch,
         [
@@ -472,6 +499,7 @@ async def test_realtime_board_caches_use_the_60s_ttl(
     )
     _patch_em(monkeypatch, client)
     _patch_today(monkeypatch)
+    _patch_no_snapshot(monkeypatch)
     cache = _RecordingCache()
 
     await market_service.get_hot_boards("industry", cache)

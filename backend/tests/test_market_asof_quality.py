@@ -62,6 +62,20 @@ def _patch_day_rows(monkeypatch: pytest.MonkeyPatch, rows: list[dict]) -> None:
     monkeypatch.setattr(market_service, "load_day_rows", _load)
 
 
+def _patch_no_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Task 2: ``get_hot_boards`` reads the day's ``sector_moneyflow_snapshots`` first.
+
+    This module is offline; the seam is stubbed to "the table has no rows for the
+    expected trading day" so the East Money / local-fallback semantics below are
+    unchanged. Read-table coverage lives in ``tests/test_board_snapshot.py``.
+    """
+
+    async def _none(_category: str, _expected_day: date) -> None:
+        return None
+
+    monkeypatch.setattr(market_service, "_hot_boards_snapshot_rows", _none)
+
+
 async def test_distribution_carries_as_of_quality(_day: None, monkeypatch) -> None:
     _patch_day_rows(monkeypatch, [{"pct_chg": 0.5}, {"pct_chg": 0.5}, {"pct_chg": 0.5}])
 
@@ -103,6 +117,7 @@ async def test_hot_boards_fallback_carries_resolved_day_as_of_quality(
     ``partial`` instead — see ``test_board_endpoints.py``."""
     _patch_day_rows(monkeypatch, [{"csrc_desc": "电子", "pct_chg": 1.0}])
     _patch_eastmoney_failure(monkeypatch)
+    _patch_no_snapshot(monkeypatch)
 
     out = await market_service.get_hot_boards("industry", None)
 

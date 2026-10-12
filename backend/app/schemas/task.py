@@ -77,6 +77,8 @@ MarketDataJobType = Literal[
     "global_index_daily",
     "backfill_global_index",
     "sector_moneyflow",
+    "board_snapshot_eod",
+    "board_snapshot_rewrite",
     "northbound",
     "dragon_tiger",
     "block_trades",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any, TypeVar, cast
 from zoneinfo import ZoneInfo
 
@@ -41,10 +42,28 @@ def chunk_rows(rows: Sequence[RowT], size: int = UPSERT_CHUNK) -> Iterator[list[
         yield list(rows[start : start + size])
 
 
+def _dec(v: Any) -> Decimal | None:
+    """``Numeric(20,4)`` 列的入参归一：``float`` → ``Decimal``（asyncpg 的 numeric 编码器
+    只收 Decimal/str，收 float 会 TypeError）。
+
+    缺值（``None``/上游``-``）原样返回 ``None`` —— 绝不落 ``Decimal(0)``：0 是"成交额 0 元"
+    这一事实断言，而缺失是"不知道"。
+    """
+    if v is None or isinstance(v, Decimal):
+        return v
+    return Decimal(str(v))
+
+
 async def upsert_sector_moneyflow(
     db: AsyncSession, trade_date: date, dimension: str, rows: list[dict[str, Any]]
 ) -> int:
-    """当日快照幂等覆盖（盘中每次轮询 upsert）。"""
+    """当日快照幂等覆盖（盘中每次轮询 upsert）。
+
+    ``amount``/``flat_count``（Task 2）与其它列同权：冲突时一并刷新 —— 收盘态覆盖盘中态
+    靠的就是这条 DO UPDATE。``amount`` 是 ``Numeric(20,4)``，asyncpg 的 numeric 编码器
+    不收 ``float``，故在此显式 ``Decimal(str(v))``（与 ``limit_up_service`` 的
+    ``seal_fund`` 同款）；缺值仍走 ``None``（**绝不 0**）。
+    """
     if not rows:
         return 0
     values = [
@@ -63,6 +82,8 @@ async def upsert_sector_moneyflow(
             "lead_stock_name": r.get("lead_stock_name"),
             "lead_stock_code": r.get("lead_stock_code"),
             "lead_stock_pct": r.get("lead_stock_pct"),
+            "amount": _dec(r.get("amount")),
+            "flat_count": r.get("flat_count"),
         }
         for r in rows
     ]
@@ -83,6 +104,8 @@ async def upsert_sector_moneyflow(
                 "lead_stock_name": pg_insert(SectorMoneyflowSnapshot).excluded.lead_stock_name,
                 "lead_stock_code": pg_insert(SectorMoneyflowSnapshot).excluded.lead_stock_code,
                 "lead_stock_pct": pg_insert(SectorMoneyflowSnapshot).excluded.lead_stock_pct,
+                "amount": pg_insert(SectorMoneyflowSnapshot).excluded.amount,
+                "flat_count": pg_insert(SectorMoneyflowSnapshot).excluded.flat_count,
                 # pg on_conflict 不走 ORM onupdate → 显式刷 updated_at
                 "updated_at": func.now(),
             },
@@ -108,6 +131,78 @@ async def list_sector_moneyflow(
         .limit(limit)
     )
     return list((await db.execute(stmt)).scalars().all())
+
+
+async def list_sector_moneyflow_ranked(
+    db: AsyncSession, trade_date: date, dimension: str, limit: int
+) -> list[SectorMoneyflowSnapshot]:
+    """当日某维度板块按 **涨幅降序 + 板块码升序** 取 Top-N（Task 2 读表分支专用）。
+
+    这是 ``/market/hot-boards`` 的进榜判据（与上游 ``fid=f3`` 的"涨幅榜"**排序语义**一致）：
+    ``pct_change DESC`` 配 ``board_code ASC`` 是**确定性 tiebreak** —— 同涨幅的两行
+    在两次请求间不得互换位置（上游 ``fid=f3`` 的次级顺序不保证稳定）。``NULLS LAST``
+    让缺涨幅的行排在最后（服务层再稳定排序一次并截断 Top-10）。
+
+    注意行集口径：表里的行来自 ``fid=f62``（主力净流入）Top-100 的**逐次 upsert 并集**，
+    不是 ``fid=f3`` 的 Top-100，名次与"最新一次截取"可能不同（见 Task 2 报告 concerns）。
+    本函数只负责**排序**，不改变行集。
+    """
+    stmt = (
+        select(SectorMoneyflowSnapshot)
+        .where(
+            SectorMoneyflowSnapshot.trade_date == trade_date,
+            SectorMoneyflowSnapshot.dimension == dimension,
+        )
+        .order_by(
+            nullslast(desc(SectorMoneyflowSnapshot.pct_change)),
+            SectorMoneyflowSnapshot.board_code.asc(),
+        )
+        .limit(limit)
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def list_sector_moneyflow_range(
+    db: AsyncSession, dimension: str, start: date, end: date
+) -> list[SectorMoneyflowSnapshot]:
+    """某维度 **[start, end] 闭区间**的窗口读（Task 6 的赛段/连续性统计消费）。
+
+    纯读：按 ``trade_date, board_code`` 升序返回全部行（不截断）—— 窗口统计要的是
+    完整序列，"缺日"由调用方与交易日历对比得出（缺日 **不得** 被当成 0 流入）。
+    本任务无消费方，保留单日版 :func:`list_sector_moneyflow` 不动。
+    """
+    stmt = (
+        select(SectorMoneyflowSnapshot)
+        .where(
+            SectorMoneyflowSnapshot.dimension == dimension,
+            SectorMoneyflowSnapshot.trade_date >= start,
+            SectorMoneyflowSnapshot.trade_date <= end,
+        )
+        .order_by(
+            SectorMoneyflowSnapshot.trade_date.asc(),
+            SectorMoneyflowSnapshot.board_code.asc(),
+        )
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def sector_moneyflow_day_has_rows(db: AsyncSession, trade_date: date) -> bool:
+    """该日是否已有**任何**维度的快照行（Task 2 的 15:35 缺行补写判据）。
+
+    三维度由一次 ``ingest_sector_moneyflow`` 在同一事务里写入，故"日级"判据足够：要么
+    三个维度都有当日行，要么一行都没有（不存在"只写了一半"的正常状态）。
+
+    **已知边界**（ruling 的字面口径，未擅自放宽）：盘中轮询写的行也算"有行"，所以
+    "容器 15:05 缺席、但当天盘中已经写过" 的日子 15:35 会 no-op —— 那天不会补抓收盘
+    终态。`updated_at` 无法区分"盘中 tick"与"15:05 EOD"（15:00 的 tick 与 15:05 同分钟），
+    故没有可靠的新鲜度判据；务实收敛点应是"15:05 之后是否还有抓取"（见 Task 2 报告 concerns）。
+    """
+    stmt = (
+        select(SectorMoneyflowSnapshot.id)
+        .where(SectorMoneyflowSnapshot.trade_date == trade_date)
+        .limit(1)
+    )
+    return (await db.execute(stmt)).first() is not None
 
 
 async def upsert_northbound(db: AsyncSession, rows: list[dict[str, Any]]) -> int:

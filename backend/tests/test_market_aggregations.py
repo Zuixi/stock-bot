@@ -9,7 +9,10 @@ What this locks
    ``get_hot_boards`` onto the East Money board list first, so the hot-board cases
    here patch that fetch to **fail** (``_patch_eastmoney_failure``) and thereby pin
    the *fallback* path — the East Money path has its own coverage in
-   ``test_board_endpoints.py``.
+   ``test_board_endpoints.py``. Task 2 added the "read the day's
+   ``sector_moneyflow_snapshots`` first" branch, whose seam is stubbed to "no rows
+   for today" here (``_patch_no_snapshot``) so this module keeps its pre-Task-2
+   semantics; the read-table branch lives in ``test_board_snapshot.py``.
 2. The distribution bucket edges, the group keys/counts and the envelope fields.
 3. The empty-day path still returns an empty envelope and never loads rows.
 4. Shenwan L1 performance deliberately stays on its own rollup statement (it needs
@@ -113,6 +116,21 @@ def _patch_eastmoney_failure(monkeypatch: pytest.MonkeyPatch) -> None:
         raise RuntimeError("eastmoney unavailable (patched)")
 
     monkeypatch.setattr(market_service, "get_eastmoney_client", _boom)
+
+
+def _patch_no_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Task 2: ``get_hot_boards`` reads the day's ``sector_moneyflow_snapshots`` first.
+
+    This module is offline (``_BoomSession`` / no PG), so the new seam is stubbed to
+    "the table has no rows for the expected trading day" — the same treatment the
+    shared day loader gets. The read-table branch itself is covered by
+    ``tests/test_board_snapshot.py``.
+    """
+
+    async def _none(_category: str, _expected_day: date) -> None:
+        return None
+
+    monkeypatch.setattr(market_service, "_hot_boards_snapshot_rows", _none)
 
 
 class _BoomSession:
@@ -320,6 +338,7 @@ async def test_hot_boards_fallback_industry_breadth_partitions_every_row(
     (up + flat + down == the group size)."""
     _patch_day(monkeypatch, _resolved())
     _patch_eastmoney_failure(monkeypatch)
+    _patch_no_snapshot(monkeypatch)
     _patch_rows(
         monkeypatch,
         [
@@ -359,6 +378,7 @@ async def test_hot_boards_fallback_region_groups_by_province_and_keeps_top_10(
     grouping is the fallback."""
     _patch_day(monkeypatch, _resolved())
     _patch_eastmoney_failure(monkeypatch)
+    _patch_no_snapshot(monkeypatch)
     rows = [_row(csrc_desc="电子", province=f"省{i:02d}", pct_chg=float(i)) for i in range(12)]
     _patch_rows(monkeypatch, rows)
 
@@ -479,6 +499,9 @@ async def test_rewritten_endpoints_never_execute_sql(
     monkeypatch.setattr(market_service, "async_session_factory", _BoomSession)
     # hot-boards: East Money unavailable (its key is stamped with "today" = D16)
     _patch_eastmoney_failure(monkeypatch)
+    if endpoint == "hot-boards":
+        # Task 2 的读当日快照表分支：这里打桩成"当日无行"，其余端点不涉及该 seam
+        _patch_no_snapshot(monkeypatch)
     monkeypatch.setattr(market_service, "_today_sh", lambda: D16)
     cache = _RecordingCache()
 
@@ -546,6 +569,8 @@ async def test_result_cache_key_includes_the_resolved_day(
     # hot-boards: the East Money probe (keyed by today = D16) must miss, then the
     # day-keyed local fallback must miss the two seeded poisons and recompute.
     _patch_eastmoney_failure(monkeypatch)
+    if extra_reads:  # 只有 hot-boards 多探一个东财键 → 也只有它需要打桩 Task 2 的读表 seam
+        _patch_no_snapshot(monkeypatch)
     monkeypatch.setattr(market_service, "_today_sh", lambda: D16)
     cache = _SeededCache(
         {
@@ -574,6 +599,7 @@ async def test_empty_day_returns_empty_envelope_and_never_loads_rows(
     """
     _patch_day(monkeypatch, None)
     _patch_eastmoney_failure(monkeypatch)
+    _patch_no_snapshot(monkeypatch)
 
     async def _boom(*_a: Any, **_kw: Any) -> list[dict[str, Any]]:
         raise AssertionError("no resolved day => the day loader must not run")

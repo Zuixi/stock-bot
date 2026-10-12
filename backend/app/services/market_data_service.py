@@ -368,6 +368,10 @@ SECTOR_MONEYFLOW_CACHE_KEY = "market:sector-moneyflow:{dimension}:{as_of}"
 SECTOR_MONEYFLOW_TTL = 60
 SECTOR_MONEYFLOW_CACHE_LIMIT = 100  # 端点 limit 上限（le=100）：缓存全量再按请求切片
 
+#: 热门板块读表分支一次取回的行数上限：与上游 ``pz=100`` 同量级（Top-10 截断在
+#: ``market_service`` 侧做）。取回上限只作安全阀，不影响排序语义。
+HOT_BOARD_SNAPSHOT_LIMIT = 100
+
 
 async def ingest_sector_moneyflow(db: AsyncSession) -> dict[str, int]:
     """盘中轮询：industry/concept/region 三维当日快照 upsert。"""
@@ -381,6 +385,27 @@ async def ingest_sector_moneyflow(db: AsyncSession) -> dict[str, int]:
         )
     logger.info("ingest_sector_moneyflow %s", result)
     return result
+
+
+async def ingest_sector_moneyflow_if_missing(db: AsyncSession) -> dict[str, Any]:
+    """**当日缺行才**补写（15:35 容器重启兜底）；已有行 → no-op（不覆盖收盘终态）。
+
+    与 15:05 的 EOD job 共用 :func:`ingest_sector_moneyflow`（同一 service 方法，双轨制）：
+    重启错过 15:05 时这里补一次，正常日子这里什么都不做。判据是**日级**的（三维度由
+    同一次调用写在同一事务里，不存在"只写了一半"的正常状态）；因此"当天盘中已写过行、
+    但 15:05 缺席"的日子这里也会 no-op —— 见
+    :func:`market_data_repo.sector_moneyflow_day_has_rows` 的已知边界。
+
+    返回值的键刻意不含 ``status``：worker 结果里 ``status`` 由 BaseWorker 拥有
+    （``{"status": "completed", **result}`` 会被内层同名键覆盖）。
+    """
+    today = _today_sh()
+    if await market_data_repo.sector_moneyflow_day_has_rows(db, today):
+        logger.info("board snapshot rewrite skipped: %s already written", today)
+        return {"skipped": True, "reason": "today_already_written", "trade_date": today.isoformat()}
+    counts = await ingest_sector_moneyflow(db)
+    logger.info("board snapshot rewrite wrote %s for %s", counts, today)
+    return {"skipped": False, "trade_date": today.isoformat(), **counts}
 
 
 def _map_sector_moneyflow_row(snap: Any) -> dict[str, Any]:
@@ -399,6 +424,67 @@ def _map_sector_moneyflow_row(snap: Any) -> dict[str, Any]:
         "lead_stock_code": snap.lead_stock_code,
         "lead_stock_pct": snap.lead_stock_pct,
     }
+
+
+def _hot_board_snapshot_row(snap: Any) -> dict[str, Any]:
+    """快照行 → ``/market/hot-boards`` 行 dict（与实时路径的行**同构**，供同一 mapper 消费）。
+
+    相对 :func:`_map_sector_moneyflow_row` 的增量恰好是 Task 2 的两列
+    （``amount``/``flat_count``，前端 ``HotBoardItem`` 契约消费）。``amount`` 是
+    ``Numeric(20,4)`` → 出参统一转 ``float``：payload 进 Redis 时
+    ``orjson.dumps(default=str)`` 会把 ``Decimal`` 编成**字符串**，缓存命中后前端拿到
+    ``"123.45"`` 而不是数字 —— 实时路径给的是 float，两条路径必须同型（验收项
+    "同 code 行资金口径一致"依赖这一点）。
+
+    直读属性（缺列/列改名即 ``AttributeError``，不静默降级成 ``None``）：与
+    :func:`_map_sector_moneyflow_row` 同一条约定 —— 拼错列名必须炸，而不是把"没有这一列"
+    混成"这个板块没数据"。缺值（上游 ``-``/历史行）恒 ``None``，**绝不 0**。
+    """
+    return {
+        "board_code": snap.board_code,
+        "board_name": snap.board_name,
+        "pct_change": snap.pct_change,
+        "up_count": snap.up_count,
+        "flat_count": snap.flat_count,
+        "down_count": snap.down_count,
+        "main_net_inflow": snap.main_net_inflow,
+        "main_net_ratio": snap.main_net_ratio,
+        "amount": None if snap.amount is None else float(snap.amount),
+        "lead_stock_name": snap.lead_stock_name,
+        "lead_stock_code": snap.lead_stock_code,
+        "lead_stock_pct": snap.lead_stock_pct,
+    }
+
+
+async def load_hot_board_snapshot(
+    db: AsyncSession, dimension: str, expected_day: date
+) -> tuple[date, list[dict[str, Any]]] | None:
+    """读表优先：表内该维度**最近有行的那一天** == ``expected_day`` 时返回 ``(day, rows)``。
+
+    否则 ``None``（含"表里完全没有该维度"、"最近日已陈旧"、"明细为空"三种）——
+    调用方必须据此回落实时抓取，**绝不**把"表里没有"当成"今天没有热门板块"。
+
+    ``expected_day`` 由调用方按"最近**预期**交易日"给出（``last_weekday(_today_sh())``）；
+    本函数只做"表内实际持有的最近日 vs 预期"这一条判据，不自己发明第二个"今天是哪天"。
+    返回的 ``day`` 就是那批行的 ``trade_date``：调用方据此标 ``as_of``，**不得**改标成今天
+    （陈旧日必须显式陈旧）。行序由 SQL 负责（``pct_change DESC, board_code ASC``）。
+    """
+    from app.models.market_data import SectorMoneyflowSnapshot  # noqa: PLC0415
+
+    day = await _latest_snapshot_day(
+        db,
+        SectorMoneyflowSnapshot.trade_date,
+        SectorMoneyflowSnapshot.dimension == dimension,
+    )
+    if day != expected_day:
+        return None
+    snaps = await market_data_repo.list_sector_moneyflow_ranked(
+        db, day, dimension, HOT_BOARD_SNAPSHOT_LIMIT
+    )
+    rows = [_hot_board_snapshot_row(snap) for snap in snaps]
+    if not rows:
+        return None
+    return day, rows
 
 
 async def get_sector_moneyflow(

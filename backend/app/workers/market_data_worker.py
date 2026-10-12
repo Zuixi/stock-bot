@@ -38,6 +38,14 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
             )
         elif job == "sector_moneyflow":
             result = await market_data_service.ingest_sector_moneyflow(db)
+        elif job == "board_snapshot_eod":
+            # 双轨制：与 `board_snapshot_eod_job`（交易日 15:05）调同一个 service 方法
+            # （收盘终态落库；A 类数据当天不落就永久丢失）。
+            result = await market_data_service.ingest_sector_moneyflow(db)
+        elif job == "board_snapshot_rewrite":
+            # 双轨制：与 `board_snapshot_rewrite_job`（交易日 15:35）同方法 —— **当日缺行才**
+            # 写（容器重启错过 15:05 的兜底）；已有行返回 {"skipped": true}。
+            result = await market_data_service.ingest_sector_moneyflow_if_missing(db)
         elif job == "northbound":
             result = await market_data_service.ingest_northbound(
                 db, days=int(params.get("days", 30))
@@ -117,6 +125,8 @@ class MarketDataWorker(BaseWorker):
         """Execute one ingest job; service exceptions propagate (BaseWorker marks the
         task failed). Expected payload keys (top-level or nested in "params"):
         global_index_daily/sector_moneyflow/concept_members — none;
+        board_snapshot_eod — none（板块快照收盘终态，与 15:05 job 同方法）;
+        board_snapshot_rewrite — none（当日缺行才写，与 15:35 job 同方法）;
         backfill_global_index — years(=2);
         northbound/share_floats/repurchases — days(=30/7/7); dragon_tiger/block_trades —
         trade_date(yyyymmdd, optional); announcements — days(=3); limit_up_stock_facts —
