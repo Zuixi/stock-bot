@@ -31,6 +31,7 @@ from app.schemas.industry import (
     MetricHistoryOut,
     MetricHistoryPointOut,
     MetricLatestOut,
+    MetricSeriesOut,
     PhaseOut,
     PositionSliceOut,
     ReferenceOut,
@@ -49,13 +50,22 @@ from app.services.industry_registry import (
     TIER_DERIVED,
     IndustryConfig,
     MetricDef,
+    find_metric,
     get_industry,
 )
 
 logger = logging.getLogger(__name__)
 
 DASHBOARD_CACHE_TTL = 60
+SERIES_CACHE_TTL = 60
 SPARK_POINTS = 24
+
+# 通用读面 GET /metrics/series 的 range 语法：<n><d|w|m|y> 或 "all"（spec §S1.2）。
+# 按"日历窗口"换算行数上界，而不是按 registry 频率 —— 调用方要的是时间窗，不是点数；
+# 频率过滤由 registry 的 m.freq 负责（月度指标在窗口内自然只有几个点）。
+SERIES_RANGE_UNITS: dict[str, int] = {"d": 1, "w": 7, "m": 31, "y": 366}
+SERIES_DEFAULT_RANGE = "1y"
+SERIES_MAX_LIMIT = 5000
 
 
 class UnknownIndustryError(ValueError):
@@ -64,6 +74,39 @@ class UnknownIndustryError(ValueError):
 
 class UnknownMetricError(ValueError):
     pass
+
+
+def range_limit(range_key: str) -> int | None:
+    """range 语法 → 行数上限；非法返回 None（路由层转 404）。
+
+    ``30d`` → 30、``6w`` → 42、``3m`` → 93、``1y`` → 366、``all`` → SERIES_MAX_LIMIT。
+    单位换算法只在 `SERIES_RANGE_UNITS` 一处，且按 SERIES_MAX_LIMIT 钳制
+    （``999y`` 不会把全表拖出来）。
+    """
+    key = range_key.strip().lower()
+    if key == "all":
+        return SERIES_MAX_LIMIT
+    unit = key[-1:]
+    digits = key[:-1]
+    if unit not in SERIES_RANGE_UNITS or not digits.isdigit():
+        return None
+    n = int(digits)
+    if n <= 0:
+        return None
+    return min(n * SERIES_RANGE_UNITS[unit], SERIES_MAX_LIMIT)
+
+
+def _stamp_caliber(cfg: IndustryConfig, rows: list[dict]) -> list[dict]:
+    """给缺 ``caliber_version`` 的行盖上 registry 声明的当前口径（就地，返回同一列表）。
+
+    行自带值优先（人工导入指定口径断点）；registry 未声明（None）即不写 —— 于是
+    "登记位存在但尚未回填具体口径"在库里的表现就是 NULL，不会被假值污染。
+    """
+    for row in rows:
+        if row.get("caliber_version") is None:
+            m = cfg.metric(row["metric_key"])
+            row["caliber_version"] = m.caliber_version if m is not None else None
+    return rows
 
 
 def _require_industry(industry_key: str) -> IndustryConfig:
@@ -387,7 +430,8 @@ async def ingest_industry_metrics(
         raise ValueError(f"Unknown industry data source: {source}")
 
     await _ensure_reference_points(db, cfg)
-    upserted = await repo.upsert_metrics(db, rows)
+    # 口径版本登记位在写路径统一盖章（fetcher 不必各自记得带它）
+    upserted = await repo.upsert_metrics(db, _stamp_caliber(cfg, rows))
 
     # 按覆盖清除：真实源落库成功后，仅清除本次已覆盖指标的 mock 行 + 由 mock 派生的
     # derived 行（派生计算只 upsert 不删除，不清除会让 mock 算出的旧序列继续喂给
@@ -524,7 +568,7 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
         daily = await repo.get_metric_history(db, cfg.key, m.key, limit=4000, freq="daily")
         rollup_rows.extend(_rollup_monthly_rows(cfg, m, daily))
     if rollup_rows:
-        total += await repo.upsert_metrics(db, rollup_rows)
+        total += await repo.upsert_metrics(db, _stamp_caliber(cfg, rollup_rows))
 
     derived: list[dict] = []
 
@@ -642,7 +686,7 @@ async def _compute_derived_metrics(db: AsyncSession, cfg: IndustryConfig) -> int
                 }
             )
 
-    total += await repo.upsert_metrics(db, derived)
+    total += await repo.upsert_metrics(db, _stamp_caliber(cfg, derived))
     return total
 
 
@@ -667,7 +711,7 @@ async def evaluate_and_store_signal(db: AsyncSession, cfg: IndustryConfig) -> In
 
 async def _build_cycle_input(db: AsyncSession, cfg: IndustryConfig) -> cycle_engine.CycleInput:
     """指标快照：latest 行按 registry 源优先级裁决 + 环比/猪粮比序列。"""
-    grouped = await repo.latest_rows_by_metric(db, cfg.key)
+    grouped = await repo.latest_rows_by_metric(db, [cfg.key])
     ratio_row = _pick_latest(cfg, grouped, "hog_corn_ratio")
     price_row = _pick_latest(cfg, grouped, "hog_price")
     cost_row = _pick_latest(cfg, grouped, "industry_cost_avg")
@@ -714,6 +758,12 @@ def _pick_latest(cfg: IndustryConfig, grouped: dict, metric_key: str) -> Industr
     return _pick_row(cfg.metric(metric_key), grouped.get(metric_key, []))
 
 
+def _caliber_of(m: MetricDef, row: IndustryMetric | None) -> tuple[str | None, str | None]:
+    """(行上实际口径, registry 当前口径)。两者不一致即上游口径断点，由消费方提示。"""
+    stored = row.caliber_version if row is not None else None
+    return stored, m.caliber_version
+
+
 async def _build_metric_latest(
     db: AsyncSession, cfg: IndustryConfig, m: MetricDef, grouped: dict, with_spark: bool
 ) -> MetricLatestOut:
@@ -723,6 +773,8 @@ async def _build_metric_latest(
         name=m.name,
         unit=m.unit,
         tier=m.tier,
+        caliber_version_registered=m.caliber_version,
+        scope_key=cfg.key,
         description=m.description,
     )
     if row is None:
@@ -732,6 +784,12 @@ async def _build_metric_latest(
     out.source = row.source
     out.freq = row.freq
     out.period = row.period
+    out.published_at = row.published_at
+    # PIT 徽章 as_of：有实际可得时点用它，否则回退 period（行情"发布即连续可得"）。
+    # 两者都在响应里，消费方能分辨"真 PIT"与"回退值"。
+    out.as_of = row.published_at.date() if row.published_at else row.period
+    out.caliber_version, _ = _caliber_of(m, row)
+    out.scope_key = row.industry_key
 
     if out.value is not None:
         label = {
@@ -782,7 +840,7 @@ async def get_latest_metrics(
     db: AsyncSession, industry_key: str, group: str | None = None
 ) -> list[MetricLatestOut]:
     cfg = _require_industry(industry_key)
-    grouped = await repo.latest_rows_by_metric(db, cfg.key)
+    grouped = await repo.latest_rows_by_metric(db, [cfg.key])
     metrics = cfg.metrics if group is None else [m for m in cfg.metrics if m.group == group]
     return [
         await _build_metric_latest(db, cfg, m, grouped, with_spark=group is None) for m in metrics
@@ -816,6 +874,142 @@ async def get_metric_history(
                 value=float(r.value) if r.value is not None else None,
                 source=r.source,
                 freq=r.freq,
+                as_of=r.published_at.date() if r.published_at else r.period,
+                published_at=r.published_at,
+                caliber_version=r.caliber_version,
+            )
+            for r in rows
+        ],
+    )
+
+
+# ── 通用读面（spec §S1.2）：跨 scope latest + 升序 series ───────────────
+#
+# 复用审计结论：本读面**不是平行栈** —— 它复用与行业看板同一套 registry 元数据、
+# 同一套源优先级裁决（`_pick_row`）与同一套徽章投影（`_latest_out` / `_caliber_of`），
+# 只是把 scope 从"单个行业"放宽到"任意 scope 列表 / 全部 scope"。
+# 行业端点 `/industries/{key}/metrics/latest` 继续服务行业 scope（含 spark/预警带，
+# 工作台要用）；通用端点服务"一次问多个 scope 多个 metric"，供情绪/宏观/策略消费。
+
+
+def _latest_out(
+    m: MetricDef, row: IndustryMetric | None, row_scope: str | None = None
+) -> MetricLatestOut:
+    """registry 元数据 + 行上四徽章 → MetricLatestOut（无行时也给全 None 的骨架）。"""
+    stored, registered = _caliber_of(m, row)
+    out = MetricLatestOut(
+        metric_key=m.key,
+        name=m.name,
+        unit=m.unit,
+        tier=m.tier,
+        caliber_version=stored,
+        caliber_version_registered=registered,
+        scope_key=row_scope,
+        description=m.description,
+    )
+    if row is None:
+        return out
+    out.value = float(row.value) if row.value is not None else None
+    out.source = row.source
+    out.freq = row.freq
+    out.period = row.period
+    out.published_at = row.published_at
+    out.as_of = row.published_at.date() if row.published_at else row.period
+    return out
+
+
+def _metric_def_or_raise(cfg: IndustryConfig, metric_key: str) -> MetricDef:
+    m = cfg.metric(metric_key)
+    if m is None:
+        raise UnknownMetricError(f"Metric '{metric_key}' is not defined for '{cfg.key}'")
+    return m
+
+
+async def get_latest_metrics_across_scopes(
+    db: AsyncSession,
+    scope_keys: list[str] | None = None,
+    metric_keys: list[str] | None = None,
+) -> list[MetricLatestOut]:
+    """跨 scope 的每指标最新值 + 四徽章（未登记 metric_key 一律拒绝）。
+
+    - ``metric_keys`` 省略 → 返回**已登记 scope** 的全部指标（未登记 scope 无指标定义，
+      故不出现在结果里，也不报错——这正是"先登记再读"的白名单语义）。
+    - ``scope_keys`` 省略 → 全部 scope（行业 + 后续 'market' 等）。
+    - ``metric_key`` 未在任何 scope 登记 → UnknownMetricError（调用方转 404）。
+    """
+    known_scopes = {cfg.key: cfg for cfg in get_all_industries()}
+    if scope_keys is not None:
+        unknown = [k for k in scope_keys if k not in known_scopes]
+        if unknown:
+            raise UnknownIndustryError(f"Scope(s) {unknown} are not configured in registry")
+
+    defs: list[tuple[str, MetricDef]] = []
+    if metric_keys:
+        for key in metric_keys:
+            found = find_metric(key)
+            if found is None:
+                raise UnknownMetricError(f"Metric '{key}' is not registered in registry")
+            defs.append(found)
+    else:
+        scopes = (
+            known_scopes.values() if scope_keys is None else [known_scopes[k] for k in scope_keys]
+        )
+        defs = [(cfg.key, m) for cfg in scopes for m in cfg.metrics]
+
+    grouped = await repo.latest_rows_by_metric(db, scope_keys)
+    outs: list[MetricLatestOut] = []
+    for _owner_scope, m in defs:
+        rows = grouped.get(m.key, [])
+        if scope_keys is not None:
+            rows = [r for r in rows if r.industry_key in scope_keys]
+        row = _pick_row(m, rows)
+        outs.append(_latest_out(m, row, row.industry_key if row is not None else None))
+    return outs
+
+
+async def get_series(
+    db: AsyncSession,
+    scope_key: str,
+    metric_key: str,
+    range_key: str = SERIES_DEFAULT_RANGE,
+) -> MetricSeriesOut:
+    """一个 scope 一个指标的升序序列（单一源：registry 源优先级最高的那个）。
+
+    序列**不跨源拼接**——同 period 多源共存时按 registry 优先级取一个源，否则图会把
+    两套口径（如 mock 与 akshare）连成一条假趋势。
+    """
+    limit = range_limit(range_key)
+    if limit is None:
+        raise ValueError(f"Invalid series range: {range_key!r}")
+    cfg = _require_industry(scope_key)
+    m = _metric_def_or_raise(cfg, metric_key)
+    rows = await repo.get_metric_history(db, scope_key, m.key, limit=limit, freq=m.freq)
+    available = {r.source for r in rows}
+    source = next((s for s in m.sources if s in available), None)
+    if source is not None:
+        rows = [r for r in rows if r.source == source]
+    stored = rows[-1].caliber_version if rows else None
+    return MetricSeriesOut(
+        scope_key=scope_key,
+        metric_key=m.key,
+        name=m.name,
+        unit=m.unit or None,
+        tier=m.tier,
+        freq=m.freq,
+        source=source,
+        caliber_version=stored,
+        caliber_version_registered=m.caliber_version,
+        range=range_key,
+        limit=limit,
+        points=[
+            MetricHistoryPointOut(
+                period=r.period,
+                value=float(r.value) if r.value is not None else None,
+                source=r.source,
+                freq=r.freq,
+                as_of=r.published_at.date() if r.published_at else r.period,
+                published_at=r.published_at,
+                caliber_version=r.caliber_version,
             )
             for r in rows
         ],
@@ -890,7 +1084,7 @@ async def get_industry_companies(db: AsyncSession, industry_key: str) -> Industr
 async def list_industries(db: AsyncSession) -> list[IndustrySummaryOut]:
     summaries: list[IndustrySummaryOut] = []
     for cfg in get_all_industries():
-        grouped = await repo.latest_rows_by_metric(db, cfg.key)
+        grouped = await repo.latest_rows_by_metric(db, [cfg.key])
         coverage = {m.key: bool(grouped.get(m.key)) for m in cfg.metrics}
         periods = [r.period for rows in grouped.values() for r in rows]
         # 列表卡片状态行（P6）：最新信号行带出周期阶段/信号/生效日期。
@@ -943,7 +1137,7 @@ async def get_dashboard(db: AsyncSession, cache: CacheClient, industry_key: str)
     if cached is not None:
         return DashboardOut(**cached)
 
-    grouped = await repo.latest_rows_by_metric(db, cfg.key)
+    grouped = await repo.latest_rows_by_metric(db, [cfg.key])
     strip = [
         await _build_metric_latest(db, cfg, m, grouped, with_spark=True) for m in cfg.strip_metrics
     ]
@@ -1080,6 +1274,10 @@ def _prepare_batch_rows(
                 "value": item["value"],
                 "unit": item.get("unit") or m.unit or None,
                 "extra": None,
+                # 人工/CSV 通道是公告类数据的入口：PIT 与口径版本可显式落库
+                # （published_at 不填即 NULL —— 不许拿 period 冒充实际可得时点）
+                "published_at": item.get("published_at"),
+                "caliber_version": item.get("caliber_version") or m.caliber_version,
             }
         )
     return rows, sorted(set(skipped)), sorted(set(rejected))

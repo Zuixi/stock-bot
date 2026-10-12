@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,16 @@ class MetricDelta(BaseModel):
 
 
 class MetricLatestOut(BaseModel):
+    """一个 scope 的一个指标最新值。
+
+    四徽章字段（spec §S1.2）：``source`` / ``as_of`` / ``freq`` / ``caliber_version``。
+    ``as_of`` = 该值**实际可得时点**（PIT）：有 ``published_at`` 用它，否则回退到
+    ``period``（历史行情"发布即连续可得"）；``published_at`` 另单独回传，让消费方
+    能区分"真 PIT"与"回退值"，而不是被静默糊过去。
+    ``caliber_version_registered`` = registry 声明的当前口径；与 ``caliber_version``
+    （行上实际口径）不一致即上游口径断点。
+    """
+
     metric_key: str
     name: str
     value: float | None = None
@@ -22,6 +32,11 @@ class MetricLatestOut(BaseModel):
     source: str | None = None
     freq: str | None = None
     period: date | None = None
+    as_of: date | None = None  # PIT 徽章：published_at 的日期，NULL 时回退 period
+    published_at: datetime | None = None  # PIT 原值（NULL = 未登记）
+    caliber_version: str | None = None  # 口径版本徽章（行上实际值）
+    caliber_version_registered: str | None = None  # registry 声明的当前口径
+    scope_key: str | None = None  # 该行所属 scope（industry_key 泛化后的读面别名）
     delta: MetricDelta | None = None
     warn: str | None = None
     warn_severity: str | None = None
@@ -112,6 +127,9 @@ class MetricHistoryPointOut(BaseModel):
     value: float | None
     source: str
     freq: str
+    as_of: date | None = None  # PIT：published_at 的日期，NULL 时回退 period
+    published_at: datetime | None = None
+    caliber_version: str | None = None
 
 
 class MetricHistoryOut(BaseModel):
@@ -123,6 +141,28 @@ class MetricHistoryOut(BaseModel):
     points: list[MetricHistoryPointOut]
 
 
+# ── 通用指标读面（spec §S1.2：GET /api/v1/metrics/latest | /series）─────────
+# 与行业工作台的 MetricLatestOut 同形状（四徽章 + registry 元数据），只额外带
+# scope_key，使同一读面同时服务行业 scope 与后续情绪/宏观的非行业 scope。
+
+
+class MetricSeriesOut(BaseModel):
+    """升序序列 + 四徽章（Redis 缓存）。``range`` 为请求的预设窗口，``limit`` 为实际行数上限。"""
+
+    scope_key: str
+    metric_key: str
+    name: str
+    unit: str | None = None
+    tier: str = "manual"
+    freq: str
+    source: str | None = None  # 最新一点的源（序列可能跨源）
+    caliber_version: str | None = None
+    caliber_version_registered: str | None = None
+    range: str
+    limit: int
+    points: list[MetricHistoryPointOut] = []
+
+
 class MetricBatchItem(BaseModel):
     metric_key: str
     period: date
@@ -131,6 +171,10 @@ class MetricBatchItem(BaseModel):
     freq: str | None = None
     unit: str | None = None
     stock_id: int | None = Field(default=None, ge=1, description="公司级指标携带 stocks.id")
+    # PIT：人工/CSV 通道可选填写"实际可得时点"（公告日/CSV 落库日）；不填即 NULL 待登
+    published_at: datetime | None = None
+    # 口径版本：仅当本次导入的上游口径与既有不同才填（留断点）
+    caliber_version: str | None = None
 
 
 class MetricBatchRequest(BaseModel):

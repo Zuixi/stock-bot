@@ -19,7 +19,12 @@ _METRIC_CONFLICT_COLS = ("industry_key", "stock_id", "metric_key", "source", "fr
 
 
 async def upsert_metrics(db: AsyncSession, rows: list[dict]) -> int:
-    """Idempotent bulk upsert of metric rows. Returns affected row count."""
+    """Idempotent bulk upsert of metric rows. Returns affected row count.
+
+    ``published_at`` / ``caliber_version`` 在冲突更新集中：人工导入补齐 PIT 或口径版本时，
+    重跑同一 (scope, metric, source, freq, period) 必须把新值写上，否则"能写入"只对
+    首次插入成立（ADR 0011 的修订留痕依赖覆盖写）。
+    """
     if not rows:
         return 0
     stmt = pg_insert(IndustryMetric).values(rows)
@@ -30,6 +35,8 @@ async def upsert_metrics(db: AsyncSession, rows: list[dict]) -> int:
             "value": stmt.excluded.value,
             "unit": stmt.excluded.unit,
             "extra": stmt.excluded.extra,
+            "published_at": stmt.excluded.published_at,
+            "caliber_version": stmt.excluded.caliber_version,
         },
     )
     result = await db.execute(stmt)
@@ -37,19 +44,28 @@ async def upsert_metrics(db: AsyncSession, rows: list[dict]) -> int:
 
 
 async def latest_rows_by_metric(
-    db: AsyncSession, industry_key: str
+    db: AsyncSession, scope_keys: list[str] | None = None
 ) -> dict[str, list[IndustryMetric]]:
-    """Latest row per (metric_key, source, freq) —DISTINCT ON over a small keyed table."""
-    stmt = (
-        select(IndustryMetric)
-        .where(IndustryMetric.industry_key == industry_key, IndustryMetric.stock_id == 0)
-        .distinct(IndustryMetric.metric_key, IndustryMetric.source, IndustryMetric.freq)
-        .order_by(
-            IndustryMetric.metric_key,
-            IndustryMetric.source,
-            IndustryMetric.freq,
-            desc(IndustryMetric.period),
-        )
+    """Latest row per (scope, metric_key, source, freq) — DISTINCT ON over a small keyed table.
+
+    ``scope_keys=None`` 表示**全部 scope**（通用读面跨 scope 取数）；行业看板传
+    ``[cfg.key]``。返回按 metric_key 分组（值内含 scope/source/freq 的候选行，
+    由 service 的 ``_pick_row`` 做 registry 源优先级裁决）。
+    """
+    stmt = select(IndustryMetric).where(IndustryMetric.stock_id == 0)
+    if scope_keys is not None:
+        stmt = stmt.where(IndustryMetric.industry_key.in_(scope_keys))
+    stmt = stmt.distinct(
+        IndustryMetric.industry_key,
+        IndustryMetric.metric_key,
+        IndustryMetric.source,
+        IndustryMetric.freq,
+    ).order_by(
+        IndustryMetric.industry_key,
+        IndustryMetric.metric_key,
+        IndustryMetric.source,
+        IndustryMetric.freq,
+        desc(IndustryMetric.period),
     )
     result = await db.execute(stmt)
     grouped: dict[str, list[IndustryMetric]] = {}
