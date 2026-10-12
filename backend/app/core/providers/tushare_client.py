@@ -499,6 +499,100 @@ class TuShareClient(RateLimitedSyncProvider):
         return pd.concat(frames, ignore_index=True)
 
     # ------------------------------------------------------------------
+    # 股指期货（spec §S1.10 升贴水的两条腿）
+    # ------------------------------------------------------------------
+
+    async def fetch_fut_basic(
+        self,
+        exchange: str = "",
+        fut_type: str = "",
+        fields: str = (
+            "ts_code,symbol,exchange,name,fut_code,multiplier,trade_unit,per_unit,"
+            "quote_unit,quote_unit_desc,d_mode_desc,list_date,delist_date,d_month,last_ddate"
+        ),
+    ) -> pd.DataFrame:
+        """期货合约表（TuShare ``fut_basic``，2026-10-13 实机验证）.
+
+        ⚠️ **必须传 ``exchange``**：不带参数的一次调用返回 **10000 行（命中该接口上限）**，
+        各交易所被静默截断（实测 CFFEX 只落 642 行）；带 ``exchange="CFFEX"`` 时返回
+        728 行 = 完整表（CFFEX 的 IF/IC/IH/IM/T/TF/TS/TL 全在）。
+
+        本任务用 ``exchange="CFFEX"`` 取 IF/IC/IH/IM 的 ``multiplier``（合约乘数，
+        点位→金额）与 ``delist_date``（最后交易日，年化贴水率的分母）。实测
+        ``fut_mapping`` 引用过的 183/126/124/35 个真实合约**全部**在表内、``delist_date``
+        全非空。
+        """
+        kwargs: dict[str, str] = {}
+        if exchange:
+            kwargs["exchange"] = exchange
+        if fut_type:
+            kwargs["fut_type"] = fut_type
+        return await self._query("fut_basic", fields=fields, **kwargs)
+
+    async def fetch_fut_daily(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        fields: str = (
+            "ts_code,trade_date,pre_close,pre_settle,open,high,low,close,settle,"
+            "change1,change2,vol,amount,oi,oi_chg"
+        ),
+    ) -> pd.DataFrame:
+        """期货日线行情（TuShare ``fut_daily``，2026-10-13 实机验证）.
+
+        ``ts_code`` 可传**连续合约**（`IF.CFX` 主力连续 / `IFL.CFX` 当月连续 /
+        `IFL1/2/3.CFX` 下月·下季·下下季连续）或真实合约（`IF2612.CFX`，退市合约也整段可回）。
+
+        ⚠️ **单次 2000 行上限，回补必须按日期分片**（实测复现附.5 #2 的结论，且更狠：
+        带 ``start_date="20180101"`` 仍只回 2000 行、最早停在 20180711 —— **起点写早没用**，
+        分片是唯一出路）。按 ≤3 年分片（每片 ≈730 行）后实测 IF 4002 日（2010-04-16 起）、
+        IC/IH 2791 日（2015-04-16 起）、IM 1021 日（2022-07-22 起）。
+
+        字段：``close`` 收盘价 / ``settle`` **结算价**（中金所收盘后计算发布的官方标价，
+        保证金与对冲成本的结算依据）/ ``oi`` 持仓量 / ``vol`` 成交量。
+        实测连续合约的 ``close``/``settle``/``oi`` **全列非空、无 0 值、无重复日期**。
+        """
+        kwargs: dict[str, str] = {}
+        if ts_code:
+            kwargs["ts_code"] = ts_code
+        if trade_date:
+            kwargs["trade_date"] = trade_date
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        return await self._query("fut_daily", fields=fields, **kwargs)
+
+    async def fetch_fut_mapping(
+        self,
+        ts_code: str,
+        start_date: str = "",
+        end_date: str = "",
+    ) -> pd.DataFrame:
+        """主力合约映射（TuShare ``fut_mapping``，2026-10-13 实机验证）.
+
+        ``ts_code`` = 连续合约代码（如 `IF.CFX`）；返回 ``ts_code, trade_date,
+        mapping_ts_code``，**一行 = 一个交易日** → 逐日映射，**不是"当前主力"快照**。
+
+        实测不带窗口返回全部历史且**未撞 2000 行上限**（`IF.CFX` 4003 行
+        2010-04-16→2026-10-13、映射到 183 个真实合约）。**无前视偏差的一手证据**：
+        把窗口内出现过的每一个真实合约整段取回，与 `.CFX` 连续序列**逐日**比对 ``close``，
+        四品种各 484 个交易日 / 23–24 个合约**不一致 0 日** ⇒ `.CFX` 是逐日主力连续
+        且**未复权**（= 当日映射合约的原始收盘价）。
+
+        本任务用它做两件事：① 在 ``extra.contract`` 里**标注**当日的真实合约代码（可复核）；
+        ② 作为测试/探针的**独立复核**来源（不把它的结果当 `value` 的输入）。
+        """
+        kwargs: dict[str, str] = {"ts_code": ts_code}
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        return await self._query("fut_mapping", **kwargs)
+
+    # ------------------------------------------------------------------
     # Shenwan industry classification APIs
     # ------------------------------------------------------------------
 

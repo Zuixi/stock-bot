@@ -260,6 +260,105 @@ cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -c \
 > **本批次没有新增/改动的 `metric_key` 提案**：`erp_10y` 与 `idx_turnover_ratio_sse`
 > 已从下方"新增提案"表**移入本表**（它们现在有代码可核）。
 
+**已注册（波动率与衍生品，scope = `market`；spec §S1.10，2026-10-13 落地）**：
+
+> 单位 / 频率逐字抄自 `industry_registry.VOLATILITY_DERIVATIVES_METRICS`（本表只是转录）。
+> 11 个 key **同属一个命名空间**（规则 4）、落**同一张** `industry_metrics`、
+> `industry_key='market'`（与 §S1.8 / §S1.9 / §S1.11 的 key **同一个 scope**、同一个读面
+> `GET /api/v1/metrics/{latest,series}`）。spec 原话：「**这是情绪模块里性价比最高的一组**
+> ——数据质量高、有真实前瞻性」。
+
+| `metric_key` | registry `name` | 单位 `unit` | 频率 `freq` |
+|---|---|---|---|
+| `qvix_50etf` | 50ETF期权隐含波动率 | % | daily |
+| `qvix_300etf` | 300ETF期权隐含波动率 | % | daily |
+| `qvix_500etf` | 500ETF期权隐含波动率 | % | daily |
+| `qvix_cyb_etf` | 创业板ETF期权隐含波动率 | % | daily |
+| `qvix_kcb_etf` | 科创50ETF期权隐含波动率 | % | daily |
+| `if_basis` | IF股指期货基差 | 点 | daily |
+| `ic_basis` | IC股指期货基差 | 点 | daily |
+| `ih_basis` | IH股指期货基差 | 点 | daily |
+| `im_basis` | IM股指期货基差 | 点 | daily |
+| `ic_discount_rate` | IC贴水率 | % | daily |
+| `im_discount_rate` | IM贴水率 | % | daily |
+
+> **⚠️ 升贴水的符号约定（唯一口径；前端不得自行翻转符号）**：
+> **`基差 = 期货 − 现货`**（期货价 − 现货指数价）——**正值 = 升水（期货高于现货）、
+> 负值 = 贴水（期货低于现货）**。依据 spec §S1.10 的验收判据「升贴水**负值**时 UI 明示
+> 『贴水』语义，避免正负号误读」：只有本约定能让"负值 = 贴水"成立，`现货 − 期货`
+> 会把贴水显示成**正数**。**机器可读标记** `sign_convention=futures_minus_spot`
+> （registry 的 `MetricDef.description` 与每行 `extra.sign_convention` 同值），
+> 前端据此决定是否渲染「贴水」徽标。
+> **落库主值取期货结算价**：`value = fut_daily.settle − index_daily.close`
+> （结算价 = 中金所收盘后发布的当日官方标价，是保证金与对冲成本的结算依据）；
+> 收盘价口径另落 `extra.basis_close`（= `fut_close − spot_close`）供与行情商口径对拍。
+> **手算核对（2026-10-12，`fut_daily`/`index_daily` 实测）**：
+> `IF2612.CFX` 结算价 **4225.8** − 沪深300 收盘 **4287.9798** = **−62.1798**（点）⇒ 贴水；
+> 同日收盘口径 4233.6 − 4287.9798 = **−54.3798**（与 Step-0 探针的 −54.38 逐位一致）。
+> 四品种同日全部为负（IF −62.18 / IC −120.42 / IH −41.41 / IM −100.47）⇒ 当日均为贴水。
+
+> **`ic_discount_rate` / `im_discount_rate` 的口径（spec §S1.10 的「额外指标」）**：
+> `贴水率 = 基差 / 现货指数收盘价 × 100`，**符号与基差一致**（负 = 贴水、正 = 升水）
+> —— **不翻转符号**（把它翻成"贴水越深数值越大"的正数形态，正好是 spec 要防的正负号
+> 误读）。**不年化**；年化口径作留痕落 `extra.annualized_pct`
+> （= 贴水率 × 365 / 距最后交易日天数，天数由 `fut_basic.delist_date` 与交易日相减得到，
+> **挂牌即已知 ⇒ 无前视**）。spec 点名的专业用法：作为**对冲成本与中性策略拥挤度**的代理。
+> **落地为两个 key 而不是一条"IC/IM 平均"**：IC 与 IM 是不同标的、贴水水平不同
+> （实测 2026-10-12 IC −1.6977% vs IM −1.4309%），合成一条会丢掉各自的对冲成本信息。
+
+> **期权波动率口径（`qvix_*`）**：直接取 **QVIX 中国波指**的日频 `close`（AKShare
+> `index_option_50etf_qvix` / `_300etf_` / `_500etf_` / `_cyb_` / `_kcb_qvix`）。
+> **不自己实现 Black-Scholes 反解**。单位 = 波动率百分数（13.84 = 13.84% 年化隐含波动率）。
+> ⚠️ **产地是第三方（optbbs.com）编制的指数，不是交易所官方口径**：官方「上证50ETF波动率
+> 指数（iVIX）」**自 2018-02-22 起由中证指数公司暂停发布**
+> （[金融界报道](https://m.jrj.com.cn/madapter/finance/2018/02/22154024136042.shtml)），
+> 故 registry 的 `source_tier` 记 **`highfreq`（第三方参考）而不是 `official`**
+> （ADR 0014「产地决定可信度」）。5 条序列在**期权上市前**上游补 NaN 行，本模块**不落行**
+> （没有期权就没有隐含波动率）；序列起点落 `extra.expected_from`（= 该期权上市日：
+> 50ETF 2015-02-09 / 300ETF 2019-12-23 / 500ETF·创业板ETF 2022-09-19 / 科创50ETF 2023-06-05，
+> 实测"上游首个非空日"逐个等于这些日期）。
+
+> **PIT（ADR 0011 / Ruling 34-35，两档）**：`published_at` 按**产地各自的可得出处**填，均带
+> `Asia/Shanghai` 时区，**绝不回退 `period`**：
+> 5 条 `qvix_*` 当日 **15:00**（隐含波动率由当日收盘的期权价格定型）；
+> 4 个基差 + 2 条贴水率当日 **16:00**（期货**结算价**在中金所收盘后计算发布，是本行的
+> 较晚一条腿）。**落库前的机械守卫**：两处共用
+> `market_activity_service.upsert_metric_rows`（同一函数对象，`_upsert_batched` 的
+> 跨模块入口），拒绝任何缺 `published_at`（或该值非带时区 datetime）/ 缺 `caliber_version`
+> 的行 —— 这两列可空，漏带会**静默**落 NULL（Ruling 59 的原始事故形态）。
+
+> **缺数不静默为 0**：`value = NULL` + `extra.missing_reason` + 覆盖率对账。
+> 0 的波动率 / 0 点的基差是"市场毫无波动 / 期货与现货完全平水"这一**事实断言**，
+> 与"这天没有数据"完全相反。原因码三个：`source_not_updated`（**源侧**该日无值：尾部发布
+> 滞后 + 上游历史偶发缺行）、`futures_leg_missing`、`spot_index_missing`；现货收盘为 0 →
+> `basis_spot_zero`（不落无穷）。**实测**：5 条 QVIX 各有 **13–14 个交易日**是
+> `source_not_updated`（上游静态 CSV 比期货腿**晚 3 个交易日**：2026-10-13 时仍停在
+> 2026-09-30；另有 2024-05 的 7 天、2025-11-10、2026-09-10/11、300ETF 的 2024-06-03），
+> 基差/贴水率 **0 天缺数**。上游落在**非交易日**的行（实测 3 行周末行）**不落库并计数告警**
+> （`BackfillStats.qvix_non_trading_rows_dropped`）。
+
+> **落库天（Ruling 59）**：交易日全集 = TuShare `trade_cal`(SSE)；5 条 QVIX 从**该 ETF 期权
+> 上市日**起逐交易日落行、4 个基差 + 2 条贴水率从**该品种期货首个挂牌日**起落行
+> （`extra.expected_from`）。**不依赖** `daily_quotes`：它只有 2023-05-09 起的 829 天，
+> 会把 QVIX 的 11.6 年判成"覆盖 29%"。实测跨度：`if_basis` **2010-04-16 → 2026-10-12
+> = 4002 个交易日（16.4 年）**、`ic_basis`/`ih_basis` **2791 天（11.4 年）**、
+> `im_basis` **1021 天（4.2 年）** —— 四品种全部 ≥ spec 的「≥3 年」，另两条贴水率同窗口。
+
+> **口径版本**：`caliber_version = 's1.10-v1'`（首个版本；实测 11 个 key 的
+> `array_agg(DISTINCT caliber_version)` 全为 `['s1.10-v1']`）。
+>
+> **A/B/C 归类（ADR 0014）**：11 个全属 **B 类**（只用当日点内事实，可回算、允许回补）：
+> QVIX = 上游当日一行；基差 = 当日期货结算价 − 当日现货指数收盘价；贴水率由当日基差与
+> 当日现货收盘算出（年化用的合约最后交易日挂牌即已知 ⇒ 不是未来信息）。
+> **无 A 类**（不消费"只给当下"的盘中明细）、**无 C 类**（不用成分权重快照之类事后归属）。
+> 主力连续的**无前视**有一手证据：`<品种>.CFX` 与当日 `fut_mapping` 合约的收盘价
+> **逐日完全相等**（四品种各 484 个交易日 / 23–24 个合约、不一致 0 日）⇒ 是**逐日**主力
+> 连续且**未复权**。
+>
+> **Step-0 实机结论 / 未验证余项**见
+> [`data-source.md` 附.8](./data-source.md#附8-s110-段波动率与衍生品期权隐含波动率--股指期货升贴水的数据源复核2026-10-13)。
+> **本批次没有新增提案 key**：11 个 key 全部有代码可核，已直接登记在上表。
+
 **已注册因子（`factor_key` · spec §S2.1；登记地 = `industry_registry.FACTORS`）**：
 
 > **因子不是指标**：`metric_key` 描述**一条序列**，`factor_key` 描述**一次变换**

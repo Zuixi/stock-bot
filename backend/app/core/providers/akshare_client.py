@@ -24,6 +24,17 @@ logger = logging.getLogger(__name__)
 _REQUEST_INTERVAL = 1.0  # be gentle with public data sites
 _MAX_RETRIES = 2
 
+#: QVIX 中国波指各品种 → AKShare 函数名（spec §S1.10 逐字列的 5 个 ETF 期权）。
+#: **键名是稳定标识**（不是 akshare 函数名的截断）：上游若改函数名，只在这里改一处。
+#: 全部 5 个已于 2026-10-13 实机验证存在（akshare 1.18.94）。
+QVIX_SERIES: dict[str, str] = {
+    "50etf": "index_option_50etf_qvix",  # 上证50ETF 期权
+    "300etf": "index_option_300etf_qvix",  # 沪深300ETF 期权
+    "500etf": "index_option_500etf_qvix",  # 中证500ETF 期权
+    "cyb": "index_option_cyb_qvix",  # 创业板ETF 期权
+    "kcb": "index_option_kcb_qvix",  # 科创50ETF 期权
+}
+
 
 class AkShareClient(RateLimitedSyncProvider):
     """Async-friendly wrapper around the optional ``akshare`` package."""
@@ -113,6 +124,47 @@ class AkShareClient(RateLimitedSyncProvider):
             "bond_china_yield",
             lambda: self._ak.bond_china_yield(start_date=start_date, end_date=end_date),
         )
+
+    # ------------------------------------------------------------------
+    # 期权隐含波动率：QVIX 中国波指 5 条日频序列（spec §S1.10）
+    # ------------------------------------------------------------------
+
+    async def fetch_qvix(self, series: str) -> pd.DataFrame:
+        """**QVIX 中国波指**日频序列（第三方 optbbs.com 编制，AKShare 内置封装）.
+
+        已验证 2026-10-13 · akshare 1.18.94
+        （`scripts/spike_s110_volatility_futures_sources.py` PROBE 1）：
+        返回列 = ``date, open, high, low, close``，**落库取 ``close``**（日频；单位 =
+        波动率百分数，如 13.84 表示 13.84% 的年化隐含波动率）。
+
+        ``series`` 取值见 :data:`QVIX_SERIES`（50etf / 300etf / 500etf / cyb / kcb）。
+
+        ⚠️ **三条实测限制**（详见 `docs/design/data-source.md` 附.8）：
+
+        1. **上游是单个静态 CSV**（`http://1.optbbs.com/d/csv/d/k.csv`，gbk 编码，
+           87 列多品种拼接，AKShare 按列偏移切分）：**没有分页 API**，早期数据不可翻页
+           补取；原始 CSV 行数 == AKShare 返回行数（**无库内截断**，实测 2823 行）。
+        2. **期权上市前上游补 NaN 行**：5 条序列行数完全相同（2823 行）但非空深度不同
+           —— 实测「首个非空日 == 该 ETF 期权上市日」（50ETF 2015-02-09 / 300ETF
+           2019-12-23 / 500ETF·创业板ETF 2022-09-19 / 科创50ETF 2023-06-05）。
+        3. **有发布滞后**：实测 2026-10-13 时 CSV 仍停在 2026-09-30
+           （`Last-Modified: Wed, 30 Sep 2026 07:13:54 GMT`），比期货腿晚 3 个交易日
+           → 缺的交易日由调用方落 NULL + `missing_reason`，**不得**落 0、**不得**取最近值。
+
+        本方法**不做**任何插值/填充/反解 —— spec §S1.10 要的是"直接取隐含波动率序列"。
+        """
+        func_name = QVIX_SERIES.get(series)
+        if func_name is None:
+            raise ValueError(f"未知的 QVIX series={series!r}；可用={sorted(QVIX_SERIES)}")
+        func = getattr(self._ak, func_name, None)
+        if func is None:
+            # 上游改版/降级时必须**响亮失败**（Ruling 51 同类纪律）：静默返回空表会把
+            # "接口没了"伪装成"这天没数据"，整条指标序列会被静默写成 NULL。
+            raise RuntimeError(
+                f"akshare 无 {func_name}() —— QVIX 中国波指序列 {series} 不可得，"
+                "须按 docs/design/data-source.md 附.8 的结论标 blocked-on-verification"
+            )
+        return await self.invoke_async(func_name, func)
 
 
 _default_client: AkShareClient | None = None

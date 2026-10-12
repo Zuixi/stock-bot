@@ -1399,21 +1399,260 @@ def _assert_market_activity_keys() -> None:
 
 _assert_market_activity_keys()
 
+# ── 全市场波动率与衍生品（spec §S1.10）──────────────────────────────────
+#
+# spec 原话：「**这是情绪模块里性价比最高的一组**——数据质量高、有真实前瞻性」。
+# 11 个指标（5 条 QVIX 中国波指 + 4 个品种股指期货升贴水 + IC/IM 贴水率）与 §S1.8 /
+# §S1.9 / §S1.11 **同一个 scope 键、同一张 `industry_metrics`、同一个读面**。
+#
+# 计算与落库在 `app/services/volatility_derivatives_service.py`；
+# Step-0 实机结论见 `docs/design/data-source.md` 附.8。
+VOLATILITY_DERIVATIVES_CALIBER_VERSION = "s1.10-v1"
+
+#: QVIX 中国波指的产地：**第三方 optbbs.com 编制**（AKShare 内置封装直读其静态 CSV）。
+#: ⚠️ **不是交易所官方口径** —— 官方「上证50ETF波动率指数（iVIX）」自 2018-02-22 起由
+#: 中证指数公司暂停发布，故 `source_tier` 记 `highfreq`（第三方参考）而非 `official`。
+QVIX_SOURCE = "akshare_optbbs_qvix"
+#: 升贴水的产地：TuShare `fut_daily`（期货腿，`<品种>.CFX` 逐日主力连续）
+#: × `index_daily`（现货腿）。两条腿 + 相减都在本地完成 → `source = local_calc` 类口径，
+#: 但产地必须可查，故按"主腿 + 派生"记在 `extra`（见 `_basis_def`）。
+FUTURES_BASIS_SOURCE = "tushare_fut_daily"
+SPOT_INDEX_SOURCE = "tushare_index_daily"
+
+#: §S1.10 的 `extra.missing_reason` 缺数语义。**缺数恒 NULL，绝不填 0**
+#: （0 的波动率/0 点的基差是"市场毫无波动/期货与现货完全平水"这一事实断言，
+#: 与「这天没有数据」完全相反 —— 与 §S1.9 的 `margin_short_balance` 同纪律）。
+VOLATILITY_DERIVATIVES_MISSING_REASONS: dict[str, str] = {
+    "source_not_updated": (
+        "上游当日尚无值（**源侧发布滞后**：实测 QVIX 的 optbbs CSV 在 2026-10-13 仍停在 "
+        "2026-09-30，比期货腿晚 3 个交易日）。这是「源还没更新」而不是「波动率为 0」"
+    ),
+    "qvix_before_option_listing": (
+        "该交易日在对应 ETF 期权上市日之前 —— 没有期权就没有隐含波动率可算"
+        "（上游用 NaN 行占位，本模块落 NULL + 本原因码，**不落 0**）"
+    ),
+    "spot_index_missing": "该交易日现货指数腿（TuShare index_daily）没有收盘价",
+    "futures_leg_missing": "该交易日期货腿（TuShare fut_daily 主力连续）没有结算价",
+    "basis_spot_zero": "现货指数收盘价为 0 —— 基差率数学上无定义，落 NULL（不落无穷）",
+}
+
+#: **升贴水的符号约定（唯一口径，前端不得自行翻转符号）**。
+#:
+#: spec §S1.10 的验收判据是「升贴水**负值**时 UI 明示"贴水"语义，避免正负号误读」——
+#: 只有「基差 = 期货 − 现货」能让「负值 = 贴水」成立：`现货 − 期货` 会把贴水显示成
+#: **正数**，正好是判据要防的那种误读。
+BASIS_SIGN_CONVENTION = (
+    "**升贴水符号约定（唯一口径）**：`基差 = 期货 − 现货`（期货价 − 现货指数价），"
+    "**正值 = 升水（期货高于现货）、负值 = 贴水（期货低于现货）**。"
+    "依据 spec §S1.10 的验收判据「升贴水负值时 UI 明示『贴水』语义」（`现货 − 期货` 会把"
+    "贴水显示为正数）。手算核对：2026-10-12 `IF2612.CFX` 收盘 4233.60 − 沪深300 收盘 "
+    "4287.98 = −54.38 ⇒ 贴水。**机器可读标记**：`sign_convention=futures_minus_spot`"
+    "（与落库行 `extra.sign_convention` 同值），前端据此决定是否显示「贴水」徽标，"
+    "**不得**自行翻转符号。"
+)
+
+#: 基差的自报口径（写进每个基差指标的 description）。
+BASIS_CALIBER_NOTE = (
+    "`value = 期货结算价 − 现货指数收盘价`（**结算价**取自 TuShare `fut_daily.settle`，"
+    "中金所收盘后计算发布的当日官方标价 = 保证金/对冲成本的结算依据）。"
+    "收盘价口径另落 `extra.basis_close`（= 期货 `close` − 现货收盘），供与行情商口径对拍。"
+    "期货腿 = `<品种>.CFX` **逐日主力连续**（实测与当日 `fut_mapping` 合约的收盘价逐日"
+    "完全相等 ⇒ 逐日主力、未复权、无前视偏差）；现货腿 = TuShare `index_daily`。"
+    "`extra` 带 `contract`（当日真实合约）、`fut_settle`、`fut_close`、`spot_close`、"
+    "`multiplier`、`spot_index`，可逐日手算复核。"
+)
+
+#: 贴水率的口径（写进 IC/IM 贴水率指标的 description）。
+DISCOUNT_RATE_CALIBER_NOTE = (
+    "`value = 基差 / 现货指数收盘价 × 100`，**符号与基差一致**（负值 = 贴水、正值 = 升水）"
+    "—— **不翻转符号**：把它翻成「负数越大越贴水」之外的正数形态，正好是 spec §S1.10 要防的"
+    "正负号误读。**不年化**（年化口径另落 `extra.annualized_pct` = 贴水率 × 365 / 距最后"
+    "交易日天数，天数由 `fut_basic.delist_date` 与交易日相减得到，挂牌即已知 ⇒ 无前视）。"
+    "专业用途：作为**对冲成本与中性策略拥挤度**的代理（spec §S1.10 点名）。"
+)
+
+
+def _qvix_def(key: str, name: str, series: str, note: str) -> MetricDef:
+    """5 条 QVIX 中国波指的共同形状（口径文案统一，避免 5 份会腐烂的复制）。"""
+    return MetricDef(
+        key=key,
+        name=name,
+        unit="%",
+        freq="daily",
+        # ⚠️ 第三方编制（官方 iVIX 已自 2018-02-22 暂停发布）→ `highfreq` 而非 `official`。
+        tier=TIER_HIGHFREQ,
+        sources=[QVIX_SOURCE],
+        group="volatility",
+        # 波动率越高 = 市场越恐慌 → 颜色语义上"越高越差"（与 §S1.8 的 sentiment 同向）。
+        higher_is_better=False,
+        caliber_version=VOLATILITY_DERIVATIVES_CALIBER_VERSION,
+        description=(
+            f"{note}。**产地 = 第三方 optbbs.com 编制的 QVIX 中国波指**（AKShare "
+            f"`index_option_*_qvix` 直读其静态 CSV，取 `close` 列），**不是交易所官方口径**："
+            "官方「上证50ETF波动率指数（iVIX）」自 2018-02-22 起由中证指数公司暂停发布。"
+            f"单位 = 波动率百分数（如 13.84 = 13.84% 年化隐含波动率）。"
+            f"`extra.series='{series}'`、`extra.caliber='close'`、`extra.upstream` 记录产地。"
+            "**缺数恒 NULL + `missing_reason`**（`source_not_updated` = 源侧发布滞后、"
+            "`qvix_before_option_listing` = 该日早于期权上市日），**不落 0、不取最近值、"
+            "不做插值**"
+        ),
+    )
+
+
+def _basis_def(
+    product: str, key: str, name: str, contract: str, spot_code: str, spot_name: str
+) -> MetricDef:
+    """4 个品种股指期货升贴水的共同形状（符号约定与口径文案统一）。"""
+    return MetricDef(
+        key=key,
+        name=name,
+        unit="点",
+        freq="daily",
+        # 由两个当日上游事实相减得出（期货结算价 − 现货收盘）→ 本地派生。
+        tier=TIER_DERIVED,
+        sources=[FUTURES_BASIS_SOURCE, SPOT_INDEX_SOURCE],
+        group="derivatives",
+        higher_is_better=None,  # 升水/贴水本身无"越好"方向（是套保成本，不是好坏）
+        caliber_version=VOLATILITY_DERIVATIVES_CALIBER_VERSION,
+        description=(
+            f"{product} 股指期货主力连续的升贴水（{contract} 逐日主力连续 ← "
+            f"{spot_name} `{spot_code}`）。{BASIS_SIGN_CONVENTION}{BASIS_CALIBER_NOTE}"
+        ),
+    )
+
+
+def _discount_def(product: str, key: str, name: str, basis_key: str) -> MetricDef:
+    """IC / IM 贴水率的共同形状（对冲成本与中性策略拥挤度的代理）。"""
+    return MetricDef(
+        key=key,
+        name=name,
+        unit="%",
+        freq="daily",
+        tier=TIER_DERIVED,
+        sources=[FUTURES_BASIS_SOURCE, SPOT_INDEX_SOURCE],
+        group="derivatives",
+        higher_is_better=None,
+        caliber_version=VOLATILITY_DERIVATIVES_CALIBER_VERSION,
+        description=(
+            f"{product} 股指期货主力连续的**贴水率**（由 `{basis_key}` 与现货指数收盘价算出，"
+            f"与基差同源同窗口）。{DISCOUNT_RATE_CALIBER_NOTE}{BASIS_SIGN_CONVENTION}"
+        ),
+    )
+
+
+#: spec §S1.10 逐字列的 5 个期权波动率品种（**顺序 = spec 顺序**）。
+#: （akshare series 键, metric_key, 名称, 期权上市日）
+QVIX_SPECS: tuple[tuple[str, str, str, str], ...] = (
+    ("50etf", "qvix_50etf", "50ETF期权隐含波动率", "2015-02-09"),
+    ("300etf", "qvix_300etf", "300ETF期权隐含波动率", "2019-12-23"),
+    ("500etf", "qvix_500etf", "500ETF期权隐含波动率", "2022-09-19"),
+    ("cyb", "qvix_cyb_etf", "创业板ETF期权隐含波动率", "2022-09-19"),
+    ("kcb", "qvix_kcb_etf", "科创50ETF期权隐含波动率", "2023-06-05"),
+)
+
+#: spec §S1.10 逐字列的 4 个股指期货品种（顺序 = spec 顺序）。
+#: （品种, 连续合约代码, 基差 metric_key, 现货指数代码, 现货指数名）
+FUTURES_BASIS_SPECS: tuple[tuple[str, str, str, str, str], ...] = (
+    ("IF", "IF.CFX", "if_basis", "000300.SH", "沪深300"),
+    ("IC", "IC.CFX", "ic_basis", "000905.SH", "中证500"),
+    ("IH", "IH.CFX", "ih_basis", "000016.SH", "上证50"),
+    ("IM", "IM.CFX", "im_basis", "000852.SH", "中证1000"),
+)
+
+#: **额外指标**（spec §S1.10 逐字点名）：IC/IM 贴水率。
+#: spec 写作 `IC/IM 贴水率`——落地为**两个 key**（IC 与 IM 各一条独立序列），
+#: 因为二者是**不同的标的、不同的贴水水平**（实测 2026-10-12 IC −1.509% vs IM −1.431%），
+#: 合成一条"IC/IM 平均"会丢掉它们各自的对冲成本信息。品种同上（`extra` 可对账）。
+DISCOUNT_RATE_SPECS: tuple[tuple[str, str, str, str], ...] = (
+    ("IC", "ic_discount_rate", "IC贴水率", "ic_basis"),
+    ("IM", "im_discount_rate", "IM贴水率", "im_basis"),
+)
+
+VOLATILITY_DERIVATIVES_METRICS: list[MetricDef] = [
+    *(
+        _qvix_def(
+            key,
+            name,
+            series,
+            f"「{name}」= 该 ETF 期权组合的 QVIX 中国波指日频收盘值（spec §S1.10 点名的 "
+            f"{name.replace('期权隐含波动率', '')}，对应期权上市日 {list_date}）",
+        )
+        for series, key, name, list_date in QVIX_SPECS
+    ),
+    *(
+        _basis_def(product, key, f"{product}股指期货基差", contract, spot_code, spot_name)
+        for product, contract, key, spot_code, spot_name in FUTURES_BASIS_SPECS
+    ),
+    *(
+        _discount_def(product, key, name, basis_key)
+        for product, key, name, basis_key in DISCOUNT_RATE_SPECS
+    ),
+]
+
+#: §S1.10 **spec 承诺**的全部 `metric_key`：5 条 QVIX + 4 个品种升贴水 + 2 条贴水率 = 11 个。
+VOLATILITY_DERIVATIVES_METRIC_KEYS: tuple[str, ...] = (
+    *(key for _series, key, _name, _ld in QVIX_SPECS),
+    *(key for _p, _c, key, _sc, _sn in FUTURES_BASIS_SPECS),
+    *(key for _p, key, _n, _b in DISCOUNT_RATE_SPECS),
+)
+
+#: registry 里登记的**全部** key（本批次目前 = spec 的 11 个，无「底座类」附加 key）。
+VOLATILITY_DERIVATIVES_ALL_KEYS: tuple[str, ...] = tuple(
+    m.key for m in VOLATILITY_DERIVATIVES_METRICS
+)
+
+
+def _assert_volatility_derivatives_keys() -> None:
+    """spec §S1.10 的 11 个 key 必须**恰好**是登记项 —— 防"少登记一个"静默通过。
+
+    同时锁死"5 条 QVIX 覆盖 ≥3 个品种"这一 spec 判据：登记项里 QVIX 少于 3 个即当场失败
+    （不是运行时才发现 UI 上少了两条线）。
+    """
+    declared = set(VOLATILITY_DERIVATIVES_METRIC_KEYS)
+    registered = set(VOLATILITY_DERIVATIVES_ALL_KEYS)
+    if declared != registered:
+        raise RuntimeError(
+            "VOLATILITY_DERIVATIVES_METRICS 与 _METRIC_KEYS 不一致："
+            f"只登记={sorted(registered - declared)} 只声明={sorted(declared - registered)}"
+        )
+    if len(VOLATILITY_DERIVATIVES_METRIC_KEYS) != len(set(VOLATILITY_DERIVATIVES_METRIC_KEYS)):
+        raise RuntimeError("§S1.10 的 metric_key 有重复")
+    if len(VOLATILITY_DERIVATIVES_METRIC_KEYS) != 11:
+        raise RuntimeError(
+            "spec §S1.10 承诺 11 个指标（5 期权波动率 + 4 品种升贴水 + 2 条贴水率），"
+            f"声明了 {len(VOLATILITY_DERIVATIVES_METRIC_KEYS)} 个"
+        )
+    if len(QVIX_SPECS) < 3:
+        raise RuntimeError(f"spec §S1.10 要求期权波动率覆盖 ≥3 个品种，登记了 {len(QVIX_SPECS)} 个")
+    if len(FUTURES_BASIS_SPECS) != 4:
+        raise RuntimeError(
+            f"spec §S1.10 要求 IF/IC/IH/IM 四品种升贴水，登记了 {len(FUTURES_BASIS_SPECS)} 个"
+        )
+
+
+_assert_volatility_derivatives_keys()
+
 #: `INDUSTRIES['market']` **只有一个** `IndustryConfig`（scope 键必须唯一）：
-#: §S1.8 的 8 个指标与本批次的 14 个 key **合并登记在同一个 scope** 下
-#: —— 它们本来就落在同一张 `industry_metrics`、走同一个读面，`metrics` 只是白名单来源。
+#: §S1.8 的 8 个、§S1.9/S1.11 的 14 个与本批次 §S1.10 的 11 个 key **合并登记在同一个
+#: scope** 下 —— 它们本来就落在同一张 `industry_metrics`、走同一个读面，
+#: `metrics` 只是白名单来源。
 #: `MARKET_SENTIMENT` 这个名字保留（既有测试断言 `INDUSTRIES["market"] is MARKET_SENTIMENT`），
-#: 语义从"全市场情绪"扩展为"全市场（情绪 + 活跃度 + 估值）"。
+#: 语义从"全市场情绪"扩展为"全市场（情绪 + 活跃度 + 估值 + 波动率与衍生品）"。
 MARKET_SENTIMENT = IndustryConfig(
     key="market",
-    name="全市场情绪 · 活跃度 · 估值",
+    name="全市场情绪 · 活跃度 · 估值 · 波动率与衍生品",
     description=(
         "全市场 scope（非行业）：情绪/市场宽度与动量（spec §S1.8）"
-        " + 交易活跃度与杠杆资金（spec §S1.9） + 估值与风险溢价（spec §S1.11）。"
+        " + 交易活跃度与杠杆资金（spec §S1.9） + 估值与风险溢价（spec §S1.11）"
+        " + 波动率与衍生品（spec §S1.10：QVIX 期权隐含波动率 / 股指期货升贴水 / IC·IM 贴水率）。"
         "指标值与行业指标同表同读面，代码即配置"
     ),
     sw_l3_codes=[],  # 非行业 scope：不挂申万分类
-    metrics=[*MARKET_METRICS, *MARKET_ACTIVITY_METRICS],
+    metrics=[
+        *MARKET_METRICS,
+        *MARKET_ACTIVITY_METRICS,
+        *VOLATILITY_DERIVATIVES_METRICS,
+    ],
     phases=[],  # 周期判定是行业工作台的产物，全市场 scope 不参与
     position_templates={},
 )

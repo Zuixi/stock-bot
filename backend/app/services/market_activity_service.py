@@ -1253,6 +1253,19 @@ async def _upsert_batched(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
     return total
 
 
+async def upsert_metric_rows(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
+    """:func:`_upsert_batched` 的**跨模块复用入口**（spec §S1.10 的
+    `volatility_derivatives_service` 用同一套 PIT 守卫 + 分批 upsert）。
+
+    为什么要有这个别名而不是让下游 import 私有名：这两列（`published_at` /
+    `caliber_version`）在表里**可空**，漏带会**静默**落 NULL（Ruling 59 的原始事故形态：
+    12036 行全 NULL 而无人报错）。守卫只能有一份实现 —— 复制一份到第二个 service，
+    两份守卫迟早漂移，而漂移的后果是"又一次静默 NULL"。语义与 :func:`_upsert_batched`
+    完全一致（同一个函数对象）。
+    """
+    return await _upsert_batched(db, rows)
+
+
 async def backfill_market_activity(
     db: AsyncSession,
     *,
