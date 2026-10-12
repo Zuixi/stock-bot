@@ -146,6 +146,63 @@ cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -c \
 > **A/B/C 归类（ADR 0014）**：8 个全属 **B 类**（只用当日点内事实，可回算、允许回补，
 > 带 20 日窗口完备守卫）。无 A 类、无 C 类指标。
 
+**已注册因子（`factor_key` · spec §S2.1；登记地 = `industry_registry.FACTORS`）**：
+
+> **因子不是指标**：`metric_key` 描述**一条序列**，`factor_key` 描述**一次变换**
+> （`(序列, window, params) → 序列` 的纯函数）。两者**共用同一命名空间且不得撞名**
+> （撞名会让 `grep` 与前端映射双双失效，`validate_factors` + 单测机械锁定），
+> 但**登记处不同**：指标在 `INDUSTRIES[].metrics`，因子在 `FACTORS`。
+> 本表是 `FACTORS` 的逐字转录（名称 / 单位 / 窗口 `window`），
+> `backend/tests/test_indicators_registry.py::TestMetricDictionarySync` 机械比对。
+
+| `factor_key` | registry `name` | 单位 `unit` | 窗口 `window` | 分组 · 存储 |
+|---|---|---|---|---|
+| `pct_rank` | 滚动分位 | — | 252 | 分位与估值位 · 读时算 |
+| `zscore_20d` | 20 日 z-score | — | 20 | 分位与估值位 · 读时算 |
+| `yoy` | 同比 | — | 12 | 动量与变化 · 读时算 |
+| `mom` | 环比 | — | 1 | 动量与变化 · 读时算 |
+| `ma_20d` | 20 日均线 | — | 20 | 趋势与均线 · 读时算 |
+| `volatility_60d` | 60 日年化波动率 | — | 60 | 风险与波动 · 读时算 |
+| `drawdown` | 逐点回撤 | — | — | 风险与波动 · 读时算 |
+| `trend_slope_60d` | 60 日趋势斜率 | — | 60 | 趋势与均线 · 读时算 |
+| `ma_bullish` | 均线多头排列 | — | 60 | 趋势与均线 · 读时算 |
+| `consecutive_negative` | 连续为负期数 | 期 | — | 动量与变化 · 读时算 |
+| `return_percentile` | 收益分位 | — | 60 | 分位与估值位 · **物化** `stock_features.return_percentile` |
+| `max_drawdown` | 最大回撤 | — | — | 风险与波动 · **物化** `stock_features.max_drawdown` |
+| `trend_slope` | 趋势斜率 | — | 60 | 趋势与均线 · **物化** `stock_features.trend_slope` |
+| `annual_volatility` | 年化波动率 | — | 60 | 风险与波动 · **物化** `stock_features.annual_volatility` |
+
+> **单位列的「—」**：表示该因子**无量纲**（比值 / 分位 / 布尔 / 标准化值）——
+> registry 里就是 `unit=""`。`ma_20d` 的单位随输入序列（元/kg、万股、元…），
+> **有意**登记为无量纲：写死一个量纲，同一因子用在成交量上时单位就成了谎言。
+> 唯一例外是 `consecutive_negative`（单位「期」）。
+> 本表**不用**指标表那句「（**空串** = 无量纲比值）」的写法——那句话是
+> `check_metric_dictionary.py` 的 `EMPTY_UNIT_DOC` 常量，只对**指标** 4 列表生效。
+>
+> **窗口列的「—」**：`drawdown`、`max_drawdown`、`consecutive_negative` **无窗口参数**
+> —— registry 里 `window=None`。三者是**全序列口径**的纯函数（回撤算的是"历史最高
+> 到当前"的谷底、连续为负数是尾部计数，都与窗口无关）；物化/读面要裁剪到 N 日时由
+> **调用方**传窗口（`max_drawdown` 即由 `indicators.stock_feature_row` 按
+> `stock_features.window_days` 裁剪，见 `window_param` 的说明）。
+>
+> **窗口与口径参数**：其余因子的 `window` 值必须与函数签名默认值 **逐字一致**
+> （口径只住 registry 一处，`test_declared_window_matches_function_default` 锁定）；
+> 除窗口以外的口径参数（如年化波动率的 `periods_per_year=252`、趋势斜率的
+> `normalize=True`）登记在 `FactorDef.params`，由
+> `test_declared_params_match_function_defaults` 锁定——**口径参数不得只活在函数默认值里**。
+>
+> **存储（读时算 vs 物化）**：低成本因子**不落库**，读时算 + Redis 缓存；
+> 只有昂贵的（长窗口、跨全市场、逐标的 × 逐 `asof_date`）才物化。4 个物化因子的
+> `materialized_column` **必须是 `stock_features` 的既有列**——本 spec 不新增表、
+> 不新增列（`test_materialized_factors_name_existing_columns` 把这条与 ORM 模型机械绑定）。
+> 长窗口因子（如 1260 日情绪分位）走既有 `stock_features.extra`（JSONB），**无需迁移**。
+>
+> **量纲约定（读时算因子）**：变化率类（`yoy` / `mom`）返回**比值**（0.05 = +5%），
+> 不是百分数；分位类返回 **0–1**；波动率返回**比值**（0.28 = 年化 28%）；
+> 回撤类返回 **负数**（`-0.32` = 最大跌 32%，与逐点 `drawdown` 同号）。
+> 这些约定写在 `indicators.py` 的模块 docstring 与各函数 docstring 里并**被单测锁定**
+> ——口径必须在实现处显式声明，不能靠消费方猜。
+
 **手动检查脚本（未接入门禁；接入方案见 deferred）**（§4.2 规则 3 的机械验证；本文件上表 = registry 的转录，此脚本专治"抄错"）：
 
 ```bash

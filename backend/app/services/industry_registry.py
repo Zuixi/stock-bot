@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 # ── 数据源层级（UI 徽章 + 权威性裁决） ────────────────────────────────
 TIER_OFFICIAL = "official"  # 官方基准：农业农村部/发改委/统计局/交易所
@@ -140,6 +141,352 @@ class IndustryConfig:
 
     def position_template(self, signal_type: str) -> list[PositionSlice]:
         return self.position_templates.get(signal_type, self.position_templates.get("关注", []))
+
+
+# ── 因子层（spec §S2.1；不建表、不建 factor_defs） ────────────────────
+#
+# `MetricDef` 描述**一条序列**（id 元数据），`FactorDef` 描述**一次变换**
+# （`(序列, window, params) → 序列` 的元数据）。两者是不同层次，故**分表登记**
+# 而不是塞进 `IndustryConfig.metrics`——否则 `find_metric` 白名单会把因子函数
+# 当成可读指标，`/api/v1/metrics/latest` 会去查一张永远没有它的表。
+#
+# 因子实现**只在** `app/services/indicators.py`（纯函数）；本处只登记元数据。
+# 阈值/窗口若与实现分离，一律住这里（与 `cycle_engine` 的既有纪律一致：
+# "阈值调整改 registry 而非逻辑文件"）。
+
+GROUP_MOMENTUM = "momentum"  # 动量/变化
+GROUP_TREND = "trend"  # 趋势/均线
+GROUP_RISK = "risk"  # 风险/波动
+GROUP_VALUATION = "valuation"  # 分位/估值位
+
+FACTOR_GROUPS: dict[str, str] = {
+    GROUP_MOMENTUM: "动量与变化",
+    GROUP_TREND: "趋势与均线",
+    GROUP_RISK: "风险与波动",
+    GROUP_VALUATION: "分位与估值位",
+}
+
+# 物化状态：低成本的**不落库**（读时算 + Redis 缓存）；只有昂贵的（长窗口 /
+# 跨全市场 / 逐标的每日）才物化。物化列名对齐 `app/models/feature.py`。
+FACTOR_STORAGE_READ_TIME = "read_time"  # 读时算
+FACTOR_STORAGE_MATERIALIZED = "materialized"  # 物化落 stock_features 既有列
+
+
+@dataclass(frozen=True)
+class FactorDef:
+    """一个因子的登记项（`factor_key → {名称, 单位, 输入指标, 窗口, 展示分组}`）.
+
+    `func` 是 `indicators.py` 里的纯函数名（**字符串**，不是函数对象）：
+    registry 与实现**解耦**——registry 不被 import 循环绑住，函数改名在此一处改，
+    而 `tests/test_indicators_registry.py` 机械校验该名字真的存在且可调用。
+
+    `input_metrics` 是因子消费的 `metric_key`（可多个：如 `feed_meat_ratio` 之类
+    有待接入）；空元组 = 因子只吃"数值序列"，不对上具体指标（分位/波动率/均线
+    对任何序列都成立，绑死一个 metric_key 会把它降级成单指标实现）。
+    `input_metrics` 里**非空**的键必须已在 `INDUSTRIES` 注册（`validate_factors` 校验）。
+
+    `window` 是默认窗口（与 registry 其它定义一致：**口径住这里**，不写死在函数里）；
+    `window_param` 命名该窗口在函数签名里的参数（`window` / `periods_per_year` /
+    `long_window`…），`None` = 函数**无窗口参数**（全序列口径，如 `drawdown` /
+    `max_drawdown` —— 它们在 `stock_feature_row` 里按调用方窗口裁剪）。
+
+    `params` 登记**其余**口径参数（如 `periods_per_year=252`、`normalize=True`）：
+    纯函数签名里的默认值就是函数级兜底，本字段是**因子级**口径（口径住 registry）。
+    `window` **不得**与函数签名默认值矛盾（`test_declared_window_matches_function_default`
+    机械校验）；`params` 同理（`test_declared_params_match_function_defaults`）。
+    """
+
+    key: str
+    name: str
+    unit: str  # "" = 无量纲（比值/分位/布尔）
+    func: str  # indicators.py 中的纯函数名
+    input_metrics: tuple[str, ...] = ()
+    window: int | None = None
+    window_param: str | None = "window"
+    params: tuple[tuple[str, Any], ...] = ()  # 其余口径参数（名字, 值），不可变
+    group: str = GROUP_TREND
+    freq: str = "daily"  # 因子随输入序列的频率走；此处登记默认/典型频率
+    storage: str = FACTOR_STORAGE_READ_TIME
+    materialized_column: str | None = None  # 仅 storage=materialized 时非空
+    higher_is_better: bool | None = None
+    description: str = ""
+
+    def param_dict(self) -> dict[str, Any]:
+        """`params` 的字典视图（消费方按关键字展开调用纯函数时用）。"""
+        return dict(self.params)
+
+
+def _factor(
+    key: str,
+    name: str,
+    unit: str,
+    func: str,
+    *,
+    input_metrics: tuple[str, ...] = (),
+    window: int | None = None,
+    window_param: str | None = "window",
+    params: tuple[tuple[str, Any], ...] = (),
+    group: str = GROUP_TREND,
+    freq: str = "daily",
+    storage: str = FACTOR_STORAGE_READ_TIME,
+    materialized_column: str | None = None,
+    higher_is_better: bool | None = None,
+    description: str = "",
+) -> FactorDef:
+    return FactorDef(
+        key=key,
+        name=name,
+        unit=unit,
+        func=func,
+        input_metrics=input_metrics,
+        window=window,
+        window_param=window_param,
+        params=params,
+        group=group,
+        freq=freq,
+        storage=storage,
+        materialized_column=materialized_column,
+        higher_is_better=higher_is_better,
+        description=description,
+    )
+
+
+#: 因子登记表 —— `factor_key → FactorDef`。键与 `metric_key` **共用同一命名空间**
+#: 且不得撞名（`validate_factors` 校验）：撞名会让 `grep` 与前端映射双双失效。
+FACTORS: dict[str, FactorDef] = {
+    f.key: f
+    for f in [
+        # ── 读时算：低成本，不落库（Redis 缓存在读面） ──────────────────
+        _factor(
+            "pct_rank",
+            "滚动分位",
+            "",
+            "percentile_rank",
+            window=252,
+            group=GROUP_VALUATION,
+            higher_is_better=False,
+            description=(
+                "窗口内当前值的历史分位（0–1，越高越极端）。nearest-rank / 无插值，"
+                "只用有效样本。低成本 → 读时算；长窗口（如 1260 日情绪分位）才物化进 "
+                "stock_features.extra，不新增列"
+            ),
+        ),
+        _factor(
+            "zscore_20d",
+            "20 日 z-score",
+            "",
+            "zscore",
+            window=20,
+            group=GROUP_VALUATION,
+            higher_is_better=None,
+            description="偏离 20 日均值多少个总体标准差；窗口内无波动 → NULL（不是 0）",
+        ),
+        _factor(
+            "yoy",
+            "同比",
+            "",
+            "yoy",
+            window=12,
+            window_param="periods_per_year",
+            freq="monthly",
+            group=GROUP_MOMENTUM,
+            higher_is_better=True,
+            description=(
+                "与 12 期前比，返回比值（0.05 = +5%）。窗口即回看期数（月度序列=去年同月），"
+                "落在函数参数 periods_per_year 上"
+            ),
+        ),
+        _factor(
+            "mom",
+            "环比",
+            "",
+            "mom",
+            window=1,
+            window_param="lag",
+            freq="monthly",
+            group=GROUP_MOMENTUM,
+            higher_is_better=True,
+            description="与上期比，返回比值（0.05 = +5%）；基期为 0 → NULL，不算 inf",
+        ),
+        _factor(
+            "ma_20d",
+            "20 日均线",
+            "",  # 单位随输入序列，registry 不另立量纲
+            "moving_average",
+            window=20,
+            group=GROUP_TREND,
+            description=(
+                "简单移动平均；要求窗口内无缺失（与市场情绪 above_ma20_ratio 的"
+                "窗口完备守卫同义）。单位随输入序列：本因子登记为无量纲是**有意**的——"
+                "写死 '元/kg' 会让同一因子用在成交量上时单位变谎言"
+            ),
+        ),
+        _factor(
+            "volatility_60d",
+            "60 日年化波动率",
+            "",
+            "annualized_volatility",
+            window=60,
+            params=(("periods_per_year", 252),),
+            group=GROUP_RISK,
+            higher_is_better=False,
+            description="窗口内一阶收益率的总体标准差 × sqrt(252)，返回比值（0.28 = 28%）",
+        ),
+        _factor(
+            "drawdown",
+            "逐点回撤",
+            "",
+            "drawdown",
+            window=None,
+            window_param=None,
+            group=GROUP_RISK,
+            higher_is_better=False,
+            description="(x − 历史最高) / 历史最高，范围 [-1, 0]，逐位对齐输入序列",
+        ),
+        _factor(
+            "trend_slope_60d",
+            "60 日趋势斜率",
+            "",
+            "trend_slope",
+            window=60,
+            group=GROUP_TREND,
+            higher_is_better=True,
+            description=(
+                "窗口内 OLS 斜率 ÷ 窗口均值（无量纲，跨量级可比）；对应 stock_features.trend_slope"
+            ),
+        ),
+        _factor(
+            "ma_bullish",
+            "均线多头排列",
+            "",
+            "ma_bullish",
+            window=60,
+            window_param="long_window",
+            group=GROUP_TREND,
+            higher_is_better=True,
+            description="MA(short) > MA(long) 的布尔序列（严格大于；等于不算多头）",
+        ),
+        _factor(
+            "consecutive_negative",
+            "连续为负期数",
+            "期",
+            "count_consecutive_negative",
+            window=None,
+            window_param=None,
+            group=GROUP_MOMENTUM,
+            higher_is_better=False,
+            description=(
+                "尾部连续严格为负的期数。**复用 cycle_engine.count_consecutive_negative**"
+                "（spec §S2.1 点名），本层不另写一份"
+            ),
+        ),
+        # ── 物化：昂贵（逐标的 × 逐 asof_date），落 stock_features 既有列 ──
+        _factor(
+            "return_percentile",
+            "收益分位",
+            "",
+            "percentile_rank",
+            window=60,
+            group=GROUP_VALUATION,
+            storage=FACTOR_STORAGE_MATERIALIZED,
+            materialized_column="return_percentile",
+            higher_is_better=False,
+            description=(
+                "逐标的每日物化（跨全市场 × 长历史是昂贵侧）。**复用既有 "
+                "stock_features.return_percentile 列**"
+                "（uq_stock_features_key 冲突即更新，重跑幂等）"
+            ),
+        ),
+        _factor(
+            "max_drawdown",
+            "最大回撤",
+            "",
+            "max_drawdown",
+            window=None,
+            window_param=None,
+            group=GROUP_RISK,
+            storage=FACTOR_STORAGE_MATERIALIZED,
+            materialized_column="max_drawdown",
+            higher_is_better=False,
+            description=(
+                "窗口内最大回撤（负数）。纯函数是全序列口径（window=None → 整条序列）；"
+                "物化时按 stock_features.window_days 裁剪（见 indicators.stock_feature_row）。"
+                "复用既有 stock_features.max_drawdown 列"
+            ),
+        ),
+        _factor(
+            "trend_slope",
+            "趋势斜率",
+            "",
+            "trend_slope",
+            window=60,
+            group=GROUP_TREND,
+            storage=FACTOR_STORAGE_MATERIALIZED,
+            materialized_column="trend_slope",
+            higher_is_better=True,
+            description="窗口内归一化 OLS 斜率。复用既有 stock_features.trend_slope 列",
+        ),
+        _factor(
+            "annual_volatility",
+            "年化波动率",
+            "",
+            "annualized_volatility",
+            window=60,
+            group=GROUP_RISK,
+            storage=FACTOR_STORAGE_MATERIALIZED,
+            materialized_column="annual_volatility",
+            higher_is_better=False,
+            description="窗口内一阶收益率年化标准差。复用既有 stock_features.annual_volatility 列",
+        ),
+    ]
+}
+
+
+def get_factor(factor_key: str) -> FactorDef | None:
+    """因子白名单查询（与 `find_metric` 同构）：未登记因子返回 None."""
+    return FACTORS.get(factor_key)
+
+
+def validate_factors() -> None:
+    """登记自洽性校验（纯函数，无 IO；由 `tests/test_indicators_registry.py` 调用）。
+
+    逐条查 registry 自身**可判定**的三件事——这些都是"抄错即静默失效"的类型：
+
+    1. 因子键**不得与 metric_key 撞名**（共用命名空间）
+    2. `input_metrics` 里的键必须**已在 INDUSTRIES 注册**（否则因子引用了
+       不存在的指标，读时才发现）
+    3. `group` 取值必须在 `FACTOR_GROUPS` 内；`storage` 取值必须是两个常量之一；
+       `storage=materialized` ⟺ `materialized_column` 非空
+    4. `window_param` 与 `params` 的名字**不得重复**（同一个参数两处给值 → 谁生效靠顺序，
+       是口径漂移的入口）
+
+    实现侧的名字/签名是否存在由单测校验（registry 不 import indicators，
+    以免形成 import 环）。
+    """
+    metric_keys = {m.key for cfg in INDUSTRIES.values() for m in cfg.metrics}
+    for key, f in FACTORS.items():
+        if key != f.key:
+            raise ValueError(f"FACTORS 键 {key!r} 与 FactorDef.key {f.key!r} 不一致")
+        if key in metric_keys:
+            raise ValueError(f"factor_key {key!r} 与已注册 metric_key 撞名（命名空间冲突）")
+        for mk in f.input_metrics:
+            if mk not in metric_keys:
+                raise ValueError(f"因子 {key!r} 引用了未注册指标 {mk!r}")
+        if f.group not in FACTOR_GROUPS:
+            raise ValueError(f"因子 {key!r} 的展示分组 {f.group!r} 未登记")
+        if f.storage not in (FACTOR_STORAGE_READ_TIME, FACTOR_STORAGE_MATERIALIZED):
+            raise ValueError(f"因子 {key!r} 的 storage {f.storage!r} 非法")
+        if (f.storage == FACTOR_STORAGE_MATERIALIZED) != bool(f.materialized_column):
+            raise ValueError(
+                f"因子 {key!r}：storage=materialized 必须给 materialized_column，反之亦然"
+            )
+        param_names = [name for name, _ in f.params]
+        if len(param_names) != len(set(param_names)):
+            raise ValueError(f"因子 {key!r} 的 params 里有重名参数: {param_names}")
+        if f.window_param is not None and f.window_param in param_names:
+            raise ValueError(
+                f"因子 {key!r}：{f.window_param!r} 同时出现在 window_param 与 params 里"
+            )
 
 
 # ── 信号类型 ─────────────────────────────────────────────────────────
