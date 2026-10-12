@@ -11,7 +11,7 @@
 | 宣传首页 | 公开独立布局，登录 CTA | `frontend/src/pages/landing` |
 | 行情台首页 | 指数卡、涨跌分布、榜单、板块、资金流、热门板块（免登录可用） | `frontend/src/pages/market` · `frontend/src/features/market` · `/api/v1/market` |
 | 指数详情 | 指数 K 线、SSE 指数快照与盘中序列（路由 `/market/index/:tsCode`，由 `/index/:tsCode` redirect） | `frontend/src/pages/market-index` · `/api/v1/market` |
-| 申万行业浏览 | 申万一级/二级/三级树、下钻、行业表现 | `frontend/src/pages/market-category` · `frontend/src/pages/market-industry-level2` · `frontend/src/pages/market-industry-level3` · `/api/v1/market` |
+| 申万行业浏览 | 申万一级/二级/三级树、下钻、行业表现；**末级成分股页**（`/market/industry/:level1Code/:level2Code/:level3Code`）带 7 项行情字段（K 线中位数/涨跌幅/换手率/成交量/量比/振幅/成交额）与 **SCD2 归属区间**（`effective_from`/`effective_to`，可按历史交易日还原成分） | `frontend/src/pages/market-category` · `frontend/src/pages/market-industry-level2` · `frontend/src/pages/market-industry-level3` · `frontend/src/pages/market-industry-level4` · `/api/v1/market` |
 | 概念板块 | 板块列表、详情、成分股（成分以 `symbol` 为业务键）；`/market/concept/:boardCode` **保留**（Ruling 30） | `frontend/src/pages/market-concept` · `frontend/src/features/concept` · `/api/v1/concepts` |
 | 热门板块与情绪 | 涨停梯队、板块涨停、昨日涨停、情绪日历/盘中；`/market/hot-sectors/:category` **保留**（Ruling 30） | `frontend/src/pages/market-hot-sectors` · `frontend/src/shared/api/limitUp.ts` · `/api/v1/market` |
 | 市场热力图 | 板块/概念热力图（Task 5 建占位路由 `/market/heatmap`，真实现归 S1.5；**不是任何 redirect 的目标**） | `frontend/src/pages/market-heatmap` · `/api/v1/market` |

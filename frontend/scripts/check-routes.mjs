@@ -96,6 +96,10 @@ const ALLOWED_EXTRA = [
   "/market/heatmap",
   // S1.3 新增：全球市场与跨市场标的（真功能页，非 redirect 目标、非占位）
   "/market/global",
+  // S1.4 新增：申万末级成分股页（真功能页，公开；非 redirect 目标、非占位）。
+  // 既有两条 industry 保留路由（`:level1Code` / `:level1Code/:level2Code`）语义未变，
+  // 本行只是**多**一条更深的变体，不改它们的 kind。
+  "/market/industry/:level1Code/:level2Code/:level3Code",
   // MainLayout 外壳（无 path）
   "",
 ];

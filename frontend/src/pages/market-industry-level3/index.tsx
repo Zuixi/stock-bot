@@ -1,11 +1,16 @@
 import { useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { Breadcrumb, Button, Card, Empty, Space, Tag, Typography } from "antd";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { Alert, Breadcrumb, Button, Card, Empty, Space, Tag, Typography } from "antd";
 import type { TableProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { StockTable } from "@/features/market/components/StockTable";
 import type { StockRecord } from "@/shared/types";
 import { fetchSwIndustryTree, fetchSwLevel2Stocks, fetchSwLevel3Stocks, fetchSwLevel2StocksEnriched, fetchSwLevel3StocksEnriched } from "@/shared/api/swIndustry";
+import { fetchIndustryLevel } from "@/shared/api/swDrilldown";
+import {
+  IndustryAsOfBar,
+  IndustryMetricStrip,
+} from "@/features/market/components/IndustryMetricStrip";
 import { fetchIndustries } from "@/shared/api/industryResearch";
 import { useAuthStore } from "@/features/auth";
 
@@ -41,6 +46,18 @@ export default function IndustryLevel3Page() {
   const level2 = useMemo(
     () => level1?.children.find((node) => node.code === level2Code),
     [level1, level2Code]
+  );
+
+  // ── S1.4：该二级行业下各三级行业的 7 项聚合 + SCD2 归属口径 ──
+  const { data: drill } = useQuery({
+    queryKey: ["sw-drill-levels", 3, level1Code, level2Code],
+    queryFn: () => fetchIndustryLevel(3, { level1Code, level2Code }),
+    enabled: Boolean(level1Code && level2Code),
+    staleTime: 60_000,
+  });
+  const metricsByCode = useMemo(
+    () => new Map((drill?.items ?? []).map((it) => [it.code, it.metrics])),
+    [drill?.items]
   );
 
   // ── 已产品化行业导航：当前二级（或选中三级）命中 registry sw_l3_codes 时出 banner ──
@@ -118,11 +135,36 @@ export default function IndustryLevel3Page() {
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <Breadcrumb
         items={[
-          { title: <a onClick={() => navigate("/market")}>市场</a> },
-          { title: <a onClick={() => navigate(`/market/industry/${level1.code}`)}>{level1.name}</a> },
+          { title: <Link to="/market">市场</Link> },
+          {
+            title: (
+              <Link to={`/market/industry/${level1.code}`}>{level1.name}</Link>
+            ),
+          },
           { title: level2.name },
         ]}
       />
+
+      {drill ? (
+        <IndustryAsOfBar
+          asOf={drill.as_of}
+          asOfQuality={drill.as_of_quality}
+          asOfReason={drill.as_of_reason}
+          scd2AsOf={drill.scd2_as_of}
+          scd2Available={drill.scd2_available}
+          scd2Note={drill.scd2_note}
+        />
+      ) : null}
+
+      {drill && !drill.scd2_available ? (
+        <Alert type="warning" showIcon message="分类归属尚无 SCD2 数据" description={drill.scd2_note} />
+      ) : null}
+
+      {drill?.parent ? (
+        <Card title={`${level2.name} · 7 项行情字段（二级聚合）`} size="small">
+          <IndustryMetricStrip metrics={drill.parent.metrics} />
+        </Card>
+      ) : null}
 
       {workbenchIndustry && (
         <Card size="small">
@@ -147,28 +189,44 @@ export default function IndustryLevel3Page() {
       <Card
         title={`${level2.name} · 三级行业`}
         size="small"
-        extra={<Typography.Text type="secondary">点击三级标签切换板块个股</Typography.Text>}
+        extra={<Typography.Text type="secondary">点击三级进入末级成分股页（含 7 项字段与 SCD2 归属）</Typography.Text>}
       >
-        <Space wrap>
-          <Tag.CheckableTag
-            checked={!selectedLevel3Code}
-            onChange={(checked) => {
-              if (checked) setSelectedLevel3Code(undefined);
-            }}
-          >
-            查看二级全部
-          </Tag.CheckableTag>
-          {level2.children.map((level3) => (
+        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+          <Space wrap>
             <Tag.CheckableTag
-              key={level3.code}
-              checked={selectedLevel3Code === level3.code}
+              checked={!selectedLevel3Code}
               onChange={(checked) => {
-                if (checked) setSelectedLevel3Code(level3.code);
+                if (checked) setSelectedLevel3Code(undefined);
               }}
             >
-              {level3.name} ({level3.stockCount})
+              查看二级全部
             </Tag.CheckableTag>
-          ))}
+            {level2.children.map((level3) => (
+              <Tag.CheckableTag
+                key={level3.code}
+                checked={selectedLevel3Code === level3.code}
+                onChange={(checked) => {
+                  if (checked) setSelectedLevel3Code(level3.code);
+                }}
+              >
+                {level3.name} ({level3.stockCount})
+              </Tag.CheckableTag>
+            ))}
+          </Space>
+          {/* 末级入口：每条三级行业一行（7 项聚合 + 成分股链接）。
+              用真 <Link> 而不是裸 onClick：键盘可达、可新开标签（Task 16 的既有纪律）。 */}
+          <Space direction="vertical" size={4} style={{ width: "100%" }}>
+            {level2.children.map((level3) => (
+              <Space key={level3.code} size={12} wrap>
+                <Link to={`/market/industry/${level1Code}/${level2Code}/${level3.code}`}>
+                  {level3.name} · 成分股
+                </Link>
+                {metricsByCode.get(level3.code) ? (
+                  <IndustryMetricStrip metrics={metricsByCode.get(level3.code) ?? null} compact />
+                ) : null}
+              </Space>
+            ))}
+          </Space>
         </Space>
       </Card>
 

@@ -2,11 +2,20 @@ import { Link } from "react-router-dom";
 import { Card, Col, Empty, Row, Skeleton, Space, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchSwIndustryTree } from "@/shared/api/swIndustry";
+import { fetchIndustryLevel } from "@/shared/api/swDrilldown";
 import { useMarketPolling } from "../hooks/useMarketPolling";
+import { IndustryAsOfBar, IndustryMetricStrip } from "./IndustryMetricStrip";
 
 const STALE_TIME = 5 * 60 * 1000;
 const SKELETON_COUNT = 12;
 
+/**
+ * S1.4：申万一级行业列表（31 个），每个卡片带该行业的 **7 项行情聚合**。
+ *
+ * 层级与成分数仍来自 `sw-industry/tree`（静态树）；7 项字段来自
+ * `/sw-industry/drill/levels/1`（SCD2 归属 + 行情口径）。两者分开取：
+ * drill 失败时**只少一条指标带**，层级导航不受影响（Ruling 30：不得删既有能力）。
+ */
 export function IndustryClassification() {
   const { refetchInterval } = useMarketPolling();
   const { data: tree = [], isLoading } = useQuery({
@@ -15,6 +24,12 @@ export function IndustryClassification() {
     staleTime: STALE_TIME,
     refetchInterval,
   });
+  const { data: drill } = useQuery({
+    queryKey: ["sw-drill-levels", 1],
+    queryFn: () => fetchIndustryLevel(1),
+    staleTime: 60_000,
+  });
+  const metricsByCode = new Map((drill?.items ?? []).map((it) => [it.code, it.metrics]));
 
   return (
     <Card
@@ -23,6 +38,16 @@ export function IndustryClassification() {
       extra={<Typography.Text type="secondary">当前页面仅展示一级行业，点击进入二级页面</Typography.Text>}
     >
       <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        {drill ? (
+          <IndustryAsOfBar
+            asOf={drill.as_of}
+            asOfQuality={drill.as_of_quality}
+            asOfReason={drill.as_of_reason}
+            scd2AsOf={drill.scd2_as_of}
+            scd2Available={drill.scd2_available}
+            scd2Note={drill.scd2_note}
+          />
+        ) : null}
         <Typography.Text strong>一级行业（{tree.length}）</Typography.Text>
         {isLoading ? (
           <Row gutter={[12, 12]}>
@@ -39,7 +64,7 @@ export function IndustryClassification() {
         ) : (
           <Row gutter={[12, 12]}>
             {tree.map((level1) => (
-              <Col key={level1.code} xs={12} sm={8} lg={6}>
+              <Col key={level1.code} xs={24} sm={12} lg={8}>
                 {/* 整卡是跳转入口 → 用真 <Link>：可 Tab 聚焦、Enter 触发、可新开标签；
                     裸 <Card onClick> 键盘不可达（读屏也不会报成链接）（Task 16） */}
                 <Link
@@ -55,6 +80,12 @@ export function IndustryClassification() {
                           {level1.children.length} 个二级行业
                         </Typography.Text>
                       </Space>
+                      {metricsByCode.get(level1.code) ? (
+                        <IndustryMetricStrip
+                          metrics={metricsByCode.get(level1.code) ?? null}
+                          compact
+                        />
+                      ) : null}
                     </Space>
                   </Card>
                 </Link>

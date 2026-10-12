@@ -24,6 +24,8 @@ const PAGES: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
   MarketIndexPage: lazy(() => import("@/pages/market-index")),
   IndustryLevel2Page: lazy(() => import("@/pages/market-industry-level2")),
   IndustryLevel3Page: lazy(() => import("@/pages/market-industry-level3")),
+  // S1.4 末级：三级行业的成分股 + 该节点 7 项聚合（公开，不套 RequireAuth）
+  IndustryLevel4Page: lazy(() => import("@/pages/market-industry-level4")),
   // 保留路由（Ruling 30）：今天就有数据的真页面，不 redirect 到占位页
   MarketHotSectorsPage: lazy(() => import("@/pages/market-hot-sectors")),
   ConceptBoardPage: lazy(() => import("@/pages/market-concept")),

@@ -110,6 +110,19 @@ export const ROUTES: AppRoute[] = [
     component: "IndustryLevel3Page",
     parent: "main",
   },
+  // S1.4 新增：末级成分股页（`/market/industry/:l1/:l2/:l3`）。
+  // 为什么是**新路由**而不是把末级塞进上面那条：spec §S1.4 的钻取路径是
+  // 「31 一级 → 二级 → 三级 → 个股」，末级语义是"某个三级行业的成分股 + 该节点 7 项聚合"，
+  // 与"某二级下的三级清单 + 可切子集"是两件事；二/三级两条既有保留路由语义**未变**
+  // （Ruling 30：不得让既有入口指向占位页），故原地保留、末级另开一条。
+  // 权限：`/market/**` 公开免登录（ADR 0008）——本行**不加** requiresAuth / permission。
+  {
+    key: "market-industry-l4",
+    path: "/market/industry/:level1Code/:level2Code/:level3Code",
+    kind: "page",
+    component: "IndustryLevel4Page",
+    parent: "main",
+  },
   // `/market/heatmap`：**不是任何 redirect 的目标**（Ruling 30）；真实现归 S1.5
   {
     key: "market-heatmap",
