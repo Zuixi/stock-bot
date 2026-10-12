@@ -83,6 +83,21 @@ const NEW_TARGETS = [
   "/search", // 8（?q=，顶栏工具目标、非 redirect）
 ];
 
+/**
+ * IA §4「S1.x 新增路由的登记（Ruling 56.1）」——Wave 1 起新增的**真功能页**。
+ *
+ * 为什么从 `ALLOWED_EXTRA` 提出来单列：白名单只表达"允许出现"，不表达"契约要求它存在"，
+ * 于是 4 条真路由一度只活在门禁脚本里、契约文档 §4 里查不到（review 实测）。本常量与 IA §4
+ * 那张表**双向比对**（见下方断言 8b）：表 ↔ 清单路径集合一致 + 声明条数一致。
+ * 它们**不是 redirect**，故不参与 `REDIRECTS` / `KEEP` 的任何算术。
+ */
+const NEW_S1_ROUTES = [
+  "/market/global", // S1.3 全球市场
+  "/market/industry/:level1Code/:level2Code/:level3Code", // S1.4 申万末级成分股
+  "/market/heatmap", // S1.5 板块热力图（Ruling 30：不是任何 redirect 的目标）
+  "/market/rankings/:key", // S1.6 A股排行 7 榜
+];
+
 /** 允许出现的额外路由（既有页面按新前缀搬迁 / 目标带参变体）：超出即报错，防私加路由 */
 const ALLOWED_EXTRA = [
   ...NAV_ROOTS.map((n) => n.path),
@@ -92,18 +107,6 @@ const ALLOWED_EXTRA = [
   "/me",
   "/search",
   "/market/industry",
-  // `/market/heatmap` 仍是**已声明路由**（S1.5 建真热力图），但它不是 redirect 目标
-  "/market/heatmap",
-  // S1.3 新增：全球市场与跨市场标的（真功能页，非 redirect 目标、非占位）
-  "/market/global",
-  // S1.6 新增：A股排行 7 榜（真功能页，公开；非 redirect 目标、非占位）。
-  // 它**不在 IA §4 表内**：IA 的 15 条旧路由清单是 S0.2 冻结的结果，S1.6 是其后新增的
-  // 子路由（与 S1.3 的 `/market/global`、S1.5 的 `/market/heatmap` 同类）。
-  "/market/rankings/:key",
-  // S1.4 新增：申万末级成分股页（真功能页，公开；非 redirect 目标、非占位）。
-  // 既有两条 industry 保留路由（`:level1Code` / `:level1Code/:level2Code`）语义未变，
-  // 本行只是**多**一条更深的变体，不改它们的 kind。
-  "/market/industry/:level1Code/:level2Code/:level3Code",
   // MainLayout 外壳（无 path）
   "",
 ];
@@ -203,7 +206,7 @@ if (declaredRoutes.some((r) => r.path === "/" && r.parent)) {
 }
 
 // 5：不许出现表外路由
-const contract = new Set([...legacy, ...NEW_TARGETS, ...ALLOWED_EXTRA]);
+const contract = new Set([...legacy, ...NEW_TARGETS, ...NEW_S1_ROUTES, ...ALLOWED_EXTRA]);
 let offContract = 0;
 for (const declared of declaredPaths) {
   if (!contract.has(declared)) {
@@ -470,6 +473,64 @@ if (contractNums) {
   }
 } else {
   fail("redirect 契约段缺少「N 条 redirect、M 条保留」的声明（无法机械比对）");
+}
+
+// 8b：IA §4「S1.x 新增路由的登记（Ruling 56.1）」表 ↔ `NEW_S1_ROUTES` **双向比对**。
+// 为什么要有这条（review 实测的缺口）：这 4 条真路由一度只写在 `ALLOWED_EXTRA` 白名单里，
+// 白名单只表达"允许出现"，不表达"契约要求存在" → 路由在契约文档 §4 中不可见。
+// 故把该表变成被断言的契约：**路径集合双向**（表里有清单没有 = 幽灵行；清单有表里没有 = 文档漏记）
+// + **声明条数**（`> **N 条 S1.x 新增路由**`：多一条少一条都转红）。
+// 注意本表与 15 条旧路由表**列数不同**（4 列 vs 5 列），故不会被上面的旧表解析器吞掉——
+// 下面按「恰 4 个单元格 + 第 1 格反引号里是 `/` 开头的路径」识别本表，不猜列位。
+const iaS1Paths = [];
+for (const line of ia.split("\n")) {
+  if (!line.trim().startsWith("|")) continue;
+  const cells = [];
+  let buf = "";
+  let inCode = false;
+  for (const ch of line) {
+    if (ch === "`") inCode = !inCode;
+    if (ch === "|" && !inCode) {
+      cells.push(buf);
+      buf = "";
+    } else {
+      buf += ch;
+    }
+  }
+  cells.push(buf);
+  const trimmed = cells.slice(1, -1).map((c) => c.trim());
+  if (trimmed.length !== 4) continue; // 旧路由表是 5 列，本表是 4 列
+  const m = trimmed[0].match(/`(\/[^`]*)`/);
+  if (m) iaS1Paths.push(m[1]);
+}
+{
+  const a = [...iaS1Paths].sort().join(" | ");
+  const b = [...NEW_S1_ROUTES].sort().join(" | ");
+  if (a === b) {
+    pass(`IA §4「S1.x 新增路由」表与清单契约一致（${iaS1Paths.length} 条）`);
+  } else {
+    fail(
+      `IA §4「S1.x 新增路由」表与清单契约不一致\n      IA   = ${a}\n      清单 = ${b}` +
+        ` —— 新增真功能路由必须同时登记 IA §4 本表与 check-routes.mjs 的 NEW_S1_ROUTES`
+    );
+  }
+}
+// S1.x 新增路由必须**真的在清单里声明**（表里写了、清单没有 = 文档承诺了不存在的路由）
+for (const path of NEW_S1_ROUTES) {
+  if (declaredPaths.includes(path)) pass(`S1.x 新增路由已声明：${path}`);
+  else fail(`S1.x 新增路由缺失：${path}（IA §4 已登记，清单里却没有）`);
+}
+const s1CountLine = ia.match(/\*\*S1\.x 新增路由共 (\d+) 条\*\*/) || ia.match(/\*\*共 (\d+) 条\*\*/);
+if (s1CountLine) {
+  if (Number(s1CountLine[1]) === NEW_S1_ROUTES.length) {
+    pass(`IA §4「S1.x 新增路由」声明的条数与契约一致（${s1CountLine[1]} 条）`);
+  } else {
+    fail(
+      `IA §4「S1.x 新增路由」声明的条数不符：文档 ${s1CountLine[1]} 条，契约 ${NEW_S1_ROUTES.length} 条`
+    );
+  }
+} else {
+  fail("IA §4「S1.x 新增路由」块缺少「**S1.x 新增路由共 N 条**」的声明（无法机械比对）");
 }
 
 // 9：ARCHITECTURE（前端**当前态权威**，见 docs/authority.md）§6 路由一览 ↔ 清单**双向比对**。

@@ -28,6 +28,14 @@ PIT（本任务最关键的一条）
 
 **没有已公告期的股票不进榜**（``eligible_rows`` 不含它），且它的财务字段是 ``None``
 而**不是 0**——0 会被排进"利润最小"的名次里，那是错的。剔除的理由写进 ``notes``。
+
+``eligible_rows`` 的口径（Ruling 56.3）
+----------------------------------------
+分母与排序**严格同一列判据**：该交易日已公告的期里，**排序列有值**的最新一期
+（利润榜 = ``n_income_attr_p IS NOT NULL``；ROE 榜 = 长表 ``value IS NOT NULL``）。
+故 ``eligible_rows`` 就是"这个榜上能排上名的标的数"，不是"库里有多少只股票碰过某张表"。
+早先用 ``fm.metric_key`` 的**存在性**选期时，某期有 ``roe`` 但 ``n_income_attr_p`` 为 NULL
+的股票会**计入分母却排不进榜**——而分母是展示给用户的样本量，那种不对称是误导。
 """
 
 from __future__ import annotations
@@ -237,7 +245,14 @@ def _momentum_sql(direction: str) -> TextClause:
 #: 财务类榜的"选期 CTE"（一次写、两处用：取 top-N 与算分母/报告期分布）。
 #: 两处**必须逐字同源**——否则 ``eligible_rows`` 的分母与实际排序用的是两套口径，
 #: "为什么不足 100 条"就会说错（这是本文件最容易出现假绿的地方，故用同一个生成器）。
-_FINANCIAL_PIT_CTE = """
+#:
+#: **为什么按"排序列 IS NOT NULL"选期（Ruling 56.3 的落地口径）**：
+#: ``eligible_rows`` 是对用户展示的**样本量**，必须与排序谓词**严格同一判据**。
+#: 早先 ``have`` 用 ``fm.metric_key = 'roe'`` 做**存在性**判据、排序却按具体列判 NULL：
+#: 某期有 ``roe`` 但 ``n_income_attr_p`` 为 NULL 时，该股计入分母却排不进榜
+#: ——"分母 600 却只有 100 名"这句话本身就是错的。现在两处都取
+#: 「该交易日已公告的期里，**排序列有值**的最新一期」，分母 = 排序候选集。
+_FINANCIAL_PIT_CTE_TEMPLATE = """
         WITH ann AS (
             SELECT v.id,
                    v.stock_id,
@@ -252,13 +267,12 @@ _FINANCIAL_PIT_CTE = """
               AND coalesce(v.f_ann_date, v.ann_date) <= CAST(:as_of AS date)
         ),
         have AS (
-            SELECT DISTINCT ON (fm.stock_id)
-                   fm.stock_id, fm.report_version_id, a.end_date, a.report_type,
+            SELECT DISTINCT ON (a.stock_id)
+                   a.stock_id, a.id AS report_version_id, a.end_date, a.report_type,
                    a.ann_date, a.ann_date_source
-            FROM financial_metrics fm
-            JOIN ann a ON a.id = fm.report_version_id
-            WHERE fm.metric_key = :metric_key
-            ORDER BY fm.stock_id, a.end_date DESC, a.ann_date DESC
+            FROM ann a
+            {value_join}
+            ORDER BY a.stock_id, a.end_date DESC, a.ann_date DESC
         )
 """
 
@@ -312,19 +326,52 @@ def _financial_join(column: FinancialColumn) -> str:
     )
 
 
+def _financial_pit_cte(column: FinancialColumn) -> str:
+    """按**排序列**选期的 PIT CTE（见 :data:`_FINANCIAL_PIT_CTE_TEMPLATE`）。
+
+    选期与取值的指标 JOIN 由 :func:`_financial_value_join_inner` 从同一个白名单生成
+    ——「能进榜」与「计入分母」因此是**同一个谓词**（Ruling 56.3）。
+    """
+    return _FINANCIAL_PIT_CTE_TEMPLATE.format(value_join=_financial_value_join_inner(column, "fm"))
+
+
+def _financial_value_join_inner(column: FinancialColumn, alias: str) -> str:
+    """**指标值 JOIN**（内连接 + 值非空）——选期与取值的**唯一**判据来源。
+
+    ``alias`` 关联的是选期 CTE ``ann`` 的**行别名** ``a``（见
+    :data:`_FINANCIAL_PIT_CTE_TEMPLATE`），故这里写 ``a.id``。
+
+    实测落库位置：``n_income_attr_p`` 在 ``income_statement_facts``（宽表，取同名列）；
+    ``roe`` 在 ``financial_metrics``（**长表**，取 ``value``，须显式
+    ``metric_key = 'roe' AND value IS NOT NULL``）。
+
+    两侧都写**显式** NULL 判据（不靠宽表内连接的隐式效果），这样「能进榜」与
+    「计入分母」能被机械比对是同一条 —— 这是 Ruling 56.3 要钉住的性质。
+    """
+    if FINANCIAL_COLUMN_SOURCE[column] == "income_statement_facts":
+        return (
+            f"JOIN income_statement_facts {alias} ON {alias}.report_version_id = a.id"
+            f" AND {alias}.{column} IS NOT NULL"
+        )
+    return (
+        f"JOIN financial_metrics {alias} ON {alias}.report_version_id = a.id"
+        f" AND {alias}.metric_key = :metric_key AND {alias}.value IS NOT NULL"
+    )
+
+
 def _financial_top_sql(column: FinancialColumn, direction: str) -> TextClause:
     """半年利润 / 年利润 / ROE：PIT 选取已公告最新一期，再按该期指标排序。
 
-    **两步是必须的**：``have`` 只负责「选期」（``metric_key`` 在此是**存在性**判据），
-    随后按 ``report_version_id`` 回表取实际值。若把 ``metric_key = 'n_income_attr_p'``
-    写进 ``have`` 又同时取 ``roe`` 列（或反过来），关联列会被筛成 NULL → 整榜全空。
+    ``have`` 已把「已公告 ≤ 口径日」与「排序列有值」两件事一起做完（见
+    :data:`_FINANCIAL_PIT_CTE_TEMPLATE` 的注释），本查询只负责再关联出值并排序;
+    ``WHERE {value} IS NOT NULL`` 与 :func:`_financial_stats_sql` 的分母谓词**同一判据**。
 
     ``DISTINCT ON`` 排序键 = ``(stock_id, end_date DESC, ann_date DESC)``：期末新者优先；
     同一期末有多个可见版本（更正披露）时取更晚可见的那条。
     """
     value = _financial_value_sql(column)
     return text(f"""
-        {_FINANCIAL_PIT_CTE}
+        {_financial_pit_cte(column)}
         SELECT s.symbol, s.name, s.exchange, q.close, q.pct_chg,
                {value} AS metric,
                b.total_mv, b.dv_ratio, s.list_date,
@@ -347,6 +394,10 @@ def _financial_stats_sql(column: FinancialColumn) -> TextClause:
     分组后 ``sum(stock_count)`` = ``eligible_rows``（排序前的全市场分母），
     同时给出「实际取到的报告期分布」——这两件事是 UI 回答
     「不足 100 条时为什么」和「用的是哪期财务数据」的唯一依据。
+
+    **分母与排序必须严格同一判据**（Ruling 56.3）：选期 CTE 与 ``WHERE``
+    均与 :func:`_financial_top_sql` 逐字同源，故 ``eligible_rows`` 就是
+    "这个榜上能排上名的标的数"，不是"库里有多少只股票有某张表"。
     """
     source = FINANCIAL_COLUMN_SOURCE[column]
     later = (
@@ -356,7 +407,7 @@ def _financial_stats_sql(column: FinancialColumn) -> TextClause:
     )
     extra_join = "" if source == "financial_metrics" else "JOIN stocks s ON s.id = h.stock_id"
     return text(f"""
-        {_FINANCIAL_PIT_CTE}
+        {_financial_pit_cte(column)}
         {later}
         FROM have h
         {_financial_join(column)}
@@ -684,11 +735,13 @@ def _notes(
     notes: list[str] = list(spec.extra_notes)
     if returned_rows < limit:
         if spec.source_kind == "financial_statement":
+            # 分母与排序**同一判据**（Ruling 56.3）：分母里的每一只都能排上名，
+            # 故这里说的是"库里有多少只、其中多少只这一步有值"，不是两个不同的集合。
             detail = (
-                f"已公告财报的标的有 {all_have_financials} 只，但其中 {spec.metric_key} 取不到值的"
-                f"（NULL，非 0）不计入分母"
+                f"该交易日已公告财报的标的有 {all_have_financials} 只，"
+                f"其中 {spec.metric_key} 有值（非 NULL）的才计入分母并可参与排序"
                 if all_have_financials is not None
-                else "该榜分母只算指标可取值的标的"
+                else f"分母与排序同一判据：{spec.metric_key} 有值的标的才计入"
             )
             notes.append(
                 f"不足 {limit} 条：本榜实际返回 {returned_rows} 条，口径下可参与排序的标的仅 "

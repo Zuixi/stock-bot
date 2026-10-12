@@ -321,12 +321,35 @@ def test_financial_sql_is_point_in_time_bounded() -> None:
 
 
 def test_financial_sqls_share_one_pit_cte_source() -> None:
-    """分母与排序必须同源：否则"为什么不足 100 条"会说错。"""
+    """分母与排序必须**同一判据**：否则"为什么不足 100 条"会说错（Ruling 56.3）。
+
+    共享的选期 CTE 由 :func:`rbs._financial_pit_cte` 从同一个模板生成，且模板里的
+    指标值 JOIN 带**排序列非空**判据（``_financial_value_join_inner``）；本用例逐列核对
+    「分母查询的谓词 == 排序查询的谓词」，并挡住旧根因：选期**只用** ``metric_key``
+    做存在性判断（那正是 eligible_rows 与排序不一致的旧实现）。
+
+    注：``roe`` 的 join 里出现 ``metric_key = :metric_key`` 是**长表定位**判据，
+    不是存在性判据——它与 ``value IS NOT NULL`` 成对出现；下面按"成对出现"断言。
+    """
     for column in ("n_income_attr_p", "roe"):
         top = str(rbs.FINANCIAL_SQL[column])
         stats = str(rbs.FINANCIAL_STATS_SQL[column])
-        assert rbs._FINANCIAL_PIT_CTE.strip() in top
-        assert rbs._FINANCIAL_PIT_CTE.strip() in stats
+        cte = rbs._financial_pit_cte(column)
+        value = rbs._financial_value_sql(column)
+        # 选期 CTE 逐字同源（同一模板 + 同一 join 生成，不是两份手抄）
+        assert cte in top
+        assert cte in stats
+        assert "DISTINCT ON (a.stock_id)" in cte
+        # 谓词同源：两边都以「排序列有值」筛，且用的就是这一列的取值表达式
+        assert f"WHERE {value} IS NOT NULL" in top
+        assert f"WHERE {value} IS NOT NULL" in stats
+        # 选期 CTE 里也必须带**排序列**非空判据（不是只按 metric_key 存在性选期）
+        if rbs.FINANCIAL_COLUMN_SOURCE[column] == "income_statement_facts":
+            assert f"fm.{column} IS NOT NULL" in cte
+        else:
+            # 长表：metric_key 定位 + value 非空，缺一不可（只有存在性判据 = 旧根因）
+            assert "fm.metric_key = :metric_key" in cte
+            assert "fm.value IS NOT NULL" in cte
 
 
 def test_caliber_always_fills_three_items() -> None:
@@ -413,7 +436,10 @@ def test_notes_explain_no_announced_period_with_real_denominator() -> None:
         all_have_financials=1234,
     )
     joined = "".join(notes)
-    assert "1234" in joined and "NULL" in joined, "必须说清是没有已公告期、还是该指标无值"
+    assert "1234" in joined, "必须说清「没有已公告期」与「该指标无值」是两件事"
+    # 分母口径必须自述为「与排序同一判据」（Ruling 56.3），不再说成"取不到值的不计入分母"
+    # 那种"分母含了排不上名的标的"的旧说法
+    assert spec.metric_key in joined and "计入分母" in joined, joined
 
 
 class _RecordingCache:
@@ -781,6 +807,76 @@ def test_financial_board_ranks_by_roe_from_financial_metrics(
     assert [i.symbol for i in out.items] == [f"{PREFIX}021"], "未来期的 88% ROE 不许进榜"
     assert out.items[0].roe == pytest.approx(21.5)
     assert out.eligible_rows == 1
+
+
+@requires_pg
+def test_financial_boards_denominator_uses_the_sorted_column_not_metric_existence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**Ruling 56.3**：``eligible_rows`` 的分母必须与排序**严格同一列判据**。
+
+    旧实现的根因（review 实测）：``have`` 用 ``fm.metric_key = 'roe'`` 做**存在性**判据，
+    排序却按具体列 ``IS NOT NULL`` 过滤 → 某期有 ``roe`` 但 ``n_income_attr_p`` 为 NULL 时，
+    该股**计入分母却排不进榜**（"分母 3，榜上 2 条"这种样本量是误导）。
+
+    合成数据（都已公告，``f_ann_date = 2026-04-25``）：
+
+    * ``T10B070`` 该期 ``n_income_attr_p = NULL``、``roe = 9.9`` —— 有 roe 但没有利润；
+    * ``T10B071`` 该期 ``n_income_attr_p = 1e8``、**没有 roe 行** —— 有利润但没有 roe。
+
+    期望：两个榜各自只把**自己那一列有值**的标的计入分母，且分母 == 实际可排序的标的数：
+    利润榜分母不含 070、ROE 榜分母不含 071。若判据仍是 ``metric_key`` 存在性，两个榜的
+    分母都会变成 2（错），本用例转红。
+    """
+
+    async def _scenario(
+        db: AsyncSession,
+    ) -> tuple[RankingBoardResponseOut, RankingBoardResponseOut]:
+        only_roe = await _seed_stock(db, f"{PREFIX}070", "有ROE无利润", date(2015, 1, 1))
+        only_income = await _seed_stock(db, f"{PREFIX}071", "有利润无ROE", date(2015, 1, 1))
+        await _seed_financials(
+            db,
+            only_roe,
+            end_date=date(2026, 3, 31),
+            report_type="Q1",
+            ann_date=None,
+            f_ann_date=date(2026, 4, 25),
+            n_income_attr_p=None,
+            roe=9.9,
+        )
+        await _seed_financials(
+            db,
+            only_income,
+            end_date=date(2026, 3, 31),
+            report_type="Q1",
+            ann_date=None,
+            f_ann_date=date(2026, 4, 25),
+            n_income_attr_p=100_000_000.0,
+            roe=None,  # 不写 roe 行 → 该期没有 roe
+        )
+        return (
+            await rbs.get_ranking_board(db, None, "half_year_profit", 100),
+            await rbs.get_ranking_board(db, None, "roe", 100),
+        )
+
+    profit, roe = _run(_scenario, monkeypatch, AS_OF)
+
+    profit_symbols = [i.symbol for i in profit.items]
+    assert f"{PREFIX}071" in profit_symbols, "有利润的那只必须进利润榜"
+    assert f"{PREFIX}070" not in profit_symbols, "没有利润值的那只不该进利润榜"
+    assert profit.returned_rows == len(profit_symbols)
+    # 分母 == 该榜真正能排上名的标的数（本用例里两者相等；旧实现会是 returned_rows + 1）
+    assert profit.eligible_rows == profit.returned_rows, (
+        f"利润榜分母 {profit.eligible_rows} != 可排序标的数 {profit.returned_rows}"
+        " —— 说明分母用了 metric_key 存在性而非 n_income_attr_p IS NOT NULL"
+    )
+
+    roe_symbols = [i.symbol for i in roe.items]
+    assert f"{PREFIX}070" in roe_symbols, "有 ROE 的那只必须进 ROE 榜"
+    assert f"{PREFIX}071" not in roe_symbols, "没有 ROE 的那只不该进 ROE 榜"
+    assert roe.eligible_rows == roe.returned_rows, (
+        f"ROE 榜分母 {roe.eligible_rows} != 可排序标的数 {roe.returned_rows}"
+    )
 
 
 @requires_pg
