@@ -10,12 +10,18 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-// 注释感知的扫描原语（Ruling 45）：两个源码级门禁都不许直接在原文上跑正则。
-import { findVarRefs, lineOf, stripComments } from "./lib/source-scan.mjs";
+import ts from "typescript";
+
+// Ruling 46 分工：
+//   • `.ts/.tsx` → **TypeScript 编译器 API**（结构与词法交给解析器；注释、字符串、正则、
+//     模板串、内联样式键全部是 AST 节点，不再有"手工词法"那一类假绿/假红）；
+//   • `.css` 与 **字符串里的 `var(...)`** → 文本解析（CSS 无 JS 词法歧义；`var()` 是字符串内容）。
+import { parseSource, walk } from "./lib/ast-scan.mjs";
+import { findVarRefs, lineOf, stripCssComments } from "./lib/source-scan.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const css = readFileSync(join(root, "src/app/styles/theme.css"), "utf8");
-const ts = readFileSync(join(root, "src/app/theme.ts"), "utf8");
+const themeTsSource = readFileSync(join(root, "src/app/theme.ts"), "utf8");
 
 function blockOf(source, marker) {
   const start = source.indexOf(marker);
@@ -28,8 +34,8 @@ function varOf(text, name) {
   return m[1].toLowerCase();
 }
 function tsColor(mode, name) {
-  const start = ts.indexOf(`${mode}: {`);
-  const sec = ts.slice(start, ts.indexOf("},", start));
+  const start = themeTsSource.indexOf(`${mode}: {`);
+  const sec = themeTsSource.slice(start, themeTsSource.indexOf("},", start));
   const m = sec.match(new RegExp(`${name}:\\s*"(#[0-9a-fA-F]{6})"`));
   if (!m) throw new Error(`THEME_COLORS.${mode}.${name} not found`);
   return m[1].toLowerCase();
@@ -89,24 +95,27 @@ for (const { label, marker, tsMode, surfaces } of MODES) {
 //      不是自定义属性；真正存在的是 `--text-secondary`）。
 // 因此把"**引用的每一个 `var(--x)` 都必须真的被定义**"机械化——这条完全可以机械检测。
 //
-// 定义面 = `src/` 下所有 `.css/.ts/.tsx` 里的 `--x:` 声明（含 `theme.css`、各组件局部变量
-// 如 `--ladder-h1`/`--sw3-h2`/`--thermo-up-tint`，以及 **JSX 内联样式对象**里的
-// `"--x": "…"` 写法）。
-// 引用面 = 同一批文件里的 `var(--x…)`。
+// ── 死变量检查（Ruling 43 / 45 / 46）──────────────────────────────────────
 //
-// **`var(--x, <fallback>)` 的语义（Ruling 45 / 探针 C 修的就是这里）**：
-// 第二参存在且非空 = 提供了兜底值 → 首参**允许未定义**，这是 fallback 的用途，门禁**不得**报错；
-// 无第二参（`var(--x)`）或第二参为空（`var(--x,)`，CSS 语义下不算兜底）→ 首参**必须已定义**。
-// 而 fallback 表达式内部的变量（`var(--sw-heat, var(--up))` 里的 `--up`）**自身仍是引用**，
-// 它若未定义就是真的错——所以 `findVarRefs` 会把它作为独立的一条 `var(` 扫出来。
+// 为什么要有这一段：`--flat` 这类"看起来该存在"的变量被写进组件后，声明在
+// computed-value time 失效、元素**静默继承**别的颜色——不报错、不闪、测试也不红。
+// 同一处已栽过两次：① `#cf1322` 写死色值（暗色对比度 ≈2.8:1）；② 修①时写出 `var(--flat)`
+// （`--flat` 是 CSS **类名修饰符** `.delta-flat`，真正存在的是 `--text-secondary`）。
 //
-// ⚠️ **本门禁不做注释剥离以外的语法解析**（Ruling 45 的对称性要求）：
-// - **已覆盖**：注释里的 `--x:` **不再**被当成定义（先前是个假绿）；注释里的 `var(--x)` 也
-//   不再被当成引用（先前是个假红）；JSX 内联样式的 `"--x":` 现在被识别为定义。
-// - **未覆盖（已知限度，宁可写明也不静默）**：`--x` 的**作用域**不做校验——本门禁只断言
-//   "这个名字在 `src/` 里**某处**被声明过"，不断言"在使用它的那个选择器/组件里可见"。
-//   跨越样式表边界的可见性需要真正的 CSS 级联分析（当前仓库不引第三方解析器）。
-//   故本门禁的定位是"消灭**死变量**（从未被声明的名字）"，而不是"校验级联"。
+// **本轮（Fix Round 4）改用 TypeScript 编译器 API 取 `.ts/.tsx` 的定义与引用**，
+// 因为上一版的文本扫描在三处出了缺陷：
+//   NEW-2：fallback 按**变量名**记录 → A 处 `var(--x, #fff)` 给 B 处 `var(--x,)` **背书**（假绿）；
+//   NEW-3：自制词法器不认识含引号的正则字面量（`/'/`）→ 吞掉文件余部（假绿 + 假红）。
+// 现在：**每个 `var(...)` 引用各自判定自己的 fallback**；字符串/注释/正则由解析器处理。
+//
+// **限度（写明而不静默）**：`--x` 的**作用域/级联**不做校验——本门禁只断言"这个名字在
+// `src/` 里**某处**被声明过"，不断言"在使用它的那个选择器/组件里可见"。跨样式表边界的
+// 可见性需要真正的 CSS 级联分析（当前不引第三方解析器）。故本门禁的定位是
+// "消灭**死变量**（从未被声明的名字）"，而不是"校验级联"。
+//
+// **`var(--x, <fallback>)` 的语义（逐引用）**：
+//   有非空第二参 → 该处首参**允许未定义**（这正是 fallback 的用途），不失败，但报 ⚠；
+//   无第二参（`var(--x)`）或空第二参（`var(--x,)`，CSS 语义下不算兜底）→ 首参**必须已定义**。
 const SRC = join(root, "src");
 const walkFiles = (dir) => {
   const out = [];
@@ -120,51 +129,86 @@ const walkFiles = (dir) => {
 
 const sourceFiles = walkFiles(SRC);
 const definedVars = new Set();
-const referencedVars = new Map(); // 变量名 → 出现位置（前 3 处，便于定位）
-const fallbackOptional = new Set(); // 有兜底、故允许未定义的变量名
+/** 逐引用记录：变量名 → [{ rel, line, hasFallback }]（不合并成"名字级"事实） */
+const refs = [];
 for (const file of sourceFiles) {
-  const raw = readFileSync(file, "utf8");
-  // **先剥注释再匹配**（Ruling 45）：否则注释里的 `--x: #fff` 会被当成真定义（假绿）、
-  // 注释里举例的 `var(--x)` 会被当成真引用（假红）。两个方向都已实测复现过。
-  const text = stripComments(raw);
   const rel = file.slice(root.length + 1);
-  // 定义：`--x:`（可能写成 `"--x": "…"` 的内联样式键，故允许变量名两侧有引号/空格）
-  for (const m of text.matchAll(/["']?(--[a-zA-Z0-9-]+)["']?\s*:/g)) definedVars.add(m[1]);
-  // 引用：用注释感知的 var() 解析（能正确跨过嵌套括号，见 source-scan.mjs）
-  for (const ref of findVarRefs(text)) {
-    const line = lineOf(text, ref.index);
-    if (ref.hasFallback) fallbackOptional.add(ref.name);
-    if (!referencedVars.has(ref.name)) referencedVars.set(ref.name, []);
-    const hits = referencedVars.get(ref.name);
-    if (hits.length < 3) hits.push(`${rel}:${line}`);
+  const raw = readFileSync(file, "utf8");
+
+  if (file.endsWith(".css")) {
+    // CSS：剥块注释后取 `--x: value` 定义与 `var(...)` 引用（文本解析的**限度**见文件头）
+    const text = stripCssComments(raw);
+    for (const m of text.matchAll(/(--[a-zA-Z0-9-]+)\s*:/g)) definedVars.add(m[1]);
+    for (const ref of findVarRefs(text)) {
+      refs.push({ name: ref.name, hasFallback: ref.hasFallback, rel, line: lineOf(text, ref.index) });
+    }
+    continue;
   }
+
+  // TS/TSX：AST。
+  //   定义 = 名字以 `--` 开头的**字符串字面量**（内联样式对象 `{"--x": "1px"}`、
+  //          CSS-in-JS 模板串里的 `--x:` 都由此覆盖；注释里的不算——注释根本不是节点）。
+  //   引用 = 出现在**字符串字面量**里的 `var(...)`（`style={{ color: "var(--up)" }}`、
+  //          模板串整段 CSS）。字符串内容是文本，故按文本解析 `var()`，但**只在 AST
+  //          给出的那一个字符串值上解析**，不接触文件全文 → NEW-3 无法复现。
+  const sf = parseSource(file, raw);
+  walk(sf, (node) => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      const value = node.text;
+      if (/^--[a-zA-Z0-9-]+$/.test(value)) definedVars.add(value);
+      if (value.includes("var(")) {
+        for (const ref of findVarRefs(value)) {
+          refs.push({
+            name: ref.name,
+            hasFallback: ref.hasFallback,
+            rel,
+            line: lineOf(raw, node.getStart(sf)),
+          });
+        }
+      }
+      // 模板串里成段的 CSS 声明（`--x: #fff;`）也认
+      for (const m of value.matchAll(/(--[a-zA-Z0-9-]+)\s*:/g)) definedVars.add(m[1]);
+      return;
+    }
+    if (ts.isTemplateExpression(node)) {
+      for (const span of [node.head, ...node.templateSpans.map((s) => s.literal)]) {
+        const value = span.text;
+        for (const m of value.matchAll(/(--[a-zA-Z0-9-]+)\s*:/g)) definedVars.add(m[1]);
+        for (const ref of findVarRefs(value)) {
+          refs.push({
+            name: ref.name,
+            hasFallback: ref.hasFallback,
+            rel,
+            line: lineOf(raw, span.getStart(sf)),
+          });
+        }
+      }
+    }
+  });
 }
 
-const undefinedVars = [...referencedVars.entries()]
-  .filter(([name]) => !definedVars.has(name) && !fallbackOptional.has(name))
-  .sort(([a], [b]) => a.localeCompare(b));
-// 有兜底但从未声明的变量：不算失败，但**要报出来**——它意味着兜底色在永远生效，
-// 很可能是"以为定义了、其实没定义"的又一次，静默才是危险的。
-const fallbackOnlyVars = [...referencedVars.keys()]
-  .filter((name) => !definedVars.has(name) && fallbackOptional.has(name))
-  .sort();
+// **逐引用**判定：一处有兜底只豁免它自己（NEW-2）
+const undefinedRefs = refs.filter((r) => !definedVars.has(r.name) && !r.hasFallback);
+const fallbackOnlyRefs = refs.filter((r) => !definedVars.has(r.name) && r.hasFallback);
 
-if (undefinedVars.length === 0) {
+if (undefinedRefs.length === 0) {
   console.log(
-    `PASS 组件引用的 CSS 变量全部已定义（引用 ${referencedVars.size} 个 / 定义 ${definedVars.size} 个，扫描 ${sourceFiles.length} 个文件）`
+    `PASS 组件引用的 CSS 变量全部已定义（引用 ${new Set(refs.map((r) => r.name)).size} 个名字 / ${refs.length} 处；` +
+      `定义 ${definedVars.size} 个；扫描 ${sourceFiles.length} 个文件 —— .ts/.tsx 走 AST，.css 走文本）`
   );
 } else {
-  for (const [name, hits] of undefinedVars) {
+  for (const r of undefinedRefs) {
     console.log(
-      `FAIL 未定义的 CSS 变量 var(${name}) 且**未提供兜底值** —— 该声明会在 computed-value time 失效并静默继承父级颜色：${hits.join("、")}`
+      `FAIL 未定义的 CSS 变量 var(${r.name}) 且**该处未提供兜底值** —— 声明会在 computed-value time 失效并静默继承父级颜色：${r.rel}:${r.line}`
     );
   }
-  failed += undefinedVars.length;
+  failed += undefinedRefs.length;
 }
-for (const name of fallbackOnlyVars) {
+if (fallbackOnlyRefs.length > 0) {
   console.log(
-    `  ⚠ var(${name}) 未在任何文件里声明，但调用处提供了兜底值（当前不失败）：${referencedVars.get(name).join("、")} —— 兜底色在一直生效，确认是不是漏了声明`
+    `  ⚠ ${fallbackOnlyRefs.length} 处引用的变量未在任何文件里声明，但**该处**提供了兜底值（不失败）：`
   );
+  for (const r of fallbackOnlyRefs) console.log(`      var(${r.name}) @ ${r.rel}:${r.line}`);
 }
 
 if (failed) {

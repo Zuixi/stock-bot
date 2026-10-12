@@ -1,44 +1,28 @@
-// 门禁共用的**注释感知**扫描原语。
+// 门禁共用的**文本**解析原语（Ruling 46 之后只剩两件正事）。
 //
-// 为什么需要它（Ruling 45）：两个源码级门禁各自都栽在同一个坑上——**把注释当成代码**。
-//   • 「不得假 0」门禁的"存在空值渲染分支"断言能被注释里的 `—` 满足 → **假绿**
-//     （删掉真实的 `== null` 分支后门禁照样 PASS）；
-//   • 设计令牌门禁会把注释里的 `--x: #fff;` 当成变量**定义** → 又一个假绿；
-//     反过来，把注释里举例写的 `var(--x)` 当成**引用** → 假红。
-// 结论：**任何源码级门禁都不得直接在原文上跑正则**。先剥注释，再匹配。
-//
-// 这里刻意**不引第三方解析器**（门禁要能在 `npm ci` 之前跑、且只依赖 node 内置模块）：
-// 用一个小状态机逐字符走，正确地跳过 4 种字符串字面量与注释。它不解析语法树，
-// 只保证"匹配到的东西不在注释里、也不在字符串内部被误切"。
+// 分工（Ruling 46 明确要求）：
+//   • `.ts/.tsx` 的**结构与词法** —— 一律交给 `lib/ast-scan.mjs`（TypeScript 编译器 API）。
+//     这里不再承担"剥注释/找 token"的职责：自制词法器不认识含引号的正则字面量（`/'/`），
+//     会把文件余部当字符串吞掉，一轮内直接造成假绿 + 假红（NEW-3）。
+//   • `.css` 与 **字符串里的 `var(...)`** —— 保留文本解析。理由：CSS 没有 JS 那套词法歧义
+//     （没有正则字面量、没有模板串；`/* */` 与字符串由 `stripCssComments` 处理，
+//     已有实测矩阵覆盖），而 `var()` 是**字符串内容**，本来就不在 AST 结构里，必须按文本解析。
+//     **限度**：这两条路径都只在"注释已剥离的 CSS"或"AST 给出的单个字符串字面量值"上工作，
+//     不接触原始文件全文 —— 故 NEW-3 那一类无法复现。
 
 /**
- * 剥掉 JS/TS/CSS 里的注释，**保留字符串字面量**与**行号**（把注释字符换成空格，
- * 换行原样保留），使"同一位置的匹配"在剥注释前后仍落在同一行。
+ * 剥掉 CSS 块注释（保留换行以维持行号）。
  *
- * 处理的边界：
- * - `//` 行注释、块注释（斜杠星号 … 星号斜杠）；
- * - `'…'`、`"…"`、`` `…` `` 三种字符串（含反斜杠转义）；模板串里的 `${}` 不特殊处理
- *   ——门禁只关心 `?? 0` / `var(--x)` 这类片段，把它们当普通字符扫过即可；
- * - CSS 里没有 `//` 行注释，但把 `url(https://…)` 当字符串处理后会先进入 `"`/`'` 分支，
- *   裸 `//` 在 CSS 中不存在，故同一套状态机对 `.css/.ts/.tsx` 都安全。
+ * ⚠️ **只用于 `.css` 文件**。不要再用它处理 `.ts/.tsx`：那条路已交给解析器，
+ * 手工词法正是 NEW-3 的成因。CSS 侧之所以安全：CSS 没有正则字面量、没有 `//` 行注释
+ * （`url(https://…)` 必须加引号；未加引号的 `url(...)` 里也不会出现块注释起始符）。
  */
-export function stripComments(source) {
+export function stripCssComments(source) {
   let out = "";
   let i = 0;
   const n = source.length;
   while (i < n) {
-    const ch = source[i];
-    const next = source[i + 1];
-    // 行注释
-    if (ch === "/" && next === "/") {
-      while (i < n && source[i] !== "\n") {
-        out += " ";
-        i += 1;
-      }
-      continue;
-    }
-    // 块注释（保留其中的换行，避免行号漂移）
-    if (ch === "/" && next === "*") {
+    if (source[i] === "/" && source[i + 1] === "*") {
       out += "  ";
       i += 2;
       while (i < n && !(source[i] === "*" && source[i + 1] === "/")) {
@@ -51,33 +35,13 @@ export function stripComments(source) {
       }
       continue;
     }
-    // 字符串字面量：原样保留（含引号与内容），只跳过转义
-    if (ch === '"' || ch === "'" || ch === "`") {
-      const quote = ch;
-      out += ch;
-      i += 1;
-      while (i < n) {
-        if (source[i] === "\\") {
-          out += source[i] + (source[i + 1] ?? "");
-          i += 2;
-          continue;
-        }
-        out += source[i];
-        if (source[i] === quote) {
-          i += 1;
-          break;
-        }
-        i += 1;
-      }
-      continue;
-    }
-    out += ch;
+    out += source[i];
     i += 1;
   }
   return out;
 }
 
-/** 1-based 行号（配合 `matchAll` 的 `m.index` 用）。 */
+/** 1-based 行号。 */
 export function lineOf(text, index) {
   let line = 1;
   for (let i = 0; i < index && i < text.length; i += 1) {
@@ -87,18 +51,33 @@ export function lineOf(text, index) {
 }
 
 /**
- * 从 `var(` 之后扫出参数列表，正确跨过嵌套括号与字符串。
+ * 从 `var(` 之后扫出参数列表，正确跨过嵌套括号与引号。
+ * 返回 `{ args, end }`：`args` 按顶层逗号切分；`end` 是配对 `)` 之后的下标。
  *
- * 返回 `{ args, end }`：`args` 为按顶层逗号切分的原始参数文本；`end` 是匹配的 `)` 之后的下标。
- * 之所以要手写而不是正则：`var(--a, var(--b, #fff))` 有嵌套括号，正则会切错。
+ * 手写而不是正则：`var(--a, var(--b, #fff))` 有嵌套括号，正则会切错。
  */
 export function readVarArgs(text, start) {
   const args = [];
   let depth = 0;
   let current = "";
-  let i = start;
-  for (; i < text.length; i += 1) {
+  let quote = null;
+  for (let i = start; i < text.length; i += 1) {
     const ch = text[i];
+    if (quote) {
+      current += ch;
+      if (ch === "\\") {
+        current += text[i + 1] ?? "";
+        i += 1;
+      } else if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      current += ch;
+      continue;
+    }
     if (ch === "(") {
       depth += 1;
       current += ch;
@@ -121,47 +100,30 @@ export function readVarArgs(text, start) {
     current += ch;
   }
   args.push(current);
-  return { args, end: i };
+  return { args, end: text.length };
 }
 
 /**
- * 解析出源码里所有 `var()` 引用。
+ * 解析出文本里所有 `var()` 引用（**逐引用**给出其自身的 fallback 事实）。
  *
- * 返回 `[{ name, hasFallback, index }]`（`index` = `var(` 的下标）：
- * - `name` = **首参**里的自定义属性名；
- * - `hasFallback` = 首参之后**还存在非空参数**（即真的提供了兜底值）。
- *   注意 `var(--x,)` 这种"空兜底"按 CSS 语义**不算兜底**，故要求第二参去空格后非空。
+ * 返回 `[{ name, hasFallback, index }]`：
+ * - `name` = 首参里的自定义属性名；
+ * - `hasFallback` = 首参之后**存在非空参数**（`var(--x,)` 的空兜底在 CSS 语义下**不算**兜底）。
+ *
+ * **`hasFallback` 必须逐引用判定**（NEW-2 的修法）：旧实现把"有兜底"的变量名记进一个
+ * 全局集合，于是 A 处写了 `var(--x, #fff)` 就给 B 处的 `var(--x,)` 背书——
+ * 正是 Ruling 45 在 F1 里否掉的「一处为另一处背书」。现在每个 `var(...)` 自己决定自己。
  */
 export function findVarRefs(text) {
   const refs = [];
-  const re = /\bvar\(/g;
-  for (const m of text.matchAll(re)) {
+  for (const m of text.matchAll(/\bvar\(/g)) {
     const { args } = readVarArgs(text, m.index + m[0].length);
     const first = (args[0] ?? "").trim();
     const nameMatch = first.match(/^--[a-zA-Z0-9-]+/);
     if (!nameMatch) continue;
-    // 关键：首个 `var(` 的参数里可能还嵌着别的 `var(`（如 `var(--sw-heat, var(--up))`），
-    // 那个内部的 `var(` 会被本函数的 `matchAll` 自己扫到，故这里**只登记本层首参**，
-    // 不递归——避免同一个变量被登记两次、也避免把兜底里的变量误标成"必填"。
+    // 嵌套的 `var(` 会被本函数的 matchAll 自己扫到，故这里只登记本层首参，不递归
     const hasFallback = args.slice(1).some((a) => a.trim().length > 0);
     refs.push({ name: nameMatch[0], hasFallback, index: m.index });
   }
   return refs;
-}
-
-/**
- * 判断某个 `?? 0` / `|| 0` 匹配之后是否**只用于判定**（不产出被使用的值）。
- *
- * 判定依据：跳过连续的收尾符号 `)`, `]`, `}` 与空白后，
- * - 若紧跟比较/逻辑运算符（`> < >= <= == === != !== && ||`）→ **判定型**；
- * - 否则 → **取值型**。
- *
- * 为什么必须跳过收尾括号（Ruling 45 / 探针 D）：`(x ?? 0) > 0` 里 `?? 0` 之后紧跟 `)`，
- * 旧实现直接看"下一个字符是不是运算符"，于是把判定型误判成取值型并**硬失败**——
- * 一段合法（虽然不理想）的选色代码把门禁打红，正是"假阳性逼人放宽规则"的成因。
- */
-export function isJudgementOnly(text, matchEnd) {
-  let i = matchEnd;
-  while (i < text.length && /[\s)\]}]/.test(text[i])) i += 1;
-  return /^(?:[<>]=?|===?|!==?|&&|\|\|)/.test(text.slice(i, i + 3));
 }
