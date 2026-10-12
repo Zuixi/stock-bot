@@ -1,3 +1,23 @@
+## 2026-10-12 - **修复测试隔离缺陷（PIT 列每次 pytest 被 DROP）** + S1.9 交易活跃度与杠杆资金 + S1.11 估值与风险溢价
+
+### 先记最重要的：一个会**破坏 dev 库数据**的测试隔离缺陷
+- **症状**：`industry_metrics` 的 `published_at`/`caliber_version` 会在**每次完整 `pytest` 之后**变成 NULL，且 `count`/`created_at`/`xmin` **全不变**——看起来像"某次服务写入把它们抹了"，导致控制器一度误判实现方"谎报验证"（**Ruling 60 已撤回该指控**）
+- **真因**：`backend/tests/test_intraday_snapshot_table.py` **硬编码 dev 库**（`localhost:5433/stock_bot`）并执行 `alembic downgrade d7c8b9a0e1f2`——**该版本低于 `f1a2b3c4d5e6_add_metric_pit_and_caliber`** → **DROP 掉这两列**，随后 `upgrade head` 把它们加回来（值 NULL）。`DROP/ADD COLUMN` **不重写行**，故所有行级指纹不变
+- **修复**（`89c1fa0`）：该测试改用 `TEST_DATABASE_URL`（**刻意不回退 `DATABASE_URL`**——注释写明"那会在只设了 `DATABASE_URL` 且指向 dev 库时打到 dev 库"）+ 新增 **`backend/tests/test_db_isolation_guard.py`**（静态扫描"测试不得硬编码 dev 库" + 对两个跑 downgrade 的模块断言**解析后的 URL 不得是 dev 库**）
+- **控制器决定性反证**：`pytest` 前 `market: n=15071 pit=15071 cal=15071` → 跑完 1213 passed → **仍为 15071/15071/15071**（不变）
+- **教训**：① **在把 DB 状态当证据前，必须先确认测试套件不改写该库**——"状态稳定性"要先于"状态正确性"，这正是"亲自查库"这条缓解措施失效的原因（抹除发生在两次查询之间）② "测试硬编码共享 dev 库"应从"基线噪声"升级为"**可能造成数据破坏**"③ Task 8 已对 `test_industry_metric_pit_roundtrip.py` 做了破坏性迁移的 opt-in，但**同类的另一个文件被漏掉**——"修一个实例"不等于"修这一类"，现由隔离守卫机械覆盖全类
+
+### S1.9 交易活跃度与杠杆资金 + S1.11 估值与风险溢价（`1a5feba` + 修复轮 `d0c5a4d`/`80ab747`）
+- **Step-0 实机验证**（追加为 `docs/design/data-source.md` **附.7**，探针 `backend/scripts/spike_s19_s111_sources.py` 入库、空结果响亮失败）：
+  - **融资融券** = `可得`（TuShare `margin`，日频，一行 = 一交易日 × 一交易所，实测 `SSE 1557/SZSE 1557/BSE 886`）；**单次 4000 行上限 → 不分片会把"≥3 年"做成"只有最近 8 年"且头部静默缺失**；金额单位实测为**元**、`rqyl` 为**股**
+  - **指数换手率** = `受限`：7 个里 **5 个可直取**；**北证50(899050.BJ) 与科创综指(000680.SH) 返回 0 行且不报错** → 判 `需自建`（`index_weight` 月快照 × `daily_basic.turnover_rate_f`）；`turnover_rate_f`（自由流通）与 `turnover_rate`（总股本）同日不同值，**已在 registry 写明口径**
+  - **10Y 国债** = TuShare `yc_cb` **blocked**（逐字：`抱歉，您没有接口(yc_cb)访问权限`）→ 改**中债官方** + 备源东财 `bond_zh_us_rate`（2002 起），**两源同日逐值相同（差 0.0000）**
+- **落库**：13 个 spec 指标 + `pe_csi300` 落 `industry_metrics(industry_key='market')`，**不新建表、不新增迁移、无平行读路**；`erp_10y` 经修复轮**改锚到自身两个输入（CSI300 PE ∩ 10Y 国债）的可用性交集**，由 829 天（3.4 年）→ **1298 行 / 1260 有值 / 2021-07-26 起（5.2 年）**，满足 spec 的 ≥5 年；`idx_turnover_ratio_star` 仅 **244 天有值**（限制来自**上游 `index_weight` 快照起点 2025-09-30**，非指数成立日——`index_basic` 显示 base_date 2019-12-31、`index_daily` 1639 行；**保留科创综指不替换为科创50**），585 天标 `no_weight_snapshot`
+- **修掉两个真 bug**：① 自建换手率的守卫把**空的成分集合**当成 0.000（并非键空间不匹配——实测交集 50/50 与 579/579），改为**先判定快照期**再取数 ② **缓存命中的 (key,day) 被回写成 `source_empty` NULL** → 重跑会摧毁全部自建值
+- **PIT**：`published_at` 按产地分档（行情/IV 15:00 · 两融 18:00 · 国债 19:00 Asia/Shanghai），`caliber_version='s1.9s1.11-v2'`；控制器查库确认**每个 key 的 `n == published_at == caliber_version`**
+- 门禁：pytest **1200 → 1213 passed / 12 skipped / 0 failed**；ruff/format/mypy/doc_gate/self_review 全绿；`check_metric_dictionary.py` 30 行 MISMATCH 0；alembic 单头
+- **另补 S1.6 欠账**：`docs/design/metric-dictionary.md` 新增 **`## §4.7`** 榜级口径（`monthly_pct_chg`/`total_mv`/`dv_ratio`/`n_income_attr_p`/`roe`，含窗口、复权、样本谓词、期别语义、PIT 与"分母 == 排序谓词"）
+
 ## 2026-10-12 - S2.1 因子层（纯函数库 + registry 元数据，**不建表**）
 
 - **交付**（`c2015e8`、`f5c8411`）：`backend/app/services/indicators.py`（新，463 行）——可复用**纯函数**因子库；`industry_registry.py` 扩展因子元数据（`factor_key → {名称, 单位, 输入指标, 窗口, 展示分组}`）；`docs/design/metric-dictionary.md` 登记
