@@ -1413,10 +1413,16 @@ VOLATILITY_DERIVATIVES_CALIBER_VERSION = "s1.10-v1"
 #: ⚠️ **不是交易所官方口径** —— 官方「上证50ETF波动率指数（iVIX）」自 2018-02-22 起由
 #: 中证指数公司暂停发布，故 `source_tier` 记 `highfreq`（第三方参考）而非 `official`。
 QVIX_SOURCE = "akshare_optbbs_qvix"
-#: 升贴水的产地：TuShare `fut_daily`（期货腿，`<品种>.CFX` 逐日主力连续）
-#: × `index_daily`（现货腿）。两条腿 + 相减都在本地完成 → `source = local_calc` 类口径，
-#: 但产地必须可查，故按"主腿 + 派生"记在 `extra`（见 `_basis_def`）。
-FUTURES_BASIS_SOURCE = "tushare_fut_daily"
+#: 升贴水的产地标记：TuShare `fut_daily`（期货腿，`<品种>.CFX` 逐日主力连续）
+#: + `index_daily`（现货腿）两条腿相减得出。
+#:
+#: ⚠️ **必须与写进 `industry_metrics.source` 的字符串逐字相等**：`get_series` 用
+#: `MetricDef.sources` 做**源过滤白名单**（`source = next(s for s in m.sources if s in
+#: available)`），登记与数据脱节会让序列读面返回**空序列 + source_mismatch=True**
+#: ——实测踩过：登记写成 `tushare_fut_daily` 而库里的 source 是
+#: `tushare_fut_daily+index_daily`，`GET /metrics/series` 于是返回 0 个点。
+#: 两条腿各自的产地明细落 `extra.futures_source` / `extra.spot_source`。
+FUTURES_BASIS_SOURCE = "tushare_fut_daily+index_daily"
 SPOT_INDEX_SOURCE = "tushare_index_daily"
 
 #: §S1.10 的 `extra.missing_reason` 缺数语义。**缺数恒 NULL，绝不填 0**
@@ -1510,7 +1516,7 @@ def _basis_def(
         freq="daily",
         # 由两个当日上游事实相减得出（期货结算价 − 现货收盘）→ 本地派生。
         tier=TIER_DERIVED,
-        sources=[FUTURES_BASIS_SOURCE, SPOT_INDEX_SOURCE],
+        sources=[FUTURES_BASIS_SOURCE],
         group="derivatives",
         higher_is_better=None,  # 升水/贴水本身无"越好"方向（是套保成本，不是好坏）
         caliber_version=VOLATILITY_DERIVATIVES_CALIBER_VERSION,
@@ -1529,7 +1535,7 @@ def _discount_def(product: str, key: str, name: str, basis_key: str) -> MetricDe
         unit="%",
         freq="daily",
         tier=TIER_DERIVED,
-        sources=[FUTURES_BASIS_SOURCE, SPOT_INDEX_SOURCE],
+        sources=[FUTURES_BASIS_SOURCE],
         group="derivatives",
         higher_is_better=None,
         caliber_version=VOLATILITY_DERIVATIVES_CALIBER_VERSION,

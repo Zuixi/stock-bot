@@ -153,6 +153,24 @@ class TestRegistryWiring:
             assert "不年化" in text
             assert "对冲成本" in text  # spec 点名的专业用法
 
+    def test_registry_declared_source_matches_the_source_the_service_writes(self) -> None:
+        """**源过滤白名单的不变量**（实测踩过，必须机械化）。
+
+        `get_series` 用 `MetricDef.sources` 做源过滤：`source = next(s for s in m.sources
+        if s in available)`，取不到就返回**空序列 + source_mismatch=True**。登记写成
+        `tushare_fut_daily` 而库里写的是 `tushare_fut_daily+index_daily` 时，
+        `GET /api/v1/metrics/series?metric_key=if_basis` 会静默给出 0 个点 ——
+        "登记与数据脱节"必须在这里红，而不是等前端看到空图。
+        """
+        for metric in INDUSTRIES["market"].metrics:
+            if metric.key not in set(svc.INGEST_METRIC_KEYS):
+                continue
+            assert svc._source_for(metric.key) in metric.sources, (
+                f"{metric.key}: 服务写的 source={svc._source_for(metric.key)!r} "
+                f"不在 registry 的 sources={metric.sources} 里 —— "
+                "序列读面会返回空序列"
+            )
+
     def test_caliber_version_is_registered(self) -> None:
         calibers = {m.key: m.caliber_version for m in INDUSTRIES["market"].metrics}
         for key in svc.INGEST_METRIC_KEYS:
