@@ -25,7 +25,6 @@ import {
   IndustryClassification,
   MarketDataBoard,
   SwIndustryGrid,
-  DataCoverageMatrix,
   SentimentThermometer,
   SentimentIntradayChart,
   LimitUpLadder,
@@ -218,8 +217,7 @@ function SentimentTab() {
 
 /**
  * 行情中心（Stage C TradingView 化重构，契约 docs/design/landing-market-theme.md §4）：
- * 顶部分类 Tab（指数总览 / A股全景 / 资金流向 / 数据面）+ 卡片阵列，
- * 页脚上方放数据版图精简矩阵（契约 §5）。
+ * 顶部分类 Tab（指数总览 / A股全景 / 资金流向 / 数据面 / 短线情绪）+ 卡片阵列。
  */
 export default function MarketPage() {
   // Tab 是"视图状态"，必须进 URL：此前是 `useState("overview")`，而 `/market` 与
@@ -324,14 +322,6 @@ export default function MarketPage() {
         onChange={setTab}
         items={items}
       />
-
-      <Row gutter={[16, 16]} style={{ marginTop: 24 }}>
-        <Col span={24}>
-          <Card title="数据版图" size="small">
-            <DataCoverageMatrix withStats={false} />
-          </Card>
-        </Col>
-      </Row>
     </div>
   );
 }

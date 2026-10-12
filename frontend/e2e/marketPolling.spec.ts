@@ -60,7 +60,7 @@ function trackMarketRequests(page: Page): Map<string, number> {
 async function mountBothCardGroups(page: Page) {
   await page.goto("/market");
   await expect15s(page.getByRole("tab", { name: "指数总览" })).toBeVisible();
-  // 用卡头标题定位：「全球指数」在「数据版图」卡体内也出现（strict mode 会双命中）
+  // 用卡头标题定位，避免撞上卡体内同名的文本节点（strict mode 会双命中）
   await expect15s(page.locator(".ant-card-head-title").filter({ hasText: "全球指数" }).first()).toBeVisible();
 
   const distributionLanded = page.waitForResponse((r) => r.url().includes("/api/v1/market/distribution"));
