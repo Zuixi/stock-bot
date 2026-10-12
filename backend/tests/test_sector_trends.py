@@ -296,15 +296,19 @@ async def test_empty_result_is_never_cached(monkeypatch: pytest.MonkeyPatch) -> 
     assert cache.sets == []
 
 
-async def test_empty_dimension_never_touches_daily_quotes(
+async def test_empty_dimension_early_exit_never_touches_daily_quotes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """**空维度必须早退**：一条 `daily_quotes` 查询都不许发（Task 6 评审 Important #3）。
+    """**空维度必须早退且不缓存**：不发起任何 `daily_quotes` 查询，也不把它冻成空结果。
+
+    Task 6 评审 Important #3 的被测性质是"**不发起任何 `daily_quotes` 查询**"——**不是**
+    "一条 SQL 都不发"（锚点聚合 `max(trade_date)` 仍会跑，真库是一条 `Index Only Scan`）。
+    Task 8 在这里同时恢复"空结果不缓存"的**专用**断言（`boards=[]` 不得被冻结 300s），
+    并把测试名改成实际断言的两件事。
 
     原实现会走 `list_trading_days(db, date.min, date.min)` —— `trade_date >= 0001-01-01
     AND <= 0001-01-01` 在 `daily_quotes` 上是非 sargable 的全表扫；这条路径恰是"该维度
-    尚无数据"的诚实空态（真库用户可随时请求一个空维度）。用只记语句的假 session 断言
-    执行过 `sector_moneyflow_snapshots`、且**从未**出现 `daily_quotes`。
+    尚无数据"的诚实空态（真库用户可随时请求一个空维度）。
     """
     factory = _FakeFactory()
     _patch_sector_db(monkeypatch, rows=[], trading=[D1, D2, D3], snapshot_days=[], factory=factory)
@@ -316,14 +320,18 @@ async def test_empty_dimension_never_touches_daily_quotes(
 
     monkeypatch.setattr(market_data_repo, "list_trading_days", _no_market_read)
 
-    payload = await mds.get_sector_trends(_RecordingCache(), dimension="industry", days=60)
+    cache = _RecordingCache()
+    payload = await mds.get_sector_trends(cache, dimension="industry", days=60)
 
-    # 早退：**一条 SQL 都不发**（尤其不查 `daily_quotes`；原实现会发
-    # `trade_date >= 0001-01-01 AND <= 0001-01-01` 的非 sargable 全表扫）
-    assert factory.statements == [], [str(s) for s in factory.statements]
+    # 早退：执行过的语句里**没有** `daily_quotes`（原实现会发
+    # `trade_date >= 0001-01-01 AND <= 0001-01-01` 的非 sargable 全表扫）。
+    # 注意：锚点聚合在本用例里被 `_patch_sector_db` 的 repo 替身顶掉，所以它不会出现在
+    # `factory.statements` 里 —— 断言"锚点查询发生过"会是在断言替身的实现，不是断言服务。
     assert "daily_quotes" not in _sql_tables(factory.statements)
     # 空维度是"没有可统计对象"，不是"有对象但缺完整日"：两种形状必须可区分
     assert payload == mds._empty_sector_trends("industry", 60, 20)
+    # 空结果不缓存（专用断言，Task 6 重写时丢失）：第一行落库后下次请求必须看得见
+    assert cache.sets == []
 
 
 async def test_window_never_exceeds_requested_days_when_snapshot_lags_quotes(
@@ -482,6 +490,15 @@ def _patch_sector_db(
     async def _market_days(
         db: Any, start: date, end: date, *, limit: int | None = None
     ) -> list[date]:
+        # 扫描下界必须仍能覆盖**窗口**所需的交易日（Task 8 给生产加了"有界下探"：
+        # 上界 = 锚点 - (days * 2 + 14) 自然日）；否则"窗口守恒"等用例会因为扫描截断而
+        # 静默变样。窗口长度由生产的 `trailing_window_days(days=60)` 决定 —— 桩数据里
+        # 最老的**切片点**必须不早于 start（该用例本身断言的是"扫描下界被上界钳住"，
+        # 它允许夹具刻意铺更老的历史）。
+        required_from = start if len(trading) <= 60 else trading[-(60 + 1)]
+        assert required_from >= start, (
+            f"bounded scan starts at {start}, truncating the 60-day window from {required_from}"
+        )
         window = [d for d in trading if start <= d <= end]
         return window[-limit:] if limit is not None else window
 
@@ -773,3 +790,49 @@ def test_lu_count_is_rendered_only_where_point_in_time_membership_exists() -> No
     )
     assert all(p["lu_count"] is None for b in industry["boards"] for p in b["series"])
     assert industry["lu_count_source"] == "unavailable"
+
+
+def _record_scan_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[date, date]]:
+    """`list_trading_days` 的调用记录（`(start, end)`）。必须**在**
+    :func:`_patch_sector_db` 之后调用 —— 它包住后者装的桩，而不是替换桩的行为。"""
+    real = market_data_repo.list_trading_days
+    calls: list[tuple[date, date]] = []
+
+    async def _spy(db: Any, start: date, end: date, **kw: Any) -> list[date]:
+        calls.append((start, end))
+        return await real(db, start, end, **kw)
+
+    monkeypatch.setattr(market_data_repo, "list_trading_days", _spy)
+    return calls
+
+
+async def test_daily_quotes_scan_window_is_bounded_not_history_wide(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`daily_quotes` 扫描范围必须**两端有界**（Task 6 评审 Minor：原实现从该维度最早行扫起）。
+
+    构造：该维度快照横跨 240 个自然日（`days=60` 只取末尾 60 个交易日），锚点为最后一天
+    → 下界应是"锚点 - (60*2+14) 自然日"，而不是 240 天前的 `min(trade_date)`。
+    只断言"不比上界更早"（上界公式本身就是被测实现的一部分），并另用一条断言把
+    "不再横跨整部维度历史"钉死。
+    """
+    # 维度历史 ≈ 2 年（720 自然日）；行情只在这些日子里稀疏存在（真实 A 股约 0.67
+    # 交易日/自然日），最老的行情在 200 自然日前 —— 远早于有界下探上界（134 自然日）。
+    anchor = D1 + timedelta(days=719)
+    trading = [anchor - timedelta(days=2 * i) for i in range(220)]  # 每 2 天一个交易日
+    trading.reverse()
+    _patch_sector_db(
+        monkeypatch,
+        rows=[_snap(d, "BK0001") for d in trading],
+        trading=trading,
+        snapshot_days=trading,
+    )
+    scans = _record_scan_calls(monkeypatch)
+
+    await mds.get_sector_trends(_RecordingCache(), dimension="industry", days=60)
+
+    start, end = max(scans)  # 只有一次；`max` 使断言在"多扫一次"的实现下也不假绿
+    assert end == anchor
+    assert start == anchor - timedelta(days=134)
+    assert start > trading[0], "不得从该维度的最早行开始扫（横跨整部维度历史）"
+    assert start <= anchor - timedelta(days=2 * 59), "下探上界必须仍装得下 60 个交易日"

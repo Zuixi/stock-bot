@@ -534,6 +534,73 @@ async def test_backfill_survives_a_failing_day(monkeypatch) -> None:
     assert summary.errors() == 1
 
 
+class _CommitFailsOn(_FakeDb):
+    """`commit()` 在第 N 天失败（Task 8：提交失败必须与写入失败同款隔离）。"""
+
+    def __init__(self, trade_dates: list[date] | None = None, *, fail_on_commit: int = 2) -> None:
+        super().__init__(trade_dates)
+        self.fail_on_commit = fail_on_commit
+
+    async def commit(self) -> None:
+        self.commits += 1
+        if self.commits == self.fail_on_commit:
+            raise RuntimeError("commit boom")
+
+
+async def test_backfill_survives_a_failing_commit(monkeypatch) -> None:
+    """单日 `commit()` 失败 → 该日记 `error` + rollback，**不**中断整段（Task 8 修）。
+
+    修前 `db.commit()` 在 `try` 之外 → 提交异常直接冒泡出 `run_backfill`，整段回补崩在
+    第二天（脚本承诺的 per-day 隔离在"提交"这一步上不成立）。
+    """
+    _patch_days(monkeypatch, DAYS)
+
+    async def fake_review(db: Any, trade_date: date, lookback: int = 0) -> None:
+        return None
+
+    async def fake_persist(
+        db: Any, cache: Any, as_of: date | None = None, **kwargs: Any
+    ) -> dict[str, Any]:
+        return {"status": "ok", "trade_date": as_of, "zt_count": 1}
+
+    monkeypatch.setattr(bmh, "review_day", fake_review)
+    monkeypatch.setattr(limit_up_service, "persist_snapshot", fake_persist)
+
+    db = _CommitFailsOn(fail_on_commit=2)
+    summary = await bmh.run_backfill(db, domain=bmh.DOMAIN_SENTIMENT, start=D1, end=D3)
+
+    assert [o.reason for o in summary.days] == [bmh.REASON_OK, bmh.REASON_ERROR, bmh.REASON_OK]
+    assert "commit boom" in (summary.days[1].detail or "")
+    assert db.rollbacks == 1 and db.commits == 3  # 失败那次也计入（提交被真正尝试过）
+    assert summary.errors() == 1
+
+
+async def test_backfill_stock_survives_a_failing_commit(monkeypatch) -> None:
+    """个股事实域同一契约：`commit()` 失败被记成 `error` + rollback，不中断。"""
+    _patch_days(monkeypatch, DAYS)
+
+    async def fake_review(db: Any, trade_date: date, lookback: int = 0) -> None:
+        return None
+
+    async def fake_breadth(db: Any, trade_date: date) -> dict[str, Any]:
+        return {"quoted": 5500}
+
+    async def fake_facts(db: Any, as_of: date, **kwargs: Any) -> dict[str, Any]:
+        return {"rows": 10, "upserted": 10, "is_lu": 3, "is_zb": 1, "prev_is_lu": 2}
+
+    monkeypatch.setattr(bmh, "review_day", fake_review)
+    monkeypatch.setattr(limit_up_repo, "fetch_day_breadth", fake_breadth)
+    monkeypatch.setattr(limit_up_service, "persist_stock_facts", fake_facts)
+
+    db = _CommitFailsOn(fail_on_commit=2)
+    summary = await bmh.run_backfill(db, domain=bmh.DOMAIN_LIMIT_UP_STOCKS, start=D1, end=D3)
+
+    assert [o.reason for o in summary.days] == [bmh.REASON_OK, bmh.REASON_ERROR, bmh.REASON_OK]
+    assert "commit boom" in (summary.days[1].detail or "")
+    assert db.rollbacks == 1 and db.commits == 3
+    assert summary.errors() == 1
+
+
 # ---------------------------------------------------------------------------
 # 汇总表 / CLI 契约
 # ---------------------------------------------------------------------------

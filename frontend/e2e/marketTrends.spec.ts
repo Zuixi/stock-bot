@@ -118,11 +118,18 @@ const SECTOR_TRENDS = {
   dimension: "industry",
   as_of: "2026-10-09",
   available_from: "2026-10-01",
-  attribution: "current_sw_snapshot",
   attribution_note: "按当前分类回溯，非当时成分",
   lu_count_source: "unavailable",
   top_n: 20,
-  window: { days: 60, from: "2026-10-01", to: "2026-10-09", samples: 3 },
+  // `days`(请求值) 与 `observed_days`(实际观测跨度) 故意不等：表头必须两者都显示，
+  // 否则"只取到 3 个交易日"会被读成"用户只请求了 3 天"（Task 8）。
+  window: {
+    days: 60,
+    observed_days: 3,
+    from: "2026-10-01",
+    to: "2026-10-09",
+    samples: 3,
+  },
   boards: [
     { board_code: "BK0475", board_name: "银行", main_net_inflow: 3.2e8, pct_change: 1.2,
       up_count: 30, down_count: 5, streak_on_top_n: 3, max_streak_on_top_n: 4,
@@ -152,7 +159,6 @@ const SECTOR_TRENDS = {
 const SECTOR_TRENDS_CONCEPT = {
   ...SECTOR_TRENDS,
   dimension: "concept",
-  attribution: "point_in_time",
   attribution_note: "成分按 concept_member_changes 反推的时点口径",
   lu_count_source: "point_in_time_membership",
   boards: [{ ...SECTOR_TRENDS.boards[0], series: [
@@ -249,6 +255,13 @@ test("板块连续性 chip 带 attribution 标注与 available_from", async ({ p
   // available_from 必须显式（表内最早完整日，不是窗口起点）
   await expect(page.locator('[data-testid="sector-continuity-available-from"]'))
     .toContainText("自 2026-10-01 起累积");
+  // 请求窗口与实际观测跨度必须并排显示（Task 8）：短观测不得读成短请求
+  await expect(page.locator('[data-testid="sector-continuity-window"]'))
+    .toContainText("请求近 60 交易日");
+  await expect(page.locator('[data-testid="sector-continuity-window"]'))
+    .toContainText("实际观察 3 个交易日");
+  await expect(page.locator('[data-testid="sector-continuity-window"]'))
+    .toContainText("2026-10-01 → 2026-10-09");
 
   // 连续性只来自完整日：3 天上榜 / 2 天连续净流入（后端在完整日上算，前端不重算）
   const bank = page.locator('[data-testid="sector-continuity-BK0475"]');

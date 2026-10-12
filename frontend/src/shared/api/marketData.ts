@@ -174,6 +174,7 @@ interface BackendSectorTrendBoard {
 
 interface BackendSectorTrendWindow {
   days: number;
+  observed_days: number;
   from: string | null;
   to: string | null;
   samples: number;
@@ -342,10 +343,10 @@ export interface AnnouncementItem {
 export type SectorDimension = "industry" | "concept" | "region";
 
 /**
- * 归属口径（Ruling 22）：`currentSwSnapshot` = 按**当前**分类回溯（行业/地域，
- * 非当时成分）；`pointInTime` = 用 `concept_member_changes` 反推的时点成分（仅概念）。
+ * 归属口径（Ruling 22）只以 `SectorTrends.attributionNote` 一个真源上屏（Task 8）：
+ * 后端另有枚举 `attribution`（`current_sw_snapshot` | `point_in_time`），前端不消费，
+ * 故不映射、也不在本层另立一个可能与文案不一致的类型。
  */
-export type SectorAttribution = "current_sw_snapshot" | "point_in_time";
 
 /** 板块涨停家数的归属来源；`unavailable` 时前端**不得**渲染家数（缺失 ≠ 0 家）。 */
 export type SectorLuCountSource = "point_in_time_membership" | "unavailable";
@@ -381,6 +382,8 @@ export interface SectorTrendBoard {
 
 export interface SectorTrendWindow {
   days: number;
+  /** 实际观察到的交易日跨度（可能 < `days`：数据起点附近/该维度行集更短）。 */
+  observedDays: number;
   from: string | null;
   to: string | null;
   samples: number;
@@ -396,15 +399,18 @@ export interface LeaderChange {
 /**
  * 板块趋势（`GET /market/sector-trends`）。
  *
- * 三条硬约束见后端 schema：`attribution`/`attributionNote` 必填且如实；
- * `availableFrom`（可为 `null` = 该维度还没有任何完整日）；`missingDays` 显式列缺日，
- * **缺日不得当成 0 流入**。
+ * 三条硬约束见后端 schema：`attributionNote`（归属口径文案，**唯一**的归属真源）必填
+ * 且如实；`availableFrom`（可为 `null` = 该维度还没有任何完整日）；`missingDays` 显式列
+ * 缺日，**缺日不得当成 0 流入**。
+ *
+ * 为什么**不**把后端 `attribution`（枚举）也映射上来（Task 8）：它与 `attributionNote`
+ * 是同一件事的两个来源，前端只用后者渲染 ⇒ 映射上来只会成为无人消费的第二真源，
+ * 并让"标注随维度切换联动"这件事有两个可能不一致的入口。归属口径只保留 note + 维度。
  */
 export interface SectorTrends {
   dimension: string;
   asOf: string | null;
   availableFrom: string | null;
-  attribution: SectorAttribution;
   attributionNote: string;
   luCountSource: SectorLuCountSource;
   topN: number;
@@ -579,12 +585,13 @@ const mapSectorTrends = (b: BackendSectorTrends): SectorTrends => ({
   dimension: b.dimension,
   asOf: b.as_of,
   availableFrom: b.available_from,
-  attribution: b.attribution,
   attributionNote: b.attribution_note,
   luCountSource: b.lu_count_source,
   topN: b.top_n,
   window: {
     days: b.window.days,
+    // 缺省回落到"请求值"会让短观测跨度看起来像短请求 —— 拿不到就按 samples 自陈
+    observedDays: b.window.observed_days ?? b.window.samples,
     from: b.window.from,
     to: b.window.to,
     samples: b.window.samples,

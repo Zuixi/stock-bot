@@ -369,8 +369,8 @@ export interface SentimentTrends {
   window: SentimentTrendWindow;
   series: SentimentTrendPoint[];
   percentile: Partial<Record<SentimentPercentileField, SentimentPercentile>> | null;
-  /** `ztAboveMedianDays` 为 `null` = 该统计缺失（前端 `--`，绝不 0）。 */
-  streak: { ztAboveMedianDays: number | null };
+  /** 与后端同口径**非空**（`int = 0`）：0 是"没有一天高于中位数"的正经值，不是缺失。 */
+  streak: { ztAboveMedianDays: number };
   insufficientHistory: boolean;
 }
 
@@ -503,7 +503,7 @@ const mapSentimentTrends = (b: BackendSentimentTrends): SentimentTrends => {
     series: (b.series ?? []).map(mapTrendPoint),
     // 后端 `null` 原样保留（`{}` 会被消费端读成「有分位但全缺」）；null 是「样本不足」的唯一信号
     percentile: b.percentile ? percentile : null,
-    streak: { ztAboveMedianDays: b.streak?.zt_above_median_days ?? null },
+    streak: { ztAboveMedianDays: b.streak?.zt_above_median_days ?? 0 },
     // 缺省 `true`：拿不到「样本够不够」的证据时按样本不足处理，不给分位
     insufficientHistory: b.insufficient_history ?? true,
   };

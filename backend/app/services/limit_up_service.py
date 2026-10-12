@@ -488,6 +488,7 @@ async def persist_snapshot(
 ENRICH_REASON_POOL_FAILED = "pool_fetch_failed"
 ENRICH_REASON_EMPTY_POOL = "empty_pool"
 ENRICH_REASON_NO_ROWS = "no_fact_rows"
+ENRICH_REASON_WRITE_FAILED = "enrich_write_failed"
 
 
 def build_stock_fact_rows(
@@ -653,8 +654,9 @@ async def persist_and_enrich_stock_facts(
 
     返回 `{"rows","is_lu","is_zb","prev_is_lu","enriched","enrich_reason"}`：
     `enrich_reason` 为 `None` 表示增强成功；否则是原因码（`pool_fetch_failed` /
-    `empty_pool` / `no_fact_rows`），由调用方升级成 `job:failures` 告警。**增强失败绝不影响
-    已提交的事实行，也绝不让 job 整体失败**（B 类事实优先于 A 类装饰）。
+    `empty_pool` / `no_fact_rows` / `enrich_write_failed`），由调用方升级成 `job:failures`
+    告警。**增强失败绝不影响已提交的事实行，也绝不让 job 整体失败**（B 类事实优先于
+    A 类装饰）—— 包括增强写库本身抛错（Task 8：best-effort 覆盖整段增强）。
     """
     result: dict[str, int] = await persist_stock_facts(db, as_of, fact_source=fact_source)
     await db.commit()
@@ -663,7 +665,12 @@ async def persist_and_enrich_stock_facts(
 
 
 async def _enrich_stock_facts_day(db: AsyncSession, as_of: date) -> tuple[int, str | None]:
-    """抓 `as_of` 的东财涨停池并增强当日事实行；任何失败都降级为原因码，不抛错。"""
+    """抓 `as_of` 的东财涨停池并增强当日事实行；任何失败都降级为原因码，不抛错。
+
+    best-effort **覆盖整段增强**（Ruling 10 的"增强失败绝不影响已提交事实"）：外呼失败、
+    空池、0 命中、以及**增强写库本身抛错**都只记原因码 + `logger.warning`，由调用方升级成
+    `job:failures`。facts 已由调用方 commit，故这里失败不回滚、不上抛。
+    """
     from app.services import intraday_sentiment_service  # noqa: PLC0415
 
     try:
@@ -676,8 +683,19 @@ async def _enrich_stock_facts_day(db: AsyncSession, as_of: date) -> tuple[int, s
         )
         return 0, ENRICH_REASON_POOL_FAILED
     if not pool_rows:
+        # Ruling 10 要求空池**也告警**（与 0 命中并列）：空池同样是"A 类封板明细当天没拿到"
+        logger.warning("stock facts EOD enrichment: eastmoney pool is empty (trade_date=%s)", as_of)
         return 0, ENRICH_REASON_EMPTY_POOL
-    enriched = await enrich_stock_facts_from_pool(db, as_of, pool_rows)
+    try:
+        enriched = await enrich_stock_facts_from_pool(db, as_of, pool_rows)
+    except Exception:  # noqa: BLE001 —— 写库失败同样是"装饰丢了"，不得让 job 整体失败
+        logger.warning(
+            "stock facts EOD enrichment: write failed (trade_date=%s, pool=%d)",
+            as_of,
+            len(pool_rows),
+            exc_info=True,
+        )
+        return 0, ENRICH_REASON_WRITE_FAILED
     if not enriched:
         logger.warning(
             "stock facts EOD enrichment: pool=%d but 0 fact rows matched (trade_date=%s)",

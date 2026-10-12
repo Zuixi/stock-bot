@@ -15,6 +15,19 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
+# uv 的默认缓存是 `~/.cache/uv`，在受限沙箱/只读 HOME 下会以
+# `Failed to initialize cache at /Users/.../.cache/uv ... Operation not permitted` 直接失败，
+# 让 ruff/mypy/pytest 三段全部假红（与代码无关）。未显式设置时**默认落到工作区内的**
+# `backend/.uv-cache`（已进本 worktree 的 .git/info/exclude），使脚本无需手工 export 即可跑。
+# 显式传入仍以调用方为准（CI 可用共享缓存目录）。
+if [ -z "${UV_CACHE_DIR:-}" ]; then
+  UV_CACHE_DIR="$ROOT/backend/.uv-cache"
+  export UV_CACHE_DIR
+  # 变量必须写成 ${VAR}：紧跟中文全角括号时 `$VAR）` 会把「）」（UTF-8 多字节）并进变量名
+  # → `unbound variable` 直接终止脚本（实测踩过，shell_hazard_check 未覆盖此形态）。
+  echo "  （UV_CACHE_DIR 未设置 → 使用工作区默认 ${UV_CACHE_DIR}）"
+fi
+
 FULL=0
 if [ "${1:-}" = "--full" ]; then FULL=1; fi
 

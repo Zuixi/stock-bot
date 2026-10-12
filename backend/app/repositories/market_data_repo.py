@@ -296,9 +296,11 @@ async def latest_sector_moneyflow_day(db: AsyncSession, dimension: str) -> date 
 async def earliest_sector_moneyflow_day(db: AsyncSession, dimension: str) -> date | None:
     """该维度 `min(trade_date)`（**不限**产地）—— 趋势窗口左界的下探起点。
 
-    与 :func:`latest_sector_moneyflow_day` 配对给出"该维度自己有数据的区间"，供
-    `list_trading_days(db, start, anchor)` 生成**有界**的交易日候选（不能用
-    `date.min`：那是非 sargable 的全表扫，见 Task 6 评审 Important #3）。
+    与 :func:`latest_sector_moneyflow_day` 配对给出"该维度自己有数据的区间"。调用方
+    （`get_sector_trends`）**不**把它直接当 `list_trading_days` 的起点：那会让扫描横跨
+    整部维度历史，而窗口只取末尾 `days` 个交易日 —— 生产路径取
+    `较晚者(本函数返回值, 锚点 - N 自然日)`，本函数只用于"不越界"的下界钳制
+    （不能用 `date.min`：那是非 sargable 的全表扫，见 Task 6 评审 Important #3）。
     返回 `None` = 该维度一行都没有（调用方应走空响应早退）。
     """
     return (

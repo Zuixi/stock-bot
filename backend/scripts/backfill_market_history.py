@@ -211,6 +211,10 @@ async def backfill_sentiment_day(
     `ok` 的依据是 upsert 的 **rowcount**（`result["upserted"]`），不是"调用了就成功"：
     该日已有实时行时守卫会让 rowcount=0 → `kept_realtime`（独立原因码），
     绝不报成"成功回补"（T4 评审 Important #1）。
+
+    `commit()` **在 `try` 内**（T4 评审 Minor / Task 8）：提交失败与写入失败一样是"单日
+    失败"，必须记 `error` + rollback 后继续，而不是让整段回补直接崩掉 —— 脚本承诺的
+    per-day 隔离必须覆盖提交。
     """
     reason = await review_day(db, trade_date)
     if reason is not None:
@@ -221,12 +225,13 @@ async def backfill_sentiment_day(
         result = await limit_up_service.persist_snapshot(
             db, None, trade_date, fact_source=BACKFILL_FACT_SOURCE, enrich=False
         )
+        if result.get("status") == "ok":
+            await db.commit()
     except Exception as exc:  # noqa: BLE001 —— 单日失败不中断整段；原因码 + rollback 可见
         await db.rollback()
         logger.error("backfill: sentiment %s failed: %s", trade_date, exc, exc_info=True)
         return DayOutcome(trade_date, REASON_ERROR, detail=f"{type(exc).__name__}: {exc}")
     if result.get("status") == "ok":
-        await db.commit()
         # 缺 `upserted` 只可能是测试替身：宁可按"已写入"算（老替身语义），也不静默算 0 行。
         upserted = int(result.get("upserted", 1))
         if result.get("kept_realtime"):
@@ -249,6 +254,7 @@ async def backfill_stock_day(
 
     行集里有任何一行被守卫拒绝（该行已存在且是实时行）→ 整日 `kept_realtime`：
     这一天**不是**一次全新的回补，不能计入 `written_days`；`rows` 记实际 rowcount。
+    `commit()` **在 `try` 内**（Task 8）：提交失败同样记 `error` + rollback，不中断整段。
     """
     reason = await review_day(db, trade_date)
     if reason is not None:
@@ -262,13 +268,14 @@ async def backfill_stock_day(
         result = await limit_up_service.persist_stock_facts(
             db, trade_date, fact_source=BACKFILL_FACT_SOURCE
         )
+        if result.get("rows"):
+            await db.commit()
     except Exception as exc:  # noqa: BLE001 —— 同上：记录 + rollback，不中断整段
         await db.rollback()
         logger.error("backfill: stock facts %s failed: %s", trade_date, exc, exc_info=True)
         return DayOutcome(trade_date, REASON_ERROR, detail=f"{type(exc).__name__}: {exc}")
     if not result.get("rows"):
         return DayOutcome(trade_date, REASON_NO_FACT_ROWS)
-    await db.commit()
     planned = int(result["rows"])
     upserted = int(result.get("upserted", planned))  # 缺 `upserted` 只可能是测试替身
     detail = (

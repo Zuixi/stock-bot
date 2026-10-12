@@ -357,10 +357,12 @@ class CoverageOut(BaseModel):
     first_day: str | None = None
     last_day: str | None = None
     status: str = "ok"  # ok | missing_table | missing_column
-    # 分母口径降级：主源 `daily_quotes` 不可用（未建/迁移未应用）→ 交易日只来自
-    # `stock_price_limits`。换源必须可见，不能静默换一个分母。
-    # 名字与 reconcile 的 `degraded_calendar`（trade_cal 外呼降级）**故意区分**：一个是
-    # "本地日历源换了"，一个是"tushare 日历降级成工作日启发式"。
+    # 分母口径降级：**并集提供了主源 `daily_quotes` 缺失的交易日**（`union_days !=
+    # primary_days`），或主源表不可用（未建/迁移未应用）。换分母必须可见，不能静默换。
+    # 只判"表是否存在"会漏掉真实状态：主源在库但缺日、由 `stock_price_limits` 补上时，
+    # 分母口径已经变了却标 ok（评审 Important #1）。名字与 reconcile 的
+    # `degraded_calendar`（trade_cal 外呼降级）**故意区分**：一个是"本地日历源换了"，
+    # 一个是"tushare 日历降级成工作日启发式"。
     degraded_trading_calendar: bool = False
 
 

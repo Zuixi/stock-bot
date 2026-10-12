@@ -86,15 +86,25 @@ function lastInflow(value: number | null): string {
  *    （自 X 起累积）必须上屏 —— 归属口径不能藏在代码里；
  * 3. 缺完整日（`missingDays`）按缺日披露（不计 0 流入）；末日缺值渲染 `--`；
  *    `luCountSource=unavailable` 时**不显示**家数（缺失 ≠ 0 家）。
+ *
+ * Task 8 补充：表头并排显示**请求窗口**（`window.days`）与**实际观测跨度**
+ * （`window.observedDays`）—— 只显示 `samples`/观测值会让"数据起点附近只取到 5 个交易日"
+ * 被读成"用户只请求了 5 天"。
  */
 function ContinuityStrip({ trends }: { trends: SectorTrends }) {
   const boards = trends.boards.slice(0, CONTINUITY_CHIPS);
   const luAvailable = trends.luCountSource === "point_in_time_membership";
+  const { days, observedDays, from, to, samples } = trends.window;
   return (
     <div className="mf-continuity" data-testid="sector-continuity">
       <div className="mf-continuity__head">
         <span className="mf-continuity__title">
-          板块连续性（近 {trends.window.samples} 个完整日 · 上榜口径 Top {trends.topN}）
+          板块连续性（近 {samples} 个完整日 · 上榜口径 Top {trends.topN}）
+        </span>
+        {/* 请求值 vs 实际观测跨度必须并排：只显示观测值会把"短观测"读成"短请求" */}
+        <span className="mf-continuity__tag" data-testid="sector-continuity-window">
+          请求近 {days} 交易日 · 实际观察 {observedDays} 个交易日
+          {from && to ? `（${from} → ${to}）` : ""}
         </span>
         <span className="mf-continuity__tag" data-testid="sector-continuity-attribution">
           {trends.attributionNote}

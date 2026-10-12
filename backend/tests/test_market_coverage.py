@@ -301,8 +301,14 @@ async def test_coverage_report_source_of_truth_matches_query_table() -> None:
         assert (src.table, src.date_column) == (table, column)
 
 
-async def test_coverage_report_denominator_is_daily_quotes_trading_days() -> None:
-    """分母 = 该域区间内 `daily_quotes` 的交易日；`daily_quotes` 没数据 → cover_pct=None。"""
+async def test_coverage_report_denominator_is_union_trading_days() -> None:
+    """分母 = 窗口内 `daily_quotes` ∪ `stock_price_limits` 的**交易日**（不是自然日）。
+
+    名字里的"并集"是 Task 8 更正的结果：原名 `..._is_daily_quotes_trading_days`，
+    但实现与断言用的是 `TRADING_DAY_SOURCES` 的并集（单源会把自己的缺日算成巡检域的
+    缺日；并集补出主源缺日时另由 `degraded_trading_calendar` 标注）。`daily_quotes`
+    没数据时并集也可能为空 → `cover_pct=None`（由下一条用例钉住）。
+    """
     report = await rc.coverage_report(_report_db())
     by_domain = {r["domain"]: r for r in report}
     sent = by_domain["sentiment_daily"]
@@ -469,8 +475,10 @@ async def test_coverage_report_warns_when_rows_exist_but_have_days_zero(
 async def test_coverage_report_trading_calendar_is_union_of_sources() -> None:
     """分母 = `daily_quotes` ∪ `stock_price_limits`：行情自己缺日时不得把洞算到巡检域头上。
 
-    真库实测：`daily_quotes` 缺 2026-09-09..09-17 共 7 个交易日，只用它当分母会把
-    sector_moneyflow 的 14 天判成 12 天 —— 行情缺口被误报成业务缺口。
+    构造（桩）：主源缺 D15、补漏源 D15 有行 —— 只用主源当分母就少算一个交易日，
+    行情缺口被误报成业务缺口。（早期报告的真库证据"`daily_quotes` 缺
+    2026-09-09..09-17 共 7 个交易日"**已撤回**：那是窗口化查询的产物，真库覆盖该区间
+    全部日期。契约必须由桩钉住，真库状态会变。）
 
     并集**补出了主源缺的日子** → `degraded_trading_calendar=True`（评审 Important #1：
     该标记的语义是"并集提供了主源缺失的交易日"，不是"主源表不存在"）。
@@ -596,8 +604,8 @@ async def test_coverage_report_first_last_day_echo_range() -> None:
 async def test_coverage_report_degraded_when_union_fills_primary_gap() -> None:
     """主源在库但缺日、由次源补上 → `degraded_trading_calendar=True`（评审 Important #1 的正例）。
 
-    与下一条真库用例（`daily_quotes` 当前是次源的超集 → 必须为 False）配成一对：
-    单看真库状态会把"永不触发"写成测试，所以正例必须用桩构造。
+    与 `test_coverage_report_calendar_not_degraded_when_primary_complete`（主源完整 →
+    必须为 False）配成一对：两条都是**桩**构造的契约，不看会变的真库状态。
     """
     db = _report_db(
         quotes=[(D14, 5500), (D16, 5500)],  # 主源缺 D15
@@ -610,17 +618,21 @@ async def test_coverage_report_degraded_when_union_fills_primary_gap() -> None:
 
 @pytest.mark.e2e
 async def test_coverage_report_calendar_not_degraded_on_real_db() -> None:
-    """真库（`e2e`）：`daily_quotes` 是 `stock_price_limits` 的超集（829 vs 254）→ 并集
-    没有多出任何日子 → `degraded_trading_calendar` 必须为 False（评审 Important #1 反例）。
+    """真库（`e2e`）：`daily_quotes` 当前是 `stock_price_limits` 的超集 → 并集没有多出
+    任何日子 → `degraded_trading_calendar` 为 False。
 
-    这条替代了原先被评审点名的"把 false 钉死"的桩用例：真库状态会变，桩才是契约。
+    **说明（Task 8）**：这条是**环境探针**（打印真库当前形状），不是契约 —— 真库状态会变
+    （行情自己缺日时该标记**应当**为 true），把 `degraded is False` 当断言会让它随数据
+    合法变化而随机变红。契约由两条桩用例钉住：
+    `test_coverage_report_calendar_not_degraded_when_primary_complete`（反例）与
+    `test_coverage_report_degraded_when_union_fills_primary_gap`（正例）。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
 
     async with async_session_factory() as db:
         calendar, degraded = await rc._trading_calendar(db, window_days=30, since=None)
         assert calendar, "真库 daily_quotes 不该为空"
-        assert degraded is False
+        print(f"[e2e probe] trading_days={len(calendar)} degraded={degraded}")
 
 
 def test_data_freshness_out_exposes_coverage_additively() -> None:

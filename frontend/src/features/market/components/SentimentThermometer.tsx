@@ -62,7 +62,7 @@ function PercentileBlock({ trends }: { trends: SentimentTrends }) {
           样本 {win.from ?? "--"} → {win.to ?? "--"}（{win.samples} 个交易日）
         </span>
         <span className="thermo-pct__streak" data-testid="thermo-streak">
-          涨停家数高于中位数 {streak == null ? "--" : streak} 天
+          涨停家数高于中位数 {streak} 天
         </span>
       </div>
       {insufficientHistory || !percentile ? (

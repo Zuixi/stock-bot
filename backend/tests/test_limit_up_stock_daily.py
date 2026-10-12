@@ -481,6 +481,59 @@ async def test_persist_and_enrich_distinguishes_empty_pool_and_no_rows(monkeypat
     assert no_rows["enrich_reason"] == "no_fact_rows"
 
 
+async def test_empty_pool_logs_a_warning(monkeypatch, caplog) -> None:
+    """Ruling 10：空池必须**警告**（不只是原因码）——A 类封板明细当天丢了要可见。
+
+    与"池有票但 0 命中"并列：两种都 `logger.warning`，区别只在原因码。
+    """
+    from app.services import intraday_sentiment_service as iss
+    from app.services import limit_up_service as lus
+
+    async def empty_fetch(trade_date: str) -> list[dict[str, Any]]:
+        return []
+
+    monkeypatch.setattr(iss, "fetch_intraday_pool", empty_fetch)
+    events: list[str] = []
+    _patch_persist(monkeypatch, events)
+
+    with caplog.at_level("WARNING"):
+        empty = await lus.persist_and_enrich_stock_facts(_RecordingSession(events), AS_OF)
+
+    assert empty["enrich_reason"] == lus.ENRICH_REASON_EMPTY_POOL
+    assert "pool is empty" in caplog.text
+    assert str(AS_OF) in caplog.text
+
+
+async def test_enrichment_write_failure_is_best_effort(monkeypatch, caplog) -> None:
+    """增强**写库**抛错也必须降级为原因码（Task 8）：facts 已 commit，绝不回滚/上抛。
+
+    变异：把 `enrich_stock_facts_from_pool` 的调用移出 `try` → 本例抛 `RuntimeError` 变红。
+    """
+    from app.services import intraday_sentiment_service as iss
+    from app.services import limit_up_service as lus
+
+    async def some_fetch(trade_date: str) -> list[dict[str, Any]]:
+        return [{"symbol": "600001", "seal_time": "09:31:00", "seal_fund": 1.0, "break_count": 0}]
+
+    async def boom(db: Any, as_of: date, pool_rows: list[dict[str, Any]]) -> int:
+        raise RuntimeError("write conflict")
+
+    monkeypatch.setattr(iss, "fetch_intraday_pool", some_fetch)
+    monkeypatch.setattr(lus, "enrich_stock_facts_from_pool", boom)
+    events: list[str] = []
+    _patch_persist(monkeypatch, events)
+
+    with caplog.at_level("WARNING"):
+        result = await lus.persist_and_enrich_stock_facts(_RecordingSession(events), AS_OF)
+
+    assert result["enrich_reason"] == lus.ENRICH_REASON_WRITE_FAILED
+    assert result["enriched"] == 0
+    # 事实结果原样返回、facts 已 commit（事件序列里没有 rollback）
+    assert (result["rows"], result["is_lu"], result["is_zb"]) == (178, 75, 39)
+    assert events == ["persist", "commit"]
+    assert "write failed" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # 默认门禁：双轨制接线（schema / worker / scheduler）
 # ---------------------------------------------------------------------------

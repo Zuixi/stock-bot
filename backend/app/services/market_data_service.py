@@ -716,6 +716,16 @@ MARKET_MONEYFLOW_TTL = 60
 SECTOR_TRENDS_CACHE_KEY = "market:sector-trends:{dimension}:{days}:{top_n}"
 SECTOR_TRENDS_TTL = 300
 
+#: `daily_quotes` 交易日候选的**下探上界**（自然日 / 每个请求的交易日数）。
+#: 为什么需要它（Task 6 评审 Minor，Task 8 修）：窗口右端是"该维度快照最近日"，若左界取
+#: 该维度**最早**行（A 类数据可能积累到数百天），`list_trading_days` 的扫描范围会横跨整部
+#: 维度历史，而 :func:`trailing_window_days` 只取末尾 `days` 个 —— 扫描量远超所需。
+#: 上界取 `days * 2 + 14` 自然日：即便窗口内一半是周末/节假日也仍能凑满 `days` 个交易日
+#: （A 股年化约 243 交易日 / 365 自然日 ≈ 0.67，`days * 2 + 14` 的松弛足够；再保守也只是
+#: 多扫几十天，`observed_days < days` 时窗口仍如实自陈）。
+SECTOR_TRENDS_SCAN_DAYS = 2
+SECTOR_TRENDS_SCAN_PAD_DAYS = 14
+
 #: 归属口径（Ruling 22）。两个字面量与 `app.schemas.market_data.Attribution` 对齐；
 #: service 不 import schema（schema 只描述出参），故这里保留字面量并由端点断言兜住。
 ATTRIBUTION_CURRENT_SW = "current_sw_snapshot"
@@ -1119,6 +1129,10 @@ async def get_sector_trends(
        个（否则会把行情独有的那几十天全报成缺日）；
     3. 交易日源缺失（`daily_quotes` 为空/迁移未跑）→ 退回用快照自己的行集日（有界）。
 
+    `daily_quotes` 的扫描范围**两端都有界**：右端 = 快照最近日，左端 = 较晚者(该维度最早行,
+    右端 - `days * SECTOR_TRENDS_SCAN_DAYS + SECTOR_TRENDS_SCAN_PAD_DAYS` 自然日) ——
+    只取末尾 `days` 个交易日，没有理由从该维度的最早行开始扫。
+
     缓存键含 `dimension`/`days`/`top_n`（三者都会改变结果）；空结果不缓存。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
@@ -1138,9 +1152,15 @@ async def get_sector_trends(
             empty_payload = _empty_sector_trends(dimension, days, top_n)
         else:
             start = await market_data_repo.earliest_sector_moneyflow_day(db, dimension)
-            trading_days = await market_data_repo.list_trading_days(
-                db, start if start is not None else anchor, anchor
+            # 扫描下界**有界**（Task 8 修）：`trailing_window_days` 只取末尾 `days` 个交易日，
+            # 故没有理由从该维度的最早行开始扫（A 类快照可能积累数百天）。上界 =
+            # 右端锚点 - (days * 2 + 14) 自然日；仍与"该维度最早行"取较晚者，不越界。
+            scan_start = anchor - timedelta(
+                days=days * SECTOR_TRENDS_SCAN_DAYS + SECTOR_TRENDS_SCAN_PAD_DAYS
             )
+            if start is not None and start > scan_start:
+                scan_start = start
+            trading_days = await market_data_repo.list_trading_days(db, scan_start, anchor)
             if not trading_days:
                 # 交易日源缺失：退回快照自己的行集日（有界、不整表扫）
                 trading_days = await market_data_repo.list_sector_moneyflow_trading_days(
