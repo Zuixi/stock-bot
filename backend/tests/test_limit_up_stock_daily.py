@@ -327,6 +327,68 @@ def test_broken_board_predicate_is_the_breadth_predicate() -> None:
     assert join in broken_sql
 
 
+def _collapse(sql: str) -> str:
+    """折叠空白后再比较：`_BREADTH_SQL` 里 `l.up_limit  - 0.005` 有两个空格（与下一行
+    `<=` 对齐），逐字节比较会假红；谓词**语义**一致才是要守的东西。"""
+    return " ".join(sql.split())
+
+
+def test_is_lu_predicate_is_the_breadth_zt_count_predicate() -> None:
+    """默认门禁守卫：`is_lu` 与 `zt_count` 必须是同一个谓词（同源，非各写一份）。
+
+    这两处一旦漂移，「个股 is_lu 数 == 聚合 zt_count」这条口径不变式就静默失效——而真库
+    不变式用例在 e2e 标记后面（默认 addopts 排除），所以这里补一个**默认门禁能红**的守卫：
+    改动列名（close↔high）/ 比较符 / 阈值 任意一处都会红。
+    """
+    window_sql = _collapse(limit_up_repo.build_window_sql_for_explain())
+    breadth_sql = _collapse(limit_up_repo._BREADTH_SQL)
+    predicate = "q.close >= l.up_limit - 0.005"
+    # 同一个谓词文本必须同时出现在两侧（口径同源）
+    assert predicate in window_sql, window_sql
+    assert predicate in breadth_sql, breadth_sql
+    # is_lu 必须**恰好**由该谓词定义（COALESCE 到 false），不许换列/换阈值/换比较符
+    assert f"COALESCE({predicate}, false) AS is_lu" in window_sql
+    # zt_count 必须**恰好**由该谓词定义
+    assert f"count(*) FILTER (WHERE {predicate}) AS zt_count" in breadth_sql
+
+
+def test_fact_is_lu_count_equals_window_limit_up_count() -> None:
+    """默认门禁守卫：事实行集的 is_lu 计数 == 窗口 as_of 行的涨停只数。
+
+    行集 = 窗口 `as_of` 行 ∪ 炸板行 ⇒ union 只能**加**非涨停的炸板票：
+    - 涨停票一只都不能被丢（丢一只 `count(is_lu) < zt_count`，真库不变式红）；
+    - 同 `stock_id` 的炸板行不得覆盖窗口行的判定（否则 is_lu 从 true 变 false）；
+    - 去重（同一票两行会让 count 虚高）。
+    """
+    window_rows = [
+        _win(11, "600011", D3, is_lu=False),
+        _win(11, "600011", D4, is_lu=True, streak_upto=1),
+        _win(12, "600012", D3, is_lu=True, streak_upto=1),
+        _win(12, "600012", D4, is_lu=True, streak_upto=2),
+        _win(13, "600013", D4, is_lu=False, touched=False),  # 昨日涨停今日未板
+    ]
+    broken_rows = [
+        # 防御态：涨停票同时被炸板查询命中（两谓词互斥，正常不会出现）——窗口行必须赢
+        {"stock_id": 11, "symbol": "600011", "name": "N600011"},
+        {"stock_id": 14, "symbol": "600014", "name": "N600014"},  # 炸板-only
+    ]
+    rows = limit_up_service.build_stock_fact_rows(
+        window_rows,
+        broken_rows,
+        as_of=AS_OF,
+        as_of_prev=AS_OF_PREV,
+        market_days=MARKET_DAYS,
+    )
+    by_id = _by_id(rows)
+    window_lu = [r for r in window_rows if r["trade_date"] == AS_OF and r["is_lu"]]
+    assert len(rows) == len(by_id) == 4, "union 必须去重且不丢行"
+    assert set(by_id) == {11, 12, 13, 14}
+    assert sum(1 for r in rows if r["is_lu"]) == len(window_lu) == 2
+    assert by_id[11]["is_lu"] is True, "炸板行不得覆盖窗口涨停行的判定"
+    assert by_id[14]["is_lu"] is False and by_id[14]["is_zb"] is True
+    assert by_id[13]["is_lu"] is False and by_id[13]["is_zb"] is False
+
+
 class _RecordingSession:
     """只记录 commit 顺序的假 session（编排顺序是硬约束，必须可断言）。"""
 
@@ -582,6 +644,9 @@ async def test_job_alerts_when_eod_enrichment_hits_no_rows(monkeypatch) -> None:
     monkeypatch.setattr(mds, "resolve_latest_complete_day", fake_resolve)
     monkeypatch.setattr("app.core.database.async_session_factory", fake_session_factory)
     monkeypatch.setattr(scheduler_jobs, "_alert_job_failure", fake_alert)
+    # `_is_workday` 是纯 weekday 判断（jobs.py）：不打桩则周六/周日早返回、alerts 为空
+    # → 测试只在工作日绿。同仓其它驱动 workday 守卫 job 的用例都显式钉死它。
+    monkeypatch.setattr(scheduler_jobs, "_is_workday", lambda: True)
 
     await scheduler_jobs.limit_up_stock_facts_job()
 
