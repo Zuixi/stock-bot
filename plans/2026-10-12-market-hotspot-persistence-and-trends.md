@@ -1,9 +1,9 @@
 ---
-status: active
+status: completed
 scope: 市场热点/情绪/资金数据的日级持久化边界与统计追踪——个股级涨停事实、东财实时源日终捕获、覆盖率只读巡检、情绪与板块趋势端点
 touches: backend/app/models/market_data.py, backend/app/migrations/versions/, backend/app/repositories/market_data_repo.py, backend/app/repositories/limit_up_repo.py, backend/app/services/market_data_service.py, backend/app/services/limit_up_service.py, backend/app/services/reconciliation_service.py, backend/app/core/providers/eastmoney_client.py, backend/app/scheduler/jobs.py, backend/app/scheduler/runner.py, backend/app/workers/market_data_worker.py, backend/app/schemas/task.py, backend/app/schemas/market_data.py, backend/app/api/v1/market_data.py, backend/scripts/, backend/tests/, frontend/src/shared/api/, frontend/src/features/market/, docs/decisions/, docs/features.md, docs/Changelog.md
 updated: 2026-10-12
-next-action: Task 7 完成（前端 mapper + 情绪分位 chip / 板块连续性 chip + 复用 TrendSpark；新 e2e 6 条红→绿、既有五个 market e2e 38 passed 零回归、tsc/build 绿；Ruling 23 跳过可选 Step 4）；下一步 Task 8（文档收口）
+next-action: -
 ---
 
 # 市场热点数据持久化与趋势追踪 实施计划（v2）
@@ -133,11 +133,11 @@ next-action: Task 7 完成（前端 mapper + 情绪分位 chip / 板块连续性
 
 **验收（真库实测，数字回填本文件）：** 跑 `persist_stock_facts(2026-09-08)` → `is_lu=75`、`is_zb=39`、总行数=当日候选∪炸板；`uv run alembic heads` 单 head；enrichment 跑完后 `is_lu` 计数**零变化**；空池/外呼失败时 `job:failures` 有记录且 facts 已提交（不回滚）。
 
-- [ ] Step 1: 模型 + 迁移 + 唯一键
-- [ ] Step 2: 失败测试（四态行构造 + 口径不变式 + enrichment 不改判定列）
-- [ ] Step 3: `fetch_day_broken_board_stocks` + repo 四函数 + service 两函数
-- [ ] Step 4: scheduler/worker/schema 接线（17:20 facts→enrichment；worker 支持 `trade_date` retro；双轨同方法）
-- [ ] Step 5: 真库实测并回填数字
+- [x] Step 1: 模型 + 迁移 + 唯一键
+- [x] Step 2: 失败测试（四态行构造 + 口径不变式 + enrichment 不改判定列）
+- [x] Step 3: `fetch_day_broken_board_stocks` + repo 四函数 + service 两函数
+- [x] Step 4: scheduler/worker/schema 接线（17:20 facts→enrichment；worker 支持 `trade_date` retro；双轨同方法）
+- [x] Step 5: 真库实测并回填数字
 
 ---
 
@@ -167,11 +167,11 @@ next-action: Task 7 完成（前端 mapper + 情绪分位 chip / 板块连续性
 
 **验收（真库实测，数字回填本文件）：** `/market/hot-boards?category=industry` 读表分支与实时分支**同 code 行资金口径一致**；`amount`/`flat_count` 非空率 ≥99%（上游为空的板块允许 NULL）；EOD 全量抓取的行数 ≈ 上游 `total`（industry 496 / concept 506 / region 31）；**明确记录**：历史 15 个缺失交易日不可补，覆盖率目标 = 上线日起 100%。
 
-- [ ] Step 1: 迁移 `amount`/`flat_count`/`capture_kind` + 模型
-- [ ] Step 2: `fetch_sector_moneyflow` fields 扩参（含"不新增第二次请求"的断言测试）+ 分页全量 helper
-- [ ] Step 3: 失败测试（读表闸门 `eod_full` / 回落 / 字段集 ⊇ 契约 / 缺行不返空 / 分页覆盖 total）
-- [ ] Step 4: `get_hot_boards` 读表分支 + 15:05 全量 EOD + 15:35 补写（守卫=`eod_full` 缺失）+ worker 分支
-- [ ] Step 5: 真库实测并回填数字（含 EOD 全量行数 vs 上游 total）
+- [x] Step 1: 迁移 `amount`/`flat_count`/`capture_kind` + 模型
+- [x] Step 2: `fetch_sector_moneyflow` fields 扩参（含"不新增第二次请求"的断言测试）+ 分页全量 helper
+- [x] Step 3: 失败测试（读表闸门 `eod_full` / 回落 / 字段集 ⊇ 契约 / 缺行不返空 / 分页覆盖 total）
+- [x] Step 4: `get_hot_boards` 读表分支 + 15:05 全量 EOD + 15:35 补写（守卫=`eod_full` 缺失）+ worker 分支
+- [x] Step 5: 真库实测并回填数字（含 EOD 全量行数 vs 上游 total）
 
 ---
 
@@ -331,7 +331,7 @@ next-action: Task 7 完成（前端 mapper + 情绪分位 chip / 板块连续性
 - **Step 1（mapper）**：snake→camel 只在 `frontend/src/shared/api/limitUp.ts`（`fetchSentimentTrends`：window/series/percentile/streak/insufficientHistory，`percentile=null` 原样保留）与 `marketData.ts`（`fetchSectorTrends`：attributionNote/availableFrom/luCountSource/missingDays）各一处；`window.from` / `percentile` 可空、`broken_rate`/`promo_1to2` 的 NULL **不映射成 0**
 - **Step 2（chip）**：`SentimentThermometer` 新增 `trends` prop → 分位区块（每个 chip 带**该字段**的样本窗口「近 239/231/228 交易日分位」+ 样本区间 `from → to`；`insufficient_history=true` ⇒ 只渲染「样本不足」，**无任何分位数字**；字段全 NULL ⇒ 「无有效样本」），趋势线优先复用**同一个** `TrendSpark` 画 trends 长窗口序列（端点失败回落 30 天日历序列，零新增图表依赖）；`SectorMoneyflowCard` 新增连续性 chip 条（`attributionNote` + `自 available_from 起累积` + 连续上榜/净流入-流出/末完整日 `--`/`当日涨停 N 家`，`luCountSource=unavailable` 时不渲染家数；`missing_days` 按缺日披露「不计 0 流入」）
 - **Step 3（e2e）**：新增 `frontend/e2e/marketTrends.spec.ts` 6 条（全 `page.route` mock）——RED **5 failed / 1 passed**（组件不存在）→ GREEN **6 passed**；含「insufficient 分支不得出现任何分位梯」的**变异验证**（把 `P50 90` 塞进样本不足文案 → 转红 → 还原转绿）。既有五个 market spec **38 passed / 0 failed**（零回归）；`npx tsc --noEmit` + `npm run build` 绿
-- **活链路缺口（如实披露）**：本机 `backend_api` 容器镜像为 **2026-09-29** 构建（早于 Task 6），`/market/sentiment/trends` 与 `/market/sector-trends` 经 dev 代理仍 **404**（`limit-up-ladder`/`sector-moneyflow` 200）⇒ 两处 chip 的**真库渲染未验证**，mock 载荷逐字段对齐 Task 6 的 Pydantic schema（`SentimentTrendsOut` / `SectorTrendsOut`）；活链路验证需 `docker compose build api` 后重跑
+- **活链路缺口（Task 8 已闭环）**：当时 `backend_api` 容器镜像为 **2026-09-29** 构建（早于 Task 6）→ 两个新端点经 dev 代理 **404**，chip 的真库渲染未验证。**Task 8 用本 worktree 的临时 `uvicorn`（127.0.0.1:8099，不重建共享 Docker 栈）补齐**：`GET /api/v1/market/sentiment/trends?days=250` → **200**、`window.samples=239`、三个指标分位齐备（p50 = 76 / 0.2921 / 0.1591，与 Task 6 验收行逐字一致）、`streak.zt_above_median_days=119`；`GET /api/v1/market/sector-trends?dimension=industry&days=60&top_n=20` → **200**、`available_from=null`（当前 `eod_full=0`，符合 Ruling 21）、`attribution=current_sw_snapshot`、`window={days:60, observed_days:20, samples:0}`、`missing_days` 20 天。curl 全文见 Task 8 报告；进程已杀、端口已证空闲
 
 - [x] Step 1: api mapper + 类型
 - [x] Step 2: 卡片 chip/sparkline
@@ -344,10 +344,10 @@ next-action: Task 7 完成（前端 mapper + 情绪分位 chip / 板块连续性
 
 - Modify: `docs/features.md`（新表/新端点语义）、`docs/architecture/database-architecture.md`（新表 + 扩列）、`docs/Changelog.md`（逐 Task 一句）、本文件（勾选 + 回填实测数字 + `status: completed`）、`plans/index.md`（状态）、`docs/references/best-practices/*.md`（**仅当**出现无法机械化的教训）
 
-- [ ] Step 1: 逐 Task Changelog 齐全
-- [ ] Step 2: 表名/端点名交叉引用一致（`doc_gate`）
-- [ ] Step 3: `bash scripts/self_review.sh --full` 绿 + `bash scripts/doc_gate.sh` 绿
-- [ ] Step 4: 回填全部「实测」占位并翻状态
+- [x] Step 1: 逐 Task Changelog 齐全
+- [x] Step 2: 表名/端点名交叉引用一致（`doc_gate`）
+- [x] Step 3: `bash scripts/self_review.sh --full` 绿 + `bash scripts/doc_gate.sh` 绿
+- [x] Step 4: 回填全部「实测」占位并翻状态
 
 ---
 
@@ -380,11 +380,35 @@ next-action: Task 7 完成（前端 mapper + 情绪分位 chip / 板块连续性
 
 - [x] ADR 0009 落地并登记（`docs/decisions/0009-market-derived-fact-persistence.md` + index）；`doc_gate` 全绿（16 项）
 - [x] `/market/data-freshness` 输出覆盖率（`coverage`），如实呈现旧形状：sector_moneyflow `have_days` 复现 ~60-65% / `complete_days=0`（Ruling 13）、`sentiment_intraday.trading_days=11`（54.5% 的分母）
-- [ ] `market_limit_up_stock_daily` 上线，`count(is_lu)` 与 `market_sentiment_daily.zt_count` 逐日一致（不变式测试在库）
-- [ ] EOD enrichment 落库且判定列零改写
-- [ ] `/market/hot-boards` 读表分支与实时分支同 code 口径一致；`amount`/`flat_count` 非空率 ≥99%
-- [ ] `market_sentiment_daily` 21 → ≥235 天，黄金日 2026-09-08 字节不变
-- [ ] 个股事实 239 天回补完成（行数与抽样一致性实测回填）
+- [x] `market_limit_up_stock_daily` 上线，`count(is_lu)` 与 `market_sentiment_daily.zt_count` 逐日一致（全量不变式 e2e 门禁 `test_sentiment_daily_matches_fact_counts_for_every_day`：实测 **239 天 / 0 不一致 / 0 缺行**，已做破坏验证）
+- [x] EOD enrichment 落库且判定列零改写（`test_enrichment_never_rewrites_verdict_columns` 断言 `SET` 子句不含判定列 + 真库行值不变）
+- [x] `/market/hot-boards` 读表分支与实时分支同 code 口径一致（实测同 code `mainNetInflow` **8/8 全等**）；`amount`/`flat_count` 非空率 **100%**（新写入路径 231/231 三维度；当日全量捕获把旧 NULL 行也刷新到 100%，KPI 的 ≥99% 只看新路径）
+- [x] `market_sentiment_daily` 21 → **239** 天（≥235），黄金日 2026-09-08 字节不变（21 行 `local_calc` 聚合 md5 与黄金行 md5 回补前后相同）
+- [x] 个股事实 239 天回补完成（**40,894** 行 / 239 天，`fact_source` 100% `backfill`；行数、日均与抽样值已回填本文件 Task 4 验收行）
 - [x] 两个 trends 端点上线，样本不足返回 `insufficient_history`，`attribution`/`available_from` 必填（真库实测见 Task 6 验收行）
-- [ ] 前端 chip + e2e 绿；`tsc`/`build` 绿；现有 market e2e 零回归
-- [ ] `bash scripts/self_review.sh --full` 绿；`docs/Changelog.md` 逐 Task 有记录
+- [x] 前端 chip + e2e 绿（新 spec 6 passed）；`tsc`/`build` 绿；现有五个 market e2e **38 passed 零回归**
+- [x] `bash scripts/self_review.sh --full` 绿（本地默认 `UV_CACHE_DIR` 修复后免手工 export）；`docs/Changelog.md` 逐 Task（T1–T7）有记录，两处文本缺陷已在 Task 8 更正
+
+## 实施结果（Task 8 收口，2026-10-12）
+
+**逐 Task 提交（分支 `feat/market-hotspot-persistence`，HEAD 见本行下）**
+
+| Task | 提交 |
+|---|---|
+| T1 个股级涨停事实表 + 东财 EOD 增强 | `431a406`、`dd1d5d6` |
+| T2 板块快照读当日表 + 2 列 + EOD/补写 | `ebb16bf`、`b1f7d9e`、`5bc5b8c` |
+| T3 覆盖率只读巡检 + ADR 0009 | `e2c9446`、`0901252` |
+| T4 历史回补脚本（情绪 / 个股事实） | `b769457`、`ef555c4`、`ef8663f` |
+| T5 pct_chg 365 天回填（5a） | `24f62c1` |
+| T6 统计端点（情绪趋势 + 板块趋势） | `117dfc4`、`a54f3bc` |
+| T7 前端分位/连续性 chip | `3db5b5e` |
+| T8 文档收口 + 选定卫生修复 | 本次收口提交 |
+
+**头条数字（最后一次全量 suite 之后的真库实测）**
+
+- `market_sentiment_daily` **239** 天（`2025-10-15 → 2026-10-09`，21 → 239）；`market_limit_up_stock_daily` **40,894** 行 / 239 天
+- `pct_chg` 365 天窗口内 **241/241** 个限价交易日达标（254 天全量口径 17 → 241；窗口外 13 个限价日不承诺）
+- 全量门禁 **806 passed / 67 deselected / 0 failed**；`ruff check` + `ruff format --check` + `mypy app` + `tsc --noEmit` + `npm run build` + `self_review --full` 全绿
+- 覆盖率巡检 8 个只读域 + `sector_moneyflow` 完整日闸门（当前真库 `capture_kind='eod_full'` 行数 **0** → 三个维度 `available_from=null`、窗口内 20 个交易日全部进 `missing_days`，如实不冒充）
+
+**明确未做（与"明确不做"表一致）：** `rankings`/`distribution`/`sectors`/`capital-flow`/`sw-performance` 落库、5 分钟级全池明细、板块快照历史缺口回补、北向资金回补、T5 的 5b 子项、T7 的可选 Step 4（`/market?tab=trends` 独立视图，Ruling 23）。

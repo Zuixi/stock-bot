@@ -126,6 +126,15 @@ CREATE INDEX idx_daily_quotes_date ON daily_quotes(trade_date);
 COMMENT ON TABLE daily_quotes IS '日频行情，按交易日期分区';
 ```
 
+#### 2.1.2.1 市场热点派生事实层（backend）
+
+backend（`backend/app/models/market_data.py`）在行情底表之上新增/扩展了两张"市场热点"表，口径与取舍见 [ADR 0009](../../decisions/0009-market-derived-fact-persistence.md)：
+
+| 表 | 用途 | 主键/唯一键 | 产地字段 |
+|---|---|---|---|
+| `market_limit_up_stock_daily` | 个股级涨停事实（`is_lu`/`touched`/`is_zb`/`prev_is_lu`/`streak`/`days_span`/`boards_in_window`/`missing_days`）+ 东财 EOD 独有的封板明细（`seal_time`/`seal_fund`/`break_count`，历史回补恒 NULL） | `(trade_date, stock_id)` | `fact_source`（`local_calc` \| `backfill`）、`enrich_source`（`eastmoney_eod` \| NULL）、`observed_at`（TIMESTAMPTZ，区分"当天看到的"与"事后回补的"） |
+| `sector_moneyflow_snapshots`（**已存在，本计划扩 3 列**） | 东财板块资金流/热门板块榜快照；新增 `amount`（`Numeric(20,4)`）、`flat_count`（`Integer`，均允许 NULL，上游缺值即为 NULL）与 `capture_kind`（`poll` \| `eod_full`，非空默认 `poll`） | `(trade_date, dimension, board_code)` | `capture_kind='eod_full'` = 收盘分页全量捕获；**只有 `eod_full` 的日子是完整日**，`poll` 行只是盘中资金流 Top-100 子集（有行 ≠ 完整），覆盖率/趋势读取一律只认完整日 |
+
 #### 2.1.3 特征工程数据
 
 ```sql
