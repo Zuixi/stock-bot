@@ -1,3 +1,15 @@
+## 2026-10-12 - S2.1 因子层（纯函数库 + registry 元数据，**不建表**）
+
+- **交付**（`c2015e8`、`f5c8411`）：`backend/app/services/indicators.py`（新，463 行）——可复用**纯函数**因子库；`industry_registry.py` 扩展因子元数据（`factor_key → {名称, 单位, 输入指标, 窗口, 展示分组}`）；`docs/design/metric-dictionary.md` 登记
+- **因子清单 14 个**：**10 个读时算**（纯函数、无 IO，Redis 缓存留在读面）+ **4 个物化**——后者**复用 `stock_features` 既有列**（`return_percentile`/`max_drawdown`/`trend_slope`/`annual_volatility`）→ **新增列 0、新增迁移 0**（`alembic heads` 仍单头 `84476cb7b838`）。长窗口因子落在既有 `stock_features.extra` JSONB
+- **验收判据「不新增任何表」已核实**：迁移目录零改动、无 `factor_defs`/`create_table`（`grep` 计数 0）；spec 明令不建的 `factor_defs` 与因子库 UI **均未出现**（后者 Wave 5 才有消费方）
+- **复用**：`cycle_engine.count_consecutive_negative` 以**再导出**方式复用（**恒等性由测试断言**，不是抄一份）；`percentile` 口径与既有两处 nearest-rank 实现（`limit_up_service.percentile_from_series`、`financial_service._percentile_rank`）对齐——那两处是 dict/shape-bound 且非滚动，故不可直接 import
+- **纯函数纪律已验证**：138 个新测试在**数据库不可达**（端口 59999）时全绿 → 证明"无 DB、无 marker"；`indicators.py` 只 import `math`/`typing`
+- **可复算性**：同一输入跑两次**误差恰为 0.0**；另有"用旧定义重算历史仍得原值"与"历史前缀不看未来"两条测试
+- **物化写入路径**：新增纯函数 `stock_feature_row()` + 复用既有 `feature_repo.upsert_features()`（`uq_stock_features_key` 幂等）。**尚无写路径调用方**——spec 把消费方推迟到 Wave 5，故未自造 scheduler/worker 范围
+- 门禁：pytest **980 → 1118 passed / 4 skipped / 0 failed**（+138 = **恰好等于新增测试数**，零回归）· ruff/format/mypy（190 files）✓ · `check_metric_dictionary.py` 16 行 **MISMATCH 0** · `bash scripts/bench.sh` **全部基准在 12% 阈值内**
+- **并行开发的两个新坑（记入流程）**：① **pytest 必须显式导出 `DATABASE_URL`/`TEST_DATABASE_URL`（端口 5433）**——否则 `test_auth_guard.py` 会去连 5432 而失败，基线被误读为 979/1-failed ② **`scripts/self_review.sh` 在并行期间无法变绿**：它按分支改动集收集文件，会把**另一个 agent 的未提交 WIP** 拉进 ruff 面 → 并行期只能做**逐文件归因**（本任务已如此处理：唯一失败文件是对方的未跟踪测试，自己 5 个文件全过）
+
 ## 2026-10-12 - S1.8 市场宽度与动量（6 指标落 industry_metrics scope=market）+ 并行开发流程启用
 
 - **并行开发流程（Ruling 53，用户批准 A+B）**：同一 worktree 内**两个 agent 并行**，靠"文件集不重叠 + 提交只用显式路径"保证安全；**分级评审**——碰数据正确性的走完整闭环，纯展示类只跑门禁即收口（**但每条新断言仍须配注入反例**，不降级）。首批并行（S1.5 前端 / S1.8 后端）**零冲突落地**，合并态 `pytest` 一次通过
