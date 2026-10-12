@@ -12,6 +12,7 @@ from app.schemas.heatmap import ConceptBoardRef, HeatmapTreemapOut
 from app.schemas.market import BoardStockOut, HotBoardsOut, MarketListOut
 from app.schemas.quote import IndexDailyOut, IndexKlineResponse
 from app.schemas.ranking import RankingResponseOut, RankingType
+from app.schemas.ranking_board import RankingBoardResponseOut
 from app.schemas.sse_index import (
     BackfillRequest,
     BackfillResponse,
@@ -29,6 +30,7 @@ from app.schemas.sw_performance import SwPerformanceResponseOut
 from app.services import (
     heatmap_service,
     market_service,
+    ranking_board_service,
     stock_tag_service,
     sw_drilldown_service,
 )
@@ -55,6 +57,41 @@ async def get_rankings(
 ) -> RankingResponseOut:
     """公开榜单。口径 T+1，见响应 as_of。"""
     return await market_service.get_rankings(db, cache, type, limit)
+
+
+# ---------------------------------------------------------------------------
+# S1.6 A股 7 榜（公开免登录）
+#
+# 为什么是**新端点**而不是给 /rankings 加 type：那 5 个榜是 daily_quotes 单列排序
+# （_RANKING_ORDER 的形状装不下财务来源 + 窗口聚合），7 榜另有来源表、PIT 报告期与
+# 样本口径，形状不同则端点分开——既有 5 个榜的入参、响应与缓存键一个字节都没动
+# （Ruling 30）。
+#
+# 路径段用 `boards/` 而非平铺 `/rankings/{key}`：`/rankings` 是既有端点，平铺会把
+# 新 key 与既有 `type` 的查询参数语义挤在同一个 URL 空间里；显式一段前缀让两者
+# 各自可演进而互不干扰。
+# ---------------------------------------------------------------------------
+
+
+@router.get("/rankings/boards/{key}", response_model=RankingBoardResponseOut)
+async def get_ranking_board(
+    key: str,
+    cache: CacheDep,
+    db: DbDep,
+    limit: int = Query(default=100, ge=1, le=100),
+) -> RankingBoardResponseOut:
+    """A股 7 榜之一（市值 / 股息率 / 月度涨幅 / 月度跌幅 / 半年利润 / 年利润 / ROE）。
+
+    每榜默认 100 强；响应携带口径三件事（交易日 / 财务期 / 样本范围）与
+    「不足 100 条」的结构化说明，前端不得自行编造口径。
+    """
+    try:
+        return await ranking_board_service.get_ranking_board(db, cache, key, limit)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"unknown ranking board key: {key}",
+        ) from exc
 
 
 @router.get("/sectors", response_model=MarketListOut)

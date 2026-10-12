@@ -22,6 +22,8 @@ const PAGES: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
   CategoryPage: lazy(() => import("@/pages/market-category")),
   MarketHeatmapPage: lazy(() => import("@/pages/market-heatmap")),
   MarketIndexPage: lazy(() => import("@/pages/market-index")),
+  // S1.6 A股排行 7 榜（公开，不套 RequireAuth）
+  MarketRankingsPage: lazy(() => import("@/pages/market-rankings")),
   IndustryLevel2Page: lazy(() => import("@/pages/market-industry-level2")),
   IndustryLevel3Page: lazy(() => import("@/pages/market-industry-level3")),
   // S1.4 末级：三级行业的成分股 + 该节点 7 项聚合（公开，不套 RequireAuth）

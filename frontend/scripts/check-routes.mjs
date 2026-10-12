@@ -96,6 +96,10 @@ const ALLOWED_EXTRA = [
   "/market/heatmap",
   // S1.3 新增：全球市场与跨市场标的（真功能页，非 redirect 目标、非占位）
   "/market/global",
+  // S1.6 新增：A股排行 7 榜（真功能页，公开；非 redirect 目标、非占位）。
+  // 它**不在 IA §4 表内**：IA 的 15 条旧路由清单是 S0.2 冻结的结果，S1.6 是其后新增的
+  // 子路由（与 S1.3 的 `/market/global`、S1.5 的 `/market/heatmap` 同类）。
+  "/market/rankings/:key",
   // S1.4 新增：申万末级成分股页（真功能页，公开；非 redirect 目标、非占位）。
   // 既有两条 industry 保留路由（`:level1Code` / `:level1Code/:level2Code`）语义未变，
   // 本行只是**多**一条更深的变体，不改它们的 kind。

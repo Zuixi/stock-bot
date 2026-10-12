@@ -133,6 +133,19 @@ export const ROUTES: AppRoute[] = [
     component: "MarketHeatmapPage",
     parent: "main",
   },
+  // S1.6 新增：A股排行 7 榜（市值/股息率/月度涨幅/月度跌幅/半年利润/年利润/ROE）。
+  // 为什么带 `:key` 而不是拆成 7 条路由：7 个榜**共用同一个页面壳与同一套口径披露**
+  // （Tab 切换），拆成 7 条会让"新增第 8 个榜"变成改三处清单 + 文档。
+  // 为什么新开一条而不是改 `/market`：既有 `/market` 的榜单矩阵消费的是 5 个**单日**榜
+  // （`/api/v1/market/rankings?type=`），与 7 榜的来源/口径都不同，不得互相顶替（Ruling 30）。
+  // 权限：`/market/**` 公开免登录（ADR 0008）——本行**不加** requiresAuth / permission。
+  {
+    key: "market-rankings",
+    path: "/market/rankings/:key",
+    kind: "page",
+    component: "MarketRankingsPage",
+    parent: "main",
+  },
   { key: "market-index", path: "/market/index/:tsCode", kind: "page", component: "MarketIndexPage", parent: "main" },
   // 以下两条是**保留**路由：热点板块 / 概念板块今天就是有数据的真页面（Ruling 30）
   {
