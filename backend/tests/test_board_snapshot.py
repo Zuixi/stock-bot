@@ -32,11 +32,12 @@ import logging
 import re
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, get_args
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy.dialects import postgresql
@@ -50,6 +51,11 @@ D_TODAY = date(2026, 9, 18)  # 周五：`_today_sh` 的桩值（= 最近预期�
 D_SAT = date(2026, 9, 19)  # 周六：预期交易日应回落到 09-18
 D_PREV = date(2026, 9, 17)
 D_ANCIENT = date(1999, 1, 4)  # 真库 scratch 日：早于任何真实快照，且不影响 max(trade_date)
+#: 收盘守卫（评审 Important #1）的注入时刻：上海时区
+_SH_TZ = ZoneInfo("Asia/Shanghai")
+D_BEFORE_CLOSE = datetime(2026, 9, 18, 14, 30, tzinfo=_SH_TZ)  # 盘中
+D_AT_CLOSE = datetime(2026, 9, 18, 15, 0, tzinfo=_SH_TZ)  # 边界：含
+D_AFTER_CLOSE = datetime(2026, 9, 18, 15, 5, tzinfo=_SH_TZ)  # 15:05 job 的真实时刻
 
 _FRONTEND_MARKET_TS = (
     Path(__file__).resolve().parents[2] / "frontend" / "src" / "shared" / "api" / "market.ts"
@@ -80,6 +86,24 @@ def _async_return(value: Any) -> Any:
         return value
 
     return _f
+
+
+def _boom_factory(message: str) -> Any:
+    """同步替身：一被调用就 AssertionError（用于钉"这条路径根本不该被走到"）。"""
+
+    def _boom(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError(message)
+
+    return _boom
+
+
+def _raise_factory(message: str) -> Any:
+    """异步替身（同上，供 await 的调用点用）。"""
+
+    async def _boom(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError(message)
+
+    return _boom
 
 
 class _CursorResult:
@@ -923,7 +947,7 @@ async def test_eod_full_ingest_pages_every_dimension_and_marks_eod_full(
     )
     monkeypatch.setattr(mds.market_data_repo, "upsert_sector_moneyflow", _upsert)
 
-    out = await mds.ingest_sector_moneyflow_eod_full(object())
+    out = await mds.ingest_sector_moneyflow_eod_full(object(), now=D_AFTER_CLOSE)
 
     assert fetched == ["industry", "concept", "region"]
     assert upserts == [
@@ -933,6 +957,83 @@ async def test_eod_full_ingest_pages_every_dimension_and_marks_eod_full(
     ]
     assert out["industry"] == {"fetched": 3, "total": 3, "upserted": 3}
     assert mds.eod_shortfalls(out) == []
+    assert mds.eod_alert_reasons(out) == []
+
+
+def test_is_after_close_boundaries_and_timezone_independence() -> None:
+    """纯函数（评审 Important #1）：14:59 → False、**15:00 → True**；aware 输入换算到上海。
+
+    naive 视为上海本地（与 ``_today_sh`` 同约定）；``close`` 可注入。
+    """
+    from datetime import time
+
+    sh = ZoneInfo("Asia/Shanghai")
+    assert mds.is_after_close(datetime(2026, 10, 12, 14, 59, tzinfo=sh)) is False
+    assert mds.is_after_close(datetime(2026, 10, 12, 15, 0, tzinfo=sh)) is True
+    assert mds.is_after_close(datetime(2026, 10, 12, 15, 0, 1, tzinfo=sh)) is True
+    # aware 输入不要求是上海时区：UTC 06:59 == 上海 14:59；UTC 07:00 == 上海 15:00
+    assert mds.is_after_close(datetime(2026, 10, 12, 6, 59, tzinfo=UTC)) is False
+    assert mds.is_after_close(datetime(2026, 10, 12, 7, 0, tzinfo=UTC)) is True
+    # naive 视作上海本地时间
+    assert mds.is_after_close(datetime(2026, 10, 12, 14, 59)) is False
+    assert mds.is_after_close(datetime(2026, 10, 12, 15, 0)) is True
+    # close 可注入（将来收盘时间改了不用动调用点）
+    assert mds.is_after_close(datetime(2026, 10, 12, 14, 30, tzinfo=sh), close=time(14, 0)) is True
+
+
+async def test_eod_full_ingest_skips_before_close_without_any_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**盘中（<15:00）调用 → 零写入 + 零外呼** + reason ``before_close``（且告警可见）。
+
+    评审 Important #1 的两条可达路径之一（worker 手动入口盘中触发）：若允许盘中打
+    ``eod_full``，它单向不可降级 → 读表闸门从那一刻起整天打开，而表里只有 grab 时刻的
+    子集 → 正是 Ruling 11 要消除的缺陷。
+    """
+    monkeypatch.setattr(mds, "_today_sh", lambda: D_TODAY)
+    monkeypatch.setattr(mds, "_get_eastmoney", _boom_factory("收盘前不得外呼东财"))
+    monkeypatch.setattr(
+        mds.market_data_repo,
+        "upsert_sector_moneyflow",
+        _raise_factory("收盘前不得写任何行"),
+    )
+
+    out = await mds.ingest_sector_moneyflow_eod_full(object(), now=D_BEFORE_CLOSE)
+
+    assert out["skipped"] is True
+    assert out["reason"] == "before_close"
+    assert out["trade_date"] == D_TODAY.isoformat()
+    assert mds.eod_shortfalls(out) == []
+    reasons = mds.eod_alert_reasons(out)
+    assert reasons and "before_close" in reasons[0]
+
+
+async def test_eod_full_ingest_writes_at_the_close_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """15:00 整（含）之后照常写入 —— 守卫不得误伤边界与收盘后的补跑。"""
+    upserts: list[str] = []
+
+    async def _full(dimension: str) -> tuple[list[dict[str, Any]], int]:
+        return [_hot_board_row(board_code=f"BK{dimension[:2].upper()}")], 1
+
+    async def _upsert(
+        db: Any, trade_date: date, dimension: str, rows: list[Any], *, capture_kind: str = "poll"
+    ) -> int:
+        upserts.append(capture_kind)
+        return len(rows)
+
+    monkeypatch.setattr(mds, "_today_sh", lambda: D_TODAY)
+    monkeypatch.setattr(
+        mds, "_get_eastmoney", lambda: SimpleNamespace(fetch_sector_moneyflow_full=_full)
+    )
+    monkeypatch.setattr(mds.market_data_repo, "upsert_sector_moneyflow", _upsert)
+
+    out = await mds.ingest_sector_moneyflow_eod_full(object(), now=D_AT_CLOSE)
+
+    assert upserts == ["eod_full", "eod_full", "eod_full"]
+    assert not out.get("skipped")
+    assert mds.eod_alert_reasons(out) == []
 
 
 async def test_eod_shortfalls_flags_incomplete_and_unknown_coverage() -> None:
@@ -946,6 +1047,18 @@ async def test_eod_shortfalls_flags_incomplete_and_unknown_coverage() -> None:
     ]
     # 15:35 的 skipped 形态没有维度统计 → 不算短缺
     assert mds.eod_shortfalls({"skipped": True, "trade_date": "2026-09-18"}) == []
+
+
+def test_eod_alert_reasons_includes_before_close_skip() -> None:
+    """告警通道的单一判据 = 覆盖不足 **+** before_close 跳过（两条轨道共用）。"""
+    assert mds.eod_alert_reasons({"skipped": True, "trade_date": "2026-09-18"}) == []
+    assert mds.eod_alert_reasons(
+        {"industry": {"fetched": 496, "total": 496}, "concept": {"fetched": 1, "total": 506}}
+    ) == ["concept: fetched=1 < total=506"]
+    before = {"skipped": True, "reason": "before_close", "now": "2026-09-18T14:30:00+08:00"}
+    assert mds.eod_alert_reasons(before) == [
+        "skipped: before_close (now=2026-09-18T14:30:00+08:00, close=15:00 SH)"
+    ]
 
 
 async def test_rewrite_ingest_skips_when_today_is_already_fully_captured(
@@ -976,8 +1089,8 @@ async def test_rewrite_ingest_runs_the_full_capture_when_eod_full_is_missing(
     gate = _patch_full_capture(monkeypatch, False)
     seen: list[Any] = []
 
-    async def _full(db: Any) -> dict[str, Any]:
-        seen.append(db)
+    async def _full(db: Any, *, now: Any = None) -> dict[str, Any]:
+        seen.append((db, now))
         return {"industry": {"fetched": 496, "total": 496, "upserted": 496}}
 
     monkeypatch.setattr(mds, "ingest_sector_moneyflow_eod_full", _full)
@@ -986,7 +1099,7 @@ async def test_rewrite_ingest_runs_the_full_capture_when_eod_full_is_missing(
     out = await mds.ingest_sector_moneyflow_if_missing(db)
 
     assert gate == [(D_TODAY, "eod_full")], "守卫看的是 eod_full，不是'有没有行'"
-    assert seen == [db], "补写必须复用同一个全量捕获方法（双轨制）"
+    assert [s[0] for s in seen] == [db], "补写必须复用同一个全量捕获方法（双轨制）"
     assert out["skipped"] is False
     assert out["industry"]["fetched"] == 496 and out["trade_date"] == D_TODAY.isoformat()
 
@@ -1151,6 +1264,88 @@ async def test_board_snapshot_jobs_alert_on_short_coverage(
 
     assert alerts and alerts[0][0] == job_id
     assert "fetched=12 < total=496" in str(alerts[0][1])
+
+
+@pytest.mark.parametrize(
+    ("job_func", "job_id"),
+    [
+        ("board_snapshot_eod_job", "board_snapshot_eod"),
+        ("board_snapshot_rewrite_job", "board_snapshot_rewrite"),
+    ],
+)
+async def test_board_snapshot_jobs_skip_and_alert_before_close(
+    monkeypatch: pytest.MonkeyPatch, job_func: str, job_id: str
+) -> None:
+    """定时轨道也过收盘守卫（评审 Important #1）：钉在 14:30 → 零写入 + ``job:failures``。
+
+    这是"跨日补跑"路径（``misfire_grace_time=None``，宿主睡醒后补跑）：早上触发时若绕过
+    守卫，就会把**新的一天**提前写成 ``eod_full``，闸门整天打开。
+    """
+    from app.scheduler import jobs as scheduler_jobs
+
+    alerts: list[Any] = []
+
+    async def _alert(ids: Any, exc: BaseException) -> None:
+        alerts.append((ids, exc))
+
+    monkeypatch.setattr(mds, "_now_sh", lambda: D_BEFORE_CLOSE)
+    monkeypatch.setattr(mds, "_today_sh", lambda: D_TODAY)
+    monkeypatch.setattr(mds, "_get_eastmoney", _boom_factory("收盘前不得外呼东财"))
+    monkeypatch.setattr(
+        mds.market_data_repo, "upsert_sector_moneyflow", _raise_factory("收盘前不得写任何行")
+    )
+    monkeypatch.setattr(
+        mds.market_data_repo, "sector_moneyflow_day_has_capture", _async_return(False)
+    )
+    monkeypatch.setattr("app.core.database.async_session_factory", _session_factory)
+    monkeypatch.setattr(scheduler_jobs, "_is_workday", lambda: True)
+    monkeypatch.setattr(scheduler_jobs, "_alert_job_failure", _alert)
+
+    await getattr(scheduler_jobs, job_func)()
+
+    assert alerts, "收盘前跳过必须登记 job:failures（两条轨道同款可见性）"
+    assert alerts[0][0] == job_id
+    assert "before_close" in str(alerts[0][1])
+
+
+async def test_worker_board_snapshot_skips_before_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """worker 手动轨道同样过守卫：盘中触发 ``board_snapshot_eod`` → 零写入 + 告警。"""
+    recorded: list[Any] = []
+
+    async def _record(job_id: str, error: str, **kwargs: Any) -> None:
+        recorded.append((job_id, error))
+
+    from tests.test_market_data_worker import _fake_session_factory
+
+    monkeypatch.setattr(mds, "_now_sh", lambda: D_BEFORE_CLOSE)
+    monkeypatch.setattr(mds, "_today_sh", lambda: D_TODAY)
+    monkeypatch.setattr(mds, "_get_eastmoney", _boom_factory("收盘前不得外呼东财"))
+    monkeypatch.setattr(
+        mds.market_data_repo, "upsert_sector_moneyflow", _raise_factory("收盘前不得写任何行")
+    )
+    monkeypatch.setattr(
+        mds.market_data_repo, "sector_moneyflow_day_has_capture", _async_return(False)
+    )
+    from app.services import job_alert_service as jas
+    from app.workers.market_data_worker import MarketDataWorker
+
+    monkeypatch.setattr(jas, "record_job_failure", _record)
+    monkeypatch.setattr(
+        "app.workers.market_data_worker.async_session_factory", _fake_session_factory
+    )
+
+    eod = await MarketDataWorker().process(task_id=None, payload={"type": "board_snapshot_eod"})
+    rewrite = await MarketDataWorker().process(
+        task_id=None, payload={"type": "board_snapshot_rewrite"}
+    )
+
+    for result, job_id in ((eod, "board_snapshot_eod"), (rewrite, "board_snapshot_rewrite")):
+        assert result["status"] == "completed"
+        assert result["skipped"] is True and result["reason"] == "before_close"
+    assert [r[0] for r in recorded] == ["board_snapshot_eod", "board_snapshot_rewrite"]
+    assert all("before_close" in r[1] for r in recorded)
 
 
 @pytest.mark.parametrize("job_func", ["board_snapshot_eod_job", "board_snapshot_rewrite_job"])
@@ -1346,7 +1541,11 @@ async def test_list_sector_moneyflow_ranked_orders_in_pg(_clean_scratch_day: Non
 async def test_eod_full_row_counts_match_upstream_total_in_pg(
     _clean_scratch_day: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """真库：全量抓取的落库行数 == 上游 ``total``（三维度分别核对），闸门随之打开。"""
+    """真库：**收盘后**全量抓取的落库行数 == 上游 ``total``（三维度分别核对），闸门随之打开。
+
+    注入 ``now``（scratch 日 15:05 SH）而不是让它取真实当下：收盘守卫会挡住盘中调用
+    （见 ``test_eod_full_ingest_skips_before_close_without_any_write``）。
+    """
     from sqlalchemy import func, select
 
     from app.core.database import async_session_factory
@@ -1368,7 +1567,9 @@ async def test_eod_full_row_counts_match_upstream_total_in_pg(
     )
 
     async with async_session_factory() as db:
-        out = await mds.ingest_sector_moneyflow_eod_full(db)
+        out = await mds.ingest_sector_moneyflow_eod_full(
+            db, now=datetime(1999, 1, 4, 15, 5, tzinfo=_SH_TZ)
+        )
         await db.commit()
         for dimension, total in totals.items():
             count = (

@@ -33,10 +33,10 @@ class SectorMoneyflowSnapshot(Base):
     上游对无成分股/停牌的板块给 ``-`` → 落 **NULL，绝不 0**（0 是"平盘 0 家"这一事实断言）。
 
     ``capture_kind``（Ruling 11）是**行级产地**：``poll`` = 盘中 5 分钟轮询（``fid=f62``
-    Top-100 子集）；``eod_full`` = 15:05 收盘后分页全量（覆盖上游 ``data.total``，当日所有
-    板块）。因为 ``clist`` 的 ``pz`` 上限是 100，盘中表行只是"每次轮询 Top-100 的并集、
-    旧行永不刷新"，既不是完整当日态、也不是 hot-boards 要的 ``f3``（涨幅）全集 —— 所以
-    读表闸门只认 ``eod_full``（当日已全量捕获）。
+    Top-100 子集）；``eod_full`` = **收盘后**（≥15:00 上海）的分页全量（覆盖上游
+    ``data.total``，当日所有板块）。因为 ``clist`` 的 ``pz`` 上限是 100，盘中表行只是
+    "每次轮询 Top-100 的并集、旧行永不刷新"，既不是完整当日态、也不是 hot-boards 要的
+    ``f3``（涨幅）全集 —— 所以读表闸门只认 ``eod_full``（当日已全量捕获）。
     """
 
     __tablename__ = "sector_moneyflow_snapshots"

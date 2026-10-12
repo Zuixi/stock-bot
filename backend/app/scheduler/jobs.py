@@ -291,7 +291,7 @@ async def board_snapshot_eod_job() -> None:
         logger.exception("Board snapshot EOD job failed")
         await _alert_job_failure("board_snapshot_eod", exc)
         return
-    shortfalls = market_data_service.eod_shortfalls(result)
+    shortfalls = market_data_service.eod_alert_reasons(result)
     if shortfalls:
         await _alert_job_failure("board_snapshot_eod", RuntimeError("; ".join(shortfalls)))
 
@@ -320,7 +320,7 @@ async def board_snapshot_rewrite_job() -> None:
         logger.exception("Board snapshot rewrite job failed")
         await _alert_job_failure("board_snapshot_rewrite", exc)
         return
-    shortfalls = market_data_service.eod_shortfalls(result)
+    shortfalls = market_data_service.eod_alert_reasons(result)
     if shortfalls:
         await _alert_job_failure("board_snapshot_rewrite", RuntimeError("; ".join(shortfalls)))
 

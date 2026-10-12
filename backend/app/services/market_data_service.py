@@ -10,7 +10,7 @@ import logging
 import math
 import sys
 from collections.abc import Mapping
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
@@ -373,6 +373,33 @@ SECTOR_MONEYFLOW_CACHE_LIMIT = 100  # 端点 limit 上限（le=100）：缓存�
 #: ``market_service`` 侧做）。取回上限只作安全阀，不影响排序语义。
 HOT_BOARD_SNAPSHOT_LIMIT = 100
 
+#: 上海收盘时刻：``eod_full``（收盘全量捕获）的守卫边界，**含** 15:00 整。
+SH_CLOSE = time(15, 0)
+
+
+def _now_sh() -> datetime:
+    """上海当下的 wall clock（**测试打桩点**：定时的 15:05 与手动 worker 两条轨道共用）。"""
+    return datetime.now(_SH)
+
+
+def is_after_close(now: datetime, *, close: time = SH_CLOSE) -> bool:
+    """``now`` 是否已到/过了收盘时刻（默认上海 15:00）—— 纯函数。
+
+    为什么需要这条谓词（评审 Important #1）：``eod_full`` 是"收盘后的全量捕获"标记，且在
+    upsert 里**单向不可降级**（见 :func:`market_data_repo.upsert_sector_moneyflow` 的
+    ``CASE``）。若盘中就能打上这个标记，读表闸门会从那一刻起**整天打开** —— 表里不在当前
+    ``fid=f62`` Top-100 的行停在抓取时刻的值（5 分钟轮询只刷新它碰到的那 100 行），涨幅榜
+    被冻结成"并集 + 陈旧行"，正是 Ruling 11 要消除的缺陷类别；跨日补跑（两个 job 都继承
+    ``misfire_grace_time=None``，宿主睡醒后补跑）还会把**新的一天**提前写成"全量"。
+
+    ``now`` 是 aware 时一律**换算到上海时钟**再比较（传 UTC/任何时区都判对）；naive 视作
+    上海本地时间（与 :func:`_today_sh` 同约定）。``close`` 可注入（将来改收盘时间不用动
+    调用点）。
+    """
+    if now.tzinfo is not None:
+        now = now.astimezone(_SH)
+    return now.time() >= close
+
 
 async def ingest_sector_moneyflow(db: AsyncSession) -> dict[str, int]:
     """盘中轮询：industry/concept/region 三维当日快照 upsert（``capture_kind='poll'``）。
@@ -393,8 +420,12 @@ async def ingest_sector_moneyflow(db: AsyncSession) -> dict[str, int]:
     return result
 
 
-async def ingest_sector_moneyflow_eod_full(db: AsyncSession) -> dict[str, dict[str, int | None]]:
-    """15:05 收盘**全量**捕获：分页覆盖上游 ``data.total`` → ``capture_kind='eod_full'``。
+async def ingest_sector_moneyflow_eod_full(
+    db: AsyncSession, *, now: datetime | None = None
+) -> dict[str, Any]:
+    """**收盘后**（上海 ≥15:00）的全量捕获：分页覆盖上游 ``data.total``。
+
+    落库标记 ``capture_kind='eod_full'``。
 
     为什么必须全量（Ruling 11）：``clist`` 的 ``pz`` 上限是 100（实测传 1000 仍只回 100
     行），盘中 5 分钟轮询按主力净流入只拿得到 Top-100，当日表行因此是"每次轮询 Top-100 的
@@ -403,12 +434,31 @@ async def ingest_sector_moneyflow_eod_full(db: AsyncSession) -> dict[str, dict[s
     （industry ≈5 页 / concept ≈6 页 / region 1 页 ≈12 次请求/日）把当日**所有**板块刷新一次，
     "并集 + 陈旧行"自然消解，**无需** DELETE 剪枝。
 
+    **收盘守卫**（评审 Important #1）：``now < 15:00``（上海）时**跳过并返回**
+    ``{"skipped": True, "reason": "before_close", ...}`` —— 不抛错、不写任何行、不外呼，
+    告警由调用方（job/worker）走既有通道（:func:`eod_alert_reasons`）。因为 ``eod_full``
+    单向不可降级，盘中打上它会让读表闸门提前整天打开（表里只有抓取时刻的子集），跨日补跑
+    还会把新的一天提前写成"全量"。定时的 15:05 job 与手动 worker 都调本方法 → 两条触发路径
+    同时关闭；收盘后的补跑（≥15:00）照常写入。``now`` 可注入（测试/运维复现）；
+    ``None`` = 上海当下。
+
     返回 ``{dimension: {"fetched", "total", "upserted"}}``：``total`` 是上游 ``data.total``，
     覆盖不足由 :func:`eod_shortfalls` 判定（job 与 worker 两条轨道都要告警 —— **不许静默
     截断**：短列表看起来完全正常，但读表闸门会照开、T6 会拿它当完整日）。
     """
-    em = _get_eastmoney()
+    now = now if now is not None else _now_sh()
     today = _today_sh()
+    if not is_after_close(now):
+        logger.warning(
+            "board snapshot EOD capture skipped before close: now=%s (< %s SH)", now, SH_CLOSE
+        )
+        return {
+            "skipped": True,
+            "reason": "before_close",
+            "trade_date": today.isoformat(),
+            "now": now.isoformat(),
+        }
+    em = _get_eastmoney()
     result: dict[str, dict[str, int | None]] = {}
     for dimension in ("industry", "concept", "region"):
         rows, total = await em.fetch_sector_moneyflow_full(dimension)
@@ -440,13 +490,28 @@ def eod_shortfalls(result: Mapping[str, Any]) -> list[str]:
     return out
 
 
-async def ingest_sector_moneyflow_if_missing(db: AsyncSession) -> dict[str, Any]:
+def eod_alert_reasons(result: Mapping[str, Any]) -> list[str]:
+    """全量捕获需要**告警/登记 ``job:failures``** 的原因（job 与 worker 共用的唯一判据）。
+
+    = 覆盖不足（:func:`eod_shortfalls`）+ **收盘前跳过**（:func:`is_after_close` 的
+    ``before_close``）：后者本身就说明"这次 EOD 捕获没做"，必须可见（跨日补跑时操作者
+    要能看出前一天的全量没抓到）。无告警 → 空列表。
+    """
+    reasons = eod_shortfalls(result)
+    if result.get("skipped") and result.get("reason") == "before_close":
+        reasons.append(f"skipped: before_close (now={result.get('now')}, close=15:00 SH)")
+    return reasons
+
+
+async def ingest_sector_moneyflow_if_missing(
+    db: AsyncSession, *, now: datetime | None = None
+) -> dict[str, Any]:
     """当日**没有 ``eod_full`` 行**才补做收盘全量捕获（15:35 容器重启兜底）。
 
     与 15:05 的 EOD job 共用 :func:`ingest_sector_moneyflow_eod_full`（同一 service 方法，
-    双轨制）。判据是"当日有没有**全量**捕获"而不是"有没有行"（Ruling 11）：只落了盘中
-    ``poll`` 行、错过 15:05 的日子也能补上收盘态 —— 这正是盘中 Top-100 子集不该被当成
-    当日完整态的另一面。
+    双轨制，收盘守卫也在那里）。判据是"当日有没有**全量**捕获"而不是"有没有行"
+    （Ruling 11）：只落了盘中 ``poll`` 行、错过 15:05 的日子也能补上收盘态 —— 这正是盘中
+    Top-100 子集不该被当成当日完整态的另一面。
 
     返回值的键刻意不含 ``status``：worker 结果里 ``status`` 由 BaseWorker 拥有
     （``{"status": "completed", **result}`` 会被内层同名键覆盖）。
@@ -461,7 +526,11 @@ async def ingest_sector_moneyflow_if_missing(db: AsyncSession) -> dict[str, Any]
             "reason": "today_already_fully_captured",
             "trade_date": today.isoformat(),
         }
-    counts = await ingest_sector_moneyflow_eod_full(db)
+    counts = await ingest_sector_moneyflow_eod_full(db, now=now)
+    if counts.get("skipped"):
+        # 收盘前跳过（before_close）：零写入，原样上报 reason 让调用方登记 job:failures
+        logger.info("board snapshot rewrite skipped %s for %s", counts.get("reason"), today)
+        return counts
     logger.info("board snapshot rewrite captured %s for %s", counts, today)
     return {"skipped": False, "trade_date": today.isoformat(), **counts}
 
@@ -528,7 +597,8 @@ async def load_hot_board_snapshot(
     盘中 5 分钟轮询按 ``fid=f62``（主力净流入）只拿得到 Top-100，当日行集是"每次轮询
     Top-100 的并集、旧行永不刷新"（实测 industry 229 个 code 里 84 行停在开盘后第一轮）
     —— 拿它冒充 ``f3``（涨幅）全量榜是错的。只有 15:05 的分页全量捕获（覆盖上游
-    ``data.total``）才能保证"当日所有板块都在表里、且都是收盘态"。
+    ``data.total``、且 ``before_close`` 守卫保证只在 ≥15:00 写）才能保证"当日所有板块都在
+    表里、且都是收盘后的值"。
 
     ``expected_day`` 由调用方按"最近**预期**交易日"给出（``last_weekday(_today_sh())``）；
     本函数只做"表内实际持有的最近日 vs 预期"这一条判据，不自己发明第二个"今天是哪天"。

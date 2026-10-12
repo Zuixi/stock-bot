@@ -46,12 +46,15 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
             # 双轨制：与 `board_snapshot_eod_job`（交易日 15:05）调同一个 service 方法 ——
             # **分页全量**收盘捕获（capture_kind='eod_full'；A 类数据当天不落就永久丢失）。
             result = await market_data_service.ingest_sector_moneyflow_eod_full(db)
-            shortfall_alert = ("board_snapshot_eod", market_data_service.eod_shortfalls(result))
+            shortfall_alert = ("board_snapshot_eod", market_data_service.eod_alert_reasons(result))
         elif job == "board_snapshot_rewrite":
             # 双轨制：与 `board_snapshot_rewrite_job`（交易日 15:35）同方法 —— 当日**没有
             # eod_full 行**才补做收盘全量（容器重启错过 15:05 的兜底）；否则 {"skipped": true}。
             result = await market_data_service.ingest_sector_moneyflow_if_missing(db)
-            shortfall_alert = ("board_snapshot_rewrite", market_data_service.eod_shortfalls(result))
+            shortfall_alert = (
+                "board_snapshot_rewrite",
+                market_data_service.eod_alert_reasons(result),
+            )
         elif job == "northbound":
             result = await market_data_service.ingest_northbound(
                 db, days=int(params.get("days", 30))

@@ -54,7 +54,8 @@ def _dec(v: Any) -> Decimal | None:
     return Decimal(str(v))
 
 
-#: ``capture_kind`` 的取值（Ruling 11）：盘中 5 分钟轮询 / 15:05 收盘分页全量。
+#: ``capture_kind`` 的取值（Ruling 11）：盘中 5 分钟轮询 / **收盘后**（≥15:00 上海,
+#: 见 ``market_data_service.is_after_close``）的分页全量。
 POLL_CAPTURE = "poll"
 EOD_FULL_CAPTURE = "eod_full"
 _CAPTURE_KINDS = frozenset({POLL_CAPTURE, EOD_FULL_CAPTURE})
@@ -238,7 +239,7 @@ async def sector_moneyflow_day_has_capture(
     Ruling 11：盘中 5 分钟轮询写的 ``poll`` 行只是 ``fid=f62`` Top-100 子集（且旧行永不
     刷新），所以"当日有没有行"不是正确的判据 —— 正确的判据是"当日有没有 **eod_full**
     行"（15:05 分页全量，覆盖上游 ``data.total``）。这同时修掉了
-    "容器 15:05 缺席、但当天盘中已写过 → 15:35 不再补抓收盘态"的缺口。
+    "容器 15:05 缺席、但当天盘中已写过 → 15:35 不再补抓收盘全量"的缺口。
     """
     stmt = (
         select(SectorMoneyflowSnapshot.id)
