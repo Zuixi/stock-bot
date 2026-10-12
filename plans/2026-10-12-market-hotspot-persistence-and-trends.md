@@ -1,9 +1,9 @@
 ---
-status: active
+status: completed
 scope: 市场热点/情绪/资金数据的日级持久化边界与统计追踪——个股级涨停事实、东财实时源日终捕获、覆盖率只读巡检、情绪与板块趋势端点
 touches: backend/app/models/market_data.py, backend/app/migrations/versions/, backend/app/repositories/market_data_repo.py, backend/app/repositories/limit_up_repo.py, backend/app/services/market_data_service.py, backend/app/services/limit_up_service.py, backend/app/services/reconciliation_service.py, backend/app/core/providers/eastmoney_client.py, backend/app/scheduler/jobs.py, backend/app/scheduler/runner.py, backend/app/workers/market_data_worker.py, backend/app/schemas/task.py, backend/app/schemas/market_data.py, backend/app/api/v1/market_data.py, backend/scripts/, backend/tests/, frontend/src/shared/api/, frontend/src/features/market/, docs/decisions/, docs/features.md, docs/Changelog.md
 updated: 2026-10-12
-next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktree 分支 feat/market-hotspot-persistence 实施中
+next-action: -
 ---
 
 # 市场热点数据持久化与趋势追踪 实施计划（v2）
@@ -35,7 +35,7 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 
 **Tech Stack:** FastAPI + SQLAlchemy 2.0 async + Alembic + APScheduler（`Asia/Shanghai`）+ RabbitMQ Worker + Redis + PostgreSQL；前端 React 18 + antd 5 + TanStack Query + ECharts；Playwright e2e。**零新增第三方依赖**。
 
-**Spec:** 本文件即 spec；口径依据 [`docs/design/market-data-trust-and-realtime.md`](../docs/design/market-data-trust-and-realtime.md)（D1 本地自算为主干 / Web 仅装饰层）、[`docs/design/limit-up-sentiment.md`](../docs/design/limit-up-sentiment.md)、[ADR 0004](../docs/decisions/0004-current-snapshot-not-backfilled.md)（由 Task 3 的 ADR 0009 划清边界）。
+**Spec:** 本文件即 spec；口径依据 [`docs/design/market-data-trust-and-realtime.md`](../docs/design/market-data-trust-and-realtime.md)（D1 本地自算为主干 / Web 仅装饰层）、[`docs/design/limit-up-sentiment.md`](../docs/design/limit-up-sentiment.md)、[ADR 0004](../docs/decisions/0004-current-snapshot-not-backfilled.md)（由 Task 3 的 ADR 0014 划清边界）。
 
 ## v2 修订记录（ponytail review 的 7 项更正 + 4 项拍板）
 
@@ -45,7 +45,7 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 | E2 | 错误 | 回补起点未算窗口 → 前 15 个交易日的 `streak`/晋级率被窗口起点截平（`window_trade_days(10)=10+6=16`，`limit_up_service.py:35/42`，窗口取自 `daily_quotes` 而限价自 2025-09-16 才有） | 加**窗口完备性守卫**（窗口内任一日缺限价即 skip）；安全起点实测 **2025-10-15**，可回补 **239 天**（不是 254） |
 | E3 | 错误 | 只写"复用 `fetch_day_breadth`" —— 它只回**计数**，`_WINDOW_SQL` 的 `cand` 也不含炸板票 → `is_zb` 行根本落不出来 | 新增 `fetch_day_broken_board_stocks`（同一谓词改成选行） |
 | E4 | 错误 | "hot-boards 完全不落库" 表述错误：三维度行**已在** `sector_moneyflow_snapshots`（同源同形） | T2 从"新建落库链路"降为"**端点改读表 + 1 处 fields 扩参 + EOD/当日补写**" |
-| E5 | 错误 | 计划自相矛盾：不做清单禁止"用当前申万分类回算历史"，T6 又要做 | 删该不做项；ADR 0009 明确：ADR 0004 管"快照型分类数据本身"，**不禁止**"用行情事实做聚合 + 归属按当前快照并显式标注"；双向引用 |
+| E5 | 错误 | 计划自相矛盾：不做清单禁止"用当前申万分类回算历史"，T6 又要做 | 删该不做项；ADR 0014 明确：ADR 0004 管"快照型分类数据本身"，**不禁止**"用行情事实做聚合 + 归属按当前快照并显式标注"；双向引用 |
 | E6 | 错误 | 行集只有"涨停 ∪ 炸板" → 断板日/停牌日都表现为"无行"，**踩「缺失 ≠ 0」** | 行集 = 窗口 when `as_of` 的候选行（含"昨日涨停今日未板"）∪ 炸板行；`missing_days` 显式落列；不变式改为 `count(is_lu) == zt_count` |
 | E7 | 错误 | v1 说"对近日缺失日补抓板块快照" —— 东财实时板块资金流**没有历史接口**，昨天的数据无法补 | 明确：**历史缺口不可补**，只保证"从今日起不再丢 + 当日重跑补写"；验收目标从"65%→100%"改为"**上线日起 100%**" |
 | R1 | 冗余 | T2 要加 5 列（`amount/flat_count/rank/captured_at/is_final`） | 只加 **`amount` + `flat_count`**（前端 `HotBoardItem` 契约消费，`market.ts:30-52`、`HotSectors.tsx:77`）；`rank` 前端不消费且可推导；`captured_at` 与 `updated_at` 重复；`is_final` 可推导 |
@@ -96,8 +96,8 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 - Modify: `backend/app/repositories/market_data_repo.py`（+`enrich_limit_up_stock_daily_from_pool`：只更新东财拥有的列）
 - Modify: `backend/app/services/limit_up_service.py`（+`persist_stock_facts(db, as_of, *, fact_source)`、+`enrich_stock_facts_from_pool(db, as_of, pool_rows)`）
 - Modify: `backend/app/services/intraday_sentiment_service.py`（盘中池 → 结构化 enriched 行，供 enrichment 复用）
-- Modify: `backend/app/scheduler/jobs.py`（+`limit_up_stock_facts_job` 交易日 17:20；+`intraday_pool_eod_job` 交易日 15:05）
-- Modify: `backend/app/scheduler/runner.py`、`backend/app/schemas/task.py`（`MarketDataJobType` +2）、`backend/app/workers/market_data_worker.py`（同队列新分支）
+- Modify: `backend/app/scheduler/jobs.py`（+`limit_up_stock_facts_job` 交易日 17:20：**facts → commit → best-effort enrichment**）
+- Modify: `backend/app/scheduler/runner.py`、`backend/app/schemas/task.py`（`MarketDataJobType` +1：`limit_up_stock_facts`，支持可选 `trade_date` 做 retro）、`backend/app/workers/market_data_worker.py`（同队列新分支）
 - Test: `backend/tests/test_limit_up_stock_daily.py`（行构造 + 口径不变式 + enrichment 不改写判定列）
 
 **表结构**（唯一键 `(trade_date, stock_id)`；行集 ≈ 涨停 ∪ 炸板 ∪ 昨日涨停 ≈ 200–450 行/日）：
@@ -120,19 +120,24 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 - `async def fetch_day_broken_board_stocks(db, as_of) -> list[dict]` —— 谓词与 `_BREADTH_SQL` 的 `zb_count` **逐字一致**（`high >= up_limit - 0.005 AND close < up_limit - 0.005`），返回 `stock_id/symbol/name`
 - `async def enrich_stock_facts_from_pool(db, as_of, pool_rows) -> int` —— 只 `SET seal_time/seal_fund/break_count/enrich_source`，**不碰** `is_lu/touched/is_zb/streak/*_span`
 
+**时序裁决（Ruling 10，实施中实测发现，取代 v2 初稿的 15:05 job）：** 15:05 时当日 facts 行**还不存在**（`stock_price_limits` 16:50 才入库、facts 17:20 才建行），UPDATE-only 的 enrichment 必然命中 0 行 → A 类封板明细当天就丢。故：**取消 15:05 job**，把 enrichment 接在 17:20 的 facts commit **之后**，并且：
+- enrichment **best-effort**：外呼抛错/空池 → `logger.warning` + 既有 `_alert_job_failure`，**不得**回滚 facts、不得让 job 整体失败（B 类事实优先于 A 类装饰）
+- `enriched_rows == 0` 也要告警（空池与"无行可更"分别记 reason）——A 类静默丢失必须可见
+- worker job 支持可选 `trade_date`，对指定日跑 facts + enrichment（东财涨停池端点有近 ~20 交易日历史）→ 17:20 那次外呼失败时的**同一代码路径**兜底，不新增 job 类型
+
 **测试策略（必须有能在默认门禁失败的测试）：**
 - 行构造：涨停 / 炸板 / 昨日涨停今日未板 / 停牌缺行 四态；缺失值不落 0
 - **口径不变式**：`count(*) FILTER (WHERE is_lu) WHERE trade_date=d` **等于** `market_sentiment_daily.zt_count`（同日）；炸板行数等于 `_BREADTH_SQL` 的 `zb_count`
 - enrichment：单元测试断言 SQL 的 `SET` 子句不含判定列（防回归）
 - repo：沿用 `build_window_sql_for_explain` 的同源思路，不复制 SQL 文本做计划守卫
 
-**验收（真库实测，数字回填本文件）：** 跑 `persist_stock_facts(2026-09-08)` → `is_lu=75`、`is_zb=39`、总行数=当日候选∪炸板；`uv run alembic heads` 单 head；EOD enrichment 跑完后 `is_lu` 计数**零变化**。
+**验收（真库实测，数字回填本文件）：** 跑 `persist_stock_facts(2026-09-08)` → `is_lu=75`、`is_zb=39`、总行数=当日候选∪炸板；`uv run alembic heads` 单 head；enrichment 跑完后 `is_lu` 计数**零变化**；空池/外呼失败时 `job:failures` 有记录且 facts 已提交（不回滚）。
 
-- [ ] Step 1: 模型 + 迁移 + 唯一键
-- [ ] Step 2: 失败测试（四态行构造 + 口径不变式 + enrichment 不改判定列）
-- [ ] Step 3: `fetch_day_broken_board_stocks` + repo 四函数 + service 两函数
-- [ ] Step 4: scheduler/worker/schema 接线（17:20 事实、15:05 EOD enrichment；双轨同方法）
-- [ ] Step 5: 真库实测并回填数字
+- [x] Step 1: 模型 + 迁移 + 唯一键
+- [x] Step 2: 失败测试（四态行构造 + 口径不变式 + enrichment 不改判定列）
+- [x] Step 3: `fetch_day_broken_board_stocks` + repo 四函数 + service 两函数
+- [x] Step 4: scheduler/worker/schema 接线（17:20 facts→enrichment；worker 支持 `trade_date` retro；双轨同方法）
+- [x] Step 5: 真库实测并回填数字
 
 ---
 
@@ -152,22 +157,30 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 
 **口径裁定：** `/market/hot-boards` 的 items 由表行按 `pct_change DESC, board_code ASC`（确定性 tiebreak）排序取 Top-N —— 与上游 `fid=f3` 语义一致，故**不存 `rank`**；`as_of`/`as_of_quality` 语义与 `/market/sector-moneyflow` 统一（同一次抓取、同一行）。
 
-**验收（真库实测，数字回填本文件）：** `/market/hot-boards?category=industry` 读表分支与实时分支**同 code 行资金口径一致**；`amount`/`flat_count` 非空率 ≥99%（上游为空的板块允许 NULL）；**明确记录**：历史 15 个缺失交易日不可补，覆盖率目标 = 上线日起 100%。
+**行集与新鲜度裁决（Ruling 11，实施中实测发现）：** 上游 `clist` **`pz` 上限 100 且忽略更大值**（实测 `pz=1000` 仍只回 100 行：industry `total=496` / concept `506` / region `31`），而 5 分钟轮询按 `fid=f62`（主力净流入）取 Top-100 → 当日表行是"每次轮询 Top-100 的并集、旧行永不刷新"（实测 industry 当日 229 个 code，其中 84 行停在 09:25），且**该行集不是 hot-boards 的 `f3`（涨幅）榜全集**。故：
+- 新增 **`capture_kind`** 列（`String(16)`，非空，默认 `'poll'`；取值 `poll` | `eod_full`），行级记录"这一行来自盘中轮询还是收盘全量"
+- **15:05 EOD 改为分页全量抓取**（复用既有 `_paged_clist` 模式；industry 5 页 + concept 6 页 + region 1 页 ≈ 12 次请求/日），写 `capture_kind='eod_full'` → 当日**所有板块**在收盘时被刷新一次，"并集+陈旧行"问题自然消解（无需 DELETE 剪枝）
+- **读表闸门**：仅当该 `(day, dimension)` 存在 `eod_full` 行（当日已全量捕获）才走表；否则走既有实时路径（盘中本来就更新）。交易日盘中不走表 = 不引入"用 Top-100 子集冒充 f3 全量榜"的错误
+- **15:35 重写 job 的守卫从"当日无任何行"改为"当日无 `eod_full` 行"** → 只落了盘中轮询、错过 15:05 的日子也能补上收盘态（修正 Ruling 11 同时发现的第二个缺口）
+- `list_sector_moneyflow_range(dimension, start, end, capture_kind=None)` 供 T6 只取完整日
+- 延迟项（记入账本，交 final review）：`_is_workday()` 是纯 weekday 判断 → 节假日工作日的行会带节假日日期（既有约定，非本任务引入）
 
-- [ ] Step 1: 迁移 2 列 + 模型
-- [ ] Step 2: `fetch_sector_moneyflow` fields 扩参（含"不新增第二次请求"的断言测试）
-- [ ] Step 3: 失败测试（读表优先 / 回落 / 字段集 ⊇ 契约 / 缺行不返空）
-- [ ] Step 4: `get_hot_boards` 读表分支 + EOD/当日补写 job + worker 分支
-- [ ] Step 5: 真库实测并回填数字
+**验收（真库实测，数字回填本文件）：** `/market/hot-boards?category=industry` 读表分支与实时分支**同 code 行资金口径一致**；`amount`/`flat_count` 非空率 ≥99%（上游为空的板块允许 NULL）；EOD 全量抓取的行数 ≈ 上游 `total`（industry 496 / concept 506 / region 31）；**明确记录**：历史 15 个缺失交易日不可补，覆盖率目标 = 上线日起 100%。
+
+- [x] Step 1: 迁移 `amount`/`flat_count`/`capture_kind` + 模型
+- [x] Step 2: `fetch_sector_moneyflow` fields 扩参（含"不新增第二次请求"的断言测试）+ 分页全量 helper
+- [x] Step 3: 失败测试（读表闸门 `eod_full` / 回落 / 字段集 ⊇ 契约 / 缺行不返空 / 分页覆盖 total）
+- [x] Step 4: `get_hot_boards` 读表分支 + 15:05 全量 EOD + 15:35 补写（守卫=`eod_full` 缺失）+ worker 分支
+- [x] Step 5: 真库实测并回填数字（含 EOD 全量行数 vs 上游 total）
 
 ---
 
-## Task 3: 覆盖率只读巡检 + ADR 0009
+## Task 3: 覆盖率只读巡检 + ADR 0014
 
 **为什么：** `DOMAINS` 只 4 个域（`reconciliation_service.py:34`）→ 65%/54.5% 这类洞当天不告警。**但补漏循环硬编码 3 域**（`:228`），不能靠"加域"解决。
 
 **Files:**
-- Create: `docs/decisions/0009-market-derived-fact-persistence.md`（+`docs/decisions/index.md` 登记）
+- Create: `docs/decisions/0014-market-derived-fact-persistence.md`（+`docs/decisions/index.md` 登记）
 - Modify: `backend/app/services/reconciliation_service.py`（新增**只读**覆盖率聚合：`coverage_report(db, *, window_days=30)`；**不修改** 3 域补漏循环与 `sentiment` 特例；`DOMAINS` 的语义在 docstring 里显式分节为"可自愈域 / 只读巡检域"）
 - Modify: `backend/app/schemas/market_data.py`（`DataFreshnessOut` +`coverage: list[...]`）
 - Modify: `backend/app/api/v1/market_data.py`（`/data-freshness` 组装；只读路径沿用 `apply=False`）
@@ -175,18 +188,42 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 - Test: `backend/tests/test_market_coverage.py`（纯函数 `compute_coverage(trading_days, have_days)`：分母为 0、未来脏行、缺日列表；巡检域不得进入补漏路径的断言）
 
 **Interfaces:**
-- `def compute_coverage(trading_days: list[date], have_days: set[date]) -> dict` —— `{have_days, trading_days, cover_pct, missing_days}`；`trading_days` 为空 → `cover_pct=None`（不产生 0/0）
-- `async def coverage_report(db, *, window_days: int = 30) -> list[dict]` —— 巡检域：`sector_moneyflow` / `sentiment` / `sentiment_intraday` / `limit_up_stock_daily` / `dragon_tiger` / `block_trade` / `share_float` / `repurchase`；分母 = `daily_quotes` 交易日（**不用自然日**）
-- 缺行 → 复用既有 `job_alert_service`（不新增机制）
+- `def compute_coverage(trading_days: list[date], have_days: set[date], complete_days: set[date] | None = None, *, window: tuple[date, date] | None = None) -> dict` —— `{have_days, complete_days, trading_days, cover_pct, missing_days, extra_days}`；`trading_days` 为空 → `cover_pct=None`（不产生 0/0）；返回的 `have_days` 与分母同口径（**窗口内交易日**的行数），窗口外/非交易日的脏行进 `extra_days`
+- `async def coverage_report(db, *, window_days: int = 30) -> list[dict]` —— 巡检域：`sector_moneyflow` / `sentiment_daily`（**不叫 `sentiment`**：那是可自愈域的名，重名会让"巡检域 vs 补漏域"的边界糊掉；同一张表 `market_sentiment_daily`）/ `sentiment_intraday` / `limit_up_stock_daily` / `dragon_tiger` / `block_trade` / `share_float` / `repurchase`；分母 = **交易日**（`daily_quotes` ∪ `stock_price_limits`，见 `TRADING_DAY_SOURCES`；**不用自然日**），窗口 = 最大(域首行, 日历末日前 N 自然日) → 日历末日。并集是评审 Important #1 的口径修正：**任何单源都可能缺日**（该修正落地时真库 `daily_quotes` 恰好是次源超集、并集没多出日子，但这一天可能再来），单源当分母会把行情自己的洞算成巡检域的洞；并集相对主源多出的每一天都会把 `degraded_trading_calendar` 置 true
+- 缺表/缺列（迁移未应用）→ 该域 `missing_table`/`missing_column`，其余域照常渲染（SAVEPOINT 隔离，不 500）；**并集相对主源多出的交易日 → `degraded_trading_calendar=true`**（判据是「并集 != 主源」，不是「主源表不存在」：主源在库但缺日、由次源补上时分母口径已经变了，不能标 ok）
+- **测量窗口末端锚定交易日历末日**（不是各域自己的最后一行）：夹到域末日会让整域停更的域分母随之缩小（极端退化到单日）→ `cover_pct=100`/`missing_days=[]`，对「这个域整体停更」完全盲；`window_days` 语义 = 以日历末日前推 N 自然日的测量窗
+- 缺行 → 复用既有 `job_alert_service`（不新增机制）；**覆盖率本身不写登记表**（只读端点每次请求都调，会刷出假告警），缺口经 `cover_pct`/`missing_days` 可见
 
-**ADR 0009 必须写清三件事：** ① A/B/C 三条判据；② 与 ADR 0004 的边界（ADR 0004 管"快照型分类数据本身不得回算"，**不禁止**用行情事实做聚合 + 按当前分类归属并显式标注 = 拍板②）；③ 被否决方案（全读时计算 / 全落库含榜单 / 5 分钟全池明细）。
+**ADR 0014 必须写清三件事：** ① A/B/C 三条判据；② 与 ADR 0004 的边界（ADR 0004 管"快照型分类数据本身不得回算"，**不禁止**用行情事实做聚合 + 按当前分类归属并显式标注 = 拍板②）；③ 被否决方案（全读时计算 / 全落库含榜单 / 5 分钟全池明细）。外加一条：**产地决定可信度**——`sector_moneyflow` 的"完整日"= 有 `capture_kind='eod_full'` 行的日子（Ruling 11/12），`poll` 行只是盘中子集。
 
-**验收（真库实测）：** `/market/data-freshness` 的 `coverage` 里 `sector_moneyflow.cover_pct ≈ 65`、`sentiment_intraday ≈ 54.5`（与本文档 Why-now 表一致）；`limit_up_stock_daily` 在 T1 之前不存在时**不得 500**（返回 `missing_table` 或跳过并标注）；`bash scripts/doc_gate.sh` 绿。
+**Ruling 13（覆盖率必须区分"有行"与"完整"）：** T2 之后 `sector_moneyflow` 的行数不再等于数据完整——盘中轮询写的是 inflow-Top-100 子集。故 `coverage` 每域同时返回两个数：`have_days`（有任何行）与 `complete_days`（`sector_moneyflow` 取有 `eod_full` 行的日子；其余域 = `have_days`），`cover_pct` 基于 `complete_days`，`have_days` 原样带回（供与本文档 Why-now 表对拍）。历史 13 天只有 poll 行 → `complete_days=0`，`have_days` 仍应复现 ~65%。
 
-- [ ] Step 1: 纯函数 + 单测（分母 0 / 脏行 / 缺日）
-- [ ] Step 2: `coverage_report` + `DataFreshnessOut.coverage` + 端点
-- [ ] Step 3: ADR 0009 + index 登记
-- [ ] Step 4: 真库实测并回填数字 + `docs/features.md` 同步
+**验收（真库实测，2026-10-12 12:20 +0800，默认 `window_days=30`，评审修复轮 1 的新锚定基准；数字回填本行）：**
+
+| 域 | row_count | have_days | complete_days | trading_days | cover_pct | 缺日 | 区间 |
+|---|---|---|---|---|---|---|---|
+| `sector_moneyflow` | 4232 | **9** | **0** | 17 | **0.0** | 8 | 2026-09-04..10-12 |
+| `sentiment_daily` | 17 | 17 | 17 | 17 | 100.0 | 0 | 2026-09-03..10-09 |
+| `sentiment_intraday` | 1 | 1 | 1 | **11** | 9.09 | 10 | 2026-09-17..09-17 |
+| `limit_up_stock_daily` | 0 | 0 | 0 | 17 | 0.0 | 17 | —（T1 真库行已被 e2e 清理） |
+| `dragon_tiger` | 1077 | 16 | 16 | **17** | **94.12** | 1（10-09） | 2026-08-25..10-08 |
+| `block_trade` | 1561 | 16 | 16 | **17** | **94.12** | 1（10-09） | 2026-08-25..10-08 |
+| `share_float` | 24562 | 12 | 12 | 17 | 70.59 | 5 | 2026-08-28..10-09 |
+| `repurchase` | 458 | 16 | 16 | 17 | 94.12 | 1（09-09） | 2026-08-28..10-09 |
+
+- **Important #2 的可见收益就在表里**：`dragon_tiger`/`block_trade` 的分母从 16 → **17**，`cover_pct` 从虚高的 100.0 → **94.12**，并报出真实缺日 **2026-10-09**（旧口径把窗口末端夹到域末日 `10-08`，这个洞被夹掉了）。`repurchase` 也报出 `09-09`。
+- 窗口 = 最大(域首行, 日历末日前 30 自然日) → **日历末日**；分母只随日历变、不随任何单个域停更而缩短。
+- **`complete_days = 0` 复现**：`sector_moneyflow` 全表 `capture_kind='eod_full'` 行数为 **0**（全是 `poll`）→ 完整日自 T2 上线起累积。这就是 Ruling 13 要防的"有行冒充完整"。
+- **~65% 形状复现**：`window_days=3650`（不限窗口）时 `sector_moneyflow` 为 **12/20 = 60%**（本文档 Why-now 表口径为 13/20 = 65%，差 1 天是实测时点不同 + 板块表仍在被 5 分钟轮询写入）；`complete_days` 仍为 0。
+- **`sentiment_intraday` 54.5% 的分母复现**：`trading_days = 11` 与 Why-now 表的 6/11 同形；`have_days=1` 是因为 `tests/test_intraday_snapshot_table.py` 的迁移 down/up 用例**会 DROP+重建 `market_sentiment_intraday`**（全量 suite 每跑一次清一次历史，只留 scheduler 重建后的行）——按 controller caveat，这是"最后一次全量 suite 之后"的真库状态，不是覆盖率实现的问题。
+- **`degraded_trading_calendar` 真库为 false（正确）**：实测 `daily_quotes` 是次源的**超集**（829 vs 254，次源相对主源多出 **0** 天）→ 并集没有多出日子，不该标降级；该标记的正例由桩用例 `test_coverage_report_degraded_when_union_fills_primary_gap` 钉住，真库反例由 `@pytest.mark.e2e` 的 `test_coverage_report_calendar_not_degraded_on_real_db` 钉住（**不用真库状态代替契约**）。
+- **"整域停更"的构造证据**：`test_stale_domain_old_vs_new_anchor_evidence` 用同一份桩数据并排断言旧口径（分母夹到域末日 → `cover_pct=100`/无缺日）与新口径（分母 3 个交易日 → `33.33`/缺 2 天）。
+- 缺表/缺列：单测断言 `missing_table` / `missing_column` + 其余域照常渲染（打桩触发，不真删表）；`bash scripts/doc_gate.sh` 绿（16 项）。
+
+- [x] Step 1: 纯函数 + 单测（分母 0 / 脏行 / 缺日）
+- [x] Step 2: `coverage_report` + `DataFreshnessOut.coverage` + 端点
+- [x] Step 3: ADR 0014 + index 登记
+- [x] Step 4: 真库实测并回填数字 + `docs/features.md` 同步
 
 ---
 
@@ -196,25 +233,28 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 
 **Files:**
 - Create: `backend/scripts/backfill_market_history.py`（`--domain sentiment|limit_up_stocks`、`--from`/`--to`/`--limit`/`--dry-run`）
-- Modify: `backend/app/services/limit_up_service.py`（`persist_snapshot` 增 `fact_source` 参数；新增 **`window_limits_complete(db, as_of, lookback) -> bool`** 守卫）
-- Test: `backend/tests/test_backfill_market_history.py`（区间生成只取交易日；窗口不完备 → skip 且原因可辨；`--dry-run` 不写库；重跑收敛）
+- Modify: `backend/app/services/limit_up_service.py`（`persist_snapshot` 增 `fact_source`/`enrich` 参数；新增 **`window_limits_complete(db, as_of, lookback) -> bool`** 守卫；`get_snapshot` 增 `enrich` 开关）
+- Modify: `backend/app/repositories/limit_up_repo.py`（Ruling 18 守卫：`upsert_sentiment_daily`/`upsert_limit_up_stock_daily` 增 `backfill_only`，`DO UPDATE ... WHERE <已存储的 source/fact_source> = 'backfill'`；`BACKFILL_SOURCE` 单一字面量）
+- Test: `backend/tests/test_backfill_market_history.py`（区间生成只取交易日；窗口不完备 → skip 且原因可辨；`--dry-run` 不写库；重跑收敛；Ruling 18 默认门禁 SQL 守卫 + 真库哨兵日语义）
 
 **实现要点：**
-- `sentiment` 域逐日 `persist_snapshot(db, cache=None, as_of=d)`（`limit_up_service.py:377`，已支持任意 `as_of` 且幂等）→ **零新逻辑**；`cache=None` 规避 Redis JSON 回读把 `as_of` 变 str 的既有坑
+- `sentiment` 域逐日 `persist_snapshot(db, cache=None, as_of=d, fact_source="backfill", enrich=False)`（`limit_up_service.py:377`，已支持任意 `as_of` 且幂等）→ **零新逻辑**；`cache=None` 规避 Redis JSON 回读把 `as_of` 变 str 的既有坑；`enrich=False` 让历史回补不对东财外呼 239 次
 - 跳过判据 = 实时路径判据（`is_partial`/`price_limits_missing`/…）**加上** `window_limits_complete`（E2）；逐日记录纳入/跳过原因，输出汇总表
 - **升序**执行（`promo_*`/`broken_rate` 依赖前一日 streak）
-- `limit_up_stocks` 域调用 T1 的 `persist_stock_facts(..., fact_source="backfill")`
+- `limit_up_stocks` 域调用 T1 的 `persist_stock_facts(..., fact_source="backfill")`（**不**调 `persist_and_enrich_stock_facts`，历史日不增强）
 - `pct_chg` **不是**本 Task 的前置（`persist_snapshot` 的闸门是 4000 行下限，与 `pct_chg` 无关）
 
-**验收（真库实测，数字回填本文件）：**
-- `market_sentiment_daily` 天数 21 → **≥235**（239 天内允许个别真降级日，差值逐日列原因）
-- `market_limit_up_stock_daily` 行数 ≈ Σ(候选∪炸板)（**实测值回填**）；2026-09-08：`is_lu=75`、`is_zb=39`
-- 黄金日 2026-09-08 的既有行**字节不变**（回补不得改写已正确行）；连跑两次行数不变
+**验收（真库实测 2026-10-12，数字已回填）：**
+- `market_sentiment_daily` 天数 21 → **239**（`2025-10-15 → 2026-10-09`）。**原因分布**：**218 天 `ok`**（真写入/更新）+ **21 天 `kept_realtime`**（该日已有 `local_calc` 实时行、Ruling 18 守卫拒改，`upserted=0`；修复轮 2 前被误报成 `ok`）；从限价首日起算的只读预演 `--from 2025-09-16 --dry-run` = 254 天里 **15 天 `window_limits_incomplete`**（2025-09-16…2025-10-14，正好是限价窗口未完备的前 15 个交易日）→ 239 天，与 E2 推算逐日吻合
+- `market_limit_up_stock_daily` 行数 **40,894**（239 天，日均 ≈171；`fact_source` 100% `backfill`；`seal_time`/`seal_fund`/`break_count`/`enrich_source` 非空计数 **0**，全部 NULL、绝无 0 填充）；耗时 54.8s；2026-09-08：**178 行 / is_lu=75 / is_zb=39 / prev_is_lu=95**
+- 黄金日 2026-09-08 的既有行**字节不变**：21 行 `local_calc` 的聚合 md5 `0c8e6ffe4e41e736faf8ac17043f8982` 回补前后相同，黄金行 md5 `a5e745db72f1548a2c742dedef7553f0` 不变（Ruling 18 守卫，默认门禁 + 真库哨兵日双向验证）；连跑两次行数不变（sentiment 239 / facts 40,894），且 facts 内容 md5（除 `id`/`observed_at`）`96c5cc73e19a46d8e66871b1372cc58e` 在**全表重建**与**单日重建**两种路径下逐字节一致（含一次"整表被 pytest 迁移循环重建后重跑"）
+- **修复轮 2（评审 Important #1/#2，已执行）**：① upsert 的**实际受影响行数**透到调用方（`persist_snapshot`/`persist_stock_facts` 返回 `upserted` + `kept_realtime`），脚本新增原因码 `kept_realtime` 与独立计数列 `skipped_kept_realtime`，`written_days` 只数真写入的天；真库重跑分布 sentiment **218 ok / 21 kept_realtime**、limit_up_stocks **239 ok**；② E2 单测替身改为真的读传入参数（spy 断言收到整段窗口），变异回退成 `missing_price_limit_dates(db, [as_of])` → 2 例变红（含 E2 本体）后逐字还原
+- **修复轮 1（controller 裁决①，已执行）**：4 个与重算不一致的 `local_calc` 日（2026-09-10/11/14/15）已按模型契约「纯派生缓存可重建」**显式实时重算**（`persist_snapshot(db, cache=None, as_of=d)`，**不带**回补守卫、`source` 保持 `local_calc`，共 1.26s）：zt 39→40 / 39→40 / 55→57 / 32→32，zb 26 / 25 / 38→39 / 24→25。根因 = **写入时输入未全**（差值恰等于 2026-09-18 08:31/08:34 才落库的行情/限价中今日判为 zt/zb 的行数），`_BREADTH_SQL` 谓词自 2026-09-14 起逐字未变 → 非口径变化。**新增全量不变式 e2e 门禁** `tests/test_backfill_market_history.py::test_sentiment_daily_matches_fact_counts_for_every_day`（每日 `count(is_lu)==zt_count`、`count(is_zb)==zb_count`；零行日报 `missing_fact_rows` 不静默跳过；已做破坏验证）→ 实测 **239 天 0 不一致 / 0 缺行**
 
-- [ ] Step 1: 失败测试（区间/守卫/skip 原因/幂等）
-- [ ] Step 2: 脚本 + `window_limits_complete` + `persist_snapshot(fact_source=)`
-- [ ] Step 3: 真库回补（记录耗时、纳入/跳过分布）
-- [ ] Step 4: 黄金日一致性 + 计数回填本文件
+- [x] Step 1: 失败测试（区间/守卫/skip 原因/幂等）—— RED 22 failed / 2 passed（stub）→ GREEN 24 passed
+- [x] Step 2: 脚本 + `window_limits_complete` + `persist_snapshot(fact_source=)` + Ruling 18 守卫
+- [x] Step 3: 真库回补（记录耗时、纳入/跳过分布）
+- [x] Step 4: 黄金日一致性 + 计数回填本文件
 
 ---
 
@@ -227,11 +267,11 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 - Test: 逐日循环的日期生成 + 空结果不写空行 + 幂等
 
 **Two 子项（各自独立，可只做其一）：**
-- 5a `pct_chg` **365 天**修复（拍板①）：`uv run python scripts/backfill_pct_chg.py --start-date <today-365> --end-date <today>`（≈241 次 TuShare 调用）；验收：254 个限价交易日里过 `pct_chg≥0.99` 的日数 **17 → ≥235**
-- 5b 龙虎榜/大宗/解禁/回购按上游窗口回补；验收：逐表"可回溯到的最早日期"**实测决定**（不预设）
+- 5a `pct_chg` **365 天**修复（拍板①）：`uv run python scripts/backfill_pct_chg.py --start-date 2025-10-12 --end-date 2026-10-12`（≈241 次 TuShare 调用）；**验收（2026-10-12 实测）**：窗口内 **241/241** 个限价交易日过 `pct_chg≥0.99`（回填前 **17/241**，全部落在 `2026-09-09` 及以后）；**254 天全量口径 17 → 241**（超出 ≥235 目标）；另 **13** 个限价交易日（`2025-09-16 … 2025-10-11`）在 owner 批准的 365 天窗口**之外**，保持未回填、本任务不承诺
+- 5b 龙虎榜/大宗/解禁/回购按上游窗口回补；验收：逐表"可回溯到的最早日期"**实测决定**（不预设）——**本轮明确不做**（controller 裁定：四表 27/27 天无洞，属可选子项，另立任务）
 
-- [ ] Step 1（5a）: `--limit 5` 冒烟 → 分年回填 → 回填统计数字
-- [ ] Step 2（5b）: 逐域回补（若做）→ 记录最早可回溯日
+- [x] Step 1（5a）: `--limit 5` 冒烟（5 日 / 4.0s）→ 全窗口回填（`2025-10-12 → 2026-10-12`，241 个交易日、1,322,196 行更新、**0** 失败/0 空回、2 分 45 秒、约 241 次 TuShare `daily` 调用）→ 回填统计数字见上方验收行；复跑 5 个历史日幂等收敛（非空数不变）
+- [x] Step 2（5b）: 本轮跳过（controller 范围裁定），未消耗 TuShare 配额
 
 ---
 
@@ -258,12 +298,20 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 - 指标：连续上榜天数（按当日 `main_net_inflow` Top-N）、连续净流入/流出天数、龙头更替次数、板块涨停家数序列（读 T1 事实 + 归属）
 - 缺日语义：**不做插值**，`missing_days` 显式返回；缺日不得计成"0 流入"
 
-**验收（真库实测）：** 6a `days=250` → `samples ≥ 230`（依赖 T4）；`days=30` → `insufficient_history=true`；6b `available_from` = 表内最早日，与 `/market/sector-moneyflow` 当日值一致；`docs/features.md` 增两行。
+**验收（真库实测 2026-10-12，最后一次全量 pytest 之后；数字回填本行）：**
+- **6a `days=250`** → `window.samples` = **239**（`2025-10-15 → 2026-10-09`，≥230 目标达成，依赖 T4）、`insufficient_history=false`，三个指标 `sample_count` 全 **239**：`zt_count` p0/p50/p100 = **32/76/226**、`broken_rate` **0.0763/0.2921/0.681**、`promo_1to2` **0.0/0.1591/0.4762**（`promo_1to2` p0=0.0 = "0 是可达的正经样本值"的端点证据，不是缺失）。`as_of=2026-10-09`、`as_of_quality=complete`、`streak.zt_above_median_days=119`
+- **6a `days=30`** → `samples=30` → `insufficient_history=true`、`percentile=null`（59/60 边界由单测逐字钉住）
+- **6b 当前真库如实**：`capture_kind='eod_full'` 行数 = **0**（T2 的 15:05 EOD job 上线前）→ 三个维度 `available_from=null`、`window.samples=0`、`boards=[]`，**且窗口内 20 个交易日全部列进 `missing_days`**（`2026-09-04 … 2026-10-09`；用 poll 行冒充完整日或把缺日算成 0 流入都会让这组数字变得"好看而错"）
+- **6b 完整日闸门的实测证据（`@e2e`，自建自清哨兵行）**：往"窗口内最早交易日"写一行 `board_code='BK9999'` 的 `eod_full` 后 → `available_from=as_of=2026-09-04`、`window.samples=1`、`missing_days` 由 20 → **19**、`leader_change_count=0`（单一完整日没有"更替"）、`attribution="current_sw_snapshot"`；该行的 `main_net_inflow/pct_change/up_count/down_count` 与 `list_sector_moneyflow` 读同一行的值**逐字相等**。**注意**：哨兵日必须落在"窗口内"，写在窗口外的早期日期（如 1999-01-04）会因窗口下界被 `daily_quotes` 起点夹住而从序列中消失——这不是 bug，是"窗口=两端都得有数据"的口径（单测已覆盖）
+- **窗口守恒（评审修复轮 1，Important #2/#3）**：窗口 = **以该维度快照最近日为右端、向前恰好 `days` 个交易日**；`window` 并排三元组 `days`（请求值）/ `observed_days`（实际交易日跨度）/ `samples`（完整日），不变量 `samples + len(missing_days) <= days` 恒成立。真库 6b 实测 `window={days:60, observed_days:20, samples:0}`。该维度**一行都没有**时**早退**（`observed_days=0`、`missing_days=[]`、一条 SQL 都不发）——实测空维度路径 **74.2ms** / 单条 `Index Only Scan using ix_sector_moneyflow_dim_date`（`EXPLAIN` 实证非全表扫），修复前会落到 `list_trading_days(date.min, date.min)` 的非 sargable 全表扫
+- **评审修复轮 1 的变异验证**：① `trailing_window_days` 改成不截断 → `test_window_never_exceeds_requested_days_when_snapshot_lags_quotes` 变红；② 去掉空维度早退 → `test_empty_dimension_never_touches_daily_quotes` 变红；两次还原后均 18 passed。全量 **806 passed / 67 deselected / 0 failed**
+- **代理不可用的显式声明**：`concept` 的 `attribution="point_in_time"`、`lu_count_source="point_in_time_membership"`；`industry`/`region` 没有"东财板块码 → 个股"的同源映射（`concept_members` 只覆盖 concept）→ `lu_count_source="unavailable"`、序列 `lu_count=null`，**不**用名字相近的申万码冒充
+- `docs/features.md` 增两行（情绪趋势与历史分位 / 板块趋势）；`docs/Changelog.md` 一句；全量 **803 passed / 67 deselected / 0 failed**
 
-- [ ] Step 1: 纯函数 + 单测（分位/样本/边界/缺日）
-- [ ] Step 2: repo 窗口查询 + 两个 service + 两端点 + schema
-- [ ] Step 3: 真库实测并回填数字
-- [ ] Step 4: `docs/features.md` 同步
+- [x] Step 1: 纯函数 + 单测（分位/样本/边界/缺日）
+- [x] Step 2: repo 窗口查询 + 两个 service + 两端点 + schema
+- [x] Step 3: 真库实测并回填数字
+- [x] Step 4: `docs/features.md` 同步
 
 ---
 
@@ -279,9 +327,15 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 
 **验收：** `npx tsc --noEmit` + `npm run build` + 新 e2e 绿；现有 market e2e（`limitUpSentiment`/`marketTrust`/`marketDataFace`/`marketPolling`/`darkmode`）**零回归**。
 
-- [ ] Step 1: api mapper + 类型
-- [ ] Step 2: 卡片 chip/sparkline
-- [ ] Step 3: e2e（含样本不足与缺日分支）
+**交付实测（2026-10-12，Ruling 23：只做 Step 1–3，跳过可选 Step 4）：**
+- **Step 1（mapper）**：snake→camel 只在 `frontend/src/shared/api/limitUp.ts`（`fetchSentimentTrends`：window/series/percentile/streak/insufficientHistory，`percentile=null` 原样保留）与 `marketData.ts`（`fetchSectorTrends`：attributionNote/availableFrom/luCountSource/missingDays）各一处；`window.from` / `percentile` 可空、`broken_rate`/`promo_1to2` 的 NULL **不映射成 0**
+- **Step 2（chip）**：`SentimentThermometer` 新增 `trends` prop → 分位区块（每个 chip 带**该字段**的样本窗口「近 239/231/228 交易日分位」+ 样本区间 `from → to`；`insufficient_history=true` ⇒ 只渲染「样本不足」，**无任何分位数字**；字段全 NULL ⇒ 「无有效样本」），趋势线优先复用**同一个** `TrendSpark` 画 trends 长窗口序列（端点失败回落 30 天日历序列，零新增图表依赖）；`SectorMoneyflowCard` 新增连续性 chip 条（`attributionNote` + `自 available_from 起累积` + 连续上榜/净流入-流出/末完整日 `--`/`当日涨停 N 家`，`luCountSource=unavailable` 时不渲染家数；`missing_days` 按缺日披露「不计 0 流入」）
+- **Step 3（e2e）**：新增 `frontend/e2e/marketTrends.spec.ts` 6 条（全 `page.route` mock）——RED **5 failed / 1 passed**（组件不存在）→ GREEN **6 passed**；含「insufficient 分支不得出现任何分位梯」的**变异验证**（把 `P50 90` 塞进样本不足文案 → 转红 → 还原转绿）。既有五个 market spec **38 passed / 0 failed**（零回归）；`npx tsc --noEmit` + `npm run build` 绿
+- **活链路缺口（Task 8 已闭环）**：当时 `backend_api` 容器镜像为 **2026-09-29** 构建（早于 Task 6）→ 两个新端点经 dev 代理 **404**，chip 的真库渲染未验证。**Task 8 用本 worktree 的临时 `uvicorn`（127.0.0.1:8099，不重建共享 Docker 栈）补齐**：`GET /api/v1/market/sentiment/trends?days=250` → **200**、`window.samples=239`、三个指标分位齐备（p50 = 76 / 0.2921 / 0.1591，与 Task 6 验收行逐字一致）、`streak.zt_above_median_days=119`；`GET /api/v1/market/sector-trends?dimension=industry&days=60&top_n=20` → **200**、`available_from=null`（当前 `eod_full=0`，符合 Ruling 21）、`attribution=current_sw_snapshot`、`window={days:60, observed_days:20, samples:0}`、`missing_days` 20 天。curl 全文见 Task 8 报告；进程已杀、端口已证空闲
+
+- [x] Step 1: api mapper + 类型
+- [x] Step 2: 卡片 chip/sparkline
+- [x] Step 3: e2e（含样本不足与缺日分支）
 - [ ] Step 4（可选）: `/market?tab=trends` 视图
 
 ---
@@ -290,10 +344,10 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 
 - Modify: `docs/features.md`（新表/新端点语义）、`docs/architecture/database-architecture.md`（新表 + 扩列）、`docs/Changelog.md`（逐 Task 一句）、本文件（勾选 + 回填实测数字 + `status: completed`）、`plans/index.md`（状态）、`docs/references/best-practices/*.md`（**仅当**出现无法机械化的教训）
 
-- [ ] Step 1: 逐 Task Changelog 齐全
-- [ ] Step 2: 表名/端点名交叉引用一致（`doc_gate`）
-- [ ] Step 3: `bash scripts/self_review.sh --full` 绿 + `bash scripts/doc_gate.sh` 绿
-- [ ] Step 4: 回填全部「实测」占位并翻状态
+- [x] Step 1: 逐 Task Changelog 齐全
+- [x] Step 2: 表名/端点名交叉引用一致（`doc_gate`）
+- [x] Step 3: `bash scripts/self_review.sh --full` 绿 + `bash scripts/doc_gate.sh` 绿
+- [x] Step 4: 回填全部「实测」占位并翻状态
 
 ---
 
@@ -324,13 +378,37 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 
 ## 验收总清单
 
-- [ ] ADR 0009 落地并登记；`doc_gate` 全绿
-- [ ] `/market/data-freshness` 输出覆盖率，如实呈现 65% / 54.5%（先复现旧数字）
-- [ ] `market_limit_up_stock_daily` 上线，`count(is_lu)` 与 `market_sentiment_daily.zt_count` 逐日一致（不变式测试在库）
-- [ ] EOD enrichment 落库且判定列零改写
-- [ ] `/market/hot-boards` 读表分支与实时分支同 code 口径一致；`amount`/`flat_count` 非空率 ≥99%
-- [ ] `market_sentiment_daily` 21 → ≥235 天，黄金日 2026-09-08 字节不变
-- [ ] 个股事实 239 天回补完成（行数与抽样一致性实测回填）
-- [ ] 两个 trends 端点上线，样本不足返回 `insufficient_history`，`attribution`/`available_from` 必填
-- [ ] 前端 chip + e2e 绿；`tsc`/`build` 绿；现有 market e2e 零回归
-- [ ] `bash scripts/self_review.sh --full` 绿；`docs/Changelog.md` 逐 Task 有记录
+- [x] ADR 0014 落地并登记（`docs/decisions/0014-market-derived-fact-persistence.md` + index）；`doc_gate` 全绿（16 项）
+- [x] `/market/data-freshness` 输出覆盖率（`coverage`），如实呈现旧形状：sector_moneyflow `have_days` 复现 ~60-65% / `complete_days=0`（Ruling 13）、`sentiment_intraday.trading_days=11`（54.5% 的分母）
+- [x] `market_limit_up_stock_daily` 上线，`count(is_lu)` 与 `market_sentiment_daily.zt_count` 逐日一致（全量不变式 e2e 门禁 `test_sentiment_daily_matches_fact_counts_for_every_day`：实测 **239 天 / 0 不一致 / 0 缺行**，已做破坏验证）
+- [x] EOD enrichment 落库且判定列零改写（`test_enrichment_never_rewrites_verdict_columns` 断言 `SET` 子句不含判定列 + 真库行值不变）
+- [x] `/market/hot-boards` 读表分支与实时分支同 code 口径一致（实测同 code `mainNetInflow` **8/8 全等**）；`amount`/`flat_count` 非空率 **100%**（新写入路径 231/231 三维度；当日全量捕获把旧 NULL 行也刷新到 100%，KPI 的 ≥99% 只看新路径）
+- [x] `market_sentiment_daily` 21 → **239** 天（≥235），黄金日 2026-09-08 字节不变（21 行 `local_calc` 聚合 md5 与黄金行 md5 回补前后相同）
+- [x] 个股事实 239 天回补完成（**40,894** 行 / 239 天，`fact_source` 100% `backfill`；行数、日均与抽样值已回填本文件 Task 4 验收行）
+- [x] 两个 trends 端点上线，样本不足返回 `insufficient_history`，`attribution`/`available_from` 必填（真库实测见 Task 6 验收行）
+- [x] 前端 chip + e2e 绿（新 spec 6 passed）；`tsc`/`build` 绿；现有五个 market e2e **38 passed 零回归**
+- [x] `bash scripts/self_review.sh --full` 绿（本地默认 `UV_CACHE_DIR` 修复后免手工 export）；`docs/Changelog.md` 逐 Task（T1–T7）有记录，两处文本缺陷已在 Task 8 更正
+
+## 实施结果（Task 8 收口，2026-10-12）
+
+**逐 Task 提交（分支 `feat/market-hotspot-persistence`，HEAD 见本行下）**
+
+| Task | 提交 |
+|---|---|
+| T1 个股级涨停事实表 + 东财 EOD 增强 | `431a406`、`dd1d5d6` |
+| T2 板块快照读当日表 + 2 列 + EOD/补写 | `ebb16bf`、`b1f7d9e`、`5bc5b8c` |
+| T3 覆盖率只读巡检 + ADR 0014 | `e2c9446`、`0901252` |
+| T4 历史回补脚本（情绪 / 个股事实） | `b769457`、`ef555c4`、`ef8663f` |
+| T5 pct_chg 365 天回填（5a） | `24f62c1` |
+| T6 统计端点（情绪趋势 + 板块趋势） | `117dfc4`、`a54f3bc` |
+| T7 前端分位/连续性 chip | `3db5b5e` |
+| T8 文档收口 + 选定卫生修复 | 本次收口提交 |
+
+**头条数字（最后一次全量 suite 之后的真库实测）**
+
+- `market_sentiment_daily` **239** 天（`2025-10-15 → 2026-10-09`，21 → 239）；`market_limit_up_stock_daily` **40,894** 行 / 239 天
+- `pct_chg` 365 天窗口内 **241/241** 个限价交易日达标（254 天全量口径 17 → 241；窗口外 13 个限价日不承诺）
+- 全量门禁 **806 passed / 67 deselected / 0 failed**；`ruff check` + `ruff format --check` + `mypy app` + `tsc --noEmit` + `npm run build` + `self_review --full` 全绿
+- 覆盖率巡检 8 个只读域 + `sector_moneyflow` 完整日闸门（当前真库 `capture_kind='eod_full'` 行数 **0** → 三个维度 `available_from=null`、窗口内 20 个交易日全部进 `missing_days`，如实不冒充）
+
+**明确未做（与"明确不做"表一致）：** `rankings`/`distribution`/`sectors`/`capital-flow`/`sw-performance` 落库、5 分钟级全池明细、板块快照历史缺口回补、北向资金回补、T5 的 5b 子项、T7 的可选 Step 4（`/market?tab=trends` 独立视图，Ruling 23）。

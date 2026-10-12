@@ -407,8 +407,8 @@ async def test_ingest_sector_moneyflow_uses_today_and_both_dims(monkeypatch):
 
     upserts: list = []
 
-    async def fake_upsert(db, trade_date, dimension, rows):
-        upserts.append((trade_date, dimension, rows))
+    async def fake_upsert(db, trade_date, dimension, rows, *, capture_kind="poll"):
+        upserts.append((trade_date, dimension, rows, capture_kind))
         return len(rows)
 
     monkeypatch.setattr(
@@ -428,6 +428,8 @@ async def test_ingest_sector_moneyflow_uses_today_and_both_dims(monkeypatch):
     assert result == {"industry": 1, "concept": 0, "region": 0}
     assert set(fetched) == {"industry", "concept", "region"}
     assert upserts[0][0] == mds._today_sh() and upserts[0][1] == "industry"
+    # 盘中轮询恒写 capture_kind='poll'（当日完整态由 15:05 的 eod_full 全量捕获负责）
+    assert {u[3] for u in upserts} == {"poll"}, upserts
 
 
 def test_map_hsgt_rows_string_to_float():

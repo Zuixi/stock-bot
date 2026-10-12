@@ -1,0 +1,73 @@
+/* 板块连续性 chip（Task 7）。
+ * 连续性来自 `/market/sector-trends` 的**完整日**统计，与上方当日快照柱状图分开：
+ * 视觉上降一级（虚线分隔 + 纸面底色），并强制带上归属口径 / available_from 标注。
+ * 颜色全走 CSS 变量（明暗双主题），不引入新色值。 */
+
+.mf-continuity {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.mf-continuity__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.mf-continuity__title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mf-continuity__tag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--hover);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.mf-continuity__chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.mf-continuity__chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-page);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.mf-continuity__name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mf-continuity__stat--in {
+  color: var(--up);
+}
+
+.mf-continuity__stat--out {
+  color: var(--down);
+}
+
+.mf-continuity__empty,
+.mf-continuity__missing,
+.mf-continuity__leaders {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}

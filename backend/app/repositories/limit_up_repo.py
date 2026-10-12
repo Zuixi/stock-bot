@@ -13,7 +13,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.market_data import MarketSentimentDaily, StockPriceLimit
+from app.models.market_data import (
+    MarketLimitUpStockDaily,
+    MarketSentimentDaily,
+    StockPriceLimit,
+)
 from app.models.quote import DailyQuote
 
 
@@ -193,6 +197,36 @@ def build_window_sql_for_explain() -> str:
     return _WINDOW_SQL
 
 
+# 当日炸板选行：谓词与 `_BREADTH_SQL` 的 `zb_count` **逐字一致**（`_BREADTH_SQL` 只回
+# 计数、`_WINDOW_SQL` 的 `cand` 又不含炸板票——实测 09-08 的 39 只炸板里只有 12 只在
+# 候选窗口内，靠窗口回不出另外 27 只）。同款 `JOIN stock_price_limits` 保证缺限价的行
+# 被排除，与 breadth 口径同源。
+_DAY_BROKEN_SQL = """
+SELECT q.stock_id, st.symbol, st.name
+FROM daily_quotes q
+JOIN stock_price_limits l ON l.stock_id = q.stock_id AND l.trade_date = q.trade_date
+JOIN stocks st ON st.id = q.stock_id
+WHERE q.trade_date = :as_of
+  AND q.high >= l.up_limit - 0.005
+  AND q.close < l.up_limit - 0.005
+ORDER BY q.stock_id
+"""
+
+
+def build_day_broken_sql_for_audit() -> str:
+    """给测试用的同源 SQL（守卫"炸板谓词 == breadth 谓词"，避免两处口径漂移）。"""
+    return _DAY_BROKEN_SQL
+
+
+async def fetch_day_broken_board_stocks(db: AsyncSession, as_of: date) -> list[dict[str, Any]]:
+    """当日炸板股（盘中触板但收盘未封住）逐股行；`stock_id/symbol/name`。
+
+    与 `fetch_day_breadth` 的 `zb_count` 同谓词 → `len(rows) == breadth["zb_count"]`。
+    """
+    rows = (await db.execute(text(_DAY_BROKEN_SQL), {"as_of": as_of})).mappings().all()
+    return [dict(r) for r in rows]
+
+
 async def fetch_limit_up_window(
     db: AsyncSession, as_of: date, as_of_prev: date, window_start: date
 ) -> list[dict[str, Any]]:
@@ -221,13 +255,137 @@ async def fetch_day_breadth(db: AsyncSession, as_of: date) -> dict[str, int]:
     return {k: int(v or 0) for k, v in dict(row).items()}
 
 
-async def upsert_sentiment_daily(db: AsyncSession, row: dict[str, Any]) -> int:
+# 事实表单行 16 列 → asyncpg 单语句 32767 个绑定参数上限下最多约 2000 行；取 1000 留余量
+# （单日行集实测 178–450 行，正常不会触发分批，分批只为防御"以后有人合并多日再写"）。
+_FACT_UPSERT_CHUNK = 1000
+
+# 事实表 upsert 只覆写**本地判定 + 窗口派生**列。东财独有列（seal_time/seal_fund/
+# break_count/enrich_source）必须留在 set_ 之外：17:20 的 facts 重跑不得把同 job
+# 后段刚写好的封板明细抹回 NULL（口径冻结：东财只填它独有的列，本地只填判定列）。
+_FACT_UPDATE_COLUMNS = (
+    "symbol",
+    "is_lu",
+    "touched",
+    "is_zb",
+    "prev_is_lu",
+    "streak",
+    "days_span",
+    "boards_in_window",
+    "missing_days",
+    "fact_source",
+)
+
+# 回补行标记（Ruling 18）。**写入方与守卫必须同一个字面量**：回补脚本以它标记新行，
+# upsert 的 `DO UPDATE ... WHERE <stored> = BACKFILL_SOURCE` 以它识别"可修复的行"。
+# 两处各写一份 'backfill' 就会静默退化成"回补能改实时行"。
+BACKFILL_SOURCE = "backfill"
+
+
+async def upsert_limit_up_stock_daily(
+    db: AsyncSession, rows: list[dict[str, Any]], *, backfill_only: bool = False
+) -> int:
+    """幂等写入个股事实；同批内先按唯一键去重（pg 的 ON CONFLICT 不处理同批自冲突）。
+
+    `backfill_only=True`（Ruling 18）：**回补只能修回补行**。`DO UPDATE` 带
+    `WHERE market_limit_up_stock_daily.fact_source = 'backfill'`（看**已存储**的列，
+    不是 `excluded`），于是当天实时写下的 `local_calc` 行——连同 `enrich_source`/
+    `seal_*` 增强列——对回补**完全不可见**。这让"黄金日既有行字节不变"是**保证**，
+    不是"恰好没撞上"。
+
+    `backfill_only=True` 还**拒绝** `fact_source != 'backfill'` 的行（最终评审 Important 2）：
+    `ON CONFLICT` 的守卫只管 `DO UPDATE` 分支，插入分支不受约束 —— 一次"回补"批里若某行
+    把 `fact_source` 写错，就会 **INSERT 出 `local_calc` 行**，从而永久免疫后续回补修复
+    （守卫只修 `backfill` 行）。这里提前 fail-fast，不静默插脏行。
+    """
+    if not rows:
+        return 0
+    if backfill_only:
+        offenders = sorted({str(r.get("fact_source")) for r in rows} - {BACKFILL_SOURCE})
+        if offenders:
+            raise ValueError(
+                "upsert_limit_up_stock_daily(backfill_only=True) 收到非回补来源的行："
+                f"fact_source={offenders}（只允许 {BACKFILL_SOURCE!r}）—— 否则插入分支会写出"
+                "永久免疫 Ruling 18 修复的实时行"
+            )
+    deduped = list({(r["trade_date"], r["stock_id"]): r for r in rows}.values())
+    total = 0
+    for i in range(0, len(deduped), _FACT_UPSERT_CHUNK):
+        batch = deduped[i : i + _FACT_UPSERT_CHUNK]
+        ins = pg_insert(MarketLimitUpStockDaily)
+        stmt = ins.values(batch).on_conflict_do_update(
+            constraint="uq_limit_up_stock_daily_date_stock",
+            set_={
+                **{c: getattr(ins.excluded, c) for c in _FACT_UPDATE_COLUMNS},
+                "observed_at": func.now(),
+            },
+            where=(
+                MarketLimitUpStockDaily.fact_source == BACKFILL_SOURCE if backfill_only else None
+            ),
+        )
+        result = cast("CursorResult[Any]", await db.execute(stmt))
+        total += int(result.rowcount)
+    await db.flush()
+    return total
+
+
+async def list_limit_up_stock_daily(db: AsyncSession, as_of: date) -> list[MarketLimitUpStockDaily]:
+    """某交易日的个股事实行（涨停优先、连板数降序、再按代码升序；排序确定性可测）。"""
+    stmt = (
+        select(MarketLimitUpStockDaily)
+        .where(MarketLimitUpStockDaily.trade_date == as_of)
+        .order_by(
+            MarketLimitUpStockDaily.is_lu.desc(),
+            MarketLimitUpStockDaily.streak.desc(),
+            MarketLimitUpStockDaily.symbol,
+        )
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def limit_up_stock_daily_missing_dates(db: AsyncSession, dates: list[date]) -> list[date]:
+    """给定交易日中，`market_limit_up_stock_daily` 尚无任何行的那些（回补判据）。"""
+    if not dates:
+        return []
+    present = set(
+        (
+            await db.execute(
+                select(MarketLimitUpStockDaily.trade_date)
+                .where(MarketLimitUpStockDaily.trade_date.in_(dates))
+                .group_by(MarketLimitUpStockDaily.trade_date)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [d for d in dates if d not in present]
+
+
+async def upsert_sentiment_daily(
+    db: AsyncSession, row: dict[str, Any], *, backfill_only: bool = False
+) -> int:
+    """幂等写情绪聚合行（唯一键 `trade_date`）。
+
+    `backfill_only=True`（Ruling 18）：回补 upsert 只修回补行 —— `DO UPDATE` 带
+    `WHERE market_sentiment_daily.source = 'backfill'`（看**已存储**的 `source`，
+    不是 `excluded`）。实时路径（`backfill_only=False`）语义**不变**：仍是覆写，
+    且 SET 依旧排除 `source`，永不重标。
+
+    `backfill_only=True` 还**拒绝** `source != 'backfill'` 的行（最终评审 Important 2）：
+    与 :func:`upsert_limit_up_stock_daily` 同因 —— 插入分支不受 `ON CONFLICT` 守卫约束，
+    写错来源的行会被 INSERT 成"实时行"并永久免疫回补修复。
+    """
+    if backfill_only and row.get("source") != BACKFILL_SOURCE:
+        raise ValueError(
+            "upsert_sentiment_daily(backfill_only=True) 收到非回补来源的行："
+            f"source={row.get('source')!r}（只允许 {BACKFILL_SOURCE!r}）"
+        )
     stmt = (
         pg_insert(MarketSentimentDaily)
         .values(**row)
         .on_conflict_do_update(
             constraint="uq_sentiment_daily_date",
             set_={k: v for k, v in row.items() if k not in ("trade_date", "source")},
+            where=MarketSentimentDaily.source == BACKFILL_SOURCE if backfill_only else None,
         )
     )
     result = cast("CursorResult[Any]", await db.execute(stmt))
@@ -253,3 +411,51 @@ async def list_sentiment_calendar(db: AsyncSession, days: int) -> list[dict[str,
         }
         for r in reversed(rows)
     ]
+
+
+# ----- Task 6a：情绪趋势窗口读（纯读，不物化）--------------------------------------
+#
+# 与 `list_sentiment_calendar` 的分工：那个只回"图表要的 9 个字段"、且**缺
+# `promo_1to2_n`**——分位必须知道"这天该字段到底有没有值"（NULL ≠ 0，见 Ruling 4），
+# 所以趋势读单独一条，回整行 + 有效样本判据列。不要合并：calendar 的字段集是前端
+# 周期图契约，吃进 `promo_1to2_n` 会让两个消费方的口径糊在一起。
+
+
+async def latest_sentiment_day(db: AsyncSession) -> date | None:
+    """`market_sentiment_daily` 的最近交易日（趋势端点的 `as_of`，不是"今天"）。"""
+    return (
+        await db.execute(select(func.max(MarketSentimentDaily.trade_date)))
+    ).scalar_one_or_none()
+
+
+async def list_sentiment_days(db: AsyncSession, days: int) -> list[MarketSentimentDaily]:
+    """近 N 个交易日情绪行（**升序**返回）。
+
+    实现取"降序 limit days"再反转：跨月时序图从左到右，且窗口是"最近 N 天"而不是
+    "最早 N 天"。`days <= 0` 时 SQL 的 `LIMIT 0` 回空（不抛），调用方的 samples=0。
+    """
+    stmt = (
+        select(MarketSentimentDaily)
+        .order_by(MarketSentimentDaily.trade_date.desc())
+        .limit(max(days, 0))
+    )
+    rows = list((await db.execute(stmt)).scalars().all())
+    return list(reversed(rows))
+
+
+async def sentiment_days_in_range(db: AsyncSession, start: date, end: date) -> list[date]:
+    """`[start, end]` 闭区间内 `market_sentiment_daily` 实际持有的交易日（升序）。
+
+    供趋势端点的"窗口内缺日"（有交易日行情、但没有情绪行）与日历对拍——分母是**情绪
+    表自己持有的日子**，不是 weekday 推算（节假日工作日的脏日期不会被当成交易日）。
+    """
+    stmt = (
+        select(MarketSentimentDaily.trade_date)
+        .where(
+            MarketSentimentDaily.trade_date >= start,
+            MarketSentimentDaily.trade_date <= end,
+        )
+        .order_by(MarketSentimentDaily.trade_date.asc())
+        .group_by(MarketSentimentDaily.trade_date)
+    )
+    return list((await db.execute(stmt)).scalars().all())

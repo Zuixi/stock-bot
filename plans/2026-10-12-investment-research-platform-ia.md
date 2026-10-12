@@ -583,7 +583,7 @@ graph_edges(
 
 **遗留（交终审 triage）**：5 条 Task 4 minor + 3 条 Task 2 minor + 2 条 Task 3 minor + 门禁类 3 条（`shell_hazard_check` 增「双引号串未转义反引号」规则 · CI ruff 面扩到 `backend/scripts/` · `check_metric_dictionary.py` 接入 self_review 执行面）。全部记于 `.superpowers/sdd/<plan>/progress.md`。
 
-**⚠️ 合并期待办（需人类定夺，见 Ruling 11）**：本分支取 ADR 编号 **0009–0013**，而 `.worktrees/market-hotspot-persistence`（分支 `feat/market-hotspot-persistence`，`status: active`、Task 1 实施中）的计划 `## Task 3` 声明 `Create: docs/decisions/0009-market-derived-fact-persistence.md`。两分支**各自** `doc_gate` 均绿，**合并时才会碰撞**；后合者需重命名（机械操作，约 10 分钟）。① 保持本分支 0009–0013、对方改号（其文件尚不存在，最便宜）；② 合并时重命名。**不得在对方 worktree 未确认前单方面改动对方文件。**
+**✅ 合并期待办 —— 已解决（2026-10-12，Ruling 11 落地）**：`feat/market-hotspot-persistence`（PR #12）已并入 `main`，其 `docs/decisions/0009-market-derived-fact-persistence.md` 与本分支的 `0009-content-view-separation.md` **编号碰撞**（实测：`doc_gate [2/13]` 报 `✘ ADR 编号不连续：期望 0010`）。处置采用方案 ①：**本分支 0009–0013 不动，对方那一篇改号为 0014**（成本实测极不对称：本分支 5 篇 ADR 被全仓引用 0009×41/0010×27/0011×13/0012×17/0013×15 次，含 spec 绑定契约；对方仅 1 篇）。已 `git mv` + 改标题 + 更新 `index.md`、`database-architecture.md`、hotspot 计划 7 处与本方 Changelog 3 处。
 
 **下一步**：Wave 1 —— Task 5（S1.1 导航骨架与路由迁移，前端）→ Task 6（S1.2 `industry_metrics` 加 2 列 + 统一读面，后端）→ S1.3–S1.14。
 **Wave 1 前置**：Ruling 20 —— `资金流四件套` 中 **ETF 份额取数路径尚未验证**（仓库 `fund_daily` 只有价格/成交、无份额），须在 S1.7 开工前完成验证，否则四件套只有三件。
@@ -618,6 +618,6 @@ graph_edges(
 
 **遗留（交终审 triage）**：Wave 0 的 13 条 + 本 Wave 累积约 25 条（含 Task 5 门禁类 2 条、Task 7 的 `100.IXIC` 一手验证、`quote_provider` 死元数据、`price_source` 按字段存在判定、过期 e2e mock、周期 ingest 未注册队列等）。全部记于 `.superpowers/sdd/<plan>/progress.md`。
 
-**⚠️ 合并期待办（同上，见 Ruling 11）**：本分支取 ADR **0009–0013**；`feat/market-hotspot-persistence` 的计划声明要建 `0009-market-derived-fact-persistence.md`。**合并时才会碰撞**，后合者重命名（机械操作）。**仍未定夺。**
+**✅ 合并期待办 —— 已解决（同上，见 Ruling 11 落地）**：对方 ADR 已改号为 **0014**，本分支 0009–0013 不动；本分支已把 `origin/main` 合并进来并解除全部冲突（详见 §13 Wave 0 段的 ✅ 条目）。
 
 **下一步**：Task 8（S1.4）修复收口 → **S1.5 热力图**（brief 已就绪；关键风险：**现有行情端点上限均 ≤200，"≥3000 标的"必须新建批量读路**）→ **S1.6 排行 7 榜**（brief 已就绪；关键：**既有 5 个榜与 spec 的 7 个榜没有交集**，且财务类榜必须 **PIT 正确**——按交易日已公告可得的那一期排序，不得取"最新一期"）→ S1.7–S1.14。

@@ -74,6 +74,38 @@ _BOARD_FS: dict[str, str] = {
     "region": "m:90+t:1+f:!50",
 }
 
+#: 板块资金流榜的字段集（单次请求与 15:05 全量翻页**共用**：口径不分叉）。
+#: 是板块榜（``fetch_board_list``，``fid=f3``）字段集的**超集**：多 ``f62/f66/f72/f184``
+#: （资金流卡片）与 ``f128/f136/f140``（主力净流入最大股），并含 Task 2 的 ``f6``（成交额）
+#: 与 ``f106``（平盘家数）。
+_SECTOR_MONEYFLOW_FIELDS = "f12,f14,f3,f6,f62,f66,f72,f104,f105,f106,f128,f136,f140,f184"
+
+
+def _map_sector_flow_row(d: dict[str, Any]) -> dict[str, Any]:
+    """板块资金流原始行 → 归一字段（单次请求与全量翻页共用，金额单位：元）。
+
+    ``f104/f105/f106`` 统一走 :func:`_count`：``fltt=2`` 下无效值是字符串 ``-``（板块无
+    成分股时），原样透传会落进 ``Integer`` 列 → asyncpg 直接报错，整个三维度当日快照
+    （A 类数据）全丢。``f128/f136/f140`` 是东财"主力净流入最大股"（领涨股），可能为 ``-``。
+    """
+    return {
+        "board_code": str(d.get("f12")),
+        "board_name": d.get("f14"),
+        "pct_change": _num(d.get("f3")),
+        "amount": _num(d.get("f6")),
+        "main_net_inflow": _num(d.get("f62")),
+        "super_large_net": _num(d.get("f66")),
+        "large_net": _num(d.get("f72")),
+        "up_count": _count(d.get("f104")),
+        "flat_count": _count(d.get("f106")),
+        "down_count": _count(d.get("f105")),
+        "main_net_ratio": _num(d.get("f184")),
+        # data.eastmoney.com/bkzj/ 排行页同款"主力净流入最大股"
+        "lead_stock_name": d.get("f128"),
+        "lead_stock_code": d.get("f140"),
+        "lead_stock_pct": _num(d.get("f136")),
+    }
+
 
 def _map_concept_board(d: dict[str, Any]) -> dict[str, Any]:
     """概念板块 clist 行 → 归一字段。
@@ -169,12 +201,15 @@ class EastmoneyClient:
         fs: str,
         fields: str,
         mapper: Callable[[dict[str, Any]], dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """clist 全量翻页（服务端 pz 上限 100，实测见 ``_PAGE_SIZE``）。
+    ) -> tuple[list[dict[str, Any]], int | None]:
+        """clist 全量翻页（服务端 pz 上限 100，实测见 ``_PAGE_SIZE``）。返回 ``(rows, total)``。
 
         ``fid=f12``（按代码排）而非 f3（涨跌幅）：盘中按涨跌幅排序翻页会漏/重。
         收敛条件：空页 / 去重后条数 >= total / pn 超过 ``_MAX_PAGES``。
         按映射后的业务键去重（板块 board_code、成分 symbol）——翻页抖动会重复行。
+
+        ``total`` 一并返回（上游 ``data.total``，解析不到则 ``None``）：调用方要能断言
+        "全量覆盖"（Task 2 的 EOD 全量：行数 ≈ total 才算完整，数量级不足必须可见）。
 
         **只要最终 ``len(rows) < total`` 就 WARNING**（含空页提前收敛）：服务端截断/抖动会
         让一份"非空但短"的列表看起来完全正常，而下游的成分差分会把它当权威全集（少一页 =
@@ -223,54 +258,80 @@ class EastmoneyClient:
                 len(rows),
                 int(total),
             )
-        return list(rows.values())
+        return list(rows.values()), (None if total is None else int(total))
 
     async def fetch_concept_boards(self) -> list[dict[str, Any]]:
         """概念板块全量列表（实测 2026-09-18：total=504，pz 上限 100，需翻 6 页）。"""
-        return await self._paged_clist(_CONCEPT_FS, "f12,f14,f104,f105,f106", _map_concept_board)
+        rows, _total = await self._paged_clist(
+            _CONCEPT_FS, "f12,f14,f104,f105,f106", _map_concept_board
+        )
+        return rows
 
     async def fetch_concept_members(self, board_code: str) -> list[dict[str, Any]]:
         """单板成分股（实测 BK0501 total=162 → 2 页）。"""
-        return await self._paged_clist(f"b:{board_code}", "f12,f13,f14", _map_concept_member)
+        rows, _total = await self._paged_clist(
+            f"b:{board_code}", "f12,f13,f14", _map_concept_member
+        )
+        return rows
 
     async def fetch_sector_moneyflow(self, dimension: str) -> list[dict[str, Any]]:
+        """板块资金流榜（``fid=f62`` 主力净流入降序）→ 归一字段。
+
+        ``fields`` 是 :meth:`fetch_board_list`（``fid=f3``）的**超集**：除了资金流卡片
+        要的 ``f62/f66/f72/f184`` 与领涨股 ``f128/f136/f140``，还带了热门板块榜读表分支
+        需要的 ``f6``（成交额，元）与 ``f106``（平盘家数）—— Task 2 的硬约束是
+        **一次请求拿全**，不为这 2 列再发第二次 ``clist``。
+
+        家数字段（``f104/f105/f106``）统一走 :func:`_count`：``fltt=2`` 下无效值是字符串
+        ``-``（板块无成分股时），原样透传会落进 ``Integer`` 列 → asyncpg 直接报错，
+        整个三维度 upsert（含 A 类当日快照）全丢。``_count`` 的 docstring 本就是为这三个
+        字段写的；``_map_board_row`` 早已这么映射，这里对齐。
+
+        与 :meth:`fetch_sector_moneyflow_full`（15:05 收盘全量）共用
+        :data:`_SECTOR_MONEYFLOW_FIELDS` 与 :func:`_map_sector_flow_row`：两条路径的口径
+        不能分叉（同一个字段集、同一个 mapper），差别只在"取一页 Top-100"还是"翻页取全量"。
+        """
         if dimension not in ("industry", "concept", "region"):
             raise ValueError(f"dimension must be industry|concept|region, got {dimension}")
-        fs = _BOARD_FS[dimension]
         data = await self._get_json(
             _CLIST_BASE,
             "/api/qt/clist/get",
             {
                 "pn": 1,
-                "pz": 100,
+                "pz": _PAGE_SIZE,
                 "po": 1,
                 "np": 1,
                 "fltt": 2,
                 "invt": 2,
                 "fid": "f62",
-                "fs": fs,
-                "fields": "f12,f14,f3,f62,f66,f72,f104,f105,f128,f136,f140,f184",
+                "fs": _BOARD_FS[dimension],
+                "fields": _SECTOR_MONEYFLOW_FIELDS,
             },
         )
         diff = (data.get("data") or {}).get("diff") or []
-        return [
-            {
-                "board_code": str(d.get("f12")),
-                "board_name": d.get("f14"),
-                "pct_change": _num(d.get("f3")),
-                "main_net_inflow": _num(d.get("f62")),
-                "super_large_net": _num(d.get("f66")),
-                "large_net": _num(d.get("f72")),
-                "up_count": d.get("f104"),
-                "down_count": d.get("f105"),
-                "main_net_ratio": _num(d.get("f184")),
-                # data.eastmoney.com/bkzj/ 排行页同款"主力净流入最大股"
-                "lead_stock_name": d.get("f128"),
-                "lead_stock_code": d.get("f140"),
-                "lead_stock_pct": _num(d.get("f136")),
-            }
-            for d in diff
-        ]
+        return [_map_sector_flow_row(d) for d in diff]
+
+    async def fetch_sector_moneyflow_full(
+        self, dimension: str
+    ) -> tuple[list[dict[str, Any]], int | None]:
+        """收盘**全量**板块资金流榜（15:05 EOD 用）：返回 ``(rows, upstream_total)``。
+
+        为什么必须翻页：``clist`` 的 ``pz`` 上限是 100（实测传 1000 仍只回 100 行），而
+        industry ``total=496`` / concept ``506`` / region ``31`` → industry 5 页 / concept 6 页 /
+        region 1 页（≈12 次请求/日）。盘中 5 分钟轮询只拿得到 ``fid=f62`` Top-100，当日表行
+        是"每次轮询 Top-100 的并集、旧行永不刷新"，所以收盘必须全量刷新一次。
+
+        翻页用 ``_paged_clist`` 的 ``fid=f12``（按代码排）：**排序键稳定**才能保证"翻页不
+        漏行"，而按 f62（主力净流入）翻页时榜单名次会在两次请求之间漂移（该 helper 的
+        docstring 已写明这条教训）。字段集与 mapper 与单次请求路径完全相同，故**抓到的数据
+        与"按 f62 排序取全量"一致**，只是枚举顺序不同；``total`` 一并交回调用方，用于断言
+        全量覆盖（数量级不足必须告警，不许静默截断）。
+        """
+        if dimension not in ("industry", "concept", "region"):
+            raise ValueError(f"dimension must be industry|concept|region, got {dimension}")
+        return await self._paged_clist(
+            _BOARD_FS[dimension], _SECTOR_MONEYFLOW_FIELDS, _map_sector_flow_row
+        )
 
     @staticmethod
     def _map_board_row(d: dict[str, Any]) -> dict[str, Any]:

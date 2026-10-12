@@ -15,6 +15,8 @@ from apscheduler.triggers.date import DateTrigger
 from app.scheduler.jobs import (
     announcements_poll_job,
     block_trade_daily_job,
+    board_snapshot_eod_job,
+    board_snapshot_rewrite_job,
     concept_members_refresh_job,
     daily_basic_backfill_job,
     daily_quotes_backfill_job,
@@ -23,6 +25,7 @@ from app.scheduler.jobs import (
     global_index_daily_job,
     industry_metrics_refresh_job,
     intraday_sentiment_poll_job,
+    limit_up_stock_facts_job,
     market_moneyflow_daily_job,
     northbound_daily_job,
     price_limits_daily_job,
@@ -222,6 +225,28 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
 
+    # 板块资金流**当日收盘终态**：Mon-Fri 15:05（A 类数据，东财无历史接口 —— 当天不落
+    # 就永久丢失）。盘中 9-15 点的 */5 轮询负责新鲜度，这一 tick 负责终态。
+    # 不设 per-job 宽限 → 继承 job_defaults(None)：容器重启/宿主睡醒后迟到也补跑
+    # （ingest 幂等，重跑只覆盖同一批行）。
+    scheduler.add_job(
+        board_snapshot_eod_job,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=5, timezone="Asia/Shanghai"),
+        id="board_snapshot_eod",
+        name="Board snapshot EOD",
+        replace_existing=True,
+    )
+
+    # 当日缺行的兜底补写：Mon-Fri 15:35。只承诺**当日**（跨日不可补）：15:05 那次因容器
+    # 重启错过时，这里看到当日无行才写一次；已有行则 no-op。
+    scheduler.add_job(
+        board_snapshot_rewrite_job,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=35, timezone="Asia/Shanghai"),
+        id="board_snapshot_rewrite",
+        name="Board snapshot rewrite",
+        replace_existing=True,
+    )
+
     # Intraday sentiment snapshot: Mon-Fri 9:00-15:55 every 5 min —— cron 圈住
     # "含 15:00 收盘 tick 的盘中窗口"（hour=9-15），盘前 09:00-09:25 与 15:05 后
     # 的 tick 由 task 体内 ``_is_workday()``/``_in_trading_hours()`` 早返回拦掉
@@ -318,6 +343,18 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(day_of_week="mon-fri", hour=17, minute=15, timezone="Asia/Shanghai"),
         id="sentiment_daily",
         name="Market sentiment daily",
+        replace_existing=True,
+    )
+
+    # 个股级涨停事实 + 东财 EOD 增强：17:20 Mon-Fri（晚于 16:50 限价补漏与 17:15 情绪聚合）。
+    # 增强**必须**与落库同 job 且在其后：增强是 UPDATE-only，当日事实行 17:20 才存在；
+    # 单独挂 15:05 的增强 job 在限价（16:50）入库前必然命中 0 行。不设 per-job 宽限 →
+    # 继承 job_defaults(None)，停摆后迟到也补跑（ingest 与增强都幂等）。
+    scheduler.add_job(
+        limit_up_stock_facts_job,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute=20, timezone="Asia/Shanghai"),
+        id="limit_up_stock_facts",
+        name="Limit-up stock facts + EOD enrichment",
         replace_existing=True,
     )
 

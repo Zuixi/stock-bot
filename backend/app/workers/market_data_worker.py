@@ -23,9 +23,15 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
     from app.services import (
         announcement_service,
         concept_service,
+        job_alert_service,
         limit_up_service,
         market_data_service,
+        market_day_service,
     )
+
+    # 各分支返回结构不同（计数 dict / 维度统计 dict / {"skipped": …}）→ 显式声明
+    result: dict[str, Any]
+    shortfall_alert: tuple[str, list[str]] | None = None
 
     async with async_session_factory() as db:
         if job == "global_index_daily":
@@ -36,6 +42,19 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
             )
         elif job == "sector_moneyflow":
             result = await market_data_service.ingest_sector_moneyflow(db)
+        elif job == "board_snapshot_eod":
+            # 双轨制：与 `board_snapshot_eod_job`（交易日 15:05）调同一个 service 方法 ——
+            # **分页全量**收盘捕获（capture_kind='eod_full'；A 类数据当天不落就永久丢失）。
+            result = await market_data_service.ingest_sector_moneyflow_eod_full(db)
+            shortfall_alert = ("board_snapshot_eod", market_data_service.eod_alert_reasons(result))
+        elif job == "board_snapshot_rewrite":
+            # 双轨制：与 `board_snapshot_rewrite_job`（交易日 15:35）同方法 —— 当日**没有
+            # eod_full 行**才补做收盘全量（容器重启错过 15:05 的兜底）；否则 {"skipped": true}。
+            result = await market_data_service.ingest_sector_moneyflow_if_missing(db)
+            shortfall_alert = (
+                "board_snapshot_rewrite",
+                market_data_service.eod_alert_reasons(result),
+            )
         elif job == "northbound":
             result = await market_data_service.ingest_northbound(
                 db, days=int(params.get("days", 30))
@@ -73,6 +92,25 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
         elif job == "sentiment_daily":
             # 盘后落库不需要缓存（cache=None）：避免命中 Redis JSON 后 as_of 变 str。
             result = await limit_up_service.persist_snapshot(db, None)
+        elif job == "limit_up_stock_facts":
+            # 双轨制：与 `limit_up_stock_facts_job` 调同一个 service 编排（落库 → commit →
+            # 东财 EOD 增强）。trade_date 可选：指定时对该日补跑（涨停池端点保留约 14 个
+            # 交易日（2026-10-12 实测：09-14 有数据、09-11 为 0）→ 17:20 那次外呼失败后
+            # 可用同一条代码路径回补），不指定则取最新完整交易日（与定时轨道同参）。
+            day = _opt_date(params.get("trade_date"))
+            if day is None:
+                md = await market_day_service.resolve_latest_complete_day(db)
+                if md is None:
+                    return {"status": "failed", "error": "no quotes; cannot resolve trade date"}
+                day = md.day
+            result = await limit_up_service.persist_and_enrich_stock_facts(db, day)
+            reason = result.get("enrich_reason")
+            if reason:
+                # 与定时轨道同款可见性：A 类装饰丢失必须进 `job:failures`（不只留在
+                # task.result 里）——手动补跑路径不该比定时路径更瞎。
+                await job_alert_service.record_job_failure(
+                    "limit_up_stock_facts", f"EOD enrichment {reason} (trade_date={day})"
+                )
         elif job == "concept_members":
             result = await concept_service.ingest_concept_members(db)
         elif job == "reconcile":
@@ -84,6 +122,12 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
             # Defensive: unreachable via process() — the type is validated there.
             return {"status": "failed", "error": f"unknown market_data type: {job}"}
         await db.commit()
+    if shortfall_alert is not None and shortfall_alert[1]:
+        # 与定时轨道同款可见性（Task 1 的教训：手动路径不该比定时路径更瞎）：全量捕获
+        # 覆盖不足 = 当日"全量"其实是子集，读表闸门却照开 → 必须进 `job:failures`。
+        await job_alert_service.record_job_failure(
+            shortfall_alert[0], "; ".join(shortfall_alert[1])
+        )
     return {"status": "completed", "type": job, **result}
 
 
@@ -96,10 +140,13 @@ class MarketDataWorker(BaseWorker):
         """Execute one ingest job; service exceptions propagate (BaseWorker marks the
         task failed). Expected payload keys (top-level or nested in "params"):
         global_index_daily/sector_moneyflow/concept_members — none;
+        board_snapshot_eod — none（板块快照收盘**全量**捕获，与 15:05 job 同方法）;
+        board_snapshot_rewrite — none（当日无 eod_full 行才补做全量，与 15:35 job 同方法）;
         backfill_global_index — years(=2);
         northbound/share_floats/repurchases — days(=30/7/7); dragon_tiger/block_trades —
-        trade_date(yyyymmdd, optional); announcements — days(=3). Unknown types return
-        a failed dict without touching the DB.
+        trade_date(yyyymmdd, optional); announcements — days(=3); limit_up_stock_facts —
+        trade_date(可选，缺省取最新完整交易日；个股涨停事实落库 + 东财 EOD 增强).
+        Unknown types return a failed dict without touching the DB.
         """
         job = str(payload.get("type") or "")
         if job not in _KNOWN_TYPES:

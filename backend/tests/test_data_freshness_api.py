@@ -46,6 +46,13 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     monkeypatch.setattr("app.core.database.async_session_factory", _Ctx)
     monkeypatch.setattr("app.services.reconciliation_service.reconcile_market_data", _reconcile)
+
+    # Task 3 之后端点还会调只读覆盖率聚合：本文件只测对账侧契约，覆盖率打桩成空
+    # （覆盖率自己的契约在 tests/test_market_coverage.py）
+    async def _coverage(db: Any, **kw: Any) -> list[dict[str, Any]]:
+        return []
+
+    monkeypatch.setattr("app.services.reconciliation_service.coverage_report", _coverage)
     return {"calls": calls}
 
 

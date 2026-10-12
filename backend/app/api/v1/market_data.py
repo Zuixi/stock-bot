@@ -4,6 +4,7 @@ announcements（公告快讯）/ limit-up ladder（连板梯队与市场情绪�
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 from typing import Literal
 
@@ -16,21 +17,25 @@ from app.schemas.limit_up import (
     SectorLimitUpOut,
     SentimentCalendarPointOut,
     SentimentIntradayPointOut,
+    SentimentTrendsOut,
     YesterdayLimitUpOut,
 )
 from app.schemas.market_data import (
     AnnouncementOut,
     BlockTradeOut,
+    DataFreshnessOut,
     DragonTigerOut,
     GlobalIndexCardOut,
     MarketMoneyflowOut,
     NorthboundSeriesOut,
     RepurchaseOut,
     SectorMoneyflowListOut,
+    SectorTrendsOut,
     ShareFloatOut,
 )
-from app.schemas.reconciliation import DataFreshnessOut
 from app.services import limit_up_service, market_data_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["market-data"])
 
@@ -237,6 +242,68 @@ async def get_sentiment_calendar(
     return [SentimentCalendarPointOut(**r) for r in rows]
 
 
+@router.get("/sentiment/trends", response_model=SentimentTrendsOut)
+async def get_sentiment_trends(
+    cache: CacheDep,
+    days: int = Query(
+        default=250,
+        ge=5,
+        le=500,
+        description="窗口交易日数（读时计算，不物化）；上限 500",
+    ),
+) -> SentimentTrendsOut:
+    """情绪趋势 + 历史分位（读时计算，**不物化**）。
+
+    - `series` 来自 `market_sentiment_daily` 的最近 `days` 个交易日（升序）；
+    - `percentile` **只有 3 个指标**（`zt_count`/`broken_rate`/`promo_1to2`），
+      且只用**有效样本**：某字段当日为 NULL（分母为 0）不进该字段样本、**不计 0**；
+    - `insufficient_history` 为真时 `percentile=null`（有效样本 < 60，不给假分位）；
+    - **不插值**：缺日就是没有这一天，`window.samples` 如实少于 `window.days`。
+    """
+    payload = await limit_up_service.get_sentiment_trends(cache, days)
+    return SentimentTrendsOut.model_validate(payload)
+
+
+@router.get("/sector-trends", response_model=SectorTrendsOut)
+async def get_sector_trends(
+    cache: CacheDep,
+    dimension: Literal["industry", "concept", "region"] = "industry",
+    days: int = Query(
+        default=60,
+        ge=5,
+        le=120,
+        description="窗口交易日数：以该维度快照最近日为右端、向前恰好 N 个交易日；上限 120",
+    ),
+    top_n: int = Query(
+        default=20,
+        ge=1,
+        le=100,
+        description="上榜口径 N：当日 main_net_inflow 降序（tiebreak board_code 升序）前 N 名",
+    ),
+) -> SectorTrendsOut:
+    """板块趋势（连续上榜/连续净流入流出/龙头更替/板块涨停家数），读时计算。
+
+    三条硬约束：
+
+    1. **完整日闸门**（Ruling 21）：只有当日存在 `capture_kind='eod_full'` 行的交易日
+       才进统计；窗口内缺完整日的日子列在 `missing_days`，**绝不**当成"0 净流入"。
+       `available_from` = 该维度最早的完整日（可为 `null`：还没有任何完整日）。
+    2. **归属显式**（Ruling 22）：`dimension=industry|region` 回
+       `attribution="current_sw_snapshot"`（**按当前分类回溯，非当时成分**）；
+       `dimension=concept` 回 `attribution="point_in_time"`（成分差分反推的时点成分）。
+    3. **`top_n` 显式**：连续上榜天数的 N 由查询参数定义（默认 20），并列进响应。
+
+    窗口守恒：`window.days` = 请求的交易日数，`window.observed_days` = 实际落在窗口内的
+    交易日数（数据起点附近会小于请求值），`window.samples` = 其中完整日数。
+    `samples + len(missing_days) <= days` 恒成立；该维度一行都没有时 `observed_days=0`
+    且 `missing_days=[]`（"没有可统计对象"与"有对象但缺完整日"是两种形状）。
+    """
+    payload = await market_data_service.get_sector_trends(
+        cache, dimension=dimension, days=days, top_n=top_n
+    )
+    return SectorTrendsOut.model_validate(payload)
+
+
 @router.get("/sentiment/intraday", response_model=list[SentimentIntradayPointOut])
 async def get_sentiment_intraday(
     cache: CacheDep,
@@ -286,12 +353,20 @@ async def get_data_freshness() -> DataFreshnessOut:
     """数据新鲜度巡检（只读，绝不触发回补）：把"静默缺数据"变成端点可见。
 
     复用对账器的期望集/行数判据（apply=False 路径），开销为几次聚合计数查询。
+    Task 3 追加 `coverage`：只读巡检域的覆盖率（含 `have_days` vs `complete_days`）——
+    这些域没有 `_refetch_*`，永不进 apply 补漏，只在这里被看见。覆盖率是加法：
+    它整体失败（如迁移未应用）也只回空列表，不得把本端点打成 500。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.services import job_alert_service, reconciliation_service  # noqa: PLC0415
 
     async with async_session_factory() as db:
         result = await reconciliation_service.reconcile_market_data(db, apply=False)
+        try:
+            result["coverage"] = await reconciliation_service.coverage_report(db)
+        except Exception:  # noqa: BLE001 — 覆盖率是加法，失败不得反噬新鲜度巡检
+            logger.warning("coverage report unavailable", exc_info=True)
+            result["coverage"] = []
     # Redis 不可用 → 空列表（登记表是运行时告警，不影响"只读巡检"契约）
     result["failed_jobs"] = await job_alert_service.list_job_failures()
     return DataFreshnessOut(**result)

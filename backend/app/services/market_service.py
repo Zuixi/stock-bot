@@ -43,7 +43,7 @@ from app.models.stock import Stock
 from app.schemas.ranking import RankingItemOut, RankingResponseOut, RankingType
 from app.schemas.stock import StockOut
 from app.schemas.sw_performance import SwPerformanceItemOut, SwPerformanceResponseOut
-from app.services import market_day_service
+from app.services import market_data_service, market_day_service
 from app.services.market_data_service import _today_sh
 from app.services.market_snapshot_service import group_by, load_day_rows, summarize_group
 
@@ -551,11 +551,16 @@ def _hot_board_item(category: HotBoardCategory, row: dict[str, Any]) -> dict[str
 def _hot_board_items_from_eastmoney(
     category: HotBoardCategory, rows: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """东财板块行 → Top-``_HOT_BOARD_LIMIT`` 条 items。
+    """东财口径的板块行 → Top-``_HOT_BOARD_LIMIT`` 条 items（**实时与读表两条路径共用**）。
 
-    东财已按 ``fid=f3`` 降序返回；这里**再排一次**，理由与本地路径相同：进榜判据是
-    涨幅本身，不依赖上行排序的实现细节（``pz``/``fid`` 被改动时不会静默改变契约）。
-    ``pct_change`` 缺值排最后（不能与 None 比较）。
+    排序**再排一次**，理由与本地路径相同：进榜判据是涨幅本身，不依赖上行排序的实现
+    细节（``pz``/``fid`` 被改动时不会静默改变契约）。``pct_change`` 缺值排最后
+    （不能与 None 比较）。
+
+    **平局次序**：``list.sort`` 是稳定排序，所以同涨幅的行保持**输入顺序**。读表路径的
+    输入来自 ``list_sector_moneyflow_ranked``（``pct_change DESC, board_code ASC``），
+    故平局按板块码升序 —— 这就是 brief 要的确定性 tiebreak；实时路径保持东财返回序
+    （ruling：实时路径不变）。
     """
     items = [_hot_board_item(category, row) for row in rows]
     items.sort(
@@ -631,23 +636,63 @@ async def _hot_boards_local(
     return payload
 
 
+async def _hot_boards_snapshot_rows(
+    category: HotBoardCategory, expected_day: date
+) -> tuple[date, list[dict[str, Any]]] | None:
+    """读当日快照表（Task 2 的"读表优先"）：命中返回 ``(行日, 行)``，否则 ``None``。
+
+    判据与取数都在 :func:`market_data_service.load_hot_board_snapshot`（它拿得到
+    ``sector_moneyflow_snapshots`` 的模型与 mapper）；这里只负责开 session —— 是
+    **单测打桩的 seam**（离线用例把它打桩成"表内无当日行"，与 ``load_day_rows`` 同款）。
+
+    **任何 DB 错误一律当作"今天没有快照"**（最终评审 Important 3）：读表查询会碰
+    ``capture_kind`` 列，而该列由迁移 ``a3f8c2d6e9b1`` 引入 —— 一版落后的库上（或迁移
+    只跑了一半）查询会抛 ``UndefinedColumn``。旧实现把这次查询放在端点 ``try`` **之外**，
+    于是"本可降级到实时路径"变成 **500**（compose 的 migrate→api 顺序只是缓解，不是保证）。
+    宽 except + warning，与 :func:`get_hot_boards` 的实时/本地分组回落同一写法。
+    """
+    try:
+        async with async_session_factory() as db:
+            return await market_data_service.load_hot_board_snapshot(db, category, expected_day)
+    except Exception:
+        logger.warning(
+            "hot-boards: snapshot table read failed (category=%s, expected_day=%s) —— "
+            "按'今日无快照'回落实时路径",
+            category,
+            expected_day,
+            exc_info=True,
+        )
+        return None
+
+
 async def get_hot_boards(
     category: HotBoardCategory,
     cache: CacheClient | None = None,
 ) -> dict[str, Any]:
-    """热门板块：东财板块体系（真实 ``BK`` code）为主，失败回落本地分组并标注。
+    """热门板块：**当日快照表优先**，表内无当日行才回落实时抓取。
 
-    东财路径 ``source="eastmoney_boards"``、``as_of`` = **今日**、``as_of_quality="partial"``：
-    板块榜是实时快照，不是库内判据日，"完整日"判据在这里不适用——与 Task 10/11 盘中
-    路径（``as_of=今日`` + ``partial``）同一口径。缓存键按今日（跨零点自然换键）。
+    三条路径，``source`` 判别不变：
 
-    回落路径（东财 fetch 抛错）``source="local_grouping"`` +
-    ``degraded_reason="eastmoney_unavailable"``，日与质量沿用 T+1 判据；该路径下
-    ``concept`` 无本地口径（:data:`_LOCAL_GROUPING_KEYS`），返回空 items 而不是省
-    份分组。
+    1. **读表**（Task 2）：``sector_moneyflow_snapshots`` 里该维度最近有行的那天 ==
+       最近预期交易日（``last_weekday(_today_sh())``）→ 服务表行，``source="eastmoney_boards"``、
+       ``as_of`` = **那批行的日子**（周末/停牌日请求时是上一个交易日，不谎报今天）、
+       ``as_of_quality="partial"``（板块快照是实时/收盘快照，不是库内"完整日"判据，
+       与实时路径同口径）。排序 ``pct_change DESC, board_code ASC``（SQL 侧确定性
+       tiebreak，见 ``list_sector_moneyflow_ranked``），Top-10 由
+       :func:`_hot_board_items_from_eastmoney` 稳定排序 + 截断完成 —— 稳定的前提是
+       输入已按 tiebreak 排好（repo 契约）。
+    2. **实时**（表内没有最近预期交易日的行，例如 EOD job 还没跑）：**原路径不变** ——
+       东财板块榜 ``fid=f3``，``as_of`` = 今日、``partial``。绝不返回空表：表里没有时
+       实时路径还能给出行（"缺行"≠"今天没有热门板块"）。
+    3. **本地分组降级**（实时东财也失败）：``source="local_grouping"`` +
+       ``degraded_reason``，日与质量沿用 T+1 判据日；该路径下 ``concept`` 无本地口径
+       （:data:`_LOCAL_GROUPING_KEYS`），返回空 items 而不是省份分组。
 
-    两条路径的 TTL 不同：东财快照是实时类 → :data:`_REALTIME_CACHE_TTL`（60s，与
-    前端盘中 30s 轮询同量级）；回落 payload 是按日聚合 → :data:`_MARKET_CACHE_TTL`。
+    读端点**不写库**：唯一写路径是 15:05 EOD job / 15:35 缺行补写 job（双轨制）。
+    缓存按**今日**分键（``market:hot-boards:em:{category}:{today}``，跨零点换键、
+    TTL 60s 实时类）；表行 payload 也挂这个键，故同一份表行最多每 60s 查一次库。
+
+    历史缺口不可补（A 类：东财板块资金流无历史接口）—— 覆盖率目标 = 上线日起 100%。
     """
     today = _today_sh()
     cache_key = f"market:hot-boards:em:{category}:{today.isoformat()}"
@@ -655,6 +700,21 @@ async def get_hot_boards(
         cached = await cache.get(cache_key)
         if isinstance(cached, dict) and cached.get("source") == _HOT_BOARD_SOURCE_EASTMONEY:
             return cast(dict[str, Any], cached)
+
+    snapshot = await _hot_boards_snapshot_rows(category, last_weekday(today))
+    if snapshot is not None:
+        day, rows = snapshot
+        table_payload: dict[str, Any] = {
+            "as_of": day.isoformat(),
+            "as_of_quality": "partial",
+            "as_of_reason": None,
+            "source": _HOT_BOARD_SOURCE_EASTMONEY,
+            "degraded_reason": None,
+            "items": _hot_board_items_from_eastmoney(category, rows),
+        }
+        if cache is not None:
+            await cache.set(cache_key, table_payload, _REALTIME_CACHE_TTL)
+        return table_payload
 
     try:
         rows = await get_eastmoney_client().fetch_board_list(category)
