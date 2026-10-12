@@ -1078,7 +1078,16 @@ MARKET_SENTIMENT = IndustryConfig(
 #
 # 计算与落库在 `app/services/market_activity_service.py`；Step-0 实机结论见
 # `docs/design/data-source.md` 附.7。
-MARKET_ACTIVITY_CALIBER_VERSION = "s1.9s1.11-v1"
+#
+# v2（Ruling 59 fix round 1）与 v1 的差异：① `erp_10y` / `cn_treasury_yield_10y` 的
+# **落库天**由「`daily_quotes` 交易日」改为**自身输入的可得性交集**（中债曲线日 ∩
+# 沪深300 PE 日）—— ERP = 1/PE − 10Y 与 `daily_quotes` 无关，v1 因此被无关输入截断在
+# 829 天（3.4 年 < spec §S1.11 的「≥5 年」），v2 起为 1259 天（5.2 年）；
+# ② 自建换手率的增量缓存改为**口径感知**（只认当前口径的行），命中的 (key, day)
+# **不再重写**——v1 的重跑会把库里的好值覆盖成 `source_empty`(NULL)（"有值/空值抖动"
+# 的根因）；③ 落库前新增 PIT 守卫（缺 `published_at`/`caliber_version` 即响亮失败）。
+# 两版的可比值**逐值相同**（公式未变），变的是覆盖窗口与写入纪律。
+MARKET_ACTIVITY_CALIBER_VERSION = "s1.9s1.11-v2"
 
 #: 两融口径的产地（TuShare `margin` = 交易所官方汇总，三所求和）。
 MARGIN_SOURCE = "tushare_margin"
@@ -1101,7 +1110,10 @@ MARKET_ACTIVITY_MISSING_REASONS: dict[str, str] = {
     "index_not_in_source": (
         "该指数不在 index_dailybasic 的覆盖范围（实测 北证50/科创综指 返回 0 行且不报错）"
     ),
-    "no_weight_snapshot": "该交易日之前没有任何 index_weight 月度快照（指数尚未发布）",
+    "no_weight_snapshot": (
+        "该交易日之前没有任何 index_weight 月度快照（**是上游快照的起点，不是指数的成立日**："
+        "科创综指自身日线可回溯到基日 2019-12-31，缺的只是成分权重快照）"
+    ),
     "partial_weight_coverage": (
         "自建指数的权重覆盖率低于门槛（extra.weight_coverage < 0.95）—— 参与未达标，"
         "不拿缺失成分拼出一个换手率"
@@ -1201,8 +1213,12 @@ MARKET_ACTIVITY_METRICS: list[MetricDef] = [
         note=(
             "科创综指（000680.SH）自由流通股本换手率。**index_dailybasic 不覆盖该指数**，"
             "故与北证50同法自建（成分权重 × 成分股 daily_basic.turnover_rate_f）。"
-            "⚠️ 上游 index_weight 的科创综指快照自 2025-09-30 起（实测 13 期），"
-            "故本序列**短于 3 年**，缺头在 extra.weight_period 可见"
+            "⚠️ **序列起点 = 上游 index_weight 快照起点 2025-09-30**（实测 13 期）——"
+            "这是**源侧限制、不是该指数的成立日**：该指数自身日线可回溯到基日 2019-12-31"
+            "（TuShare `index_basic`：base_date=20191231、list_date=20250120；"
+            "`index_daily` 实测自 2019-12-31 起 1639 行），缺的只是成分权重快照。"
+            "故本 key 当前**短于 3 年**，属**可由上游补齐**的缺口（不是结构性不可能），"
+            "缺头的每一天都带 missing_reason='no_weight_snapshot'"
         ),
     ),
     _turnover_def(
@@ -1293,6 +1309,8 @@ MARKET_ACTIVITY_METRICS: list[MetricDef] = [
             "中债国债收益率曲线的 **10 年** 期限值（中国债券信息网官方口径，"
             "`yield.chinabond.com.cn` 的 `qxId=ycqx` 历史查询；AKShare "
             "`bond_china_yield` 逐年翻窗取数，窗口必须 < 1 年）。"
+            "**落库天锚在本源自身的可得性上**（Ruling 59）：中债曲线有值的交易日就落行，"
+            "**不**被 `daily_quotes`（本地行情底座）截断，故与 `erp_10y` 同窗口（≥5 年）。"
             "⚠️ TuShare `yc_cb` 在本 token 上**权限不足**（`抱歉，您没有接口(yc_cb)访问权限`），"
             "故走中债直取；备源东财 `bond_zh_us_rate` 的 `中国国债收益率10年` 列"
             "（2002 起全历史），两源同日逐值相同（见 data-source.md 附.7 的 XCHK）"
@@ -1314,6 +1332,9 @@ MARKET_ACTIVITY_METRICS: list[MetricDef] = [
             "**PE 口径 = 整体法**（指数总市值 / 指数口径净利润），**指数 = 沪深300"
             "（000300.SH）**，取 TuShare `index_dailybasic.pe`（该列即整体法口径，"
             "不是成分中位数）。PE 与收益率都落 `extra`，可逐日手算复核。"
+            "**落库天锚在自身两个输入的可得性交集上**（Ruling 59）：只看 10Y 中债曲线日"
+            "与沪深300 PE 日，**不依赖 `daily_quotes`** —— 公式里根本没有它。"
+            "缺 PE 或缺收益率的交易日落 NULL + `missing_reason`，不落 0。"
             "spec 允许「全A或沪深300」——实测 `index_dailybasic` **没有全A（中证全指）**，"
             "故取沪深300；PE 本身另落 `pe_csi300` 一行，便于独立查询"
         ),

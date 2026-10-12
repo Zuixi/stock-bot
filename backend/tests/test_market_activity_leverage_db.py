@@ -31,6 +31,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import asyncpg
+import pandas as pd
 import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -526,3 +527,97 @@ def test_coverage_helper_reports_all_thirteen_metrics() -> None:
     assert {c.metric_key for c in coverage} == set(svc.INGEST_METRIC_KEYS)
     for c in coverage:
         assert c.rows == c.covered_days + c.null_days
+
+
+# ── 7) Ruling 59 fix round 1：ERP 的落库天锚在自身输入上（不依赖 daily_quotes）──
+
+
+class _EmptyTushare:
+    """只回空表的假上游：本用例的落点是 ERP 的锚，不是行情类指标。"""
+
+    async def fetch_margin(self, **_: Any) -> pd.DataFrame:
+        return pd.DataFrame()
+
+    async def fetch_index_dailybasic(self, **_: Any) -> pd.DataFrame:
+        return pd.DataFrame()
+
+    async def fetch_index_weight(self, **_: Any) -> pd.DataFrame:
+        return pd.DataFrame()
+
+    async def fetch_daily_basic_by_trade_date(self, *_: Any, **__: Any) -> pd.DataFrame:
+        return pd.DataFrame()
+
+
+class _FakeTreasury:
+    def __init__(self, values: dict[date, float]) -> None:
+        self._values = values
+
+    async def fetch_china_bond_yield(self, start_date: str, end_date: str) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {"曲线名称": "中债国债收益率曲线", "日期": day, "10年": value}
+                for day, value in sorted(self._values.items())
+            ]
+        )
+
+
+@requires_pg
+def test_erp_is_anchored_on_its_own_inputs_not_on_daily_quotes() -> None:
+    """PE ∩ 10Y 的日子**即使不是 `daily_quotes` 交易日**也要落 `erp_10y` / 10Y 行。
+
+    Ruling 59 Job 3b：v1 把 ERP 锚在行情底座上，实测只有 829 天（3.4 年 < spec §S1.11
+    的 5 年）。ERP = 1/PE − 10Y 与 `daily_quotes` 无关，锚必须落在它自己的两个输入上。
+    本用例用一个**不在行情底座里**的交易日，锁住"改锚真的生效"。
+    """
+
+    async def _go(
+        session: AsyncSession,
+    ) -> tuple[date, set[date], dict[str, IndustryMetric], Any]:
+        day_hi = await _latest_quote_day(session)
+        pe_day = day_hi - timedelta(days=100)
+        quote_days = set(await svc._quote_days(session, pe_day, day_hi))
+        assert pe_day not in quote_days, "本用例要求 PE 日不在行情底座里（否则证明不了改锚）"
+        # 代价：往库里写一行 PE 底座（同事务回滚，不落库）
+        session.add(
+            IndustryMetric(
+                industry_key="market",
+                stock_id=0,
+                metric_key=svc.ERP_PE_METRIC_KEY,
+                source="tushare_index_dailybasic",
+                source_tier="official",
+                freq="daily",
+                period=pe_day,
+                value=10.0,
+                unit="倍",
+                published_at=svc.published_at_for(pe_day),
+                caliber_version=MARKET_ACTIVITY_CALIBER_VERSION,
+            )
+        )
+        await session.flush()
+        stats = await svc.upsert_metric_range(
+            session,
+            pe_day,
+            day_hi,
+            tushare=_EmptyTushare(),
+            akshare=_FakeTreasury({pe_day: 2.0, day_hi: 1.6864}),
+        )
+        rows = (
+            await session.execute(
+                select(IndustryMetric).where(
+                    IndustryMetric.industry_key == "market",
+                    IndustryMetric.stock_id == 0,
+                    IndustryMetric.period == pe_day,
+                    IndustryMetric.metric_key.in_(svc.ERP_EXTENSION_KEYS),
+                )
+            )
+        ).scalars()
+        return pe_day, quote_days, {r.metric_key: r for r in rows}, stats
+
+    pe_day, quote_days, by_key, stats = asyncio.run(_with_rollback(_go))
+    assert set(by_key) == set(svc.ERP_EXTENSION_KEYS), "非行情交易日的 ERP 与 10Y 两侧都要落行"
+    erp, treasury = by_key["erp_10y"], by_key["cn_treasury_yield_10y"]
+    assert float(treasury.value) == pytest.approx(2.0)
+    assert float(erp.value) == pytest.approx(100.0 / 10.0 - 2.0), "1/PE×100 − 10Y 必须成立"
+    assert erp.published_at is not None and erp.caliber_version == MARKET_ACTIVITY_CALIBER_VERSION
+    assert stats.per_metric_covered["erp_10y"] >= 1
+    assert pe_day not in quote_days  # 前提复核：这天的行**不可能**来自行情循环

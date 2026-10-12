@@ -18,10 +18,22 @@
     # 只落 ERP 的 PE 底座（沪深300 整体法 PE），不算 ERP
     .venv/bin/python scripts/backfill_market_activity.py --pe-only --from ... --to ...
 
-退出码：0 = 成功；1 = 参数非法 / 无 `daily_quotes` 数据 / 覆盖率对账发现真缺口。
+退出码：0 = 成功且 PIT 审计通过；1 = 参数非法 / **整个区间一行都没落库** /
+覆盖率对账发现真缺口 / **`industry_key='market'` 有行缺 `published_at` 或
+`caliber_version`**（Ruling 59 的 PIT 审计 —— 这两列可空，漏带会静默落 NULL）。
+注意：**早于行情底座、但 PE 与 10Y 都有的区间是正常成功**（只有 ERP/10Y 有行），
+不再因为 `quote_days == 0` 判失败（Ruling 59 连带修正）。
+
+**落库天（Ruling 59）**：行情类 11 个指标锚在 `daily_quotes` 交易日；
+`cn_treasury_yield_10y` / `erp_10y` 锚在**自身输入的可得性交集**（中债曲线日 ∩
+沪深300 PE 日），故后两者的行数**多于** `daily_quotes` 的交易日数 ——
+默认窗口下 `erp_10y` 为 1259 天（2021-07-27 起，≈5.2 年 ≥ spec §S1.11 的「≥5 年」），
+其余指标为 829 天（2023-05-09 起）。
 
 **幂等**：唯一键 `(industry_key, stock_id, metric_key, source, freq, period)` +
 `ON CONFLICT DO UPDATE`，同一区间重跑新增行数 = 0（ADR 0014 的 B 类可回补）。
+自建换手率有**口径感知**的增量缓存：已按当前 `caliber_version` 落值的 (key, day)
+不重算、也不重写（重写会把好值覆盖成 NULL），故中断后可重跑续补。
 
 **联网**：默认会真的调 TuShare（`margin` / `index_dailybasic` / `index_weight`）与
 AKShare（`bond_china_yield`）。`--coverage-only` 不联网。
@@ -102,9 +114,14 @@ async def _run(args: argparse.Namespace) -> int:
             else:
                 stats = await _upsert(db, day_lo, day_hi)
                 print(json.dumps(stats.as_dict(), ensure_ascii=False, indent=2))
-                if stats.quote_days == 0:
+                # **判据是"有没有落库"，不是"有没有行情日"**（Ruling 59 的连带修正）：
+                # `erp_10y` / `cn_treasury_yield_10y` 锚在自己的输入上，早于行情底座的
+                # 区间（如 2021-07-27..2022-12-31）照样有 ERP 可落 —— 那种区间
+                # `quote_days == 0` 却是**正常成功**，旧的判据会把它误报成失败。
+                if stats.rows_upserted == 0:
                     print(
-                        "✘ 区间内 daily_quotes 无任何交易日 —— 没有可回补的底座",
+                        "✘ 区间内既无 daily_quotes 交易日、也没有任何指标落库 —— "
+                        "没有可回补的底座（行情类锚在 daily_quotes；ERP 类锚在 PE ∩ 10Y）",
                         file=sys.stderr,
                     )
                     return 1
@@ -128,6 +145,54 @@ async def _run(args: argparse.Namespace) -> int:
                 f"{cov.rows:>6}{cov.covered_days:>9}{cov.null_days:>7}"
                 f"{len(cov.missing_days):>9}  "
                 f"{json.dumps(cov.missing_reasons, ensure_ascii=False)}"
+            )
+
+        # ── PIT / 口径落库审计（Ruling 59：把"报告里的 PIT 100%"机械化）────────
+        # **硬判据 = 本次写过的窗口**（`[coverage_lo, coverage_hi]`）：这两列可空，
+        # 漏带会静默落 NULL —— 本任务曾有 12036 行全部 NULL 而无人报错。判据限定在窗口内，
+        # 是为了让"分年分段修复历史欠账"不被窗口外的旧行挡住（那是上一段的欠账，不是本段的）。
+        window_lo = coverage_lo if coverage_lo is not None else date(1900, 1, 1)
+        window_hi = coverage_hi if coverage_hi is not None else date(2999, 12, 31)
+        audit = await svc.pit_audit(db, window_lo, window_hi)
+        if not audit:
+            print("\n✘ PIT 审计：窗口内一行都没有 —— 回补没有落库", file=sys.stderr)
+            return 1
+        print(
+            f"\n=== PIT / 口径审计（窗口 {window_lo} … {window_hi}）==="
+            "  count(*) / count(published_at) / count(caliber_version)"
+        )
+        ahead = (
+            f"{'metric_key':<30}{'rows':>7}{'published_at':>15}{'caliber_version':>17}  calibers"
+        )
+        print(ahead)
+        print("-" * len(ahead))
+        missing: list[str] = []
+        for row in audit:
+            print(
+                f"{row.metric_key:<30}{row.rows:>7}{row.with_published_at:>15}"
+                f"{row.with_caliber:>17}  {','.join(row.calibers) or '—'}"
+            )
+            if not row.ok:
+                missing.append(f"{row.metric_key}(pub {row.with_published_at}/{row.rows})")
+        if missing:
+            print(
+                "\n✘ PIT 审计不通过：窗口内有缺 published_at 或 caliber_version 的行 —— "
+                + "; ".join(missing),
+                file=sys.stderr,
+            )
+            return 1
+        # 整个 `market` scope 的完整性：只**告警**（窗口外的欠账由别的窗口/回补负责，
+        # 但必须看得见 —— 这正是"报告声称 100%、库里却是 0"要防的形态）。
+        whole = await svc.pit_audit(db)
+        whole_missing = [
+            f"{r.metric_key}(pub {r.with_published_at}/{r.rows})" for r in whole if not r.ok
+        ]
+        if whole_missing:
+            print(
+                "\n⚠ PIT 告警：`industry_key='market'` **窗口之外**仍有缺 PIT/口径的行 —— "
+                + "; ".join(whole_missing)
+                + "\n   （对本模块的 key 请回补覆盖这些 period 的区间）",
+                file=sys.stderr,
             )
     return 0
 

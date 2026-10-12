@@ -421,3 +421,184 @@ def test_sentiment_metrics_still_registered_in_same_scope() -> None:
         "market_decline_count",
     ):
         assert key in keys, key
+
+
+# ── 6) Ruling 59 fix round 1：PIT 落库守卫 / 自建换手的"无快照期"分诊 ────
+
+
+class _FakeResult:
+    def __init__(self, rows: list[object]) -> None:
+        self._rows = rows
+        #: 模拟 `INSERT ... ON CONFLICT DO UPDATE` 的 rowcount（DO UPDATE 也计入）。
+        self.rowcount = 1
+
+    def all(self) -> list[object]:
+        return self._rows
+
+
+class _QuoteDaySession:
+    """只回答 `_quote_days` 的假会话（返回给定交易日）。"""
+
+    def __init__(self, days: list[date]) -> None:
+        self._days = days
+        self.executed = 0
+
+    async def execute(self, stmt: object) -> _FakeResult:
+        self.executed += 1
+        return _FakeResult([(d,) for d in self._days])
+
+
+class _FakeTushare:
+    """按交易日返回成分股 `turnover_rate_f` 的假上游（记录调用次数）。"""
+
+    def __init__(self, quotes_by_day: dict[date, dict[str, float]]) -> None:
+        self._quotes = quotes_by_day
+        self.calls: list[str] = []
+
+    async def fetch_daily_basic_by_trade_date(self, trade_date: str, **_: object) -> object:
+        import pandas as pd
+
+        self.calls.append(trade_date)
+        day = datetime.strptime(trade_date, "%Y%m%d").date()
+        rows = [
+            {"ts_code": code, "turnover_rate_f": value}
+            for code, value in self._quotes.get(day, {}).items()
+        ]
+        return pd.DataFrame(rows, columns=["ts_code", "turnover_rate_f"])
+
+
+def _weight_frame(period: date, members: dict[str, float], index_code: str = "899050.BJ") -> object:
+    import pandas as pd
+
+    return pd.DataFrame(
+        [
+            {
+                "index_code": index_code,
+                "con_code": code,
+                "trade_date": period.strftime("%Y%m%d"),
+                "weight": weight,
+                "period_date": period,
+            }
+            for code, weight in members.items()
+        ]
+    )
+
+
+def test_upsert_batched_refuses_rows_missing_published_at() -> None:
+    """缺 `published_at` 的行**响亮失败**（可空列漏带会静默落 NULL，Ruling 59）。"""
+    import asyncio
+
+    row = svc._row(date(2026, 10, 9), svc.MetricValue("erp_10y", 5.0))
+    row["published_at"] = None
+    with pytest.raises(RuntimeError, match="published_at"):
+        asyncio.run(svc._upsert_batched(None, [row]))  # type: ignore[arg-type]
+
+
+def test_upsert_batched_refuses_naive_published_at() -> None:
+    """`published_at` 必须带时区（Ruling 35 的反面：naive 时间不是 PIT）。"""
+    import asyncio
+
+    row = svc._row(date(2026, 10, 9), svc.MetricValue("erp_10y", 5.0))
+    row["published_at"] = datetime(2026, 10, 9, 15, 0)  # noqa: DTZ001 — 故意构造 naive
+    with pytest.raises(RuntimeError, match="published_at"):
+        asyncio.run(svc._upsert_batched(None, [row]))  # type: ignore[arg-type]
+
+
+def test_upsert_batched_refuses_rows_missing_caliber_version() -> None:
+    import asyncio
+
+    row = svc._row(date(2026, 10, 9), svc.MetricValue("erp_10y", 5.0))
+    row["caliber_version"] = None
+    with pytest.raises(RuntimeError, match="caliber_version"):
+        asyncio.run(svc._upsert_batched(None, [row]))  # type: ignore[arg-type]
+
+
+def test_upsert_batched_lets_pit_rows_through() -> None:
+    """带齐两列的行照常落库（守卫不是恒真）。"""
+    import asyncio
+
+    session = _QuoteDaySession([])
+    rows = [svc._row(date(2026, 10, 9), svc.MetricValue("erp_10y", 5.0))]
+    assert asyncio.run(svc._upsert_batched(session, rows)) == 1  # type: ignore[arg-type]
+
+
+def test_self_built_pre_snapshot_days_do_not_call_upstream_nor_raise() -> None:
+    """**Ruling 59 Job 2 的根因回归**：快照期之前的交易日 = 结构性无解。
+
+    这些日子既不该去上游取数，也不该被匹配率守卫当成"键空间对不上"（旧实现在
+    `_cov` 为空时把中位数默认成 0.0，于是 585 个快照前的交易日让整条回补崩掉）。
+    """
+    import asyncio
+
+    frame = _weight_frame(date(2026, 9, 30), {"600000.SH": 60.0, "600001.SH": 40.0})
+    days = [date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 3)]
+    session = _QuoteDaySession(days)
+    client = _FakeTushare({})
+    out = asyncio.run(
+        svc._self_built_rows(session, frame, days[0], days[-1], tushare=client)  # type: ignore[arg-type]
+    )
+    assert client.calls == [], "快照期之前的日子不得打上游"
+    assert set(out) == set(days)
+    for day in days:
+        assert out[day].value is None
+        assert out[day].missing_reason == svc.MISSING_NO_WEIGHT_SNAPSHOT
+
+
+def test_self_built_mixed_window_only_fetches_evaluable_days() -> None:
+    """窗口里既有快照前的日子也有快照后的日子：只取可评估的那天。"""
+    import asyncio
+
+    frame = _weight_frame(date(2026, 9, 30), {"600000.SH": 60.0, "600001.SH": 40.0})
+    pre, eligible = date(2026, 9, 29), date(2026, 9, 30)
+    session = _QuoteDaySession([pre, eligible])
+    client = _FakeTushare({eligible: {"600000.SH": 2.0, "600001.SH": 3.0}})
+    out = asyncio.run(
+        svc._self_built_rows(session, frame, pre, eligible, tushare=client)  # type: ignore[arg-type]
+    )
+    assert client.calls == ["20260930"], "只应取可评估的那一天"
+    assert out[pre].missing_reason == svc.MISSING_NO_WEIGHT_SNAPSHOT
+    # (60×2.0 + 40×3.0) / 100 = 2.4
+    assert out[eligible].value == pytest.approx(2.4)
+    assert out[eligible].extra["weight_coverage"] == pytest.approx(1.0)
+
+
+def test_self_built_member_match_guard_still_bites_at_095() -> None:
+    """键空间真对不上时守卫**照样抛错**（门槛仍是 0.95，没有被"修空"削弱）。"""
+    import asyncio
+
+    frame = _weight_frame(date(2026, 9, 30), {"600000.SH": 100.0})
+    day = date(2026, 9, 30)
+    session = _QuoteDaySession([day])
+    client = _FakeTushare({day: {"999999.SH": 1.0}})  # 一只都对不上
+    with pytest.raises(RuntimeError, match="成分匹配率中位数"):
+        asyncio.run(
+            svc._self_built_rows(session, frame, day, day, tushare=client)  # type: ignore[arg-type]
+        )
+    assert svc.MIN_MEMBER_COVERAGE == 0.95, "门槛不得被削弱"
+
+
+def test_erp_extension_keys_are_the_two_input_anchored_metrics() -> None:
+    """ERP 与 10Y 收益率是**唯一**不依赖 `daily_quotes` 的两个 key（Ruling 59）。"""
+    assert svc.ERP_EXTENSION_KEYS == ("cn_treasury_yield_10y", "erp_10y")
+    # 这两个 key 必须在覆盖率对账的分母里（不能因为改了落库天就漏出对账）
+    assert set(svc.ERP_EXTENSION_KEYS) <= set(svc.INGEST_METRIC_KEYS)
+
+
+def test_treasury_fetch_clips_to_the_requested_window() -> None:
+    """逐年翻窗会带回窗口外的日子 —— 必须裁剪，否则落库集合被"多出来的一年"灌满。"""
+    import asyncio
+
+    import pandas as pd
+
+    class _FakeAkshare:
+        async def fetch_china_bond_yield(self, start_date: str, end_date: str) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {"曲线名称": "中债国债收益率曲线", "日期": date(2026, 3, 2), "10年": 2.0},
+                    {"曲线名称": "中债国债收益率曲线", "日期": date(2026, 10, 9), "10年": 1.6864},
+                    {"曲线名称": "中债国债收益率曲线", "日期": date(2026, 12, 31), "10年": 1.5},
+                ]
+            )
+
+    out = asyncio.run(svc.fetch_treasury_10y(_FakeAkshare(), date(2026, 10, 1), date(2026, 10, 9)))
+    assert out == {date(2026, 10, 9): pytest.approx(1.6864)}

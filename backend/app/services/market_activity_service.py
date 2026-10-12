@@ -71,6 +71,14 @@
 | `cn_treasury_yield_10y` | 当日 **19:00** | 中债/东财当日曲线在银行间收市（16:30）后发布 |
 
 `caliber_version` 恒填 :data:`MARKET_ACTIVITY_CALIBER_VERSION`。
+
+**落库天（Ruling 59 的契约修正）**：行情类 11 个指标锚在 `daily_quotes` 实际持有的
+交易日；`cn_treasury_yield_10y` / `erp_10y` 锚在**自身输入的可得性交集**（中债曲线日 ∩
+沪深300 PE 日）—— ERP = `1/PE − 10Y` 与 `daily_quotes` 无关，锚在行情底座上会让序列
+被一个无关输入截断（实测只有 829 天，不满足 spec §S1.11 的「≥5 年」）。
+
+**落库前的 PIT 守卫**：:func:`_upsert_batched` 拒绝任何缺 `published_at`（或该列非
+带时区 datetime）/ 缺 `caliber_version` 的行 —— 这两列可空，漏带会**静默**落 NULL。
 """
 
 from __future__ import annotations
@@ -83,7 +91,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.industry_research import IndustryMetric
@@ -191,6 +199,11 @@ INGEST_METRIC_KEYS: tuple[str, ...] = tuple(k for k in UNITS if k != "pe_csi300"
 
 #: 本模块落库的**全部** key（= 13 个 spec 指标 + ERP 的 PE 底座）。
 ALL_METRIC_KEYS: tuple[str, ...] = tuple(UNITS)
+
+#: **不依赖 `daily_quotes`** 的两个指标（Ruling 59）：10Y 国债收益率与由它减出的 ERP。
+#: 它们的落库天锚在自身输入的可得性上（中债曲线日 ∩ 沪深300 PE 日），故 `daily_quotes`
+#: 覆盖不到的更早交易日也要落行 —— 否则 spec §S1.11 的「≥5 年」被判据卡在一个无关输入上。
+ERP_EXTENSION_KEYS: tuple[str, ...] = ("cn_treasury_yield_10y", "erp_10y")
 
 #: 两融三个指标的 key（顺序 = spec 表格顺序）。
 MARGIN_KEYS: tuple[str, ...] = (
@@ -492,7 +505,16 @@ async def self_built_turnover(
 async def self_built_cached_days(
     db: AsyncSession, day_lo: date, day_hi: date
 ) -> dict[str, set[date]]:
-    """已落库**有值**的自建换手率交易日（增量回补的缓存键 = metric_key）。"""
+    """已落库**有值**的自建换手率交易日（增量回补的缓存键 = metric_key）。
+
+    **缓存是口径感知的**：只认 `caliber_version` == 当前版本的行。口径变更时整条
+    序列必须按新口径重算（口径换了而值沿用旧口径 = 静默错标，ADR 0011 第 4 条），
+    否则 bump `caliber_version` 就只会改标签、不改数值。
+
+    **为什么"命中即不重写"**：自建值只能由上游逐日重算得到；命中的日子上游不会重取，
+    `compute_day_metrics` 只能给出 `source_empty`（NULL）。若照写，会把库里已有的
+    好值**覆盖成 NULL** —— 实测这正是"596 天有值 / 233 天空"在两次 run 间抖动的根因。
+    """
     keys = [s.metric_key for s in INDEX_TURNOVER_SPECS if s.source == SRC_SELF_BUILT]
     stmt = select(IndustryMetric.metric_key, IndustryMetric.period).where(
         IndustryMetric.industry_key == "market",
@@ -501,6 +523,7 @@ async def self_built_cached_days(
         IndustryMetric.period >= day_lo,
         IndustryMetric.period <= day_hi,
         IndustryMetric.value.is_not(None),
+        IndustryMetric.caliber_version == MARKET_ACTIVITY_CALIBER_VERSION,
     )
     out: dict[str, set[date]] = {k: set() for k in keys}
     for key, period in (await db.execute(stmt)).all():
@@ -538,16 +561,43 @@ async def _self_built_rows(
     tushare: Any | None = None,
     cached_days: set[date] | None = None,
 ) -> dict[date, MetricValue]:
-    """自建换手率的逐日加权平均（逐交易日取上游 `daily_basic.turnover_rate_f`）。"""
+    """自建换手率的逐日加权平均（逐交易日取上游 `daily_basic.turnover_rate_f`）。
+
+    **先按快照期分诊，再取数**（Ruling 59 的修复）：
+
+    - 快照期**之前**的交易日 = 结构性无解（该指数当期还没有权重快照），直接落
+      `no_weight_snapshot`，**不去上游取数**。这些日子既不是采集失败、也不是键空间
+      问题，把它们混进匹配率分母会把守卫的结论打反。
+    - 有快照期的交易日才取上游 `daily_basic`，并在**这些可评估的日子**上算匹配率
+      中位数（`_cov` 非空才判门槛）——守卫的"取到行却一只都没匹配上"语义不被稀释。
+    """
     if tushare is None:  # pragma: no cover — 调用方必须注入（避免隐式联网）
         raise ValueError("self-built turnover 需要注入 tushare client")
     cached = cached_days or set()
-    days = [d for d in await _quote_days(db, day_lo, day_hi) if d not in cached]
-    if not days:
-        return {}
+    periods = sorted(set(weight_frame["period_date"]))
+    weight_frame = weight_frame.copy()
+    weight_frame["symbol"] = [str(c).strip().upper() for c in weight_frame["con_code"].tolist()]
+
+    out: dict[date, MetricValue] = {}
+    evaluable: list[date] = []
+    for day in await _quote_days(db, day_lo, day_hi):
+        if day in cached:
+            continue
+        if not any(p <= day for p in periods):
+            out[day] = MetricValue(
+                "",
+                None,
+                MISSING_NO_WEIGHT_SNAPSHOT,
+                {"weight_period_from": periods[0].isoformat() if periods else None},
+            )
+            continue
+        evaluable.append(day)
+    if not evaluable:
+        return out
+
     by_day: dict[date, dict[str, float]] = {}
     empty_days: list[date] = []
-    for day in days:
+    for day in evaluable:
         quotes = await _turnover_from_daily_basic(tushare, day)
         if quotes:
             by_day[day] = quotes
@@ -563,52 +613,41 @@ async def _self_built_rows(
             f"（前几个：{[d.isoformat() for d in empty_days[:5]]}）—— 上游限频/超时，"
             "请重跑回补（自建指标有增量缓存，重跑只补缺口）。**不得**静默记成缺数。"
         )
-    if not by_day:
-        return {}
     # `daily_basic` 与 `index_weight` 两侧都带交易所后缀（920001.BJ / 688001.SH），
     # 直接按 ts_code 匹配。**匹配前显式规范化**（去空白 + 大写），避免大小写/空白造成的
     # 假不匹配（那会把成分覆盖率打成 0 → 整列 `partial_member_coverage`）。
-    weight_frame = weight_frame.copy()
-    weight_frame["symbol"] = [str(c).strip().upper() for c in weight_frame["con_code"].tolist()]
     by_day = {d: {str(k).strip().upper(): v for k, v in q.items()} for d, q in by_day.items()}
 
     # **匹配率断言**（防"取数成功但一只都没匹配上"这一形态静默落 `source_empty`）：
     # 逐日按**当期成分**（而不是全历史成分并集）算有当日 `turnover_rate_f` 的比例，
     # 中位数低于门槛即抛错。⚠️ 分母必须是当期成分：北证50 的全历史并集有 110 只而每期
     # 只有 50 只 —— 按并集算中位数 = 0.936，会被误判成"键对不上"。
-    _periods_sorted = sorted(set(weight_frame["period_date"]))
+    # 分母也只能是**有快照期的那批日**（`evaluable`，见函数开头）：快照期之前的交易日
+    # 与"键空间对不上"无关，混进来会让中位数恒为 0 并误报键空间问题。
+    by_period = {p: g for p, g in weight_frame.groupby("period_date")}
     _cov: list[float] = []
-    for _day, _q in by_day.items():
-        _eligible = [pp for pp in _periods_sorted if pp <= _day]
-        if not _eligible:
-            continue
-        _members = set(weight_frame.loc[weight_frame["period_date"] == _eligible[-1], "symbol"])
-        if _members:
-            _cov.append(len(_members & set(_q)) / len(_members))
+    for day, quotes in by_day.items():
+        members = set(by_period[max(p for p in periods if p <= day)]["symbol"])
+        if members:
+            _cov.append(len(members & set(quotes)) / len(members))
     _cov.sort()
     _median_cov = _cov[len(_cov) // 2] if _cov else 0.0
+    if not _cov:
+        raise RuntimeError(
+            f"自建换手率有 {len(by_day)} 个可评估交易日，却没有任何一期可用成分 —— "
+            "index_weight 快照行存在但成分列为空，属上游结构异常，**不得**静默落 NULL"
+        )
     if _median_cov < MIN_MEMBER_COVERAGE:
         raise RuntimeError(
-            f"自建换手率的成分匹配率中位数={_median_cov:.3f} < {MIN_MEMBER_COVERAGE} —— "
-            "上游取到了行但成分 ts_code 对不上（键空间/代码迁移），"
-            "**不得**静默落 source_empty；请重核 `index_weight.con_code` 与 "
-            "`daily_basic.ts_code` 的命名空间。"
+            f"自建换手率的成分匹配率中位数={_median_cov:.3f} < {MIN_MEMBER_COVERAGE} "
+            f"（在 {len(_cov)} 个有快照期的交易日上评估）—— 上游取到了行但成分 ts_code "
+            "对不上（键空间/代码迁移），**不得**静默落 source_empty；请重核 "
+            "`index_weight.con_code` 与 `daily_basic.ts_code` 的命名空间。"
         )
-    periods = sorted(set(weight_frame["period_date"]))
-    if not periods:
-        return {}
-    by_period = {p: g for p, g in weight_frame.groupby("period_date")}
 
-    out: dict[date, MetricValue] = {}
     for day in sorted(by_day):
         # 该交易日或之前最近一期快照（无前视偏差）
-        eligible = [p for p in periods if p <= day]
-        if not eligible:
-            out[day] = MetricValue(
-                "", None, MISSING_NO_WEIGHT_SNAPSHOT, {"weight_period_from": periods[0].isoformat()}
-            )
-            continue
-        period = eligible[-1]
+        period = max(p for p in periods if p <= day)
         group = by_period[period]
         quotes = by_day[day]
         total_w = 0.0
@@ -653,7 +692,12 @@ async def _self_built_rows(
 
 
 async def fetch_treasury_10y(client: Any, day_lo: date, day_hi: date) -> dict[date, float]:
-    """中债国债收益率曲线 10Y 列（逐年翻窗；窗口必须 < 1 年）。"""
+    """中债国债收益率曲线 10Y 列（逐年翻窗；窗口必须 < 1 年）。
+
+    **返回结果严格裁剪到 `[day_lo, day_hi]`**：上游按年翻窗（`{year}0101→{year}1231`），
+    天然会带回窗口外的日子；调用方把本函数的结果当作"这段区间的可得日"用
+    （ERP 的落库天就锚在它上面），不裁剪会把区间外的一年数据灌进落库集合。
+    """
     out: dict[date, float] = {}
     for year in range(day_lo.year, day_hi.year + 1):
         df = await client.fetch_china_bond_yield(start_date=f"{year}0101", end_date=f"{year}1231")
@@ -667,7 +711,8 @@ async def fetch_treasury_10y(client: Any, day_lo: date, day_hi: date) -> dict[da
                 continue
             d = row["日期"]
             day = d if isinstance(d, date) else pd.to_datetime(d).date()
-            out[day] = float(raw)
+            if day_lo <= day <= day_hi:
+                out[day] = float(raw)
     return out
 
 
@@ -995,7 +1040,15 @@ async def upsert_metric_range(
 ) -> BackfillStats:
     """把 `[day_lo, day_hi]` 的 13 个指标算出来并**幂等**写进 `industry_metrics`。
 
-    落库天 = `daily_quotes` 实际持有的交易日（与 S1.8 同一定义）。
+    **两类落库天，各自锚在自己的输入可得性上**（Ruling 59 的契约修正）：
+
+    - 11 个依赖本地行情的指标（成交额 / 7 个换手率 / 3 个两融）：落库天 =
+      `daily_quotes` 实际持有的交易日（与 S1.8 同一定义）。
+    - `cn_treasury_yield_10y` 与 `erp_10y`：落库天 = **其自身输入的可得性交集**
+      （10Y 中债曲线日 ∩ 沪深300 PE 日）。ERP 是 `1/PE − 10Y`，**不需要 `daily_quotes`**；
+      把它锚在行情底座上会让序列被一个无关的输入截断（实测只有 829 天 ≈ 3.4 年，
+      不满足 spec §S1.11 的「≥5 年」）。改锚后 = PE 起点 2021-07-27 → 1259 天 ≈ 5.2 年。
+
     幂等：唯一键 + `ON CONFLICT DO UPDATE`，重跑同一区间新增行数 = 0。
     调用方负责 `await db.commit()`（本层不替上层决定事务边界）。
     """
@@ -1015,13 +1068,14 @@ async def upsert_metric_range(
         for spec in INDEX_TURNOVER_SPECS
         if spec.source == SRC_SELF_BUILT
     }
+    cached_self_built = await self_built_cached_days(db, day_lo, day_hi)
     self_built = await self_built_turnover(
         db,
         weight_frames,
         day_lo,
         day_hi,
         tushare=ts_client,
-        skip_days=await self_built_cached_days(db, day_lo, day_hi),
+        skip_days=cached_self_built,
     )
     treasury = await fetch_treasury_10y(ak_client, day_lo, day_hi)
     pe = await pe_by_day_index(db, ERP_PE_INDEX_CODE, day_lo, day_hi)
@@ -1030,6 +1084,16 @@ async def upsert_metric_range(
     covered: dict[str, int] = dict.fromkeys(ALL_METRIC_KEYS, 0)
     nulls: dict[str, int] = dict.fromkeys(ALL_METRIC_KEYS, 0)
     reasons: dict[str, dict[str, int]] = {k: {} for k in ALL_METRIC_KEYS}
+
+    def _tally(metric: MetricValue) -> None:
+        key = metric.metric_key
+        if metric.value is None:
+            nulls[key] += 1
+            if metric.missing_reason:
+                reasons[key][metric.missing_reason] = reasons[key].get(metric.missing_reason, 0) + 1
+        else:
+            covered[key] += 1
+
     for day in days:
         values = compute_day_metrics(
             day,
@@ -1044,14 +1108,13 @@ async def upsert_metric_range(
         )
         for key in INGEST_METRIC_KEYS:
             metric = values[key]
-            if metric.value is None:
-                nulls[key] += 1
-                if metric.missing_reason:
-                    reasons[key][metric.missing_reason] = (
-                        reasons[key].get(metric.missing_reason, 0) + 1
-                    )
-            else:
+            if day in cached_self_built.get(key, ()):
+                # **增量缓存命中**：该 (key, day) 在库里已有值且 caliber 与本次一致。
+                # 这里**不重写**：上游没重取，`values[key]` 只会是 `source_empty`(NULL)，
+                # 照写就把好值覆盖成 NULL（Ruling 59 的"抖动"根因）。计数仍算已覆盖。
                 covered[key] += 1
+                continue
+            _tally(metric)
             rows.append(_row(day, metric))
         # PE 底座**不由本循环落库**（它已在 :func:`ingest_erp_pe` 里写过，且产地在
         # 上游直取而非本地派生），但覆盖率仍要看得见 —— 故只记数、不重复写行。
@@ -1059,6 +1122,24 @@ async def upsert_metric_range(
             nulls[ERP_PE_METRIC_KEY] += 1
         else:
             covered[ERP_PE_METRIC_KEY] += 1
+
+    # ── ERP / 10Y 收益率：按**自身输入的可得性**补 `daily_quotes` 之外的天 ──────
+    # 只在有 10Y 值的日子补（10Y 是这两个指标共同的必要输入）；`erp_10y` 再要求
+    # PE 侧有行，缺 PE 的日子落 NULL + `pe_missing`（缺数可见，不静默丢天）。
+    quote_days = set(days)
+    for day in sorted(set(treasury) - quote_days):
+        values = compute_day_metrics(
+            day,
+            turnover=None,
+            margin=None,
+            direct={},
+            self_built={},
+            treasury=treasury[day],
+            pe=pe.get(day),
+        )
+        for key in ERP_EXTENSION_KEYS:
+            _tally(values[key])
+            rows.append(_row(day, values[key]))
 
     upserted = await _upsert_batched(db, rows)
     return BackfillStats(
@@ -1137,10 +1218,35 @@ async def ingest_erp_pe(
 async def _upsert_batched(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
     """分批 upsert（asyncpg 参数上限 32767，见 :data:`UPSERT_BATCH_ROWS`）。
 
+    **落库前先验两列 PIT 元数据**（Ruling 59 的机械守卫）：本模块的**每一行**都必须带
+    非空、**带时区**的 `published_at` 与非空 `caliber_version`。
+
+    为什么必须在这里挡：这两列在 `industry_metrics` 里是**可空列**，写入路径漏带它们
+    会**静默**落 NULL —— 实测 dev 库 12036 行 S1.9/S1.11 全部 `published_at IS NULL`
+    而没有任何一处报错（报告却声称 100% 非空）。而共享 repo 的
+    `coalesce(excluded.published_at, 既有)` 只保证"已有 PIT 不被抹掉"，**不保证
+    "这一次写对了"**：既有值为 NULL 时它照样是 NULL。缺列即**响亮失败**、一行不落
+    （与 `daily_basic` 取数 0 行、自建成分匹配率两个守卫同纪律）。
+
     返回各批 `rowcount` 之和（与一次性 upsert 的语义一致：`DO UPDATE` 计入 rowcount）。
     """
     if not rows:
         return 0
+    bad_pit = [
+        str(r.get("metric_key"))
+        for r in rows
+        if not isinstance(r.get("published_at"), datetime) or r["published_at"].tzinfo is None
+    ]
+    bad_caliber = [str(r.get("metric_key")) for r in rows if not r.get("caliber_version")]
+    if bad_pit or bad_caliber:
+        raise RuntimeError(
+            "拒绝落库：本模块的每一行都必须带非空、带时区的 published_at 与非空 "
+            f"caliber_version。缺 published_at 的行 {len(bad_pit)} 条"
+            f"（前几个 key：{sorted(set(bad_pit))[:5]}）、缺 caliber_version 的 "
+            f"{len(bad_caliber)} 条（前几个 key：{sorted(set(bad_caliber))[:5]}）—— "
+            "PIT 是可空列，漏带会**静默**落 NULL；请修行构造器（`_row` / `ingest_erp_pe`），"
+            "**不得**靠删行重插掩盖。"
+        )
     total = 0
     for start in range(0, len(rows), UPSERT_BATCH_ROWS):
         total += await metric_repo.upsert_metrics(db, rows[start : start + UPSERT_BATCH_ROWS])
@@ -1155,8 +1261,11 @@ async def backfill_market_activity(
 ) -> BackfillStats:
     """回补 `[day_hi - lookback_days, day_hi]` 的 13 个指标（日频序列）并提交。
 
-    默认 1900 个日历日 ≈ 5.2 年 ≥ spec §S1.11 的「≥5 年」判据（同时也满足 §S1.9 的
-    「≥3 年」）。先落 PE 底座再算 ERP，保证 `erp_10y` 的分子可从库里独立复核。
+    默认 1900 个日历日：`day_hi=2026-10-09` 时 `day_lo=2021-07-27`，恰好是沪深300
+    PE 底座（`index_dailybasic.pe`）的第一天 —— 于是 `erp_10y` / `cn_treasury_yield_10y`
+    以**自身输入的可得性交集**为准回补到 **1259 天 ≈ 5.2 年**（≥ spec §S1.11 的「≥5 年」，
+    Ruling 59），不再被 `daily_quotes`（2023-05-09 起 829 天）截断。
+    先落 PE 底座再算 ERP，保证 `erp_10y` 的分子可从库里独立复核。
 
     `day_hi=None` → 取 `daily_quotes` 的 `max(trade_date)`（**不是** `date.today()`：
     今天是休市日时按今天回补只会得到一片空）。
@@ -1257,3 +1366,72 @@ async def metric_coverage(
             )
         )
     return out
+
+
+@dataclass(frozen=True)
+class PitAuditRow:
+    """一个 `metric_key` 的 PIT / 口径落库审计结果（`industry_key='market'`）。"""
+
+    metric_key: str
+    rows: int
+    with_published_at: int
+    with_caliber: int
+    calibers: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        return self.rows == self.with_published_at == self.with_caliber
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "metric_key": self.metric_key,
+            "rows": self.rows,
+            "with_published_at": self.with_published_at,
+            "with_caliber": self.with_caliber,
+            "calibers": list(self.calibers),
+            "ok": self.ok,
+        }
+
+
+async def pit_audit(
+    db: AsyncSession, day_lo: date | None = None, day_hi: date | None = None
+) -> list[PitAuditRow]:
+    """**PIT / 口径落库审计**（Ruling 59）：`industry_key='market'` 的每个 key 逐条给出
+    `count(*) / count(published_at) / count(caliber_version)` 与出现过的口径版本。
+
+    这是"报告里那句 PIT 100%"的**机械版**：不靠手写、不靠眼看，直接由库产出。
+    审计范围含 S1.8 的 key —— 它们与 S1.9/S1.11 同 scope 同表，PIT 完整是**整个
+    `market` scope 的落库契约**（本任务此前把 S1.8 的 PIT 抹成过 NULL，故一并纳入巡检）。
+
+    传了 `day_lo` / `day_hi` 就只审窗口内的行：回补脚本用"**我刚写的这个窗口**必须
+    PIT 完整"当硬判据（这样分年分段修复不会被窗口外的历史欠账挡住），
+    而整个 scope 的完整性另打印一行**告警**（见 `scripts/backfill_market_activity.py`）。
+
+    缺 PIT 的行**不静默**：调用方（回补脚本）据此以非 0 退出。
+    """
+    stmt = (
+        select(
+            IndustryMetric.metric_key,
+            func.count().label("rows"),
+            func.count(IndustryMetric.published_at).label("with_published_at"),
+            func.count(IndustryMetric.caliber_version).label("with_caliber"),
+            func.array_agg(func.distinct(IndustryMetric.caliber_version)).label("calibers"),
+        )
+        .where(IndustryMetric.industry_key == "market", IndustryMetric.stock_id == 0)
+        .group_by(IndustryMetric.metric_key)
+        .order_by(IndustryMetric.metric_key)
+    )
+    if day_lo is not None:
+        stmt = stmt.where(IndustryMetric.period >= day_lo)
+    if day_hi is not None:
+        stmt = stmt.where(IndustryMetric.period <= day_hi)
+    return [
+        PitAuditRow(
+            metric_key=r.metric_key,
+            rows=int(r.rows),
+            with_published_at=int(r.with_published_at),
+            with_caliber=int(r.with_caliber),
+            calibers=tuple(sorted(c for c in (r.calibers or []) if c is not None)),
+        )
+        for r in (await db.execute(stmt)).all()
+    ]
