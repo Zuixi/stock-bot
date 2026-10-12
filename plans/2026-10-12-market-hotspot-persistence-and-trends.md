@@ -3,7 +3,7 @@ status: active
 scope: 市场热点/情绪/资金数据的日级持久化边界与统计追踪——个股级涨停事实、东财实时源日终捕获、覆盖率只读巡检、情绪与板块趋势端点
 touches: backend/app/models/market_data.py, backend/app/migrations/versions/, backend/app/repositories/market_data_repo.py, backend/app/repositories/limit_up_repo.py, backend/app/services/market_data_service.py, backend/app/services/limit_up_service.py, backend/app/services/reconciliation_service.py, backend/app/core/providers/eastmoney_client.py, backend/app/scheduler/jobs.py, backend/app/scheduler/runner.py, backend/app/workers/market_data_worker.py, backend/app/schemas/task.py, backend/app/schemas/market_data.py, backend/app/api/v1/market_data.py, backend/scripts/, backend/tests/, frontend/src/shared/api/, frontend/src/features/market/, docs/decisions/, docs/features.md, docs/Changelog.md
 updated: 2026-10-12
-next-action: Task 4 完成（真库实测：sentiment 21→239 天、个股事实 40,894 行、黄金日字节不变；见 Task 4 验收数字）。Task 5（可选）未开工
+next-action: Task 5a 完成（真库实测：365 天窗口 241/241 限价日过 pct_chg≥0.99、1,322,196 行、2m45s；254 天口径 17→241，13 个窗口外限价日保持未回填）；Task 5b 经裁定跳过。下一步 Task 6
 ---
 
 # 市场热点数据持久化与趋势追踪 实施计划（v2）
@@ -266,11 +266,11 @@ next-action: Task 4 完成（真库实测：sentiment 21→239 天、个股事�
 - Test: 逐日循环的日期生成 + 空结果不写空行 + 幂等
 
 **Two 子项（各自独立，可只做其一）：**
-- 5a `pct_chg` **365 天**修复（拍板①）：`uv run python scripts/backfill_pct_chg.py --start-date <today-365> --end-date <today>`（≈241 次 TuShare 调用）；验收：254 个限价交易日里过 `pct_chg≥0.99` 的日数 **17 → ≥235**
-- 5b 龙虎榜/大宗/解禁/回购按上游窗口回补；验收：逐表"可回溯到的最早日期"**实测决定**（不预设）
+- 5a `pct_chg` **365 天**修复（拍板①）：`uv run python scripts/backfill_pct_chg.py --start-date 2025-10-12 --end-date 2026-10-12`（≈241 次 TuShare 调用）；**验收（2026-10-12 实测）**：窗口内 **241/241** 个限价交易日过 `pct_chg≥0.99`（回填前 **17/241**，全部落在 `2026-09-09` 及以后）；**254 天全量口径 17 → 241**（超出 ≥235 目标）；另 **13** 个限价交易日（`2025-09-16 … 2025-10-11`）在 owner 批准的 365 天窗口**之外**，保持未回填、本任务不承诺
+- 5b 龙虎榜/大宗/解禁/回购按上游窗口回补；验收：逐表"可回溯到的最早日期"**实测决定**（不预设）——**本轮明确不做**（controller 裁定：四表 27/27 天无洞，属可选子项，另立任务）
 
-- [ ] Step 1（5a）: `--limit 5` 冒烟 → 分年回填 → 回填统计数字
-- [ ] Step 2（5b）: 逐域回补（若做）→ 记录最早可回溯日
+- [x] Step 1（5a）: `--limit 5` 冒烟（5 日 / 4.0s）→ 全窗口回填（`2025-10-12 → 2026-10-12`，241 个交易日、1,322,196 行更新、**0** 失败/0 空回、2 分 45 秒、约 241 次 TuShare `daily` 调用）→ 回填统计数字见上方验收行；复跑 5 个历史日幂等收敛（非空数不变）
+- [x] Step 2（5b）: 本轮跳过（controller 范围裁定），未消耗 TuShare 配额
 
 ---
 

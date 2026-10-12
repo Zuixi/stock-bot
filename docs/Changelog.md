@@ -5,6 +5,14 @@
 - **修复（次生，同一症状的第二成因）**：`App.tsx` 的全局 `ErrorBoundary` 进入错误态后永不自愈 —— 个股页一旦渲染异常，按返回键只会反复看到同一张「页面渲染出错」，只能刷新。改为 `RouteErrorBoundary` 以 `location.pathname` 作 key（**不用** `location.key`，否则 `?tab=` 变化会整树重挂）；实测渲染异常后返回能正常回到行情中心
 - **门禁**：新增 e2e `limitUpSentiment.spec.ts`「从短线情绪进个股，浏览器返回仍停在短线情绪 Tab」；`marketTrust.spec.ts` 抽屉用例的 `toHaveURL(/\/market$/)` 放宽为「pathname=/market 且无 board 参数」（其本意是"抽屉不改 URL"，不因 Tab 入 URL 而误红）。本地（vite dev + mock）实测：limitUpSentiment / marketTrust / conceptBoard / marketDataFace / marketPolling / darkmode 共 50 例全绿，`npx tsc --noEmit` 通过
 - 涉及文件：frontend/src/pages/market/index.tsx、frontend/src/App.tsx、frontend/e2e/limitUpSentiment.spec.ts、frontend/e2e/marketTrust.spec.ts、docs/Changelog.md
+## 2026-10-12 - `daily_quotes.pct_chg` 365 天历史回填（计划 Task 5a）
+
+- **回填（复用 `backend/scripts/backfill_pct_chg.py`，未改一行逻辑）**：`--start-date 2025-10-12 --end-date 2026-10-12` → 命中 `daily_quotes` 内 **241** 个交易日（`2025-10-13 → 2026-10-09`，窗口末端今天 2026-10-12 尚无行情行），TuShare `daily` 权威逐日重取，**1,322,196** 行 `pre_close`/`pct_chg` 更新、**0** 失败 / **0** 空回 / EXIT=0，耗时 **2m45s**（≈0.65s/日，约 241 次调用，未触发限流、无需断点续跑）。冒烟 `--limit 5` 4.0s / 27,788 行；对 `2025-10-13…10-17` 复跑幂等（非空数与行数逐日不变）
+- **验收（计划 T5 验收行，按 365 天口径调整）**：窗口内既有限价行又落在窗口内的限价交易日 **241** 个，`pct_chg` 非空率 ≥0.99 的天数 **17 → 241（100%）**，0 失败日；254 天全量口径 **17 → 241**（超 ≥235 目标）。**13 个限价交易日（`2025-09-16 … 2025-10-11`）在 owner 批准窗口之外**，仍只有 29/5412 行非空，本轮**明确不承诺**回填
+- **下游效果（真库实测）**：`market_day_service.is_day_complete`（行数 ≥0.9×universe + `pct_chg` 非空率 ≥0.99 + 该日有限价）对 3 个历史采样日由 `partial` → `complete`：`2025-10-15` 0.005355→1.000000、`2026-01-06` 0.005318→1.000000、`2026-06-10` 0.006531→1.000000（rows/universe/limits_present 不变）；窗口内 1,322,196 行**全部**非空（100%）
+- **5b（龙虎榜/大宗/解禁/回购窗口回补）本轮跳过**：controller 裁定该子项可选且四表 27/27 天无洞，另立任务；**未消耗 TuShare 配额**
+- 涉及文件：plans/2026-10-12-market-hotspot-persistence-and-trends.md、docs/Changelog.md（数据面回填，**无代码改动**）
+
 ## 2026-10-12 - 历史回补：一个脚本两个域（情绪 21→239 天 / 个股事实 0→40,894 行）（计划 Task 4）
 
 - **`backend/scripts/backfill_market_history.py`**（`--domain sentiment|limit_up_stocks`、`--from`/`--to`/`--limit`/`--dry-run`）：按 `daily_quotes` 真实交易日**升序**逐日回补（`promo_*`/`broken_rate` 依赖前一日 streak，乱序会静默算错）；逐日记录纳入/跳过原因并在结尾打印汇总表 + 逐日列出跳过日；`--dry-run` 只跑只读闸门、不写库不增强不 commit。sentiment 域复用实时路径 `persist_snapshot`（零新口径），个股域只调 `persist_stock_facts`（**不**调东财 EOD 增强）。不新建 job/队列
