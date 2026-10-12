@@ -116,6 +116,7 @@ export default function IndustryLevel2Page() {
           scd2AsOf={drill.scd2_as_of}
           scd2Available={drill.scd2_available}
           scd2Note={drill.scd2_note}
+          scd2Coverage={drill.scd2_coverage}
         />
       ) : null}
 

@@ -45,14 +45,20 @@ export default function IndustryLevel4Page() {
     by: null,
     order: "asc",
   });
+  /**
+   * 历史口径日（Fix round 1 · 评审 Minor）：此前**没有任何前端路径**能传 `asOf`，
+   * 后端"按 SCD2 区间还原历史成分"的能力在 UI 上完全不可达。空 = 最新完整交易日。
+   */
+  const [asOf, setAsOf] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["sw-drill-members", level1Code, level2Code, level3Code],
+    queryKey: ["sw-drill-members", level1Code, level2Code, level3Code, asOf],
     queryFn: () =>
       fetchIndustryMembers({
         level1Code,
         level2Code,
         level3Code,
+        asOf: asOf ?? undefined,
       }),
     enabled: Boolean(level1Code && level2Code && level3Code),
     staleTime: 30_000,
@@ -188,6 +194,8 @@ export default function IndustryLevel4Page() {
           scd2AsOf={data.scd2_as_of}
           scd2Available={data.scd2_available}
           scd2Note={data.scd2_note}
+          scd2Coverage={data.scd2_coverage}
+          onPickDay={setAsOf}
         />
       ) : null}
 

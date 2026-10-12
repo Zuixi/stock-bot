@@ -1,7 +1,8 @@
-import { Space, Tag, Tooltip, Typography } from "antd";
+import { DatePicker, Space, Tag, Tooltip, Typography } from "antd";
+import dayjs, { type Dayjs } from "dayjs";
 import { DeltaText } from "@/shared/ui/DeltaText";
 import { formatCnDate } from "@/shared/ui/date";
-import type { IndustryQuote } from "@/shared/api/swDrilldown";
+import type { IndustryQuote, Scd2Coverage } from "@/shared/api/swDrilldown";
 
 /**
  * S1.4 · 一个申万行业节点的 7 项行情字段条。
@@ -57,7 +58,7 @@ export function IndustryMetricStrip({
     {
       key: "kline",
       label: "K 线 开/高/低/收",
-      tip: `成分股 OHLC 的**中位数**（不是行业指数点位）：${k.member_count} 只参与`,
+      tip: `成分股 OHLC 的**中位数**（不是行业指数点位）：${k.quoted_count} 只参与`,
       node: (
         <Typography.Text>
           {fmtPrice(k.open)} / {fmtPrice(k.high)} / {fmtPrice(k.low)} /{" "}
@@ -120,6 +121,13 @@ export function IndustryMetricStrip({
       >
         <Tag color="blue">{total} 只</Tag>
       </Tooltip>
+      {metrics.member_source === "rollup" ? (
+        <Tooltip title={metrics.member_source_note ?? "上卷估算，与上游不等价"}>
+          <Tag color="red" data-testid="rollup-tag">
+            上卷估算
+          </Tag>
+        </Tooltip>
+      ) : null}
     </Space>
   );
 }
@@ -138,6 +146,8 @@ export function IndustryAsOfBar({
   scd2AsOf,
   scd2Available,
   scd2Note,
+  scd2Coverage,
+  onPickDay,
 }: {
   asOf: string | null;
   asOfQuality: string;
@@ -145,6 +155,13 @@ export function IndustryAsOfBar({
   scd2AsOf: string | null;
   scd2Available: boolean;
   scd2Note: string | null;
+  scd2Coverage?: Scd2Coverage | null;
+  /**
+   * 传了才显示日期选择器（历史口径日）。
+   * Fix round 1 · 评审 Minor：此前**没有任何前端路径**能传 `asOf`，
+   * 于是后端的历史还原能力在 UI 上完全不可达。
+   */
+  onPickDay?: (day: string | null) => void;
 }) {
   const qualityLabel: Record<string, string> = {
     complete: "完整",
@@ -161,6 +178,39 @@ export function IndustryAsOfBar({
           分类归属口径日 {scd2AsOf ? formatCnDate(scd2AsOf) : "无数据"}
         </Tag>
       </Tooltip>
+      {scd2Coverage ? (
+        <Tooltip
+          title={
+            scd2Coverage.detail ??
+            "最近一次成分 ingest 的逐层覆盖与下界断言结果"
+          }
+        >
+          <Tag
+            color={
+              scd2Coverage.last_run_status === "ok" && scd2Coverage.fully_ingested
+                ? "green"
+                : "red"
+            }
+            data-testid="scd2-coverage-tag"
+          >
+            成分覆盖 {scd2Coverage.index_codes} 指数
+            {scd2Coverage.fully_ingested ? "（完整）" : "（不完整）"}
+            {scd2Coverage.zero_row_indices > 0
+              ? ` · 0 行 ${scd2Coverage.zero_row_indices}`
+              : ""}
+          </Tag>
+        </Tooltip>
+      ) : null}
+      {onPickDay ? (
+        <DatePicker
+          size="small"
+          allowClear
+          placeholder="历史口径日"
+          value={asOf ? dayjs(asOf) : null}
+          onChange={(d: Dayjs | null) => onPickDay(d ? d.format("YYYY-MM-DD") : null)}
+          data-testid="asof-picker"
+        />
+      ) : null}
       {asOfReason ? (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {asOfReason}

@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { Card, Col, Empty, Row, Skeleton, Space, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
@@ -29,7 +30,11 @@ export function IndustryClassification() {
     queryFn: () => fetchIndustryLevel(1),
     staleTime: 60_000,
   });
-  const metricsByCode = new Map((drill?.items ?? []).map((it) => [it.code, it.metrics]));
+  // Fix round 1 · 评审 Minor：原先是每次 render 重建 Map（L2/L3 页用的是 useMemo）
+  const metricsByCode = useMemo(
+    () => new Map((drill?.items ?? []).map((it) => [it.code, it.metrics])),
+    [drill?.items]
+  );
 
   return (
     <Card
@@ -46,6 +51,7 @@ export function IndustryClassification() {
             scd2AsOf={drill.scd2_as_of}
             scd2Available={drill.scd2_available}
             scd2Note={drill.scd2_note}
+            scd2Coverage={drill.scd2_coverage}
           />
         ) : null}
         <Typography.Text strong>一级行业（{tree.length}）</Typography.Text>

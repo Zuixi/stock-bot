@@ -16,8 +16,22 @@ export interface KlineMedian {
   high: number | null;
   low: number | null;
   close: number | null;
-  /** 参与中位数的成分股家数（= 当日真有行情的家数） */
-  member_count: number;
+  /** 参与中位数的家数 = 当日真有行情的家数（不是成分总数，那在 IndustryQuote.member_count） */
+  quoted_count: number;
+  up_count: number;
+  down_count: number;
+}
+
+/** 最近一次 SCD2 成分 ingest 的覆盖摘要（缺数对账的读面入口，Fix round 1 · 评审 I5） */
+export interface Scd2Coverage {
+  last_run_as_of: string | null;
+  last_run_status: string | null;
+  fully_ingested: boolean;
+  index_codes: number;
+  rows_inserted: number;
+  rows_updated: number;
+  zero_row_indices: number;
+  detail: string | null;
 }
 
 /** 一个行业节点在某交易日的 7 项行情字段聚合 */
@@ -30,6 +44,13 @@ export interface IndustryQuote {
   quoted_count: number;
   up_count: number;
   down_count: number;
+  /**
+   * 成员来源：`level` = 节点**自身层级**的 SCD2 成员（正确）；
+   * `rollup` = 该层级没有记录，退回"其下 L3 的并集"**估算** —— 与上游**不等价**
+   * （实测 24/31 个一级行业偏少），聚合出的成交额等也会偏少。
+   */
+  member_source: "level" | "rollup";
+  member_source_note: string | null;
   /** ① K 线（成分股 OHLC 中位数，不是指数点位） */
   kline_median: KlineMedian;
   /** ② 涨跌幅（成交额加权，%） */
@@ -68,6 +89,7 @@ export interface IndustryLevelResponse {
   scd2_as_of: string | null;
   scd2_available: boolean;
   scd2_note: string | null;
+  scd2_coverage: Scd2Coverage;
   level: number;
   parent: IndustryLevelItem | null;
   items: IndustryLevelItem[];
@@ -102,6 +124,7 @@ export interface IndustryMembersResponse {
   scd2_as_of: string | null;
   scd2_available: boolean;
   scd2_note: string | null;
+  scd2_coverage: Scd2Coverage;
   chain: IndustryLevelItem[];
   metrics: IndustryQuote | null;
   items: IndustryMember[];
