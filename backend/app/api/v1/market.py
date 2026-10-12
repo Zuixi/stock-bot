@@ -19,8 +19,13 @@ from app.schemas.sse_index import (
     SseSnapshotOut,
 )
 from app.schemas.stock import StockEnrichedOut, StockOut
+from app.schemas.sw_drilldown import (
+    MarketIndustryLevelOut,
+    MarketIndustryMembersOut,
+    MarketIndustryQuoteOut,
+)
 from app.schemas.sw_performance import SwPerformanceResponseOut
-from app.services import market_service, stock_tag_service
+from app.services import market_service, stock_tag_service, sw_drilldown_service
 
 router = APIRouter()
 
@@ -138,6 +143,109 @@ async def get_sw_industry_performance(
 ) -> SwPerformanceResponseOut:
     """公开申万一级行业行情聚合。口径 T+1，见响应 as_of。"""
     return await market_service.get_sw_industry_performance(db, cache, limit)
+
+
+# ---------------------------------------------------------------------------
+# S1.4 申万三级下钻（SCD2 分类归属 + 7 项行情字段）
+#
+# 路径前缀 `/sw-industry/drill/` 而不是复用一个 `/{code}` 段：本文件里既有
+# `/sw-industry/{level1_code}/stocks` 这类"单段即 level1"的路由，若把
+# `/sw-industry/levels/{level}` 放在它们前面，FastAPI 先注册先匹配不会出问题，
+# 但交换声明顺序就会把 `levels` 当成 level1_code（实测易错）。显式 `drill` 段
+# 把新读路与既有读路的命名空间彻底分开，顺序无关。
+#
+# 鉴权：`/market/**` 公开免登录（ADR 0008），**不挂 RequireAuth / require_permissions**。
+# ---------------------------------------------------------------------------
+
+
+@router.get("/sw-industry/drill/levels/{level}", response_model=MarketIndustryLevelOut)
+async def get_sw_drill_levels(
+    level: int,
+    db: DbDep,
+    cache: CacheDep,
+    level1_code: str = Query(default="", description="按 L1 过滤（level>=2 时必填）"),
+    level2_code: str = Query(default="", description="按 L2 过滤（level=3 时给）"),
+    as_of: date | None = Query(default=None, description="行情口径日；缺省 = 最新完整交易日"),
+) -> MarketIndustryLevelOut:
+    """申万行业某一层的下钻列表（逐子行业带 7 项行情聚合）。
+
+    * ``level=1`` → 31 个一级行业；
+    * ``level=2&level1_code=`` → 该 L1 下的二级行业（``parent`` 带 L1 自身聚合）；
+    * ``level=3&level1_code=&level2_code=`` → 该 L2 下的三级行业。
+
+    ``as_of`` 可传历史交易日：成分归属按 **SCD2** 还原（``effective_from``/``effective_to``）。
+    """
+    if level not in (1, 2, 3):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="level 只能取 1/2/3"
+        )
+    if level >= 2 and not level1_code:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="level>=2 需要 level1_code"
+        )
+    if level == 3 and not level2_code:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="level=3 需要 level2_code"
+        )
+    try:
+        return await sw_drilldown_service.get_level_items(
+            db, cache, level1_code=level1_code, level2_code=level2_code, as_of=as_of
+        )
+    except LookupError as exc:
+        raise not_found_response("SW industry", str(exc)) from exc
+
+
+@router.get("/sw-industry/drill/metrics", response_model=MarketIndustryQuoteOut)
+async def get_sw_drill_metrics(
+    db: DbDep,
+    cache: CacheDep,
+    level1_code: str = Query(..., description="L1 行业代码"),
+    level2_code: str = Query(default=""),
+    level3_code: str = Query(default=""),
+    as_of: date | None = Query(default=None),
+) -> MarketIndustryQuoteOut:
+    """单个申万行业节点的 7 项行情聚合。
+
+    7 项 = K 线（成分股 OHLC 中位数）· 涨跌幅 · 换手率 · 成交量 · 量比 · 振幅 · 成交额。
+    """
+    try:
+        return await sw_drilldown_service.get_level_metrics(
+            db,
+            cache,
+            level1_code=level1_code,
+            level2_code=level2_code,
+            level3_code=level3_code,
+            as_of=as_of,
+        )
+    except LookupError as exc:
+        raise not_found_response("SW industry", str(exc)) from exc
+
+
+@router.get("/sw-industry/drill/members", response_model=MarketIndustryMembersOut)
+async def get_sw_drill_members(
+    db: DbDep,
+    cache: CacheDep,
+    level1_code: str = Query(...),
+    level2_code: str = Query(...),
+    level3_code: str = Query(...),
+    as_of: date | None = Query(default=None),
+) -> MarketIndustryMembersOut:
+    """末级（L3）成分股列表：逐只 7 项字段 + 该节点聚合 + L1→L2→L3 链。
+
+    成分按 **SCD2 区间**还原（``as_of`` 当日有效的那一段），响应里的
+    ``scd2_as_of`` 是"分类归属口径日"（最近一次成功 ingest），不得省略。
+    """
+    try:
+        return await sw_drilldown_service.get_members(
+            db,
+            cache,
+            level1_code=level1_code,
+            level2_code=level2_code,
+            level3_code=level3_code,
+            as_of=as_of,
+        )
+    except LookupError as exc:
+        raise not_found_response("SW industry", str(exc)) from exc
 
 
 @router.get("/sw-industry/{level1_code}/stocks", response_model=list[StockOut])
