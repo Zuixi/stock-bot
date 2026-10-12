@@ -413,6 +413,46 @@ async def sentiment_daily_job() -> None:
         await _alert_job_failure("sentiment_daily", exc)
 
 
+async def limit_up_stock_facts_job() -> None:
+    """个股级涨停事实落库 + 东财 EOD 增强（交易日 17:20，晚于 16:50 限价补漏）。
+
+    **为什么顺序是"先落库再增强"**：增强是 UPDATE-only（当天事实行必须先存在），而当日
+    限价 16:50 才入库、事实行本 job 才写 —— 因此增强只能挂在落库之后（15:05 单挂一个
+    增强 job 必然命中 0 行，每天白造一条告警）。
+
+    `as_of` 走与 `persist_snapshot` 同款的完整性判据（最新**完整**交易日），不直接用
+    "今天"：脏的最新日（partial）不得被当成事实落库日。
+
+    best-effort 边界：东财外呼失败/空池/0 命中一律只 `logger.warning` + 登记
+    `job:failures`（A 类装饰丢失必须可见），**不回滚**已提交的事实、不让 job 整体失败。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import limit_up_service, market_day_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            md = await market_day_service.resolve_latest_complete_day(db)
+            if md is None:
+                logger.warning("Limit-up stock facts skipped: no quotes")
+                return
+            result = await limit_up_service.persist_and_enrich_stock_facts(db, md.day)
+            await db.commit()
+        logger.info("Limit-up stock facts done: day=%s %s", md.day, result)
+    except Exception as exc:
+        logger.exception("Limit-up stock facts job failed")
+        await _alert_job_failure("limit_up_stock_facts", exc)
+        return
+    reason = result.get("enrich_reason")
+    if reason:
+        # "池里有票但当日事实行 0 命中"才是 A 类数据静默丢失的信号；空池/外呼失败同样登记
+        await _alert_job_failure(
+            "limit_up_stock_facts",
+            RuntimeError(f"EOD enrichment {reason} (trade_date={md.day})"),
+        )
+
+
 async def intraday_sentiment_poll_job() -> None:
     """盘中分时点入库（交易日 9:25-15:05 每 5 分钟，job 内交易时段守卫）。
 

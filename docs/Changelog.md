@@ -5,6 +5,14 @@
 - **修复（次生，同一症状的第二成因）**：`App.tsx` 的全局 `ErrorBoundary` 进入错误态后永不自愈 —— 个股页一旦渲染异常，按返回键只会反复看到同一张「页面渲染出错」，只能刷新。改为 `RouteErrorBoundary` 以 `location.pathname` 作 key（**不用** `location.key`，否则 `?tab=` 变化会整树重挂）；实测渲染异常后返回能正常回到行情中心
 - **门禁**：新增 e2e `limitUpSentiment.spec.ts`「从短线情绪进个股，浏览器返回仍停在短线情绪 Tab」；`marketTrust.spec.ts` 抽屉用例的 `toHaveURL(/\/market$/)` 放宽为「pathname=/market 且无 board 参数」（其本意是"抽屉不改 URL"，不因 Tab 入 URL 而误红）。本地（vite dev + mock）实测：limitUpSentiment / marketTrust / conceptBoard / marketDataFace / marketPolling / darkmode 共 50 例全绿，`npx tsc --noEmit` 通过
 - 涉及文件：frontend/src/pages/market/index.tsx、frontend/src/App.tsx、frontend/e2e/limitUpSentiment.spec.ts、frontend/e2e/marketTrust.spec.ts、docs/Changelog.md
+## 2026-10-12 - 个股级涨停事实表 + 东财 EOD 增强（计划 Task 1）
+
+- **新增 `market_limit_up_stock_daily`**（唯一键 `trade_date + stock_id`，迁移 `c4d8e1a72b93`）：把 `_WINDOW_SQL` 的**判定**部分按日落库（`is_lu`/`touched`/`is_zb`/`prev_is_lu`/`streak`/`days_span`/`boards_in_window`/`missing_days`）+ 东财独有的 `seal_time`/`seal_fund`/`break_count`（`Numeric(20,4)`，历史恒 NULL **绝不填 0**）+ `fact_source`/`enrich_source`/`observed_at`。为什么：`market_sentiment_daily` 24 个字段全是聚合，个股只剩 `max_streak_symbol` 一个代码，情绪标的没有可统计对象
+- **行集 = 候选窗口 as_of 行 ∪ 当日炸板行**：炸板选行新增 `limit_up_repo.fetch_day_broken_board_stocks`（谓词与 `_BREADTH_SQL` 的 `zb_count` 逐字一致；`_WINDOW_SQL` 的 `cand` 实测只覆盖 39 只炸板里的 12 只）。窗口派生的 `days_span`/`boards_in_window`/`missing_days` 只对候选窗口内的票可算 → "炸板-only"（今日触板但昨日未涨停，实测 27/日）落 NULL（缺失 ≠ 0）
+- **真库验收（2026-09-08）**：`is_lu=75` / `is_zb=39` / 总行数 **178**（151 候选 + 27 炸板-only）/ `prev_is_lu=95`；**口径不变式** `count(is_lu) == market_sentiment_daily.zt_count`、`count(is_zb) == zb_count` 均成立，重复跑收敛。EOD 增强后 `is_lu` 零变化
+- **东财 EOD 增强（A 类不可回补）**：`enrich_stock_facts_from_pool` **UPDATE-only**，只 `SET seal_time/seal_fund/break_count/enrich_source`（SQL 的 SET 子句 + 行 dict 双守卫，判定列永不覆写）。**裁决修正**：原计划的 15:05 独立增强 job 被取消 —— 15:05 时当日限价（16:50）与事实行（17:20）都还不存在，UPDATE-only 必然命中 0 行；改为 17:20 单 job 内 `persist_stock_facts` → commit → 增强（`persist_and_enrich_stock_facts`），增强 best-effort（外呼失败/空池/0 命中只登记 `job:failures`，不回滚事实、不让 job 失败）
+- **实测东财池可取窗口**：2026-10-12 探测，`date=20260914`（第 14 个交易日）有数据、`date=20260911` 为 0 → 保留窗口 ≈ 最近 14 个交易日；2026-10-09 实跑 `persist_and_enrich_stock_facts` → `rows=119 / is_lu=72 / is_zb=20 / enriched=69`（真实封板时间/封单/炸板次数全落），不变式同样成立。worker `limit_up_stock_facts` 支持可选 `trade_date` 对该日补跑（retro 兜底，不新增 job 类型）
+- 涉及文件：backend/app/models/market_data.py、backend/app/migrations/versions/c4d8e1a72b93_add_market_limit_up_stock_daily.py、backend/app/repositories/limit_up_repo.py、backend/app/repositories/market_data_repo.py、backend/app/services/limit_up_service.py、backend/app/services/intraday_sentiment_service.py、backend/app/scheduler/jobs.py、backend/app/scheduler/runner.py、backend/app/schemas/task.py、backend/app/workers/market_data_worker.py、backend/tests/test_limit_up_stock_daily.py、docs/Changelog.md
 
 ## 2026-10-12 - 计划登记：市场热点数据持久化与趋势追踪（P0–P4）
 

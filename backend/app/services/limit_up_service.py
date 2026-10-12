@@ -425,6 +425,198 @@ async def persist_snapshot(
     return {"status": "ok", "trade_date": trade_date, "zt_count": k["zt_count"]}
 
 
+# ----- 个股级涨停事实 + 东财 EOD 增强（Task 1）------------------------------------
+#
+# 两个关注点，互不越界：
+# 1) **判定列**（is_lu/touched/is_zb/streak/N天M板/missing_days/prev_is_lu，B 类可回算）
+#    恒来自交易所限价：候选窗口 `_WINDOW_SQL` + 当日炸板选行 `_DAY_BROKEN_SQL`。
+# 2) **东财独有列**（seal_time/seal_fund/break_count，A 类不可回补）由 EOD 增强写入，
+#    UPDATE-only，**永不**覆写判定列。
+
+# 增强告警原因码（区分"空池"与"池里有票但当日事实行不存在"——后者才是数据丢了）
+ENRICH_REASON_POOL_FAILED = "pool_fetch_failed"
+ENRICH_REASON_EMPTY_POOL = "empty_pool"
+ENRICH_REASON_NO_ROWS = "no_fact_rows"
+
+
+def build_stock_fact_rows(
+    window_rows: list[dict[str, Any]],
+    broken_rows: list[dict[str, Any]],
+    *,
+    as_of: date,
+    as_of_prev: date,
+    market_days: list[date],
+    lookback: int = calc.LOOKBACK_TRADE_DAYS,
+    fact_source: str = "local_calc",
+) -> list[dict[str, Any]]:
+    """当日个股事实行集 = 候选窗口 as_of 行 ∪ 当日炸板行（按 stock_id 去重）。
+
+    - 窗口 as_of 行来自 `_WINDOW_SQL` 的 `cand`（含 `as_of_prev` 涨停的票）→ "昨日涨停
+      今日未板"的断板票天然在内；`prev_is_lu` 取同一只票在窗口里的 `as_of_prev` 行，
+      该行缺失（前一日停牌/无行情）→ `False`（"前一日是否涨停"在无行情日不成立）。
+    - 炸板行来自 `_DAY_BROKEN_SQL`（`cand` 不含炸板票：实测 09-08 的 39 只炸板里只有
+      12 只在候选窗口内）。
+    - **窗口派生列只对候选窗口内的票可算**：炸板-only 的票（今日触板但昨日未涨停）在
+      窗口里没有任何行 → `days_span`/`boards_in_window`/`missing_days` 落 `None`
+      （缺失 ≠ 0；落 0 会被下游读成"无板/无停牌"这一事实断言）。
+    - `streak` 恒为"截至 as_of 的连板数"：当日未涨停即确定归零（0 是事实，不是缺失），
+      与 `limit_up_calculator.ladder` 的 `streak_upto` 同源。
+    - 东财独有列恒 `None`（本地路径不具备），由 EOD 增强填。
+    """
+    today_by_id = {r["stock_id"]: r for r in window_rows if r["trade_date"] == as_of}
+    prev_by_id = {r["stock_id"]: r for r in window_rows if r["trade_date"] == as_of_prev}
+    broken_by_id = {r["stock_id"]: r for r in broken_rows}
+
+    rows: list[dict[str, Any]] = []
+    for stock_id in sorted(set(today_by_id) | set(broken_by_id)):
+        today = today_by_id.get(stock_id)
+        if today is not None:
+            symbol = today["symbol"]
+            is_lu = bool(today["is_lu"])
+            touched = bool(today["touched"])
+        else:
+            # 炸板-only：`_DAY_BROKEN_SQL` 的谓词已保证 high ≥ 涨停价 且 close < 涨停价
+            broken = broken_by_id[stock_id]
+            symbol = broken["symbol"]
+            is_lu = False
+            touched = True
+        prev = prev_by_id.get(stock_id)
+        if today is not None:
+            days_span, boards = calc.n_day_m_board(
+                window_rows, stock_id, as_of, market_days, lookback
+            )
+            missing_days: int | None = calc.missing_days(window_rows, stock_id, market_days)
+        else:
+            days_span, boards, missing_days = None, None, None
+        rows.append(
+            {
+                "trade_date": as_of,
+                "stock_id": stock_id,
+                "symbol": symbol,
+                "is_lu": is_lu,
+                "touched": touched,
+                "is_zb": touched and not is_lu,
+                "prev_is_lu": bool(prev["is_lu"]) if prev is not None else False,
+                "streak": int(today["streak_upto"]) if (today is not None and is_lu) else 0,
+                "days_span": days_span,
+                "boards_in_window": boards,
+                "missing_days": missing_days,
+                "seal_time": None,
+                "seal_fund": None,
+                "break_count": None,
+                "fact_source": fact_source,
+                "enrich_source": None,
+            }
+        )
+    return rows
+
+
+async def persist_stock_facts(
+    db: AsyncSession, as_of: date, *, fact_source: str = "local_calc"
+) -> dict[str, int]:
+    """把某交易日的个股涨停/炸板事实写入 `market_limit_up_stock_daily`（幂等）。
+
+    窗口参数与 `get_snapshot` 完全同参（`window_trade_days(lookback)` 个交易日），
+    否则 `streak`/N天M板/missing_days 会与梯队口径分叉。
+
+    `as_of` 不在 `daily_quotes` 的交易日集合里（节假日/脏日期）→ 返回全 0 并告警：
+    不写一行假事实、也不抛错打断调用方的盘后链路。
+    """
+    market_days = await limit_up_repo.list_recent_trade_dates(
+        db, as_of, window_trade_days(calc.LOOKBACK_TRADE_DAYS)
+    )
+    if len(market_days) < 2 or market_days[-1] != as_of:
+        logger.warning(
+            "persist_stock_facts skipped: as_of=%s not the latest quoted trade date (%s)",
+            as_of,
+            market_days[-3:],
+        )
+        return {"rows": 0, "is_lu": 0, "is_zb": 0, "prev_is_lu": 0}
+    window_rows = await limit_up_repo.fetch_limit_up_window(
+        db, as_of=as_of, as_of_prev=market_days[-2], window_start=market_days[0]
+    )
+    broken_rows = await limit_up_repo.fetch_day_broken_board_stocks(db, as_of)
+    rows = build_stock_fact_rows(
+        window_rows,
+        broken_rows,
+        as_of=as_of,
+        as_of_prev=market_days[-2],
+        market_days=market_days,
+        fact_source=fact_source,
+    )
+    await limit_up_repo.upsert_limit_up_stock_daily(db, rows)
+    return {
+        "rows": len(rows),
+        "is_lu": sum(1 for r in rows if r["is_lu"]),
+        "is_zb": sum(1 for r in rows if r["is_zb"]),
+        "prev_is_lu": sum(1 for r in rows if r["prev_is_lu"]),
+    }
+
+
+async def enrich_stock_facts_from_pool(
+    db: AsyncSession, as_of: date, pool_rows: list[dict[str, Any]]
+) -> int:
+    """东财涨停池 → 事实表的**增强**列（UPDATE-only，返回命中行数）。
+
+    **只**写 `seal_time`/`seal_fund`/`break_count`/`enrich_source`：判定列恒由交易所限价
+    决定，东财池永不覆写（口径冻结）。池里不存在的 symbol 不新建行 —— 行集由判定口径
+    定义，不由装饰层定义。
+    """
+    from app.repositories import market_data_repo  # noqa: PLC0415
+    from app.services import intraday_sentiment_service  # noqa: PLC0415
+
+    enriched_rows = intraday_sentiment_service.build_enriched_rows(pool_rows)
+    if not enriched_rows:
+        return 0
+    return await market_data_repo.enrich_limit_up_stock_daily_from_pool(db, as_of, enriched_rows)
+
+
+async def persist_and_enrich_stock_facts(
+    db: AsyncSession, as_of: date, *, fact_source: str = "local_calc"
+) -> dict[str, Any]:
+    """盘后主链（双轨共用）：落判定列 → **commit** → 东财 EOD 增强（best-effort）。
+
+    顺序是硬约束：增强是 UPDATE-only，当日事实行必须先 commit 才对它可见。这也是
+    "为什么增强不能单独挂在 15:05" 的原因 —— 15:05 时限价（16:50）与 facts（本 job）
+    都还没跑，增强必然命中 0 行，每天白造一条告警。
+
+    返回 `{"rows","is_lu","is_zb","prev_is_lu","enriched","enrich_reason"}`：
+    `enrich_reason` 为 `None` 表示增强成功；否则是原因码（`pool_fetch_failed` /
+    `empty_pool` / `no_fact_rows`），由调用方升级成 `job:failures` 告警。**增强失败绝不影响
+    已提交的事实行，也绝不让 job 整体失败**（B 类事实优先于 A 类装饰）。
+    """
+    result: dict[str, int] = await persist_stock_facts(db, as_of, fact_source=fact_source)
+    await db.commit()
+    enriched, reason = await _enrich_stock_facts_day(db, as_of)
+    return {**result, "enriched": enriched, "enrich_reason": reason}
+
+
+async def _enrich_stock_facts_day(db: AsyncSession, as_of: date) -> tuple[int, str | None]:
+    """抓 `as_of` 的东财涨停池并增强当日事实行；任何失败都降级为原因码，不抛错。"""
+    from app.services import intraday_sentiment_service  # noqa: PLC0415
+
+    try:
+        pool_rows = await intraday_sentiment_service.fetch_intraday_pool(as_of.strftime("%Y%m%d"))
+    except Exception:  # noqa: BLE001 —— A 类装饰失败不得上升为 job 失败
+        logger.warning(
+            "stock facts EOD enrichment: eastmoney pool fetch failed (trade_date=%s)",
+            as_of,
+            exc_info=True,
+        )
+        return 0, ENRICH_REASON_POOL_FAILED
+    if not pool_rows:
+        return 0, ENRICH_REASON_EMPTY_POOL
+    enriched = await enrich_stock_facts_from_pool(db, as_of, pool_rows)
+    if not enriched:
+        logger.warning(
+            "stock facts EOD enrichment: pool=%d but 0 fact rows matched (trade_date=%s)",
+            len(pool_rows),
+            as_of,
+        )
+        return 0, ENRICH_REASON_NO_ROWS
+    return enriched, None
+
+
 async def get_calendar(cache: CacheClient | None, days: int = 30) -> list[dict[str, Any]]:
     """情绪周期时序（来自 `market_sentiment_daily` 派生缓存，升序）。
 

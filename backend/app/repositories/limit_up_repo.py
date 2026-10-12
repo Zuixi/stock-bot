@@ -13,7 +13,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.market_data import MarketSentimentDaily, StockPriceLimit
+from app.models.market_data import (
+    MarketLimitUpStockDaily,
+    MarketSentimentDaily,
+    StockPriceLimit,
+)
 from app.models.quote import DailyQuote
 
 
@@ -193,6 +197,36 @@ def build_window_sql_for_explain() -> str:
     return _WINDOW_SQL
 
 
+# 当日炸板选行：谓词与 `_BREADTH_SQL` 的 `zb_count` **逐字一致**（`_BREADTH_SQL` 只回
+# 计数、`_WINDOW_SQL` 的 `cand` 又不含炸板票——实测 09-08 的 39 只炸板里只有 12 只在
+# 候选窗口内，靠窗口回不出另外 27 只）。同款 `JOIN stock_price_limits` 保证缺限价的行
+# 被排除，与 breadth 口径同源。
+_DAY_BROKEN_SQL = """
+SELECT q.stock_id, st.symbol, st.name
+FROM daily_quotes q
+JOIN stock_price_limits l ON l.stock_id = q.stock_id AND l.trade_date = q.trade_date
+JOIN stocks st ON st.id = q.stock_id
+WHERE q.trade_date = :as_of
+  AND q.high >= l.up_limit - 0.005
+  AND q.close < l.up_limit - 0.005
+ORDER BY q.stock_id
+"""
+
+
+def build_day_broken_sql_for_audit() -> str:
+    """给测试用的同源 SQL（守卫"炸板谓词 == breadth 谓词"，避免两处口径漂移）。"""
+    return _DAY_BROKEN_SQL
+
+
+async def fetch_day_broken_board_stocks(db: AsyncSession, as_of: date) -> list[dict[str, Any]]:
+    """当日炸板股（盘中触板但收盘未封住）逐股行；`stock_id/symbol/name`。
+
+    与 `fetch_day_breadth` 的 `zb_count` 同谓词 → `len(rows) == breadth["zb_count"]`。
+    """
+    rows = (await db.execute(text(_DAY_BROKEN_SQL), {"as_of": as_of})).mappings().all()
+    return [dict(r) for r in rows]
+
+
 async def fetch_limit_up_window(
     db: AsyncSession, as_of: date, as_of_prev: date, window_start: date
 ) -> list[dict[str, Any]]:
@@ -219,6 +253,81 @@ async def fetch_day_breadth(db: AsyncSession, as_of: date) -> dict[str, int]:
     """当日全市场涨停/跌停/炸板家数与有行情家数。"""
     row = (await db.execute(text(_BREADTH_SQL), {"as_of": as_of})).mappings().one()
     return {k: int(v or 0) for k, v in dict(row).items()}
+
+
+# 事实表单行 16 列 → asyncpg 单语句 32767 个绑定参数上限下最多约 2000 行；取 1000 留余量
+# （单日行集实测 178–450 行，正常不会触发分批，分批只为防御"以后有人合并多日再写"）。
+_FACT_UPSERT_CHUNK = 1000
+
+# 事实表 upsert 只覆写**本地判定 + 窗口派生**列。东财独有列（seal_time/seal_fund/
+# break_count/enrich_source）必须留在 set_ 之外：17:20 的 facts 重跑不得把同 job
+# 后段刚写好的封板明细抹回 NULL（口径冻结：东财只填它独有的列，本地只填判定列）。
+_FACT_UPDATE_COLUMNS = (
+    "symbol",
+    "is_lu",
+    "touched",
+    "is_zb",
+    "prev_is_lu",
+    "streak",
+    "days_span",
+    "boards_in_window",
+    "missing_days",
+    "fact_source",
+)
+
+
+async def upsert_limit_up_stock_daily(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
+    """幂等写入个股事实；同批内先按唯一键去重（pg 的 ON CONFLICT 不处理同批自冲突）。"""
+    if not rows:
+        return 0
+    deduped = list({(r["trade_date"], r["stock_id"]): r for r in rows}.values())
+    total = 0
+    for i in range(0, len(deduped), _FACT_UPSERT_CHUNK):
+        batch = deduped[i : i + _FACT_UPSERT_CHUNK]
+        ins = pg_insert(MarketLimitUpStockDaily)
+        stmt = ins.values(batch).on_conflict_do_update(
+            constraint="uq_limit_up_stock_daily_date_stock",
+            set_={
+                **{c: getattr(ins.excluded, c) for c in _FACT_UPDATE_COLUMNS},
+                "observed_at": func.now(),
+            },
+        )
+        result = cast("CursorResult[Any]", await db.execute(stmt))
+        total += int(result.rowcount)
+    await db.flush()
+    return total
+
+
+async def list_limit_up_stock_daily(db: AsyncSession, as_of: date) -> list[MarketLimitUpStockDaily]:
+    """某交易日的个股事实行（涨停优先、连板数降序、再按代码升序；排序确定性可测）。"""
+    stmt = (
+        select(MarketLimitUpStockDaily)
+        .where(MarketLimitUpStockDaily.trade_date == as_of)
+        .order_by(
+            MarketLimitUpStockDaily.is_lu.desc(),
+            MarketLimitUpStockDaily.streak.desc(),
+            MarketLimitUpStockDaily.symbol,
+        )
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def limit_up_stock_daily_missing_dates(db: AsyncSession, dates: list[date]) -> list[date]:
+    """给定交易日中，`market_limit_up_stock_daily` 尚无任何行的那些（回补判据）。"""
+    if not dates:
+        return []
+    present = set(
+        (
+            await db.execute(
+                select(MarketLimitUpStockDaily.trade_date)
+                .where(MarketLimitUpStockDaily.trade_date.in_(dates))
+                .group_by(MarketLimitUpStockDaily.trade_date)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [d for d in dates if d not in present]
 
 
 async def upsert_sentiment_daily(db: AsyncSession, row: dict[str, Any]) -> int:

@@ -23,8 +23,10 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
     from app.services import (
         announcement_service,
         concept_service,
+        job_alert_service,
         limit_up_service,
         market_data_service,
+        market_day_service,
     )
 
     async with async_session_factory() as db:
@@ -73,6 +75,25 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
         elif job == "sentiment_daily":
             # 盘后落库不需要缓存（cache=None）：避免命中 Redis JSON 后 as_of 变 str。
             result = await limit_up_service.persist_snapshot(db, None)
+        elif job == "limit_up_stock_facts":
+            # 双轨制：与 `limit_up_stock_facts_job` 调同一个 service 编排（落库 → commit →
+            # 东财 EOD 增强）。trade_date 可选：指定时对该日补跑（涨停池端点保留约 14 个
+            # 交易日（2026-10-12 实测：09-14 有数据、09-11 为 0）→ 17:20 那次外呼失败后
+            # 可用同一条代码路径回补），不指定则取最新完整交易日（与定时轨道同参）。
+            day = _opt_date(params.get("trade_date"))
+            if day is None:
+                md = await market_day_service.resolve_latest_complete_day(db)
+                if md is None:
+                    return {"status": "failed", "error": "no quotes; cannot resolve trade date"}
+                day = md.day
+            result = await limit_up_service.persist_and_enrich_stock_facts(db, day)
+            reason = result.get("enrich_reason")
+            if reason:
+                # 与定时轨道同款可见性：A 类装饰丢失必须进 `job:failures`（不只留在
+                # task.result 里）——手动补跑路径不该比定时路径更瞎。
+                await job_alert_service.record_job_failure(
+                    "limit_up_stock_facts", f"EOD enrichment {reason} (trade_date={day})"
+                )
         elif job == "concept_members":
             result = await concept_service.ingest_concept_members(db)
         elif job == "reconcile":
@@ -98,8 +119,9 @@ class MarketDataWorker(BaseWorker):
         global_index_daily/sector_moneyflow/concept_members — none;
         backfill_global_index — years(=2);
         northbound/share_floats/repurchases — days(=30/7/7); dragon_tiger/block_trades —
-        trade_date(yyyymmdd, optional); announcements — days(=3). Unknown types return
-        a failed dict without touching the DB.
+        trade_date(yyyymmdd, optional); announcements — days(=3); limit_up_stock_facts —
+        trade_date(可选，缺省取最新完整交易日；个股涨停事实落库 + 东财 EOD 增强).
+        Unknown types return a failed dict without touching the DB.
         """
         job = str(payload.get("type") or "")
         if job not in _KNOWN_TYPES:

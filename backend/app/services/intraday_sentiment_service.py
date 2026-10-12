@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from app.core.providers.eastmoney_client import get_eastmoney_client
@@ -88,6 +89,35 @@ async def fetch_intraday_pool(trade_date: str) -> list[dict[str, Any]]:
     并在 ``as_of_label`` 标注回落。
     """
     return await get_eastmoney_client().fetch_limit_up_pool(trade_date)
+
+
+def build_enriched_rows(pool_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """东财涨停池 → 事实表增强行（**只**含东财独有的三列 + symbol 定位键）。
+
+    这是"东财只填它独有的列"的边界：池里的 ``streak``/``days``/``boards``/``amount``/
+    ``board_name`` 一律**丢弃**——判定列与窗口派生列恒由交易所限价 + ``_WINDOW_SQL`` 决定，
+    让池的连板数流进事实表就等于把东财口径混进判定口径（口径冻结）。
+
+    缺值保持 ``None``（缺失 ≠ 0）：池行没有的封板时间/封单/炸板次数就是 NULL，
+    绝不填 0（``break_count=0`` 是合法观测值"从未炸板"，与"上游没给"必须可区分）。
+    """
+    rows: list[dict[str, Any]] = []
+    for row in pool_rows:
+        symbol = row.get("symbol")
+        if not symbol:
+            continue
+        seal_fund = row.get("seal_fund")
+        break_count = row.get("break_count")
+        rows.append(
+            {
+                "symbol": str(symbol),
+                "seal_time": row.get("seal_time"),
+                # 金额落 Numeric(20,4)：先用 str 过一道，避免二进制浮点的表示误差
+                "seal_fund": None if seal_fund is None else Decimal(str(seal_fund)),
+                "break_count": None if break_count is None else int(break_count),
+            }
+        )
+    return rows
 
 
 # ----- 内部实现：纯函数（便于单测覆盖）---------------------------------------------

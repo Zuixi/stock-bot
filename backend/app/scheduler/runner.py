@@ -23,6 +23,7 @@ from app.scheduler.jobs import (
     global_index_daily_job,
     industry_metrics_refresh_job,
     intraday_sentiment_poll_job,
+    limit_up_stock_facts_job,
     market_moneyflow_daily_job,
     northbound_daily_job,
     price_limits_daily_job,
@@ -318,6 +319,18 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(day_of_week="mon-fri", hour=17, minute=15, timezone="Asia/Shanghai"),
         id="sentiment_daily",
         name="Market sentiment daily",
+        replace_existing=True,
+    )
+
+    # 个股级涨停事实 + 东财 EOD 增强：17:20 Mon-Fri（晚于 16:50 限价补漏与 17:15 情绪聚合）。
+    # 增强**必须**与落库同 job 且在其后：增强是 UPDATE-only，当日事实行 17:20 才存在；
+    # 单独挂 15:05 的增强 job 在限价（16:50）入库前必然命中 0 行。不设 per-job 宽限 →
+    # 继承 job_defaults(None)，停摆后迟到也补跑（ingest 与增强都幂等）。
+    scheduler.add_job(
+        limit_up_stock_facts_job,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute=20, timezone="Asia/Shanghai"),
+        id="limit_up_stock_facts",
+        name="Limit-up stock facts + EOD enrichment",
         replace_existing=True,
     )
 

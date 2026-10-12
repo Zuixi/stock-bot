@@ -96,8 +96,8 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 - Modify: `backend/app/repositories/market_data_repo.py`（+`enrich_limit_up_stock_daily_from_pool`：只更新东财拥有的列）
 - Modify: `backend/app/services/limit_up_service.py`（+`persist_stock_facts(db, as_of, *, fact_source)`、+`enrich_stock_facts_from_pool(db, as_of, pool_rows)`）
 - Modify: `backend/app/services/intraday_sentiment_service.py`（盘中池 → 结构化 enriched 行，供 enrichment 复用）
-- Modify: `backend/app/scheduler/jobs.py`（+`limit_up_stock_facts_job` 交易日 17:20；+`intraday_pool_eod_job` 交易日 15:05）
-- Modify: `backend/app/scheduler/runner.py`、`backend/app/schemas/task.py`（`MarketDataJobType` +2）、`backend/app/workers/market_data_worker.py`（同队列新分支）
+- Modify: `backend/app/scheduler/jobs.py`（+`limit_up_stock_facts_job` 交易日 17:20：**facts → commit → best-effort enrichment**）
+- Modify: `backend/app/scheduler/runner.py`、`backend/app/schemas/task.py`（`MarketDataJobType` +1：`limit_up_stock_facts`，支持可选 `trade_date` 做 retro）、`backend/app/workers/market_data_worker.py`（同队列新分支）
 - Test: `backend/tests/test_limit_up_stock_daily.py`（行构造 + 口径不变式 + enrichment 不改写判定列）
 
 **表结构**（唯一键 `(trade_date, stock_id)`；行集 ≈ 涨停 ∪ 炸板 ∪ 昨日涨停 ≈ 200–450 行/日）：
@@ -120,18 +120,23 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 - `async def fetch_day_broken_board_stocks(db, as_of) -> list[dict]` —— 谓词与 `_BREADTH_SQL` 的 `zb_count` **逐字一致**（`high >= up_limit - 0.005 AND close < up_limit - 0.005`），返回 `stock_id/symbol/name`
 - `async def enrich_stock_facts_from_pool(db, as_of, pool_rows) -> int` —— 只 `SET seal_time/seal_fund/break_count/enrich_source`，**不碰** `is_lu/touched/is_zb/streak/*_span`
 
+**时序裁决（Ruling 10，实施中实测发现，取代 v2 初稿的 15:05 job）：** 15:05 时当日 facts 行**还不存在**（`stock_price_limits` 16:50 才入库、facts 17:20 才建行），UPDATE-only 的 enrichment 必然命中 0 行 → A 类封板明细当天就丢。故：**取消 15:05 job**，把 enrichment 接在 17:20 的 facts commit **之后**，并且：
+- enrichment **best-effort**：外呼抛错/空池 → `logger.warning` + 既有 `_alert_job_failure`，**不得**回滚 facts、不得让 job 整体失败（B 类事实优先于 A 类装饰）
+- `enriched_rows == 0` 也要告警（空池与"无行可更"分别记 reason）——A 类静默丢失必须可见
+- worker job 支持可选 `trade_date`，对指定日跑 facts + enrichment（东财涨停池端点有近 ~20 交易日历史）→ 17:20 那次外呼失败时的**同一代码路径**兜底，不新增 job 类型
+
 **测试策略（必须有能在默认门禁失败的测试）：**
 - 行构造：涨停 / 炸板 / 昨日涨停今日未板 / 停牌缺行 四态；缺失值不落 0
 - **口径不变式**：`count(*) FILTER (WHERE is_lu) WHERE trade_date=d` **等于** `market_sentiment_daily.zt_count`（同日）；炸板行数等于 `_BREADTH_SQL` 的 `zb_count`
 - enrichment：单元测试断言 SQL 的 `SET` 子句不含判定列（防回归）
 - repo：沿用 `build_window_sql_for_explain` 的同源思路，不复制 SQL 文本做计划守卫
 
-**验收（真库实测，数字回填本文件）：** 跑 `persist_stock_facts(2026-09-08)` → `is_lu=75`、`is_zb=39`、总行数=当日候选∪炸板；`uv run alembic heads` 单 head；EOD enrichment 跑完后 `is_lu` 计数**零变化**。
+**验收（真库实测，数字回填本文件）：** 跑 `persist_stock_facts(2026-09-08)` → `is_lu=75`、`is_zb=39`、总行数=当日候选∪炸板；`uv run alembic heads` 单 head；enrichment 跑完后 `is_lu` 计数**零变化**；空池/外呼失败时 `job:failures` 有记录且 facts 已提交（不回滚）。
 
 - [ ] Step 1: 模型 + 迁移 + 唯一键
 - [ ] Step 2: 失败测试（四态行构造 + 口径不变式 + enrichment 不改判定列）
 - [ ] Step 3: `fetch_day_broken_board_stocks` + repo 四函数 + service 两函数
-- [ ] Step 4: scheduler/worker/schema 接线（17:20 事实、15:05 EOD enrichment；双轨同方法）
+- [ ] Step 4: scheduler/worker/schema 接线（17:20 facts→enrichment；worker 支持 `trade_date` retro；双轨同方法）
 - [ ] Step 5: 真库实测并回填数字
 
 ---

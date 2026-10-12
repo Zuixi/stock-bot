@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, TypeVar, cast
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import desc, func, nullslast, select
+from sqlalchemy import desc, func, nullslast, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -557,3 +557,65 @@ async def list_intraday_snapshot(
         .order_by(MarketSentimentIntraday.captured_at)
     )
     return list((await db.execute(stmt)).scalars().all())
+
+
+# 东财 EOD 增强：**只**允许写这三列 + ``enrich_source``。判定列（``is_lu`` / ``touched``
+# / ``is_zb`` / ``streak`` / ``days_span`` / ``boards_in_window`` / ``missing_days`` /
+# ``prev_is_lu``）恒由交易所限价决定，东财池永不覆写（口径冻结，见计划全局约束）。
+# 改这条 SQL 时必须同步 `tests/test_limit_up_stock_daily.py` 的 SET 子句守卫。
+_ENRICH_SOURCE = "eastmoney_eod"
+
+_ENRICH_SQL = """
+UPDATE market_limit_up_stock_daily AS f
+SET seal_time = v.seal_time,
+    seal_fund = v.seal_fund,
+    break_count = v.break_count,
+    enrich_source = :enrich_source
+FROM unnest(
+    CAST(:symbols AS varchar[]),
+    CAST(:seal_times AS varchar[]),
+    CAST(:seal_funds AS numeric[]),
+    CAST(:break_counts AS integer[])
+) AS v(symbol, seal_time, seal_fund, break_count)
+WHERE f.trade_date = :trade_date AND f.symbol = v.symbol
+"""
+
+
+def build_enrich_sql_for_audit() -> str:
+    """给测试用的同源 SQL（守卫"增强只写东财独有列"，避免复制一份会漂移的 SQL）。"""
+    return _ENRICH_SQL
+
+
+async def enrich_limit_up_stock_daily_from_pool(
+    db: AsyncSession, as_of: date, rows: list[dict[str, Any]]
+) -> int:
+    """把东财涨停池的封板时间/封单/炸板次数写进当日事实行（UPDATE-only）。
+
+    ``rows`` 必须是 ``intraday_sentiment_service.build_enriched_rows`` 的输出
+    （``symbol`` + 东财三列）。**不 INSERT**：事实行集由交易所限价口径定义，装饰层不得
+    造行；池里有、事实表里没有的 symbol 直接忽略（返回的 rowcount 只算真正更新的行）。
+    缺失值写 NULL（UPDATE 语义天然如此——池里没给就是 NULL，绝不填 0）。
+
+    单条 `UPDATE ... FROM unnest(...)`（而不是逐行 executemany）：asyncpg 对
+    executemany 的 rowcount 恒为 -1，「更新了几行」是本函数的返回值契约（0 命中 =
+    A 类数据静默丢失的信号，调用方要据此告警），必须拿得到真数。
+    """
+    params = [r for r in rows if r.get("symbol")]
+    if not params:
+        return 0
+    result = cast(
+        "CursorResult[Any]",
+        await db.execute(
+            text(_ENRICH_SQL),
+            {
+                "trade_date": as_of,
+                "symbols": [r["symbol"] for r in params],
+                "seal_times": [r.get("seal_time") for r in params],
+                "seal_funds": [r.get("seal_fund") for r in params],
+                "break_counts": [r.get("break_count") for r in params],
+                "enrich_source": _ENRICH_SOURCE,
+            },
+        ),
+    )
+    await db.flush()
+    return int(result.rowcount or 0)
