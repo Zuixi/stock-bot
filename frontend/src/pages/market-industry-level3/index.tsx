@@ -136,7 +136,7 @@ export default function IndustryLevel3Page() {
             <Button
               type="primary"
               size="small"
-              onClick={() => navigate(`/research/${workbenchIndustry.key}`)}
+              onClick={() => navigate(`/industry/${workbenchIndustry.key}`)}
             >
               进入投研工作台
             </Button>

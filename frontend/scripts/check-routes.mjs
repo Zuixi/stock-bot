@@ -12,7 +12,7 @@
 //   6. 未落在表内的路由不许出现（防"顺手加的"路由绕过权限口径）。
 //
 // 只读 `src/app/router/index.tsx`，不 import 运行时（可在 CI 无依赖环境跑）。
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -224,6 +224,38 @@ const redirectRouteCount = [...staticRedirects.keys(), ...componentRedirects.key
 ).length;
 if (redirectRouteCount === REDIRECTS.length) pass(`redirect 条数 = ${REDIRECTS.length}（不多不少）`);
 else fail(`redirect 条数 = ${redirectRouteCount}，契约 ${REDIRECTS.length}`);
+
+// 7：站内链接不许再写**已迁移的旧裸路径**（新代码一律指规范路由）。
+//    只收"旧路径恰好等于整串"的情形：`navigate("/research")`、`to="/tags"`、`` `/watchlist` ``。
+//    带参旧路径（`/stock/xxx`、`/tags/xxx`）**不在此列**——它们有 redirect 兜底、行为等价，
+//    全量改写属独立机械重构（本轮不混入），故不误报、也不假装已清零。
+const FORBIDDEN_LITERALS = ["/research", "/watchlist", "/tags", "/index"];
+const walked = [];
+function walk(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) walk(full);
+    else if (/\.(ts|tsx)$/.test(entry.name)) walked.push(full);
+  }
+}
+walk(join(root, "src"));
+let literalHits = 0;
+for (const file of walked) {
+  const rel = file.slice(root.length + 1);
+  if (rel === "src/app/router/index.tsx") continue; // 契约与 redirect 声明的所在地
+  const text = readFileSync(file, "utf8");
+  for (const literal of FORBIDDEN_LITERALS) {
+    const esc = literal.replace(/[/\\^$*+?.()|[\]{}]/g, "\\$&");
+    // 只看"字符串字面量整串"：前后紧邻引号才算命中；
+    // 模板串 `` `/research/${key}` `` 或路径片段 `@/pages/research` 都不会误报
+    const re = new RegExp(`["'\`]${esc}["'\`]`);
+    if (re.test(text)) {
+      fail(`站内链接写了已迁移的旧裸路径：${rel} 含 "${literal}"（应写规范路由）`);
+      literalHits += 1;
+    }
+  }
+}
+if (!literalHits) pass("站内链接无已迁移旧裸路径字面量（router 内的 redirect 声明除外）");
 
 if (failed) {
   console.log(`\n路由迁移门禁未通过：${failed} 项`);

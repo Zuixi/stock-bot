@@ -31,7 +31,7 @@ export default function ResearchPage() {
         <Row gutter={[16, 16]}>
           {(data ?? []).map((item) => (
             <Col key={item.key} xs={24} md={12} lg={8} style={{ display: "flex" }}>
-              <IndustryCard industry={item} onOpen={() => navigate(`/research/${item.key}`)} />
+              <IndustryCard industry={item} onOpen={() => navigate(`/industry/${item.key}`)} />
             </Col>
           ))}
           {(data ?? []).length === 0 && (
