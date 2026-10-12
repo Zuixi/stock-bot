@@ -141,13 +141,13 @@ alter table industry_metrics
 | 语义 | 定义 | 命名 | 图上对应 |
 |---|---|---|---|
 | **已接入数** | 该入口下已有真实数据可展示的条目数 | `ingested_count` | 大宗商品 29 · 外汇市场 5 · 主要指数 9 · 申万一级 31 |
-| **已策展数** | 该入口下已人工策展/建成完整体验的条目数 | `curated_count` | 行业看板 3 · 行业分类 16（待 owner 复核归类）|
+| **已策展数** | 该入口下已有**策展产物**的条目数（**唯一定义见 [`docs/design/metric-dictionary.md` §4.1](../design/metric-dictionary.md)**：registry 指标定义 / 行业页 / 榜单配置） | `curated_count` | 行业看板 3 · 行业分类 16（**语义**已定为 `curated_count`；**数值为 owner 图上标注、尚未与数据侧核对**，见字典 §4.1）|
 
 > **`A股市场 18`** 与展开后的子节点（5 个）及 `主要指数 9` 均对不上——归入本节复核项，**必须定一个语义或删除该徽标**，不允许以"大概是个数"存在。→ **已按 Ruling 4 裁定删除**（裁定理由与"不作为替代"说明见 [`docs/design/metric-dictionary.md` §4.1](../design/metric-dictionary.md)）。
 
 ### 4.2 `metric_key` 命名
 
-- 全小写 + 下划线，**语义完整、不自造缩写**：`idx_turnover_ratio_sse`（对上证换手率）、`margin_financing_balance`、`erp_10y`（股债收益差）
+- 全小写 + 下划线，**语义完整、不自造缩写**：`idx_turnover_ratio_sse`（对上证换手率）、`sow_inventory`（能繁母猪存栏，registry 中真实存在）、`erp_10y`（股债收益差）；`margin_financing_balance` 属**提案、尚未注册**（勿当既有 key 引用，见 [字典 §4.2](../design/metric-dictionary.md)）
 - 单位与频率随 `metric_key` 在 registry 固定，**不在展示层换算**
 - 与既有 `industry_metrics` 的 `metric_key` 保持同一命名空间
 

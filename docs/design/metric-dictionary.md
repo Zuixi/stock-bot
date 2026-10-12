@@ -119,14 +119,17 @@ cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -c \
 
 > 上表 `unit` 列的"（空串 = 无量纲比值）"对应 registry 里的 `unit=""`（`hog_corn_ratio` 是纯比值，没有量纲单位）——**这是 registry 的原值，不是省略**。
 
-**可复跑的核对脚本**（§4.2 规则 3 的机械验证；本文件上表 = registry 的转录，此脚本专治"抄错"）：
+**手动检查脚本（未接入门禁；接入方案见 deferred）**（§4.2 规则 3 的机械验证；本文件上表 = registry 的转录，此脚本专治"抄错"）：
 
 ```bash
-cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python ../scripts/check_metric_dictionary.py
+UV_CACHE_DIR=/tmp/uv-cache uv run --project backend python backend/scripts/check_metric_dictionary.py
 ```
 
-脚本逐行打印 `文档 unit/freq` vs `registry unit/freq` 的对比，任一行不一致即非 0 退出（可直接当门禁）。
-**已实测**：`核对 8 行，MISMATCH 0 行 → ✔ 全绿`。改本表后**必须重跑**，不要靠眼看。
+脚本逐行打印 `文档 name/unit/freq` vs `registry name/unit/freq` 的对比，并额外查两件事：**反查**（已注册的 key 不得被错列进下方"新增提案"表）与**覆盖面**（样例表覆盖了几个已注册 key）。任一条不满足即非 0 退出。
+
+> **声明降级（勿过度声称）**：本脚本**尚未接入任何门禁**——它不在 `scripts/self_review.sh`、pre-commit 或 CI 的自动检查面内（放在 `backend/scripts/` 只保证被 ruff **lint/format** 覆盖，不保证被**执行**）。把 CI 的 ruff 面 / 执行面扩到该目录属**独立变更**（扩面可能暴露该目录既有未格式化文件），故记为 **deferred**，不由本文件声称"已是门禁"。
+
+**已实测**（2026-10-12）：`核对 8 行，MISMATCH 0 行 → ✔ 全绿`。改本表后**必须手动重跑**，不要靠眼看。
 
 **本文件落册的新增提案**（**尚未注册**，命名按上表 5 条规则；接源见 `data-source.md` 附.1，注册动作在 Wave 1）：
 
