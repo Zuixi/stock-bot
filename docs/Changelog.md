@@ -1,3 +1,22 @@
+## 2026-10-12 - 核对脚本移入 backend/scripts 并补 name/反查检查（Ruling 27）+ spec §4.1/§4.2 口径对齐（Ruling 28）
+
+- **背景**：Fix round 2 新增的核对脚本放在根 `scripts/` 下，**三层 lint 覆盖全无**（`scripts/self_review.sh` 的 `py_files()` 只认 `^backend/.*\.py$`；pre-commit 的 ruff hook 是 `files: ^backend/`；CI backend job 只跑 `ruff check app/ tests/`，唯一跑全目录的 job 是 auth-service），且 `ruff format --check` 未过
+- **Ruling 27（脚本）**：
+  - `git mv` 到 **`backend/scripts/check_metric_dictionary.py`**——**零新增门禁基建**即落入 `self_review` 与 pre-commit 的 ruff 面（实测 `self_review` 已打印 `✔ ruff check 通过 (scripts/check_metric_dictionary.py)`，`✔ ruff format --check 通过`）
+  - 跑 `ruff format`，`check` / `format --check` 均通过
+  - **补 name 列比对**（此前完全不查，故 Fix round 2 的 `hog_price` 名称那半无脚本保护）；**补反查断言**（已注册 key 若被错移进 5 列"新增提案"表 → 报出该 key 并非 0 退出）；补**覆盖面**报告（样例表 8 / registry 共 21，只报告不失败）
+  - docstring 修正：原写"必须在 backend/ 下跑"**不成立**（脚本自己 `sys.path.insert`，cwd 无关）；用法改为 `uv run --project backend python backend/scripts/check_metric_dictionary.py`
+  - **文档措辞降级**：`metric-dictionary.md` 的"可直接当门禁"→「**手动检查脚本（未接入门禁；接入方案见 deferred）**」，并写明它**不在** `self_review` / pre-commit / CI 的执行面内
+  - **未改** CI / `self_review.sh` / `.pre-commit-config.yaml`：把 ruff 执行面扩到 `backend/scripts/` 是**独立变更**（该目录既有 **4 个未格式化文件**，扩面会让 CI 因无关原因变红）→ **deferred**
+- **Ruling 28（spec 残留，因 §authority 新优先级"spec 优先于字典"而已升级为真冲突）**：
+  - `docs/specs/S0-platform-contracts.md:144` 的 `已策展数` 定义由「已人工策展/**建成完整体验**的条目数」改为引用字典 §4.1 的**唯一定义**（已有策展产物：registry 指标定义 / 行业页 / 榜单配置），并注明 `16` 的**数值**仍是 owner 标注、待数据侧核对
+  - 同文件 `:150` 把 `margin_financing_balance` 列为命名**示例** → 换成 registry 中真实存在的 `sow_inventory`，并明标 `margin_financing_balance` **属提案、尚未注册**（勿当既有 key 引用）
+- **deferred（本轮发现，未修，已留证据）**：
+  - ① CI 的 ruff 面从 `app/ tests/` 扩到含 `backend/scripts/`（扩面会暴露该目录 4 个既有未格式化文件）
+  - ② `scripts/self_review.sh` 的 `py_files()` 只取 `git status --porcelain` 的**第 2 列**（`awk '{print $2}'`），而 rename 条目的第 2 列是**旧路径** → **纯 `git mv` 一个 .py 时该文件会被静默跳过 lint**（本轮实测："无 backend Python 改动，跳过"，提交后才恢复命中）；修法是取最后一个字段或 `--porcelain -z` 解析
+  - ③ 同一脚本 `:58` 的 `fail "...（跑 \`uv run ruff format <files>\`）"` 里 `<files>` 被当作重定向 → 触发 `syntax error near unexpected token 'newline'`（仅在真失败时才现形；**未改**，属门禁脚本自身缺陷）
+- 涉及文件：backend/scripts/check_metric_dictionary.py（移动+增强）、scripts/check_metric_dictionary.py（删除）、docs/design/metric-dictionary.md、docs/specs/S0-platform-contracts.md、docs/Changelog.md
+
 ## 2026-10-12 - 口径字典复核修正（Fix round 2）：样例表单位/频率对齐 registry、`caliber_version` 改回"待加"、`curated_count` 唯一定义 + 新增机械核对脚本
 
 - **背景**：`docs/design/metric-dictionary.md` 已被登记为口径权威，实现者会照它执行；复核逐条对代码后发现 **3 处 Important + 4 处 Minor**（无 Critical），全部为**可对代码证伪**的硬伤，属"抄错/写超"而非设计问题
