@@ -471,6 +471,9 @@ async def test_coverage_report_trading_calendar_is_union_of_sources() -> None:
 
     真库实测：`daily_quotes` 缺 2026-09-09..09-17 共 7 个交易日，只用它当分母会把
     sector_moneyflow 的 14 天判成 12 天 —— 行情缺口被误报成业务缺口。
+
+    并集**补出了主源缺的日子** → `degraded_trading_calendar=True`（评审 Important #1：
+    该标记的语义是"并集提供了主源缺失的交易日"，不是"主源表不存在"）。
     """
     db = _report_db(
         quotes=[(D14, 5500), (D16, 5500)],  # 主源缺 D15
@@ -480,7 +483,58 @@ async def test_coverage_report_trading_calendar_is_union_of_sources() -> None:
     by_domain = {r["domain"]: r for r in report}
     assert by_domain["sentiment_daily"]["trading_days"] == 3  # D14/15/16 都在
     assert by_domain["sentiment_daily"]["cover_pct"] == 100.0
-    assert by_domain["sentiment_daily"]["degraded_trading_calendar"] is False
+    assert by_domain["sentiment_daily"]["degraded_trading_calendar"] is True
+
+
+async def test_stale_domain_old_vs_new_anchor_evidence() -> None:
+    """评审 Important #2 的构造证据：同一份假 DB，旧锚定（夹到域末日）vs 新锚定（日历末日）。
+
+    旧口径：`block_trade` 只到 D14 → 分母缩成 1 天 → `cover_pct=100.0` / 无缺日。
+    新口径：分母仍是窗口 3 个交易日 → `33.33` / 缺 D15、D16。
+    两行断言并排钉住"夹取会让整域停更看起来健康"这件事本身。
+    """
+    days = dict(DAY_ROWS)
+    days["block_trades"] = [(D14, 20)]  # 自 D15 起整域停更
+
+    old = rc._normalize_coverage_row(
+        "block_trade",
+        rc._COVERAGE_SOURCES["block_trade"],
+        dict(days["block_trades"]),  # 真实调用方传的就是 {date: 行数}
+        (D14, D14),  # 旧口径：win_to = 域自己的末日
+        [D14, D15, D16],
+    )
+    assert (old["cover_pct"], old["missing_days"]) == (100.0, [])
+
+    new = {r["domain"]: r for r in await rc.coverage_report(_report_db(days=days))}["block_trade"]
+    assert (new["cover_pct"], new["missing_days"]) == (
+        33.33,
+        [D15.isoformat(), D16.isoformat()],
+    )
+
+
+async def test_coverage_report_calendar_not_degraded_when_primary_complete() -> None:
+    """主源自己就覆盖窗口内全部交易日（并集没有多出日子）→ 不得误报降级。"""
+    db = _report_db(quotes=QUOTES_DAYS, limits=[(D15, 5500)])  # 次源只是子集
+    report = await rc.coverage_report(db)
+    assert all(r["degraded_trading_calendar"] is False for r in report)
+
+
+async def test_coverage_report_window_end_anchored_to_calendar_last_day() -> None:
+    """窗口末端锚定**日历末日**，不夹到各域自己的最后一行（评审 Important #2）。
+
+    夹到域末日 → 整域停更的域分母随之缩小甚至退化成单日，报 `cover_pct=100` /
+    `missing_days=[]`，对"这个域整体停更"完全盲。这里让 block_trade 停在 D14、
+    日历到 D16，则它必须报出 D15/D16 两个洞（而不是分母缩成 1 天报 100%）。
+    """
+    days = dict(DAY_ROWS)
+    days["block_trades"] = [(D14, 20)]  # 该域从 D15 起整域停更
+    report = await rc.coverage_report(_report_db(days=days))
+    row = {r["domain"]: r for r in report}["block_trade"]
+    assert row["trading_days"] == 3  # 分母仍是整个窗口的交易日
+    assert row["have_days"] == 1
+    assert row["cover_pct"] == 33.33  # 明显 < 100
+    assert row["missing_days"] == [D15.isoformat(), D16.isoformat()]
+    assert row["last_day"] == D14.isoformat()  # 数据跨度如实展示（停更事实可见）
 
 
 async def test_coverage_report_degraded_when_primary_calendar_missing() -> None:
@@ -526,13 +580,47 @@ async def test_coverage_report_first_last_day_echo_range() -> None:
     by_domain = {r["domain"]: r for r in report}
     assert by_domain["share_float"]["first_day"] == D14.isoformat()
     assert by_domain["share_float"]["last_day"] == D16.isoformat()
-    # window_days 的**下界**必须落在窗口上（分子分母同一个窗口，否则行数与天数各说各话）
-    assert rc._coverage_window((D16, D14), since=D15) == (D14, D16, D15, D16)
-    assert rc._coverage_window((D16, D14), since=None) == (D14, D16, D14, D16)
-    assert rc._coverage_window((None, None), since=D15) == (None, None, None, None)
+    # 窗口口径（分子分母必须同一个窗口）：下界取 max(域首行, since)，**末端锚定日历末日**
+    assert rc._coverage_window((D16, D14), since=D15, cal_end=D16) == (D14, D16, D15, D16)
+    assert rc._coverage_window((D16, D14), since=None, cal_end=D16) == (D14, D16, D14, D16)
+    # 整域停更（域末日 ≪ 日历末日）时末端仍取日历末日 → 洞不会被夹掉
+    assert rc._coverage_window((D14, D14), since=D14, cal_end=D22) == (D14, D14, D14, D22)
+    # 日历为空（全库无行情）→ 退回域末日，不让窗口末端为 None
+    assert rc._coverage_window((D16, D14), since=None, cal_end=None) == (D14, D16, D14, D16)
+    assert rc._coverage_window((None, None), since=D15, cal_end=None) == (None, None, None, None)
 
 
 # ------------------------------------------------------------------ 3. 端点
+
+
+async def test_coverage_report_degraded_when_union_fills_primary_gap() -> None:
+    """主源在库但缺日、由次源补上 → `degraded_trading_calendar=True`（评审 Important #1 的正例）。
+
+    与下一条真库用例（`daily_quotes` 当前是次源的超集 → 必须为 False）配成一对：
+    单看真库状态会把"永不触发"写成测试，所以正例必须用桩构造。
+    """
+    db = _report_db(
+        quotes=[(D14, 5500), (D16, 5500)],  # 主源缺 D15
+        limits=[(D14, 5500), (D15, 5500), (D16, 5500)],
+    )
+    report = await rc.coverage_report(db)
+    assert all(r["degraded_trading_calendar"] is True for r in report)
+    assert {r["domain"]: r["trading_days"] for r in report}["sentiment_daily"] == 3
+
+
+@pytest.mark.e2e
+async def test_coverage_report_calendar_not_degraded_on_real_db() -> None:
+    """真库（`e2e`）：`daily_quotes` 是 `stock_price_limits` 的超集（829 vs 254）→ 并集
+    没有多出任何日子 → `degraded_trading_calendar` 必须为 False（评审 Important #1 反例）。
+
+    这条替代了原先被评审点名的"把 false 钉死"的桩用例：真库状态会变，桩才是契约。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+
+    async with async_session_factory() as db:
+        calendar, degraded = await rc._trading_calendar(db, window_days=30, since=None)
+        assert calendar, "真库 daily_quotes 不该为空"
+        assert degraded is False
 
 
 def test_data_freshness_out_exposes_coverage_additively() -> None:

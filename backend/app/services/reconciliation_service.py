@@ -435,10 +435,11 @@ def compute_coverage(
     ``complete_days=None``（其余域）→ ``complete_days = have_days``（不是 0）。
     分母为空 → ``cover_pct=None``（绝不用 0/0 渲染成 0%）。
 
-    ``window`` 显式给出该域自身的 ``(first_day, last_day)``；缺省则取 ``have_days``
-    的极值（纯函数调用方只关心"数据自身跨度"这一种窗口）。返回的 ``have_days`` 是
-    **窗口内交易日**的行数——分母是交易日，分子就必须同口径（周末/未来脏行既不是
-    "有数据"也不是"缺"，它们只出现在 ``extra_days`` 里，不静默丢弃）。
+    ``window`` 显式给出测量窗口 ``(from, to)``（生产路径传"最近 window_days、末端锚定
+    日历末日"，见 :func:`_coverage_window`）；缺省则取 ``have_days`` 的极值（纯函数
+    调用方只关心"数据自身跨度"）。返回的 ``have_days`` 是**窗口内交易日**的行数——
+    分母是交易日，分子就必须同口径（窗口外/非交易日的行既不是"有数据"也不是"缺"，
+    它们只出现在 ``extra_days`` 里，不静默丢弃）。
     """
     trading = sorted(_normalized_day_set(trading_days))
     have_all = _normalized_day_set(have_days)
@@ -459,7 +460,9 @@ def compute_coverage(
     have = {d for d in have_all if d in set(trading)}
     complete = complete_all & have
     missing = sorted(d for d in trading if d not in have)
-    extra = sorted(have_all - have)  # 未来脏行/非交易日：单列，不静默丢弃
+    # 窗口外/非交易日的行：单列，不静默丢弃。**不叫"脏行"** —— 当日盘中行只要落在
+    # 窗口外就会进这里（窗口外 ≠ 这行是错的），它们只是不参与覆盖率计分
+    extra = sorted(have_all - have)
     cover_pct = round(100.0 * len(complete) / len(trading), 2) if trading else None
     return {
         "have_days": len(have),
@@ -495,7 +498,9 @@ def _coverage_days_stmt(src: _CoverageSource) -> Any:
     return select(func.max(col), func.min(col))
 
 
-async def _trading_calendar(db: Any, *, window_days: int) -> tuple[list[date], bool]:
+async def _trading_calendar(
+    db: Any, *, window_days: int, since: date | None
+) -> tuple[list[date], bool]:
     """交易日历（``TRADING_DAY_SOURCES`` 的并集，只取最近 ``window_days``）+ 是否降级。
 
     取并集是因为**任何单源都可能缺日**：真库实测 ``daily_quotes`` 2026-09 缺
@@ -503,27 +508,34 @@ async def _trading_calendar(db: Any, *, window_days: int) -> tuple[list[date], b
     ``stock_price_limits`` 是涨停判定的权威口径且逐日 100% 覆盖，并进来即可对齐。
 
     查询形状：内层 `distinct` 走 `trade_date` 索引，外层自连接取 `max` 再按日历区间
-    过滤 → 有界扫描（不把整部行情史拉回来）。返回的 ``last_quote`` 由调用方取
-    `days[-1]`。
+    过滤 → 有界扫描（不把整部行情史拉回来）。
 
-    主源（``daily_quotes``）缺失/未建时**不抛**：降级成只有其他源，并把
-    ``degraded`` 透出（分母口径变了必须让人看见，不能静默换源）。
+    ``degraded`` 的语义 = **并集提供了主源缺失的交易日**（`union_days != primary_days`），
+    或主源表不可用。只按"表是否存在"判降级会漏掉真实状态（主源在库但缺日、由次源补上），
+    那种情况下分母口径已经变了却标 ok —— 评审 Important #1。
     """
     all_days: set[date] = set()
-    degraded = False
+    primary_days: set[date] = set()
+    primary_broken = False
     for name in TRADING_DAY_SOURCES:
         model = _row_model_for_table(name)
         distinct_days = select(model.trade_date).distinct().subquery()
         col = distinct_days.c.trade_date
         stmt = select(col).where(col >= select(func.max(col)).scalar_subquery() - window_days)
         try:
-            all_days |= {_as_date(d) for (d,) in (await db.execute(stmt)).all()}
+            days = {_as_date(d) for (d,) in (await db.execute(stmt)).all()}
         except ProgrammingError:
-            if name == TRADING_DAY_PRIMARY:
-                degraded = True
-                logger.warning("COVERAGE trading calendar: %s unavailable", name, exc_info=True)
-            else:
+            if name != TRADING_DAY_PRIMARY:
                 raise
+            primary_broken = True
+            logger.warning("COVERAGE trading calendar: %s unavailable", name, exc_info=True)
+            continue
+        all_days |= days
+        if name == TRADING_DAY_PRIMARY:
+            primary_days = days
+    if since is not None:
+        all_days = {d for d in all_days if d >= since}
+    degraded = primary_broken or all_days != primary_days
     return sorted(all_days), degraded
 
 
@@ -548,21 +560,28 @@ def _row_model_for_table(table: str) -> Any:
 
 
 def _coverage_window(
-    range_row: Any, *, since: date | None
+    range_row: Any, *, since: date | None, cal_end: date | None
 ) -> tuple[date | None, date | None, date | None, date | None]:
-    """该域的数据跨度（SQL 的 max/min）与 **有效测量窗口**（再套一层 `since`）。
+    """该域的数据跨度（SQL 的 max/min）与 **有效测量窗口**。
 
     返回 ``(first_day, last_day, win_from, win_to)``：``first_day``/``last_day`` 是
-    原始数据跨度（报告里如实展示），``win_from``/``win_to`` 是把 `window_days` 的
-    下界也算进去之后的窗口——分子分母**必须**用同一个窗口，否则"行数"与"天数"
-    各说各话（真库实测踩过：sector 的 14 天里 5 天在窗口外，have_days 却照算）。
+    原始数据跨度（报告里如实展示，停更事实由此可见）；``win_from``/``win_to`` 是分子
+    分母**共用**的测量窗口。
+
+    窗口**末端锚定交易日历的末日**（``cal_end``）而不是该域自己的最后一行：夹到域末日
+    会让整域停更的域分母随之缩小（极端情况退化成单日），于是 `cover_pct=100`、
+    `missing_days=[]` —— 对"这个域整体停更"完全盲（评审 Important #2；真库实测
+    dragon_tiger/block_trade 的 trading_days=16 而邻域 17 就是这个夹取）。
+    窗口下界 = max(域首行, `since`)：历史上限 + 域自身起点，谁更晚取谁。
+    日历为空（全库无行情）时退回域末日，避免窗口末端为 None。
     """
     last, first = (range_row or (None, None))[0], (range_row or (None, None))[1]
     first, last = _as_date(first), _as_date(last)
     win_from = first
     if win_from is not None and since is not None:
         win_from = max(win_from, since)
-    return first, last, win_from, last
+    win_to = cal_end if cal_end is not None else last
+    return first, last, win_from, win_to
 
 
 def _normalize_coverage_row(
@@ -573,20 +592,18 @@ def _normalize_coverage_row(
     quotes: list[date],
     *,
     complete_days: set[date] | None = None,
-    fallback_window: tuple[date | None, date | None] | None = None,
 ) -> dict[str, Any]:
     """SQL 行 → 报告 dict（纯函数，便于单测与真实查询共用同一形状）。
 
     ``counts`` = 该域**有任何行**的交易日行数（``have_days``/``row_count`` 的来源）；
     ``complete_days`` = 逐域单独查出的"完整日"集合（``sector_moneyflow`` 的
     ``capture_kind='eod_full'``）；``None`` 表示该域没有产地之分 → 完整日 = 有行的日子。
-    ``window`` 是**有效测量窗口**（见 :func:`_coverage_window`）：窗口外的行只进
-    ``extra_days``（周末/未来脏行/超出 window_days 的老数据），不抬高 `have_days`。
-    域**一行都还没有**（如新表上线前）→ 退回 ``fallback_window``（最近 window_days），
-    否则窗口无从取极值、分母会退化成整部行情史（真库实测：空域报 0/829 交易日）。
+    ``window`` 是**有效测量窗口**（见 :func:`_coverage_window`，末端锚定日历末日）：
+    窗口外的行只进 ``extra_days``，不抬高 `have_days`。空域（新表上线前）由调用方传入
+    "最近 window_days"窗口，否则窗口无从取极值、分母会退化成整部行情史
+    （真库实测：空域曾报 0/829 交易日）。
     """
-    win = window if window and window[0] and window[1] else fallback_window
-    win_from, win_to = win if win else (None, None)
+    win_from, win_to = window if window else (None, None)
     have_raw = {d for d in counts if isinstance(d, date)}
     trading = [
         d for d in quotes if (win_from is None or d >= win_from) and (win_to is None or d <= win_to)
@@ -682,9 +699,12 @@ async def coverage_report(
     # 交易日历 = 多源并集（`TRADING_DAY_SOURCES`）。**基准日不能取主源自己的 max**：
     # 主源缺最近几天时（真库实测 2026-09 缺 7 个交易日）会把补漏源的新日子截掉。
     # 这里直接取并集的 max，主源缺失则标降级。
-    calendar, calendar_degraded = await _trading_calendar(db, window_days=window_days)
-    last_quote = calendar[-1] if calendar else None
+    # 先取"粗略的一段"定位日历末日，再用它算 `since`，最后用 `since` 收窄（避免
+    # 把整部行情史拉回来，也让窗口口径只依赖日历、不依赖任何单个巡检域）。
+    rough, _ = await _trading_calendar(db, window_days=window_days, since=None)
+    last_quote = rough[-1] if rough else None
     since = last_quote - timedelta(days=window_days) if last_quote else None
+    calendar, calendar_degraded = await _trading_calendar(db, window_days=window_days, since=since)
 
     out: list[dict[str, Any]] = []
     for domain in INSPECT_DOMAINS:
@@ -717,11 +737,11 @@ async def coverage_report(
             continue
 
         first_day, last_day, win_from, win_to = _coverage_window(
-            range_row[0] if range_row else None, since=since
+            range_row[0] if range_row else None, since=since, cal_end=last_quote
         )
         if first_day is None:
-            # 该域一行都没有（新表上线前）：窗口退回"最近 window_days"；若连基准日都没有
-            # （daily_quotes 缺失），退化成"已观测到的交易日两端"（不取全史）
+            # 该域一行都没有（新表上线前）：窗口退回"最近 window_days"（同样锚定日历末日）；
+            # 若连日历都空，退化成"已观测到的交易日两端"（不取全史）
             win_from, win_to = since, last_quote
             if win_from is None and calendar:
                 win_from, win_to = calendar[0], calendar[-1]

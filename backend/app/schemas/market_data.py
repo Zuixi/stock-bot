@@ -230,7 +230,10 @@ class CoverageOut(BaseModel):
     trading_days: int = 0  # 分母：该域区间内的**交易日**数（见 TRADING_DAY_SOURCES 并集）
     cover_pct: float | None = None  # complete_days / trading_days；分母为 0 → None
     missing_days: list[str] = []  # 窗口内缺行的交易日（isoformat，升序）
-    extra_days: list[str] = []  # 区间外/非交易日的行（未来脏行；不参与覆盖率）
+    # 窗口外/非交易日的行，**不是**"未来脏行"的同义词：当日盘前/盘中写下的合法行
+    # （sector_moneyflow 的 poll 行、sentiment_intraday 的当日行）只要落在窗口外就会
+    # 出现在这里。判据是"日期不在窗口内"，不是"这行是脏的"；不参与覆盖率计分。
+    extra_days: list[str] = []
     first_day: str | None = None
     last_day: str | None = None
     status: str = "ok"  # ok | missing_table | missing_column

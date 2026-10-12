@@ -189,31 +189,36 @@ next-action: Task 4（历史回补脚本 backfill_market_history.py，sentiment 
 
 **Interfaces:**
 - `def compute_coverage(trading_days: list[date], have_days: set[date], complete_days: set[date] | None = None, *, window: tuple[date, date] | None = None) -> dict` —— `{have_days, complete_days, trading_days, cover_pct, missing_days, extra_days}`；`trading_days` 为空 → `cover_pct=None`（不产生 0/0）；返回的 `have_days` 与分母同口径（**窗口内交易日**的行数），窗口外/非交易日的脏行进 `extra_days`
-- `async def coverage_report(db, *, window_days: int = 30) -> list[dict]` —— 巡检域：`sector_moneyflow` / `sentiment_daily`（**不叫 `sentiment`**：那是可自愈域的名，重名会让"巡检域 vs 补漏域"的边界糊掉；同一张表 `market_sentiment_daily`）/ `sentiment_intraday` / `limit_up_stock_daily` / `dragon_tiger` / `block_trade` / `share_float` / `repurchase`；分母 = **交易日**（`daily_quotes` ∪ `stock_price_limits`，见 `TRADING_DAY_SOURCES`；**不用自然日**），且逐域收窄到该域自身 `[first_day, last_day]`。并集是实施中实测的必要修正：`daily_quotes` 自己缺 2026-09-09..09-17 共 7 个交易日，单源当分母会把行情自己的洞算成巡检域的洞（sector 14 天被误判成 12 天）
-- 缺表/缺列（迁移未应用）→ 该域 `missing_table`/`missing_column`，其余域照常渲染（SAVEPOINT 隔离，不 500）；主源缺日历时 `degraded_trading_calendar=true`（换分母必须可见）
+- `async def coverage_report(db, *, window_days: int = 30) -> list[dict]` —— 巡检域：`sector_moneyflow` / `sentiment_daily`（**不叫 `sentiment`**：那是可自愈域的名，重名会让"巡检域 vs 补漏域"的边界糊掉；同一张表 `market_sentiment_daily`）/ `sentiment_intraday` / `limit_up_stock_daily` / `dragon_tiger` / `block_trade` / `share_float` / `repurchase`；分母 = **交易日**（`daily_quotes` ∪ `stock_price_limits`，见 `TRADING_DAY_SOURCES`；**不用自然日**），窗口 = 最大(域首行, 日历末日前 N 自然日) → 日历末日。并集是评审 Important #1 的口径修正：**任何单源都可能缺日**（该修正落地时真库 `daily_quotes` 恰好是次源超集、并集没多出日子，但这一天可能再来），单源当分母会把行情自己的洞算成巡检域的洞；并集相对主源多出的每一天都会把 `degraded_trading_calendar` 置 true
+- 缺表/缺列（迁移未应用）→ 该域 `missing_table`/`missing_column`，其余域照常渲染（SAVEPOINT 隔离，不 500）；**并集相对主源多出的交易日 → `degraded_trading_calendar=true`**（判据是「并集 != 主源」，不是「主源表不存在」：主源在库但缺日、由次源补上时分母口径已经变了，不能标 ok）
+- **测量窗口末端锚定交易日历末日**（不是各域自己的最后一行）：夹到域末日会让整域停更的域分母随之缩小（极端退化到单日）→ `cover_pct=100`/`missing_days=[]`，对「这个域整体停更」完全盲；`window_days` 语义 = 以日历末日前推 N 自然日的测量窗
 - 缺行 → 复用既有 `job_alert_service`（不新增机制）；**覆盖率本身不写登记表**（只读端点每次请求都调，会刷出假告警），缺口经 `cover_pct`/`missing_days` 可见
 
 **ADR 0009 必须写清三件事：** ① A/B/C 三条判据；② 与 ADR 0004 的边界（ADR 0004 管"快照型分类数据本身不得回算"，**不禁止**用行情事实做聚合 + 按当前分类归属并显式标注 = 拍板②）；③ 被否决方案（全读时计算 / 全落库含榜单 / 5 分钟全池明细）。外加一条：**产地决定可信度**——`sector_moneyflow` 的"完整日"= 有 `capture_kind='eod_full'` 行的日子（Ruling 11/12），`poll` 行只是盘中子集。
 
 **Ruling 13（覆盖率必须区分"有行"与"完整"）：** T2 之后 `sector_moneyflow` 的行数不再等于数据完整——盘中轮询写的是 inflow-Top-100 子集。故 `coverage` 每域同时返回两个数：`have_days`（有任何行）与 `complete_days`（`sector_moneyflow` 取有 `eod_full` 行的日子；其余域 = `have_days`），`cover_pct` 基于 `complete_days`，`have_days` 原样带回（供与本文档 Why-now 表对拍）。历史 13 天只有 poll 行 → `complete_days=0`，`have_days` 仍应复现 ~65%。
 
-**验收（真库实测，2026-10-12 11:55 +0800，默认 `window_days=30`；数字回填本行）：**
+**验收（真库实测，2026-10-12 12:20 +0800，默认 `window_days=30`，评审修复轮 1 的新锚定基准；数字回填本行）：**
 
-| 域 | row_count | have_days | complete_days | trading_days | cover_pct | 区间 |
-|---|---|---|---|---|---|---|
-| `sector_moneyflow` | 4232 | **9** | **0** | 17 | **0.0** | 2026-09-04..10-12 |
-| `sentiment_daily` | 17 | 17 | 17 | 17 | 100.0 | 2026-09-03..10-09 |
-| `sentiment_intraday` | 1 | 1 | 1 | **11** | 9.09 | 2026-09-17..10-12 |
-| `limit_up_stock_daily` | 0 | 0 | 0 | 17 | 0.0 | —（T1 真库行已被 e2e 清理） |
-| `dragon_tiger` | 1077 | 16 | 16 | 16 | 100.0 | 2026-08-25..10-08 |
-| `block_trade` | 1561 | 16 | 16 | 16 | 100.0 | 2026-08-25..10-08 |
-| `share_float` | 24562 | 12 | 12 | 17 | 70.59 | 2026-08-28..10-09 |
-| `repurchase` | 458 | 16 | 16 | 17 | 94.12 | 2026-08-28..10-09 |
+| 域 | row_count | have_days | complete_days | trading_days | cover_pct | 缺日 | 区间 |
+|---|---|---|---|---|---|---|---|
+| `sector_moneyflow` | 4232 | **9** | **0** | 17 | **0.0** | 8 | 2026-09-04..10-12 |
+| `sentiment_daily` | 17 | 17 | 17 | 17 | 100.0 | 0 | 2026-09-03..10-09 |
+| `sentiment_intraday` | 1 | 1 | 1 | **11** | 9.09 | 10 | 2026-09-17..09-17 |
+| `limit_up_stock_daily` | 0 | 0 | 0 | 17 | 0.0 | 17 | —（T1 真库行已被 e2e 清理） |
+| `dragon_tiger` | 1077 | 16 | 16 | **17** | **94.12** | 1（10-09） | 2026-08-25..10-08 |
+| `block_trade` | 1561 | 16 | 16 | **17** | **94.12** | 1（10-09） | 2026-08-25..10-08 |
+| `share_float` | 24562 | 12 | 12 | 17 | 70.59 | 5 | 2026-08-28..10-09 |
+| `repurchase` | 458 | 16 | 16 | 17 | 94.12 | 1（09-09） | 2026-08-28..10-09 |
 
-- **`complete_days = 0` 复现**：`sector_moneyflow` 全表 `capture_kind='eod_full'` 行数为 **0**（`poll=6616` 行）→ 完整日自 T2 上线起累积。这就是 Ruling 13 要防的"有行冒充完整"
-- **~65% 形状复现**：`window_days=3650`（=不限窗口）时 `sector_moneyflow` 为 **12/20 = 60%**（本文档 Why-now 表口径为 13/20 = 65%，差 1 天是实测时点不同 + 数据仍在被 5 分钟轮询写入）；`complete_days` 仍为 0
-- **`sentiment_intraday` 54.5% 的分母复现**：`trading_days = 11` 与 Why-now 表的 6/11 同形；`have_days=1` 是因为 `tests/test_intraday_snapshot_table.py` 的迁移 down/up 用例**会 DROP+重建 `market_sentiment_intraday`**（全量 suite 每跑一次清一次历史，只留 scheduler 重建后的行）——按 controller caveat，这是"最后一次全量 suite 之后"的真库状态，不是覆盖率实现的问题
-- 缺表/缺列：单测断言 `missing_table` / `missing_column` + 其余域照常渲染（打桩触发，不真删表）；`bash scripts/doc_gate.sh` 绿（16 项）
+- **Important #2 的可见收益就在表里**：`dragon_tiger`/`block_trade` 的分母从 16 → **17**，`cover_pct` 从虚高的 100.0 → **94.12**，并报出真实缺日 **2026-10-09**（旧口径把窗口末端夹到域末日 `10-08`，这个洞被夹掉了）。`repurchase` 也报出 `09-09`。
+- 窗口 = 最大(域首行, 日历末日前 30 自然日) → **日历末日**；分母只随日历变、不随任何单个域停更而缩短。
+- **`complete_days = 0` 复现**：`sector_moneyflow` 全表 `capture_kind='eod_full'` 行数为 **0**（全是 `poll`）→ 完整日自 T2 上线起累积。这就是 Ruling 13 要防的"有行冒充完整"。
+- **~65% 形状复现**：`window_days=3650`（不限窗口）时 `sector_moneyflow` 为 **12/20 = 60%**（本文档 Why-now 表口径为 13/20 = 65%，差 1 天是实测时点不同 + 板块表仍在被 5 分钟轮询写入）；`complete_days` 仍为 0。
+- **`sentiment_intraday` 54.5% 的分母复现**：`trading_days = 11` 与 Why-now 表的 6/11 同形；`have_days=1` 是因为 `tests/test_intraday_snapshot_table.py` 的迁移 down/up 用例**会 DROP+重建 `market_sentiment_intraday`**（全量 suite 每跑一次清一次历史，只留 scheduler 重建后的行）——按 controller caveat，这是"最后一次全量 suite 之后"的真库状态，不是覆盖率实现的问题。
+- **`degraded_trading_calendar` 真库为 false（正确）**：实测 `daily_quotes` 是次源的**超集**（829 vs 254，次源相对主源多出 **0** 天）→ 并集没有多出日子，不该标降级；该标记的正例由桩用例 `test_coverage_report_degraded_when_union_fills_primary_gap` 钉住，真库反例由 `@pytest.mark.e2e` 的 `test_coverage_report_calendar_not_degraded_on_real_db` 钉住（**不用真库状态代替契约**）。
+- **"整域停更"的构造证据**：`test_stale_domain_old_vs_new_anchor_evidence` 用同一份桩数据并排断言旧口径（分母夹到域末日 → `cover_pct=100`/无缺日）与新口径（分母 3 个交易日 → `33.33`/缺 2 天）。
+- 缺表/缺列：单测断言 `missing_table` / `missing_column` + 其余域照常渲染（打桩触发，不真删表）；`bash scripts/doc_gate.sh` 绿（16 项）。
 
 - [x] Step 1: 纯函数 + 单测（分母 0 / 脏行 / 缺日）
 - [x] Step 2: `coverage_report` + `DataFreshnessOut.coverage` + 端点
