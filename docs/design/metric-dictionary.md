@@ -36,8 +36,8 @@
 | 2 | 外汇市场 **5** | 5 个汇率品种（美元 / 欧元 / 日元 / 港元 / 英镑等） | `ingested_count` | 同上：有真实序列，无策展层 |
 | 3 | 主要指数 **9** | 9 个指数（上证 / 深证 / 创业板 / 科创50 / 沪深300 / 中证500 / 恒生 / 标普500 / 纳斯达克综合等） | `ingested_count` | 行情事实层已覆盖，不依赖任何人工策展 |
 | 4 | 申万一级 **31** | 申万一级行业 **31** 个（分类体系全集） | `ingested_count` | 分类体系本身全量落库（SCD2 归属表），属于"名录已接入" |
-| 5 | 行业看板 **3** | 已有策展产物的行业工作台 | `curated_count` | **语义**已定（走上面 `curated_count` 的唯一定义）；**数值 3 是 owner 图上的标注值，尚未与数据侧核对**——registry 当前只注册 **2** 个行业（`INDUSTRIES` = `pig` / `broiler`），核对方法见下方"语义归类已定 vs 数值待核" |
-| 6 | **行业分类（申万）16** | 申万一级中**已策展的行业**数 | **`curated_count`** | 与第 5 行 `行业看板 3` 同语义（同一钻取路径）；**语义**归类见下方"`行业分类（申万）16` 的归类裁定"，**数值 16 是 owner 标注值、尚未与数据侧核对**（registry 今日实测 = 2）|
+| 5 | 行业看板 **3** | 已有策展产物的行业工作台 | `curated_count` | **语义**已定（走上面 `curated_count` 的唯一定义）；**数值 3 是 owner 图上的标注值，尚未与数据侧核对**——registry 当前只注册 **2** 个**行业** scope，核对方法见下方"语义归类已定 vs 数值待核" |
+| 6 | **行业分类（申万）16** | 申万一级中**已策展的行业**数 | **`curated_count`** | 与第 5 行 `行业看板 3` 同语义（同一钻取路径）；**语义**归类见下方"`行业分类（申万）16` 的归类裁定"，**数值 16 是 owner 标注值、尚未与数据侧核对**（registry 今日实测行业 scope = 2）|
 | 7 | ~~**A股市场 18**~~ | —— | **删除（不再存在）** | 见下方 Ruling 4 |
 
 ### Ruling 4：`A股市场 18` 徽标**删除**
@@ -63,24 +63,28 @@
 | **它数的是** | 申万一级行业里**已有策展产物**（`industry_registry` 指标定义 / 行业页 / 榜单配置）的行业数 |
 | **依据 1（语义自洽）** | 与上表第 5 行 `行业看板 3` 同源同义：`行业分类（申万）→ 逐行业` 是同一个钻取路径，`16` 与 `3` 只能同属一套语义；否则同一个入口的两个数字互不可比 |
 | **依据 2（与 spec 落位一致）** | spec §4.1 已把 `行业分类 16` 排在 `已策展数` 一列（原文标注"待 owner 复核归类"，本行即完成**语义**复核）；`ingested_count` 一列是 29 / 5 / 9 / 31 |
-| **依据 3（可验收：核对方法）** | 核对方法 = **数 `industry_registry.INDUSTRIES` 的 key 数**（`industries[].metrics` 里含 `MetricDef` 的行业）。**今日实测 = 2**（`pig` / `broiler`，见 `industry_registry.py` 的 `INDUSTRIES` 定义）→ **与图上的 `16` 不符**，故 `16` 只作 owner 标注值、**待数据侧复核**（不在本任务裁决范围）|
-| **数值状态** | 图上的 `16` **尚未与数据侧核对**（当前 registry 实际注册 2 个行业）。**不作为已核实事实使用**；UI 上架前必须先核对 |
+| **依据 3（可验收：核对方法）** | 核对方法 = **数 `industry_registry.get_industry_scopes()` 的长度**（判据 = `IndustryConfig.is_industry`，即 `sw_l3_codes` 非空的 **行业** scope）。**今日实测 = 2**（`pig` / `broiler`）→ **与图上的 `16` 不符**，故 `16` 只作 owner 标注值、**待数据侧复核**（不在本任务裁决范围）。**不许**改数 `INDUSTRIES` 的 key 数：`INDUSTRIES` 现在同时登记非行业 scope（`market` = 全市场情绪，spec §S1.8），key 数 = 3，把全市场数成一个"行业"会让分母虚高（Ruling 54 第 4 条）|
+| **数值状态** | 图上的 `16` **尚未与数据侧核对**（当前 registry 实际注册 2 个**行业** scope / 3 个 scope）。**不作为已核实事实使用**；UI 上架前必须先核对 |
 | **因此不许** | ① 不允许把 `16` 读成"16 个行业有数据"（那是 `ingested_count` 的口径，且与 `31` 冲突）② **不允许把未经核对的 `16` 写成已核实事实** ③ **同一入口同时展示两个语义时必须带标签**（如「已策展 16 / 已接入 31」），裸数字不再出现 |
 
 **语义归类已定 vs 数值待核（必须显式分开，不许混写）**：
 
 | 徽标 | 语义归类（本次裁定，已定） | 数值（owner 图上标注，**待核**） | 核对方法 |
 |---|---|---|---|
-| `行业分类（申万）16` | `curated_count` | **16 —— 未与数据侧核对** | 数 `industry_registry.INDUSTRIES` 的 key 数（今日 = **2**，与 16 不符 → 待复核）|
+| `行业分类（申万）16` | `curated_count` | **16 —— 未与数据侧核对** | 数 `get_industry_scopes()` 的长度（今日 = **2**，与 16 不符 → 待复核）|
 | `行业看板 3` | `curated_count` | **3 —— 未与数据侧核对** | 同上（今日 = **2**）|
 
 **可复跑的核对命令**（"今日 = 2"的出处）：
 
 ```bash
 cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -c \
-  "from app.services.industry_registry import INDUSTRIES; print(len(INDUSTRIES), list(INDUSTRIES))"
-# → 2 ['pig', 'broiler']
+  "from app.services.industry_registry import INDUSTRIES, get_industry_scopes; \
+   print(len(INDUSTRIES), list(INDUSTRIES), '->', len(get_industry_scopes()), [c.key for c in get_industry_scopes()])"
+# → 3 ['pig', 'broiler', 'market'] -> 2 ['pig', 'broiler']
 ```
+
+> 两个数**都要看**：`INDUSTRIES` 的 key 数是 **scope 数**（3，含全市场情绪 `market`），
+> `get_industry_scopes()` 才是**行业数**（2）。徽标的「行业分类（申万）」分母是后者。
 
 > **口径纪律**：本文件只负责把**语义**钉死；**数值**必须由数据侧核对后才可写成事实。凡本文件出现"今日 = N"的写法，都是**截至编写时可复跑的实测值**（附核对命令），不是定格口径——数值变化时改数据侧或徽标，不改本节的语义裁定。
 
@@ -142,6 +146,25 @@ cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -c \
 > **PIT**：这 8 个 key 的每行 `published_at` 恒为"该交易日 15:00 Asia/Shanghai"
 > （`market_sentiment_service.published_at_for`），读面的 `as_of_source` 因此恒为
 > `published_at`，**不回退** `period`（ADR 0011 / Ruling 34-35）。
+>
+> **口径版本**：`caliber_version = 's1.8-v2'`（fix round 1 从 v1 bump）。v1 把
+> `pct_chg IS NULL` 的行按市场分布的 `None → 0~1%` 行为记成"上涨"，v2 在分桶前剔除
+> NULL 行并加覆盖率门槛；两版的行**不可混用**（ADR 0011 第 4 条）。
+>
+> **涨跌类指标的双口径（Ruling 54.1，必须可查）**：`market_advance_count` /
+> `market_decline_count` / `advance_decline_ratio` 的**主值 = 市场 `A股涨跌分布` 的
+> 桶之和**（`up` = `0~1%`/`1~3%`/`3~5%`/`>5%`/`涨停` 之和，`down` = 六个负数桶之和），
+> 与市场页逐桶可对拍；`extra.sign_basis='market_distribution_buckets'` 记录该基准。
+> 桶口径里 **`0~1%` 含 `pct_chg == 0` 的平盘**，故与符号口径（`pct_chg > 0`）之差 =
+> 平盘家数，落 `extra.flat_in_positive_bucket`（恒等式
+> `up_count - up_sign_count == flat_in_positive_bucket` 有测试锁定）。
+> **`pct_chg IS NULL` 的行在分桶前剔除**（Ruling 55）：它们**不计涨也不计跌**，
+> 家数落 `extra.unavailable_pct_chg`；可用覆盖率 `extra.coverage` 低于
+> `extra.min_coverage`（当前 `0.95`）时，三个指标整组 `value = NULL` +
+> `missing_reason='partial_pct_chg'`，**不落任何由缺失数据拼出的数字**。
+> `above_ma20_ratio` 的 `extra` 另带 `max_window_span_days` / `max_gap_days` /
+> `span_over_alert_days`（20 行窗口最坏的日历跨度、最大相邻间隔、跨度超
+> `span_alert_days`=40 天的合格标的家数：窗口是「20 行」而非「20 个连续交易日」）。
 >
 > **A/B/C 归类（ADR 0014）**：8 个全属 **B 类**（只用当日点内事实，可回算、允许回补，
 > 带 20 日窗口完备守卫）。无 A 类、无 C 类指标。

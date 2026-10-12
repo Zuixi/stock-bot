@@ -16,6 +16,12 @@ spec §S1.8，2026-10-12 落地）—— 两者落进同一张 `industry_metrics
 `sw_l3_codes` / `phases` / `position_templates` 留空（'market' 即如此），
 只有 `metrics` 与 `reference_points` 对它有意义。消费方若假定"每个 scope 都是行业"
 （如数 `sw_l3_codes` 或取相位），必须先看该 scope 是否行业 scope。
+
+**"是不是行业"有唯一判据**：:attr:`IndustryConfig.is_industry`（= `sw_l3_codes`
+非空，即该 scope 挂了申万三级分类）。`INDUSTRIES` 的 key 数是**scope 数**（既有行业
+也有全市场），不是行业数 —— 徽标的「行业分类（申万）」分母与
+`GET /api/v1/industries`（"已产品化行业列表"）都必须用 `is_industry` 过滤，
+否则全市场情绪会被当成一个"行业"计数/上架（Ruling 54 第 4 条）。
 """
 
 from __future__ import annotations
@@ -130,6 +136,18 @@ class IndustryConfig:
 
     def metric(self, key: str) -> MetricDef | None:
         return next((m for m in self.metrics if m.key == key), None)
+
+    @property
+    def is_industry(self) -> bool:
+        """本 scope 是否**行业** scope（唯一判据：挂了非空申万三级分类）。
+
+        为什么不用别的判据：`phases` / `position_templates` 在"已策展但尚未配相位"
+        的行业上也可能为空，用它会把真行业误判成非行业；`sw_l3_codes` 是**申万行业
+        归属**的最小充分证据（行业 scope 必有、全市场 scope 必无）。徽标
+        「行业分类（申万）」的 `curated_count` 分母与 `GET /api/v1/industries`
+        （"已产品化行业列表"）都用它，避免把 `market` 数成行业（Ruling 54 第 4 条）。
+        """
+        return bool(self.sw_l3_codes)
 
     @property
     def strip_metrics(self) -> list[MetricDef]:
@@ -868,7 +886,11 @@ BROILER_INDUSTRY = IndustryConfig(
 # `local_calc`（与 `market_sentiment_daily.source` 同值 —— 产地标签与底座保持一致，
 # 不另造一个只在读面出现的源名），`unit` / `freq` / `tier` 由本表登记。
 MARKET_SENTIMENT_SOURCE = "local_calc"
-MARKET_CALIBER_VERSION = "s1.8-v1"
+#: 口径版本：**fix round 1 bump 到 s1.8-v2** —— v1 把 `pct_chg IS NULL` 的行按市场
+#: 分布的 `None → 0~1%` 行为记成"上涨"（2025-09-23 落库 `market_advance_count=5382`），
+#: v2 在分桶前剔除 NULL 行、加覆盖率门槛（`partial_pct_chg`）并改 `extra` 形状。
+#: v1 的行与 v2 **不可混用**（ADR 0011 第 4 条：口径变更 bump + 留断点）。
+MARKET_CALIBER_VERSION = "s1.8-v2"
 
 #: `extra` 里带 `missing_reason` 的缺数语义。**缺数恒 NULL，绝不填 0**（spec §S1.8
 #: 验收：涨停类指标的"缺数日"不能静默为 0）——0 在"涨跌停家数"上是"今天只有 0 家
@@ -878,6 +900,10 @@ MARKET_METRIC_MISSING_REASONS: dict[str, str] = {
     "source_null": "底座该字段为 NULL（上游口径下该日该值不可得）",
     "no_quote_rows": "该交易日 daily_quotes 无行（行情底座缺失）",
     "no_ma20_window": "无任何标的具备完整的 20 日窗口（上市不足 20 个交易日或 20 日窗口未取满）",
+    "partial_pct_chg": (
+        "当日取回行的可算 pct_chg 覆盖率低于门槛（extra.coverage < extra.min_coverage），"
+        "涨跌家数与涨跌比整组落 NULL —— 分母被缺失数据掏空后，任何数字都不是该日的市场事实"
+    ),
 }
 
 MARKET_METRICS: list[MetricDef] = [
@@ -893,9 +919,13 @@ MARKET_METRICS: list[MetricDef] = [
         higher_is_better=True,
         caliber_version=MARKET_CALIBER_VERSION,
         description=(
-            "全市场当日在市标的收盘 pct_chg > 0 的家数。"
-            "与市场模块 A股涨跌分布同一个 loader（market_snapshot_service.load_day_rows），"
-            "口径与分布正数桶之和按构造相等"
+            "全市场当日**有 pct_chg 的**（`pct_chg IS NOT NULL`）标的中，收盘涨跌幅落入"
+            "市场分布上涨桶（`0~1%` / `1~3%` / `3~5%` / `>5%` / `涨停`）的家数。"
+            "注意 `0~1%` 桶含 `pct_chg == 0` 的平盘，故本值 = 符号上涨（`pct_chg > 0`）"
+            "**加上**平盘；两者之差落 `extra.flat_in_positive_bucket` 可复核。"
+            "`pct_chg IS NULL`（无行情行/未采集）的家数**既不计涨也不计跌**，"
+            "落 `extra.unavailable_pct_chg`；可算覆盖率 `extra.coverage` 低于门槛时"
+            "本指标整组落 NULL（`missing_reason='partial_pct_chg'`），不拿缺失数据拼数字"
         ),
     ),
     MetricDef(
@@ -909,8 +939,12 @@ MARKET_METRICS: list[MetricDef] = [
         higher_is_better=False,
         caliber_version=MARKET_CALIBER_VERSION,
         description=(
-            "全市场当日在市标的收盘 pct_chg < 0 的家数；"
-            "平盘（pct_chg == 0 或 NULL）既不计涨也不计跌，与分布中桶一致"
+            "全市场当日**有 pct_chg 的**标的中，收盘涨跌幅落入市场分布下跌桶"
+            "（`0~-1%` / `-1~-3%` / `-3~-5%` / `-5~-7%` / `>-7%` / `跌停`）的家数"
+            "（等价于 `pct_chg < 0`）；平盘（`pct_chg == 0`）在上涨侧的 `0~1%` 桶里，"
+            "**不计入本值**。`pct_chg IS NULL` 的行**既不计涨也不计跌**，其家数落"
+            "`extra.unavailable_pct_chg`；覆盖率低于门槛时整组落 NULL"
+            "（`missing_reason='partial_pct_chg'`）"
         ),
     ),
     # ── ② 涨跌比 ─────────────────────────────────────────────────────────
@@ -925,8 +959,11 @@ MARKET_METRICS: list[MetricDef] = [
         higher_is_better=True,
         caliber_version=MARKET_CALIBER_VERSION,
         description=(
-            "上涨家数 / 下跌家数（无量纲比值）。分母为 0（全市场无下跌）时落 NULL，"
-            "不落 0 也不落无穷；`extra` 同时带上涨/下跌/平盘原始家数可复核"
+            "上涨家数 / 下跌家数（无量纲比值，口径同为市场分布桶之和，见上涨/下跌家数）。"
+            "分母为 0（全市场无下跌）时落 NULL，不落 0 也不落无穷；`extra` 同时带"
+            "上涨/下跌/平盘家数、不可用家数 `unavailable_pct_chg` 与可用覆盖率"
+            "`coverage` 可复核；`pct_chg IS NULL` 的行不计涨也不计跌，覆盖率低于门槛时"
+            "落 NULL（`missing_reason='partial_pct_chg'`，`value` 不落任何由缺失数据拼出的数字）"
         ),
     ),
     # ── ③ 涨跌停比（底座：market_sentiment_daily.zt_count / dt_count，直接读不重算）──
@@ -960,7 +997,11 @@ MARKET_METRICS: list[MetricDef] = [
             "收盘价 > 该股截至当日的 20 日简单均线（含当日、前 19 个交易日）的标的占"
             "**具备完整 20 日窗口**标的的比例，算术均值取存储列 close。"
             "窗口不足 20 个交易日的标的整只剔除（不进分子也不进分母）——"
-            "新股按字面口径永远是 0%，会把新上市高峰期误读成情绪冰点"
+            "新股按字面口径永远是 0%，会把新上市高峰期误读成情绪冰点。"
+            "窗口是「最近 20 **行**行情」而非「20 个连续交易日」，长停牌股的一个窗口"
+            "可能横跨 60+ 个日历日，故 `extra` 记录当日最坏的"
+            "`max_window_span_days`（窗口跨度）、`max_gap_days`（窗口内最大相邻间隔）"
+            "与 `span_over_alert_days`（跨度超过 `span_alert_days`=40 天的合格标的家数）"
         ),
     ),
     # ── ⑤ 炸板率（底座：market_sentiment_daily.broken_rate，直接读不重算）──
@@ -1039,6 +1080,17 @@ INDUSTRIES: dict[str, IndustryConfig] = {
 
 def get_industry(key: str) -> IndustryConfig | None:
     return INDUSTRIES.get(key)
+
+
+def get_industry_scopes() -> list[IndustryConfig]:
+    """`INDUSTRIES` 里 ``is_industry`` 为真的 scope（**行业** scope，顺序 = 登记序）。
+
+    这是"行业数"的**唯一**分母：徽标的「行业分类（申万）」`curated_count` 与
+    `GET /api/v1/industries`（"已产品化行业列表"）都必须用它，而不是
+    ``len(INDUSTRIES)`` —— 后者数的是 scope 数，含全市场情绪 `market`（Ruling 54 第 4 条）。
+    通用读面/因子校验要**全部** scope 时请直接用 `INDUSTRIES`。
+    """
+    return [cfg for cfg in INDUSTRIES.values() if cfg.is_industry]
 
 
 def find_metric(metric_key: str) -> tuple[str, MetricDef] | None:

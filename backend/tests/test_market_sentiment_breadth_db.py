@@ -9,10 +9,14 @@
 2. **PIT**：每行 `published_at` = 该行 `period` 的 15:00 Asia/Shanghai、非空，
    于是读面的 `as_of_source` 恒为 `published_at`（不是回退的 `period`，Ruling 34/35）。
 3. **同源证据（真库）**：市场分布（`market_service._distribution_items`）的 11 桶
-   逐桶相加 == 本模块落库的涨/跌家数；且 `advance_decline_ratio == 上涨/下跌`。
+   逐桶相加 == 本模块落库的涨/跌家数（在**可用行**上）；且
+   `advance_decline_ratio == 上涨/下跌`。**C1 回归**：`pct_chg` 覆盖率不足的交易日
+   整组落 NULL + `partial_pct_chg`（不拿 NULL 当"涨"）。
 4. **`above_ma20_ratio` 可手算核对**：取一只股票、一天，手工算 20 日收盘均线验证
    "是否在均线上方"；并用一条**独立写法的相关子查询**（不用窗口函数）重算全市场
-   分子分母，与窗口函数结果数字相等 —— 两套写法互为对拍。
+   分子分母，与窗口函数结果数字相等 —— 两套写法互为对拍。窗口的**日历跨度**与
+   **最大相邻间隔**（`win = 20` = 20 行，不是 20 个连续交易日）也用独立写法对拍。
+5. **I3**：`GET /api/v1/industries` 的 service 层只列**行业** scope（不含 `market`）。
 
 **不污染库**（Ruling 17 的做法）：所有写入都包在 `rollback` 的事务里；测试库无数据时
 skip 而不是红。测试前后 `industry_key='market'` 的行数与内容不变（回滚）。
@@ -34,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.models.industry_research import IndustryMetric
 from app.models.quote import DailyQuote
 from app.services import market_sentiment_service as svc
+from app.services.industry_registry import MARKET_CALIBER_VERSION
 
 _DEFAULT_ASYNC = "postgresql+asyncpg://stock_user:stock_pass@localhost:5433/stock_bot_test"
 ASYNC_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL") or _DEFAULT_ASYNC
@@ -148,7 +153,7 @@ def test_rows_carry_registry_projection_and_pit() -> None:
         assert row.source == svc.METRIC_SOURCE == "local_calc"
         assert row.source_tier == "derived"
         assert row.freq == "daily" and row.stock_id == 0
-        assert row.caliber_version == "s1.8-v1"
+        assert row.caliber_version == MARKET_CALIBER_VERSION == "s1.8-v2"
         assert row.published_at is not None, "PIT 恒非空：读面 as_of_source 不得回退 period"
         assert row.published_at == svc.published_at_for(row.period)
         assert row.unit == svc._UNITS[row.metric_key]
@@ -206,16 +211,18 @@ def test_missing_base_row_yields_null_with_reason_not_zero() -> None:
 
 @requires_pg
 def test_advance_decline_matches_market_distribution_buckets() -> None:
-    """**同源证据（真库）**：市场分布的 11 桶 vs 本模块落库的家数（同一天、同一份行）。
+    """**同源证据（真库）**：市场分布的 11 桶 vs 本模块落库的家数（同一天、同一份**可用**行）。
 
     - `市场负数桶之和 == market_decline_count`（实测边界与 `pct_chg < 0` 完全重合）；
     - `市场正数桶之和 == market_advance_count`（`0~1%` 桶含平盘）；
-    - 差额 = 平盘家数，落 `extra.flat_in_positive_bucket`，账目闭合。
+    - 差额 = 平盘家数，落 `extra.flat_in_positive_bucket`，账目闭合；
+    - **NULL 行在分桶前剔除**：可用行上 `up + down == total`；若该日存在
+      `pct_chg IS NULL` 的行，市场页（含 NULL 的全量分桶）会比本模块多出恰好那么多。
     """
 
     async def _go(
         session: AsyncSession,
-    ) -> tuple[dict[str, int], list[dict[str, Any]], dict[str, Any]]:
+    ) -> tuple[dict[str, int], list[dict[str, Any]], dict[str, Any], dict[str, int]]:
         from app.services.market_service import _distribution_items
 
         day_hi = await _latest_quote_day(session)
@@ -234,15 +241,22 @@ def test_advance_decline_matches_market_distribution_buckets() -> None:
             .all()
         }
         rows = await svc.load_day_rows(session, day_hi)
-        return svc.distribution_counts(rows), _distribution_items(rows), stored
+        usable = [r for r in rows if r.get("pct_chg") is not None]
+        return (
+            svc.distribution_counts(usable),
+            _distribution_items(rows),
+            stored,
+            svc.distribution_counts(rows),
+        )
 
-    buckets, items, stored = asyncio.run(_with_rollback(_go))
+    buckets, items, stored, all_rows_buckets = asyncio.run(_with_rollback(_go))
     # 逐桶对拍：市场侧发出的 items 与本模块分桶是同一个判据函数
     from app.services.market_service import _DISTRIBUTION_RANGES
 
     assert [i["range"] for i in items] == list(_DISTRIBUTION_RANGES)
     for item in items:
-        assert buckets[item["range"]] == item["count"], item["range"]
+        # 市场页对**全量行**分桶（含 NULL → 0~1%），故它与全量分桶逐桶相等
+        assert all_rows_buckets[item["range"]] == item["count"], item["range"]
 
     up = int(stored["market_advance_count"].value)
     down = int(stored["market_decline_count"].value)
@@ -250,11 +264,80 @@ def test_advance_decline_matches_market_distribution_buckets() -> None:
     assert down == sum(buckets[label] for label in svc.DISTRIBUTION_DOWN_LABELS)
     extra = stored["advance_decline_ratio"].extra
     assert extra["up_count"] == up and extra["down_count"] == down
-    assert up + down + extra["flat_count"] == extra["total"]
+    # 可用行上桶是完备划分：up + down == total == 可用行数；NULL 行单独记账
+    assert up + down == extra["total"] == extra["total_rows"] - extra["unavailable_pct_chg"]
     assert up - extra["up_sign_count"] == extra[svc.FLAT_IN_POSITIVE_BUCKET]
+    assert "flat_count" not in extra
+    # 市场页的 0~1% 桶含 NULL；本模块的扁平家数必须是可用行上的真平盘
+    assert all_rows_buckets["0~1%"] - buckets["0~1%"] == extra["unavailable_pct_chg"]
+    assert buckets["0~1%"] >= extra[svc.FLAT_IN_POSITIVE_BUCKET]
     # `industry_metrics.value` 是 `Numeric(18,4)` → 落库被四舍五入到 4 位小数
     assert float(stored["advance_decline_ratio"].value) == pytest.approx(up / down, abs=5e-5)
-    assert buckets["0~1%"] >= extra[svc.FLAT_IN_POSITIVE_BUCKET]
+
+
+@requires_pg
+def test_mostly_null_pct_chg_day_persists_null_with_partial_reason() -> None:
+    """**C1 核心回归（真库）**：`pct_chg` 覆盖率不足的交易日必须整组 NULL。
+
+    做法：用一条聚合 SQL 找出窗口内"行很多、可用 `pct_chg` 很少"的交易日
+    （实测 `stock_bot@5433` 有 21 天，首日 2025-09-23），对该日跑
+    `upsert_metric_range` 并断言落库行 `value IS NULL` + `partial_pct_chg`，且
+    `extra` 里同时有 `unavailable_pct_chg` / `coverage` —— 旧代码在这些日子落
+    `market_advance_count = NULL 行数`（2025-09-23 为 5382）。
+    """
+
+    async def _go(
+        session: AsyncSession,
+    ) -> tuple[date, int, int, dict[str, IndustryMetric]]:
+        day_hi = await _latest_quote_day(session)
+        day_lo = day_hi - timedelta(days=400)
+        coverage_rows = (
+            await session.execute(
+                select(
+                    DailyQuote.trade_date,
+                    func.count().label("rows"),
+                    func.count(DailyQuote.pct_chg).label("usable"),
+                )
+                .where(DailyQuote.trade_date >= day_lo, DailyQuote.trade_date <= day_hi)
+                .group_by(DailyQuote.trade_date)
+                .order_by(DailyQuote.trade_date)
+            )
+        ).all()
+        bad = [
+            row
+            for row in coverage_rows
+            if int(row.rows) and int(row.usable) / int(row.rows) < svc.MIN_PCT_CHG_COVERAGE
+        ]
+        if not bad:
+            pytest.skip("窗口内没有 pct_chg 覆盖率不足的交易日 —— 无样本")
+        target = bad[0].trade_date
+        await svc.upsert_metric_range(session, target, target, warmup_days=60)
+        stored = {
+            r.metric_key: r
+            for r in (
+                await session.execute(
+                    select(IndustryMetric).where(
+                        IndustryMetric.industry_key == "market",
+                        IndustryMetric.period == target,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        }
+        return target, int(bad[0].rows), int(bad[0].usable), stored
+
+    target, rows, usable, stored = asyncio.run(_with_rollback(_go))
+    for key in ("market_advance_count", "market_decline_count", "advance_decline_ratio"):
+        row = stored[key]
+        assert row.value is None, f"{key} 在覆盖率不足的日子必须 NULL（{target}）"
+        assert row.extra is not None and row.extra["missing_reason"] == "partial_pct_chg"
+        assert row.extra["unavailable_pct_chg"] == rows - usable
+        assert row.extra["total_rows"] == rows
+        assert row.extra["coverage"] < svc.MIN_PCT_CHG_COVERAGE
+        # 诊断数字仍是"可用行上的真值"（不是 0 伪造、也不是 NULL 家数）
+        assert row.extra["up_count"] + row.extra["down_count"] == usable
+        assert "flat_count" not in row.extra
 
 
 # ── 3) above_ma20_ratio 可手算核对 ────────────────────────────────────
@@ -346,12 +429,20 @@ def test_ma20_hand_check_compute_day_matches_sql_ratio() -> None:
         window_closes = [c for c in reversed(closes)]
         mean = sum(window_closes) / Decimal(20)
         stored = await svc.compute_day_metrics(session, day_hi, ma20=ma20)
+        md = ma20[day_hi]
         return (
             day_hi,
             int(candidate),
             window_closes,
             mean,
-            {"eligible": ma20[day_hi][0], "above": ma20[day_hi][1]},
+            {
+                "eligible": md.eligible,
+                "above": md.above,
+                "max_window_span_days": md.max_window_span_days,
+                "max_gap_days": md.max_gap_days,
+                "span_over_alert_days": md.span_over_alert_days,
+                "span_alert_days": svc.MA20_SPAN_ALERT_DAYS,
+            },
             {
                 "value": stored["above_ma20_ratio"].value,
                 "extra": stored["above_ma20_ratio"].extra,
@@ -364,7 +455,7 @@ def test_ma20_hand_check_compute_day_matches_sql_ratio() -> None:
     on_or_above = p_close > mean  # 严格大于：等于均线**不**计入（与 SQL 的 `>` 一致）
     eligible, above = sql_pair["eligible"], sql_pair["above"]
     assert 0 <= above <= eligible > 0
-    assert computed["extra"] == {"window": 20, "eligible": eligible, "above": above}
+    assert computed["extra"] == {"window": 20, **sql_pair}
     assert computed["value"] == pytest.approx(above / eligible * 100)
     assert 0.0 <= float(computed["value"]) <= 100.0
     print(
@@ -399,7 +490,7 @@ def test_ma20_window_function_matches_independent_rewrite() -> None:
         ).all()
         alt = {r.trade_date: (int(r.eligible), int(r.above)) for r in rows}
         compared = [
-            (day, window_result[day], alt[day])
+            (day, (window_result[day].eligible, window_result[day].above), alt[day])
             for day in sorted(set(window_result) & set(alt))
             if day >= day_lo
         ]
@@ -411,6 +502,83 @@ def test_ma20_window_function_matches_independent_rewrite() -> None:
     mismatches = [(d, w, a) for d, w, a in compared if w != a]
     assert not mismatches, f"窗口函数与独立写法不一致：{mismatches[:5]}"
     assert alt_days > 0
+
+
+#: **与窗口函数独立写法的**窗口跨度/间隔复核 SQL。刻意不用
+#: `min(trade_date) OVER (ROWS 19 PRECEDING)`，而是按 `row_number() DESC` 取
+#: "最近 20 行"再求 `max - min`（跨度）与相邻 `lag` 之差（间隔）；两套写法算出同一个
+#: 数字才算对拍。`w.n_close > 0 AND w.last_close IS NOT NULL` 与服务侧
+#: `ma20 IS NOT NULL AND close IS NOT NULL` 的分母判据一一对应。
+_MA20_SPAN_INDEPENDENT_SQL = text(
+    """
+    WITH r AS (
+        SELECT stock_id, trade_date, close,
+               row_number() OVER (PARTITION BY stock_id ORDER BY trade_date DESC) AS rn
+        FROM daily_quotes
+        WHERE trade_date BETWEEN :pre_lo AND :hi
+    ),
+    g AS (
+        SELECT stock_id, trade_date, rn,
+               trade_date - lag(trade_date) OVER (PARTITION BY stock_id ORDER BY rn DESC) AS gap
+        FROM r
+    ),
+    w AS (
+        SELECT stock_id,
+               max(trade_date) - min(trade_date) AS span,
+               count(*)                          AS n,
+               count(close)                      AS n_close,
+               max(CASE WHEN rn = 1 THEN close END) AS last_close
+        FROM r WHERE rn <= 20 GROUP BY stock_id HAVING count(*) = 20
+    ),
+    gw AS (
+        SELECT stock_id, max(gap) AS max_gap FROM g WHERE rn BETWEEN 1 AND 19 GROUP BY stock_id
+    )
+    SELECT max(w.span) AS max_span,
+           max(gw.max_gap) AS max_gap,
+           count(*) FILTER (WHERE w.span > 40) AS over_alert
+    FROM w JOIN gw USING (stock_id)
+    WHERE w.n_close > 0 AND w.last_close IS NOT NULL
+    """
+)
+
+
+@requires_pg
+def test_ma20_window_span_and_gap_are_recorded_and_reproducible() -> None:
+    """**窗口退化可见（Ruling：`win = 20` = 20 行 != 20 个连续交易日）**。
+
+    `_ma20_metric` 的 `extra.max_window_span_days` / `extra.max_gap_days` 必须与一条
+    独立写法（`row_number() DESC` + 相邻 `lag`）算出的当日最坏值逐字相等。长停牌股的
+    "20 行窗口"可以横跨 40+ 个日历日（实测 2026-10-09 最坏 64 天），旧实现对此完全
+    沉默 —— 这两个字段是唯一能看见该退化的证据。
+    """
+
+    async def _go(session: AsyncSession) -> tuple[svc.Ma20Day, int | None, int | None, int]:
+        day_hi = await _latest_quote_day(session)
+        pre_lo = day_hi - timedelta(days=120)
+        ma20 = await svc.ratio_above_ma20(session, pre_lo, day_hi)
+        if day_hi not in ma20:
+            pytest.skip("该日无具备完整 20 日窗口的标的")
+        row = (
+            await session.execute(_MA20_SPAN_INDEPENDENT_SQL, {"pre_lo": pre_lo, "hi": day_hi})
+        ).one()
+        return ma20[day_hi], row.max_span, row.max_gap, int(row.over_alert)
+
+    got, indep_span, indep_gap, indep_over = asyncio.run(_with_rollback(_go))
+    assert indep_span is not None and indep_gap is not None
+    assert got.max_window_span_days == int(indep_span), "窗口跨度与独立写法不一致"
+    assert got.max_gap_days == int(indep_gap), "窗口内最大间隔与独立写法不一致"
+    assert got.span_over_alert_days == indep_over, "超阈窗口家数与独立写法不一致"
+    # 20 个交易日至少横跨 25 个日历日（4 周 + 周末），间隔至少 1 天；
+    # 跨度 >= 间隔是定义使然（一个窗口内的间隔不可能大于整段跨度）。
+    assert got.max_window_span_days >= 25, got
+    assert got.max_window_span_days >= got.max_gap_days >= 1
+    assert got.span_over_alert_days <= got.eligible
+    print(
+        f"\n[MA20 窗口退化] 最坏 max_window_span_days={got.max_window_span_days}"
+        f" / max_gap_days={got.max_gap_days}"
+        f" / 跨度 > {svc.MA20_SPAN_ALERT_DAYS} 天的合格标的 {got.span_over_alert_days}"
+        f" / {got.eligible}"
+    )
 
 
 # ── 4) 读面（S1.2 既有 surfaces，不新建平行读路）─────────────────────
@@ -441,7 +609,7 @@ def test_read_surface_exposes_all_badges_for_market_scope() -> None:
         assert m.scope_key == "market"
         assert m.freq == "daily" and m.tier == "derived"
         assert m.source == "local_calc"
-        assert m.caliber_version_registered == "s1.8-v1"
+        assert m.caliber_version_registered == MARKET_CALIBER_VERSION == "s1.8-v2"
         # PIT：published_at 非空 → as_of 走真 PIT，不回退 period
         assert m.published_at is not None
         assert m.as_of_source == "published_at"
@@ -450,3 +618,26 @@ def test_read_surface_exposes_all_badges_for_market_scope() -> None:
         assert m.description, m.metric_key
         if m.value is None:
             assert m.model_dump().get("value") is None  # NULL 不被打成 0
+
+
+@requires_pg
+def test_industries_list_excludes_market_scope() -> None:
+    """**I3**：`GET /api/v1/industries`（"已产品化行业列表"）不得列全市场情绪。
+
+    service 层 `list_industries` 是路由的唯一实现处；用 `is_industry` 过滤后，返回的
+    key 集必须 == `get_industry_scopes()` 的 key 集，且**不含** `market`。
+    """
+
+    async def _go(session: AsyncSession) -> list[str]:
+        from app.services import industry_metric_service as metric_svc
+
+        return [s.key for s in await metric_svc.list_industries(session)]
+
+    keys = asyncio.run(_with_rollback(_go))
+    from app.services.industry_registry import INDUSTRIES, get_industry_scopes
+
+    assert "market" not in keys, "全市场情绪不是行业，不得出现在已产品化行业列表"
+    assert keys == [cfg.key for cfg in get_industry_scopes()]
+    assert set(keys) == {"pig", "broiler"}
+    # scope 总数（含 market）比行业数多一个 —— 这正是需要显式判据的原因
+    assert len(keys) == len(INDUSTRIES) - 1

@@ -31,12 +31,36 @@ SQL、不另写分桶**，而是：
 - 调用**同一个** `market_snapshot_service.load_day_rows`（同一取行语句、同一份 Redis
   payload、同一套 `ROW_KEYS` 规范化）；
 - 调用**同一个** `market_snapshot_service.summarize_group`（全市场就是一个组），而
-  `summarize_group` 正是 `up_count` / `down_count` / `flat_count` 的唯一定义处。
+  `summarize_group` 正是 `up_count` / `down_count` 的唯一定义处。
 
-于是"市场分布的正数桶之和 == 情绪上涨家数、负数桶之和 == 情绪下跌家数"**按构造
-成立**，不是靠两套算法事后对齐（`tests/test_market_sentiment_breadth.py` 有真库锁定
-用例逐桶相加对拍）。**这是刻意的"只复用、不新造"**：本模块里没有第二个 `pct_chg`
-分桶实现，也没有第二条读 `daily_quotes` 的取行语句。
+于是"市场分布的正数桶之和 == 情绪上涨家数、负数桶之和 == 情绪下跌家数"在**同一份
+可用行集**上**按构造成立**，不是靠两套算法事后对齐
+（`tests/test_market_sentiment_breadth.py` 有真库锁定用例逐桶相加对拍）。
+**这是刻意的"只复用、不新造"**：本模块里没有第二个 `pct_chg` 分桶实现，也没有第二
+条读 `daily_quotes` 的取行语句。
+
+### 关键修正（Ruling 55）：分桶**之前**先剔除 `pct_chg IS NULL`
+
+`_distribution_bucket(None)` 返回 `0~1%`（市场页的现状行为，见
+`market_service.py:338-339`），而 `0~1%` 在涨/跌标签映射里属于"涨"。若照搬这条映射
+到全量行，**没有行情行（`pct_chg IS NULL`）的标的会被记成 上涨**——`None` 是"没有
+数据"，不是"涨"。实测 `stock_bot@5433` 上 2025-09-04…2025-10-10 有 **21 天**全市场
+`pct_chg` 几乎全为 NULL（2025-09-23：可用行 pos=0 / neg=32 / NULL=5382），旧写法把
+5382 个 NULL 记成 `market_advance_count=5382`、`advance_decline_ratio=168.19` 并落库，
+量级差 2–3 个数量级。
+
+故本模块在**分桶之前**过滤出可用行（`pct_chg IS NOT NULL`），只对可用行做桶求和与
+符号统计；NULL 行的家数落在 `extra.unavailable_pct_chg`，覆盖率
+`extra.coverage = 可用行 / 取回行` 一并落库。覆盖率低于
+:data:`MIN_PCT_CHG_COVERAGE` 时**整组涨跌类指标落 `value=NULL`**，原因码
+`partial_pct_chg` —— 宁可承认"这天算不出"，也不落一个由缺失数据拼出来的数字。
+
+> **与市场页的差异是刻意的，且是 follow-up（不在本任务文件范围内）**：
+> 市场页 `_distribution_bucket(None) -> "0~1%"` 的同一缺陷会让 2025-09-23 这类日子在
+> 市场 `A股涨跌分布` 上显示约 5388 家"上涨"。修复它必须改
+> `backend/app/services/market_service.py:338-339`（并行 S1.6 agent 的文件），故本任务
+> **不**"对齐"市场页的显示行为，只在 `task-11-report.md` 里登记为后续项。一致性不能
+> 洗白错误：两个模块同时错，不等于对。
 
 > 为什么不是"情绪算完、市场去引用情绪 API"（S0.4 §4.5 的模块边界裁定原文）：
 > 裁定的是**口径与计算的归宿**（情绪拥有 `advance_decline_ratio` 这个注册指标的定义
@@ -51,6 +75,9 @@ SQL、不另写分桶**，而是：
 
 - **缺数一律 `value = NULL`**，`extra.missing_reason` 带原因码（`None` = 无缺口）。
   0 在"涨跌停家数"上是"今天只有 0 家涨停"这一**事实断言**，与"这天没数据"相反。
+- **覆盖率不足也算缺数**：涨跌类指标的 `extra.coverage < MIN_PCT_CHG_COVERAGE` 时
+  整组落 NULL + `partial_pct_chg`（因为分母被缺失数据掏空后，比值/家数都不再是
+  该交易日的市场事实）。
 - **完全不写 0 行**：某交易日若 `daily_quotes` 无行，本模块**不落任何行**（不拿
   0 伪造一天"全市场 0 家上涨"）；该日在覆盖率对账里表现为 `missing_days` 的
   `no_quote_rows`。
@@ -65,7 +92,9 @@ SQL、不另写分桶**，而是：
 **6 个指标全属 B 类**（只用**当日**点内事实，可回算且无前视偏差）：
 
 - `advance_decline_ratio` / `market_advance_count` / `market_decline_count`：只用当日
-  `daily_quotes.pct_chg`（+ 平盘=当日 pct_chg 为 0/NULL）→ 可整天重算、允许回补。
+  `daily_quotes.pct_chg`；**平盘（`pct_chg == 0`）留在市场分布的 `0~1%` 桶里**（即计入
+  上涨桶之和，差额由 `flat_in_positive_bucket` 记账），**`pct_chg IS NULL` 的行在分桶前
+  剔除、不计涨也不计跌**（见上文 Ruling 55 修正）→ 可整天重算、允许回补。
 - `above_ma20_ratio`：当日收盘 + **截至当日的** 20 日窗口（`ROWS BETWEEN 19 PRECEDING
   AND CURRENT ROW`，窗口内不含未来行）→ 可回算、允许回补；带窗口完备守卫
   （`win = 20`，不足 20 个交易日的标的整只剔除，不进分子也不进分母）。
@@ -84,7 +113,9 @@ SQL、不另写分桶**，而是：
 数值"实际可得"的最早时点：全部输入（收盘价、涨停判定）在收盘那一刻才定型。
 于是读面的 `as_of_source` 恒为 `published_at`（**不是**回退的 `period`），
 S2.2 的规则/回测护栏不会因本模块的序列而报"未登记 PIT"。
-`caliber_version` 恒填 `s1.8-v1`（口径变更时 bump 并留断点，ADR 0011 第 4 条）。
+`caliber_version` 恒填 :data:`MARKET_CALIBER_VERSION`（口径变更时 bump 并留断点，
+ADR 0011 第 4 条）。**fix round 1 已 bump 到 `s1.8-v2`**：剔除 `pct_chg IS NULL`、
+覆盖率门槛与 `extra.unavailable_pct_chg` 都是口径变更，v1 的行不可与 v2 混用。
 """
 
 from __future__ import annotations
@@ -130,6 +161,13 @@ METRIC_SOURCE = MARKET_SENTIMENT_SOURCE
 #: 20 日均线的窗口长度（交易日，含当日）。改这个数 = 改口径 → 必须 bump `caliber_version`。
 MA20_WINDOW = 20
 
+#: 窗口退化的告警阈值（日历日）：`win = 20` 只保证"20 **行**行情"，不是"20 个连续
+#: 交易日"。窗口跨度超过这个数就是"这只股的 20 行横跨了太长的时间"，其"20 日均线"
+#: 可能来自被停牌切开的两个时间段。实测 2026-10-09：5542 只合格标的中 15 只跨度 > 40
+#: 天（最坏 64 天）。这里只在 `extra` 记账（最坏跨度 + 超阈家数），不剔除标的 ——
+#: 剔除会让"长期停牌后复牌"的股票整只消失，反而更不可见。
+MA20_SPAN_ALERT_DAYS = 40
+
 #: A 股收盘时刻：`published_at` 的取值。
 MARKET_CLOSE = dtime(15, 0)
 
@@ -157,6 +195,16 @@ MISSING_NO_SENTIMENT_DAY = "no_sentiment_day"
 MISSING_SOURCE_NULL = "source_null"
 MISSING_NO_QUOTE_ROWS = "no_quote_rows"
 MISSING_NO_MA20_WINDOW = "no_ma20_window"
+#: `pct_chg` 覆盖率低于门槛 → 涨跌类指标整组落 NULL（不拿缺失数据拼数字，Ruling 55）。
+MISSING_PARTIAL_PCT_CHG = "partial_pct_chg"
+
+#: 涨跌类指标的**最小可用 `pct_chg` 覆盖率**（可用行 / 取回行）。
+#:
+#: 为什么是 0.95：正常交易日的全市场 `daily_quotes.pct_chg` 覆盖率实测 ≈ 1.000
+#: （2026-10-09：5559/5559 非空）；而 2025-09-23 这类"行情行在、pct_chg 全 NULL"的日子
+#: 覆盖率 ≈ 0.006。门槛取 0.95 让正常日一个都不误伤（含最多几个停牌/缺数标的），
+#: 又让整日缺数当场落 NULL。改这个数 = 改口径 → 必须 bump `caliber_version`。
+MIN_PCT_CHG_COVERAGE = 0.95
 
 
 def published_at_for(day: date) -> datetime:
@@ -211,26 +259,52 @@ def _day_args(day_lo: date, day_hi: date) -> dict[str, date]:
     return {"day_lo": day_lo, "day_hi": day_hi}
 
 
+@dataclass(frozen=True)
+class Ma20Day:
+    """一天的 MA20 汇总：分子/分母 + 窗口跨度与最大间隔（可复核性留痕）。"""
+
+    eligible: int
+    above: int
+    #: 当日"具备完整窗口"的标的中**最坏**的窗口跨度 = 窗口首末 `trade_date` 相差的
+    #: 日历日数。窗口是"最近 20 **行**行情"而不是"最近 20 个连续交易日"，故长停牌股
+    #: 的一个"20 行窗口"可能横跨 60+ 个日历日（实测 2026-10-09 最坏 64 天）。
+    max_window_span_days: int
+    #: 同上集合中，窗口内相邻两行 `trade_date` 的**最大间隔**（日历日数）。正常周内
+    #: 相邻 = 1；> 1 就是那只股在窗口中途停牌过的证据（这 20 行不是 20 个连续交易日）。
+    max_gap_days: int
+    #: 窗口跨度超过 :data:`MA20_SPAN_ALERT_DAYS` 的合格标的家数（退化窗口的规模）。
+    span_over_alert_days: int
+
+
 async def ratio_above_ma20(
     db: AsyncSession,
     day_lo: date,
     day_hi: date,
-) -> dict[date, tuple[int, int]]:
-    """`[day_lo, day_hi]` 内每日 (具备完整 20 日窗口的标的数, 其中 close > MA20 的数)。
+) -> dict[date, Ma20Day]:
+    """`[day_lo, day_hi]` 内每日"具备完整 20 日窗口的标的数 / 其中 close > MA20 的数"。
 
     **算法**（单条窗口函数 SQL，无 Python 端逐股循环）：
 
     1. 内层：把 `[day_lo, day_hi]` 的 `daily_quotes` 行按 `stock_id` 分区、`trade_date`
-       升序开两个窗口 ——
+       升序开窗口 ——
        `avg(close) OVER (PARTITION BY stock_id ORDER BY trade_date ROWS BETWEEN 19
-       PRECEDING AND CURRENT ROW)` 是该股"含当日、前 19 个交易日"的 20 日简单均值；
-       `count(*) OVER (同一个窗口)` 是**实际参与均值**的行数。
+       PRECEDING AND CURRENT ROW)` 是该股"含当日、前 19 行"的 20 日简单均值；
+       `count(*) OVER (同一个窗口)` 是**窗口内的行情行数**（不是非空 close 数：
+       `avg` 自己忽略 NULL，见第 4 条）。
     2. 窗口内**不含未来行**（`ROWS ... PRECEDING` 只回看）→ 无前视偏差，可回补（B 类）。
-    3. 守卫：`win = 20`。不足 20 个交易日的标的（次新股、区间开头）整只剔除，
+    3. 守卫：`win = 20`。不足 20 行的标的（次新股、区间开头）整只剔除，
        **不进分子也不进分母**。理由：按字面口径"没有 MA20"的股票既非"在均线之上"
        也非"在均线之下"；把它算作 0 等于让新上市高峰期被误读成情绪冰点。
-    4. `ma20 IS NOT NULL` 再排除"close 全为 NULL 的窗口"（avg 回 NULL）。
-    5. 外层按日分组，分子判据是 `close > ma20`（**严格大于**：等于均线不计入）。
+    4. **分母与分子同口径**：外层同时要求 `ma20 IS NOT NULL`（排除 close 全 NULL 的
+       窗口）与 `close IS NOT NULL`（当日无收盘价的标的既算不出 `close > ma20`，
+       也不该被计入分母 —— 修掉了"count(*) 把 NULL close 行算进分母"的不一致）。
+    5. 外层按日分组，分子判据是 `close > ma20`（**严格大于**：等于均线不计入）；
+       同时把当日最坏的 `max_window_span_days` / `max_gap_days` 一并汇总（见
+       :class:`Ma20Day` 的说明 —— `win = 20` 只保证"20 行"，不保证"20 个交易日"）。
+       两个跨度字段都由窗口函数在同一趟里算出，不额外查库。
+    6. `max_gap_days` 的窗口是 `ROWS BETWEEN 18 PRECEDING AND CURRENT ROW`：当前行的
+       "20 行窗口"里，第 1 行的 `lag` 指向窗口**外**的那一行，算它会把窗口外的间隔
+       错记成窗口内间隔，故用 18 PRECEDING 把窗口首行排除在 gap 统计之外。
 
     **为什么按 `[day_lo, day_hi]` 一次算而不是逐日算**：窗口函数的输入必须包含
     `day_lo` 之前 19 个交易日的行，一次算整段只需一趟扫描；逐日算会把
@@ -238,34 +312,62 @@ async def ratio_above_ma20(
     调用方传入的 `day_lo` 必须是**目标区间首日往前推足够多个交易日**的日期
     （见 :func:`upsert_metric_range`：多取 60 个日历日，> 19 个交易日）。
 
-    返回 `{交易日: (eligible, above)}`；区间内没有任何具备完整窗口的标的的日子
+    返回 `{交易日: Ma20Day}`；区间内没有任何具备完整窗口的标的的日子
     **不出现在字典里**（调用方据此落 `missing_reason='no_ma20_window'`）。
     """
     sql = text(
         f"""
-        SELECT w.trade_date,
-               count(*)                                        AS eligible,
-               count(*) FILTER (WHERE w.close > w.ma20)        AS above
+        SELECT x.trade_date,
+               count(*)                                 AS eligible,
+               count(*) FILTER (WHERE x.close > x.ma20) AS above,
+               max(x.window_span_days)                  AS max_window_span_days,
+               max(x.max_gap_days)                      AS max_gap_days,
+               count(*) FILTER (WHERE x.window_span_days > {MA20_SPAN_ALERT_DAYS})
+                                                        AS span_over_alert_days
         FROM (
-            SELECT stock_id,
-                   trade_date,
-                   close,
-                   avg(close) OVER w AS ma20,
-                   count(*)   OVER w AS win
-            FROM daily_quotes
-            WHERE trade_date BETWEEN CAST(:day_lo AS date) AND CAST(:day_hi AS date)
-            WINDOW w AS (
-                PARTITION BY stock_id ORDER BY trade_date
-                ROWS BETWEEN {MA20_WINDOW - 1} PRECEDING AND CURRENT ROW
-            )
-        ) w
-        WHERE w.win = {MA20_WINDOW} AND w.ma20 IS NOT NULL
-        GROUP BY w.trade_date
-        ORDER BY w.trade_date
+            SELECT b.trade_date,
+                   b.close,
+                   b.ma20,
+                   b.win,
+                   b.window_span_days,
+                   max(b.gap_days) OVER (
+                       PARTITION BY b.stock_id ORDER BY b.trade_date
+                       ROWS BETWEEN {MA20_WINDOW - 2} PRECEDING AND CURRENT ROW
+                   ) AS max_gap_days
+            FROM (
+                SELECT stock_id,
+                       trade_date,
+                       close,
+                       avg(close) OVER w AS ma20,
+                       count(*)   OVER w AS win,
+                       trade_date - min(trade_date) OVER w AS window_span_days,
+                       trade_date - lag(trade_date) OVER p AS gap_days
+                FROM daily_quotes
+                WHERE trade_date BETWEEN CAST(:day_lo AS date) AND CAST(:day_hi AS date)
+                WINDOW w AS (
+                    PARTITION BY stock_id ORDER BY trade_date
+                    ROWS BETWEEN {MA20_WINDOW - 1} PRECEDING AND CURRENT ROW
+                ), p AS (
+                    PARTITION BY stock_id ORDER BY trade_date
+                )
+            ) b
+        ) x
+        WHERE x.win = {MA20_WINDOW} AND x.ma20 IS NOT NULL AND x.close IS NOT NULL
+        GROUP BY x.trade_date
+        ORDER BY x.trade_date
         """
     )
     rows = (await db.execute(sql, _day_args(day_lo, day_hi))).all()
-    return {row.trade_date: (int(row.eligible), int(row.above)) for row in rows}
+    return {
+        row.trade_date: Ma20Day(
+            eligible=int(row.eligible),
+            above=int(row.above),
+            max_window_span_days=int(row.max_window_span_days),
+            max_gap_days=int(row.max_gap_days),
+            span_over_alert_days=int(row.span_over_alert_days),
+        )
+        for row in rows
+    }
 
 
 async def _sentiment_rows_by_day(db: AsyncSession, day_lo: date, day_hi: date) -> dict[date, Any]:
@@ -339,21 +441,27 @@ def _sentiment_metrics(day: date, row: Any | None) -> list[MetricValue]:
     ]
 
 
-#: 市场模块 `A股涨跌分布` 的 11 个桶里，哪些算"涨"、哪些算"跌"、哪个是"平"。
+#: 市场模块 `A股涨跌分布` 的 11 个桶里，哪些算"涨"、哪些算"跌"。
 #:
-#: **这是与市场分布做到"同源同值"的关键，也是一处必须写明的口径差**：
-#: 市场分布的 `0~1%` 桶的判据是 `0 <= pct_chg < 1`（含 **pct_chg == 0**，即平盘），
-#: 而 `summarize_group` 的 `up_count` 判据是 `pct_chg > 0`（**不含**平盘）。实测
-#: 2026-10-09：分布正数桶之和 3414 vs `summarize_group.up_count` 3297，差额恰为
-#: `flat_count = 117`（pct_chg == 0 的平盘股）。
+#: **这是与市场分布做到"同源同值"的关键，也是两处必须写明的口径差**：
 #:
-#: 取哪一边？spec §S1.8 的行为判据是"市场模块的涨跌分布与情绪模块的涨跌家数
-#: **同源**（同一 API），**数值一致**"，且 §S0.4 的边界裁定把口径与计算判给情绪。
-#: 于是以**市场已发布的 11 桶标签**为准（对同一份行、同一天，`sum` 桶 == 本模块值，
-#: 逐桶可复核），并把上面的差额用 `flat_in_positive_bucket` / `sign_basis` 暴露出来
-#: —— 不是两个算法，而是**同一个算法的两种切法之差被显式记账**（差额 = 平盘家数，
-#: 恒等式 `up_bucket_sum - up_sign_count == flat_in_positive_bucket` 有测试锁定）。
-#: 市场侧若以后改口径（把平盘挪出 `0~1%`），本模块的账目会当场对不上，必须同步改。
+#: 1. **平盘在正数桶里**：市场分布的 `0~1%` 桶判据是 `0 <= pct_chg < 1`
+#:    （含 **pct_chg == 0** 平盘），而 `summarize_group` 的 `up_count` 判据是
+#:    `pct_chg > 0`（**不含**平盘）。实测 2026-10-09：正数桶之和 3414 vs
+#:    `summarize_group.up_count` 3297，差额 = **117**（`pct_chg == 0` 的平盘股）。
+#:    以**市场已发布的 11 桶标签**为准，差额用 `flat_in_positive_bucket` /
+#:    `sign_basis` 显式记账（恒等式 `up_count - up_sign_count ==
+#:    flat_in_positive_bucket`，有测试锁定）。
+#: 2. **NULL 行在分桶之前剔除（Ruling 55）**：`_distribution_bucket(None)` 把
+#:    `pct_chg IS NULL` 归进 `0~1%`（市场页的现状行为），而 `0~1%` 属于"涨"标签集。
+#:    照搬到全量行会把"没有行情行"记成"上涨"（实测 2025-09-23：5382 个 NULL 被记成
+#:    上涨家数 5382）。故 :func:`breadth_counts_from_rows` **先过滤 `pct_chg IS NOT NULL`**
+#:    再分桶；NULL 家数落在 `extra.unavailable_pct_chg`，覆盖率不足则整组落 NULL。
+#:    `distribution_counts` 本身仍是市场页的逐字复现（含 NULL → `0~1%`），
+#:    因为它的职责就是"与市场端点逐桶对拍"。
+#:
+#: 市场侧若以后改口径（把平盘/NULL 挪出 `0~1%`），本模块的账目会当场对不上，
+#: 必须同步改。
 DISTRIBUTION_UP_LABELS: tuple[str, ...] = ("0~1%", "1~3%", "3~5%", ">5%", "涨停")
 DISTRIBUTION_DOWN_LABELS: tuple[str, ...] = ("跌停", ">-7%", "-5~-7%", "-3~-5%", "-1~-3%", "0~-1%")
 
@@ -362,11 +470,14 @@ FLAT_IN_POSITIVE_BUCKET = "flat_in_positive_bucket"
 
 
 def distribution_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
-    """一日全市场行 → 11 个分布的桶计数（**复用市场模块的唯一分桶函数**）。
+    """一日全市场行 → 11 个分布的桶计数（**市场页行为的逐字复现**）。
 
     直接用 `market_service._DISTRIBUTION_RANGES` + `market_service._distribution_bucket`
     —— 同一个桶表、同一个判据函数。本模块**不复制**这段分桶逻辑；市场侧改判据，
     这里自动跟着改（若改了桶标签，下面的 `_assert_bucket_labels` 会当场报错）。
+
+    ⚠️ 与市场页一样，`pct_chg is None` 会落 `0~1%` 桶。**涨跌家数不得直接用它**：
+    :func:`breadth_counts_from_rows` 先剔除 NULL 行再调用本函数（Ruling 55）。
     """
     _assert_bucket_labels()
     counts = dict.fromkeys(DISTRIBUTION_RANGES, 0)
@@ -390,59 +501,98 @@ def _assert_bucket_labels() -> None:
         )
 
 
-def breadth_counts_from_rows(rows: list[dict[str, Any]]) -> dict[str, int]:
-    """一日全市场行的涨/平/跌家数（**与市场分布逐桶对拍**）。
+def breadth_counts_from_rows(rows: list[dict[str, Any]]) -> dict[str, int | float]:
+    """一日全市场行的涨/跌家数（**先剔除 `pct_chg IS NULL`，再与市场分布逐桶对拍**）。
 
-    两份家数都在这里，**都是同一份行集**，差别只有一处口径切法（见
+    输入是 `load_day_rows` 取回的**全量**行（含 `pct_chg is None` 的无行情行）。本函数
+    先把它们切成两半：
+
+    - **可用行** = `pct_chg is not None`：进分桶、进符号统计、进家数与比值。
+    - **不可用行** = `pct_chg is None`：**不进任何涨/跌桶**（Ruling 55：NULL 是"没有
+      数据"，不是"涨"），只被计成 `unavailable_pct_chg`，并压低 `coverage`。
+
+    两套家数都在这里，都是**同一份可用行集**，差别只有一处口径切法（见
     :data:`DISTRIBUTION_UP_LABELS` 的说明）：
 
-    - `up_count` / `down_count` / `flat_count`：**市场分布的桶之和**
-      （`up = ` 正数桶之和，`down = ` 负数桶之和，`flat = total - up - down`）——
-      这是落进 `market_advance_count` / `market_decline_count` /
+    - `up_count` / `down_count`：**市场分布的桶之和**（`up = ` 正数桶之和，
+      `down = ` 负数桶之和）—— 落进 `market_advance_count` / `market_decline_count` /
       `advance_decline_ratio` 的口径，保证 spec 的"与市场分布数值一致"逐桶可验。
     - `up_sign_count` / `down_sign_count`：`summarize_group` 的**符号口径**
-      （`pct_chg > 0` / `pct_chg < 0`，平盘含 NULL），随 `extra` 一起留痕。
+      （`pct_chg > 0` / `pct_chg < 0`），随 `extra` 一起留痕。
 
-    恒等式（有测试锁定）：`up_count - up_sign_count == flat_in_positive_bucket`，
+    **没有 `flat_count` 了（明确"移除"而非"修数"）**：可用行上 11 个桶是完备划分，
+    而 `0~1%`（= 平盘 ∪ `(0,1%)`）落在上涨标签集里，故旧的
+    `flat_count = total - up - down` **恒等于 0**（实测 2096/2096 行全为 0，即使在
+    5382 个平盘/NULL 的日子）—— 它是一个结构性死字段。真正的平盘家数恰好等于
+    `up_count - up_sign_count`，已经由 :data:`FLAT_IN_POSITIVE_BUCKET` 暴露；
+    保留两个名字描述同一个数字只会制造误导，故删掉 `flat_count`。
+
+    恒等式（有测试锁定）：`up_count + down_count == usable`（可用行上桶完备），
+    `up_count - up_sign_count == flat_in_positive_bucket`（= `pct_chg == 0` 家数），
     `down_count == down_sign_count`（实测负数桶的边界与 `< 0` 完全重合）。
     """
-    distribution = distribution_counts(rows)
-    stats = summarize_group(rows)
-    total = int(stats["total"])
+    total_rows = len(rows)
+    usable = [row for row in rows if row.get("pct_chg") is not None]
+    distribution = distribution_counts(usable)
+    stats = summarize_group(usable)
+    total = int(stats["total"])  # == len(usable)
     up = sum(distribution[label] for label in DISTRIBUTION_UP_LABELS)
     down = sum(distribution[label] for label in DISTRIBUTION_DOWN_LABELS)
     return {
         "total": total,
+        "total_rows": total_rows,
+        "unavailable_pct_chg": total_rows - total,
+        "coverage": (total / total_rows) if total_rows else 0.0,
         "up_count": up,
         "down_count": down,
-        "flat_count": total - up - down,
         "up_sign_count": int(stats["up_count"]),
         "down_sign_count": int(stats["down_count"]),
         FLAT_IN_POSITIVE_BUCKET: up - int(stats["up_count"]),
     }
 
 
-def _breadth_metrics(counts: dict[str, int] | None) -> list[MetricValue]:
-    """涨跌家数 + 涨跌比。`counts is None` = 该日 `daily_quotes` 无行（缺数而非 0）。"""
-    if counts is None:
+def _breadth_metrics(counts: dict[str, int | float] | None) -> list[MetricValue]:
+    """涨跌家数 + 涨跌比。
+
+    三种输入状态：
+
+    - `counts is None` = 该日 `daily_quotes` 无行 → `no_quote_rows`；
+    - `counts["coverage"] < MIN_PCT_CHG_COVERAGE` = 有行但绝大多数行没有 `pct_chg`
+      → 整组 `partial_pct_chg`（**这是 Ruling 55 的核心**：不拿缺失数据拼数字）；
+    - 否则正常落值；`extra` 恒带 `total_rows` / `unavailable_pct_chg` / `coverage`
+      三个诊断字段，让"这天的分母有多大、缺了多少"可复核。
+    """
+    if counts is None or not counts["total_rows"]:
+        # `total_rows == 0` 只能来自"该日一行都没取到"（调用方通常直接传 None）；
+        # 语义仍是 no_quote_rows，不是覆盖率不足。防御性兜底，避免 0/0 落 partial。
         return [
             MetricValue("market_advance_count", None, MISSING_NO_QUOTE_ROWS),
             MetricValue("market_decline_count", None, MISSING_NO_QUOTE_ROWS),
             MetricValue("advance_decline_ratio", None, MISSING_NO_QUOTE_ROWS),
         ]
-    up, down = counts["up_count"], counts["down_count"]
+    up, down = int(counts["up_count"]), int(counts["down_count"])
+    coverage = float(counts["coverage"])
     adr = _ratio(up, down)
-    extra = {
+    extra: dict[str, Any] = {
         "total": counts["total"],
+        "total_rows": counts["total_rows"],
+        "unavailable_pct_chg": counts["unavailable_pct_chg"],
+        "coverage": round(coverage, 6),
+        "min_coverage": MIN_PCT_CHG_COVERAGE,
         "up_count": up,
         "down_count": down,
-        "flat_count": counts["flat_count"],
         # 口径留痕：本值是"市场分布桶之和"，与符号口径的差 = 平盘被含进 0~1% 桶的家数
         "sign_basis": "market_distribution_buckets",
         "up_sign_count": counts["up_sign_count"],
         "down_sign_count": counts["down_sign_count"],
         FLAT_IN_POSITIVE_BUCKET: counts[FLAT_IN_POSITIVE_BUCKET],
     }
+    if coverage < MIN_PCT_CHG_COVERAGE:
+        return [
+            MetricValue("market_advance_count", None, MISSING_PARTIAL_PCT_CHG, dict(extra)),
+            MetricValue("market_decline_count", None, MISSING_PARTIAL_PCT_CHG, dict(extra)),
+            MetricValue("advance_decline_ratio", None, MISSING_PARTIAL_PCT_CHG, dict(extra)),
+        ]
     return [
         MetricValue("market_advance_count", float(up), None, dict(extra)),
         MetricValue("market_decline_count", float(down), None, dict(extra)),
@@ -455,23 +605,37 @@ def _breadth_metrics(counts: dict[str, int] | None) -> list[MetricValue]:
     ]
 
 
-def _ma20_metric(day: date, ma20: dict[date, tuple[int, int]]) -> MetricValue:
-    """MA20 占比：缺失分两种原因（整日无窗口 vs 该日无行），值恒 `None`（不落 0）。"""
+def _ma20_metric(day: date, ma20: dict[date, Ma20Day]) -> MetricValue:
+    """MA20 占比：缺失分两种原因（整日无窗口 vs 该日无行），值恒 `None`（不落 0）。
+
+    `extra` 除 `window` / `eligible` / `above` 外还带 `max_window_span_days` /
+    `max_gap_days`（当日最坏窗口跨度与最大相邻间隔）—— `win = 20` 只保证"20 行行情"，
+    长停牌股的一个"20 日窗口"可能横跨 60+ 个日历日，这两个字段是**唯一**能看见该
+    退化的证据（见 :class:`Ma20Day`）。
+    """
     if day not in ma20:
         return MetricValue(
             "above_ma20_ratio", None, MISSING_NO_MA20_WINDOW, {"window": MA20_WINDOW}
         )
-    eligible, above = ma20[day]
-    if eligible == 0:  # pragma: no cover — SQL 的 GROUP BY 不会产出 0 行的组，防御性
+    day_ma20 = ma20[day]
+    if day_ma20.eligible == 0:  # pragma: no cover — SQL 的 GROUP BY 不会产出 0 行的组，防御性
         return MetricValue(
             "above_ma20_ratio", None, MISSING_NO_MA20_WINDOW, {"window": MA20_WINDOW}
         )
-    ratio = above / eligible * 100.0
+    ratio = day_ma20.above / day_ma20.eligible * 100.0
     return MetricValue(
         "above_ma20_ratio",
         ratio,
         None,
-        {"window": MA20_WINDOW, "eligible": eligible, "above": above},
+        {
+            "window": MA20_WINDOW,
+            "eligible": day_ma20.eligible,
+            "above": day_ma20.above,
+            "max_window_span_days": day_ma20.max_window_span_days,
+            "max_gap_days": day_ma20.max_gap_days,
+            "span_over_alert_days": day_ma20.span_over_alert_days,
+            "span_alert_days": MA20_SPAN_ALERT_DAYS,
+        },
     )
 
 
@@ -480,7 +644,7 @@ async def compute_day_metrics(
     day: date,
     *,
     quote_rows: list[dict[str, Any]] | None = None,
-    ma20: dict[date, tuple[int, int]] | None = None,
+    ma20: dict[date, Ma20Day] | None = None,
     sentiment_row: Any | None = None,
     sentiment_loaded: bool = False,
 ) -> dict[str, MetricValue]:

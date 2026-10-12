@@ -79,6 +79,39 @@ def test_registry_description_documents_definitions() -> None:
     assert "promo_1to2_n" in by_key["first_board_promotion_ratio"].description
 
 
+def test_registry_descriptions_state_the_actual_breadth_basis() -> None:
+    """**I4**：涨跌家数的 `description` 必须写出**实际**口径（桶之和）与缺失处理。
+
+    旧描述说"`pct_chg > 0` 的家数""平盘（`pct_chg == 0` 或 NULL）既不计涨也不计跌"
+    —— 两句都与落库值相反（主值是市场分布桶之和，含平盘；NULL 曾被记成上涨）。读面
+    直接下发这个字符串，spec 又要求口径"查得到"，故用测试锁死关键措辞。
+    """
+    by_key = {m.key: m for m in MARKET_METRICS}
+    up = by_key["market_advance_count"].description
+    down = by_key["market_decline_count"].description
+    adr = by_key["advance_decline_ratio"].description
+    for desc in (up, down, adr):
+        assert "partial_pct_chg" in desc, desc
+        assert "unavailable_pct_chg" in desc, desc
+    # 上涨家数：桶之和 + 含平盘（不是 pct_chg > 0）
+    assert "上涨桶" in up and "0~1%" in up
+    assert "pct_chg == 0" in up
+    assert "flat_in_positive_bucket" in up
+    # 下跌家数：NULL 不计涨跌（旧描述把 NULL 说成平盘）
+    assert "pct_chg IS NULL" in down and "既不计涨也不计跌" in down
+    assert "pct_chg IS NULL" in up
+    # 涨跌比：分母 0 → NULL，覆盖率不足 → NULL
+    assert "分母为 0" in adr and "partial_pct_chg" in adr
+
+
+def test_registry_missing_reason_registry_includes_partial_pct_chg() -> None:
+    """新原因码 `partial_pct_chg` 必须在 registry 的缺数语义表里可查（不是裸字符串）。"""
+    from app.services.industry_registry import MARKET_METRIC_MISSING_REASONS
+
+    assert MARKET_METRIC_MISSING_REASONS[svc.MISSING_PARTIAL_PCT_CHG]
+    assert "覆盖率" in MARKET_METRIC_MISSING_REASONS[svc.MISSING_PARTIAL_PCT_CHG]
+
+
 def test_find_metric_resolves_market_keys() -> None:
     """通用读面靠 `find_metric` 做白名单：8 个 key 必须都能解析到 'market' scope。"""
     from app.services.industry_registry import find_metric
@@ -87,6 +120,25 @@ def test_find_metric_resolves_market_keys() -> None:
         found = find_metric(key)
         assert found is not None, key
         assert found[0] == "market", key
+
+
+def test_industry_predicate_excludes_market_scope() -> None:
+    """**I3**：`is_industry` 是"行业数"的唯一判据，全市场 scope 必须被判为非行业。
+
+    这条钉住徽标「行业分类（申万）」的分母与 `GET /api/v1/industries` 的过滤前提：
+    `INDUSTRIES` 的 key 数 = scope 数（3），`get_industry_scopes()` = 行业数（2）。
+    """
+    from app.services.industry_registry import get_industry_scopes
+
+    assert set(INDUSTRIES) == {"pig", "broiler", "market"}
+    scopes = get_industry_scopes()
+    assert [c.key for c in scopes] == ["pig", "broiler"]
+    assert len(INDUSTRIES) == 3 and len(scopes) == 2
+    assert INDUSTRIES["market"].is_industry is False
+    assert INDUSTRIES["market"].sw_l3_codes == []
+    for cfg in scopes:
+        assert cfg.is_industry is True
+        assert cfg.sw_l3_codes, cfg.key
 
 
 # ── 2) 缺数恒 None ────────────────────────────────────────────────────
@@ -191,6 +243,10 @@ def test_breadth_metrics_without_quote_rows_are_none_not_zero() -> None:
     for m in out.values():
         assert m.value is None
         assert m.missing_reason == svc.MISSING_NO_QUOTE_ROWS
+    # 空行集（0 行）走同一条缺数路径，不得落成"覆盖率不足"（0/0 不该被读成 partial）
+    empty = {m.metric_key: m for m in svc._breadth_metrics(svc.breadth_counts_from_rows([]))}
+    for m in empty.values():
+        assert m.value is None and m.missing_reason == svc.MISSING_NO_QUOTE_ROWS
 
 
 def test_ma20_metric_missing_window_is_none_not_zero() -> None:
@@ -202,16 +258,38 @@ def test_ma20_metric_missing_window_is_none_not_zero() -> None:
 
 
 def test_ma20_metric_ratio_and_extra() -> None:
-    """`above / eligible × 100`，分子分母都进 `extra`（可手算复核）。"""
-    m = svc._ma20_metric(date(2026, 10, 9), {date(2026, 10, 9): (5542, 2146)})
+    """`above / eligible × 100`，分子分母与窗口跨度都进 `extra`（可手算复核）。"""
+    m = svc._ma20_metric(
+        date(2026, 10, 9),
+        {
+            date(2026, 10, 9): svc.Ma20Day(
+                5542, 2146, max_window_span_days=64, max_gap_days=33, span_over_alert_days=15
+            )
+        },
+    )
     assert m.value == pytest.approx(2146 / 5542 * 100)
-    assert m.extra == {"window": 20, "eligible": 5542, "above": 2146}
+    assert m.extra == {
+        "window": 20,
+        "eligible": 5542,
+        "above": 2146,
+        "max_window_span_days": 64,
+        "max_gap_days": 33,
+        "span_over_alert_days": 15,
+        "span_alert_days": svc.MA20_SPAN_ALERT_DAYS,
+    }
     assert m.missing_reason is None
 
 
 def test_ma20_metric_zero_eligible_is_none() -> None:
     """eligible = 0 → `None`（防御性：GROUP BY 不会产出 0 行的组，但分母为 0 不许落 0）。"""
-    m = svc._ma20_metric(date(2026, 10, 9), {date(2026, 10, 9): (0, 0)})
+    m = svc._ma20_metric(
+        date(2026, 10, 9),
+        {
+            date(2026, 10, 9): svc.Ma20Day(
+                0, 0, max_window_span_days=0, max_gap_days=0, span_over_alert_days=0
+            )
+        },
+    )
     assert m.value is None and m.missing_reason == svc.MISSING_NO_MA20_WINDOW
 
 
@@ -241,12 +319,10 @@ def test_bucket_label_drift_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_breadth_counts_match_distribution_buckets_one_for_one() -> None:
-    """**同源证据（纯函数层）**：本模块的家数 == 市场分布桶的逐桶和。
+    """**同源证据（纯函数层）**：可用行的家数 == 市场分布桶的逐桶和。
 
     样本刻意覆盖每个桶的边界值：-10 / -8 / -6 / -4 / -2 / -0.5 / **0** / 0.5 /
-    2 / 4 / 10，以及 `None`（市场分布口径把 NULL 归 `0~1%`，与 `summarize_group`
-    把 NULL 归平盘是两条不同的切法 —— 前者按桶、后者按符号，差额由
-    `flat_in_positive_bucket` 显式记账）。
+    2 / 4 / 10，以及 `None`（**Ruling 55 后 NULL 在分桶前剔除**）。
     """
     rows = _rows(
         {
@@ -265,20 +341,97 @@ def test_breadth_counts_match_distribution_buckets_one_for_one() -> None:
         }
     )
     counts = svc.breadth_counts_from_rows(rows)
+    usable = [r for r in rows if r["pct_chg"] is not None]
+    buckets = svc.distribution_counts(usable)
 
     # 逐桶相加 == 本模块的家数（两次独立求和，不是同一个值回读）
-    buckets = svc.distribution_counts(rows)
     assert counts["up_count"] == sum(buckets[label] for label in svc.DISTRIBUTION_UP_LABELS)
     assert counts["down_count"] == sum(buckets[label] for label in svc.DISTRIBUTION_DOWN_LABELS)
-    assert counts["total"] == len(rows)
-    assert counts["up_count"] + counts["down_count"] + counts["flat_count"] == len(rows)
+    # NULL 行**不进** total（total = 可用行），单独记在 unavailable_pct_chg
+    assert counts["total"] == len(usable) == len(rows) - 37
+    assert counts["total_rows"] == len(rows)
+    assert counts["unavailable_pct_chg"] == 37
+    assert counts["coverage"] == pytest.approx(len(usable) / len(rows))
+    assert counts["up_count"] + counts["down_count"] == counts["total"]
 
     # 负数侧：桶的边界与 `pct_chg < 0` **完全重合**（实测与构造双证）
     assert counts["down_count"] == counts["down_sign_count"] == 5 + 7 + 11 + 13 + 3 + 2
-    # 平盘（0.0）与 NULL 都被市场分布的 `0~1%` 桶吸收 → 正数桶之和 = 符号上涨 + 平盘
-    assert buckets["0~1%"] == 17 + 19 + 37
+    # 平盘（0.0）留在市场分布的 `0~1%` 桶里；NULL **已被剔除**，不再被它吸收
+    assert buckets["0~1%"] == 17 + 19
     assert counts["up_count"] == counts["up_sign_count"] + counts[svc.FLAT_IN_POSITIVE_BUCKET]
-    assert counts[svc.FLAT_IN_POSITIVE_BUCKET] == 17 + 37
+    assert counts[svc.FLAT_IN_POSITIVE_BUCKET] == 17
+    # 旧 `flat_count = total - up - down` 是结构性死字段，已移除（不是改名）
+    assert "flat_count" not in counts
+
+
+def test_mostly_null_day_is_none_with_partial_reason_not_5382() -> None:
+    """**C1 核心回归（Ruling 55）**：2025-09-23 那类"行情行在、`pct_chg` 几乎全 NULL"的日子。
+
+    实测库内 2025-09-23：total_rows=5414 / 可用 32（全跌）/ NULL 5382。旧写法把 5382
+    个 NULL 记成"上涨 5382"、`adr=168.19`；现在必须是：可用行里 up=0、down=32，覆盖率
+    0.0059 < 门槛 → **三个指标全 `value=None` + `partial_pct_chg`**，诊断数字留在 `extra`。
+    """
+    rows = _rows({-1.0: 32, None: 5382})
+    counts = svc.breadth_counts_from_rows(rows)
+    assert counts["up_count"] == 0
+    assert counts["down_count"] == 32
+    assert counts["total_rows"] == 5414 and counts["total"] == 32
+    assert counts["unavailable_pct_chg"] == 5382
+    assert counts["coverage"] < svc.MIN_PCT_CHG_COVERAGE
+
+    out = {m.metric_key: m for m in svc._breadth_metrics(counts)}
+    for key in ("market_advance_count", "market_decline_count", "advance_decline_ratio"):
+        assert out[key].value is None, f"{key} 不得由缺失数据拼出数字"
+        assert out[key].missing_reason == svc.MISSING_PARTIAL_PCT_CHG
+        assert out[key].extra["unavailable_pct_chg"] == 5382
+        assert out[key].extra["coverage"] == pytest.approx(32 / 5414, abs=1e-6)
+        assert out[key].extra["min_coverage"] == svc.MIN_PCT_CHG_COVERAGE
+        assert "flat_count" not in out[key].extra
+
+
+@pytest.mark.parametrize(
+    ("usable", "unavailable", "expected_value"),
+    [
+        (950, 50, 950.0),  # 覆盖率恰为门槛 0.95 → 落值（>= 才通过）
+        (949, 51, None),  # 略低于门槛 → NULL
+    ],
+)
+def test_coverage_threshold_boundary(
+    usable: int, unavailable: int, expected_value: float | None
+) -> None:
+    """覆盖率门槛是闭区间下界：`coverage >= MIN_PCT_CHG_COVERAGE` 才落值。"""
+    rows = _rows({1.0: usable, None: unavailable})
+    out = {m.metric_key: m for m in svc._breadth_metrics(svc.breadth_counts_from_rows(rows))}
+    assert out["market_advance_count"].value == expected_value
+    assert out["market_advance_count"].missing_reason == (
+        None if expected_value is not None else svc.MISSING_PARTIAL_PCT_CHG
+    )
+
+
+def test_flat_identity_still_holds_after_null_exclusion() -> None:
+    """**Ruling 54.1 的 117 平盘恒等式在剔除 NULL 后仍然成立**。
+
+    用 2026-10-09 的真实库存（total=5559、正数桶之和 3414、符号上涨 3297、平盘 117、
+    下跌 2145、无 NULL）构造同形样本：`up - up_sign == flat_in_positive_bucket == 117`，
+    `adr == 3414/2145`，且 `flat_count` 不再出现在 `extra` 里。
+    """
+    rows = _rows({0.5: 3297, 0.0: 117, -0.5: 2145})
+    counts = svc.breadth_counts_from_rows(rows)
+    assert counts["unavailable_pct_chg"] == 0
+    assert counts["coverage"] == 1.0
+    assert counts["up_count"] == 3414
+    assert counts["down_count"] == 2145
+    assert counts["up_sign_count"] == 3297
+    assert counts[svc.FLAT_IN_POSITIVE_BUCKET] == 117
+    assert counts["up_count"] - counts["up_sign_count"] == counts[svc.FLAT_IN_POSITIVE_BUCKET]
+
+    out = {m.metric_key: m for m in svc._breadth_metrics(counts)}
+    assert out["market_advance_count"].value == 3414.0
+    assert out["market_decline_count"].value == 2145.0
+    assert out["advance_decline_ratio"].value == pytest.approx(3414 / 2145)
+    assert out["advance_decline_ratio"].extra[svc.FLAT_IN_POSITIVE_BUCKET] == 117
+    assert out["advance_decline_ratio"].extra["sign_basis"] == "market_distribution_buckets"
+    assert "flat_count" not in out["advance_decline_ratio"].extra
 
 
 @pytest.mark.parametrize(
@@ -298,7 +451,12 @@ def test_breadth_counts_match_distribution_buckets_one_for_one() -> None:
     ],
 )
 def test_distribution_counts_uses_market_bucket_function(pct: float | None, label: str) -> None:
-    """本模块的分桶就是市场模块的 `_distribution_bucket`（逐边界对拍，无第二套实现）。"""
+    """本模块的分桶就是市场模块的 `_distribution_bucket`（逐边界对拍，无第二套实现）。
+
+    含 `None → 0~1%`：这是**市场页的现状行为**（`distribution_counts` 的职责就是与
+    市场端点逐桶对拍）。涨跌家数**不**直接用这个函数跑全量行 ——
+    `breadth_counts_from_rows` 先剔除 NULL 再调它（Ruling 55）。
+    """
     assert svc.distribution_counts(_rows({pct: 1}))[label] == 1
     assert _distribution_bucket(pct) == label
 
@@ -314,6 +472,11 @@ def test_advance_decline_ratio_is_bucket_based() -> None:
     assert out["advance_decline_ratio"].extra["sign_basis"] == "market_distribution_buckets"
     assert out["advance_decline_ratio"].extra["up_sign_count"] == 9
     assert out["advance_decline_ratio"].extra[svc.FLAT_IN_POSITIVE_BUCKET] == 1
+    # 诊断字段：这天的分母构成可复核（C1 新增）
+    assert out["advance_decline_ratio"].extra["total_rows"] == 13
+    assert out["advance_decline_ratio"].extra["unavailable_pct_chg"] == 0
+    assert out["advance_decline_ratio"].extra["coverage"] == 1.0
+    assert "flat_count" not in out["advance_decline_ratio"].extra
 
 
 def test_row_shape_and_null_extra_keeps_missing_reason() -> None:

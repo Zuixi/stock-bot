@@ -1177,8 +1177,15 @@ async def get_industry_companies(db: AsyncSession, industry_key: str) -> Industr
 
 
 async def list_industries(db: AsyncSession) -> list[IndustrySummaryOut]:
+    """`GET /api/v1/industries`（"已产品化行业列表"）。
+
+    **只列行业 scope**（:func:`get_industry_scopes`，判据 = `IndustryConfig.is_industry`）：
+    `INDUSTRIES` 现在同时登记非行业 scope（`market` = 全市场情绪，spec §S1.8），
+    把它列成一个"产品化行业"会让列表与徽标的「行业分类（申万）」分母双双虚高
+    （Ruling 54 第 4 条）。全市场情绪的读面走通用 `GET /api/v1/metrics/*`，不在本列表。
+    """
     summaries: list[IndustrySummaryOut] = []
-    for cfg in get_all_industries():
+    for cfg in get_industry_scopes():
         grouped = await repo.latest_rows_by_metric(db, [cfg.key])
         coverage = {m.key: bool(grouped.get(m.key)) for m in cfg.metrics}
         periods = [r.period for rows in grouped.values() for r in rows]
@@ -1204,9 +1211,17 @@ async def list_industries(db: AsyncSession) -> list[IndustrySummaryOut]:
 
 
 def get_all_industries() -> list[IndustryConfig]:
+    """**全部 scope**（行业 + 非行业）。"行业数"请用 `get_industry_scopes()`。"""
     from app.services.industry_registry import INDUSTRIES  # noqa: PLC0415
 
     return list(INDUSTRIES.values())
+
+
+def get_industry_scopes() -> list[IndustryConfig]:
+    """行业 scope（判据见 `IndustryConfig.is_industry`）；列表/徽标分母的唯一来源。"""
+    from app.services.industry_registry import get_industry_scopes as _scopes  # noqa: PLC0415
+
+    return _scopes()
 
 
 # ── Dashboard aggregate ───────────────────────────────────────────────
