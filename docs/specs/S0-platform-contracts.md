@@ -35,7 +35,7 @@ alter table industry_metrics
 **验收判据**
 - 数据契约：5 篇 ADR 存在且编号连续；`docs/decisions/index.md` 已登记
 - 数据契约：`industry_metrics` 迁移**只加 2 列**，`grep -rn "create_table.*metric_series" backend/app/migrations/` 无命中
-- 行为：`grep -rn "metric_series" backend/app/ docs/` 无命中（旧方案已撤销，无残留）
+- 行为（废弃项只扫实现层，**不扫撤销记录本身**）：`grep -rn "metric_series" backend/app/` 无命中；`docs/decisions/` 命中仅限「已撤销 / 不建」的撤销记录（ADR 0013），其余文档层（`docs/specs/`、`docs/Changelog.md` 等）是历史记录，不在本判据范围内
 - 门禁：`bash scripts/doc_gate.sh` 全绿（含 [1/13] ADR 只增不改、[2/13] 头部与编号）
 
 ---
