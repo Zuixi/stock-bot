@@ -103,6 +103,22 @@ else
   fail "doc_gate 未通过"; grep '✘' /tmp/doc_gate.out | head -20
 fi
 
+# 路由迁移硬门禁（Task 5 起）：读 `frontend/src/app/router/route-manifest.ts` + IA 文档，
+# 毫秒级、无需前端依赖，故**放在快检里**（不受"是否有前端改动"限制——它同样会被 IA 文档改动打破）。
+# node 缺失时**告警而非静默通过**（评审 Defect 5）。
+echo "  check:routes（路由迁移门禁）..."
+if ! command -v node >/dev/null 2>&1; then
+  warn "未找到 node，路由迁移门禁被跳过（npm run check:routes）——请在有 node 的环境复跑"
+elif [ ! -f frontend/scripts/check-routes.mjs ]; then
+  fail "frontend/scripts/check-routes.mjs 不存在（路由迁移门禁无法执行）"
+else
+  if (cd frontend && npm run --silent check:routes > /tmp/check_routes.out 2>&1); then
+    ok "check:routes 通过（$(grep -c '^PASS' /tmp/check_routes.out) 项）"
+  else
+    fail "路由迁移门禁未通过（npm run check:routes）"; grep '^FAIL' /tmp/check_routes.out | head -20
+  fi
+fi
+
 if [ "$FULL" = 1 ]; then
   echo; echo "== [4/4] 全量门禁 (--full) =="
   [ -n "$PY" ] && { echo "  mypy app/ ..."; (cd backend && uv run mypy app)  || fail "mypy 未通过"; }
@@ -119,12 +135,6 @@ if [ "$FULL" = 1 ]; then
     (cd frontend && npx tsc --noEmit) || fail "前端 tsc 未通过"
   else
     echo "  （无前端 TS 改动，跳过 tsc）"
-  fi
-  # 路由迁移门禁（Task 5 起）：读 router + IA 文档，毫秒级，故不受"是否有前端改动"限制——
-  # 它同样会被 docs/design/ia-investment-research-platform.md 的改动打破。
-  if command -v node >/dev/null 2>&1 && [ -f frontend/scripts/check-routes.mjs ]; then
-    echo "  npm run check:routes ..."
-    (cd frontend && npm run --silent check:routes) || fail "路由迁移门禁未通过（npm run check:routes）"
   fi
 fi
 

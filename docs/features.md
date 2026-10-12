@@ -32,7 +32,7 @@
 | 功能 | 说明 | 代码入口 |
 |---|---|---|
 | 自选股 | 用户自选列表 + 标题/清空（数据归属按 `user_id` 隔离，需登录）；路由 `/me?tab=watchlist`（`/watchlist` redirect 到此） | `frontend/src/features/watchlist`（`WatchlistPanel` / `WatchlistTable`） · `/api/v1/watchlists` |
-| 自定义标签 | 标签分组总览与按标签看股票；路由 `/me?tab=tags`（`/tags` redirect 到此）、`/tags/:tagName` 保留 | `frontend/src/features/watchlist`（`TagsOverview` / `TagsPanel`） · `frontend/src/pages/tags-detail` · `/api/v1/tags` |
+| 自定义标签 | 标签分组总览与按标签看股票；路由 `/me?tab=tags`（`/tags` redirect 到此）、`/tags/:tagName`（**redirect** 到 `/me?tab=tags&name=`） | `frontend/src/features/watchlist`（`TagsOverview` / `TagsPanel`） · `/api/v1/tags` |
 | 注册 / 登录 / 会话 | 独立认证库、HttpOnly Cookie、CSRF 双防御 | `frontend/src/pages/login` · `frontend/src/features/auth` · auth-service `/auth` · gateway `forward-auth` |
 
 ## 行业投研

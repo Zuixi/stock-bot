@@ -1,17 +1,18 @@
-import { Alert, Typography } from "antd";
-import { useLocation, useSearchParams } from "react-router-dom";
-import { SectionCard, StateWrapper } from "@/shared/ui";
+import { Alert } from "antd";
+import { useSearchParams } from "react-router-dom";
+import { SectionCard } from "@/shared/ui";
 
 /**
  * `/market/heatmap`：热力图页（**今日不存在，本任务新建占位**；真实现归 S1.5）。
  *
  * **它不是任何 redirect 的目标**（Ruling 30）：`/market/hot-sectors/:category` 与
  * `/market/concept/:boardCode` 今天就是有数据的真页面，故**原地保留**，不 redirect 到这里。
- * 本页只承诺「可达 + 不 404 + 规划中提示」，并**如实回显收到的 query**——S1.5 接管时
- * `?group=` / `?concept=` 两种口径各要能渲染，且**不得静默忽略任何一个参数**。
+ *
+ * 本页只承诺「可达 + 不 404 + 如实回显 query」——「规划中」通告由路由清单注入
+ * （`route-manifest.ts` 的 `isPlaceholder: true` → `route-elements.tsx` 的 `PlaceholderNotice`），
+ * 本文件**不再自带标记**，避免同一个 testid 在页面上出现两次。
  */
 export default function MarketHeatmapPage() {
-  const location = useLocation();
   const [searchParams] = useSearchParams();
   const group = searchParams.get("group");
   const concept = searchParams.get("concept");
@@ -54,29 +55,13 @@ export default function MarketHeatmapPage() {
         />
       ) : null}
 
-      <StateWrapper
-        empty
-        emptyText={
-          <Typography.Text type="secondary">
-            规划中：热力图渲染尚未落地（占位路由，无 404）
-          </Typography.Text>
-        }
-      >
-        {null}
-      </StateWrapper>
-
-      <div
-        data-testid="placeholder-route-params"
-        style={{ marginTop: 12, fontSize: 12, color: "var(--text-secondary)", textAlign: "center" }}
-      >
-        <div>
-          当前路径：<code data-testid="placeholder-pathname">{location.pathname}</code>
-        </div>
+      {/* 参数保留自证：S1.5 接管时两种口径都要能渲染，且不得静默忽略参数 */}
+      <div style={{ marginTop: 12, fontSize: 12, color: "var(--text-secondary)", textAlign: "center" }}>
         {entries.length > 0 ? (
           <div>
             查询参数：
             {entries.map(([k, v]) => (
-              <code key={k} style={{ marginInlineStart: 6 }}>
+              <code key={k} style={{ marginInlineStart: 6 }} data-testid={`heatmap-param-${k}`}>
                 {k}={v}
               </code>
             ))}

@@ -17,47 +17,49 @@ import { UserMenu, useAuthStore } from "@/features/auth";
 import { ThemeToggle } from "@/shared/ui";
 import { ModuleSideNav, NavTree } from "@/features/nav";
 import type { NavItem, NavNode, NavVisibility } from "@/features/nav";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
+import { NAV_ROOTS } from "@/app/router/route-manifest";
 
 const { Header, Content, Footer } = Layout;
 
 /**
- * 顶栏 10 个一级导航（顺序 = IA 文档 §1 的表序，逐字）。
+ * 顶栏 10 个一级导航的**展示层配置**（图标 + 可见性）。
  *
- * **这是数据**：NavTree 只渲染它，不认识"市场""行业分析"是什么。
+ * 导航的 **path 与标题不在这里**——它们是路由契约的一部分，唯一真相在
+ * `@/app/router/route-manifest` 的 `NAV_ROOTS`（门禁 `npm run check:routes` 直接核对那份数据，
+ * 与生成 `<Route>` 的是同一份，故"顶栏少一个导航""标题被改"都能被机械发现）。
+ *
  * 权限可见性三态照抄 IA 文档 §1（口径来源 ADR 0008），**不新增任何 scope**：
  * - `public`        —— 市场 `/market`（含全部子路由）、公司分析 `/company`
  * - `permission`    —— 行业分析 `/industry`，沿用既有 `research:read`
  * - `authenticated` —— 其余 7 个（资讯/宏观/情绪/价值网/策略/风险/交易）：后端尚不存在，
  *                      按裁定「对已登录用户可见 + 不加门禁」，写死权限名就是假契约
  */
-const TOP_NAV: NavItem[] = [
-  { nav: { key: "/market", title: "市场", path: "/market", icon: <BarChartOutlined /> }, visibility: { kind: "public" } },
-  { nav: { key: "/news", title: "资讯", path: "/news", icon: <ReadOutlined /> }, visibility: { kind: "authenticated" } },
-  {
-    nav: { key: "/industry", title: "行业分析", path: "/industry", icon: <FundOutlined /> },
-    visibility: { kind: "permission", permission: "research:read" },
-  },
-  { nav: { key: "/company", title: "公司分析", path: "/company", icon: <BankOutlined /> }, visibility: { kind: "public" } },
-  { nav: { key: "/macro", title: "宏观分析", path: "/macro", icon: <GlobalOutlined /> }, visibility: { kind: "authenticated" } },
-  {
-    nav: { key: "/sentiment", title: "情绪分析", path: "/sentiment", icon: <DashboardOutlined /> },
-    visibility: { kind: "authenticated" },
-  },
-  {
-    nav: { key: "/valuegraph", title: "价值网图谱", path: "/valuegraph", icon: <DeploymentUnitOutlined /> },
-    visibility: { kind: "authenticated" },
-  },
-  {
-    nav: { key: "/strategy", title: "策略引擎", path: "/strategy", icon: <ExperimentOutlined /> },
-    visibility: { kind: "authenticated" },
-  },
-  {
-    nav: { key: "/risk", title: "风险管理", path: "/risk", icon: <SafetyCertificateOutlined /> },
-    visibility: { kind: "authenticated" },
-  },
-  { nav: { key: "/trade", title: "交易执行", path: "/trade", icon: <SwapOutlined /> }, visibility: { kind: "authenticated" } },
-];
+const NAV_PRESENTATION: Record<string, { icon: ReactNode; visibility: NavVisibility }> = {
+  "/market": { icon: <BarChartOutlined />, visibility: { kind: "public" } },
+  "/news": { icon: <ReadOutlined />, visibility: { kind: "authenticated" } },
+  "/industry": { icon: <FundOutlined />, visibility: { kind: "permission", permission: "research:read" } },
+  "/company": { icon: <BankOutlined />, visibility: { kind: "public" } },
+  "/macro": { icon: <GlobalOutlined />, visibility: { kind: "authenticated" } },
+  "/sentiment": { icon: <DashboardOutlined />, visibility: { kind: "authenticated" } },
+  "/valuegraph": { icon: <DeploymentUnitOutlined />, visibility: { kind: "authenticated" } },
+  "/strategy": { icon: <ExperimentOutlined />, visibility: { kind: "authenticated" } },
+  "/risk": { icon: <SafetyCertificateOutlined />, visibility: { kind: "authenticated" } },
+  "/trade": { icon: <SwapOutlined />, visibility: { kind: "authenticated" } },
+};
+
+/** 由清单的 `NAV_ROOTS`（path + 标题）+ 上表的图标/可见性合成顶栏数据 */
+const TOP_NAV: NavItem[] = NAV_ROOTS.map((nav) => {
+  const presentation = NAV_PRESENTATION[nav.path];
+  if (!presentation) {
+    // 清单加了导航但忘了配图标/可见性：显式抛错，不静默用一个默认值掩盖
+    throw new Error(`NAV_ROOTS 里的 ${nav.path} 缺少 NAV_PRESENTATION 配置`);
+  }
+  return {
+    nav: { key: nav.path, title: nav.title, path: nav.path, icon: presentation.icon },
+    visibility: presentation.visibility,
+  };
+});
 
 /**
  * 模块内二级/三级树的 payload。本任务**不下发任何模块树**（后续由各模块配置 / 后端下发），

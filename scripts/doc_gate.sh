@@ -113,7 +113,7 @@ fi
 # ── 3. features.md 可执行契约 ───────────────────────────────
 # 规则：反引号里出现的 frontend/src/{pages,features,shared}/<path> 必须存在；
 #       /api/v1/<seg> 的首段必须真实存在于 app/api/v1 的 include_router 前缀；
-#       出现的 frontend/src/pages/<dir> 必须被 app/router/index.tsx 引用。
+#       出现的 frontend/src/pages/<dir> 必须在 app/router/ 下被引用（Task 5 起路由由清单生成）。
 echo; echo "== [3/13] features.md 契约 =="
 if [ -f "$FEATURES_DOC" ]; then
   missing=0
@@ -131,9 +131,11 @@ if [ -f "$FEATURES_DOC" ]; then
     fi
   done
   for d in $(grep -oE '`frontend/src/pages/[A-Za-z0-9_-]+`' "$FEATURES_DOC" | tr -d '`' | sed 's#frontend/src/pages/##' | sort -u); do
-    if ! grep -q "@/pages/$d\"" frontend/src/app/router/index.tsx; then
-      fail "页面 $d 未被 app/router/index.tsx 引用（删功能请同步删 features.md 对应行）" \
-        "见 frontend/src/app/router/index.tsx 与 docs/features.md"
+    # Task 5（Ruling 33）起 router 由路由清单生成：页面 import 落在 `app/router/` 下的
+    # route-elements.tsx（懒加载注册表）。故扫描整个 `app/router/` 目录，而不是只看 index.tsx。
+    if ! grep -rq "@/pages/$d\"" frontend/src/app/router/; then
+      fail "页面 $d 未被 app/router/ 引用（删功能请同步删 features.md 对应行）" \
+        "见 frontend/src/app/router/（route-elements.tsx 的 PAGES 注册表）与 docs/features.md"
       missing=1
     fi
   done

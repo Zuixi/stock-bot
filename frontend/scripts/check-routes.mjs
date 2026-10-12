@@ -1,29 +1,42 @@
-// 路由迁移门禁（Task 5 / S1.1，永久检查）。
+// 路由迁移门禁（Task 5 / S1.1，**永久检查**）。
 //
 // 依据：docs/design/ia-investment-research-platform.md §4「完整路由表（既有 15 条，一条不漏）」
 // 与 §4「新目标路由的建立归属」（Ruling 30 后：8 条今日不存在的 redirect 目标）。
 //
-// 本脚本把那张表变成**可机械核对**的清单，逐条断言：
-//   1. 既有 15 条旧路由在新 router 中全部有声明（不许删）；
-//   2. **8 条 redirect** 的**目标逐字一致**（含参数名，如 `/company/:symbol` 而非 `/stock/:symbol`）；
-//   3. **7 条保留**路由语义未变；
-//   4. 每条 redirect 的目标路由**确实存在**（否则就是把 404 从旧路径搬到新路径）；
-//   5. 8 条今日不存在的目标路由全部已建立；
-//   6. 未落在表内的路由不许出现（防"顺手加的"路由绕过权限口径）；
-//   7. **redirect 的目标不得是「规划中」占位页**（Ruling 30：来源今天有真页面时，不许把用户送进占位页）；
-//   8. **IA §4 表与净效果块声明的数字双向比对**（行数 ↔ 成员 ↔ 声明的 8/7），防文档自相矛盾。
+// **设计（Ruling 33）**：断言的数据来自 `src/app/router/route-manifest.ts` —— 路由清单是唯一真相，
+// `router/index.tsx` 由它生成 `<Route>`。**本脚本不解析任何 JSX 源码**：此前两轮"解析 router"
+// 连续假绿（占位判定对共享组件失效、扫描器吞掉 `/` 与 `/login`），故彻底移除该层。
 //
-// 只读 `src/app/router/index.tsx` 与 IA 文档，不 import 运行时（可在 CI 无依赖环境跑）。
+// 断言清单：
+//   1. 既有 15 条旧路由在清单中全部存在（不许删）；8 条 redirect / 7 条保留；
+//   2. 8 条 redirect 的**目标逐字一致**（含参数名，如 `/company/:symbol` 而非 `/stock/:symbol`）；
+//   3. 每条 redirect 的目标都能命中某条已声明路由（否则就是把 404 从旧路径搬到新路径）；
+//   4. 8 条今日不存在的目标路由已建立；10 个一级导航根可达（`NAV_ROOTS` 即顶栏数据源）；
+//   5. 未落在契约内的路由不许出现（防"顺手加的"路由绕过权限口径）；
+//   6. **三类互斥**：redirect 集合 == 契约、保留行不得是 redirect、redirect 目标不得是占位页（`isPlaceholder`）；
+//   7. 站内链接不得再写已迁移的旧裸路径；不含 `/calendar`；
+//   8. **IA §4 文档 ↔ 清单契约 双向比对**（表行成员、净效果块分组合计与成员数、合计式、契约段声明数字）。
+
 import { readFileSync, readdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const ROUTER = join(root, "src/app/router/index.tsx");
-const source = readFileSync(ROUTER, "utf8");
 
-/** 从 router 源文件提取所有声明过的静态 `path="..."` */
-const declaredPaths = [...source.matchAll(/path="([^"]+)"/g)].map((m) => m[1]);
+// ── 清单（唯一真相）：直接 import，不做源码解析 ───────────────────────────────
+// node 直接跑 `.ts`（type stripping）；本文件里没有类型注解/枚举等需要转译的语法。
+const {
+  ROUTES,
+  NAV_ROOTS,
+  getPageRoutes,
+  getRedirectRoutes,
+  getPlaceholderRoutes,
+  getRoutePaths,
+} = await import(pathToFileURL(join(root, "src/app/router/route-manifest.ts")).href);
+
+const declaredRoutes = ROUTES;
+const declaredPaths = getRoutePaths();
+const routeRedirects = new Map(getRedirectRoutes().map((r) => [r.path, r.redirectTo]));
 
 // ── 契约（逐字抄自 IA 文档 §4）────────────────────────────────────────────
 
@@ -39,7 +52,7 @@ const KEEP = [
   "/market/concept/:boardCode",
 ];
 
-/** 8 条 redirect：旧路径 → 新位置（`${param ?? ""}` 已归一为 `:param`） */
+/** 8 条 redirect：旧路径 → 新位置（`redirectTo` 即契约写法） */
 const REDIRECTS = [
   { from: "/market/category", to: "/market/industry" },
   { from: "/index/:tsCode", to: "/market/index/:tsCode" },
@@ -52,10 +65,8 @@ const REDIRECTS = [
 ];
 
 /**
- * §4「新目标路由的建立归属」——**今日不存在的目标**（本任务必须新建）。
- * Ruling 30 后 = 8 行归属 / 11 条路由（含裸路径与带参变体、含顶栏工具目标 `/search`；
- * 其中 `/me` 一行承接 3 个 tab 变体）。
- * `/market/heatmap` 已移出本表（它不是任何 redirect 的目标，见下面「③ redirect 目标不得是占位页」断言）。
+ * §4「新目标路由的建立归属」——**今日不存在的目标**（本任务已新建）。
+ * Ruling 30 后 = 8 行归属；`/market/heatmap` 已移出本表（它不是任何 redirect 的目标）。
  */
 const NEW_TARGETS = [
   "/market/industry", // 1（裸）— /market/category 的目标
@@ -68,198 +79,20 @@ const NEW_TARGETS = [
   "/search", // 8（?q=，顶栏工具目标、非 redirect）
 ];
 
-/** 一级导航根（IA §1 的 10 个；`/market` 属保留类，已在 KEEP 中） */
-const NAV_ROOTS = [
-  "/market",
-  "/news",
-  "/industry",
-  "/company",
-  "/macro",
-  "/sentiment",
-  "/valuegraph",
-  "/strategy",
-  "/risk",
-  "/trade",
-];
-
 /** 允许出现的额外路由（既有页面按新前缀搬迁 / 目标带参变体）：超出即报错，防私加路由 */
 const ALLOWED_EXTRA = [
-  ...NAV_ROOTS,
-  // 保留类带参变体与新前缀下的既有页面
-  "/market/industry/:level1Code",
-  "/market/industry/:level1Code/:level2Code",
+  ...NAV_ROOTS.map((n) => n.path),
   "/market/index/:tsCode",
   "/company/:symbol",
   "/industry/:industryKey",
   "/me",
   "/search",
   "/market/industry",
-  // 注意：`/market/heatmap` 仍是**已声明路由**（S1.5 建真热力图），但它不是 redirect 目标
+  // `/market/heatmap` 仍是**已声明路由**（S1.5 建真热力图），但它不是 redirect 目标
   "/market/heatmap",
+  // MainLayout 外壳（无 path）
+  "",
 ];
-
-// ── 解析 Router：每条路由的 path + element 全文 ────────────────────────────
-//
-// Ruling 32：**不要**只从"N 条已知 redirect"出发去数——那样新增/漏掉的 `<Navigate>` 会被静默过滤掉。
-// 这里先把 router 里**每一条** `<Route>` 的 `path` 与 `element` 全文取出来，再由 element 判定类别：
-//   ① element 含 `<Navigate`（直接写或经 `Legacy*Redirect` 组件间接写）→ 它是 redirect；
-//   ② 渲染的页面源文件带 `data-testid="placeholder-route-params"`（**正向标记**）→ 它是占位页；
-//   ③ 其余 → 它是普通页面。
-// 然后断言三类互斥且有界：redirect 集合 == REDIRECTS、KEEP ∩ redirect == ∅、占位 ∩ 目标 == ∅。
-
-/**
- * 把 JSX 片段里的模板归一成契约写法：
- *   `/company/${symbol ?? ""}`        → `/company/:symbol`
- *   `/market/heatmap?group=${encodeURIComponent(category ?? "")}` → `/market/heatmap?group=:category`
- */
-function normalizeTarget(raw) {
-  return raw
-    .replace(/\$\{encodeURIComponent\((\w+)\s*\?\?\s*""\)\}/g, ":$1")
-    .replace(/\$\{(\w+)\s*\?\?\s*""\}/g, ":$1");
-}
-
-/** 拆出一条 `<Route ... />` 的 JSX 属性（用引号/大括号/括号配平切分，避免正则漏解嵌套） */
-function parseRouteProps(tag) {
-  const props = {};
-  let i = "<Route".length;
-  while (i < tag.length) {
-    while (i < tag.length && /[\s/]/.test(tag[i])) i += 1;
-    const nameMatch = /^([A-Za-z_][\w-]*)/.exec(tag.slice(i));
-    if (!nameMatch) break;
-    const name = nameMatch[1];
-    i += name.length;
-    while (i < tag.length && /\s/.test(tag[i])) i += 1;
-    if (tag[i] !== "=") {
-      props[name] = "true";
-      continue;
-    }
-    i += 1;
-    while (i < tag.length && /\s/.test(tag[i])) i += 1;
-    if (tag[i] === '"' || tag[i] === "'") {
-      const quote = tag[i];
-      const close = tag.indexOf(quote, i + 1);
-      props[name] = tag.slice(i + 1, close);
-      i = close + 1;
-    } else if (tag[i] === "{") {
-      let depth = 0;
-      let j = i;
-      for (; j < tag.length; j += 1) {
-        if (tag[j] === "{") depth += 1;
-        else if (tag[j] === "}") {
-          depth -= 1;
-          if (depth === 0) break;
-        }
-      }
-      props[name] = tag.slice(i + 1, j);
-      i = j + 1;
-    } else {
-      i += 1;
-    }
-  }
-  return props;
-}
-
-/** 切出所有顶层 `<Route ... />` 自闭合标签（页面的 layout 路由 `<Route element=...>` 无 path，跳过） */
-const routeTags = [];
-for (let idx = source.indexOf("<Route"); idx !== -1; ) {
-  let depth = 0;
-  let j = idx + "<Route".length;
-  let endIdx = -1;
-  for (; j < source.length; j += 1) {
-    const ch = source[j];
-    if (ch === "{") depth += 1;
-    else if (ch === "}") depth -= 1;
-    else if (ch === '"') {
-      j = source.indexOf('"', j + 1);
-    } else if (ch === "<" && source[j + 1] === "/") {
-      // `<Route ...></Route>` 形式（本文件未用，容错）
-      endIdx = source.indexOf(">", j) + 1;
-      break;
-    } else if (ch === "/" && source[j + 1] === ">" && depth === 0) {
-      endIdx = j + 2;
-      break;
-    }
-  }
-  if (endIdx === -1) break;
-  routeTags.push(source.slice(idx, endIdx));
-  idx = source.indexOf("<Route", endIdx);
-}
-
-const declaredRoutes = routeTags
-  .map(parseRouteProps)
-  .filter((p) => typeof p.path === "string" && p.path.length > 0)
-  .map((p) => ({ path: p.path, element: p.element ?? "" }));
-if (declaredRoutes.length < 20) {
-  fail(`路由解析异常：只解析出 ${declaredRoutes.length} 条带 path 的 <Route>（预期 ≥ 20，解析器可能失效）`);
-}
-
-/** `Legacy*Redirect` 组件名的函数体（用于把"经组件间接 redirect"也算成 redirect） */
-function functionBodyOf(name) {
-  const fnStart = source.indexOf(`function ${name}(`);
-  if (fnStart === -1) return null;
-  const open = source.indexOf("<Navigate", fnStart);
-  if (open === -1) return null;
-  const close = source.indexOf("/>", open);
-  return source.slice(open, close + 2);
-}
-
-/** 一条路由是否落在 `<Navigate>` 上（直接写 / 经 `Legacy*Redirect` 组件） */
-function redirectTargetOf(element) {
-  if (!element.includes("Navigate") && !element.includes("Redirect")) return null;
-  // 直接写：element={<Navigate to="X" replace />} / to={`模板`}
-  const inlineLiteral = element.match(/<Navigate to="([^"]+)"/);
-  if (inlineLiteral) return inlineLiteral[1];
-  const inlineTemplate = element.match(/<Navigate to=\{`([^`]+)`\}/);
-  if (inlineTemplate) return normalizeTarget(inlineTemplate[1]);
-  // 经组件：element={<LegacyFooRedirect />}
-  const comp = element.match(/<(Legacy\w+Redirect)\s*\/>/);
-  if (comp) {
-    const body = functionBodyOf(comp[1]);
-    if (!body) return null;
-    const literal = body.match(/<Navigate to="([^"]+)"/);
-    if (literal) return literal[1];
-    const template = body.match(/<Navigate to=\{`([^`]+)`\}/);
-    if (template) return normalizeTarget(template[1]);
-  }
-  return null;
-}
-
-const routeRedirects = new Map(); // path -> 目标（normalize 后）
-for (const { path, element } of declaredRoutes) {
-  const target = redirectTargetOf(element);
-  if (target !== null) routeRedirects.set(path, normalizeTarget(target));
-}
-const actualRedirects = routeRedirects;
-const staticRedirects = new Map([...routeRedirects].filter(([, v]) => !v.includes(":")));
-const componentRedirects = new Map([...routeRedirects].filter(([, v]) => v.includes(":")));
-
-// ── 占位路由：**正向标记**，不靠"是否 import 了 PlaceholderPage"推断 ──────────
-// 标记 = 页面源文件里出现 `data-testid="placeholder-route-params"`（PlaceholderPage 与
-// market-heatmap 都带；后者自带「规划中」空态、并不 import PlaceholderPage，
-// 旧判据会把它漏掉——这正是评审 F2(a) 证明的假绿来源）。
-const PLACEHOLDER_MARKER = 'data-testid="placeholder-route-params"';
-const lazyAliases = new Map(); // 组件常量名 -> 页面目录
-for (const m of source.matchAll(
-  /(\w+)\s*=\s*lazy\(\s*\(\)\s*=>\s*import\("@\/pages\/([\w-]+)(?:\/[\w-]+)?"\)\s*\)/g,
-)) {
-  lazyAliases.set(m[1], m[2]);
-}
-const placeholderComponents = new Set();
-for (const [constName, dir] of lazyAliases) {
-  const pageEntry = join(root, "src/pages", dir, "index.tsx");
-  const pageSource = readFileSync(pageEntry, "utf8");
-  if (pageSource.includes(PLACEHOLDER_MARKER)) placeholderComponents.add(constName);
-}
-const placeholderRoutePaths = declaredRoutes
-  .filter(({ element }) =>
-    [...placeholderComponents].some((comp) => new RegExp(`<${comp}\\s*/>`).test(element))
-  )
-  .map(({ path }) => path);
-// 反向自证：占位组件数量与占位路由数量必须对得上（防止别名没匹配上导致集合为空）
-const placeholderAliasCount = [...placeholderComponents].length;
-if (placeholderAliasCount === 0 || placeholderRoutePaths.length === 0) {
-  fail(`占位路由检测失效：识别到 ${placeholderAliasCount} 个占位组件、${placeholderRoutePaths.length} 条占位路由（不允许为 0）`);
-}
 
 // ── 断言 ────────────────────────────────────────────────────────────────
 
@@ -296,13 +129,13 @@ for (const path of legacy) {
   else fail(`旧路由丢失：${path}`);
 }
 for (const { from, to } of REDIRECTS) {
-  const actual = actualRedirects.get(from);
+  const actual = routeRedirects.get(from);
   if (actual === undefined) fail(`redirect 未实现：${from} → ${to}`);
-  else if (normalizeTarget(actual) !== to) fail(`redirect 目标不符：${from} → ${actual}（契约 ${to}）`);
+  else if (actual !== to) fail(`redirect 目标不符：${from} → ${actual}（契约 ${to}）`);
   else pass(`redirect 一致：${from} → ${to}`);
 }
 
-// 4 + 5：redirect 目标可达 + 9 条目标路由已建立
+// 3 + 4：redirect 目标可达 + 8 条目标路由已建立
 for (const { from, to } of REDIRECTS) {
   if (targetResolves(to, declaredPaths)) pass(`redirect 目标可达：${to} ← ${from}`);
   else fail(`redirect 目标仍是 404：${to}（来自 ${from}）`);
@@ -312,101 +145,92 @@ for (const target of NEW_TARGETS) {
   else fail(`新目标路由缺失：${target}`);
 }
 
-// 一级导航 10 个根全部可达
-for (const root of NAV_ROOTS) {
-  if (declaredPaths.includes(root)) pass(`一级导航根可达：${root}`);
-  else fail(`一级导航根缺失：${root}`);
+// 10 个导航根可达（清单即真相）
+for (const nav of NAV_ROOTS) {
+  if (declaredPaths.includes(nav.path)) pass(`一级导航根可达：${nav.path}`);
+  else fail(`一级导航根缺失：${nav.path}`);
+}
+if (NAV_ROOTS.length === 10) pass(`顶栏一级导航 = ${NAV_ROOTS.length} 个（IA §1）`);
+else fail(`顶栏一级导航 = ${NAV_ROOTS.length} 个，契约 10 个`);
+for (const nav of NAV_ROOTS) {
+  if (!nav.title || !String(nav.title).trim()) fail(`导航缺标题：${nav.path}`);
+}
+if (new Set(NAV_ROOTS.map((n) => n.path)).size === NAV_ROOTS.length) {
+  pass("顶栏导航 path 无重复");
+} else {
+  fail("顶栏导航 path 有重复");
 }
 
-// 6：不许出现表外路由
-const contract = new Set([...legacy, ...NEW_TARGETS, ...ALLOWED_EXTRA]);
-for (const declared of declaredPaths) {
-  if (contract.has(declared)) pass(`表内路由：${declared}`);
-  else fail(`表外路由（未经 IA 冻结，需先改契约）：${declared}`);
+// 结构断言（Ruling 33 回归）：**除以 `/` 独立布局外，所有路由都必须嵌在 MainLayout 下**。
+// 依据：改造前的 router 里 MainLayout 是唯一有子路由的 layout 路由，顶栏/页脚由它渲染；
+// 路由清单若漏写 `parent`，页面会以"无布局"渲染（顶栏消失）而门禁察觉不到。
+const layoutKeys = new Set(declaredRoutes.filter((r) => r.kind === "layout").map((r) => r.key));
+const badParent = declaredRoutes.filter((r) => r.parent && !layoutKeys.has(r.parent));
+if (badParent.length === 0) pass(`所有 parent 都指向已声明的 layout 路由（${layoutKeys.size} 个布局）`);
+else fail(`parent 指向不存在的 layout：${badParent.map((r) => `${r.path} → ${r.parent}`).join("、")}`);
+const notUnderLayout = declaredRoutes.filter(
+  (r) => r.kind !== "layout" && r.path !== "/" && r.parent !== "main"
+);
+if (notUnderLayout.length === 0) {
+  pass(`除以 \`/\`（landing 独立布局）外全部路由都嵌在 MainLayout 下（${declaredPaths.length - 2} 条）`);
+} else {
+  fail(
+    `以下路由未嵌在 MainLayout 下（顶栏/页脚不会渲染）：${notUnderLayout.map((r) => r.path).join("、")}` +
+      ` —— 清单里要写 parent: "main"`
+  );
 }
+if (declaredRoutes.some((r) => r.path === "/" && r.parent)) {
+  fail("landing \`/\` 不该有 parent（它不套 MainLayout）");
+} else {
+  pass("landing `/` 无 parent（独立布局，与改造前一致）");
+}
+
+// 5：不许出现表外路由
+const contract = new Set([...legacy, ...NEW_TARGETS, ...ALLOWED_EXTRA]);
+let offContract = 0;
+for (const declared of declaredPaths) {
+  if (!contract.has(declared)) {
+    fail(`表外路由（未经 IA 冻结，需先改契约）：${declared}`);
+    offContract += 1;
+  }
+}
+if (!offContract) pass(`清单内 ${declaredPaths.length} 条路由全部在契约内`);
 
 // 严禁 `/calendar`（IA §3「明确不含 /calendar」）
 if (declaredPaths.includes("/calendar")) fail("出现了被明确排除的 /calendar");
 else pass("不含 /calendar");
 
-// ── 顶栏 10 导航必须与 MainLayout 的 TOP_NAV 同源（防"删了一个导航没人发现"）──────
-// NAV_ROOTS 此前是手抄副本：从顶栏删掉一个导航，门禁照样全绿（评审 Minor）。
-// 这里机械解析 `MainLayout.tsx` 的 TOP_NAV 条目（`{ nav: { key, title, path, ... }, visibility: ... }`），
-// 与 NAV_ROOTS 双向比对，并断言每条都有非空标题与 path。
-const MAIN_LAYOUT = join(root, "src/app/layouts/MainLayout.tsx");
-const layoutSource = readFileSync(MAIN_LAYOUT, "utf8");
-const topNavEntries = [...layoutSource.matchAll(
-  /nav:\s*\{\s*key:\s*"([^"]+)",\s*title:\s*"([^"]+)",\s*path:\s*"([^"]+)"/g,
-)].map((m) => ({ key: m[1], title: m[2], path: m[3] }));
-if (topNavEntries.length !== 10) {
-  fail(`顶栏导航解析异常：MainLayout 的 TOP_NAV 解析出 ${topNavEntries.length} 条（预期 10）`);
-} else {
-  pass(`顶栏 10 个一级导航可机械解析（${topNavEntries.map((e) => e.title).join(" ")}）`);
-}
-const topNavPaths = topNavEntries.map((e) => e.path).sort();
-if (topNavPaths.join("|") === [...NAV_ROOTS].sort().join("|")) {
-  pass(`NAV_ROOTS 与 MainLayout.TOP_NAV 同源（${topNavPaths.length} 条，双向一致）`);
-} else {
-  fail(`NAV_ROOTS 与 MainLayout.TOP_NAV 不一致\n      顶栏 = ${topNavPaths.join("、")}\n      脚本 = ${[...NAV_ROOTS].sort().join("、")}`);
-}
-for (const e of topNavEntries) {
-  if (!e.title.trim() || !e.path.trim()) fail(`顶栏导航缺标题或 path：${JSON.stringify(e)}`);
-}
-const navKeys = topNavEntries.map((e) => e.key).sort();
-if (navKeys.join("|") === topNavPaths.join("|")) pass("TOP_NAV 的 key 与 path 一一对应");
-else fail(`TOP_NAV 的 key 与 path 不对应：key=${navKeys.join("、")} path=${topNavPaths.join("、")}`);
-
-// ── 每条已声明路由都必须挂到某个页面组件（防"声明了却没挂/挂错"）──────────────
-// 覆盖评审指出的 `/market/heatmap` 无人断言问题：它必须挂到一个页面组件（本任务阶段是占位页）。
-const routeWithoutElement = declaredRoutes.filter(
-  ({ element }) => !/<[A-Z]/.test(element) && !/<Navigate/.test(element)
-);
-if (routeWithoutElement.length === 0) {
-  pass(`每条已声明路由都挂到页面/重定向组件（${declaredRoutes.length} 条）`);
-} else {
-  fail(`以下路由未挂任何元素：${routeWithoutElement.map((r) => r.path).join("、")}`);
-}
-if (declaredPaths.includes("/market/heatmap")) {
-  const heatmapRoute = declaredRoutes.find((r) => r.path === "/market/heatmap");
-  if (heatmapRoute && placeholderRoutePaths.includes("/market/heatmap")) {
-    pass("/market/heatmap 已声明且被识别为占位路由（S1.5 接管前不承诺数据）");
-  } else {
-    fail("/market/heatmap 未声明或未被识别为占位路由");
-  }
-} else {
-  fail("/market/heatmap 未声明（S1.5 的落点必须先占位）");
-}
-
-// ── Ruling 32：三类互斥且有界的断言（每条都有独立反例，见报告 §2.12）──────────
-// ① 凡 element 含 `<Navigate`（直接或经 `Legacy*Redirect`）的路由，其 path 必须 ∈ REDIRECTS
-const redirectPaths = new Set([...actualRedirects.keys()]);
+// 6：三类互斥（Ruling 32/33）——清单即数据，无需解析源码
+const redirectPaths = new Set(routeRedirects.keys());
 const contractRedirectPaths = new Set(REDIRECTS.map((r) => r.from));
 const undeclaredRedirects = [...redirectPaths].filter((p) => !contractRedirectPaths.has(p));
 if (undeclaredRedirects.length === 0) {
   pass(`① redirect 集合 == 契约（${redirectPaths.size} 条，无"未声明的 redirect"）`);
 } else {
   fail(
-    `① 存在未声明的 redirect 路由（element 含 <Navigate> 却不在 REDIRECTS）：${undeclaredRedirects.join("、")}` +
-      ` —— 新增 redirect 必须同步改契约（否则条数会被静默过滤）`
+    `① 存在未声明的 redirect 路由（清单 kind="redirect" 却不在契约）：${undeclaredRedirects.join("、")}` +
+      ` —— 新增 redirect 必须同步改契约`
   );
 }
-// ② KEEP 里任何一条 path 都**不得**是 `<Navigate>`（Ruling 30：保留 = 原地渲染真页面）
 const keepThatRedirect = KEEP.filter((p) => redirectPaths.has(p));
 if (keepThatRedirect.length === 0) {
-  pass(`② 7 条保留均非 redirect（无 KEEP 行被偷换成 <Navigate>）`);
+  pass(`② ${KEEP.length} 条保留均非 redirect（无保留行被偷换成 redirect）`);
 } else {
   fail(
     `② 保留路由被改成了 redirect：${keepThatRedirect.join("、")}` +
-      ` —— 「保留（语义未变）」必须是原地渲染真页面（Ruling 30/31）`
+      ` —— 「保留（语义未变）」必须原地渲染真页面（Ruling 30/31）`
   );
 }
-// ③ 任何 redirect 的目标都不得是「规划中」占位页
-const placeholderTargets = [...actualRedirects.entries()].filter(([, to]) =>
-  placeholderRoutePaths.includes(to.split("?")[0])
+const placeholderPaths = getPlaceholderRoutes().map((r) => r.path);
+if (placeholderPaths.length === 0) {
+  fail("占位路由集合为空（清单里没有任何 isPlaceholder 路由，契约要求至少 10 个占位页）");
+}
+const placeholderTargets = [...routeRedirects.entries()].filter(([, to]) =>
+  placeholderPaths.includes(to.split("?")[0])
 );
 if (placeholderTargets.length === 0) {
   pass(
-    `③ redirect 目标无「规划中」占位页（占位路由共 ${placeholderRoutePaths.length} 条：${placeholderRoutePaths.join("、")}）`
+    `③ redirect 目标无「规划中」占位页（占位路由共 ${placeholderPaths.length} 条：${placeholderPaths.join("、")}）`
   );
 } else {
   fail(
@@ -415,22 +239,56 @@ if (placeholderTargets.length === 0) {
   );
 }
 
-// redirect 条数必须与契约一致（多一条少一条都要显式改契约；Ruling 30 后 = 8）
-const redirectRouteCount = [...actualRedirects.keys()].filter((p) => contractRedirectPaths.has(p)).length;
+// 占位路由的保护面：每个占位路由都必须真的挂着一个页面组件
+const placeholderWithoutComponent = getPlaceholderRoutes().filter((r) => !r.component);
+if (placeholderWithoutComponent.length === 0) {
+  pass(`占位路由都挂了页面组件（${placeholderPaths.length} 条）`);
+} else {
+  fail(`占位路由未挂页面组件：${placeholderWithoutComponent.map((r) => r.path).join("、")}`);
+}
+
+// 占位保护面（Ruling 33 回归）：占位路由里的**每一条页面**，其懒加载入口（`route-elements.tsx` 的 PAGES）
+// 必须存在；且 `route-elements.tsx` 的占位通告映射必须覆盖全部占位路由——两份清单不许漂移。
+const elementsSource = readFileSync(join(root, "src/app/router/route-elements.tsx"), "utf8");
+const noticeKeys = [...elementsSource.matchAll(/^\s*"([^"]+)":\s*\{/gm)].map((m) => m[1]);
+const missingNotice = placeholderPaths.filter((p) => !noticeKeys.includes(p));
+if (missingNotice.length === 0) {
+  pass(`占位通告映射覆盖全部占位路由（${placeholderPaths.length} 条）`);
+} else {
+  fail(`占位路由缺少 PLACEHOLDER_NOTICE 文案：${missingNotice.join("、")}`);
+}
+const pageComponentKeys = new Set(
+  [...elementsSource.matchAll(/^\s*(\w+):\s*lazy\(/gm)].map((m) => m[1])
+);
+const missingComponent = getPageRoutes()
+  .filter((r) => !pageComponentKeys.has(r.component))
+  .map((r) => `${r.path} → ${r.component}`);
+if (missingComponent.length === 0) {
+  pass(`清单里每条 page 路由的 component 都已注册到 PAGES（${getPageRoutes().length} 条）`);
+} else {
+  fail(`清单引用了未注册的 component：${missingComponent.join("、")}`);
+}
+
+// redirect 条数必须与契约一致（Ruling 30 后 = 8）
+const redirectRouteCount = [...redirectPaths].filter((p) => contractRedirectPaths.has(p)).length;
 if (redirectRouteCount === REDIRECTS.length) pass(`redirect 条数 = ${REDIRECTS.length}（不多不少）`);
 else fail(`redirect 条数 = ${redirectRouteCount}，契约 ${REDIRECTS.length}`);
 
-// 保留条数同样必须一致（Ruling 30 后 = 7）
+// 保留条数必须一致（Ruling 30 后 = 7）
 const keepDeclared = KEEP.filter((p) => declaredPaths.includes(p)).length;
 if (keepDeclared === KEEP.length) pass(`保留条数 = ${KEEP.length}（不多不少）`);
 else fail(`保留条数 = ${keepDeclared}，契约 ${KEEP.length}`);
 
+// redirect 必须带 redirectTo（防"声明了 redirect 却没有目标"）
+const redirectMissingTarget = getRedirectRoutes().filter((r) => !r.redirectTo);
+if (redirectMissingTarget.length === 0) pass("每条 redirect 都声明了 redirectTo");
+else fail(`redirect 缺少 redirectTo：${redirectMissingTarget.map((r) => r.path).join("、")}`);
+
 // 7：站内链接不许再写**已迁移的旧裸路径**（新代码一律指规范路由）。
-//    只看"字符串字面量整串"，并且**跳过 import/export 行**——模块说明符
-//    （`import { X } from "@/shared/ui"`）会被朴素正则误判成路由字面量。
-//    带参旧路径（`/stock/xxx`、`/tags/xxx`）**不在此列**：有 redirect 兜底、行为等价，
-//    全量改写属独立机械重构（本轮 deferred），故不误报、也不假装已清零。
+//    只跳过 import/export 行与纯注释行（模块说明符与路径说明不是链接目标）；
+//    带参旧路径（`/stock/xxx`、`/tags/xxx`）**不在此列**：有 redirect 兜底、行为等价。
 const FORBIDDEN_LITERALS = ["/research", "/watchlist", "/tags", "/index"];
+const QUOTES = ['"', "'", "`"];
 const walked = [];
 function walk(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -443,29 +301,25 @@ walk(join(root, "src"));
 let literalHits = 0;
 for (const file of walked) {
   const rel = file.slice(root.length + 1);
-  if (rel === "src/app/router/index.tsx") continue; // 契约与 redirect 声明的所在地
+  if (rel === "src/app/router/route-manifest.ts") continue; // 契约与 redirect 声明的所在地
   const lines = readFileSync(file, "utf8").split("\n");
   for (const [idx, line] of lines.entries()) {
     if (/^\s*(import|export)\b/.test(line)) continue; // 模块说明符不是路由
-    if (/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(line)) continue; // 纯注释行（路径说明不是链接目标）
+    if (/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(line)) continue; // 纯注释行
     for (const literal of FORBIDDEN_LITERALS) {
-      const esc = literal.replace(/[/\\^$*+?.()|[\]{}]/g, "\\$&");
-      if (new RegExp(`["'\`]${esc}["'\`]`).test(line)) {
+      // 只看"字符串字面量整串"：前后紧邻引号（' " `）才算命中——
+      // 模板串 `` `/research/${key}` `` 或路径片段 `@/pages/research` 都不会误报
+      const hit = QUOTES.some((q) => line.includes(q + literal + q));
+      if (hit) {
         fail(`站内链接写了已迁移的旧裸路径：${rel}:${idx + 1} 含 "${literal}"（应写规范路由）`);
         literalHits += 1;
       }
     }
   }
 }
-if (!literalHits) pass("站内链接无已迁移旧裸路径字面量（import/export 行与 router 内的 redirect 声明除外）");
+if (!literalHits) pass("站内链接无已迁移旧裸路径字面量（import/export 行、注释行与清单文件除外）");
 
-// ── 9：IA §4 表 ↔ 净效果块声明的数字**双向比对** ─────────────────────────────
-// 上一轮同类任务（Task 2）的教训：数字与成员必须成对书写并机械核对，否则文档自相矛盾而无人发现。
-// 这里机械解析 IA §4 的三处：
-//   (a) 迁移表的「处理」列 —— `redirect` / `保留*` 行与**成员**；
-//   (b) 净效果块的「合计 A + B + C = N（= §4 表 redirect 行数）」与其分组成员；
-//   (c) redirect 契约段的「8 条 redirect、7 条保留」。
-// 三者 + 本脚本的契约数组必须一致。
+// 8：IA §4 表 ↔ 净效果块声明的数字**双向比对**（数字与成员必须成对书写并机械核对）
 const IA_DOC = join(root, "..", "docs/design/ia-investment-research-platform.md");
 const ia = readFileSync(IA_DOC, "utf8");
 const iaRedirects = [];
@@ -486,7 +340,9 @@ for (const line of ia.split("\n")) {
   }
   cells.push(buf);
   if (cells.length < 6) continue;
-  const [rowNo, fromCell, , actionCell] = [cells[1], cells[2], cells[3], cells[4]];
+  const rowNo = cells[1];
+  const fromCell = cells[2];
+  const actionCell = cells[4];
   if (!/^\s*\d+\s*$/.test(rowNo)) continue;
   const fromMatch = fromCell.match(/`([^`]+)`/);
   if (!fromMatch) continue;
@@ -495,16 +351,15 @@ for (const line of ia.split("\n")) {
   if (action === "redirect") iaRedirects.push(from);
   else if (action.startsWith("保留")) iaKeeps.push(from);
 }
-const cmp = (label, docList, scriptList) => {
+const cmp = (label, docList, manifestList) => {
   const a = [...docList].sort().join(" | ");
-  const b = [...scriptList].sort().join(" | ");
-  if (a === b) pass(`IA §4 表与脚本契约一致（${label}：${docList.length} 条）`);
-  else fail(`IA §4 表与脚本契约不一致（${label}）\n      IA  = ${a}\n      脚本 = ${b}`);
+  const b = [...manifestList].sort().join(" | ");
+  if (a === b) pass(`IA §4 表与清单契约一致（${label}：${docList.length} 条）`);
+  else fail(`IA §4 表与清单契约不一致（${label}）\n      IA   = ${a}\n      清单 = ${b}`);
 };
 cmp("redirect 成员", iaRedirects, REDIRECTS.map((r) => r.from));
 cmp("保留成员", iaKeeps, KEEP);
 
-// (b) 净效果块的分组合计
 const groups = [...ia.matchAll(/^> - \*\*(\d+) 条\*\*[（(][^)）]*[)）]：([^—]+)——/gm)].map((m) => ({
   count: Number(m[1]),
   members: [...m[2].matchAll(/`([^`]+)`\s*→/g)].map((x) => x[1]),
@@ -521,7 +376,8 @@ if (groups.length && sumDeclared === sumMembers && sumDeclared === REDIRECTS.len
 }
 const sumLine = ia.match(/^> 合计 \*\*([\d\s+]+)= (\d+)\*\*/m);
 if (sumLine) {
-  const [, expr, total] = sumLine;
+  const expr = sumLine[1];
+  const total = sumLine[2];
   const parts = expr.split("+").map((x) => Number(x.trim()));
   const exprSum = parts.reduce((a, b) => a + b, 0);
   if (exprSum === Number(total) && exprSum === REDIRECTS.length) {
@@ -533,10 +389,10 @@ if (sumLine) {
   fail("净效果块缺少 `> 合计 **a + b + c = N**` 形式的声明（无法机械比对）");
 }
 
-// (c) redirect 契约段声明的条数
 const contractNums = ia.match(/\*\*(\d+) 条 redirect、(\d+) 条保留\*\*/);
 if (contractNums) {
-  const [, rd, kp] = [null, ...contractNums.slice(1)];
+  const rd = contractNums[1];
+  const kp = contractNums[2];
   if (Number(rd) === REDIRECTS.length && Number(kp) === KEEP.length) {
     pass(`redirect 契约段声明的条数与契约一致（${rd} redirect + ${kp} 保留）`);
   } else {
@@ -550,4 +406,7 @@ if (failed) {
   console.log(`\n路由迁移门禁未通过：${failed} 项`);
   process.exit(1);
 }
-console.log(`\n路由迁移门禁通过：旧 15 条全覆盖（${REDIRECTS.length} redirect + ${KEEP.length} 保留），${NEW_TARGETS.length} 条新目标已建立`);
+console.log(
+  `\n路由迁移门禁通过：旧 15 条全覆盖（${REDIRECTS.length} redirect + ${KEEP.length} 保留），` +
+    `${NEW_TARGETS.length} 条新目标已建立，占位路由 ${placeholderPaths.length} 条`
+);

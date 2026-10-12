@@ -1,6 +1,6 @@
 import { useLocation, useParams, useSearchParams } from "react-router-dom";
-import { Space, Typography } from "antd";
 import { StateWrapper, SectionCard } from "@/shared/ui";
+import { PlaceholderNotice } from "./PlaceholderNotice";
 
 /**
  * 「规划中」占位页（IA 文档 §5.2 的 no-404 契约）。
@@ -9,7 +9,10 @@ import { StateWrapper, SectionCard } from "@/shared/ui";
  * 模块真页面落地时替换本组件即可，**路由形状不变**。
  *
  * **参数保留**：占位页必须把 query 参数与路径参数原样显示出来，证明 redirect 没吞参数
- * （如 `/tags/:tagName` → `/me?tab=tags&name=:tagName` 的 `name`）。
+ * （如带 `?q=` / `?tab=` 的访问）。
+ *
+ * 通告条本体是 `PlaceholderNotice`（带 `data-testid="placeholder-route-params"`）；
+ * 路由清单也会把它注入到"页面自身不渲染占位"的占位路由上（如 `/company` 的占位通告由路由注入）。
  */
 export interface PlaceholderPageProps {
   /** 模块名（一级导航名，逐字取自 IA 文档 §1） */
@@ -30,23 +33,12 @@ export function PlaceholderPage({ title, hint, highlightQueryKeys }: Placeholder
 
   return (
     <SectionCard id={`placeholder-${title}`} title={title}>
-      <StateWrapper
-        empty
-        emptyText={
-          <Space direction="vertical" size={4} style={{ textAlign: "center" }}>
-            <Typography.Text strong>规划中</Typography.Text>
-            <Typography.Text type="secondary">
-              {hint ?? `${title}模块尚未落地，页面结构已就位（本页为占位路由，无 404）。`}
-            </Typography.Text>
-          </Space>
-        }
-      >
+      <StateWrapper empty emptyText={<PlaceholderNotice title={title} hint={hint} />}>
         {null}
       </StateWrapper>
 
       {/* 参数保留自证：占位路由不得把带参访问收敛成无参空页 */}
       <div
-        data-testid="placeholder-route-params"
         style={{ marginTop: 12, fontSize: 12, color: "var(--text-secondary)", textAlign: "center" }}
       >
         <div>
