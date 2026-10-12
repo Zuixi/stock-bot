@@ -739,8 +739,38 @@ async def test_scheduler_registers_facts_job_with_shanghai_cron() -> None:
 
 @pytest.fixture
 async def _clean_acceptance_day() -> AsyncGenerator[None, None]:
-    """只清理验收日一天（历史日，无其它写入者）；前后各清一次，失败路径也不留脏行。"""
+    """只清空验收日一天（历史日，无其它写入者），**并在 `finally` 原样恢复清空前的行**。
+
+    为什么必须恢复（最终评审 Critical 1）：`2026-09-08` 是**真库的验收日**，
+    `test_backfill_market_history.py::test_sentiment_daily_matches_fact_counts_for_every_day`
+    （全量不变式）要求该日有事实行。旧实现只 `DELETE` 不恢复 → 同一会话里只要**先跑本文件**
+    再跑那个用例，就会红在 `missing_fact_rows: ['2026-09-08']`；首次会话之所以绿，只是因为
+    字母序恰好 `test_backfill_*` 在前 —— 这是"同一会话第二次跑必红"的顺序依赖。
+    已做的双向自证：`pytest tests/test_limit_up_stock_daily.py -m e2e` 与
+    `pytest tests/test_backfill_market_history.py -m e2e` **两种先后各连跑两遍**全绿；
+    把 `finally` 里的恢复去掉（模拟旧行为）→ "先 facts 后 backfill" 立刻红在
+    `missing_fact_rows: ['2026-09-08']`。
+
+    **前置状态**：本 fixture 不负责"造出验收日"——三个消费它的用例都自己调
+    `persist_stock_facts(ACCEPTANCE_DAY)` 造数（断言 178 行 / is_lu=75 / is_zb=39 与
+    `market_sentiment_daily` 对拍），故验收日为空时会照常自建。**清理/恢复**：清空 ——
+    `DELETE FROM market_limit_up_stock_daily WHERE trade_date = '2026-09-08'`；恢复 ——
+    把清空前的 `SELECT *` 快照逐列按模型列写回（列集取自 `MarketLimitUpStockDaily` 的
+    表定义，不手抄、不与列增删耦合；`SELECT *` 里的 `xmin` 等系统列被过滤掉），
+    恢复后形状应为 `local_calc` / **178 行** / `is_lu=75` / `is_zb=39`。若该日被别的
+    全量 suite 清空（迁移循环会重建本表），用
+    `uv run --no-sync python scripts/backfill_market_history.py --domain limit_up_stocks`
+    重建（本文件头也叫这个命令）。
+    """
     from app.core.database import async_session_factory, engine
+
+    async def _snapshot() -> list[dict[str, Any]]:
+        async with async_session_factory() as db:
+            result = await db.execute(
+                text("SELECT * FROM market_limit_up_stock_daily WHERE trade_date = :d ORDER BY id"),
+                {"d": ACCEPTANCE_DAY},
+            )
+            return [dict(r) for r in result.mappings().all()]
 
     async def _delete() -> None:
         async with async_session_factory() as db:
@@ -750,11 +780,37 @@ async def _clean_acceptance_day() -> AsyncGenerator[None, None]:
             )
             await db.commit()
 
+    async def _restore(rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        # 只写模型声明的列（`SELECT *` 里还有 `xmin` 这类系统列，不能回插）
+        cols = [c.name for c in market_data_repo.MarketLimitUpStockDaily.__table__.columns]
+        sql = (
+            f"INSERT INTO market_limit_up_stock_daily ({', '.join(cols)}) "
+            f"VALUES ({', '.join(f':{c}' for c in cols)}) "
+            f"ON CONFLICT (trade_date, stock_id) DO NOTHING"
+        )
+        async with async_session_factory() as db:
+            await db.execute(text(sql), rows)
+            await db.commit()
+
+    snapshot = await _snapshot()
     await _delete()
     try:
         yield
     finally:
+        # 用例自身可能也写/删过该日：先清空再恢复快照，保证"清空前 == 恢复后"逐列一致
         await _delete()
+        await _restore(snapshot)
+        if not snapshot:
+            # 前置状态本来就空（例如全量 suite 的迁移循环刚重建过本表）：本 fixture 会把
+            # "空"忠实地恢复成"空"，全量不变式用例随后会红在 missing_fact_rows —— 这不是
+            # 本 fixture 的 bug，而是数据未回补。把补救命令打出来，别让人猜。
+            print(
+                f"\n[warning] {ACCEPTANCE_DAY} 在 fixture 开始时就没有事实行（快照为空）。"
+                " 全量不变式用例需要它 —— 先跑：uv run --no-sync python"
+                " scripts/backfill_market_history.py --domain limit_up_stocks"
+            )
         await engine.dispose()
 
 

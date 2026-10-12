@@ -863,6 +863,42 @@ async def test_hot_boards_falls_back_to_live_when_the_day_is_missing(
     assert payload["as_of_quality"] == "partial"
 
 
+async def test_hot_boards_snapshot_db_error_degrades_to_live_not_500(
+    monkeypatch: pytest.MonkeyPatch, caplog: Any
+) -> None:
+    """读表查询抛 DB 错误（缺 `capture_kind` 列的落后库）→ 视为"今日无快照"、回落实时。
+
+    最终评审 Important 3：旧实现把读表查询放在端点 `try` **之外**，于是一版落后的库上
+    （`capture_kind` 由迁移 `a3f8c2d6e9b1` 引入）从"降级"变成 **500**。这条钉住
+    `_hot_boards_snapshot_rows` 的宽 except：异常被吞成 `None`，实时路径照常返回。
+    这里替换的是更内层的 `load_hot_board_snapshot`（**不**替换
+    `_hot_boards_snapshot_rows` 本身），否则不会经过被测的那层 try。
+    """
+    from sqlalchemy.exc import ProgrammingError
+
+    _patch_today(monkeypatch)
+    em = _StaticEM([_live_row("BK0001", 5.0)])
+    _patch_em(monkeypatch, em)
+
+    async def _missing_column(db: Any, category: str, expected_day: date) -> Any:
+        raise ProgrammingError(
+            "SELECT ... capture_kind ...",
+            None,
+            Exception("UndefinedColumnError: column sector_moneyflow_snapshots.capture_kind"),
+        )
+
+    monkeypatch.setattr(mds, "load_hot_board_snapshot", _missing_column)
+
+    with caplog.at_level(logging.WARNING):
+        payload = await market_service.get_hot_boards("industry", None)
+
+    assert "snapshot table read failed" in caplog.text
+    assert em.calls == ["industry"], "DB 错误必须回落实时抓取"
+    assert payload["source"] == "eastmoney_boards"
+    assert payload["items"], "不得因读表失败返回空表/5xx"
+    assert payload["as_of"] == D_TODAY.isoformat()
+
+
 async def test_hot_boards_expected_day_is_the_last_weekday(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -39,6 +39,10 @@ lookback + 6`（默认 10+6=16）个交易日窗口算，而窗口取自 `daily_
 | `no_limit_up_rows` / `no_fact_rows` | 实时路径自己的降级判据（原样透传） |
 | `error` | 单日异常（已 rollback，不中断整段；有 error 则进程退出码 1） |
 
+**退出码**（函数 `exit_code`）：任一天 `error` → 1；**`written_days == 0` 且
+`skipped_kept_realtime > 0` → 1**（一天都没写成、全被 Ruling 18 守卫拒改时，此前会返回 0
+让运维/CI 把"一行都没回补"当成功 —— 最终评审 Important 4）；其余为 0（含 dry-run）。
+
 `ok` 只表示**真的写入/更新了行**（依据 upsert 返回的 rowcount，不是"我打算写"）。
 `kept_realtime` = 该日已存在实时行（`local_calc`）而被守卫拒改：情绪域 `upserted == 0`；
 个股域只要行集里有行被保留（`upserted < rows`，含部分被拒）就整日算 `kept_realtime`——
@@ -380,6 +384,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def exit_code(summary: BackfillSummary) -> int:
+    """进程退出码（运维/CI 判成功失败的唯一依据）。
+
+    - 任一天 `error`（写库/提交异常）→ 1（原有语义）；
+    - **`written_days == 0` 且 `skipped_kept_realtime > 0` → 1**（最终评审 Important 4）：
+      一天都没写成、却有一批天被 Ruling 18 守卫拒绝时，脚本此前返回 **0**（"成功"）——
+      运维与 CI 会把"**一行都没回补**"当成功。`dry_run` 路径下 `written_days` 恒为 0 且
+      `kept_realtime` 不会出现（逐日只报 `would_write`/跳过原因），故不影响预演。
+    """
+    if summary.errors():
+        return 1
+    if summary.written_days() == 0 and summary.skipped_kept_realtime() > 0:
+        logger.error(
+            "没有任何一天被真正回补：written_days=0，skipped_kept_realtime=%d —— "
+            "目标区间内的行都已是实时行（Ruling 18 守卫拒绝回补），按失败退出",
+            summary.skipped_kept_realtime(),
+        )
+        return 1
+    return 0
+
+
 async def main(args: argparse.Namespace) -> int:
     async with async_session_factory() as db:
         end = args.to_date or await limit_up_repo.latest_quote_date(db)
@@ -395,7 +420,7 @@ async def main(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
         )
     print(summary.format_table())
-    return 1 if summary.errors() else 0
+    return exit_code(summary)
 
 
 if __name__ == "__main__":

@@ -291,9 +291,22 @@ async def upsert_limit_up_stock_daily(
     不是 `excluded`），于是当天实时写下的 `local_calc` 行——连同 `enrich_source`/
     `seal_*` 增强列——对回补**完全不可见**。这让"黄金日既有行字节不变"是**保证**，
     不是"恰好没撞上"。
+
+    `backfill_only=True` 还**拒绝** `fact_source != 'backfill'` 的行（最终评审 Important 2）：
+    `ON CONFLICT` 的守卫只管 `DO UPDATE` 分支，插入分支不受约束 —— 一次"回补"批里若某行
+    把 `fact_source` 写错，就会 **INSERT 出 `local_calc` 行**，从而永久免疫后续回补修复
+    （守卫只修 `backfill` 行）。这里提前 fail-fast，不静默插脏行。
     """
     if not rows:
         return 0
+    if backfill_only:
+        offenders = sorted({str(r.get("fact_source")) for r in rows} - {BACKFILL_SOURCE})
+        if offenders:
+            raise ValueError(
+                "upsert_limit_up_stock_daily(backfill_only=True) 收到非回补来源的行："
+                f"fact_source={offenders}（只允许 {BACKFILL_SOURCE!r}）—— 否则插入分支会写出"
+                "永久免疫 Ruling 18 修复的实时行"
+            )
     deduped = list({(r["trade_date"], r["stock_id"]): r for r in rows}.values())
     total = 0
     for i in range(0, len(deduped), _FACT_UPSERT_CHUNK):
@@ -356,7 +369,16 @@ async def upsert_sentiment_daily(
     `WHERE market_sentiment_daily.source = 'backfill'`（看**已存储**的 `source`，
     不是 `excluded`）。实时路径（`backfill_only=False`）语义**不变**：仍是覆写，
     且 SET 依旧排除 `source`，永不重标。
+
+    `backfill_only=True` 还**拒绝** `source != 'backfill'` 的行（最终评审 Important 2）：
+    与 :func:`upsert_limit_up_stock_daily` 同因 —— 插入分支不受 `ON CONFLICT` 守卫约束，
+    写错来源的行会被 INSERT 成"实时行"并永久免疫回补修复。
     """
+    if backfill_only and row.get("source") != BACKFILL_SOURCE:
+        raise ValueError(
+            "upsert_sentiment_daily(backfill_only=True) 收到非回补来源的行："
+            f"source={row.get('source')!r}（只允许 {BACKFILL_SOURCE!r}）"
+        )
     stmt = (
         pg_insert(MarketSentimentDaily)
         .values(**row)

@@ -644,9 +644,25 @@ async def _hot_boards_snapshot_rows(
     判据与取数都在 :func:`market_data_service.load_hot_board_snapshot`（它拿得到
     ``sector_moneyflow_snapshots`` 的模型与 mapper）；这里只负责开 session —— 是
     **单测打桩的 seam**（离线用例把它打桩成"表内无当日行"，与 ``load_day_rows`` 同款）。
+
+    **任何 DB 错误一律当作"今天没有快照"**（最终评审 Important 3）：读表查询会碰
+    ``capture_kind`` 列，而该列由迁移 ``a3f8c2d6e9b1`` 引入 —— 一版落后的库上（或迁移
+    只跑了一半）查询会抛 ``UndefinedColumn``。旧实现把这次查询放在端点 ``try`` **之外**，
+    于是"本可降级到实时路径"变成 **500**（compose 的 migrate→api 顺序只是缓解，不是保证）。
+    宽 except + warning，与 :func:`get_hot_boards` 的实时/本地分组回落同一写法。
     """
-    async with async_session_factory() as db:
-        return await market_data_service.load_hot_board_snapshot(db, category, expected_day)
+    try:
+        async with async_session_factory() as db:
+            return await market_data_service.load_hot_board_snapshot(db, category, expected_day)
+    except Exception:
+        logger.warning(
+            "hot-boards: snapshot table read failed (category=%s, expected_day=%s) —— "
+            "按'今日无快照'回落实时路径",
+            category,
+            expected_day,
+            exc_info=True,
+        )
+        return None
 
 
 async def get_hot_boards(

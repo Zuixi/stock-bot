@@ -685,6 +685,125 @@ async def test_realtime_sentiment_upsert_keeps_existing_behaviour() -> None:
     assert "source" not in after_conflict.split("DO UPDATE", 1)[1]
 
 
+async def test_backfill_only_rejects_local_calc_row_before_any_sql() -> None:
+    """`backfill_only=True` 必须**拒绝**非回补来源的行（最终评审 Important 2）。
+
+    `ON CONFLICT ... WHERE` 只约束 `DO UPDATE` 分支；插入分支不受约束 —— 一次"回补"批里
+    若行字典把 `source` 写成 `local_calc`，就会 INSERT 出**实时行**，从而永久免疫 Ruling 18
+    的修复（守卫只修 `backfill` 行）。本用例钉住 fail-fast：抛错且**一条 SQL 都不发**。
+    变异：删掉 `upsert_sentiment_daily` 里的来源校验 → 本例变红（静默编译出 INSERT）。
+    """
+    session = _CapturingSession()
+    with pytest.raises(ValueError, match="非回补来源"):
+        await limit_up_repo.upsert_sentiment_daily(
+            session, _sentiment_row(D1, source="local_calc"), backfill_only=True
+        )
+    assert session.statements == [], "拒绝必须发生在编译/执行之前（不得静默插脏行）"
+
+
+async def test_backfill_only_rejects_mixed_source_fact_rows() -> None:
+    """事实表同款：一批里混进一行 `fact_source='local_calc'` → 整批拒绝、零 SQL。"""
+    session = _CapturingSession()
+    rows = [_fact_row(D1), _fact_row(D2, stock_id=2, fact_source="local_calc")]
+    with pytest.raises(ValueError, match="非回补来源"):
+        await limit_up_repo.upsert_limit_up_stock_daily(session, rows, backfill_only=True)
+    assert session.statements == []
+
+
+async def test_realtime_fact_upsert_still_accepts_local_calc_rows() -> None:
+    """对照：实时路径（`backfill_only=False`）必须照旧接受 `local_calc` 行。"""
+    session = _CapturingSession()
+    await limit_up_repo.upsert_limit_up_stock_daily(
+        session, [_fact_row(D1, fact_source="local_calc")], backfill_only=False
+    )
+    assert len(session.statements) == 1
+
+
+# ---------------------------------------------------------------------------
+# 退出码：一天都没写成（全被守卫拒绝）必须非 0
+# ---------------------------------------------------------------------------
+
+
+def _summary_with(*outcomes: bmh.DayOutcome, dry_run: bool = False) -> bmh.BackfillSummary:
+    return bmh.BackfillSummary(
+        domain=bmh.DOMAIN_SENTIMENT,
+        dry_run=dry_run,
+        from_date=D1,
+        to_date=D3,
+        days=list(outcomes),
+        elapsed_s=0.1,
+    )
+
+
+def test_exit_code_ok_when_something_was_written() -> None:
+    summary = _summary_with(
+        bmh.DayOutcome(D1, bmh.REASON_OK),
+        bmh.DayOutcome(D2, bmh.REASON_KEPT_REALTIME),
+    )
+    assert (summary.written_days(), summary.skipped_kept_realtime()) == (1, 1)
+    assert bmh.exit_code(summary) == 0
+
+
+def test_exit_code_nonzero_when_every_day_was_guarded_out() -> None:
+    """最终评审 Important 4：`written_days==0` 且 `skipped_kept_realtime>0` → 退出码 1。
+
+    修前 `main()` 恒 `return 1 if summary.errors() else 0`（只看 errors），运维/CI 会把
+    "一行都没回补"当成功 —— 这条钉住失败语义。
+    变异：把 `exit_code` 回退成 `1 if summary.errors() else 0` → 本例变红。
+    """
+    summary = _summary_with(
+        bmh.DayOutcome(D1, bmh.REASON_KEPT_REALTIME),
+        bmh.DayOutcome(D2, bmh.REASON_KEPT_REALTIME),
+    )
+    assert summary.errors() == 0
+    assert bmh.exit_code(summary) == 1
+
+
+def test_exit_code_still_zero_for_a_truly_empty_but_clean_run() -> None:
+    """对照：既没写成、也不是"被守卫拒绝"（如整体窗口不完备）→ 不新增失败语义。"""
+    summary = _summary_with(
+        bmh.DayOutcome(D1, bmh.REASON_WINDOW_INCOMPLETE),
+        bmh.DayOutcome(D2, bmh.REASON_WINDOW_INCOMPLETE),
+    )
+    assert summary.skipped_kept_realtime() == 0
+    assert bmh.exit_code(summary) == 0
+
+
+def test_exit_code_dry_run_is_unaffected() -> None:
+    """preview 路径：全部 `would_write`（没有真的写库）不得被判失败。"""
+    summary = _summary_with(
+        *(bmh.DayOutcome(d, bmh.REASON_WOULD_WRITE) for d in (D1, D2, D3)), dry_run=True
+    )
+    assert summary.written_days() == 0
+    assert bmh.exit_code(summary) == 0
+
+
+async def test_main_returns_exit_code_from_summary(monkeypatch, capsys) -> None:
+    """`main()` 必须把 `exit_code()` 的结果当作进程退出码（接线，不只是纯函数）。"""
+    summary = _summary_with(bmh.DayOutcome(D1, bmh.REASON_KEPT_REALTIME))
+
+    class _Ctx:
+        async def __aenter__(self) -> Any:
+            return object()
+
+        async def __aexit__(self, *exc: Any) -> None:
+            return None
+
+    async def fake_latest(db: Any) -> date:
+        return D3
+
+    async def fake_run(db: Any, **kw: Any) -> bmh.BackfillSummary:
+        return summary
+
+    monkeypatch.setattr(bmh, "async_session_factory", _Ctx)
+    monkeypatch.setattr(limit_up_repo, "latest_quote_date", fake_latest)
+    monkeypatch.setattr(bmh, "run_backfill", fake_run)
+
+    code = await bmh.main(bmh.parse_args(["--domain", "sentiment"]))
+    assert code == 1
+    assert "kept_realtime" in capsys.readouterr().out
+
+
 def _fact_row(trade_date: date, **overrides: Any) -> dict[str, Any]:
     row: dict[str, Any] = {
         "trade_date": trade_date,
