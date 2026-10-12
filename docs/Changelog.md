@@ -1,3 +1,16 @@
+## 2026-10-12 - S1.10 波动率与衍生品（QVIX 期权隐含波动率 + 股指期货升贴水 + IC/IM 贴水率）
+
+- **交付**（`1b64ec7` Step-0 · `bc390bf` 指标落库 · `1875e3a` 修读面）：**5 条 QVIX 中国波指**（50ETF 2833 天 / 300ETF 1646 / 500ETF 981 / 创业板ETF 981 / 科创50ETF 811）· **4 个品种基差**（IF 4002 天自 2010-04-16、IC/IH 2791、IM 1021）· **IC/IM 贴水率**（`基差/现货×100`，与基差**同号不翻转**、不年化，年化值落 `extra.annualized_pct`）→ 全部落 `industry_metrics(industry_key='market')`，**无新表无迁移无平行读路**
+- **复用优先的关键一步**：spec 要的"期权隐含波动率"**AKShare 已自带 5 条 QVIX 序列**（本机 1.18.94 实测），故**直接取序列，未自己实现 Black-Scholes 反解**；股指期货走 TuShare `fut_basic`/`fut_daily`/`fut_mapping`（S0.3 附.5 已证明可用，本任务补进 client）
+- **Step-0 实测**（追加为 `docs/design/data-source.md` **附.8**）：两源**全部 verified、无 blocked**；`fut_daily` **单次 2000 行上限实测复现 → 必须分片**；`fut_mapping` **逐日对拍 0 不一致**（无前视、未复权）
+- **符号约定写死并可机读**：**基差 = 期货 − 现货**（正=升水、负=贴水），`extra.sign_convention=futures_minus_spot` + registry 描述 + 字典三处一致；主值取**期货结算价**（`published_at` 16:00），收盘口径另落 `extra.basis_close` 供对拍（IF 2026-10-12：结算 −62.1798 vs 收盘 −54.3798，后者与 Step-0 探针 −54.38 逐位一致）——正是 spec「升贴水负值时 UI 明示贴水语义、避免正负号误读」的落地
+- **PIT**：逐 key `count(*) == count(published_at) == count(caliber_version)`（控制器亲查确认），两档时点 15:00/16:00 Asia/Shanghai，口径 `s1.10-v1`；落库 21669 行（有值 21603 / NULL 66，**全部 `missing_reason=source_not_updated`，非 0**）
+- **实现方发现并修掉一个真缺陷（惠及后续所有指标）**：registry 的 `sources` 登记与落库 `source` 不一致 → `get_series` 源白名单取不到源 → **`GET /metrics/series?metric_key=if_basis` 静默返回 0 点**（`latest` 读面正常故此前不可见）→ 已修 + 新增**机械守卫单测**（逐个 key 断言服务写入的 source 必在 registry sources 内）；控制器复现：`if_basis`/`ic_basis`/`qvix_50etf` 各 **242 点**、`source_mismatch=False`
+- **口径诚实性**：QVIX 是**第三方（optbbs）编制**，官方 iVIX 自 **2018-02-22 由中证指数公司停发** → `source_tier` 记 **`highfreq` 而非 `official`**（未冒充官方）；且该静态 CSV **发布滞后 1–3 个交易日** → 相关日期落 NULL + `source_not_updated`（**不是 0**）；另有 3 行落在非交易日的上游行不落库但**计数告警**
+- **未验证余项（记入附.8.4，不估算）**：中金所结算价的精确发布时刻（16:00 为保守取值）· QVIX 第三方口径未与官方/第二源对拍
+- 门禁：pytest **1213 → 1260 passed**（12→14 skipped，+49 用例）；ruff/format/mypy/self_review/doc_gate/`check_metric_dictionary` 全绿；`alembic heads` 单头
+- **遗留（Ruling 61）**：`missing_reason` 已落库但**读面不回传**（`MetricLatestOut`/`MetricHistoryPointOut` 无该字段）→ 前端分不清"源侧滞后"与"真缺数"；实现方**正确地未擅自改**（属 S1.2 读面变更）→ 已裁定要求扩展读面，排入下一批
+
 ## 2026-10-12 - **修复测试隔离缺陷（PIT 列每次 pytest 被 DROP）** + S1.9 交易活跃度与杠杆资金 + S1.11 估值与风险溢价
 
 ### 先记最重要的：一个会**破坏 dev 库数据**的测试隔离缺陷
