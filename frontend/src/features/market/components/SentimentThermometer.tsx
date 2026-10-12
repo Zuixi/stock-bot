@@ -1,5 +1,10 @@
 import { useId, useMemo, type ReactNode } from "react";
-import type { SentimentCalendarPoint, SentimentKpis } from "@/shared/api/limitUp";
+import type {
+  SentimentCalendarPoint,
+  SentimentKpis,
+  SentimentPercentileField,
+  SentimentTrends,
+} from "@/shared/api/limitUp";
 import "./SentimentThermometer.css";
 
 interface Props {
@@ -7,6 +12,11 @@ interface Props {
   /** `market_sentiment_daily` 历史序列（升序），供环比 chip 与趋势线；<2 点时不画趋势。 */
   history: SentimentCalendarPoint[];
   asOf: string | null | undefined;
+  /**
+   * 读时计算的情绪趋势窗口（`/market/sentiment/trends`）：分位 chip 与更长窗口的趋势线。
+   * 未就绪/失败时为 `undefined` —— 该区块整体不渲染（**不**退回假分位），趋势线回落日历序列。
+   */
+  trends?: SentimentTrends | null;
 }
 
 /**
@@ -15,6 +25,75 @@ interface Props {
  */
 function pct(ratio: number | null | undefined): string {
   return ratio == null ? "--" : `${(ratio * 100).toFixed(2)}%`;
+}
+
+/** 分位梯要展示的三个指标（与后端 `PERCENTILE_FIELDS` 1:1；`ratio` 决定 ×100 渲染）。 */
+const PERCENTILE_METRICS: Array<{ field: SentimentPercentileField; label: string; ratio: boolean }> = [
+  { field: "zt_count", label: "涨停家数", ratio: false },
+  { field: "broken_rate", label: "炸板率", ratio: true },
+  { field: "promo_1to2", label: "1进2晋级率", ratio: true },
+];
+
+/** 分位值格式化：计数取整、比率先 ×100；缺失一律 `--`（**绝不** 0）。 */
+function quantile(value: number | null | undefined, ratio: boolean): string {
+  if (value == null) return "--";
+  return ratio ? `${(value * 100).toFixed(2)}%` : `${Math.round(value)}`;
+}
+
+/**
+ * 历史分位区块（Task 7）。
+ *
+ * 三条硬约束：
+ * 1. **每个 chip 带自己的样本窗口**（`近 N 交易日分位`，N = 该字段的有效样本数）——
+ *    不写窗口的分位会被读成"全历史"；
+ * 2. `insufficientHistory`（或 `percentile=null`）⇒ 只显示「样本不足」，**绝不**给分位数字；
+ * 3. 某指标全部为 NULL（无有效样本）⇒ 该 chip 显示「无有效样本」，不拿 0 冒充。
+ *
+ * 这里只做展示，不做任何语义重算（分位/样本数/连击统计全部来自后端）。
+ */
+function PercentileBlock({ trends }: { trends: SentimentTrends }) {
+  const { window: win, percentile, insufficientHistory } = trends;
+  const streak = trends.streak.ztAboveMedianDays;
+  return (
+    <div className="thermo-pct" data-testid="thermo-percentile">
+      <div className="thermo-pct__head">
+        <span className="thermo-pct__title">历史分位</span>
+        <span className="thermo-pct__range">
+          样本 {win.from ?? "--"} → {win.to ?? "--"}（{win.samples} 个交易日）
+        </span>
+        <span className="thermo-pct__streak" data-testid="thermo-streak">
+          涨停家数高于中位数 {streak == null ? "--" : streak} 天
+        </span>
+      </div>
+      {insufficientHistory || !percentile ? (
+        <div className="thermo-pct__insufficient" data-testid="thermo-percentile-insufficient">
+          样本不足（近 {win.samples} 个交易日 · 不足 60 日不给分位）
+        </div>
+      ) : (
+        <div className="thermo-pct__chips">
+          {PERCENTILE_METRICS.map(({ field, label, ratio }) => {
+            const p = percentile[field];
+            return (
+              <span className="thermo-pct__chip" key={field} data-testid={`thermo-pct-${field}`}>
+                <span className="thermo-pct__chip-label">{label}</span>
+                {p ? (
+                  <>
+                    <span className="thermo-pct__chip-q">
+                      P25 {quantile(p.p25, ratio)} / P50 {quantile(p.p50, ratio)} / P75{" "}
+                      {quantile(p.p75, ratio)}
+                    </span>
+                    <span className="thermo-pct__chip-window">近 {p.sampleCount} 交易日分位</span>
+                  </>
+                ) : (
+                  <span className="thermo-pct__chip-window">无有效样本</span>
+                )}
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** 带符号百分比（数值本身已是 % 口径，如昨日涨停均值 +3.21%）。 */
@@ -151,7 +230,7 @@ function TrendSpark({
  * `kpis` 为 null（罕见：非降级但 KPI 缺失）时整板退化为 `--`，绝不 `?? 0`。
  * 环比与趋势来自 `market_sentiment_daily` 派生缓存，缺失时只藏对应元素、不造假数据。
  */
-export function SentimentThermometer({ kpis, history, asOf }: Props) {
+export function SentimentThermometer({ kpis, history, asOf, trends }: Props) {
   const sorted = useMemo(
     () => [...history].sort((a, b) => a.tradeDate.localeCompare(b.tradeDate)),
     [history],
@@ -163,12 +242,18 @@ export function SentimentThermometer({ kpis, history, asOf }: Props) {
   }, [sorted, asOf]);
   // 日历缓存滞后于 asOf（盘后任务未跑）时，把当日实时 KPI 追加为趋势末点，避免线尾与主卡数字不一致。
   // 注意：useMemo 必须全部位于 `!kpis` 早退之前（条件 hooks 会在数据到达时触发渲染错误）
+  // 趋势线数据源：优先 trends 的长窗口序列（最多 500 个交易日，分位同源同窗口），
+  // 端点未就绪时回落 30 天日历序列 —— 两条路径都复用同一个 TrendSpark（零新增图表依赖）。
   const trendSeries = useMemo(() => {
-    if (!asOf || !kpis) return sorted;
-    const last = sorted[sorted.length - 1];
-    if (last && last.tradeDate >= asOf) return sorted;
-    return [...sorted, { tradeDate: asOf, ztCount: kpis.ztCount, dtCount: kpis.dtCount }];
-  }, [sorted, kpis, asOf]);
+    const base: Array<Pick<SentimentCalendarPoint, "tradeDate" | "ztCount" | "dtCount">> =
+      trends && trends.series.length >= 2
+        ? trends.series.map((p) => ({ tradeDate: p.tradeDate, ztCount: p.ztCount, dtCount: p.dtCount }))
+        : sorted;
+    if (!asOf || !kpis) return base;
+    const last = base[base.length - 1];
+    if (last && last.tradeDate >= asOf) return base;
+    return [...base, { tradeDate: asOf, ztCount: kpis.ztCount, dtCount: kpis.dtCount }];
+  }, [sorted, trends, kpis, asOf]);
 
   if (!kpis) {
     return (
@@ -251,6 +336,8 @@ export function SentimentThermometer({ kpis, history, asOf }: Props) {
           />
         </MetricTile>
       </div>
+
+      {trends ? <PercentileBlock trends={trends} /> : null}
 
       {trendSeries.length >= 2 ? (
         <TrendSpark points={trendSeries} />

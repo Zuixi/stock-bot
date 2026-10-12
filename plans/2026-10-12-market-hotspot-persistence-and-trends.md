@@ -3,7 +3,7 @@ status: active
 scope: 市场热点/情绪/资金数据的日级持久化边界与统计追踪——个股级涨停事实、东财实时源日终捕获、覆盖率只读巡检、情绪与板块趋势端点
 touches: backend/app/models/market_data.py, backend/app/migrations/versions/, backend/app/repositories/market_data_repo.py, backend/app/repositories/limit_up_repo.py, backend/app/services/market_data_service.py, backend/app/services/limit_up_service.py, backend/app/services/reconciliation_service.py, backend/app/core/providers/eastmoney_client.py, backend/app/scheduler/jobs.py, backend/app/scheduler/runner.py, backend/app/workers/market_data_worker.py, backend/app/schemas/task.py, backend/app/schemas/market_data.py, backend/app/api/v1/market_data.py, backend/scripts/, backend/tests/, frontend/src/shared/api/, frontend/src/features/market/, docs/decisions/, docs/features.md, docs/Changelog.md
 updated: 2026-10-12
-next-action: Task 6 完成（6a days=250 → samples=239、三指标 sample_count=239、days=30 → insufficient_history；6b 真库 eod_full=0 → available_from=null + 20/20 缺日如实，哨兵行 e2e 验证闸门与同源同值）；下一步 Task 7（前端 chip + sparkline）
+next-action: Task 7 完成（前端 mapper + 情绪分位 chip / 板块连续性 chip + 复用 TrendSpark；新 e2e 6 条红→绿、既有五个 market e2e 38 passed 零回归、tsc/build 绿；Ruling 23 跳过可选 Step 4）；下一步 Task 8（文档收口）
 ---
 
 # 市场热点数据持久化与趋势追踪 实施计划（v2）
@@ -325,9 +325,15 @@ next-action: Task 6 完成（6a days=250 → samples=239、三指标 sample_coun
 
 **验收：** `npx tsc --noEmit` + `npm run build` + 新 e2e 绿；现有 market e2e（`limitUpSentiment`/`marketTrust`/`marketDataFace`/`marketPolling`/`darkmode`）**零回归**。
 
-- [ ] Step 1: api mapper + 类型
-- [ ] Step 2: 卡片 chip/sparkline
-- [ ] Step 3: e2e（含样本不足与缺日分支）
+**交付实测（2026-10-12，Ruling 23：只做 Step 1–3，跳过可选 Step 4）：**
+- **Step 1（mapper）**：snake→camel 只在 `frontend/src/shared/api/limitUp.ts`（`fetchSentimentTrends`：window/series/percentile/streak/insufficientHistory，`percentile=null` 原样保留）与 `marketData.ts`（`fetchSectorTrends`：attributionNote/availableFrom/luCountSource/missingDays）各一处；`window.from` / `percentile` 可空、`broken_rate`/`promo_1to2` 的 NULL **不映射成 0**
+- **Step 2（chip）**：`SentimentThermometer` 新增 `trends` prop → 分位区块（每个 chip 带**该字段**的样本窗口「近 239/231/228 交易日分位」+ 样本区间 `from → to`；`insufficient_history=true` ⇒ 只渲染「样本不足」，**无任何分位数字**；字段全 NULL ⇒ 「无有效样本」），趋势线优先复用**同一个** `TrendSpark` 画 trends 长窗口序列（端点失败回落 30 天日历序列，零新增图表依赖）；`SectorMoneyflowCard` 新增连续性 chip 条（`attributionNote` + `自 available_from 起累积` + 连续上榜/净流入-流出/末完整日 `--`/`当日涨停 N 家`，`luCountSource=unavailable` 时不渲染家数；`missing_days` 按缺日披露「不计 0 流入」）
+- **Step 3（e2e）**：新增 `frontend/e2e/marketTrends.spec.ts` 6 条（全 `page.route` mock）——RED **5 failed / 1 passed**（组件不存在）→ GREEN **6 passed**；含「insufficient 分支不得出现任何分位梯」的**变异验证**（把 `P50 90` 塞进样本不足文案 → 转红 → 还原转绿）。既有五个 market spec **38 passed / 0 failed**（零回归）；`npx tsc --noEmit` + `npm run build` 绿
+- **活链路缺口（如实披露）**：本机 `backend_api` 容器镜像为 **2026-09-29** 构建（早于 Task 6），`/market/sentiment/trends` 与 `/market/sector-trends` 经 dev 代理仍 **404**（`limit-up-ladder`/`sector-moneyflow` 200）⇒ 两处 chip 的**真库渲染未验证**，mock 载荷逐字段对齐 Task 6 的 Pydantic schema（`SentimentTrendsOut` / `SectorTrendsOut`）；活链路验证需 `docker compose build api` 后重跑
+
+- [x] Step 1: api mapper + 类型
+- [x] Step 2: 卡片 chip/sparkline
+- [x] Step 3: e2e（含样本不足与缺日分支）
 - [ ] Step 4（可选）: `/market?tab=trends` 视图
 
 ---

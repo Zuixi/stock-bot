@@ -8,6 +8,7 @@ import {
   fetchSectorLimitUp,
   fetchSentimentCalendar,
   fetchSentimentIntraday,
+  fetchSentimentTrends,
   fetchYesterdayLimitUp,
   type SentimentMode,
 } from "@/shared/api/limitUp";
@@ -107,6 +108,14 @@ function SentimentTab() {
     staleTime: 300_000,
     refetchInterval,
   });
+  // 历史分位 + 长窗口趋势（读时计算，端点侧 Redis 缓存 900s）：只喂温度计的分位 chip 与趋势线，
+  // 失败只藏这一块（分量分位在缺证据时必须留白，绝不退回 0/假分位）。
+  const trends = useQuery({
+    queryKey: ["market", "sentiment-trends", 250],
+    queryFn: () => fetchSentimentTrends(250),
+    staleTime: 300_000,
+    refetchInterval,
+  });
   const newStocks = useQuery({
     queryKey: ["new-stocks"],
     queryFn: () => fetchNewStocks(),
@@ -149,6 +158,7 @@ function SentimentTab() {
                   kpis={ladder.data?.kpis}
                   history={calendar.data ?? []}
                   asOf={ladder.data?.asOf}
+                  trends={trends.data}
                 />
               </ErrorBoundary>
             )}

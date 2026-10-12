@@ -144,6 +144,62 @@ interface BackendAnnouncementItem {
   pdf_url: string | null;
 }
 
+// ── Task 6b：板块趋势（GET /market/sector-trends，读时计算，不物化）──────────────
+
+interface BackendSectorTrendPoint {
+  trade_date: string;
+  main_net_inflow: number | null;
+  pct_change: number | null;
+  up_count: number | null;
+  down_count: number | null;
+  /** 板块涨停家数：只有 concept 维度能算；`null` = 不适用/缺数据（**不是 0 家**）。 */
+  lu_count: number | null;
+}
+
+interface BackendSectorTrendBoard {
+  board_code: string;
+  board_name: string | null;
+  main_net_inflow: number | null;
+  pct_change: number | null;
+  up_count: number | null;
+  down_count: number | null;
+  streak_on_top_n: number;
+  max_streak_on_top_n: number;
+  streak_inflow: number;
+  max_streak_inflow: number;
+  streak_outflow: number;
+  max_streak_outflow: number;
+  series?: BackendSectorTrendPoint[];
+}
+
+interface BackendSectorTrendWindow {
+  days: number;
+  from: string | null;
+  to: string | null;
+  samples: number;
+}
+
+interface BackendLeaderChange {
+  trade_date: string;
+  board_code: string;
+  board_name: string | null;
+}
+
+interface BackendSectorTrends {
+  dimension: string;
+  as_of: string | null;
+  available_from: string | null;
+  attribution: "current_sw_snapshot" | "point_in_time";
+  attribution_note: string;
+  lu_count_source: "point_in_time_membership" | "unavailable";
+  top_n: number;
+  window: BackendSectorTrendWindow;
+  boards?: BackendSectorTrendBoard[];
+  missing_days?: string[];
+  leader_change_count?: number;
+  leader_changes?: BackendLeaderChange[];
+}
+
 // ---- 前端模型（camelCase） ----
 
 export interface GlobalIndexCard {
@@ -282,6 +338,83 @@ export interface AnnouncementItem {
   pdfUrl: string | null;
 }
 
+/** 板块维度（与后端 `Literal["industry","concept","region"]` 对齐）。 */
+export type SectorDimension = "industry" | "concept" | "region";
+
+/**
+ * 归属口径（Ruling 22）：`currentSwSnapshot` = 按**当前**分类回溯（行业/地域，
+ * 非当时成分）；`pointInTime` = 用 `concept_member_changes` 反推的时点成分（仅概念）。
+ */
+export type SectorAttribution = "current_sw_snapshot" | "point_in_time";
+
+/** 板块涨停家数的归属来源；`unavailable` 时前端**不得**渲染家数（缺失 ≠ 0 家）。 */
+export type SectorLuCountSource = "point_in_time_membership" | "unavailable";
+
+/** 板块在某个**完整日**的观测（缺完整日不出现在序列里）。 */
+export interface SectorTrendPoint {
+  tradeDate: string;
+  mainNetInflow: number | null; // 元
+  pctChange: number | null; // %
+  upCount: number | null;
+  downCount: number | null;
+  luCount: number | null;
+}
+
+/** 单板块在窗口内的连续性统计（只在完整日上计算，缺日既不续接也不打断）。 */
+export interface SectorTrendBoard {
+  boardCode: string;
+  boardName: string | null;
+  /** **最后完整日**的值；`null` = 该行上游缺值（**不是 0 流入**）→ 前端 `--`。 */
+  mainNetInflow: number | null; // 元
+  pctChange: number | null;
+  upCount: number | null;
+  downCount: number | null;
+  /** 上榜口径：当日 `mainNetInflow` 降序前 `topN`。 */
+  streakOnTopN: number;
+  maxStreakOnTopN: number;
+  streakInflow: number;
+  maxStreakInflow: number;
+  streakOutflow: number;
+  maxStreakOutflow: number;
+  series: SectorTrendPoint[];
+}
+
+export interface SectorTrendWindow {
+  days: number;
+  from: string | null;
+  to: string | null;
+  samples: number;
+}
+
+/** 龙头更替事件（`boardCode`/`boardName` 是**当日新龙头**）。 */
+export interface LeaderChange {
+  tradeDate: string;
+  boardCode: string;
+  boardName: string | null;
+}
+
+/**
+ * 板块趋势（`GET /market/sector-trends`）。
+ *
+ * 三条硬约束见后端 schema：`attribution`/`attributionNote` 必填且如实；
+ * `availableFrom`（可为 `null` = 该维度还没有任何完整日）；`missingDays` 显式列缺日，
+ * **缺日不得当成 0 流入**。
+ */
+export interface SectorTrends {
+  dimension: string;
+  asOf: string | null;
+  availableFrom: string | null;
+  attribution: SectorAttribution;
+  attributionNote: string;
+  luCountSource: SectorLuCountSource;
+  topN: number;
+  window: SectorTrendWindow;
+  boards: SectorTrendBoard[];
+  missingDays: string[];
+  leaderChangeCount: number;
+  leaderChanges: LeaderChange[];
+}
+
 // ---- snake → camel 映射 ----
 
 const mapCard = (b: BackendGlobalIndexCard): GlobalIndexCard => ({
@@ -415,6 +548,58 @@ const mapAnnouncement = (b: BackendAnnouncementItem): AnnouncementItem => ({
   pdfUrl: b.pdf_url,
 });
 
+// ---- 板块趋势（Task 6b）映射 ----
+
+const mapSectorTrendPoint = (p: BackendSectorTrendPoint): SectorTrendPoint => ({
+  tradeDate: p.trade_date,
+  mainNetInflow: p.main_net_inflow,
+  pctChange: p.pct_change,
+  upCount: p.up_count,
+  downCount: p.down_count,
+  luCount: p.lu_count,
+});
+
+const mapSectorTrendBoard = (b: BackendSectorTrendBoard): SectorTrendBoard => ({
+  boardCode: b.board_code,
+  boardName: b.board_name,
+  mainNetInflow: b.main_net_inflow,
+  pctChange: b.pct_change,
+  upCount: b.up_count,
+  downCount: b.down_count,
+  streakOnTopN: b.streak_on_top_n,
+  maxStreakOnTopN: b.max_streak_on_top_n,
+  streakInflow: b.streak_inflow,
+  maxStreakInflow: b.max_streak_inflow,
+  streakOutflow: b.streak_outflow,
+  maxStreakOutflow: b.max_streak_outflow,
+  series: (b.series ?? []).map(mapSectorTrendPoint),
+});
+
+const mapSectorTrends = (b: BackendSectorTrends): SectorTrends => ({
+  dimension: b.dimension,
+  asOf: b.as_of,
+  availableFrom: b.available_from,
+  attribution: b.attribution,
+  attributionNote: b.attribution_note,
+  luCountSource: b.lu_count_source,
+  topN: b.top_n,
+  window: {
+    days: b.window.days,
+    from: b.window.from,
+    to: b.window.to,
+    samples: b.window.samples,
+  },
+  boards: (b.boards ?? []).map(mapSectorTrendBoard),
+  // 缺日原样透传：`missingDays` 是「这天没有完整快照」的唯一信号，前端不得补 0
+  missingDays: b.missing_days ?? [],
+  leaderChangeCount: b.leader_change_count ?? 0,
+  leaderChanges: (b.leader_changes ?? []).map((c) => ({
+    tradeDate: c.trade_date,
+    boardCode: c.board_code,
+    boardName: c.board_name,
+  })),
+});
+
 // ---- 请求函数 ----
 
 export function fetchGlobalIndices(): Promise<GlobalIndexCard[]> {
@@ -473,4 +658,22 @@ export function fetchAnnouncements(symbol?: string, limit = 30): Promise<Announc
   return apiGet<BackendAnnouncementItem[]>("/api/v1/market/announcements", { symbol, limit }).then((rows) =>
     rows.map(mapAnnouncement),
   );
+}
+
+/**
+ * 板块趋势（连续上榜 / 连续净流入-流出 / 龙头更替 / 板块涨停家数）。
+ *
+ * `days` 只统计**完整日**（`eod_full`）；窗口内缺完整日的交易日进 `missingDays`，
+ * **绝不**当成 0 流入。`topN` 是「上榜」口径（当日主力净流入前 N），显式写进响应。
+ */
+export function fetchSectorTrends(
+  dimension: SectorDimension = "industry",
+  days = 60,
+  topN = 20,
+): Promise<SectorTrends> {
+  return apiGet<BackendSectorTrends>("/api/v1/market/sector-trends", {
+    dimension,
+    days,
+    top_n: topN,
+  }).then(mapSectorTrends);
 }
