@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "test:e2e": "playwright test",
     "check:design": "node scripts/check-design-tokens.mjs",
+    "check:no-fake-zero": "node scripts/check-no-fake-zero.mjs",
     "check:routes": "node scripts/check-routes.mjs"
   },
   "dependencies": {

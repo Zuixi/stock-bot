@@ -6,6 +6,28 @@ import { ChangeText } from "@/shared/ui";
 import { KlineChart } from "@/shared/ui/kline";
 import { fetchGlobalIndices } from "@/shared/api/marketData";
 import { fetchIndexKline, fetchMarketIndices } from "@/shared/api/market";
+import type { MarketIndex } from "@/shared/types";
+
+/**
+ * 详情页的展示模型。**三个行情字段可空**（与 `MarketIndex` 的必填数字不同）：
+ *
+ * 背景（Ruling 44）：本页对"既有指数列表里没有、但全球标的卡片里有"的代码（如本任务新增的
+ * `NDX`/`SOX`/`HXC`）走 globalCards 兜底。这三个标的**按设计没有 `index_dailies` 日线行**，
+ * 实时源不可用时 `price/change/pctChange` 是 `null`。旧写法 `card.price ?? 0` 会把 `null`
+ * 变成 **`0`**——用户在卡片上看到 `—`，点进来看到 `0.00` 与 `+0.00%`：
+ * 同一处数据两种说法，且 `0` 会被读成"平盘"（真实点位）。
+ * 这条路径**只有本任务新增的标的会走到**，所以它属于本任务的收尾，不能留给下一个任务。
+ */
+interface IndexDetail {
+  code: string;
+  tsCode: string;
+  name: string;
+  value: number | null;
+  change: number | null;
+  changePercent: number | null;
+  exchange: string;
+  asof: string;
+}
 
 export default function IndexDetailPage() {
   const { tsCode } = useParams<{ tsCode: string }>();
@@ -24,20 +46,23 @@ export default function IndexDetailPage() {
   });
 
   const found = indices.find((idx) => idx.tsCode === tsCode);
-  const index = found ?? (() => {
-    const card = globalCards.find((c) => c.tsCode === tsCode);
-    if (!card) return undefined;
-    return {
-      code: card.tsCode.split(".")[0],
-      tsCode: card.tsCode,
-      name: card.name,
-      value: card.price ?? 0,
-      change: card.change ?? 0,
-      changePercent: card.pctChange ?? 0,
-      exchange: "Global",
-      asof: card.updatedAt,
-    };
-  })();
+  const index: IndexDetail | undefined =
+    found ??
+    (() => {
+      const card = globalCards.find((c) => c.tsCode === tsCode);
+      if (!card) return undefined;
+      return {
+        code: card.tsCode.split(".")[0],
+        tsCode: card.tsCode,
+        name: card.name,
+        // ⚠️ 一律用 `?? null`，**不得** `?? 0`：缺价是"没有"，不是"零"。
+        value: card.price ?? null,
+        change: card.change ?? null,
+        changePercent: card.pctChange ?? null,
+        exchange: "Global",
+        asof: card.updatedAt,
+      };
+    })();
 
   if (isLoading || isGlobalLoading) {
     return (
@@ -88,12 +113,25 @@ export default function IndexDetailPage() {
             </Typography.Text>
           </Space>
           <div style={{ marginTop: 4, display: "flex", alignItems: "baseline", gap: 16 }}>
-            <span style={{ fontSize: 28, fontWeight: 700 }}>
-              {index.value.toLocaleString("zh-CN", { minimumFractionDigits: 2 })}
-            </span>
+            {/* 缺价 → `—`（与全球卡片同一口径）；**不渲染 0**，0 会被读成真实点位/平盘。
+                `ChangeText` 的 null 分支渲染 `--`，与这里的 `—` 同义（都是"不可判"）。 */}
+            {index.value == null ? (
+              <span style={{ fontSize: 28, fontWeight: 700, color: "var(--text-secondary)" }}>
+                —
+              </span>
+            ) : (
+              <span style={{ fontSize: 28, fontWeight: 700 }}>
+                {index.value.toLocaleString("zh-CN", { minimumFractionDigits: 2 })}
+              </span>
+            )}
             <ChangeText value={index.change} suffix="" style={{ fontSize: 16 }} />
             <ChangeText value={index.changePercent} style={{ fontSize: 16 }} />
           </div>
+          {index.value == null && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              该标的暂无可用行情（既无实时快照也无日线），故不显示数值；行情入接入后自动出现。
+            </Typography.Text>
+          )}
         </div>
       </Space>
 

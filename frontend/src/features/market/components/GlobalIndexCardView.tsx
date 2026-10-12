@@ -18,8 +18,11 @@ export function GlobalIndexCardView({ index }: { index: GlobalIndexCard }) {
   const navigate = useNavigate();
   const { colors } = useTheme();
   const badge = MARKET_BADGE[index.market] ?? { label: index.market, color: colors.flat };
-  const up = (index.pctChange ?? 0) > 0;
-  const down = (index.pctChange ?? 0) < 0;
+  // 严格比较（`> 0` / `< 0`）而不是 `(pctChange ?? 0) > 0`：后者把 null 折成 0 后再比，
+  // 语义上仍是"缺值当成平盘"。严格比较下 null 两侧都为 false → 落到中性色（`colors.flat`），
+  // 与"缺值时显示 `—`"同一口径。渲染层本来就不显示 0（见下方 `pctChange == null` 分支）。
+  const up = index.pctChange != null && index.pctChange > 0;
+  const down = index.pctChange != null && index.pctChange < 0;
   const color = up ? colors.up : down ? colors.down : colors.flat;
   const sparkColor =
     index.spark.length > 1

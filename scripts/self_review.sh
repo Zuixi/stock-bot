@@ -120,6 +120,22 @@ else
   fi
 fi
 
+# 「不得假 0」硬门禁（Task 7 / Ruling 44 起）：源码级断言，毫秒级、无需前端依赖，
+# 同样放在快检里。它守的是**语义**——`?? 0` 与 `null` 在 `number | null` 下都合法，
+# 故 `tsc` 对这个错误**只会沉默**（这正是它连栽三次的原因），必须单独设卡。
+echo "  check:no-fake-zero（不得把缺值渲染成 0）..."
+if ! command -v node >/dev/null 2>&1; then
+  warn "未找到 node，「不得假 0」门禁被跳过（npm run check:no-fake-zero）——请在有 node 的环境复跑"
+elif [ ! -f frontend/scripts/check-no-fake-zero.mjs ]; then
+  fail "frontend/scripts/check-no-fake-zero.mjs 不存在（「不得假 0」门禁无法执行）"
+else
+  if (cd frontend && npm run --silent check:no-fake-zero > /tmp/check_no_fake_zero.out 2>&1); then
+    ok "check:no-fake-zero 通过（$(grep -c '^PASS' /tmp/check_no_fake_zero.out) 项）"
+  else
+    fail "「不得假 0」门禁未通过（npm run check:no-fake-zero）"; grep '^FAIL' /tmp/check_no_fake_zero.out | head -20
+  fi
+fi
+
 if [ "$FULL" = 1 ]; then
   echo; echo "== [4/4] 全量门禁 (--full) =="
   [ -n "$PY" ] && { echo "  mypy app/ ..."; (cd backend && uv run mypy app)  || fail "mypy 未通过"; }

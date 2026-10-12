@@ -1,11 +1,12 @@
-// 设计令牌门禁：涨跌色对比度 >= 4.5 (WCAG AA) + theme.ts/theme.css 一致性。
+// 设计令牌门禁：涨跌色对比度 >= 4.5 (WCAG AA) + theme.ts/theme.css 一致性
+//                  + **组件引用的 `var(--x)` 必须真的被定义**（死变量，Ruling 43）。
 //
 // 覆盖三处浅色声明：
 //   1. `:root {`            —— 首帧兜底块（data-theme 未挂上时生效）
 //   2. `:root[data-theme="light"]`
 //   3. `:root[data-theme="dark"]`
 // 兜底块按契约必须与 light 块 + theme.ts light 同名值一致，防止首帧闪色漂移。
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -74,6 +75,70 @@ for (const { label, marker, tsMode, surfaces } of MODES) {
     }
   }
 }
+
+// ── 死变量检查（Ruling 43）──────────────────────────────────────────────────
+//
+// 为什么要有这一段：`--flat` 这类"看起来该存在"的变量被写进组件后，声明在
+// computed-value time 失效、元素**静默继承**别的颜色——不报错、不闪、测试也不红，
+// 只有人去比对 `theme.css` 才会发现。同一处已经栽过两次：
+//   ① `#cf1322` 写死色值（暗色对比度 ≈2.8:1，门禁只查 token 自身 → 漏过）；
+//   ② 修①时写出 `var(--flat)`（`--flat` 是 CSS **类名修饰符** `.delta--flat`，
+//      不是自定义属性；真正存在的是 `--text-secondary`）。
+// 因此把"**引用的每一个 `var(--x)` 都必须真的被定义**"机械化——这条完全可以机械检测。
+//
+// 定义面 = `src/` 下所有 `.css/.ts/.tsx` 里的 `--x:` 声明（含 `theme.css` 与各组件
+// 局部变量如 `--ladder-h1`、`--sw3-h2`、`--thermo-up-tint`）。
+// 引用面 = 同一批文件里的 `var(--x...)`。**带 fallback 的写法**（`var(--a, var(--b))`
+// 或 `var(--a, #fff)`）里，第一个参数允许未定义（这正是 fallback 的用途），
+// 故只把**第一个参数**计入引用：`--a` 是引用、`--b` 是引用，其余忽略。
+// 本仓库当前存在一处该写法：`SwL3LimitUpBoard.css:136` 的 `var(--sw-heat, var(--up))`。
+const SRC = join(root, "src");
+const walkFiles = (dir) => {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walkFiles(full));
+    else if (/\.(css|ts|tsx)$/.test(entry.name)) out.push(full);
+  }
+  return out;
+};
+
+const sourceFiles = walkFiles(SRC);
+const definedVars = new Set();
+const referencedVars = new Map(); // 变量名 → 出现位置（前 3 处，便于定位）
+for (const file of sourceFiles) {
+  const text = readFileSync(file, "utf8");
+  const rel = file.slice(root.length + 1);
+  // 定义：行内任意位置的 `--x:`（不锚定行首，因为可能写成 `background: var(--y); --x: #fff;`）
+  for (const m of text.matchAll(/(--[a-zA-Z0-9-]+)\s*:/g)) definedVars.add(m[1]);
+  // 引用：var( 之后的第一个 `--x`（只取 var 调用的首参，避免把 fallback 里的参数
+  // 当成"必须定义"）；`var(--x, var(--y))` 的两个参数都会各自被别的 match 抓到。
+  for (const m of text.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g)) {
+    const name = m[1];
+    const line = text.slice(0, m.index).split("\n").length;
+    if (!referencedVars.has(name)) referencedVars.set(name, []);
+    const hits = referencedVars.get(name);
+    if (hits.length < 3) hits.push(`${rel}:${line}`);
+  }
+}
+
+const undefinedVars = [...referencedVars.entries()]
+  .filter(([name]) => !definedVars.has(name))
+  .sort(([a], [b]) => a.localeCompare(b));
+
+if (undefinedVars.length === 0) {
+  console.log(
+    `PASS 组件引用的 CSS 变量全部已定义（引用 ${referencedVars.size} 个 / 定义 ${definedVars.size} 个，扫描 ${sourceFiles.length} 个文件）`
+  );
+} else {
+  for (const [name, hits] of undefinedVars) {
+    console.log(
+      `FAIL 未定义的 CSS 变量 var(${name}) —— 该声明会在 computed-value time 失效并静默继承父级颜色：${hits.join("、")}`
+    );
+  }
+  failed += undefinedVars.length;
+}
+
 if (failed) {
   console.log(`\n设计令牌门禁未通过：${failed} 项不达标`);
 }

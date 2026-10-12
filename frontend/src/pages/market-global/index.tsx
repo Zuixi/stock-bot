@@ -70,16 +70,25 @@ function fmtPrice(v: number | null): string {
 /**
  * 涨跌渲染：null → `—`（不可判），不 0 填充。
  *
- * 颜色走**主题 CSS 变量**（`--up`/`--down`/`--flat`，定义见 `app/styles/theme.css`），
+ * 颜色走**已存在的主题 CSS 变量**：涨 `--up`、跌 `--down`、平 `--text-secondary`
+ * （定义见 `app/styles/theme.css`；三者与 `shared/ui/DeltaText.css` 的
+ * `.delta--up/.delta--down/.delta--flat` 逐条同源——"平"那一档用的就是
+ * `--text-secondary`，**不存在** `--flat` 这个变量，写它属无效声明、计算后回落成继承色）。
  * 与 `SentimentThermometer.css` / `GlobalIndexCardView` 同一口径。
+ *
  * **不得写死 hex**：审查实测 `#cf1322` 在暗色面板 `#1e222d` 上只有 ≈2.8:1，
- * 低于仓库要求的 4.5:1（暗色 `--up` = `#f2555a` → 4.71:1）；而 `check:design`
- * 只校验主题 token 自身，**抓不到组件里的写死色值**，所以这条只能靠"用变量"保证。
+ * 低于仓库要求的 4.5:1（暗色 `--up` = `#f2555a` → 4.71:1）。原先 `check:design`
+ * 只校验主题 token 自身、**抓不到组件里的写死色值**；现已扩展为同时校验
+ * "组件里引用的每一个 CSS 变量都必须真的被定义"（见 `scripts/check-design-tokens.mjs`）。
  */
 function PctText({ card }: { card: GlobalIndexCard }) {
   if (card.pctChange == null) return <span>—</span>;
   const color =
-    card.pctChange > 0 ? "var(--up)" : card.pctChange < 0 ? "var(--down)" : "var(--flat)";
+    card.pctChange > 0
+      ? "var(--up)"
+      : card.pctChange < 0
+        ? "var(--down)"
+        : "var(--text-secondary)";
   return (
     <span style={{ color, fontVariantNumeric: "tabular-nums" }}>
       {card.pctChange > 0 ? "+" : ""}

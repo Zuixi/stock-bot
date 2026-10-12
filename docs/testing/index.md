@@ -15,7 +15,8 @@
 | 后端类型 | `self_review.sh --full` · CI `backend-typecheck` | 手动全量 / PR | 是（CI） | 修类型；别用 `# type: ignore` 掩盖契约错误 |
 | 后端单测（排除 e2e/bench） | `self_review.sh --full` · CI `backend-test` · pre-commit `backend-test` | commit / PR | 是 | 见 [`backend.md`](./backend.md) |
 | 前端类型 `tsc --noEmit` | `self_review.sh --full` · CI `frontend-lint` · pre-commit | commit / PR | 是 | 修类型；见 [ADR 0006](../decisions/0006-no-eslint-tsc-as-static-check.md) |
-| 前端设计令牌 | CI `frontend-lint`（`npm run check:design`） | PR | 是 | 涨跌色对比度 ≥ 4.5 且 `theme.ts` ↔ `theme.css` 必须一致 |
+| 前端设计令牌 | CI `frontend-lint`（`npm run check:design`） | PR | 是 | 涨跌色对比度 ≥ 4.5 且 `theme.ts` ↔ `theme.css` 必须一致；**且组件里引用的每个 `var(--x)` 必须真的被定义**（`--flat` 这类死变量会让声明在 computed-value time 静默失效并继承父级色） |
+| 「不得假 0」（缺值不得渲染成 0） | `npm run check:no-fake-zero` · CI `frontend-lint` · `self_review.sh`（**快检也跑**） | commit / PR | 是 | 缺价/缺涨跌一律 `?? null` + 显式空值渲染（`—`/`--`）；`0` 在数值页上是合法值，会被读成真实点位或"平盘"。**`tsc` 抓不到**（`0` 与 `null` 在 `number \| null` 下都合法），故单独设卡 |
 | 前端路由迁移（旧路由/redirect 目标/保留非 redirect/占位页不可为 redirect 目标/IA 文档↔路由清单一致） | `npm run check:routes` · CI `frontend-lint` · `self_review.sh`（**快检也跑**） | commit / PR | 是 | 改 `frontend/src/app/router/route-manifest.ts` 或 `frontend/scripts/check-routes.mjs`；新 redirect 必须同步改 `docs/design/ia-investment-research-platform.md` §4 |
 | 前端构建 | CI `frontend-build` | PR | 是 | `npm run build`（含 `tsc -b`） |
 | auth-service lint / 类型 / 测试 | CI `auth-service-lint` · `auth-service-typecheck` · `auth-service-test` | PR | 是 | 与后端同口径，但**独立库与版本线** |
