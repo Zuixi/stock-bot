@@ -263,6 +263,68 @@ async def sector_moneyflow_job() -> None:
         await _alert_job_failure("sector_moneyflow_poll", exc)
 
 
+async def board_snapshot_eod_job() -> None:
+    """板块资金流**当日收盘全量**落库（交易日 15:05；与 `board_snapshot_rewrite_job` 分工）。
+
+    为什么必须是"全量"而不是一次 Top-100（Ruling 11）：`clist` 的 `pz` 上限是 100，盘中
+    `sector_moneyflow_poll` 每 5 分钟按 `fid=f62`（主力净流入）只拿得到 Top-100，当日表行
+    是"每次轮询 Top-100 的并集、旧行永不刷新"，既不是完整当日态、也不是
+    `/market/hot-boards` 要的 `f3`（涨幅）全集。收盘后分页翻全（industry ≈5 页 /
+    concept ≈6 页 / region 1 页）把当日**所有**板块刷新一次并写 `capture_kind='eod_full'`；
+    读表闸门只认这一批。
+
+    A 类数据（东财板块资金流无历史接口）当天不落就永久丢失。覆盖不足（`fetched < total`）
+    与外呼失败都要登记 `job:failures`：静默截断会让读表闸门照开、T6 拿子集当完整日。
+    双轨制：与 worker 的 `board_snapshot_eod` 分支调**同一个** service 方法。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_sector_moneyflow_eod_full(db)
+            await db.commit()
+        logger.info("Board snapshot EOD done: %s", result)
+    except Exception as exc:
+        logger.exception("Board snapshot EOD job failed")
+        await _alert_job_failure("board_snapshot_eod", exc)
+        return
+    shortfalls = market_data_service.eod_alert_reasons(result)
+    if shortfalls:
+        await _alert_job_failure("board_snapshot_eod", RuntimeError("; ".join(shortfalls)))
+
+
+async def board_snapshot_rewrite_job() -> None:
+    """当日**没有全量捕获**才补做收盘全量（交易日 15:35；容器重启错过 15:05 的兜底）。
+
+    只承诺**当日**：东财板块资金流没有历史接口（A 类），补写跨日无意义 —— 昨天没抓到就是
+    永久缺失，本 job 不会（也无法）去补昨天。守卫是"当日有没有 `eod_full` 行"而不是
+    "有没有行"（Ruling 11）：只落了盘中 Top-100 子集的日子同样要补上收盘全量。
+
+    双轨制：与 worker 的 `board_snapshot_rewrite` 分支调同一个 service 方法
+    （`ingest_sector_moneyflow_if_missing`）。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_sector_moneyflow_if_missing(db)
+            await db.commit()
+        logger.info("Board snapshot rewrite done: %s", result)
+    except Exception as exc:
+        logger.exception("Board snapshot rewrite job failed")
+        await _alert_job_failure("board_snapshot_rewrite", exc)
+        return
+    shortfalls = market_data_service.eod_alert_reasons(result)
+    if shortfalls:
+        await _alert_job_failure("board_snapshot_rewrite", RuntimeError("; ".join(shortfalls)))
+
+
 async def market_moneyflow_daily_job() -> None:
     """大盘资金流日线（交易日 16:20 盘后，幂等 upsert 近 10 日窗口）。"""
     from app.core.database import async_session_factory  # noqa: PLC0415
@@ -411,6 +473,46 @@ async def sentiment_daily_job() -> None:
     except Exception as exc:
         logger.exception("Sentiment daily job failed")
         await _alert_job_failure("sentiment_daily", exc)
+
+
+async def limit_up_stock_facts_job() -> None:
+    """个股级涨停事实落库 + 东财 EOD 增强（交易日 17:20，晚于 16:50 限价补漏）。
+
+    **为什么顺序是"先落库再增强"**：增强是 UPDATE-only（当天事实行必须先存在），而当日
+    限价 16:50 才入库、事实行本 job 才写 —— 因此增强只能挂在落库之后（15:05 单挂一个
+    增强 job 必然命中 0 行，每天白造一条告警）。
+
+    `as_of` 走与 `persist_snapshot` 同款的完整性判据（最新**完整**交易日），不直接用
+    "今天"：脏的最新日（partial）不得被当成事实落库日。
+
+    best-effort 边界：东财外呼失败/空池/0 命中一律只 `logger.warning` + 登记
+    `job:failures`（A 类装饰丢失必须可见），**不回滚**已提交的事实、不让 job 整体失败。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import limit_up_service, market_day_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            md = await market_day_service.resolve_latest_complete_day(db)
+            if md is None:
+                logger.warning("Limit-up stock facts skipped: no quotes")
+                return
+            result = await limit_up_service.persist_and_enrich_stock_facts(db, md.day)
+            await db.commit()
+        logger.info("Limit-up stock facts done: day=%s %s", md.day, result)
+    except Exception as exc:
+        logger.exception("Limit-up stock facts job failed")
+        await _alert_job_failure("limit_up_stock_facts", exc)
+        return
+    reason = result.get("enrich_reason")
+    if reason:
+        # "池里有票但当日事实行 0 命中"才是 A 类数据静默丢失的信号；空池/外呼失败同样登记
+        await _alert_job_failure(
+            "limit_up_stock_facts",
+            RuntimeError(f"EOD enrichment {reason} (trade_date={md.day})"),
+        )
 
 
 async def intraday_sentiment_poll_job() -> None:

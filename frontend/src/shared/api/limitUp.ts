@@ -123,6 +123,55 @@ interface BackendSentimentCalendarPoint {
   max_streak: number;
 }
 
+interface BackendSentimentTrendPoint {
+  trade_date: string;
+  zt_count: number;
+  dt_count: number;
+  zb_count: number;
+  /** 分母为 0 的日子为 NULL（**缺失 ≠ 0**），那些日子不进分位样本。 */
+  broken_rate: number | null;
+  promo_1to2: number | null;
+  max_streak: number;
+}
+
+/** `SentimentWindowOut`：`days` 是**请求**的交易日数，`samples` 是实际纳入行数。 */
+interface BackendSentimentTrendWindow {
+  days: number;
+  from: string | null;
+  to: string | null;
+  samples: number;
+}
+
+/** `SentimentPercentileOut`：nearest-rank 分位梯，`sample_count` 是**该字段**的有效样本数。 */
+interface BackendSentimentPercentile {
+  field: string;
+  sample_count: number;
+  from: string | null;
+  to: string | null;
+  p0: number | null;
+  p10: number | null;
+  p25: number | null;
+  p50: number | null;
+  p75: number | null;
+  p90: number | null;
+  p100: number | null;
+}
+
+interface BackendSentimentStreak {
+  zt_above_median_days?: number;
+}
+
+/** `SentimentTrendsOut`（Task 6a）：读时计算，`percentile=null` = 样本不足。 */
+interface BackendSentimentTrends {
+  as_of: string | null;
+  as_of_quality?: AsOfQuality;
+  window: BackendSentimentTrendWindow;
+  series?: BackendSentimentTrendPoint[];
+  percentile: Record<string, BackendSentimentPercentile> | null;
+  streak?: BackendSentimentStreak;
+  insufficient_history?: boolean;
+}
+
 /** 盘中分时点（`SentimentIntradayPointOut` 的 1:1 对齐），端点按 captured_at 升序返回。 */
 interface BackendSentimentIntradayPoint {
   id: number;
@@ -271,6 +320,60 @@ export interface SentimentIntradayPoint {
   maxStreak: number;
 }
 
+/** 允许做历史分位的指标（后端拍板 R6 只 3 个，**不得扩张**）。 */
+export type SentimentPercentileField = "zt_count" | "broken_rate" | "promo_1to2";
+
+/** 窗口内一个交易日的情绪行；`brokenRate`/`promo1to2` 为 `null` = 当日算不出该比值（**不是 0**）。 */
+export interface SentimentTrendPoint {
+  tradeDate: string;
+  ztCount: number;
+  dtCount: number;
+  zbCount: number;
+  brokenRate: number | null;
+  promo1to2: number | null;
+  maxStreak: number;
+}
+
+/** 窗口自描述：`days` = 请求交易日数，`samples` = 实际纳入行数（**不插值**）。 */
+export interface SentimentTrendWindow {
+  days: number;
+  from: string | null;
+  to: string | null;
+  samples: number;
+}
+
+/** 单指标历史分位梯（nearest-rank）；`sampleCount` 是**该字段**的有效样本数。 */
+export interface SentimentPercentile {
+  field: string;
+  sampleCount: number;
+  from: string | null;
+  to: string | null;
+  p0: number | null;
+  p10: number | null;
+  p25: number | null;
+  p50: number | null;
+  p75: number | null;
+  p90: number | null;
+  p100: number | null;
+}
+
+/**
+ * 情绪趋势 + 历史分位（`GET /market/sentiment/trends`）。
+ *
+ * `percentile=null` ⇔ `insufficientHistory`（有效样本 < 60，**不给假分位**）；
+ * 非 null 时某指标仍可能缺席（该字段全部为 NULL → 无有效样本），消费端必须渲染 `--`。
+ */
+export interface SentimentTrends {
+  asOf: string | null;
+  asOfQuality: AsOfQuality;
+  window: SentimentTrendWindow;
+  series: SentimentTrendPoint[];
+  percentile: Partial<Record<SentimentPercentileField, SentimentPercentile>> | null;
+  /** 与后端同口径**非空**（`int = 0`）：0 是"没有一天高于中位数"的正经值，不是缺失。 */
+  streak: { ztAboveMedianDays: number };
+  insufficientHistory: boolean;
+}
+
 // ---- mapper（字段一一对应，不做任何语义重算） ----
 
 const mapStock = (s: BackendLadderStock): LadderStock => ({
@@ -353,6 +456,58 @@ const mapIntradayPoint = (p: BackendSentimentIntradayPoint): SentimentIntradayPo
   zbCount: p.zb_count,
   maxStreak: p.max_streak,
 });
+
+const mapTrendPoint = (p: BackendSentimentTrendPoint): SentimentTrendPoint => ({
+  tradeDate: p.trade_date,
+  ztCount: p.zt_count,
+  dtCount: p.dt_count,
+  zbCount: p.zb_count,
+  brokenRate: p.broken_rate,
+  promo1to2: p.promo_1to2,
+  maxStreak: p.max_streak,
+});
+
+const mapPercentile = (p: BackendSentimentPercentile): SentimentPercentile => ({
+  field: p.field,
+  sampleCount: p.sample_count,
+  from: p.from,
+  to: p.to,
+  p0: p.p0,
+  p10: p.p10,
+  p25: p.p25,
+  p50: p.p50,
+  p75: p.p75,
+  p90: p.p90,
+  p100: p.p100,
+});
+
+/** 后端 `PERCENTILE_FIELDS` 的 1:1 对齐（映射只在这里遍历，消费端不猜键名）。 */
+const PERCENTILE_FIELDS: SentimentPercentileField[] = ["zt_count", "broken_rate", "promo_1to2"];
+
+const mapSentimentTrends = (b: BackendSentimentTrends): SentimentTrends => {
+  const percentile: Partial<Record<SentimentPercentileField, SentimentPercentile>> = {};
+  for (const field of PERCENTILE_FIELDS) {
+    const raw = b.percentile?.[field];
+    if (raw) percentile[field] = mapPercentile(raw);
+  }
+  return {
+    asOf: b.as_of,
+    // 缺省回落 `partial`：口径未知时不得谎报「收盘」
+    asOfQuality: b.as_of_quality ?? "partial",
+    window: {
+      days: b.window.days,
+      from: b.window.from,
+      to: b.window.to,
+      samples: b.window.samples,
+    },
+    series: (b.series ?? []).map(mapTrendPoint),
+    // 后端 `null` 原样保留（`{}` 会被消费端读成「有分位但全缺」）；null 是「样本不足」的唯一信号
+    percentile: b.percentile ? percentile : null,
+    streak: { ztAboveMedianDays: b.streak?.zt_above_median_days ?? 0 },
+    // 缺省 `true`：拿不到「样本够不够」的证据时按样本不足处理，不给分位
+    insufficientHistory: b.insufficient_history ?? true,
+  };
+};
 
 /**
  * `mode` 只在盘中时才写进 query——收盘路径的 URL 必须与引入双口径前**字节级一致**
@@ -440,5 +595,15 @@ export function fetchSentimentCalendar(days = 30): Promise<SentimentCalendarPoin
 export function fetchSentimentIntraday(date?: string): Promise<SentimentIntradayPoint[]> {
   return apiGet<BackendSentimentIntradayPoint[]>("/api/v1/market/sentiment/intraday", { date }).then(
     (points) => points.map(mapIntradayPoint),
+  );
+}
+
+/**
+ * 情绪趋势 + 历史分位（读时计算，不物化）。`days` 是**请求**的交易日数，
+ * 实际纳入行数看 `window.samples`（后端不插值，缺日就是没有那天）。
+ */
+export function fetchSentimentTrends(days = 250): Promise<SentimentTrends> {
+  return apiGet<BackendSentimentTrends>("/api/v1/market/sentiment/trends", { days }).then(
+    mapSentimentTrends,
   );
 }

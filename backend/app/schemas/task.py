@@ -77,6 +77,8 @@ MarketDataJobType = Literal[
     "global_index_daily",
     "backfill_global_index",
     "sector_moneyflow",
+    "board_snapshot_eod",
+    "board_snapshot_rewrite",
     "northbound",
     "dragon_tiger",
     "block_trades",
@@ -86,6 +88,7 @@ MarketDataJobType = Literal[
     "announcements",
     "price_limits",
     "sentiment_daily",
+    "limit_up_stock_facts",
     "concept_members",
     "reconcile",
 ]

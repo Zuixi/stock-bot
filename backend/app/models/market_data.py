@@ -4,6 +4,7 @@ block trades / share float / repurchase / announcements."""
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
@@ -24,7 +25,19 @@ from app.core.database import Base
 
 
 class SectorMoneyflowSnapshot(Base):
-    """东财板块主力资金流当日快照（盘中每 5 分钟 upsert 覆盖，跨日保留）。金额单位：元。"""
+    """东财板块主力资金流当日快照（盘中每 5 分钟 upsert 覆盖，跨日保留）。金额单位：元。
+
+    Task 2 追加的两列是热门板块榜（``/market/hot-boards`` 读表分支）与前端
+    ``HotBoardItem`` 契约消费的字段：``amount``（``f6`` 成交额，``Numeric(20,4)``）与
+    ``flat_count``（``f106`` 平盘家数；``f104+f105+f106`` 恒等于该板块成分股总数）。
+    上游对无成分股/停牌的板块给 ``-`` → 落 **NULL，绝不 0**（0 是"平盘 0 家"这一事实断言）。
+
+    ``capture_kind``（Ruling 11）是**行级产地**：``poll`` = 盘中 5 分钟轮询（``fid=f62``
+    Top-100 子集）；``eod_full`` = **收盘后**（≥15:00 上海）的分页全量（覆盖上游
+    ``data.total``，当日所有板块）。因为 ``clist`` 的 ``pz`` 上限是 100，盘中表行只是
+    "每次轮询 Top-100 的并集、旧行永不刷新"，既不是完整当日态、也不是 hot-boards 要的
+    ``f3``（涨幅）全集 —— 所以读表闸门只认 ``eod_full``（当日已全量捕获）。
+    """
 
     __tablename__ = "sector_moneyflow_snapshots"
     __table_args__ = (
@@ -54,6 +67,14 @@ class SectorMoneyflowSnapshot(Base):
     lead_stock_name: Mapped[str | None] = mapped_column(String(32))
     lead_stock_code: Mapped[str | None] = mapped_column(String(12))
     lead_stock_pct: Mapped[float | None] = mapped_column(Float)  # %
+    # Task 2 追加（迁移 e7b1c9d4a2f3）：上游缺值恒 NULL，绝不 0
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))  # 成交额，元（f6）
+    flat_count: Mapped[int | None] = mapped_column(Integer)  # 平盘家数（f106）
+    # Task 2 追加（迁移 a3f8c2d6e9b1）：行级产地 poll | eod_full；
+    # 既有行由 server_default 一次性回填 'poll'
+    capture_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="poll", default="poll"
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -263,6 +284,53 @@ class MarketSentimentDaily(Base):
     max_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_streak_symbol: Mapped[str | None] = mapped_column(String(10))
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="local_calc")
+
+
+class MarketLimitUpStockDaily(Base):
+    """个股级涨停/炸板/连板事实（唯一键 `(trade_date, stock_id)`；约 200–450 行/交易日）。
+
+    为什么落库：`market_sentiment_daily` 24 个字段全是聚合，个股只剩
+    `max_streak_symbol` 一个代码 —— "市场情绪标的持续追踪"没有可统计对象。本表把
+    `_WINDOW_SQL` 的**判定**部分（is_lu/touched/streak/N天M板/missing_days）按日冻结，
+    并把东财涨停池独有的三列（封板时间/封单/炸板次数）落下（A 类不可回补，当天不抓就永久丢）。
+
+    口径（不可动摇）：
+    - **判定列恒来自交易所限价**（`stock_price_limits`），东财只在 EOD 增强里填它独有的列，
+      **永不覆写** `is_lu`/`touched`/`is_zb`/`streak`/`*_span`/`missing_days`/`prev_is_lu`。
+    - 行集 = 候选窗口 as_of 行（含"昨日涨停今日未板"的断板票）∪ 当日炸板行。
+    - 缺失恒 NULL、绝不填 0：`seal_time`/`seal_fund`/`break_count` 本地路径恒 NULL；
+      窗口派生列（`days_span`/`boards_in_window`/`missing_days`）对"炸板-only"（不在候选
+      窗口 `cand` 内）的票无从计算，同样落 NULL —— 0 会被读成"无板/无停牌"这一事实断言。
+    - `streak` 恒为"截至 trade_date 的连板数"：当日未收盘涨停即确定归零（0 是事实，不是缺失）。
+    """
+
+    __tablename__ = "market_limit_up_stock_daily"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "stock_id", name="uq_limit_up_stock_daily_date_stock"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    stock_id: Mapped[int] = mapped_column(nullable=False)
+    symbol: Mapped[str] = mapped_column(String(16), nullable=False)
+    is_lu: Mapped[bool] = mapped_column(nullable=False)  # 收盘涨停
+    touched: Mapped[bool] = mapped_column(nullable=False)  # 盘中触板（high ≥ 涨停价）
+    is_zb: Mapped[bool] = mapped_column(nullable=False)  # 炸板 = touched AND NOT is_lu
+    prev_is_lu: Mapped[bool] = mapped_column(nullable=False)  # 前一日是否涨停
+    streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 窗口派生列：仅对候选窗口内的股票可算；炸板-only → NULL（缺失 ≠ 0）
+    days_span: Mapped[int | None] = mapped_column(Integer)
+    boards_in_window: Mapped[int | None] = mapped_column(Integer)
+    missing_days: Mapped[int | None] = mapped_column(Integer)
+    # 仅东财可得：历史回补恒 NULL，绝不填 0
+    seal_time: Mapped[str | None] = mapped_column(String(8))
+    seal_fund: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))
+    break_count: Mapped[int | None] = mapped_column(Integer)
+    fact_source: Mapped[str] = mapped_column(String(16), nullable=False, default="local_calc")
+    enrich_source: Mapped[str | None] = mapped_column(String(16))
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class MarketSentimentIntraday(Base):

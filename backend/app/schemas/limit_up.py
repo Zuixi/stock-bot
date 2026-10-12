@@ -16,7 +16,7 @@ missing_days` 全部 `None`；盘中无"昨日→今日"语义 → `YesterdayLim
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.market import AsOfQuality
 
@@ -159,3 +159,95 @@ class SentimentIntradayPointOut(BaseModel):
     dt_count: int
     zb_count: int
     max_streak: int
+
+
+# ── Task 6a：情绪趋势 + 历史分位（GET /market/sentiment/trends）────────────────────
+#
+# 读时计算，**不物化**：SQL over `market_sentiment_daily`（该表本身是 T4 回补后的
+# 派生缓存），分位在服务层按**有效样本**算。响应形状与 brief 6a 逐字对齐；
+# `percentile` 里只有 3 个指标（拍板 R6），字段口径见 `SentimentPercentileOut`。
+
+#: 允许做历史分位的指标（拍板 R6：只 3 个，不得扩张）。
+#: `zt_count` 每日必有效；`broken_rate`/`promo_1to2` 在分母为 0 的日子为 NULL
+#: —— 那些日子**不进**该字段样本（NULL ≠ 0）。
+PERCENTILE_FIELDS = ("zt_count", "broken_rate", "promo_1to2")
+
+#: 分位不足的历史门槛（Ruling 4）：有效样本 < 60 → `insufficient_history=true` 且
+#: `percentile=null`（不给假分位）。
+MIN_PERCENTILE_SAMPLES = 60
+
+
+class SentimentTrendPointOut(BaseModel):
+    """窗口内一个交易日的情绪行（`market_sentiment_daily` 的投影）。
+
+    缺失渲染 ``null``（前端 ``--``），**绝不** 0：`broken_rate`/`promo_1to2` 为 NULL
+    表示"当日算不出该比值"（分母 0），不是"比值是 0"。
+    """
+
+    trade_date: date
+    zt_count: int
+    dt_count: int
+    zb_count: int
+    broken_rate: float | None = None
+    promo_1to2: float | None = None
+    max_streak: int = 0
+
+
+class SentimentWindowOut(BaseModel):
+    """窗口自描述：`days` 是**请求**的交易日数；`samples` 是实际纳入的行数。
+
+    `samples < days` 时缺口由"该表自己持有的交易日"决定（T4 之前只有 21 天）；
+    `from`/`to` 是**实际纳入**的首/末日（无行时均为 None，不拿"今天"冒充）。
+    """
+
+    days: int
+    from_: date | None = Field(default=None, alias="from")
+    to: date | None = None
+    samples: int = 0
+
+    model_config = {"populate_by_name": True}
+
+
+class SentimentPercentileOut(BaseModel):
+    """单指标的历史分位（nearest-rank，样本升序第 ``ceil(pct/100 × n)`` 个）。
+
+    只有**有效样本**参与：字段为 NULL 的日子被排除（绝不按 0 计）。`p0`/`p100`
+    分别等于样本的最小/最大值 —— 端点值可达且正确（Ruling 4）。
+    `sample_count` 是**该字段**的样本数（三个指标各不相同），不是窗口行数。
+    """
+
+    field: str
+    sample_count: int
+    from_: date | None = Field(default=None, alias="from")
+    to: date | None = None
+    p0: float | None = None
+    p10: float | None = None
+    p25: float | None = None
+    p50: float | None = None
+    p75: float | None = None
+    p90: float | None = None
+    p100: float | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class SentimentStreakOut(BaseModel):
+    """窗口内的连击统计。`zt_above_median_days` = `zt_count` **严格大于**窗口中位数的天数。"""
+
+    zt_above_median_days: int = 0
+
+
+class SentimentTrendsOut(BaseModel):
+    """``GET /market/sentiment/trends`` 响应。
+
+    `percentile` 为 ``None`` 即"样本不足，不给分位"（与 `insufficient_history` 同真值）；
+    空窗口同样 ``None``。`as_of_quality` 复用 ``market_day_service`` 的完整性判据。
+    """
+
+    as_of: date | None = None
+    as_of_quality: AsOfQuality = "partial"
+    window: SentimentWindowOut
+    series: list[SentimentTrendPointOut] = []
+    percentile: dict[str, SentimentPercentileOut] | None = None
+    streak: SentimentStreakOut = SentimentStreakOut()
+    insufficient_history: bool = True
