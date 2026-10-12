@@ -3,6 +3,14 @@
 指标定义 / 数据源分级 / 参考区间 / 展示分组 / 周期阶段 / 仓位模板全部在此声明，
 API 与前端组件均由其驱动：新增一列、换一个预警阈值、接入一个新行业 = 改配置，
 零前端改动、零新表。metric_key 命名与 docs/design/data-source.md 对齐。
+
+registry 同时是**未登记 key 的拒绝面**：metric_key 不在此登记即被读/写路径拒绝
+（`IndustryConfig.metric` 与 `find_metric` 都是白名单查询）。
+
+`industry_key` 语义已泛化为通用 scope 键（spec §S1.2）：INDUSTRIES 现在按**行业**
+登记（'pig' / 'broiler'），后续情绪/宏观指标会以 `industry_key='market'` 落进
+同一张 `industry_metrics` 表并复用 `GET /api/v1/metrics/*` 读面；届时在此登记
+非行业 scope 的 MetricDef 即可，无需新表。
 """
 
 from __future__ import annotations
@@ -59,6 +67,10 @@ class MetricDef:
     warn_bands: list[WarnBand] = field(default_factory=list)
     # 通用 mock 基准值：generic mock builder 据此生成抖动序列（未配置则该指标跳过）
     mock_base: float | None = None
+    # 口径版本登记位（spec §S1.2）：上游口径修订时在此声明当前口径。
+    # None = 该指标尚无口径修订（读面按行的 caliber_version 回传，两者不一致即上游
+    # 口径断点，由消费方提示）。本期只要求登记位存在，**不预填具体口径**。
+    caliber_version: str | None = None
     description: str = ""
 
     def band_label(self, value: float) -> str | None:
@@ -95,6 +107,8 @@ class ReferencePointDef:
 
 @dataclass(frozen=True)
 class IndustryConfig:
+    """一个 scope 的登记项（现按行业登记；`key` 语义已泛化为通用 scope 键）."""
+
     key: str
     name: str
     description: str
@@ -500,3 +514,18 @@ INDUSTRIES: dict[str, IndustryConfig] = {
 
 def get_industry(key: str) -> IndustryConfig | None:
     return INDUSTRIES.get(key)
+
+
+def find_metric(metric_key: str) -> tuple[str, MetricDef] | None:
+    """全局 metric_key 白名单查询：返回 (登记它的 scope key, 定义)，未登记返回 None.
+
+    通用读面 ``/api/v1/metrics/latest`` 按 metric_key 跨 scope 取数时用它做**未登记
+    key 拒绝**（spec §S1.2 验收：未登记 metric_key 被 registry 拒绝）。同一 metric_key
+    若被多个 scope 登记（如未来 'market' 与行业共用日频指标），返回首个登记 scope ——
+    定义（单位/频率/源优先级）必须一致，否则属于登记冲突。
+    """
+    for scope_key, cfg in INDUSTRIES.items():
+        m = cfg.metric(metric_key)
+        if m is not None:
+            return scope_key, m
+    return None
