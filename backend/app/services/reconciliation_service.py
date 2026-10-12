@@ -5,6 +5,16 @@
 任何停摆（宿主睡眠/容器挂起/任务异常）在下一个对账触发点自动收敛。
 设计与事故时间线见 plans/2026-09-17-data-sync-self-healing.md。
 
+两套域，语义不同，**不得混淆**（E1：把只读域塞进补漏循环 = 假绿）：
+
+- **可自愈域（有 ``_refetch_*``）** = :data:`DOMAINS`：``daily_quotes`` /
+  ``daily_basic`` / ``price_limits`` / ``sentiment``。只有这些域进
+  :func:`reconcile_market_data` 的 apply 补漏循环（3 域底座 + sentiment 特例）。
+- **只读巡检域（永不参与 apply 补漏）** = :data:`INSPECT_DOMAINS`：东财快照/盘中聚合/
+  个股事实/数据面四表。它们**没有**回补器（A 类无历史接口，或历史靠独立回补脚本），
+  本模块对它们只做覆盖率聚合（:func:`coverage_report`），绝不写库。新加域前先问：
+  这个域有 ``_refetch_*`` 吗？没有就只能进巡检列表。
+
 补灌副作用：重拉某天时新插入的行只有 TuShare ``daily`` 的 OHLC（该接口不带因子），
 ``adj_factor`` 为 NULL，而 upsert 的 COALESCE 只保已有值、懒加载只认最新行——中间
 交易日的洞两条路径都不会再碰。因此重拉 ``daily_quotes`` 后，对**本次重拉的日子**补
@@ -15,12 +25,23 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 
 from app.models.daily_basic import DailyBasicIndicator
-from app.models.market_data import MarketSentimentDaily, StockPriceLimit
+from app.models.market_data import (
+    BlockTrade,
+    DragonTigerEntry,
+    MarketLimitUpStockDaily,
+    MarketSentimentDaily,
+    MarketSentimentIntraday,
+    SectorMoneyflowSnapshot,
+    ShareFloat,
+    StockPriceLimit,
+    StockRepurchase,
+)
 from app.models.quote import DailyQuote
 from app.models.stock import Stock
 from app.services.market_data_service import _d, _get_tushare, _today_sh
@@ -29,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 COMPLETENESS_RATIO = 0.8
 DEFAULT_WINDOW_DAYS = 10
+DEFAULT_COVERAGE_WINDOW_DAYS = 30
 
 # 对账域（顺序即依赖序：sentiment 依赖 quotes + price_limits 完备）
 DOMAINS: tuple[str, ...] = ("daily_quotes", "daily_basic", "price_limits", "sentiment")
@@ -39,6 +61,66 @@ _ROW_MODEL: dict[str, type[Any]] = {
     "price_limits": StockPriceLimit,
     "sentiment": MarketSentimentDaily,
 }
+
+
+class _CoverageSource(NamedTuple):
+    """巡检域的数据来源（唯一真源；``domain`` 键即 API 里的 ``domain`` 字段）。"""
+
+    table: str
+    date_column: str  # 业务日期列（不是自然日，也不是 created_at）
+    complete_kind: tuple[str, str] | None = None  # (列, 值)：只有"完整日"才计入的产地标记
+
+
+#: 交易日历的数据源（并集）：`daily_quotes` 是主源，`stock_price_limits` 是**补漏源**。
+#: 为什么不止用 daily_quotes：它自己会缺日（真库实测 2026-09 缺 09-09..09-17 共 7 个
+#: 交易日），拿它当分母会把"行情自己缺"算成"巡检域缺"——sector_moneyflow 的 14 天会被
+#: 判成 12 天。限价表是涨停判定的权威口径且逐日 100% 覆盖，并进来即可对齐。
+#: 并集会**高估新表的可用交易日**（2025-09-16 之前 daily_quotes 才有数据），所以窗口
+#: 下界取 domain 自身区间 + `window_days` + 主源起点三者之较晚者。
+TRADING_DAY_SOURCES: tuple[str, ...] = ("daily_quotes", "stock_price_limits")
+
+#: 交易日历的权威来源列（报告里透出，便于解释分母构成）；主源缺失时状态会降级
+TRADING_DAY_PRIMARY = "daily_quotes"
+
+
+# 域 → (表, 业务日期列 [, 完整日产地产地列])。日期列逐域实测确定，不猜：
+#   - `share_floats` 的业务日期是 `float_date`（`ann_date` 可空且是公告日，不是解禁日）
+#   - `stock_repurchases` 的采集/去重键是 `ann_date`（`end_date`/`exp_date` 常为 NaN）
+#   - `sector_moneyflow` 的"完整日"只认 `capture_kind='eod_full'`（Ruling 11/13）：
+#     盘中 `poll` 行是 inflow-Top-100 子集，有行 ≠ 完整
+_COVERAGE_SOURCES: dict[str, _CoverageSource] = {
+    "sector_moneyflow": _CoverageSource(
+        "sector_moneyflow_snapshots", "trade_date", ("capture_kind", "eod_full")
+    ),
+    # 注意：这里叫 `sentiment_daily` —— 可自愈域里的 `sentiment` 指同一张表但语义是
+    # "补漏单元"。两套域名必须可区分，否则"巡检域 == 补漏域"的边界又糊了。
+    "sentiment_daily": _CoverageSource("market_sentiment_daily", "trade_date"),
+    "sentiment_intraday": _CoverageSource("market_sentiment_intraday", "trade_date"),
+    "limit_up_stock_daily": _CoverageSource("market_limit_up_stock_daily", "trade_date"),
+    "dragon_tiger": _CoverageSource("dragon_tiger_entries", "trade_date"),
+    "block_trade": _CoverageSource("block_trades", "trade_date"),
+    "share_float": _CoverageSource("share_floats", "float_date"),
+    "repurchase": _CoverageSource("stock_repurchases", "ann_date"),
+}
+
+# 只读巡检域（顺序即报告顺序）。**永不**参与 apply 补漏——没有 `_refetch_*`，
+# 塞进 `DOMAINS` 只会得到"看着被纳入、永不补漏"的假绿（E1）。
+INSPECT_DOMAINS: tuple[str, ...] = (
+    "sector_moneyflow",
+    "sentiment_daily",
+    "sentiment_intraday",
+    "limit_up_stock_daily",
+    "dragon_tiger",
+    "block_trade",
+    "share_float",
+    "repurchase",
+)
+
+assert not set(INSPECT_DOMAINS) & set(DOMAINS), "巡检域与可自愈域不得重名（边界守卫）"
+
+# SQLSTATE：未定义表 / 未定义列。迁移未应用时覆盖率必须降级标注而不是 500。
+_SQLSTATE_UNDEFINED_TABLE = "42P01"
+_SQLSTATE_UNDEFINED_COLUMN = "42703"
 
 
 async def expected_trade_dates(
@@ -322,3 +404,369 @@ def _log_summary(result: dict[str, Any]) -> None:
         )
     else:
         logger.info("RECONCILE all domains ok (expected_latest=%s)", result["expected_latest"])
+
+
+def _as_date(value: Any) -> Any:
+    """日期归一：DB 可能回 ``date``/``datetime``/ISO 字符串，纯函数只认 ``date``。"""
+    return value.date() if hasattr(value, "date") and not isinstance(value, date) else value
+
+
+def _normalized_day_set(days: Any) -> set[date]:
+    return {d for d in (_as_date(v) for v in days) if isinstance(d, date)}
+
+
+def compute_coverage(
+    trading_days: list[date],
+    have_days: set[date],
+    complete_days: set[date] | None = None,
+    *,
+    window: tuple[date, date] | None = None,
+) -> dict[str, Any]:
+    """单域覆盖率（纯函数，无 DB 无 IO）。
+
+    分母恒为 **交易日**（``daily_quotes`` 的 distinct ``trade_date``），且只取该域
+    自己数据的 ``[first_day, last_day]`` 内的交易日——域内缺日才算洞，域开始记录
+    之前的空白不算缺失。
+
+    ``have_days``（有任何行）与 ``complete_days``（完整日）**必须分开**（Ruling 13）：
+    ``sector_moneyflow`` 盘中 ``poll`` 行只是 inflow-Top-100 子集，"有行"不等于"完整"。
+    ``cover_pct`` 基于 ``complete_days``，``have_days`` 原样带回供与计划 Why-now 表对拍。
+
+    ``complete_days=None``（其余域）→ ``complete_days = have_days``（不是 0）。
+    分母为空 → ``cover_pct=None``（绝不用 0/0 渲染成 0%）。
+
+    ``window`` 显式给出该域自身的 ``(first_day, last_day)``；缺省则取 ``have_days``
+    的极值（纯函数调用方只关心"数据自身跨度"这一种窗口）。返回的 ``have_days`` 是
+    **窗口内交易日**的行数——分母是交易日，分子就必须同口径（周末/未来脏行既不是
+    "有数据"也不是"缺"，它们只出现在 ``extra_days`` 里，不静默丢弃）。
+    """
+    trading = sorted(_normalized_day_set(trading_days))
+    have_all = _normalized_day_set(have_days)
+    if complete_days is None:
+        complete_all = set(have_all)
+    else:
+        # 完整日必须是"有行"的子集：脏数据不得造出 complete > have
+        complete_all = have_all & _normalized_day_set(complete_days)
+
+    if window is None:
+        span = have_all | complete_all
+        if span:
+            window = (min(span), max(span))
+    if window is not None:
+        first, last = _as_date(window[0]), _as_date(window[1])
+        trading = [d for d in trading if first <= d <= last]
+    # 分子 = 窗口内**且是交易日**的行数：周末/未来脏行既不算"有数据"也不算"缺"
+    have = {d for d in have_all if d in set(trading)}
+    complete = complete_all & have
+    missing = sorted(d for d in trading if d not in have)
+    extra = sorted(have_all - have)  # 未来脏行/非交易日：单列，不静默丢弃
+    cover_pct = round(100.0 * len(complete) / len(trading), 2) if trading else None
+    return {
+        "have_days": len(have),
+        "trading_days": len(trading),
+        "complete_days": len(complete),
+        "cover_pct": cover_pct,
+        "missing_days": [d.isoformat() for d in missing],
+        "extra_days": [d.isoformat() for d in extra],
+    }
+
+
+def _coverage_row_days_stmt(src: _CoverageSource, *, complete_only: bool = False) -> Any:
+    """各交易日行数（``have`` 与 ``row_count`` 的唯一来源；``row_count`` 不另发查询）。
+
+    ``complete_only=True`` 只统计"完整日"的产地（如 ``capture_kind='eod_full'``）——
+    这是 **``complete_days`` 专用**查询，绝不能拿来算 ``have_days``/``row_count``：
+    sector_moneyflow 的 pre-T2 历史只有 ``poll`` 行，混用会让 ``have_days`` 归零
+    （真库实测踩过）。
+    """
+    model = _row_model_for_table(src.table)
+    col = getattr(model, src.date_column)
+    stmt = select(col, func.count()).group_by(col)
+    if complete_only:
+        if src.complete_kind is None:  # pragma: no cover — 调用方只对有声明的域传 True
+            raise ValueError(f"{src.table} has no complete_kind")
+        stmt = stmt.where(getattr(model, src.complete_kind[0]) == src.complete_kind[1])
+    return stmt
+
+
+def _coverage_days_stmt(src: _CoverageSource) -> Any:
+    """该域数据的 ``[last_day, first_day]``（区间界定窗口，不是自然日窗口）。"""
+    col = getattr(_row_model_for_table(src.table), src.date_column)
+    return select(func.max(col), func.min(col))
+
+
+async def _trading_calendar(db: Any, *, window_days: int) -> tuple[list[date], bool]:
+    """交易日历（``TRADING_DAY_SOURCES`` 的并集，只取最近 ``window_days``）+ 是否降级。
+
+    取并集是因为**任何单源都可能缺日**：真库实测 ``daily_quotes`` 2026-09 缺
+    09-09..09-17 共 7 个交易日，拿它当分母会把行情自己的洞算成巡检域的洞。
+    ``stock_price_limits`` 是涨停判定的权威口径且逐日 100% 覆盖，并进来即可对齐。
+
+    查询形状：内层 `distinct` 走 `trade_date` 索引，外层自连接取 `max` 再按日历区间
+    过滤 → 有界扫描（不把整部行情史拉回来）。返回的 ``last_quote`` 由调用方取
+    `days[-1]`。
+
+    主源（``daily_quotes``）缺失/未建时**不抛**：降级成只有其他源，并把
+    ``degraded`` 透出（分母口径变了必须让人看见，不能静默换源）。
+    """
+    all_days: set[date] = set()
+    degraded = False
+    for name in TRADING_DAY_SOURCES:
+        model = _row_model_for_table(name)
+        distinct_days = select(model.trade_date).distinct().subquery()
+        col = distinct_days.c.trade_date
+        stmt = select(col).where(col >= select(func.max(col)).scalar_subquery() - window_days)
+        try:
+            all_days |= {_as_date(d) for (d,) in (await db.execute(stmt)).all()}
+        except ProgrammingError:
+            if name == TRADING_DAY_PRIMARY:
+                degraded = True
+                logger.warning("COVERAGE trading calendar: %s unavailable", name, exc_info=True)
+            else:
+                raise
+    return sorted(all_days), degraded
+
+
+def _row_model_for_table(table: str) -> Any:
+    """表名 → ORM 模型（覆盖率查询按列取值；表名与 `_COVERAGE_SOURCES` 同源）。"""
+    for model in (
+        DailyQuote,
+        DailyBasicIndicator,
+        StockPriceLimit,
+        MarketSentimentDaily,
+        SectorMoneyflowSnapshot,
+        MarketLimitUpStockDaily,
+        MarketSentimentIntraday,
+        DragonTigerEntry,
+        BlockTrade,
+        ShareFloat,
+        StockRepurchase,
+    ):
+        if model.__tablename__ == table:
+            return model
+    raise KeyError(f"no mapped model for coverage table {table!r}")
+
+
+def _coverage_window(
+    range_row: Any, *, since: date | None
+) -> tuple[date | None, date | None, date | None, date | None]:
+    """该域的数据跨度（SQL 的 max/min）与 **有效测量窗口**（再套一层 `since`）。
+
+    返回 ``(first_day, last_day, win_from, win_to)``：``first_day``/``last_day`` 是
+    原始数据跨度（报告里如实展示），``win_from``/``win_to`` 是把 `window_days` 的
+    下界也算进去之后的窗口——分子分母**必须**用同一个窗口，否则"行数"与"天数"
+    各说各话（真库实测踩过：sector 的 14 天里 5 天在窗口外，have_days 却照算）。
+    """
+    last, first = (range_row or (None, None))[0], (range_row or (None, None))[1]
+    first, last = _as_date(first), _as_date(last)
+    win_from = first
+    if win_from is not None and since is not None:
+        win_from = max(win_from, since)
+    return first, last, win_from, last
+
+
+def _normalize_coverage_row(
+    domain: str,
+    src: _CoverageSource,
+    counts: dict[date, int],
+    window: tuple[date | None, date | None] | None,
+    quotes: list[date],
+    *,
+    complete_days: set[date] | None = None,
+    fallback_window: tuple[date | None, date | None] | None = None,
+) -> dict[str, Any]:
+    """SQL 行 → 报告 dict（纯函数，便于单测与真实查询共用同一形状）。
+
+    ``counts`` = 该域**有任何行**的交易日行数（``have_days``/``row_count`` 的来源）；
+    ``complete_days`` = 逐域单独查出的"完整日"集合（``sector_moneyflow`` 的
+    ``capture_kind='eod_full'``）；``None`` 表示该域没有产地之分 → 完整日 = 有行的日子。
+    ``window`` 是**有效测量窗口**（见 :func:`_coverage_window`）：窗口外的行只进
+    ``extra_days``（周末/未来脏行/超出 window_days 的老数据），不抬高 `have_days`。
+    域**一行都还没有**（如新表上线前）→ 退回 ``fallback_window``（最近 window_days），
+    否则窗口无从取极值、分母会退化成整部行情史（真库实测：空域报 0/829 交易日）。
+    """
+    win = window if window and window[0] and window[1] else fallback_window
+    win_from, win_to = win if win else (None, None)
+    have_raw = {d for d in counts if isinstance(d, date)}
+    trading = [
+        d for d in quotes if (win_from is None or d >= win_from) and (win_to is None or d <= win_to)
+    ]
+    # 空集不能写成 `complete_raw or None`：那会把"完整日 0 天"重新解释成"该域没有
+    # 产地之分"，于是 complete_days 又等于 have_days（Ruling 13 的核心形状被吃掉）
+    complete_raw = have_raw if complete_days is None else (complete_days & have_raw)
+    out = compute_coverage(
+        trading,
+        have_raw,
+        None if complete_days is None else complete_raw,
+        window=(win_from, win_to) if win_from and win_to else None,
+    )
+    first = min(have_raw) if have_raw else None
+    last = max(have_raw) if have_raw else None
+    out.update(
+        {
+            "domain": domain,
+            "table": src.table,
+            "date_column": src.date_column,
+            # 行数只算窗口内：否则"行数"与"天数"各自一个窗口，读的人会对不上
+            "row_count": int(sum(counts.get(d, 0) for d in have_raw if d in set(trading))),
+            "first_day": first.isoformat() if first else None,
+            "last_day": last.isoformat() if last else None,
+            "status": "ok",
+        }
+    )
+    return out
+
+
+def _empty_coverage_row(
+    domain: str, src: _CoverageSource, *, status: str, degraded_calendar: bool = False
+) -> dict[str, Any]:
+    """缺表/缺列/无交易日时的一致形状：计数字段为 0、``cover_pct`` 为 ``None``。"""
+    return {
+        "domain": domain,
+        "table": src.table,
+        "date_column": src.date_column,
+        "row_count": 0,
+        "have_days": 0,
+        "complete_days": 0,
+        "trading_days": 0,
+        "cover_pct": None,
+        "missing_days": [],
+        "extra_days": [],
+        "first_day": None,
+        "last_day": None,
+        "status": status,
+        "degraded_trading_calendar": degraded_calendar,
+    }
+
+
+def _undefined_kind(exc: BaseException) -> str | None:
+    """把"迁移没跑 / 只跑了一半"从一般 SQL 错误里挑出来（其余异常照旧上抛）。
+
+    ``42P01`` = 表缺失 → ``missing_table``；``42703`` = 列缺失（如 ``capture_kind``
+    还没加）→ ``missing_column``。asyncpg 有时不带 ``sqlstate``，故再按消息兜底。
+    """
+    sqlstate = getattr(exc, "sqlstate", None)
+    if sqlstate in (_SQLSTATE_UNDEFINED_TABLE, _SQLSTATE_UNDEFINED_COLUMN):
+        return "missing_table" if sqlstate == _SQLSTATE_UNDEFINED_TABLE else "missing_column"
+    text = str(getattr(exc, "orig", exc)).lower()
+    if "undefinedcolumn" in text or "undefined_column" in text:
+        return "missing_column"
+    if "undefinedtable" in text or "undefined_table" in text:
+        return "missing_table"
+    if "does not exist" in text or "no such table" in text:
+        return "missing_column" if "column" in text else "missing_table"
+    return None
+
+
+async def coverage_report(
+    db: Any, *, window_days: int = DEFAULT_COVERAGE_WINDOW_DAYS
+) -> list[dict]:
+    """各巡检域的覆盖率（**只读**聚合；绝不回补、绝不写库）。
+
+    分母 = **交易日**（``TRADING_DAY_SOURCES`` 的并集，见 :func:`_trading_calendar`），
+    再逐域收窄到该域自身数据区间内（见 :func:`compute_coverage`）。``window_days`` 是
+    最近**自然日**上限：域数据比它更长时只测最近这一段——历史长度不改变"最近有没有洞"
+    的答案，也让单域固定为常数级查询。注意它**不是分母**（分母恒是交易日，避免周末把
+    覆盖率稀释）。
+
+    缺表/缺列 → 该域标 ``missing_table`` / ``missing_column``，其余域照常渲染（不 500）；
+    每个域的读包在 SAVEPOINT 里，一个域失败不污染会话。
+
+    这里**不**调用 `job_alert_service`：本函数由只读端点每次请求调用，登记表
+    （`job:failures`，1 job 1 条）会被巡检刷成假告警。缺口的告警出口仍是 scheduler
+    的 `_alert_job_failure`；本报告负责把洞**可见**（`cover_pct` / `missing_days`）。
+    """
+    if window_days <= 0:
+        raise ValueError("window_days must be positive")
+
+    # 交易日历 = 多源并集（`TRADING_DAY_SOURCES`）。**基准日不能取主源自己的 max**：
+    # 主源缺最近几天时（真库实测 2026-09 缺 7 个交易日）会把补漏源的新日子截掉。
+    # 这里直接取并集的 max，主源缺失则标降级。
+    calendar, calendar_degraded = await _trading_calendar(db, window_days=window_days)
+    last_quote = calendar[-1] if calendar else None
+    since = last_quote - timedelta(days=window_days) if last_quote else None
+
+    out: list[dict[str, Any]] = []
+    for domain in INSPECT_DOMAINS:
+        src = _COVERAGE_SOURCES[domain]
+        try:
+            async with db.begin_nested():
+                # `have`（有任何行）与 `complete`（完整日）是**两次查询**：
+                # 用 complete 的谓词算 have 会让 sector_moneyflow 的 pre-T2 历史
+                # （只有 poll 行）在报告里变成 0（真库实测踩过，别合并这两条语句）
+                days_rows = (await db.execute(_coverage_row_days_stmt(src))).all()
+                complete_days: set[date] | None = None
+                if src.complete_kind is not None:
+                    complete_rows = (
+                        await db.execute(_coverage_row_days_stmt(src, complete_only=True))
+                    ).all()
+                    complete_days = {
+                        d for d in (_as_date(v) for v, _ in complete_rows) if d is not None
+                    }
+                range_row = (await db.execute(_coverage_days_stmt(src))).all()
+        except ProgrammingError as exc:
+            kind = _undefined_kind(exc)
+            if kind is None:
+                raise
+            logger.warning(
+                "COVERAGE %s degraded (%s) — migration not applied?", domain, kind, exc_info=True
+            )
+            out.append(
+                _empty_coverage_row(domain, src, status=kind, degraded_calendar=calendar_degraded)
+            )
+            continue
+
+        first_day, last_day, win_from, win_to = _coverage_window(
+            range_row[0] if range_row else None, since=since
+        )
+        if first_day is None:
+            # 该域一行都没有（新表上线前）：窗口退回"最近 window_days"；若连基准日都没有
+            # （daily_quotes 缺失），退化成"已观测到的交易日两端"（不取全史）
+            win_from, win_to = since, last_quote
+            if win_from is None and calendar:
+                win_from, win_to = calendar[0], calendar[-1]
+        # 分母 = 窗口内的交易日（并集，见 TRADING_DAY_SOURCES；主源降级会被标注）
+        quotes = [
+            d
+            for d in calendar
+            if (win_from is None or d >= win_from) and (win_to is None or d <= win_to)
+        ]
+        counts = {_as_date(d): int(n or 0) for d, n in days_rows}
+        row = _normalize_coverage_row(
+            domain,
+            src,
+            counts,
+            (win_from, win_to),
+            quotes,
+            complete_days=complete_days,
+        )
+        row["degraded_trading_calendar"] = calendar_degraded
+        if row["cover_pct"] != 100.0:
+            logger.info(
+                "COVERAGE %s have=%s complete=%s trading=%s pct=%s missing=%s",
+                domain,
+                row["have_days"],
+                row["complete_days"],
+                row["trading_days"],
+                row["cover_pct"],
+                len(row["missing_days"]),
+            )
+        # 不变式：有数据的域不可能整天都没有行。踩过的真坑是把"完整日"的产地谓词
+        # （`capture_kind='eod_full'`）误用到 `have` 查询上 → pre-T2 只有 poll 行的域
+        # 在报告里变成 0 天（缺表是 missing_table，不是这里）。WARNING 而不是抛错：
+        # 只读巡检宁可少报一个域，也不能把新鲜度端点打成 500。
+        if last_day is not None and row["have_days"] == 0:
+            logger.warning(
+                "COVERAGE %s invariant violated: rows exist up to %s but have_days=0 "
+                "(完整日谓词串进了 have 查询?)",
+                domain,
+                last_day,
+            )
+        out.append(row)
+    return out
+
+
+# 域 → 回补器的启动期守卫：`DOMAINS` 里的每个域都必须真的能被补（E1：不然"看着被纳入、
+# 永不补漏"）。反向（`_refetch_x` 存在但不在 DOMAINS）由只读巡检兜住——那正是巡检域的形态。
+for _domain in DOMAINS:
+    assert f"_refetch_{_domain}" in globals(), f"DOMAINS 里的 {_domain!r} 没有 _refetch_{_domain}"

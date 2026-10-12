@@ -3,7 +3,7 @@ status: active
 scope: 市场热点/情绪/资金数据的日级持久化边界与统计追踪——个股级涨停事实、东财实时源日终捕获、覆盖率只读巡检、情绪与板块趋势端点
 touches: backend/app/models/market_data.py, backend/app/migrations/versions/, backend/app/repositories/market_data_repo.py, backend/app/repositories/limit_up_repo.py, backend/app/services/market_data_service.py, backend/app/services/limit_up_service.py, backend/app/services/reconciliation_service.py, backend/app/core/providers/eastmoney_client.py, backend/app/scheduler/jobs.py, backend/app/scheduler/runner.py, backend/app/workers/market_data_worker.py, backend/app/schemas/task.py, backend/app/schemas/market_data.py, backend/app/api/v1/market_data.py, backend/scripts/, backend/tests/, frontend/src/shared/api/, frontend/src/features/market/, docs/decisions/, docs/features.md, docs/Changelog.md
 updated: 2026-10-12
-next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktree 分支 feat/market-hotspot-persistence 实施中
+next-action: Task 4（历史回补脚本 backfill_market_history.py，sentiment 21→239 天）在 worktree 分支 feat/market-hotspot-persistence 实施中（Task 1/2/3 已完成）
 ---
 
 # 市场热点数据持久化与趋势追踪 实施计划（v2）
@@ -188,18 +188,37 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 - Test: `backend/tests/test_market_coverage.py`（纯函数 `compute_coverage(trading_days, have_days)`：分母为 0、未来脏行、缺日列表；巡检域不得进入补漏路径的断言）
 
 **Interfaces:**
-- `def compute_coverage(trading_days: list[date], have_days: set[date]) -> dict` —— `{have_days, trading_days, cover_pct, missing_days}`；`trading_days` 为空 → `cover_pct=None`（不产生 0/0）
-- `async def coverage_report(db, *, window_days: int = 30) -> list[dict]` —— 巡检域：`sector_moneyflow` / `sentiment` / `sentiment_intraday` / `limit_up_stock_daily` / `dragon_tiger` / `block_trade` / `share_float` / `repurchase`；分母 = `daily_quotes` 交易日（**不用自然日**）
-- 缺行 → 复用既有 `job_alert_service`（不新增机制）
+- `def compute_coverage(trading_days: list[date], have_days: set[date], complete_days: set[date] | None = None, *, window: tuple[date, date] | None = None) -> dict` —— `{have_days, complete_days, trading_days, cover_pct, missing_days, extra_days}`；`trading_days` 为空 → `cover_pct=None`（不产生 0/0）；返回的 `have_days` 与分母同口径（**窗口内交易日**的行数），窗口外/非交易日的脏行进 `extra_days`
+- `async def coverage_report(db, *, window_days: int = 30) -> list[dict]` —— 巡检域：`sector_moneyflow` / `sentiment_daily`（**不叫 `sentiment`**：那是可自愈域的名，重名会让"巡检域 vs 补漏域"的边界糊掉；同一张表 `market_sentiment_daily`）/ `sentiment_intraday` / `limit_up_stock_daily` / `dragon_tiger` / `block_trade` / `share_float` / `repurchase`；分母 = **交易日**（`daily_quotes` ∪ `stock_price_limits`，见 `TRADING_DAY_SOURCES`；**不用自然日**），且逐域收窄到该域自身 `[first_day, last_day]`。并集是实施中实测的必要修正：`daily_quotes` 自己缺 2026-09-09..09-17 共 7 个交易日，单源当分母会把行情自己的洞算成巡检域的洞（sector 14 天被误判成 12 天）
+- 缺表/缺列（迁移未应用）→ 该域 `missing_table`/`missing_column`，其余域照常渲染（SAVEPOINT 隔离，不 500）；主源缺日历时 `degraded_trading_calendar=true`（换分母必须可见）
+- 缺行 → 复用既有 `job_alert_service`（不新增机制）；**覆盖率本身不写登记表**（只读端点每次请求都调，会刷出假告警），缺口经 `cover_pct`/`missing_days` 可见
 
-**ADR 0009 必须写清三件事：** ① A/B/C 三条判据；② 与 ADR 0004 的边界（ADR 0004 管"快照型分类数据本身不得回算"，**不禁止**用行情事实做聚合 + 按当前分类归属并显式标注 = 拍板②）；③ 被否决方案（全读时计算 / 全落库含榜单 / 5 分钟全池明细）。
+**ADR 0009 必须写清三件事：** ① A/B/C 三条判据；② 与 ADR 0004 的边界（ADR 0004 管"快照型分类数据本身不得回算"，**不禁止**用行情事实做聚合 + 按当前分类归属并显式标注 = 拍板②）；③ 被否决方案（全读时计算 / 全落库含榜单 / 5 分钟全池明细）。外加一条：**产地决定可信度**——`sector_moneyflow` 的"完整日"= 有 `capture_kind='eod_full'` 行的日子（Ruling 11/12），`poll` 行只是盘中子集。
 
-**验收（真库实测）：** `/market/data-freshness` 的 `coverage` 里 `sector_moneyflow.cover_pct ≈ 65`、`sentiment_intraday ≈ 54.5`（与本文档 Why-now 表一致）；`limit_up_stock_daily` 在 T1 之前不存在时**不得 500**（返回 `missing_table` 或跳过并标注）；`bash scripts/doc_gate.sh` 绿。
+**Ruling 13（覆盖率必须区分"有行"与"完整"）：** T2 之后 `sector_moneyflow` 的行数不再等于数据完整——盘中轮询写的是 inflow-Top-100 子集。故 `coverage` 每域同时返回两个数：`have_days`（有任何行）与 `complete_days`（`sector_moneyflow` 取有 `eod_full` 行的日子；其余域 = `have_days`），`cover_pct` 基于 `complete_days`，`have_days` 原样带回（供与本文档 Why-now 表对拍）。历史 13 天只有 poll 行 → `complete_days=0`，`have_days` 仍应复现 ~65%。
 
-- [ ] Step 1: 纯函数 + 单测（分母 0 / 脏行 / 缺日）
-- [ ] Step 2: `coverage_report` + `DataFreshnessOut.coverage` + 端点
-- [ ] Step 3: ADR 0009 + index 登记
-- [ ] Step 4: 真库实测并回填数字 + `docs/features.md` 同步
+**验收（真库实测，2026-10-12 11:55 +0800，默认 `window_days=30`；数字回填本行）：**
+
+| 域 | row_count | have_days | complete_days | trading_days | cover_pct | 区间 |
+|---|---|---|---|---|---|---|
+| `sector_moneyflow` | 4232 | **9** | **0** | 17 | **0.0** | 2026-09-04..10-12 |
+| `sentiment_daily` | 17 | 17 | 17 | 17 | 100.0 | 2026-09-03..10-09 |
+| `sentiment_intraday` | 1 | 1 | 1 | **11** | 9.09 | 2026-09-17..10-12 |
+| `limit_up_stock_daily` | 0 | 0 | 0 | 17 | 0.0 | —（T1 真库行已被 e2e 清理） |
+| `dragon_tiger` | 1077 | 16 | 16 | 16 | 100.0 | 2026-08-25..10-08 |
+| `block_trade` | 1561 | 16 | 16 | 16 | 100.0 | 2026-08-25..10-08 |
+| `share_float` | 24562 | 12 | 12 | 17 | 70.59 | 2026-08-28..10-09 |
+| `repurchase` | 458 | 16 | 16 | 17 | 94.12 | 2026-08-28..10-09 |
+
+- **`complete_days = 0` 复现**：`sector_moneyflow` 全表 `capture_kind='eod_full'` 行数为 **0**（`poll=6616` 行）→ 完整日自 T2 上线起累积。这就是 Ruling 13 要防的"有行冒充完整"
+- **~65% 形状复现**：`window_days=3650`（=不限窗口）时 `sector_moneyflow` 为 **12/20 = 60%**（本文档 Why-now 表口径为 13/20 = 65%，差 1 天是实测时点不同 + 数据仍在被 5 分钟轮询写入）；`complete_days` 仍为 0
+- **`sentiment_intraday` 54.5% 的分母复现**：`trading_days = 11` 与 Why-now 表的 6/11 同形；`have_days=1` 是因为 `tests/test_intraday_snapshot_table.py` 的迁移 down/up 用例**会 DROP+重建 `market_sentiment_intraday`**（全量 suite 每跑一次清一次历史，只留 scheduler 重建后的行）——按 controller caveat，这是"最后一次全量 suite 之后"的真库状态，不是覆盖率实现的问题
+- 缺表/缺列：单测断言 `missing_table` / `missing_column` + 其余域照常渲染（打桩触发，不真删表）；`bash scripts/doc_gate.sh` 绿（16 项）
+
+- [x] Step 1: 纯函数 + 单测（分母 0 / 脏行 / 缺日）
+- [x] Step 2: `coverage_report` + `DataFreshnessOut.coverage` + 端点
+- [x] Step 3: ADR 0009 + index 登记
+- [x] Step 4: 真库实测并回填数字 + `docs/features.md` 同步
 
 ---
 
@@ -337,8 +356,8 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 
 ## 验收总清单
 
-- [ ] ADR 0009 落地并登记；`doc_gate` 全绿
-- [ ] `/market/data-freshness` 输出覆盖率，如实呈现 65% / 54.5%（先复现旧数字）
+- [x] ADR 0009 落地并登记（`docs/decisions/0009-market-derived-fact-persistence.md` + index）；`doc_gate` 全绿（16 项）
+- [x] `/market/data-freshness` 输出覆盖率（`coverage`），如实呈现旧形状：sector_moneyflow `have_days` 复现 ~60-65% / `complete_days=0`（Ruling 13）、`sentiment_intraday.trading_days=11`（54.5% 的分母）
 - [ ] `market_limit_up_stock_daily` 上线，`count(is_lu)` 与 `market_sentiment_daily.zt_count` 逐日一致（不变式测试在库）
 - [ ] EOD enrichment 落库且判定列零改写
 - [ ] `/market/hot-boards` 读表分支与实时分支同 code 口径一致；`amount`/`flat_count` 非空率 ≥99%

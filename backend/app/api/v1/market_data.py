@@ -4,6 +4,7 @@ announcements（公告快讯）/ limit-up ladder（连板梯队与市场情绪�
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 from typing import Literal
 
@@ -21,6 +22,7 @@ from app.schemas.limit_up import (
 from app.schemas.market_data import (
     AnnouncementOut,
     BlockTradeOut,
+    DataFreshnessOut,
     DragonTigerOut,
     GlobalIndexCardOut,
     MarketMoneyflowOut,
@@ -29,8 +31,9 @@ from app.schemas.market_data import (
     SectorMoneyflowListOut,
     ShareFloatOut,
 )
-from app.schemas.reconciliation import DataFreshnessOut
 from app.services import limit_up_service, market_data_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["market-data"])
 
@@ -286,12 +289,20 @@ async def get_data_freshness() -> DataFreshnessOut:
     """数据新鲜度巡检（只读，绝不触发回补）：把"静默缺数据"变成端点可见。
 
     复用对账器的期望集/行数判据（apply=False 路径），开销为几次聚合计数查询。
+    Task 3 追加 `coverage`：只读巡检域的覆盖率（含 `have_days` vs `complete_days`）——
+    这些域没有 `_refetch_*`，永不进 apply 补漏，只在这里被看见。覆盖率是加法：
+    它整体失败（如迁移未应用）也只回空列表，不得把本端点打成 500。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.services import job_alert_service, reconciliation_service  # noqa: PLC0415
 
     async with async_session_factory() as db:
         result = await reconciliation_service.reconcile_market_data(db, apply=False)
+        try:
+            result["coverage"] = await reconciliation_service.coverage_report(db)
+        except Exception:  # noqa: BLE001 — 覆盖率是加法，失败不得反噬新鲜度巡检
+            logger.warning("coverage report unavailable", exc_info=True)
+            result["coverage"] = []
     # Redis 不可用 → 空列表（登记表是运行时告警，不影响"只读巡检"契约）
     result["failed_jobs"] = await job_alert_service.list_job_failures()
     return DataFreshnessOut(**result)

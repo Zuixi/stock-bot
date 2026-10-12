@@ -12,6 +12,7 @@
 | [0006](./0006-no-eslint-tsc-as-static-check.md) | 前端不引入 eslint/prettier，静态校验以 tsc 为准 | accepted | 2026-09-23 | 前端 / 门禁 |
 | [0007](./0007-tiered-bench-gate-and-e2e-excluded.md) | 性能门禁分级：Tier 1 硬门禁 + e2e/bench 与常规单测隔离 | accepted | 2026-09-09 | 门禁 / 性能 |
 | [0008](./0008-research-read-requires-permission.md) | 投研板块读接口需 research:read 权限（公开行情不变） | accepted | 2026-09-28 | 安全 / 产品 |
+| [0009](./0009-market-derived-fact-persistence.md) | 市场派生事实的持久化边界：A/B/C 判据与"产地决定可信度" | accepted | 2026-10-12 | 数据口径 |
 
 状态取值：`accepted`（现行）· `superseded`（被新决策取代，须填 `superseded-by` 并双向引用）· `rejected`（评审未采纳，保留以阻止重复提议）
 

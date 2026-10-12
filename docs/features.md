@@ -15,7 +15,7 @@
 | 概念板块 | 板块列表、详情、成分股（成分以 `symbol` 为业务键） | `frontend/src/pages/market-concept` · `frontend/src/features/concept` · `/api/v1/concepts` |
 | 热门板块与情绪 | 涨停梯队、板块涨停、昨日涨停、情绪日历/盘中 | `frontend/src/pages/market-hot-sectors` · `frontend/src/shared/api/limitUp.ts` · `/api/v1/market` |
 | 市场面数据 | 北向、龙虎榜、大宗交易、解禁、回购、公告、板块与市场资金流、全球指数 | `/api/v1/market`（`market_data.py`）· `frontend/src/shared/api/marketData.ts` |
-| 数据新鲜度 | 各表最新业务时间、缺口、上游状态（数据面健康度权威入口） | `/api/v1/market/data-freshness` |
+| 数据新鲜度 | 各表最新业务时间、缺口、上游状态（数据面健康度权威入口）；另附**只读巡检域覆盖率** `coverage`（逐域 `have_days` / `complete_days` / `cover_pct` / `missing_days`，分母为 `daily_quotes` 交易日，缺失渲染 `--`；`complete_days` 只认 `capture_kind='eod_full'` 的完整日） | `/api/v1/market/data-freshness` |
 
 ## 个股
 
