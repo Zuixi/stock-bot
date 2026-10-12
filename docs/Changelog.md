@@ -1,3 +1,22 @@
+## 2026-10-12 - S1.8 市场宽度与动量（6 指标落 industry_metrics scope=market）+ 并行开发流程启用
+
+- **并行开发流程（Ruling 53，用户批准 A+B）**：同一 worktree 内**两个 agent 并行**，靠"文件集不重叠 + 提交只用显式路径"保证安全；**分级评审**——碰数据正确性的走完整闭环，纯展示类只跑门禁即收口（**但每条新断言仍须配注入反例**，不降级）。首批并行（S1.5 前端 / S1.8 后端）**零冲突落地**，合并态 `pytest` 一次通过
+- **S1.8 交付**（`643ec73`）：`backend/app/services/market_sentiment_service.py` 计算并落库 **8 个** `metric_key`（spec 的 6 个 + `market_advance_count`/`market_decline_count`，后者让"同源同值"可直接核验）到 **`industry_metrics` + `industry_key='market'`**——这正是 S1.2 当初泛化该键的用途（Ruling 16）。**不新建表、不新增迁移、不造平行读路**，经既有 `GET /api/v1/metrics/{latest,series}` 读取
+- **复用**：4 个涨停类指标**只读 `market_sentiment_daily`**（零重算涨停事实）；`advance_decline_ratio` 复用市场模块**同一 loader**（`load_day_rows`）与**同一分桶谓词**（`_distribution_bucket`），并有标签集自检；唯一新算法是 `above_ma20_ratio`（单条窗口函数 SQL + `win=20` 完备性守卫，不足 20 交易日的股票从分子分母同时剔除）
+- **回填实测**：**262 交易日 / 401 日历日**（2025-09-04→2026-10-09）· **2096 行** · missing=0 · 幂等（重跑仍 2096）。覆盖率：`advance_decline_ratio`/`above_ma20_ratio` 262/262；涨停类 236–239/262（缺数标 `no_sentiment_day`/`source_null`，**NULL 而非 0**）。PIT：`published_at`=15:00 Asia/Shanghai、`as_of_source='published_at'`（无静默回退）、`caliber_version='s1.8-v1'`
+- **口径冲突处置（Ruling 54）**：市场模块 `0~1%` 桶是 `0 <= pct_chg < 1`，**把平盘算进上涨**；而 `summarize_group.up_count` 是 `pct_chg > 0`。实测 2026-10-09 正桶合计 3414 vs 正号 3297，**差 117 只平盘**（负侧完全一致）。裁定：主口径**对齐市场模块已发布的 11 桶**（两模块对用户展示一致、可逐桶核验），**同时用 `extra.flat_in_positive_bucket`/`extra.sign_basis` 保留双口径**（不丢数据）；**缺陷在源侧**（桶边界把平盘当上涨，与"上涨"标准语义不符）→ 转后续任务在拥有 market 文件的批次修正
+- **后续项**：`curated_count` 徽章分母现包含非行业的 `market` scope，而徽章标签是「行业分类（申万）」→ **须只数行业 scope**（Ruling 54 第 4 条）；`_distribution_bucket`/`_DISTRIBUTION_RANGES` 私有符号的公开化清理
+
+## 2026-10-12 - S1.5 个股与板块热力图（treemap 首屏不再阻塞主线程）
+
+- **交付**（`56b5ba8`）：`/market/heatmap` 占位页顶成真实现（占位路由 10→9）；`frontend/src/features/market/HeatmapTreemap.tsx` + `heatmapTree.ts`；后端**新建批量读路** `GET /api/v1/market/heatmap/treemap` —— 既有行情端点上限全是 `≤100/≤200/≤31`，**"≥3000 标的"没有现成读路**，这是本任务的技术核心
+- **实测容量**：**5559 标的** · 载荷 **796,666 B**（≈778 KB）· 响应 **205 ms**；字段覆盖"面积=成交额或市值 / 颜色=涨跌幅 / 分组=申万或概念"，并**声明单位** `amount_unit`/`mv_unit`（避开单位陷阱）+ `as_of`/`as_of_quality`
+- **性能（spec 硬判据：≥3000 标的首屏不得阻塞主线程）**：修复前实测 **最长 long task 189 ms、6–7 个 >100ms**（60fps 下一帧 16.7ms，189ms ≈ 掉 11 帧）→ 修复后 **最长 63 ms、零个 >100ms、`goto→canvas` 1139→389 ms**
+- **根因是测量出来的，不是猜的**：旧的 800 叶"渐进着色"每帧重跑完整 `setOption`（`notMerge`），**把 1 次 190ms 重排复制了 7 次**（5559/800 ≈ 6.9，与实测 7 个 long task 精确吻合）；对照实验 `?paint=all` 仍 191ms、关动画仍 194ms → 代价 ∝ 叶节点数（CDP 剖析 `Model.getShallow` 148ms、`measureText` 39ms）。**分片与 Web Worker 都用数据分别否决**
+- **解法：聚合替代分片**——渲染 **901 块**，其余 **4659 只聚合成带标签的「其他 N 只」块**（点击展开）；分组视图首帧 63/77/76 ms 全部 ≤100ms。既满足判据，也比"画出亚像素矩形"更符合 spec 的「高信息密度」
+- **性能基线可复跑**：`frontend/scripts/measure-heatmap.mjs`（Playwright + `PerformanceObserver` 的 `longtask` 条目，这是「不得阻塞主线程」的正确测法），三次取中位
+- **残留（已披露）**：严格「无 >50ms 任务」未达（残余 2 个 ~55/63ms，来自 React commit + ECharts 首帧；要压到 <50ms 需把可见块砍到 ~400，与「高信息密度」冲突，控制器判定不值得）；测量夹具**无法自动点击聚合块**（ECharts `getLayout()` 坐标与命中测试不重合），下钻改由确定性不变量覆盖
+
 ## 2026-10-12 - S1.4 行业分类钻取（申万）：SCD2 成分历史 + 三级下钻 7 项字段
 
 - **第 0 步实机验证**（`docs/design/data-source.md` 附.6，10 条实机记录）：TuShare `index_member` **带 `in_date`/`out_date`**，31/31 一级行业可得、`in_date` 最早 `19901210`（可回溯到 1990 年）→ spec「任取历史交易日还原当时成分」的判据**原样成立，无需收窄**。并记录一个真陷阱：`index_classify` 的 `src='SW'` **静默返回 0 行**（正确值 `src='SW2021'` = 511 节点）
