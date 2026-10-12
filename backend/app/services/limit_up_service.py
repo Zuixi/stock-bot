@@ -48,6 +48,27 @@ def window_trade_days(lookback: int) -> int:
     return lookback + _WINDOW_BUFFER
 
 
+async def window_limits_complete(
+    db: AsyncSession, as_of: date, lookback: int = calc.LOOKBACK_TRADE_DAYS
+) -> bool:
+    """窗口完备性守卫（E2）：窗口内**每一天**都必须有限价，而不是只看 `as_of`。
+
+    窗口取自 `daily_quotes`（库里自 2023-05 起），限价自 2025-09-16 起：`lookback + 6`
+    个交易日窗口的**开头**若干天一旦落在限价上线前，`_WINDOW_SQL` 的
+    `LEFT JOIN limits` 就整天落空 → `is_lu` 全 false → streak 被截平、晋级率
+    (`promotion_rate` 读的正是 `as_of_prev` 的 streak) 系统性低估。
+
+    这种日子**不是"没涨停"**，而是"算不出来"——整日跳过（`window_limits_incomplete`），
+    绝不落一行假的低 streak。窗口凑不满（数据起点附近）或 `as_of` 自己不是窗口末日
+    （无行情/非交易日）同样判不完备。
+    """
+    needed = window_trade_days(lookback)
+    market_days = await limit_up_repo.list_recent_trade_dates(db, as_of, needed)
+    if len(market_days) < needed or market_days[-1] != as_of:
+        return False
+    return not await limit_up_repo.missing_price_limit_dates(db, market_days)
+
+
 def _intraday_cache_key(trade_date: date) -> str:
     """盘中缓存键（Task 11）——**仅**含 trade_date，**不**含 lookback。
 
@@ -89,6 +110,7 @@ async def get_snapshot(
     lookback: int = calc.LOOKBACK_TRADE_DAYS,
     *,
     mode: SnapshotMode = "close",
+    enrich: bool = True,
 ) -> dict[str, Any]:
     """一次查询 → 一份快照 → 3 个端点共享，保证口径同源。
 
@@ -104,6 +126,10 @@ async def get_snapshot(
     mode
         `close`（默认）= 本地口径；`intraday` = 盘中口径（仅今日）。
         intraday + 历史日期 → ValueError（端点转 400，盘中无历史意义）。
+    enrich
+        是否允许东财 Web 增强（默认 True，端点/实时路径行为不变）。历史回补传 False：
+        封板明细是 A 类**当天不抓就永久丢**的数据，"回补 239 天"不该对历史日期外呼 239 次
+        （既浪费外部配额，也让回补的耗时/成败绑在第三方可用性上）。
     """
     if mode == "intraday":
         if as_of is not None and as_of != _today_sh():
@@ -206,7 +232,7 @@ async def get_snapshot(
     snap["sw_coverage"] = round(mapped / len(ladder_pcts), 4) if ladder_pcts else None
     if snap["is_partial"] and snap["degraded_reason"] is None:
         snap["degraded_reason"] = "partial_day"
-    if snap["degraded_reason"] is None:
+    if enrich and snap["degraded_reason"] is None:
         snap = await enrich_from_web(snap, target.strftime("%Y%m%d"))
     if cache is not None and snap["degraded_reason"] is None:
         await cache.set(key, snap, ttl=SNAPSHOT_TTL)
@@ -375,14 +401,24 @@ async def _invalidate_calendar_cache() -> int:
 
 
 async def persist_snapshot(
-    db: AsyncSession | None, cache: CacheClient | None, as_of: date | None = None
+    db: AsyncSession | None,
+    cache: CacheClient | None,
+    as_of: date | None = None,
+    *,
+    fact_source: str = "local_calc",
+    enrich: bool = True,
 ) -> dict[str, Any]:
     """盘后把当日情绪聚合写入派生表（幂等，可重复跑）。
 
     is_partial / 限价缺失 / 空候选 / 无行情一律不写：时序图里塞进一个假低谷比缺一天更糟；
     `no_limit_up_rows`（快照 kpis 为空）漏在名单外会直接 `k["zt_count"]` KeyError。
+
+    `fact_source` 写给 `source` 列（默认 `local_calc` = 实时/定时口径；回补脚本传
+    `backfill`）。`fact_source=BACKFILL_SOURCE` 时 upsert 走 **Ruling 18 守卫**：只能修
+    已标记 `source='backfill'` 的行，当天实时行字节不变（见 `upsert_sentiment_daily`）。
+    `enrich=False` 只给历史回补用（理由见 `get_snapshot`），默认 True 保持端点行为不变。
     """
-    snap = await get_snapshot(cache, as_of)
+    snap = await get_snapshot(cache, as_of, enrich=enrich)
     # 部分行情日优先按 partial_day 跳过：get_snapshot 在「候选窗口为空」时先报
     # no_limit_up_rows，但部分 ingest 才是更本质的跳过原因（数据没拉全，而非真的没涨停）。
     if snap.get("is_partial"):
@@ -413,14 +449,15 @@ async def persist_snapshot(
         "promo_2to3_n": k["promo_2to3_n"],
         "max_streak": k["max_streak"],
         "max_streak_symbol": leaders[0]["symbol"] if leaders else None,
-        "source": snap["source"],
+        "source": fact_source,
     }
+    backfill_only = fact_source == limit_up_repo.BACKFILL_SOURCE
     if db is None:
         async with async_session_factory() as session:
-            await limit_up_repo.upsert_sentiment_daily(session, row)
+            await limit_up_repo.upsert_sentiment_daily(session, row, backfill_only=backfill_only)
             await session.commit()
     else:
-        await limit_up_repo.upsert_sentiment_daily(db, row)
+        await limit_up_repo.upsert_sentiment_daily(db, row, backfill_only=backfill_only)
     await _invalidate_calendar_cache()
     return {"status": "ok", "trade_date": trade_date, "zt_count": k["zt_count"]}
 
@@ -521,6 +558,9 @@ async def persist_stock_facts(
 
     `as_of` 不在 `daily_quotes` 的交易日集合里（节假日/脏日期）→ 返回全 0 并告警：
     不写一行假事实、也不抛错打断调用方的盘后链路。
+
+    `fact_source=BACKFILL_SOURCE`（历史回补）→ upsert 走 Ruling 18 守卫：只修
+    `fact_source='backfill'` 的行，当天实时行（含东财增强列）字节不变。
     """
     market_days = await limit_up_repo.list_recent_trade_dates(
         db, as_of, window_trade_days(calc.LOOKBACK_TRADE_DAYS)
@@ -544,7 +584,9 @@ async def persist_stock_facts(
         market_days=market_days,
         fact_source=fact_source,
     )
-    await limit_up_repo.upsert_limit_up_stock_daily(db, rows)
+    await limit_up_repo.upsert_limit_up_stock_daily(
+        db, rows, backfill_only=fact_source == limit_up_repo.BACKFILL_SOURCE
+    )
     return {
         "rows": len(rows),
         "is_lu": sum(1 for r in rows if r["is_lu"]),

@@ -3,7 +3,7 @@ status: active
 scope: 市场热点/情绪/资金数据的日级持久化边界与统计追踪——个股级涨停事实、东财实时源日终捕获、覆盖率只读巡检、情绪与板块趋势端点
 touches: backend/app/models/market_data.py, backend/app/migrations/versions/, backend/app/repositories/market_data_repo.py, backend/app/repositories/limit_up_repo.py, backend/app/services/market_data_service.py, backend/app/services/limit_up_service.py, backend/app/services/reconciliation_service.py, backend/app/core/providers/eastmoney_client.py, backend/app/scheduler/jobs.py, backend/app/scheduler/runner.py, backend/app/workers/market_data_worker.py, backend/app/schemas/task.py, backend/app/schemas/market_data.py, backend/app/api/v1/market_data.py, backend/scripts/, backend/tests/, frontend/src/shared/api/, frontend/src/features/market/, docs/decisions/, docs/features.md, docs/Changelog.md
 updated: 2026-10-12
-next-action: Task 4（历史回补脚本 backfill_market_history.py，sentiment 21→239 天）在 worktree 分支 feat/market-hotspot-persistence 实施中（Task 1/2/3 已完成）
+next-action: Task 4 完成（真库实测：sentiment 21→239 天、个股事实 40,894 行、黄金日字节不变；见 Task 4 验收数字）。Task 5（可选）未开工
 ---
 
 # 市场热点数据持久化与趋势追踪 实施计划（v2）
@@ -233,25 +233,26 @@ next-action: Task 4（历史回补脚本 backfill_market_history.py，sentiment 
 
 **Files:**
 - Create: `backend/scripts/backfill_market_history.py`（`--domain sentiment|limit_up_stocks`、`--from`/`--to`/`--limit`/`--dry-run`）
-- Modify: `backend/app/services/limit_up_service.py`（`persist_snapshot` 增 `fact_source` 参数；新增 **`window_limits_complete(db, as_of, lookback) -> bool`** 守卫）
-- Test: `backend/tests/test_backfill_market_history.py`（区间生成只取交易日；窗口不完备 → skip 且原因可辨；`--dry-run` 不写库；重跑收敛）
+- Modify: `backend/app/services/limit_up_service.py`（`persist_snapshot` 增 `fact_source`/`enrich` 参数；新增 **`window_limits_complete(db, as_of, lookback) -> bool`** 守卫；`get_snapshot` 增 `enrich` 开关）
+- Modify: `backend/app/repositories/limit_up_repo.py`（Ruling 18 守卫：`upsert_sentiment_daily`/`upsert_limit_up_stock_daily` 增 `backfill_only`，`DO UPDATE ... WHERE <已存储的 source/fact_source> = 'backfill'`；`BACKFILL_SOURCE` 单一字面量）
+- Test: `backend/tests/test_backfill_market_history.py`（区间生成只取交易日；窗口不完备 → skip 且原因可辨；`--dry-run` 不写库；重跑收敛；Ruling 18 默认门禁 SQL 守卫 + 真库哨兵日语义）
 
 **实现要点：**
-- `sentiment` 域逐日 `persist_snapshot(db, cache=None, as_of=d)`（`limit_up_service.py:377`，已支持任意 `as_of` 且幂等）→ **零新逻辑**；`cache=None` 规避 Redis JSON 回读把 `as_of` 变 str 的既有坑
+- `sentiment` 域逐日 `persist_snapshot(db, cache=None, as_of=d, fact_source="backfill", enrich=False)`（`limit_up_service.py:377`，已支持任意 `as_of` 且幂等）→ **零新逻辑**；`cache=None` 规避 Redis JSON 回读把 `as_of` 变 str 的既有坑；`enrich=False` 让历史回补不对东财外呼 239 次
 - 跳过判据 = 实时路径判据（`is_partial`/`price_limits_missing`/…）**加上** `window_limits_complete`（E2）；逐日记录纳入/跳过原因，输出汇总表
 - **升序**执行（`promo_*`/`broken_rate` 依赖前一日 streak）
-- `limit_up_stocks` 域调用 T1 的 `persist_stock_facts(..., fact_source="backfill")`
+- `limit_up_stocks` 域调用 T1 的 `persist_stock_facts(..., fact_source="backfill")`（**不**调 `persist_and_enrich_stock_facts`，历史日不增强）
 - `pct_chg` **不是**本 Task 的前置（`persist_snapshot` 的闸门是 4000 行下限，与 `pct_chg` 无关）
 
-**验收（真库实测，数字回填本文件）：**
-- `market_sentiment_daily` 天数 21 → **≥235**（239 天内允许个别真降级日，差值逐日列原因）
-- `market_limit_up_stock_daily` 行数 ≈ Σ(候选∪炸板)（**实测值回填**）；2026-09-08：`is_lu=75`、`is_zb=39`
-- 黄金日 2026-09-08 的既有行**字节不变**（回补不得改写已正确行）；连跑两次行数不变
+**验收（真库实测 2026-10-12，数字已回填）：**
+- `market_sentiment_daily` 天数 21 → **239**（`2025-10-15 → 2026-10-09`，239/239 全 `ok`、**0** 降级日、耗时 42.7s）；从限价首日起算的只读预演 `--from 2025-09-16 --dry-run` = 254 天里 **15 天 `window_limits_incomplete`**（2025-09-16…2025-10-14，正好是限价窗口未完备的前 15 个交易日）→ 239 天，与 E2 推算逐日吻合
+- `market_limit_up_stock_daily` 行数 **40,894**（239 天，日均 ≈171；`fact_source` 100% `backfill`；`seal_time`/`seal_fund`/`break_count`/`enrich_source` 非空计数 **0**，全部 NULL、绝无 0 填充）；耗时 54.8s；2026-09-08：**178 行 / is_lu=75 / is_zb=39 / prev_is_lu=95**
+- 黄金日 2026-09-08 的既有行**字节不变**：21 行 `local_calc` 的聚合 md5 `0c8e6ffe4e41e736faf8ac17043f8982` 回补前后相同，黄金行 md5 `a5e745db72f1548a2c742dedef7553f0` 不变（Ruling 18 守卫，默认门禁 + 真库哨兵日双向验证）；连跑两次行数不变（sentiment 239 / facts 40,894），且 facts 除 `observed_at` 外内容 md5 `ea1f16621170b19815df48524e574251` 两次一致（含一次"整表被 pytest 迁移循环重建后重跑"）
 
-- [ ] Step 1: 失败测试（区间/守卫/skip 原因/幂等）
-- [ ] Step 2: 脚本 + `window_limits_complete` + `persist_snapshot(fact_source=)`
-- [ ] Step 3: 真库回补（记录耗时、纳入/跳过分布）
-- [ ] Step 4: 黄金日一致性 + 计数回填本文件
+- [x] Step 1: 失败测试（区间/守卫/skip 原因/幂等）—— RED 22 failed / 2 passed（stub）→ GREEN 24 passed
+- [x] Step 2: 脚本 + `window_limits_complete` + `persist_snapshot(fact_source=)` + Ruling 18 守卫
+- [x] Step 3: 真库回补（记录耗时、纳入/跳过分布）
+- [x] Step 4: 黄金日一致性 + 计数回填本文件
 
 ---
 

@@ -47,7 +47,9 @@ def _persist_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     async def _fake_snapshot(cache: Any, as_of: date | None = None, **kw: Any) -> dict[str, Any]:
         return _healthy_snap()
 
-    async def _fake_upsert(db: Any, row: dict[str, Any]) -> None:
+    async def _fake_upsert(db: Any, row: dict[str, Any], *, backfill_only: bool = False) -> None:
+        # `backfill_only` = Ruling 18 回补守卫（回补只修回补行）；实时路径恒 False。
+        assert backfill_only is False
         calls["upserts"].append(row)
 
     async def _fake_invalidate() -> int:

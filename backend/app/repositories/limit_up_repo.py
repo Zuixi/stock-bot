@@ -275,9 +275,23 @@ _FACT_UPDATE_COLUMNS = (
     "fact_source",
 )
 
+# 回补行标记（Ruling 18）。**写入方与守卫必须同一个字面量**：回补脚本以它标记新行，
+# upsert 的 `DO UPDATE ... WHERE <stored> = BACKFILL_SOURCE` 以它识别"可修复的行"。
+# 两处各写一份 'backfill' 就会静默退化成"回补能改实时行"。
+BACKFILL_SOURCE = "backfill"
 
-async def upsert_limit_up_stock_daily(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
-    """幂等写入个股事实；同批内先按唯一键去重（pg 的 ON CONFLICT 不处理同批自冲突）。"""
+
+async def upsert_limit_up_stock_daily(
+    db: AsyncSession, rows: list[dict[str, Any]], *, backfill_only: bool = False
+) -> int:
+    """幂等写入个股事实；同批内先按唯一键去重（pg 的 ON CONFLICT 不处理同批自冲突）。
+
+    `backfill_only=True`（Ruling 18）：**回补只能修回补行**。`DO UPDATE` 带
+    `WHERE market_limit_up_stock_daily.fact_source = 'backfill'`（看**已存储**的列，
+    不是 `excluded`），于是当天实时写下的 `local_calc` 行——连同 `enrich_source`/
+    `seal_*` 增强列——对回补**完全不可见**。这让"黄金日既有行字节不变"是**保证**，
+    不是"恰好没撞上"。
+    """
     if not rows:
         return 0
     deduped = list({(r["trade_date"], r["stock_id"]): r for r in rows}.values())
@@ -291,6 +305,9 @@ async def upsert_limit_up_stock_daily(db: AsyncSession, rows: list[dict[str, Any
                 **{c: getattr(ins.excluded, c) for c in _FACT_UPDATE_COLUMNS},
                 "observed_at": func.now(),
             },
+            where=(
+                MarketLimitUpStockDaily.fact_source == BACKFILL_SOURCE if backfill_only else None
+            ),
         )
         result = cast("CursorResult[Any]", await db.execute(stmt))
         total += int(result.rowcount)
@@ -330,13 +347,23 @@ async def limit_up_stock_daily_missing_dates(db: AsyncSession, dates: list[date]
     return [d for d in dates if d not in present]
 
 
-async def upsert_sentiment_daily(db: AsyncSession, row: dict[str, Any]) -> int:
+async def upsert_sentiment_daily(
+    db: AsyncSession, row: dict[str, Any], *, backfill_only: bool = False
+) -> int:
+    """幂等写情绪聚合行（唯一键 `trade_date`）。
+
+    `backfill_only=True`（Ruling 18）：回补 upsert 只修回补行 —— `DO UPDATE` 带
+    `WHERE market_sentiment_daily.source = 'backfill'`（看**已存储**的 `source`，
+    不是 `excluded`）。实时路径（`backfill_only=False`）语义**不变**：仍是覆写，
+    且 SET 依旧排除 `source`，永不重标。
+    """
     stmt = (
         pg_insert(MarketSentimentDaily)
         .values(**row)
         .on_conflict_do_update(
             constraint="uq_sentiment_daily_date",
             set_={k: v for k, v in row.items() if k not in ("trade_date", "source")},
+            where=MarketSentimentDaily.source == BACKFILL_SOURCE if backfill_only else None,
         )
     )
     result = cast("CursorResult[Any]", await db.execute(stmt))
