@@ -697,8 +697,76 @@ async def test_sentiment_degraded_gates_still_skip(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 真库（`-m e2e`）：Ruling 18 的 SQL 语义
+# 真库（`-m e2e`）：Ruling 18 的 SQL 语义 + 情绪↔事实全量不变式
 # ---------------------------------------------------------------------------
+
+
+# 全量不变式（T4 收口）：情绪聚合 vs 个股事实逐日对拍。
+# 动机 = T4 真库验收发现的现状：21 个既有 `local_calc` 日里 **4 天**（2026-09-10/11/14/15）
+# 的存量聚合小于"用完整数据重算"的值。根因是**写入时输入未全**，不是口径变化——
+# 实测该 4 天的差值恰等于 2026-09-18 08:31/08:34 才落库的行情/限价行中今日判为 zt/zb
+# 的行数（09-10 +1 zt、09-11 +1 zt、09-14 +2 zt +1 zb、09-15 +1 zb），而
+# `_BREADTH_SQL` 的 zt/zb 谓词自 2026-09-14 引入后**逐字未变**（`git log -S` 证据）。
+# 这 4 天已按"纯派生缓存可重建"的模型契约显式实时重算（见 task-4-report.md 修复轮 1）。
+_FULL_INVARIANT_SQL = """
+SELECT s.trade_date, s.zt_count, s.zb_count, s.source,
+       f.rows AS fact_rows, f.is_lu, f.is_zb
+FROM market_sentiment_daily s
+LEFT JOIN (
+    SELECT trade_date,
+           count(*) AS rows,
+           count(*) FILTER (WHERE is_lu) AS is_lu,
+           count(*) FILTER (WHERE is_zb) AS is_zb
+    FROM market_limit_up_stock_daily
+    GROUP BY trade_date
+) f USING (trade_date)
+ORDER BY s.trade_date
+"""
+
+
+@pytest.mark.e2e
+async def test_sentiment_daily_matches_fact_counts_for_every_day() -> None:
+    """全量不变式：`market_sentiment_daily` **每一天**都要 `count(is_lu)==zt_count`
+    且 `count(is_zb)==zb_count`（一条 SQL 对拍两张表）。
+
+    - **零行的日子显式报 `missing_fact_rows`**，不得静默跳过：静默跳过正是"情绪行在、
+      个股事实缺"这种洞能长期不被发现的原因（同 Task 3 覆盖率巡检的口径）。
+    - 只按某一天（如 2026-09-08）打桩会让"其余 238 天悄悄漂移"漏网 —— 这正是本用例
+      取代"单日不变式"的理由（`test_limit_up_stock_daily.py` 的验收日用例保留，
+      覆盖 is_lu/zb 与行集构成的更细断言）。
+    """
+    from sqlalchemy import text
+
+    from app.core.database import async_session_factory, engine
+
+    try:
+        async with async_session_factory() as db:
+            rows = (await db.execute(text(_FULL_INVARIANT_SQL))).mappings().all()
+    finally:
+        # 与 `_clean_sentinel_days` 同款：engine 是**全局**的，pytest-asyncio 每个用例一个
+        # 事件循环 —— 不 dispose 就会把上一个循环的连接留给下个用例（`Event loop is closed`）。
+        await engine.dispose()
+
+    assert rows, "market_sentiment_daily 为空 —— 全量不变式无从谈起（先跑回补）"
+    missing = [r["trade_date"] for r in rows if not r["fact_rows"]]
+    assert missing == [], (
+        f"missing_fact_rows（有情绪行但个股事实为 0 行）：{[str(d) for d in missing]}"
+    )
+    mismatched = [
+        (
+            str(r["trade_date"]),
+            r["zt_count"],
+            r["is_lu"],
+            r["zb_count"],
+            r["is_zb"],
+            r["source"],
+        )
+        for r in rows
+        if r["is_lu"] != r["zt_count"] or r["is_zb"] != r["zb_count"]
+    ]
+    assert mismatched == [], (
+        f"情绪聚合与个股事实不一致 (date, zt, is_lu, zb, is_zb, source)：{mismatched}"
+    )
 
 
 @pytest.fixture
