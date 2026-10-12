@@ -24,19 +24,21 @@ test.describe("认证微服务与前端会话状态机", () => {
       })
     );
 
-    // 1. 尝试访问自选股页面
+    // 1. 尝试访问自选股页面：/watchlist 先 redirect 到 /me?tab=watchlist（IA §4），
+    //    故 returnTo 携带的是**新位置**（redirect 已把旧路径换成规范路径）
     await page.goto("/watchlist");
-    await page.waitForURL(/\/login\?returnTo=%2Fwatchlist/);
+    await page.waitForURL(/\/login\?returnTo=%2Fme%3Ftab%3Dwatchlist/);
     await expect(page.getByText("用户登录")).toBeVisible();
 
     // 2. 尝试访问自定义标签页
     await page.goto("/tags");
-    await page.waitForURL(/\/login\?returnTo=%2Ftags/);
+    await page.waitForURL(/\/login\?returnTo=%2Fme%3Ftab%3Dtags/);
     await expect(page.getByText("用户登录")).toBeVisible();
 
-    // 3. 尝试访问投研板块（已需登录才可阅读，见 docs/decisions/0008）
+    // 3. 尝试访问投研板块（已需登录才可阅读，见 docs/decisions/0008）：
+    //    /research 先 redirect 到 /industry，returnTo 携带新位置
     await page.goto("/research");
-    await page.waitForURL(/\/login\?returnTo=%2Fresearch/);
+    await page.waitForURL(/\/login\?returnTo=%2Findustry/);
     await expect(page.getByText("用户登录")).toBeVisible();
   });
 

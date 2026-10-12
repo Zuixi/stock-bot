@@ -30,7 +30,7 @@ export default function ResearchWorkbenchPage() {
     <div style={{ maxWidth: 1720, margin: "0 auto" }}>
       <Breadcrumb
         style={{ marginBottom: 10, fontSize: 13 }}
-        items={[{ title: <Link to="/research">投研</Link> }, { title: "工作台" }]}
+        items={[{ title: <Link to="/industry">行业分析</Link> }, { title: "工作台" }]}
       />
       <StateWrapper loading={isLoading} error={error} onRetry={refetch} empty={!data}>
         {data && <Workbench dashboard={data} />}

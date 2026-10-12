@@ -266,11 +266,11 @@ test("工作台面包屑：投研项可点击返回行业列表", async ({ page 
   await page.goto("/research/pig");
 
   // 面包屑首项为 react-router Link，末项"工作台"为当前页（无链接）
-  const crumbLink = page.getByRole("link", { name: "投研" });
+  const crumbLink = page.getByRole("link", { name: "行业分析" });
   await expect(crumbLink).toBeVisible();
   await crumbLink.click();
 
-  await page.waitForURL("**/research");
+  await page.waitForURL("**/industry");
   await expect(page.locator(".ant-card").filter({ hasText: "生猪养殖" })).toBeVisible();
 });
 

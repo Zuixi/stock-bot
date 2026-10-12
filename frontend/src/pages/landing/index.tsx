@@ -37,7 +37,7 @@ export default function LandingPage() {
               <MarketPulse />
             </SectionCard>
             <RankingMatrix />
-            <SectionCard id="sectors" title="行业与资金" moreHref="/market/category">
+            <SectionCard id="sectors" title="行业与资金" moreHref="/market/industry">
               <SectorFlow />
             </SectionCard>
             <SectionCard id="money" title="资金与情绪">

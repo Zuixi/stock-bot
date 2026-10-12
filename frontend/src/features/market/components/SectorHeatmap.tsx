@@ -94,7 +94,7 @@ export function SectorHeatmap() {
       size="small"
       extra={
         <span
-          onClick={() => navigate("/market/hot-sectors/industry")}
+          onClick={() => navigate("/market/heatmap?group=industry")}
           style={{ fontSize: 12, color: colors.accent, cursor: "pointer" }}
         >
           查看全部 ›

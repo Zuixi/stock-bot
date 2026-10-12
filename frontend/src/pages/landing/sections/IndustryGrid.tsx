@@ -14,7 +14,7 @@ export function IndustryGrid() {
         <SwIndustryGrid fallback="行业版图暂不可用——申万 31 个一级行业（农林牧渔、基础化工、机械设备、医药生物、电子……）免登录公开，请稍后重试" />
 
         <p className="landing-industry-footnote">
-          首个深度行业：生猪养殖 → <Link to="/research">猪智投</Link>
+          首个深度行业：生猪养殖 → <Link to="/industry">猪智投</Link>
         </p>
       </div>
     </section>

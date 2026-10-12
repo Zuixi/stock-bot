@@ -10,10 +10,10 @@
 |---|---|---|
 | 宣传首页 | 公开独立布局，登录 CTA | `frontend/src/pages/landing` |
 | 行情台首页 | 指数卡、涨跌分布、榜单、板块、资金流、热门板块（免登录可用） | `frontend/src/pages/market` · `frontend/src/features/market` · `/api/v1/market` |
-| 指数详情 | 指数 K 线、SSE 指数快照与盘中序列 | `frontend/src/pages/index-detail` · `/api/v1/market` |
+| 指数详情 | 指数 K 线、SSE 指数快照与盘中序列（路由 `/market/index/:tsCode`，由 `/index/:tsCode` redirect） | `frontend/src/pages/market-index` · `/api/v1/market` |
 | 申万行业浏览 | 申万一级/二级/三级树、下钻、行业表现 | `frontend/src/pages/market-category` · `frontend/src/pages/market-industry-level2` · `frontend/src/pages/market-industry-level3` · `/api/v1/market` |
-| 概念板块 | 板块列表、详情、成分股（成分以 `symbol` 为业务键） | `frontend/src/pages/market-concept` · `frontend/src/features/concept` · `/api/v1/concepts` |
-| 热门板块与情绪 | 涨停梯队、板块涨停、昨日涨停、情绪日历/盘中 | `frontend/src/pages/market-hot-sectors` · `frontend/src/shared/api/limitUp.ts` · `/api/v1/market` |
+| 概念板块 | 板块列表、成分股（成分以 `symbol` 为业务键）；详情页并入 `/market/heatmap`（Task 5 占位，`/market/concept/:boardCode` → `/market/heatmap?concept=`） | `frontend/src/features/concept` · `/api/v1/concepts` |
+| 热门板块与情绪 | 涨停梯队、板块涨停、昨日涨停、情绪日历/盘中；板块详情并入 `/market/heatmap`（Task 5 占位，`/market/hot-sectors/:category` → `/market/heatmap?group=`） | `frontend/src/shared/api/limitUp.ts` · `/api/v1/market` |
 | 市场面数据 | 北向、龙虎榜、大宗交易、解禁、回购、公告、板块与市场资金流、全球指数 | `/api/v1/market`（`market_data.py`）· `frontend/src/shared/api/marketData.ts` |
 | 数据新鲜度 | 各表最新业务时间、缺口、上游状态（数据面健康度权威入口） | `/api/v1/market/data-freshness` |
 
@@ -37,13 +37,13 @@
 ## 行业投研
 
 > **本板块需 `research:read` 权限才可读**（[ADR 0008](./decisions/0008-research-read-requires-permission.md)，仅 researcher / analyst / admin）：
-> `/research*` 路由与 `/api/v1/industries*` 读接口同样受限（匿名 401、无权限 403）；
+> `/industry*` 路由（由 `/research*` redirect 而来，redirect 不放宽权限）与 `/api/v1/industries*` 读接口同样受限（匿名 401、无权限 403）；
 > 公开行情（行情台首页 / 个股 / 指数）不受影响。
 
 | 功能 | 说明 | 代码入口 |
 |---|---|---|
-| 行业列表 | 已产品化行业（当前：生猪养殖"猪智投"） | `frontend/src/pages/research` · `/api/v1/industries` |
-| 投研工作台 | 四 Tab：投资看板 / 行业知识库 / 行情调研追踪 / 交易管理 | `frontend/src/pages/research-workbench` · `frontend/src/features/industry-research` · `/api/v1/industries` |
+| 行业列表 | 已产品化行业（当前：生猪养殖"猪智投"）；路由前缀迁移到 `/industry`（由 `/research` redirect） | `frontend/src/pages/industry` · `/api/v1/industries` |
+| 投研工作台 | 四 Tab：投资看板 / 行业知识库 / 行情调研追踪 / 交易管理（路由 `/industry/:industryKey`，由 `/research/:industryKey` redirect） | `frontend/src/pages/industry/workbench` · `frontend/src/features/industry-research` · `/api/v1/industries` |
 | 指标注册表 | `metric_key → {名称,单位,频率,源优先级,层级,参考区间}` 由后端下发驱动前端渲染 | `backend/app/services/`（industry registry）· `/api/v1/industries` |
 | 规则引擎与信号 | 周期阶段判定、参考区间随政策生效日切换、信号可回测可审计 | `/api/v1/industries` · `backend/tests/benchmarks/test_rule_engine_bench.py` |
 
