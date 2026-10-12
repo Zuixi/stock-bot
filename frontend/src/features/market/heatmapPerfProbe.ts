@@ -146,4 +146,3 @@ if (import.meta.env.DEV) {
   (window as unknown as { __heatmapFindAggregateTile?: typeof findAggregateTile }).__heatmapFindAggregateTile =
     findAggregateTile;
 }
-
