@@ -1,3 +1,15 @@
+## 2026-10-13 - 短线情绪页纵向预算回收：三个长区块限制默认行数（页高 −42%）
+
+- **背景（用户反馈「布局混乱」+ 实测）**：`/market?tab=sentiment` 页高 **5723px（≈5.7 屏）**，其中 **76% 的纵向预算**花在三个次级区块上——申万三级最高板铺全量 **2778px**、昨日涨停今日表现 `pagination={false}` 全量 45 行 **1956px**、次新股情绪 20 行/页 **1171px**；两个核心区块（情绪温度计 502px + 连板梯队 919px）被挤到首屏之外
+- **改动（纯限制 + 复用既有折叠模式，无新组件/无新数据）**：
+  - `SwL3LimitUpBoard`：默认只铺热门前 **10** 个行业（行已按 `板高 desc → 家数 desc` 排序，头部即结论），其余走新增的 `.sw3-toggle`「展开全部 N 个行业 / 收起」——与 `LimitUpLadder` 档内 `展开全部 N 家` 同一交互与视觉语言
+  - `YesterdayLimitUp`：`pagination={false}` → `pageSize: 10`（`hideOnSinglePage` 保留：样本 ≤10 时不出现分页器）
+  - `NewStockBoard`：`pageSize: 20` → `10`
+- **效果（Playwright 实测，同视口）**：页高 **5723 → 3344px（−42%）**；「展开全部 49 个行业」可点开（10 → 49 行）、可收起；阈值下不渲染折叠按钮
+- **回归证据**：全量 e2e **同一 dev server 前后对照 = 97 passed / 10 skipped / 0 failed**（10 skipped 全是 `marketDataFace.spec.ts` 按数据缺失优雅跳过的既有用例）；`tsc --noEmit` ✓、`npm run build` ✓、`check:design` ✓
+- 涉及文件：frontend/src/features/market/components/{SwL3LimitUpBoard.tsx,SwL3LimitUpBoard.css,YesterdayLimitUp.tsx}、frontend/src/features/concept/components/NewStockBoard.tsx、docs/Changelog.md
+- 未做（有意）：情绪温度计压缩、左右分栏重排、题材维度——按 ponytail 评审先只回收纵向预算，看到效果再决定
+
 ## 2026-10-12 - 移除「数据版图」静态矩阵（市场页底部 + landing 第 6 区块）
 
 - **背景（用户反馈）**：`DataCoverageMatrix` 是 11 行**手写常量**的静态宣传矩阵，挂在 `/market` 的 Tabs **下方**，所以 5 个 Tab 里下滑都会重复看到同一张表；且它与真实数据可用性长期漂移——北向上游停更后靠手改常量把该行标成「规划中」，逐域上线状态全靠人工维护
