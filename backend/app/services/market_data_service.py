@@ -1012,9 +1012,15 @@ def sector_trends_payload(
 ) -> dict[str, Any]:
     """组装 6b 响应（**纯函数**，无 IO；缓存由 :func:`get_sector_trends` 负责）。
 
-    `complete_days` = 请求窗口内的完整日（统计口径）；`all_complete_days` = 该维度
-    **全部**完整日（`available_from` 的口径 —— 它描述"这类数据自哪日起可用"，不是
-    "窗口里最早那天"）。
+    - `complete_days` = 请求窗口内的完整日（统计口径）；`all_complete_days` = 该维度
+      **全部**完整日（`available_from` 的口径 —— 它描述"这类数据自哪日起可用"，不是
+      "窗口里最早那天"）；
+    - `trading_days` 必须**已经**被调用方截断到 `days` 个（见 :func:`trailing_window_days`）：
+      这里只用它算 `missing_days` 与 `window`，不再二次裁剪 —— 双重截断会让"谁负责窗口
+      守恒"变得说不清；
+    - `window.days` 回**请求值**，`window.observed_days` 才是实际交易日跨度：
+      两者不等时（数据起点附近/该维度行集更短）必须**可见**，不能悄悄拿观测值冒充请求值
+      （Important #2 的收口）。不变量 `samples + len(missing_days) <= window.days`。
     """
     in_window = intersect_complete(trading_days, set(complete_days))
     attribution = ATTRIBUTION_POINT_IN_TIME if dimension == "concept" else ATTRIBUTION_CURRENT_SW
@@ -1036,7 +1042,8 @@ def sector_trends_payload(
         ),
         "top_n": top_n,
         "window": {
-            "days": len(trading_days),
+            "days": days,
+            "observed_days": len(trading_days),
             "from": in_window[0] if in_window else None,
             "to": in_window[-1] if in_window else None,
             "samples": len(in_window),
@@ -1048,6 +1055,54 @@ def sector_trends_payload(
     }
 
 
+def trailing_window_days(trading_days: list[date], days: int) -> list[date]:
+    """取 `trading_days` 的**末尾** `days` 个（窗口必须恰好是请求的交易日数）。
+
+    为什么必须截断（Important #2）：`trading_days` 来自 `daily_quotes`，右端由"该维度
+    快照的最近日"决定；当快照落后于行情时（采集断了、行情照常），原实现会把
+    `[snapshot_first, snapshot_last]` 里**所有**交易日都当成窗口 —— `days=60` 可能回
+    80–100 个交易日，并把这几十天**全列进 `missing_days`**（正是"一串假缺日"）。
+    截断到末尾 `days` 个后：窗口恰好 = "以快照最近日为右端、向前 `days` 个交易日"。
+
+    `len(trading_days) <= days` 时原样返回（数据起点附近/该维度行集更短）——
+    此时 `window.observed_days < window.days` 把差异如实暴露，而不是补零或补日。
+    """
+    return list(trading_days[-days:]) if days > 0 else []
+
+
+def _empty_sector_trends(dimension: str, days: int, top_n: int) -> dict[str, Any]:
+    """该维度**一行都没有**时的诚实空响应（早退，不查任何其它表）。
+
+    这条路径必须存在且必须**早退**（Important #3）：原先它落到
+    `list_trading_days(db, date.min, date.min)` —— `trade_date >= 0001-01-01 AND
+    trade_date <= 0001-01-01` 在 `daily_quotes` 上是非 sargable 的全表扫，而兜底分支
+    永远到不了。语义上它也不该问"行情有没有行"：没有快照行的维度就是没有可统计对象。
+    """
+    attribution = ATTRIBUTION_POINT_IN_TIME if dimension == "concept" else ATTRIBUTION_CURRENT_SW
+    return {
+        "dimension": dimension,
+        "as_of": None,
+        "available_from": None,
+        "attribution": attribution,
+        "attribution_note": _ATTRIBUTION_NOTES[attribution],
+        "lu_count_source": (
+            _LU_COUNT_POINT_IN_TIME if dimension == "concept" else _LU_COUNT_UNAVAILABLE
+        ),
+        "top_n": top_n,
+        "window": {
+            "days": days,
+            "observed_days": 0,
+            "from": None,
+            "to": None,
+            "samples": 0,
+        },
+        "boards": [],
+        "missing_days": [],
+        "leader_change_count": 0,
+        "leader_changes": [],
+    }
+
+
 async def get_sector_trends(
     cache: CacheClient | None,
     dimension: str = "industry",
@@ -1056,8 +1111,14 @@ async def get_sector_trends(
 ) -> dict[str, Any]:
     """`GET /market/sector-trends` 的编排（读时计算 + Redis 缓存，**不物化**）。
 
-    窗口 = 该维度**最近有行的 `days` 个交易日**（右端锚定该维度自己的最近日，不拉过
-    数据末端造一串假缺日）；`missing_days` = 窗口内缺 `eod_full` 的交易日。
+    窗口 = **以该维度快照的最近日为右端、向前恰好 `days` 个交易日**（`daily_quotes` 是
+    交易日真源）；`missing_days` = 窗口内缺 `eod_full` 的交易日。三条边界：
+
+    1. 该维度**一行都没有** → 立即回 :func:`_empty_sector_trends`（不查 `daily_quotes`）；
+    2. 快照落后于行情 → `trading_days` 由 :func:`trailing_window_days` 截断到末尾 `days`
+       个（否则会把行情独有的那几十天全报成缺日）；
+    3. 交易日源缺失（`daily_quotes` 为空/迁移未跑）→ 退回用快照自己的行集日（有界）。
+
     缓存键含 `dimension`/`days`/`top_n`（三者都会改变结果）；空结果不缓存。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
@@ -1068,40 +1129,48 @@ async def get_sector_trends(
         if cached:
             return cached
 
+    empty_payload: dict[str, Any] | None = None
     async with async_session_factory() as db:
-        snapshot_days = await market_data_repo.list_sector_moneyflow_trading_days(
-            db, dimension, limit=days
-        )
-        trading_days = await market_data_repo.list_trading_days(
-            db,
-            snapshot_days[0] if snapshot_days else date.min,
-            snapshot_days[-1] if snapshot_days else date.min,
-        )
-        if not trading_days:
-            trading_days = list(snapshot_days)
-        all_complete = await market_data_repo.earliest_sector_moneyflow_complete_day(db, dimension)
-        earliest = trading_days[0] if trading_days else None
-        latest = trading_days[-1] if trading_days else None
-        rows: list[Any] = []
-        if earliest is not None and latest is not None:
-            # **显式传 `capture_kind`**：窗口读只要完整日（Ruling 21）。不传会把 poll 行
-            # 一起拉回来 —— 那些行的 `main_net_inflow` 是盘中 Top-100 子集的值，一旦被
-            # 当成 `eod_full` 的候选就会把"缺完整日"的日子混进序列（实测踩过）。
-            rows = await market_data_repo.list_sector_moneyflow_range(
-                db,
-                dimension,
-                earliest,
-                latest,
-                capture_kind=market_data_repo.EOD_FULL_CAPTURE,
+        # 右端锚点 = 该维度**有行的**最近日（`latest_sector_moneyflow_day`）。锚"有行"而不是
+        # "有完整日"：若锚后者，`poll`-only 的最后几天会被整体丢出窗口、缺日反而看不见。
+        anchor = await market_data_repo.latest_sector_moneyflow_day(db, dimension)
+        if anchor is None:
+            empty_payload = _empty_sector_trends(dimension, days, top_n)
+        else:
+            start = await market_data_repo.earliest_sector_moneyflow_day(db, dimension)
+            trading_days = await market_data_repo.list_trading_days(
+                db, start if start is not None else anchor, anchor
             )
-        lu_counts: dict[tuple[date, str], int] = {}
-        if dimension == "concept" and earliest is not None and latest is not None:
-            lu_counts = await _concept_lu_counts(db, earliest, latest, rows)
-        complete_days = sorted(eod_full_days_from_rows(rows))
+            if not trading_days:
+                # 交易日源缺失：退回快照自己的行集日（有界、不整表扫）
+                trading_days = await market_data_repo.list_sector_moneyflow_trading_days(
+                    db, dimension, limit=days
+                )
+            trading_days = trailing_window_days(trading_days, days)
+
+            earliest = trading_days[0] if trading_days else None
+            latest = trading_days[-1] if trading_days else None
+            all_complete = await market_data_repo.earliest_sector_moneyflow_complete_day(
+                db, dimension
+            )
+            # **只读完整日**（Ruling 21）：repo 函数自带 `capture_kind='eod_full'` 谓词，
+            # 调用点不必再筛；段内的 `poll` 行**不进** `rows`（缺日由 `missing_days` 表达）。
+            rows: list[Any] = []
+            if earliest is not None and latest is not None:
+                rows = await market_data_repo.list_sector_moneyflow_complete_days(
+                    db, dimension, earliest, latest
+                )
+            lu_counts: dict[tuple[date, str], int] = {}
+            if dimension == "concept" and earliest is not None and latest is not None:
+                lu_counts = await _concept_lu_counts(db, earliest, latest, rows)
+
+    if empty_payload is not None:
+        # 空结果不缓存：该维度第一行落库后，下一次请求就要能看见它
+        return empty_payload
 
     payload = sector_trends_payload(
         rows=rows,
-        complete_days=complete_days,
+        complete_days=sorted(eod_full_days_from_rows(rows)),
         all_complete_days=[all_complete] if all_complete is not None else [],
         trading_days=trading_days,
         dimension=dimension,

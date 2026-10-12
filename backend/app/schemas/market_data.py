@@ -106,12 +106,20 @@ class SectorTrendBoardOut(BaseModel):
 
 
 class SectorTrendWindowOut(BaseModel):
-    """窗口自描述。`samples` = 实际纳入的**完整日**数（= 序列长度）；`days` = 请求数。
+    """窗口自描述。窗口 = **以该维度快照的最近日为右端、向前恰好 `days` 个交易日**。
 
-    `from`/`to` 是实际纳入的首/末完整日（全缺时均 None）。
+    - `days` = **请求**的交易日数（原样回显，不拿观测值冒充）；
+    - `observed_days` = 实际落在窗口内的交易日数（该维度数据起点附近 / `daily_quotes`
+      更短时会 `< days`；`== 0` 只在"该维度一行都没有"时出现）；
+    - `samples` = 其中**完整日**的数量（= 序列长度）；
+    - `from`/`to` 是实际纳入的首/末**完整日**（全缺时均 None）。
+
+    三者并排让"窗口天数不符请求值"**不可能悄悄发生**（Task 6 评审 Important #2）。
+    不变量：`samples + len(missing_days)` ≤ `days`，且 ≤ `observed_days`。
     """
 
     days: int
+    observed_days: int = 0
     from_: date | None = Field(default=None, alias="from")
     to: date | None = None
     samples: int = 0
@@ -134,8 +142,12 @@ class SectorTrendsOut(BaseModel):
     """``GET /market/sector-trends`` 响应。
 
     `available_from` 必填（可为 ``None`` = 该维度**还没有**任何完整日，如 T2 的 15:05
-    EOD job 上线前；此时 `boards=[]`、`missing_days` 覆盖整个请求窗口 —— 绝不拿 `poll`
-    行冒充、绝不 0 流入）。`attribution` 必填且随 `dimension` 变化。
+    EOD job 上线前；此时 `boards=[]`、窗口内每个交易日都在 `missing_days` —— 绝不拿
+    `poll` 行冒充、绝不 0 流入）。`attribution` 必填且随 `dimension` 变化。
+
+    该维度**一行都没有**（连 `poll` 行都没有）时是另一条路径：`available_from=null`、
+    `window.observed_days=0`、`missing_days=[]`（"没有可统计对象" ≠ "有对象但缺完整日"，
+    两者不能长成同一个形状）。
     """
 
     dimension: str

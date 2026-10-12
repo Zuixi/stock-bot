@@ -22,7 +22,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -284,37 +284,78 @@ def test_no_eod_full_day_means_no_available_from_and_never_zero_inflow() -> None
 
 async def test_empty_result_is_never_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     """空结果不得进缓存（`boards=[]` 不能被冻结成 300s 的"暂无数据"）。"""
-
-    class _Factory:
-        async def __aenter__(self) -> Any:
-            return object()
-
-        async def __aexit__(self, *exc: Any) -> None:
-            return None
-
-        def __call__(self) -> _Factory:
-            return self
-
-    async def _empty(*a: Any, **k: Any) -> list[Any]:
-        return []
-
-    async def _none(*a: Any, **k: Any) -> None:
-        return None
-
-    monkeypatch.setattr(mds, "async_session_factory", _Factory(), raising=False)
-    monkeypatch.setattr(market_data_repo, "list_sector_moneyflow_trading_days", _empty)
-    monkeypatch.setattr(market_data_repo, "list_trading_days", _empty)
-    monkeypatch.setattr(market_data_repo, "earliest_sector_moneyflow_complete_day", _none)
-    import app.core.database as _db
-
-    monkeypatch.setattr(_db, "async_session_factory", _Factory())
+    _patch_sector_db(monkeypatch, rows=[], trading=[])
 
     cache = _RecordingCache()
     payload = await mds.get_sector_trends(cache, dimension="industry", days=60, top_n=20)
 
     assert payload["boards"] == []
     assert payload["available_from"] is None
+    assert payload["window"]["observed_days"] == 0
+    assert payload["missing_days"] == []
     assert cache.sets == []
+
+
+async def test_empty_dimension_never_touches_daily_quotes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**空维度必须早退**：一条 `daily_quotes` 查询都不许发（Task 6 评审 Important #3）。
+
+    原实现会走 `list_trading_days(db, date.min, date.min)` —— `trade_date >= 0001-01-01
+    AND <= 0001-01-01` 在 `daily_quotes` 上是非 sargable 的全表扫；这条路径恰是"该维度
+    尚无数据"的诚实空态（真库用户可随时请求一个空维度）。用只记语句的假 session 断言
+    执行过 `sector_moneyflow_snapshots`、且**从未**出现 `daily_quotes`。
+    """
+    factory = _FakeFactory()
+    _patch_sector_db(monkeypatch, rows=[], trading=[D1, D2, D3], snapshot_days=[], factory=factory)
+
+    # 直接给"行情表读"装上绊线：早退若被去掉，这里立刻炸（比断言"没执行到"更强：
+    # 它不依赖替身恰好返回什么）
+    async def _no_market_read(*a: Any, **k: Any) -> list[date]:
+        raise AssertionError("空维度不得读 daily_quotes（Review Important #3）")
+
+    monkeypatch.setattr(market_data_repo, "list_trading_days", _no_market_read)
+
+    payload = await mds.get_sector_trends(_RecordingCache(), dimension="industry", days=60)
+
+    # 早退：**一条 SQL 都不发**（尤其不查 `daily_quotes`；原实现会发
+    # `trade_date >= 0001-01-01 AND <= 0001-01-01` 的非 sargable 全表扫）
+    assert factory.statements == [], [str(s) for s in factory.statements]
+    assert "daily_quotes" not in _sql_tables(factory.statements)
+    # 空维度是"没有可统计对象"，不是"有对象但缺完整日"：两种形状必须可区分
+    assert payload == mds._empty_sector_trends("industry", 60, 20)
+
+
+async def test_window_never_exceeds_requested_days_when_snapshot_lags_quotes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**快照落后行情时窗口必须截断到 `days`**（Task 6 评审 Important #2）。
+
+    构造：行情有 100 个交易日（D1…D100），该维度快照只到 D80（采集断了 20 天），
+    `days=60` → 窗口只能是最后 60 个交易日 `[D21, D80]`：
+    - 不变量 `len(series) + len(missing_days) <= days`（原实现会给 D81…D100 这 20 天
+      造出**假缺日**，`len(missing_days)` 变 80）；
+    - `window.days` 回请求值 60、`window.observed_days` = 实际跨度 60；
+    - `window.from` 不得早于请求窗口下界（D21），`missing_days` 里不得出现窗口外的日子。
+    """
+    day = [D1 + timedelta(days=i) for i in range(100)]
+    snapshots = day[:80]  # 快照落后行情 20 天
+    rows = [_snap(d, "BK0001", capture_kind=market_data_repo.POLL_CAPTURE) for d in snapshots]
+    _patch_sector_db(monkeypatch, rows=rows, trading=day, snapshot_days=snapshots)
+
+    payload = await mds.get_sector_trends(_RecordingCache(), dimension="industry", days=60)
+
+    window = payload["window"]
+    assert window["days"] == 60, window
+    assert window["observed_days"] == 60, window
+    assert window["samples"] == 0  # 全是 poll 行 → 没有完整日
+    assert len(payload["missing_days"]) <= 60, payload["missing_days"]
+    assert len(payload["boards"]) + len(payload["missing_days"]) <= 60
+    assert payload["window"]["from"] is None and payload["window"]["to"] is None
+    forbidden = {d.isoformat() for d in day[80:]}  # 快照完全没覆盖的那 20 天
+    assert forbidden & set(payload["missing_days"]) == set()
+    assert payload["missing_days"][0] >= day[20].isoformat()
+    assert payload["missing_days"][-1] <= day[79].isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -386,10 +427,57 @@ async def _api_cache() -> Any:
         app.dependency_overrides.clear()
 
 
+class _FakeFactory:
+    """`async_session_factory()` 的替身；记录每条执行过的语句（表名断言用）。"""
+
+    def __init__(self) -> None:
+        self.statements: list[Any] = []
+
+    async def __aenter__(self) -> Any:
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    def __call__(self) -> _FakeFactory:
+        return self
+
+    async def execute(self, stmt: Any, params: Any = None) -> Any:
+        self.statements.append(stmt)
+        return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
+
+
+def _sql_tables(statements: list[Any]) -> set[str]:
+    """从执行过的语句里解析出被 FROM 的表名（`daily_quotes` 是否被碰过的判据）。"""
+    from sqlalchemy.dialects import postgresql
+
+    out: set[str] = set()
+    for stmt in statements:
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "FROM " in sql, sql
+        out.add(sql.split("FROM ", 1)[1].split()[0].strip(","))
+    return out
+
+
 def _patch_sector_db(
-    monkeypatch: pytest.MonkeyPatch, rows: list[SimpleNamespace], trading: list[date]
-) -> None:
-    """把 `get_sector_trends` 的读路径换成桩（service 内联 import 的是模块属性）。"""
+    monkeypatch: pytest.MonkeyPatch,
+    rows: list[SimpleNamespace],
+    trading: list[date],
+    *,
+    snapshot_days: list[date] | None = None,
+    factory: Any = None,
+) -> Any:
+    """把 `get_sector_trends` 的读路径换成桩（service 内联 import 的是模块属性）。
+
+    `snapshot_days` 默认 = `trading`（快照与行情同步）；显式传入可构造"快照落后行情"。
+    """
+    snapshots = list(trading if snapshot_days is None else snapshot_days)
+
+    async def _earliest_day(db: Any, dimension: str) -> date | None:
+        return min(snapshots) if snapshots else None
+
+    async def _latest_day(db: Any, dimension: str) -> date | None:
+        return max(snapshots) if snapshots else None
 
     async def _market_days(
         db: Any, start: date, end: date, *, limit: int | None = None
@@ -398,40 +486,47 @@ def _patch_sector_db(
         return window[-limit:] if limit is not None else window
 
     async def _snapshot_days(db: Any, dimension: str, *, limit: int) -> list[date]:
-        days = sorted({r.trade_date for r in rows if r.dimension == dimension})
-        return days[-limit:]
+        return snapshots[-limit:]
 
     async def _earliest_complete(db: Any, dimension: str, **kw: Any) -> date | None:
         days = [
             r.trade_date
             for r in rows
-            if r.dimension == dimension and r.capture_kind == market_data_repo.EOD_FULL_CAPTURE
+            if r.trade_date in set(snapshots)
+            and r.capture_kind == market_data_repo.EOD_FULL_CAPTURE
         ]
         return min(days) if days else None
 
-    async def _range(db: Any, dimension: str, start: date, end: date, **kw: Any) -> list[Any]:
-        return [r for r in rows if r.dimension == dimension and start <= r.trade_date <= end]
+    async def _complete_rows(
+        db: Any, dimension: str, start: date, end: date, **kw: Any
+    ) -> list[Any]:
+        # 契约：窗口读**只回完整日**（`poll` 行不得混进来 —— Ruling 21 的 SQL 面）
+        assert (
+            kw.get("capture_kind", market_data_repo.EOD_FULL_CAPTURE)
+            == market_data_repo.EOD_FULL_CAPTURE
+        )
+        return [
+            r
+            for r in rows
+            if r.dimension == dimension
+            and r.capture_kind == market_data_repo.EOD_FULL_CAPTURE
+            and start <= r.trade_date <= end
+        ]
 
-    class _Factory:
-        async def __aenter__(self) -> Any:
-            return object()
-
-        async def __aexit__(self, *exc: Any) -> None:
-            return None
-
-        def __call__(self) -> _Factory:
-            return self
-
+    fake_factory = factory if factory is not None else _FakeFactory()
+    monkeypatch.setattr(market_data_repo, "earliest_sector_moneyflow_day", _earliest_day)
+    monkeypatch.setattr(market_data_repo, "latest_sector_moneyflow_day", _latest_day)
     monkeypatch.setattr(market_data_repo, "list_trading_days", _market_days)
     monkeypatch.setattr(market_data_repo, "list_sector_moneyflow_trading_days", _snapshot_days)
     monkeypatch.setattr(
         market_data_repo, "earliest_sector_moneyflow_complete_day", _earliest_complete
     )
-    monkeypatch.setattr(market_data_repo, "list_sector_moneyflow_range", _range)
-    monkeypatch.setattr(mds, "async_session_factory", _Factory(), raising=False)
+    monkeypatch.setattr(market_data_repo, "list_sector_moneyflow_complete_days", _complete_rows)
+    monkeypatch.setattr(mds, "async_session_factory", fake_factory, raising=False)
     import app.core.database as _db
 
-    monkeypatch.setattr(_db, "async_session_factory", _Factory())
+    monkeypatch.setattr(_db, "async_session_factory", fake_factory)
+    return fake_factory
 
 
 async def test_sector_trends_endpoint_shape(
@@ -461,8 +556,10 @@ async def test_sector_trends_endpoint_shape(
     assert body["attribution_note"] == "按当前分类回溯，非当时成分"
     assert body["lu_count_source"] == "unavailable"
     assert body["top_n"] == 20
-    # 窗口 = 表内实际持有的交易日（桩里 3 天），不是请求上限 60
-    assert body["window"]["days"] == 3
+    # `window.days` 回**请求值** 60；实际交易日跨度（桩里 3 天）走 `observed_days`
+    assert body["window"]["days"] == 60
+    assert body["window"]["observed_days"] == 3
+    assert body["window"]["samples"] + len(body["missing_days"]) <= body["window"]["days"]
     assert body["missing_days"] == [D2.isoformat()]
     assert [b["board_code"] for b in body["boards"]] == ["BK0001"]
     assert body["as_of"] == D3.isoformat()
@@ -566,8 +663,11 @@ async def test_sector_trends_real_db_gate_and_consistency() -> None:
         honest = await mds.get_sector_trends(cache, dimension="industry", days=60)
         assert honest["available_from"] is None, honest
         assert honest["window"]["samples"] == 0
+        assert honest["window"]["days"] == 60  # 回请求值；实际跨度走 observed_days
+        assert honest["window"]["observed_days"] > 0
         assert honest["window"]["from"] is None and honest["window"]["to"] is None
         assert honest["boards"] == []
+        assert len(honest["missing_days"]) == honest["window"]["observed_days"]
         assert honest["leader_change_count"] == 0 and honest["leader_changes"] == []
 
         # 哨兵：写在该维度**窗口内最早**的交易日（真库里该日只有 poll 行，哨兵板码
@@ -607,7 +707,7 @@ async def test_sector_trends_real_db_gate_and_consistency() -> None:
         assert sentinel_board["streak_inflow"] == 1
         # 只有哨兵那天是完整日 → 窗口内其余交易日全部点名（缺日 ≠ 0 流入）
         assert day.isoformat() not in payload["missing_days"]
-        assert len(payload["missing_days"]) == payload["window"]["days"] - 1
+        assert len(payload["missing_days"]) == payload["window"]["observed_days"] - 1
 
         # 同源一致性①：`/market/sector-moneyflow` 这条生产读路径读的就是表里那一行
         envelope = await mds.get_sector_moneyflow(None, "industry", 100)  # type: ignore[arg-type]

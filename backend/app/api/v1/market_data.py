@@ -272,7 +272,7 @@ async def get_sector_trends(
         default=60,
         ge=5,
         le=120,
-        description="窗口交易日数（只统计完整日：当日有 eod_full 行）；上限 120",
+        description="窗口交易日数：以该维度快照最近日为右端、向前恰好 N 个交易日；上限 120",
     ),
     top_n: int = Query(
         default=20,
@@ -292,6 +292,11 @@ async def get_sector_trends(
        `attribution="current_sw_snapshot"`（**按当前分类回溯，非当时成分**）；
        `dimension=concept` 回 `attribution="point_in_time"`（成分差分反推的时点成分）。
     3. **`top_n` 显式**：连续上榜天数的 N 由查询参数定义（默认 20），并列进响应。
+
+    窗口守恒：`window.days` = 请求的交易日数，`window.observed_days` = 实际落在窗口内的
+    交易日数（数据起点附近会小于请求值），`window.samples` = 其中完整日数。
+    `samples + len(missing_days) <= days` 恒成立；该维度一行都没有时 `observed_days=0`
+    且 `missing_days=[]`（"没有可统计对象"与"有对象但缺完整日"是两种形状）。
     """
     payload = await market_data_service.get_sector_trends(
         cache, dimension=dimension, days=days, top_n=top_n

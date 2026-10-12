@@ -208,14 +208,15 @@ async def list_sector_moneyflow_range(
     end: date,
     capture_kind: str | None = None,
 ) -> list[SectorMoneyflowSnapshot]:
-    """某维度 **[start, end] 闭区间**的窗口读（Task 6 的赛段/连续性统计消费）。
+    """某维度 **[start, end] 闭区间**的窗口读（T2 加的通用版）。
 
     纯读：按 ``trade_date, board_code`` 升序返回全部行（不截断）—— 窗口统计要的是
     完整序列，"缺日"由调用方与交易日历对比得出（缺日 **不得** 被当成 0 流入）。
-    本任务无消费方，保留单日版 :func:`list_sector_moneyflow` 不动。
 
-    ``capture_kind`` 可选（Ruling 11）：传 ``'eod_full'`` = 只取"当日已全量捕获"的行
-    （T6 的完整日口径）；不传 = 全序列（含盘中 poll 行）。
+    ``capture_kind`` 可选（Ruling 11）：传 ``'eod_full'`` = 只取"当日已全量捕获"的行；
+    不传 = 全序列（含盘中 poll 行）。**Task 6 的 6b 走的是"必传 `eod_full`"的
+    :func:`list_sector_moneyflow_complete_days`**（产地不该由调用方漏传而静默放宽），
+    本函数保留为"可选产地"的通用读，目前只有 ``tests/test_board_snapshot.py`` 在用。
     """
     stmt = (
         select(SectorMoneyflowSnapshot)
@@ -257,21 +258,52 @@ async def sector_moneyflow_day_has_capture(
 
 # ----- Task 6b：板块趋势窗口读（纯读，不物化）----------------------------------------
 #
-# Ruling 21 的"完整日" = 当日有 `capture_kind='eod_full'` 行的日子。下面四个函数是
-# 趋势端点**唯一**的板块读路径；`poll` 行永远只用来判"这天缺完整日"，不被聚合
-# （盘中 Top-100 子集不是当日全量态，见 Ruling 11）。
+# Ruling 21 的"完整日" = 当日有 `capture_kind='eod_full'` 行的日子。本段分两类函数：
+#
+# - **趋势端点在用**（`market_data_service.get_sector_trends` 的调用点，按顺序）：
+#   `latest_sector_moneyflow_day`（窗口右端锚点）→ `earliest_sector_moneyflow_day`
+#   （窗口左界的下探起点）→ `list_trading_days`（交易日真源；空则退回
+#   `list_sector_moneyflow_trading_days`）→ `earliest_sector_moneyflow_complete_day`
+#   （`available_from`）→ `list_sector_moneyflow_complete_days`（窗口内**只含完整日**的行）；
+# - **同类但当前无生产调用方**：`list_sector_moneyflow_range`（T2 加的通用窗口读，语义上
+#   是 `list_sector_moneyflow_complete_days` 的"可选产地"版本，目前只有
+#   `tests/test_board_snapshot.py` 在用）。
+#
+# `poll` 行永远只用来判"这天缺完整日"，**不**被聚合（盘中 Top-100 子集不是当日全量态，
+# 见 Ruling 11）。
 
 
 async def latest_sector_moneyflow_day(db: AsyncSession, dimension: str) -> date | None:
-    """该维度 `max(trade_date)`（**不限**产地）。
+    """该维度 `max(trade_date)`（**不限**产地）—— 趋势窗口的**右端锚点**。
 
-    用途与 :func:`list_sector_moneyflow_complete_days` 不同：这个只回答"表里最新的一天
-    是哪天"，供趋势窗口**末端锚定**（窗口右端取它，避免把窗口拉过数据末端造出一串
-    假缺日）；完整日判据一律走下面那个。
+    `get_sector_trends` 用它（而不是"今天"）作为窗口右端：数据末端之后的自然日不该被
+    算进窗口，否则右端会拖出一串与数据无关的缺日。注意它锚的是"**有行**的最近日"而
+    不是"有完整日的最近日" —— 若锚后者，`poll`-only 的最后几天会被整体丢出窗口，
+    "这几天缺完整日"这个事实反而看不见了。
+
+    完整日判据一律走 :func:`earliest_sector_moneyflow_complete_day` /
+    :func:`list_sector_moneyflow_complete_days`。
     """
     return (
         await db.execute(
             select(func.max(SectorMoneyflowSnapshot.trade_date)).where(
+                SectorMoneyflowSnapshot.dimension == dimension
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def earliest_sector_moneyflow_day(db: AsyncSession, dimension: str) -> date | None:
+    """该维度 `min(trade_date)`（**不限**产地）—— 趋势窗口左界的下探起点。
+
+    与 :func:`latest_sector_moneyflow_day` 配对给出"该维度自己有数据的区间"，供
+    `list_trading_days(db, start, anchor)` 生成**有界**的交易日候选（不能用
+    `date.min`：那是非 sargable 的全表扫，见 Task 6 评审 Important #3）。
+    返回 `None` = 该维度一行都没有（调用方应走空响应早退）。
+    """
+    return (
+        await db.execute(
+            select(func.min(SectorMoneyflowSnapshot.trade_date)).where(
                 SectorMoneyflowSnapshot.dimension == dimension
             )
         )
