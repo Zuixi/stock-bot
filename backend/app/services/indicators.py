@@ -420,7 +420,10 @@ def stock_feature_row(
     情绪分位）落这里，**无需迁移**。
 
     ``window`` 即 ``stock_features.window_days`` 的窗口；本函数不读它、不写它，
-    只按它算列值（分区键 ``asof_date`` 由调用方给）。
+    只按它算列值（分区键 ``asof_date`` 由调用方给）。**所有列都落在同一个
+    ``window`` 上**——包括无窗口参数的 ``trend_reversals`` / ``max_drawdown``
+    （先裁剪再算），否则同一行里 `total_return` 是 60 日而 `trend_reversals`
+    是全历史，两列不可比。
     """
     closes_valid = _valid(closes)
     total_return: float | None = None
@@ -429,6 +432,12 @@ def stock_feature_row(
 
     vols_tail = _valid(volumes)[-window:]
     avg_volume: float | None = sum(vols_tail) / len(vols_tail) if vols_tail else None
+
+    # 无窗口参数的因子（trend_reversals / max_drawdown）也要落在**同一个 window** 上：
+    # 一行 stock_features 的语义是"截至 asof_date、回看 window_days"，混入全历史量
+    # 会让同一行的两列量纲不同（total_return 是 60 日、trend_reversals 却是全历史）。
+    closes_tail = closes[-window:]
+    volumes_tail = volumes[-window:]
 
     # 短窗口（window < 2）时无法构成"短均线 < 长均线"，落 None 而不是抛异常
     short_window = max(1, window // 4)
@@ -444,13 +453,13 @@ def stock_feature_row(
         "total_return": total_return,
         "return_percentile": latest(percentile_rank(closes, window)),
         "annual_volatility": latest(annualized_volatility(closes, window)),
-        "max_drawdown": max_drawdown(closes, window),
+        "max_drawdown": max_drawdown(closes_tail),
         "downside_vol": latest(downside_volatility(closes, window)),
         "trend_slope": latest(trend_slope(closes, window)),
         "ma_bullish": bullish,
-        "trend_reversals": trend_reversals(closes),
+        "trend_reversals": trend_reversals(closes_tail),
         "avg_volume": avg_volume,
-        "volume_volatility": latest(annualized_volatility(volumes, window)),
+        "volume_volatility": latest(annualized_volatility(volumes_tail, window)),
         "extra": extra or None,
     }
 

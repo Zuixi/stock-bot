@@ -361,6 +361,33 @@ class TestStockFeatureRow:
         b = ind.stock_feature_row(_ramp(20), [1.0] * 20, window=10)
         assert a == b
 
+    def test_every_column_is_scoped_to_the_same_window(self):
+        """同一行的所有列都落在同一个 window 上（含无窗口参数的因子）。
+
+        构造：前 10 期是锯齿（很多反转）+ 深回撤，后 5 期单调上升。
+        window=5 时，max_drawdown / trend_reversals **只看后 5 期** →
+        不得把前 10 期的回撤与反转数带进来。
+        """
+        noisy = [10.0, 2.0, 9.0, 3.0, 8.0, 4.0, 7.0, 5.0, 6.0, 1.0]
+        calm = [1.0, 2.0, 3.0, 4.0, 5.0]
+        series = noisy + calm
+        row = ind.stock_feature_row(series, [1.0] * len(series), window=5)
+        assert row["max_drawdown"] == pytest.approx(0.0)  # 后 5 期单调上升
+        assert row["trend_reversals"] == 0  # 后 5 期无反转
+        # 对照：全序列口径会给出非零值（证明这条测试有区分力）
+        assert ind.max_drawdown(series) < 0
+        assert ind.trend_reversals(series) > 0
+
+    def test_window_boundary_is_trailing(self):
+        # 全序列峰值 5 → 尾部 1 = -80%；但 window=3 只看 [3,2,1] → 峰值 3 → -66.7%
+        series = [1.0, 5.0, 4.0, 3.0, 2.0, 1.0]
+        assert ind.stock_feature_row(series, [1.0] * 6, window=3)["max_drawdown"] == pytest.approx(
+            -2.0 / 3.0
+        )
+        assert ind.stock_feature_row(series, [1.0] * 6, window=6)["max_drawdown"] == pytest.approx(
+            -0.8
+        )
+
 
 # ── 纯函数性（无 IO / 无副作用） ──────────────────────────────────────
 
