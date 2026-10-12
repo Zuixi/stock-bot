@@ -1,3 +1,9 @@
+## 2026-10-12 - 计划登记：市场热点数据持久化与趋势追踪（P0–P4）
+
+- **背景（真库实测）**：行情事实底座很深（`daily_quotes` 829 交易日 / `stock_price_limits` 254 交易日 **100%** 覆盖），但派生层浅且有洞——`market_sentiment_daily` 只有 21 天、`sector_moneyflow_snapshots` 13/20（**65%**，含 2026-10-08 缺失）、`market_sentiment_intraday` 6/11（**54.5%**）且只存 4 个计数（盘中池个股明细在 `upsert_intraday_snapshot` 被丢弃）；`/market/hot-boards` 完全不落库（Redis 60s）；`daily_quotes.pct_chg` 在 2026-09 之前非空率 ≈0.5%，导致 254 个限价交易日里只有 **17 天**过 `market_day_service.is_day_complete`；`reconciliation_service.DOMAINS` 只覆盖 4 个域 → 上述洞当天不告警
+- **产出**：`plans/2026-10-12-market-hotspot-persistence-and-trends.md`（4 Phase / 13 Task；核心是三条落库判据 A 不可回补必当天落 / B 可回算允许回补 / C 快照型分类禁止回算，配「明确不做」清单、回滚方案与逐项验收数字），并登记 `plans/index.md`
+- 涉及文件：plans/2026-10-12-market-hotspot-persistence-and-trends.md、plans/index.md、docs/Changelog.md
+
 ## 2026-09-29 - 生产内存治理：回收遗留 agent 进程 951MB + 服务器专用容器内存上限
 
 - **背景实测**：服务器 3.8GB / **无 swap**、12 个容器**全部 `limit=0`**；`used 3011MB / available 710MB`。真正大头是宿主机上跑了 4~6 天的遗留 agent 进程（`hermes` ×2 + `pi` ×2 = **951MB**，住 tmux 会话 `code` 与 `systemd --user hermes-gateway`），与业务无关；其 `cron/executions.db` 自 Sep 22 起无执行记录，仅心跳空转
