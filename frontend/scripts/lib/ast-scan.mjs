@@ -235,5 +235,3 @@ function nullCheckOf(testText, expressionText) {
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-
-
