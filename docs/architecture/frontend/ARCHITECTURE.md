@@ -72,7 +72,7 @@ frontend/src/
 | `/market/industry/:level1Code` | page | `pages/market-industry-level2`（`IndustryLevel2Page`） | 公开 | 申万一级下钻 |
 | `/market/industry/:level1Code/:level2Code` | page | `pages/market-industry-level3`（`IndustryLevel3Page`） | 公开 | 申万二级下钻 |
 | `/market/industry/:level1Code/:level2Code/:level3Code` | page | `pages/market-industry-level4`（`IndustryLevel4Page`） | 公开 | 申万末级：某三级行业的成分股（**SCD2** 区间还原）+ 该节点 7 项行情聚合（S1.4） |
-| `/market/heatmap` | page（占位） | `pages/market-heatmap`（`MarketHeatmapPage`） | 公开 | 占位（真热力图归 S1.5）；**不是任何 redirect 的目标**（Ruling 30） |
+| `/market/heatmap` | page | `pages/market-heatmap`（`MarketHeatmapPage`） | 公开 | 市场/个股热力图（S1.5）：treemap、四分组（全市场/申万一级/概念/自选）、面积=市值或成交额可切换、颜色=涨跌幅；批量读路 `/api/v1/market/heatmap/treemap`；**不是任何 redirect 的目标**（Ruling 30） |
 | `/market/index/:tsCode` | page | `pages/market-index`（`MarketIndexPage`） | 公开 | 指数详情（`/index/:tsCode` 的 redirect 目标） |
 | `/market/hot-sectors/:category` | page | `pages/market-hot-sectors`（`MarketHotSectorsPage`） | 公开 | 热门板块与情绪；保留（Ruling 30 从 redirect 退回） |
 | `/market/concept/:boardCode` | page | `pages/market-concept`（`ConceptBoardPage`） | 公开 | 概念板块；保留（Ruling 30 从 redirect 退回） |

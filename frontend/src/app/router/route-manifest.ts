@@ -123,13 +123,14 @@ export const ROUTES: AppRoute[] = [
     component: "IndustryLevel4Page",
     parent: "main",
   },
-  // `/market/heatmap`：**不是任何 redirect 的目标**（Ruling 30）；真实现归 S1.5
+  // `/market/heatmap`：**不是任何 redirect 的目标**（Ruling 30）；S1.5 已兑现真实现
+  // （treemap 热力图，消费批量读路 `/api/v1/market/heatmap/treemap`），`isPlaceholder`
+  // 已摘除——`check-routes.mjs` 的占位契约与定点断言同步改写（维护契约见本文件头）。
   {
     key: "market-heatmap",
     path: "/market/heatmap",
     kind: "page",
     component: "MarketHeatmapPage",
-    isPlaceholder: true,
     parent: "main",
   },
   { key: "market-index", path: "/market/index/:tsCode", kind: "page", component: "MarketIndexPage", parent: "main" },

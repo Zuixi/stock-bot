@@ -52,7 +52,8 @@ const PAGES: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
  * `route-manifest.ts` 里 `isPlaceholder: true` 的页面，其下一定渲染本组件（可机械验证 testid）。
  */
 const PLACEHOLDER_NOTICE: Record<string, { title: string; hint?: string }> = {
-  "/market/heatmap": { title: "市场热力图" },
+  // `/market/heatmap` 已随 S1.5 兑现真实现摘除占位（manifest 去 `isPlaceholder`，
+  // 这里的通告条同步删除；check-routes 的占位契约同步改写）。
   "/company": {
     title: "公司分析",
     hint: "9 张公司卡片尚未落地；本页为占位路由，原 /stock/:symbol 已 redirect 到此",

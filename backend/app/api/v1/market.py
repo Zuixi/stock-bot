@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 
 from app.api.deps import CacheDep, DbDep, require_permissions
 from app.core.exceptions import not_found_response
+from app.schemas.heatmap import ConceptBoardRef, HeatmapTreemapOut
 from app.schemas.market import BoardStockOut, HotBoardsOut, MarketListOut
 from app.schemas.quote import IndexDailyOut, IndexKlineResponse
 from app.schemas.ranking import RankingResponseOut, RankingType
@@ -25,7 +26,12 @@ from app.schemas.sw_drilldown import (
     MarketIndustryQuoteOut,
 )
 from app.schemas.sw_performance import SwPerformanceResponseOut
-from app.services import market_service, stock_tag_service, sw_drilldown_service
+from app.services import (
+    heatmap_service,
+    market_service,
+    stock_tag_service,
+    sw_drilldown_service,
+)
 
 router = APIRouter()
 
@@ -143,6 +149,48 @@ async def get_sw_industry_performance(
 ) -> SwPerformanceResponseOut:
     """公开申万一级行业行情聚合。口径 T+1，见响应 as_of。"""
     return await market_service.get_sw_industry_performance(db, cache, limit)
+
+
+# ---------------------------------------------------------------------------
+# S1.5 市场/个股热力图（批量读路）
+#
+# 为什么是**新端点**而不是提高某个既有端点的 limit：现有行情读路全部是小上限
+# 分页（rankings ≤100 / board stocks ≤200 / sw-performance ≤31 / market_data ≤100），
+# 各自的 SQL 与缓存形状都为「Top-N」服务；热力图要的是「一天 × 全市场」的一次性
+# 快照（≈5500 行 × 5 字段），复用任何一个都要么被 limit 卡死、要么把聚合 SQL
+# 改成全量行——后者会动到既有端点的缓存契约（Ruling 30 的回归面）。
+# 独立读路 = 独立缓存键（`market:heatmap:treemap:{day}`，TTL 300s），互不牵连。
+#
+# 鉴权：`/market/**` 公开免登录（ADR 0008），**不挂 RequireAuth / require_permissions**。
+# ---------------------------------------------------------------------------
+
+
+@router.get("/heatmap/treemap", response_model=HeatmapTreemapOut)
+async def get_heatmap_treemap(cache: CacheDep, db: DbDep) -> HeatmapTreemapOut:
+    """全市场热力图批量读路：判据日一行一票，≈5500 行 × 5 字段 + 2 个分组码。
+
+    四个分组维度（全市场 / 申万一级 / 概念板块 / 自选）共用这一批 items，
+    分组在前端完成——分组形态随用户切换而变，数据不该重新传输。
+    单位见响应 `amount_unit`（千元）/ `mv_unit`（万元），前端标注直接消费。
+    """
+    return await heatmap_service.get_treemap(db, cache)
+
+
+@router.get("/heatmap/concept-boards", response_model=list[ConceptBoardRef])
+async def get_heatmap_concept_boards(cache: CacheDep, db: DbDep) -> list[ConceptBoardRef]:
+    """概念板块下拉名录（活跃板块，码升序）：给热力图「概念板块」维度做码→名映射。"""
+    boards = await heatmap_service.list_concept_boards(db, cache)
+    return [ConceptBoardRef.model_validate(b) for b in boards]
+
+
+@router.get("/heatmap/sw-l1", response_model=list[dict])
+async def get_heatmap_sw_l1(cache: CacheDep, db: DbDep) -> list[dict]:
+    """申万一级行业 ``{code, name}``：给热力图「申万一级」维度做码→名映射。
+
+    与 `/sw-industry/options?level=1` 的差别：那条走 `stock_tag_service`（个股打标
+    场景），本条是热力图组头的薄映射（同一张权威表 `sw_industry_classes`，不另立口径）。
+    """
+    return await heatmap_service.list_sw_l1(db, cache)
 
 
 # ---------------------------------------------------------------------------

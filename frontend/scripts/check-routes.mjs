@@ -243,7 +243,9 @@ if (keepThatRedirect.length === 0) {
  * 故把**成员与基数**都变成被断言的契约：多一条、少一条都转红。
  */
 const PLACEHOLDER_CONTRACT = [
-  "/market/heatmap",
+  // `/market/heatmap` 已随 S1.5 兑现真实现摘除占位（S1.5 落地前它是契约成员，
+  // 定点断言曾守「不得摘标志冒充真页面」；现在反向守「真页面不许退回占位」，
+  // 见下方定点断言——同一行占位契约的两个方向各守各的时期）。
   "/company",
   "/news",
   "/macro",
@@ -267,12 +269,13 @@ if (placeholderMissing.length === 0 && placeholderExtra.length === 0) {
       (placeholderExtra.length ? `\n      清单多 isPlaceholder：${placeholderExtra.join("、")}` : "")
   );
 }
-// 定点断言（旧脚本能力，Task 5 re-review 要求恢复）：`/market/heatmap` 是"真实现归 S1.5"的典型占位。
-// 它不在任何 redirect 目标里，上一版 ③ 对它是**完全无覆盖**的；这里给它一条不会随集合大小漂移的断言。
-if (placeholderPaths.includes("/market/heatmap")) {
-  pass("`/market/heatmap` 仍是占位路由（真热力图归 S1.5，不得摘标志冒充真页面）");
+// 定点断言（旧脚本能力，Task 5 re-review 要求恢复）：`/market/heatmap` 的占位状态是被断言的契约。
+// S1.5 落地**前**它守「不得摘标志冒充真页面」；S1.5 兑现后**反向**守「真页面不许退回占位」
+// ——同一行路由的两个方向各守各的时期，断言永不空转。
+if (!placeholderPaths.includes("/market/heatmap")) {
+  pass("`/market/heatmap` 已摘占位标志（S1.5 真热力图已落地，不得退回占位冒充「规划中」）");
 } else {
-  fail("`/market/heatmap` 不再是占位路由 —— S1.5 真热力图落地前摘标志 = 假声明");
+  fail("`/market/heatmap` 仍是占位路由 —— S1.5 已兑现真实现，退回占位 = 功能性回退");
 }
 
 const placeholderTargets = [...routeRedirects.entries()].filter(([, to]) =>
