@@ -38,14 +38,16 @@
 ## 行业投研
 
 > **本板块需 `research:read` 权限才可读**（[ADR 0008](./decisions/0008-research-read-requires-permission.md)，仅 researcher / analyst / admin）：
-> `/industry*` 路由（由 `/research*` redirect 而来，redirect 不放宽权限）与 `/api/v1/industries*` 读接口同样受限（匿名 401、无权限 403）；
+> `/industry*` 路由（由 `/research*` redirect 而来，redirect 不放宽权限）、`/api/v1/industries*` 与
+> **统一指标读面 `/api/v1/metrics*`**（router 级依赖，[backend/app/api/v1/metrics.py](../backend/app/api/v1/metrics.py)）同样受限（匿名 401、无权限 403）；
 > 公开行情（行情台首页 / 个股 / 指数）不受影响。
 
 | 功能 | 说明 | 代码入口 |
 |---|---|---|
 | 行业列表 | 已产品化行业（当前：生猪养殖"猪智投"）；路由前缀迁移到 `/industry`（由 `/research` redirect） | `frontend/src/pages/industry` · `/api/v1/industries` |
 | 投研工作台 | 四 Tab：投资看板 / 行业知识库 / 行情调研追踪 / 交易管理（路由 `/industry/:industryKey`，由 `/research/:industryKey` redirect） | `frontend/src/pages/industry/workbench` · `frontend/src/features/industry-research` · `/api/v1/industries` |
-| 指标注册表 | `metric_key → {名称,单位,频率,源优先级,层级,参考区间}` 由后端下发驱动前端渲染 | `backend/app/services/`（industry registry）· `/api/v1/industries` |
+| 指标注册表 | `metric_key → {名称,单位,频率,源优先级,层级,参考区间,口径版本}` 由后端下发驱动前端渲染；未登记 `metric_key` 一律拒绝（404） | `backend/app/services/`（industry registry）· `/api/v1/industries` · `/api/v1/metrics` |
+| 统一指标读面 | 行业/情绪/宏观/策略因子共用 `industry_metrics` 单表，`scope_key`（DB 列名仍为 `industry_key`）区分 scope；每指标最新值 + 窗口内序列，均带 `source / as_of / freq / caliber_version` 四徽章，其中 `as_of_source` 标注 PIT 实际可得日是否回退（`published_at` \| `period`） | `/api/v1/metrics/latest` · `/api/v1/metrics/series` · `frontend/src/features/industry-research/components/MetricBadge.tsx` |
 | 规则引擎与信号 | 周期阶段判定、参考区间随政策生效日切换、信号可回测可审计 | `/api/v1/industries` · `backend/tests/benchmarks/test_rule_engine_bench.py` |
 
 ## 数据管道与运维

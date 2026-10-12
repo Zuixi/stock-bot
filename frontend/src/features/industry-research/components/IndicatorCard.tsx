@@ -1,6 +1,7 @@
 import { EChart, sparkOption } from "@/shared/ui/EChart";
 import { useTheme } from "@/app/theme-context";
 import type { MetricLatest } from "@/shared/api/industryResearch";
+import { MetricBadge } from "./MetricBadge";
 import { SourceBadge } from "./SourceBadge";
 
 interface Props {
@@ -90,6 +91,19 @@ export function IndicatorCard({ metric }: Props) {
           <EChart option={sparkOption(spark, colors.primary)} height={36} silent />
         </div>
       )}
+
+      {/* 四徽章（spec §S1.2）：数据源 / 实际可得日(PIT) / 频率 / 口径版本 */}
+      <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid var(--border)" }}>
+        <MetricBadge
+          source={metric.source}
+          asOf={metric.asOf}
+          asOfSource={metric.asOfSource}
+          freq={metric.freq}
+          caliberVersion={metric.caliberVersion}
+          caliberVersionRegistered={metric.caliberVersionRegistered}
+          showCaliber
+        />
+      </div>
     </div>
   );
 }
