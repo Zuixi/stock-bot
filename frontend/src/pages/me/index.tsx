@@ -1,7 +1,7 @@
 import { Tabs, Typography } from "antd";
 import { StarOutlined, TagsOutlined, FundOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { PlaceholderPage } from "@/shared/ui";
+import { PlaceholderPage } from "@/shared/ui/PlaceholderPage";
 import { TagsPanel, WatchlistTable } from "@/features/watchlist/components";
 
 /**
