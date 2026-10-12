@@ -157,7 +157,7 @@
 
 ## 4. 完整路由表（既有 15 条，一条不漏）
 
-旧路由集合以 `frontend/src/app/router/index.tsx` 为准（**15 条**）。spec §S0.2 的 redirect 表列了 13 条，**漏了 `/`（landing）与 `/login`**：这两条语义未变，按「保留（语义未变）」补入本表。**一条都不能直接删。**
+旧路由集合以 `frontend/src/app/router/index.tsx` 为准（**合计 15 条**）。spec §S0.2 的 redirect 表列了 13 条，**漏了 `/`（landing）与 `/login`**：这两条语义未变，按「保留（语义未变）」补入本表。**一条都不能直接删。**
 
 | # | 旧路由 | 新位置 | 处理 |
 |---|---|---|---|
@@ -211,13 +211,15 @@
 > **硬性要求**：**未落地的目标与其 redirect 必须在同一个 commit 里一起交付**，且目标页以「规划中」占位路由承载（见 §5.2）。**只加 redirect、目标页留空 = 把 404 从旧路径搬到新路径**，spec §S0.2「13 条旧路由逐条访问返回 200」的验收依然过不了——本表的冻结意义正是让 Task 5 一次交付就能过该验收。
 > 已存在的目标（`/market`、`/market/industry/:level1Code`、`/market/industry/:level1Code/:level2Code`、`/`、`/login`）**不需要新建**，只在需要时改语义。
 
-> **redirect 净效果（供 Task 5 逐条照做，不得静默加严）**：10 条 redirect **没有一条被放宽或收紧**，逐组如下：
-> - 6 条 `/market/**`（`/market/category`、`/market/hot-sectors/:category`、`/market/concept/:boardCode` 及保留项）= **公开（免登录）** 不变；
-> - `/stock/:symbol` → `/company/:symbol`、`/index/:tsCode` → `/market/index/:tsCode` = **公开（免登录）** 不变（ADR 0008）；
-> - `/research`、`/research/:industryKey` → `/industry*` = **`research:read`** 不变，**不得放宽为「登录即可」**；
-> - `/watchlist`、`/tags`、`/tags/:tagName` → `/me*` = **登录即可**，与现状相同（既有这三条本就带 `RequireAuth`，未登录者同样被引导登录）。
+> **redirect 净效果（供 Task 5 逐条照做，不得静默加严）**：**10 条 redirect，一条不多**，且**没有一条被放宽或收紧**——它们恰好就是 §4 表中标 `redirect` 的那 10 行，逐组如下（每条都写成 `旧 → 新`，便于机械比对）：
+> - **3 条**（市场）：`/market/category` → `/market/industry`、`/market/hot-sectors/:category` → `/market/heatmap?group=:category`、`/market/concept/:boardCode` → `/market/heatmap?concept=:boardCode` —— 处理后仍 **公开（免登录）**（ADR 0008「`/market/**` 维持免登录」）；
+> - **2 条**（个股 / 指数）：`/stock/:symbol` → `/company/:symbol`、`/index/:tsCode` → `/market/index/:tsCode` —— **公开（免登录）** 不变（ADR 0008）；
+> - **2 条**（投研）：`/research` → `/industry`、`/research/:industryKey` → `/industry/:industryKey` —— **`research:read`** 不变，**不得放宽为「登录即可」**；
+> - **3 条**（自选 / 标签）：`/watchlist` → `/me?tab=watchlist`、`/tags` → `/me?tab=tags`、`/tags/:tagName` → `/me?tab=tags&name=:tagName` —— **登录即可**，与现状相同（既有这三条本就带 `RequireAuth`，未登录者同样被引导登录）。
 >
-> 3 条保留（`/`、`/login`、`/market`）语义未变。
+> 合计 **3 + 2 + 2 + 3 = 10**（= §4 表 `redirect` 行数）。
+> **另有 5 条保留**（语义未变，**不是 redirect、不在上面 10 条内**）：spec §S0.2 表原有的 **3 条**——`/market`、`/market/industry/:level1Code`（spec 写作 `/market/industry/:l1`）、`/market/industry/:level1Code/:level2Code`（spec 写作 `/market/industry/:l1/:l2`）——**加上 Ruling 8 补入的 2 条**：`/`（landing）与 `/login`（这两条 spec 表未列，因语义未变而补为「保留（语义未变）」）。
+> 合计 **3 + 2 = 5**（= §4 表 `保留` 行数 = `15 − 10`）。
 
 ---
 
@@ -247,12 +249,14 @@
 
 ### 5.2 未实现导航与未建成目标的占位（**no-404 契约**）
 
-**占位范围 = 10 个导航根 + 全部 redirect 目标（含裸路径与带参变体），不是只覆盖 10 个根。** 只给导航根建占位、让 redirect 目标仍 404，等于把 404 从旧路径搬到新路径，spec §S0.2「13 条旧路由逐条访问返回 200」照样过不了。
+**占位范围 = 10 个导航根 + 全部 redirect 目标（含裸路径与带参变体）+ `/search`（顶栏工具，非 redirect），不是只覆盖 10 个根。** 只给导航根建占位、让 redirect 目标仍 404，等于把 404 从旧路径搬到新路径，spec §S0.2「13 条旧路由逐条访问返回 200」照样过不了。
 
 1. **10 个导航根**：`/market`、`/news`、`/industry`、`/company`、`/macro`、`/sentiment`、`/valuegraph`、`/strategy`、`/risk`、`/trade` 全部可点击进入；未落地模块显示「规划中」占位页，**无 404**。
-2. **redirect 目标的裸路径与带参变体同样要有占位路由**（清单见 §4「新目标路由的建立归属」，逐条为：`/market/industry`（裸）/ `/market/heatmap`（含 `?group=` `?concept=`）/ `/market/index/:tsCode` / `/company` + `/company/:symbol` / `/industry`（裸）+ `/industry/:industryKey` / `/me`（含 `?tab=watchlist` `?tab=tags` `?tab=tags&name=`）/ `/search`（含 `?q=`））。占位页必须**保留 query 参数与路径参数**（redirect 不吞参数），不能把带参访问收敛成一个无参空页。
+2. **redirect 目标与顶栏工具目标的裸路径 / 带参变体同样要有占位路由**（完整清单见 §4「新目标路由的建立归属」共 9 条：`/market/industry`（裸）· `/market/heatmap`（含 `?group=` `?concept=`）· `/market/index/:tsCode` · `/company` + `/company/:symbol` · `/industry`（裸）+ `/industry/:industryKey` · `/me`（含 `?tab=watchlist` `?tab=tags` `?tab=tags&name=`）· `/search`（含 `?q=`，**顶栏全局工具、非 redirect**））。占位页必须**保留 query 参数与路径参数**（redirect 不吞参数），不能把带参访问收敛成一个无参空页。
 3. **交付原子性**：某个目标页及其 redirect **必须在同一个 commit 里一起落地**；**不允许**「先加 redirect、目标页留到以后」。
 4. 占位页只承诺「可达 + 不 404 + 规划中提示」，**不承诺数据**；模块真正的页面落地时替换占位实现即可，路由形状不变。
+
+> 范围口径说明：**5 条保留**（`/market`、`/market/industry/:level1Code`、`/market/industry/:level1Code/:level2Code`、`/`、`/login`）**今天已存在**，本来就不 404，故不需要占位；**9 条归属目标**（其中 8 条服务于 redirect、1 条 `/search` 服务于顶栏工具）今天不存在，才是占位范围。
 
 ---
 
