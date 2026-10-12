@@ -1,3 +1,10 @@
+## 2026-10-12 - 移除「数据版图」静态矩阵（市场页底部 + landing 第 6 区块）
+
+- **背景（用户反馈）**：`DataCoverageMatrix` 是 11 行**手写常量**的静态宣传矩阵，挂在 `/market` 的 Tabs **下方**，所以 5 个 Tab 里下滑都会重复看到同一张表；且它与真实数据可用性长期漂移——北向上游停更后靠手改常量把该行标成「规划中」，逐域上线状态全靠人工维护
+- **改动**：删除组件本体 `features/market/components/DataCoverageMatrix.{tsx,css}` 与 barrel 导出、`/market` 页脚上方那份（`withStats={false}`）、landing 第 6 区块（`landing/sections/DataCoverage.tsx` 及其 import/挂载）；同步删除两处断言它的 e2e（`marketTrust.spec.ts` 的「数据版图把北向一行标为规划中…」、`landing.spec.ts` 的「数据覆盖矩阵含核心数据域与免费徽章」），修正 `marketPolling.spec.ts` 与 `landing.css` 里的过时注释，设计文档 `docs/design/landing-market-theme.md` §5 改为「已下线」并保留表格作历史存档（去掉对已删 `COVERAGE_ROWS` 的同源引用）
+- **替代入口**：数据新鲜度的真实来源是**后端** `GET /market/data-freshness` 的 `coverage`（逐域 `have_days`/`complete_days`/`cover_pct`，由库内实况算出）；前端不再用手写常量对外宣称"已上线/免费"
+- 涉及文件：frontend/src/features/market/components/{DataCoverageMatrix.tsx,DataCoverageMatrix.css,index.ts}、frontend/src/pages/market/index.tsx、frontend/src/pages/landing/{index.tsx,landing.css,sections/DataCoverage.tsx}、frontend/e2e/{marketTrust,landing,marketPolling}.spec.ts、docs/design/landing-market-theme.md、docs/Changelog.md
+
 ## 2026-10-12 - 修复「点个股后按返回键回不到原界面」：Market 分类 Tab 改为 URL 状态 + 错误边界随路由重置
 
 - **根因（用户反馈，Playwright 实测复现）**：`/market` 的分类 Tab 是 `useState("overview")` 组件内存态，而 `/market` 与 `/stock/:symbol` 是兄弟路由 —— 进个股页会卸载 `MarketPage`，浏览器返回只还原 URL，组件重新挂载即落回默认「指数总览」，用户永远回不到离开时的「短线情绪」（口径/展开态等页内状态一并丢失）。实测链路：`/market` → 短线情绪 → 点个股 → `goBack()` → `activeTab=指数总览`；既有 e2e 每条用例都得手动点回该 Tab，正是这个缺陷的化石

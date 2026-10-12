@@ -336,11 +336,11 @@ test.describe("可点击条目语义与键盘可达（Task 16）", () => {
 });
 
 /**
- * Task 16：北向停更标注与数据版图降级。
+ * Task 16：北向停更标注。
  * 北向（`moneyflow_hsgt`）上游已停更：卡片要能说「数据源已停更」**并给出最新数据日**，
  * 日期必须取自 payload（`as_of`），换一天文案跟着变——写死日期就是假标注。
  */
-test.describe("北向停更标注与数据版图降级（Task 16）", () => {
+test.describe("北向停更标注（Task 16）", () => {
   const NORTHBOUND_ITEMS = [
     { date: "2026-09-06", net_amount: 12345.6 },
     { date: "2026-09-07", net_amount: -7890.1 },
@@ -376,18 +376,5 @@ test.describe("北向停更标注与数据版图降级（Task 16）", () => {
     const card2 = page.locator(".ant-card").filter({ hasText: "北向资金" });
     await expect15s(card2.getByText("数据源已停更（最新 08-21）")).toBeVisible();
     await expect(card2.getByText("（最新 09-07）")).toHaveCount(0);
-  });
-
-  test("数据版图把北向一行标为「规划中」，且不冒充已上线数据域", async ({ page }) => {
-    await page.goto("/market");
-    const matrix = page.locator(".dc-table");
-    await expect15s(matrix).toBeVisible();
-
-    const northboundRow = matrix.locator(".dc-row").filter({ hasText: "北向资金" });
-    await expect15s(northboundRow.getByText("规划中")).toBeVisible();
-    // 规划中 ≠ 免费可用：该行不得出现「免费」徽章（否则等于宣称已覆盖）
-    await expect(northboundRow.locator(".dc-free-badge")).toHaveCount(0);
-    // 规划中只此一行，别把其它数据域一起降级
-    await expect(matrix.locator(".dc-planned-badge")).toHaveCount(1);
   });
 });

@@ -45,7 +45,7 @@
 |---|---|---|
 | D1 | **盘中口径以东财为主**（涨停池），本地 EOD 自算保留为**收盘权威口径**；两者并列、各自标注 | 东财涨停池实测已含 `streak/days/boards/seal_time/seal_fund/break_count/board_name`，是现成的盘中真值；本地自算是回填/校验与历史一致性所需。原设计文档的"不做 Web-first"（§211）在本条上作废 |
 | D2 | **热门板块改用东财真实板块体系**（行业/概念/地域），带真实 `code` 与成分股 | 现 `csrc_desc`/`province` 不是板块，`code` 恒空导致下钻与高亮全部失效；申万 L3 卡保留但标注自己的口径，不混用 |
-| D3 | **北向卡保留但标注"数据源已停更"**，数据版图同步降级为"规划中" | 上游事实停更，删除会丢历史可读性；标注后不再误导 |
+| D3 | **北向卡保留但标注"数据源已停更"**（数据版图同步降级为"规划中"—— **该矩阵已于 2026-10-12 整体移除**，见 `docs/Changelog.md` 与 `landing-market-theme.md` §5） | 上游事实停更，删除会丢历史可读性；标注后不再误导 |
 | D4 | **失败可观测**：任务失败写 Redis 告警键并在 freshness 端点暴露 | APScheduler 的 "executed successfully" 只表示函数返回，不能作为成功信号 |
 | D5 | **完整性判据升级为日级三元组**：行数 ≥ 0.9×universe **且** `pct_chg` 非空率 ≥ 0.99 **且** 该日 `stock_price_limits` 存在 | 行数够但列全 NULL 的日子（09-14/15）必须被判为不完整并触发重拉 |
 | D6 | **列表型端点统一包成对象** `{as_of, as_of_quality, items}` | 现状 `distribution/sectors/capital-flow` 根本没有 as_of，无法在前端标注新鲜度 |
