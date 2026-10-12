@@ -104,6 +104,26 @@ async function mockFallbackDistribution(page: import("@playwright/test").Page) {
   );
 }
 
+/**
+ * 未解析出判据日：后端 `get_distribution` 的 docstring 明确「an unresolved day must not
+ * render as eleven zero-count buckets」，即此时 `items: []`（**而不是** 11 个 0 桶）。
+ * 本 mock 覆写为那个真实形态，用来钉住「空 items **不得**渲染成 上涨 0 只 / 下跌 0 只」。
+ */
+async function mockUnresolvedDistribution(page: import("@playwright/test").Page) {
+  await page.route("**/api/v1/market/distribution", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        as_of: null,
+        as_of_quality: "unavailable",
+        as_of_reason: "no_latest_complete_day",
+        items: [],
+      }),
+    })
+  );
+}
+
 /** 同上：北向信封同样实抓后只覆写停更标注，避免手写形状与后端漂移。 */
 async function mockDiscontinuedNorthbound(page: import("@playwright/test").Page) {
   const resp = await page.request.get("/api/v1/market/northbound?days=30");
@@ -189,5 +209,17 @@ test.describe("市场卡片口径标注", () => {
       await expect15s(card.getByText(/数据截至/).first()).toBeVisible();
       await expect15s(card.getByText(/收盘|未完整|按最近完整日/).first()).toBeVisible();
     }
+  });
+
+  test("未解析出判据日不渲染 0 只（items:[] 走空态而非全 0 桶）", async ({ page }) => {
+    await mockUnresolvedDistribution(page);
+    await page.goto("/market");
+    await page.getByRole("tab", { name: "A股全景" }).click();
+    const card = page.locator(".ant-card").filter({ hasText: "A股涨跌分布" });
+    await expect15s(card.getByTestId("distribution-empty")).toBeVisible();
+    // 核心断言：不得出现"上涨 0 只 / 下跌 0 只"，也不得出现空图
+    await expect(card.getByText(/上涨\s*0\s*只/)).toHaveCount(0);
+    await expect(card.getByText(/下跌\s*0\s*只/)).toHaveCount(0);
+    await expect(card.locator("canvas")).toHaveCount(0);
   });
 });

@@ -24,7 +24,13 @@ function buildOption(items: SectorMoneyflowItem[], c: ThemePalette) {
       ratio: i.mainNetRatio,
       leadName: i.leadStockName,
       leadPct: i.leadStockPct,
-      itemStyle: { color: (i.mainNetInflow ?? 0) >= 0 ? c.up : c.down, borderRadius: 2 },
+      // 颜色与 value 同口径（与 MarketMoneyflowCard 逐字一致）：null 时柱子本来就不画，
+      // 但 `(x ?? 0) >= 0` 会把"缺值"折成 0 再判成 `c.up` —— 留一个"不可见但语义错误"的
+      // 分支；一旦哪天改成透明占位柱，它会立刻以"阳线色"露出来。故显式判 null → `c.flat`。
+      itemStyle: {
+        color: i.mainNetInflow == null ? c.flat : i.mainNetInflow >= 0 ? c.up : c.down,
+        borderRadius: 2,
+      },
     }))
     .reverse();
   return {

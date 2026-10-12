@@ -2,8 +2,8 @@ import { Card, Spin, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchDistribution } from "@/shared/api/market";
 import { fetchMarketMoneyflow } from "@/shared/api/marketData";
+import { DegradedNotice, FreshnessNote } from "@/shared/ui";
 import { EChart } from "@/shared/ui/EChart";
-import { FreshnessNote } from "@/shared/ui";
 import { useTheme } from "@/app/theme-context";
 import type { ThemePalette } from "@/app/theme";
 import { useMarketPolling } from "../hooks/useMarketPolling";
@@ -66,7 +66,11 @@ function BalanceBar({ up, flat, down }: { up: number; flat: number; down: number
 export function DistributionChart() {
   const { colors } = useTheme();
   const { refetchInterval } = useMarketPolling();
-  const { data: distribution, isLoading } = useQuery({
+  const {
+    data: distribution,
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: ["market", "distribution"],
     queryFn: fetchDistribution,
     staleTime: STALE_TIME,
@@ -98,13 +102,24 @@ export function DistributionChart() {
     get("0~-1%") + get("-1~-3%") + get("-3~-5%") + get("-5~-7%") + get(">-7%") + get("跌停");
   const total = up + flat + down || 1;
 
+  // ⚠️ **`items: []` 不是"11 个 0 桶"，是"当日无已解析数据"**——后端把这条契约写在自己的
+  // docstring 里（`market_service.get_distribution`：
+  // 「No resolved day → ``items: []`` (an unresolved day must not render as eleven
+  //   zero-count buckets)」）。所以**空 items 时绝不能渲染下面那三行 0 只**：
+  // 上面的 `get()` 会全部返回 0，于是卡片会打印「上涨 0 只 / 平盘 0 只 / 下跌 0 只」——
+  // 一个看起来完全正常的"平盘日"，实际是"尚未解析出判据日"。
+  // 注意与"**真实的平盘日**"区分：真实的平盘日是 `items` **非空**（11 桶全 0 起底），
+  // 那时渲染三个 0 是正确的；这里挡的是 `items` 为空这一种。
+  const hasDistribution = data.length > 0;
+
   const option = {
     tooltip: {
       trigger: "axis" as const,
       formatter: (params: any) => {
         const p = params[0];
-        const pct = total ? ((p.value / total) * 100).toFixed(1) : "0";
-        return `${p.name}<br/>数量: <b>${p.value}</b>（占 ${pct}%）`;
+        // 真实全 0（11 桶全 0 的平盘日）时总数为 0：占比无意义，显式给 `—` 而不是 0.0%
+        const pct = total > 0 ? ((p.value / total) * 100).toFixed(1) : null;
+        return `${p.name}<br/>数量: <b>${p.value}</b>（占 ${pct == null ? "—" : `${pct}%`}）`;
       },
     },
     grid: { left: 40, right: 16, top: 24, bottom: 32 },
@@ -140,9 +155,26 @@ export function DistributionChart() {
       }
     >
       <Spin spinning={isLoading}>
+        {/* 有判据日才报新鲜度：无判据日时那句会是无来源的"新鲜"，与空态自相矛盾 */}
         <FreshnessNote asOf={distribution?.asOf} quality={distribution?.asOfQuality} />
-        <EChart option={option} height={220} />
-        <BalanceBar up={up} flat={flat} down={down} />
+        {hasDistribution ? (
+          <>
+            <EChart option={option} height={220} />
+            <BalanceBar up={up} flat={flat} down={down} />
+          </>
+        ) : error ? (
+          <DegradedNotice reason={`涨跌分布读取失败：${(error as Error).message}`} />
+        ) : (
+          <Typography.Text
+            type="secondary"
+            data-testid="distribution-empty"
+            style={{ display: "block", padding: "44px 0", textAlign: "center" }}
+          >
+            {distribution?.asOfReason
+              ? `当日涨跌分布暂不可用（${distribution.asOfReason}）`
+              : "暂无已解析的判据日：涨跌分布按交易日解析后展示（不是平盘日）"}
+          </Typography.Text>
+        )}
       </Spin>
     </Card>
   );

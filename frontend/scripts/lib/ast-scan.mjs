@@ -44,7 +44,20 @@ export function parseSource(fileName, text, onError) {
     /* setParentNodes */ true,
     fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   );
-  const diags = sf.parseDiagnostics ?? [];
+  // **失败关闭**（Ruling 48）：`parseDiagnostics` 是 TypeScript 的**内部**字段，
+  // 不在 `typescript.d.ts` 里公开声明。写成 `?? []` 等于"字段一旦改名（TS 升级）就静默
+  // 恢复成修复前的绿"——正是刚修掉的那个失败模式换个入口复活。
+  // 一个看不见解析错误的门禁**不许报成功**，故字段缺失本身即失败（带上排查提示）。
+  if (!("parseDiagnostics" in sf)) {
+    const message =
+      `${fileName} 无法读取解析诊断：本版 typescript 的 SourceFile 上没有 \`parseDiagnostics\` 字段` +
+      `（它是内部字段，可能已随版本改名/移除）。本门禁必须看得见解析错误才敢报成功，` +
+      `请改用公开 API（如 \`ts.createProgram\` + \`program.getSyntacticDiagnostics()\`）后重跑。`;
+    if (typeof onError === "function") onError(message);
+    else throw new Error(message);
+    return sf;
+  }
+  const diags = sf.parseDiagnostics;
   if (diags.length > 0) {
     const first = diags[0];
     const { line, character } = sf.getLineAndCharacterOfPosition(first.start ?? 0);

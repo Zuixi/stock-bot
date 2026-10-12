@@ -24,6 +24,8 @@
  *
  * 为什么 CSS 侧这样够了（不需要 JS 那套词法）：CSS 没有正则字面量、没有模板串、
  * 没有 `//` 行注释；字符串只有单引号与双引号两种，且转义只用反斜杠。
+ * **另需整体跳过 `url(...)`**（见实现①）：CSS 允许 `url()` 里不加引号，而 URL 里
+ * 完全可能出现 `/*`（如 `url(https://ex.com/*)`）——只跳字符串挡不住它。
  */
 export function stripCssComments(source) {
   let out = "";
@@ -31,7 +33,46 @@ export function stripCssComments(source) {
   const n = source.length;
   while (i < n) {
     const ch = source[i];
-    // 字符串：原样保留（含引号与内容），只跳过反斜杠转义——字符串里的 `/*` 不是注释
+
+    // ① `url(` —— **整体当不透明单元跳过**（含未加引号的 URL）。
+    //    为什么必须单独处理：CSS 允许 `url()` 里**不加引号**，而 URL 里完全可能出现 `/*`
+    //    （实测 `url(https://ex.com/*)`）。只靠"跳过引号字符串"挡不住它 →
+    //    整份文件余部被当注释吞掉 → 引用看不见（假绿）+ 定义看不见（假红）。
+    //    与 ② 是**同一类**缺陷（把非注释的 `/*` 当注释），故一并堵住。
+    //    在 `url(...)` 内只认**配对的 `)`**（允许一层嵌套括号）与其中的引号字符串；
+    //    未闭合时一路走到文件尾——这种情况 CSS 本身已非法，交给下游解析器报错。
+    if ((ch === "u" || ch === "U") && /^url\(/i.test(source.slice(i, i + 4))) {
+      out += source.slice(i, i + 4);
+      i += 4;
+      let depth = 1;
+      let quote = null;
+      while (i < n && depth > 0) {
+        const c = source[i];
+        if (quote) {
+          out += c;
+          if (c === "\\") {
+            out += source[i + 1] ?? "";
+            i += 2;
+            continue;
+          }
+          if (c === quote) quote = null;
+          i += 1;
+          continue;
+        }
+        if (c === '"' || c === "'") {
+          quote = c;
+        } else if (c === "(") {
+          depth += 1;
+        } else if (c === ")") {
+          depth -= 1;
+        }
+        out += c;
+        i += 1;
+      }
+      continue;
+    }
+
+    // ② 引号字符串：原样保留（含引号与内容），只跳过反斜杠转义——字符串里的 `/*` 不是注释
     if (ch === '"' || ch === "'") {
       const quote = ch;
       out += ch;
@@ -51,6 +92,8 @@ export function stripCssComments(source) {
       }
       continue;
     }
+
+    // ③ 真正的块注释
     if (ch === "/" && source[i + 1] === "*") {
       out += "  ";
       i += 2;
@@ -64,6 +107,7 @@ export function stripCssComments(source) {
       }
       continue;
     }
+
     out += ch;
     i += 1;
   }
