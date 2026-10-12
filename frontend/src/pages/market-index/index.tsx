@@ -6,7 +6,6 @@ import { ChangeText } from "@/shared/ui";
 import { KlineChart } from "@/shared/ui/kline";
 import { fetchGlobalIndices } from "@/shared/api/marketData";
 import { fetchIndexKline, fetchMarketIndices } from "@/shared/api/market";
-import type { MarketIndex } from "@/shared/types";
 
 /**
  * 详情页的展示模型。**三个行情字段可空**（与 `MarketIndex` 的必填数字不同）：
@@ -129,7 +128,7 @@ export default function IndexDetailPage() {
           </div>
           {index.value == null && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              该标的暂无可用行情（既无实时快照也无日线），故不显示数值；行情入接入后自动出现。
+              该标的暂无可用行情（既无实时快照也无日线），故不显示数值；行情源接入后会自动出现。
             </Typography.Text>
           )}
         </div>

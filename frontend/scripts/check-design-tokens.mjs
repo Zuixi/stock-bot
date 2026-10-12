@@ -10,6 +10,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+// 注释感知的扫描原语（Ruling 45）：两个源码级门禁都不许直接在原文上跑正则。
+import { findVarRefs, lineOf, stripComments } from "./lib/source-scan.mjs";
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const css = readFileSync(join(root, "src/app/styles/theme.css"), "utf8");
 const ts = readFileSync(join(root, "src/app/theme.ts"), "utf8");
@@ -86,12 +89,24 @@ for (const { label, marker, tsMode, surfaces } of MODES) {
 //      不是自定义属性；真正存在的是 `--text-secondary`）。
 // 因此把"**引用的每一个 `var(--x)` 都必须真的被定义**"机械化——这条完全可以机械检测。
 //
-// 定义面 = `src/` 下所有 `.css/.ts/.tsx` 里的 `--x:` 声明（含 `theme.css` 与各组件
-// 局部变量如 `--ladder-h1`、`--sw3-h2`、`--thermo-up-tint`）。
-// 引用面 = 同一批文件里的 `var(--x...)`。**带 fallback 的写法**（`var(--a, var(--b))`
-// 或 `var(--a, #fff)`）里，第一个参数允许未定义（这正是 fallback 的用途），
-// 故只把**第一个参数**计入引用：`--a` 是引用、`--b` 是引用，其余忽略。
-// 本仓库当前存在一处该写法：`SwL3LimitUpBoard.css:136` 的 `var(--sw-heat, var(--up))`。
+// 定义面 = `src/` 下所有 `.css/.ts/.tsx` 里的 `--x:` 声明（含 `theme.css`、各组件局部变量
+// 如 `--ladder-h1`/`--sw3-h2`/`--thermo-up-tint`，以及 **JSX 内联样式对象**里的
+// `"--x": "…"` 写法）。
+// 引用面 = 同一批文件里的 `var(--x…)`。
+//
+// **`var(--x, <fallback>)` 的语义（Ruling 45 / 探针 C 修的就是这里）**：
+// 第二参存在且非空 = 提供了兜底值 → 首参**允许未定义**，这是 fallback 的用途，门禁**不得**报错；
+// 无第二参（`var(--x)`）或第二参为空（`var(--x,)`，CSS 语义下不算兜底）→ 首参**必须已定义**。
+// 而 fallback 表达式内部的变量（`var(--sw-heat, var(--up))` 里的 `--up`）**自身仍是引用**，
+// 它若未定义就是真的错——所以 `findVarRefs` 会把它作为独立的一条 `var(` 扫出来。
+//
+// ⚠️ **本门禁不做注释剥离以外的语法解析**（Ruling 45 的对称性要求）：
+// - **已覆盖**：注释里的 `--x:` **不再**被当成定义（先前是个假绿）；注释里的 `var(--x)` 也
+//   不再被当成引用（先前是个假红）；JSX 内联样式的 `"--x":` 现在被识别为定义。
+// - **未覆盖（已知限度，宁可写明也不静默）**：`--x` 的**作用域**不做校验——本门禁只断言
+//   "这个名字在 `src/` 里**某处**被声明过"，不断言"在使用它的那个选择器/组件里可见"。
+//   跨越样式表边界的可见性需要真正的 CSS 级联分析（当前仓库不引第三方解析器）。
+//   故本门禁的定位是"消灭**死变量**（从未被声明的名字）"，而不是"校验级联"。
 const SRC = join(root, "src");
 const walkFiles = (dir) => {
   const out = [];
@@ -106,25 +121,33 @@ const walkFiles = (dir) => {
 const sourceFiles = walkFiles(SRC);
 const definedVars = new Set();
 const referencedVars = new Map(); // 变量名 → 出现位置（前 3 处，便于定位）
+const fallbackOptional = new Set(); // 有兜底、故允许未定义的变量名
 for (const file of sourceFiles) {
-  const text = readFileSync(file, "utf8");
+  const raw = readFileSync(file, "utf8");
+  // **先剥注释再匹配**（Ruling 45）：否则注释里的 `--x: #fff` 会被当成真定义（假绿）、
+  // 注释里举例的 `var(--x)` 会被当成真引用（假红）。两个方向都已实测复现过。
+  const text = stripComments(raw);
   const rel = file.slice(root.length + 1);
-  // 定义：行内任意位置的 `--x:`（不锚定行首，因为可能写成 `background: var(--y); --x: #fff;`）
-  for (const m of text.matchAll(/(--[a-zA-Z0-9-]+)\s*:/g)) definedVars.add(m[1]);
-  // 引用：var( 之后的第一个 `--x`（只取 var 调用的首参，避免把 fallback 里的参数
-  // 当成"必须定义"）；`var(--x, var(--y))` 的两个参数都会各自被别的 match 抓到。
-  for (const m of text.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g)) {
-    const name = m[1];
-    const line = text.slice(0, m.index).split("\n").length;
-    if (!referencedVars.has(name)) referencedVars.set(name, []);
-    const hits = referencedVars.get(name);
+  // 定义：`--x:`（可能写成 `"--x": "…"` 的内联样式键，故允许变量名两侧有引号/空格）
+  for (const m of text.matchAll(/["']?(--[a-zA-Z0-9-]+)["']?\s*:/g)) definedVars.add(m[1]);
+  // 引用：用注释感知的 var() 解析（能正确跨过嵌套括号，见 source-scan.mjs）
+  for (const ref of findVarRefs(text)) {
+    const line = lineOf(text, ref.index);
+    if (ref.hasFallback) fallbackOptional.add(ref.name);
+    if (!referencedVars.has(ref.name)) referencedVars.set(ref.name, []);
+    const hits = referencedVars.get(ref.name);
     if (hits.length < 3) hits.push(`${rel}:${line}`);
   }
 }
 
 const undefinedVars = [...referencedVars.entries()]
-  .filter(([name]) => !definedVars.has(name))
+  .filter(([name]) => !definedVars.has(name) && !fallbackOptional.has(name))
   .sort(([a], [b]) => a.localeCompare(b));
+// 有兜底但从未声明的变量：不算失败，但**要报出来**——它意味着兜底色在永远生效，
+// 很可能是"以为定义了、其实没定义"的又一次，静默才是危险的。
+const fallbackOnlyVars = [...referencedVars.keys()]
+  .filter((name) => !definedVars.has(name) && fallbackOptional.has(name))
+  .sort();
 
 if (undefinedVars.length === 0) {
   console.log(
@@ -133,10 +156,15 @@ if (undefinedVars.length === 0) {
 } else {
   for (const [name, hits] of undefinedVars) {
     console.log(
-      `FAIL 未定义的 CSS 变量 var(${name}) —— 该声明会在 computed-value time 失效并静默继承父级颜色：${hits.join("、")}`
+      `FAIL 未定义的 CSS 变量 var(${name}) 且**未提供兜底值** —— 该声明会在 computed-value time 失效并静默继承父级颜色：${hits.join("、")}`
     );
   }
   failed += undefinedVars.length;
+}
+for (const name of fallbackOnlyVars) {
+  console.log(
+    `  ⚠ var(${name}) 未在任何文件里声明，但调用处提供了兜底值（当前不失败）：${referencedVars.get(name).join("、")} —— 兜底色在一直生效，确认是不是漏了声明`
+  );
 }
 
 if (failed) {
