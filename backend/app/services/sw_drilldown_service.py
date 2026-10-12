@@ -9,11 +9,23 @@
 （``effective_from <= T`` 且（``effective_to IS NULL`` 或 ``T < effective_to``）），
 **不再**用 ``sw_industry_members`` 的当前态快照做历史还原。
 
+**成员取自节点"自身层级"，上卷只是兜底**（Fix round 1 · 评审 C1）：
+原先的实现把成员 CTE 硬钉在 ``c3.level = 3``，即"L1/L2 成分 = 其下 L3 的并集"。
+**这个等价关系实测为假** —— 31 个一级行业里 **24 个**的上游直取数大于其下 L3 并集
+（合计 5211 vs 4950；农林牧渔 104 vs 80、钢铁 43 vs 28、饲料 18 vs 11），
+因为上游存在**直接挂在 L1/L2 而未落在任何 L3 的成员**。
+故本模块：
+
+1. 先查节点**自身层级**的成员（``exact``）；
+2. 该层级一条都没有时，才退回"其下 L3 的并集"（``rollup``）；
+3. 两种来源都在响应里用 ``member_source`` 标注，``rollup`` 时额外给
+   ``member_source_note``，**不声称两者等价**。
+
 **时间轴有两条，必须分开外露**（``scd2_as_of`` vs ``as_of``）：
 
-* ``scd2_as_of`` = 最近一次成功 ingest 的日期 = **分类归属可还原能力的上界**。
-  查 ``T > scd2_as_of`` 时归属退化为"截至 ``scd2_as_of`` 的成分"，
-  故读面把 ``scd2_as_of`` 与 ``scd2_available`` 一并返回，前端必须显示。
+* ``scd2_as_of`` = 最近一次**完整成功** ingest 的日期（``fully_ingested`` 且 ``status='ok'``）
+  = **分类归属可还原能力的上界**。``--limit`` 冒烟或有失败的运行**不抬高**它。
+  查 ``T > scd2_as_of`` 时归属退化为"截至 ``scd2_as_of`` 的成分"。
 * ``as_of`` = 行情口径日（``market_day_service`` 判据），T+1。
 
 **单位**：``daily_quotes.amount`` 是 TuShare 原生**千元**，本模块统一 ×1000 → **元**。
@@ -36,77 +48,92 @@ from app.schemas.sw_drilldown import (
     MarketIndustryMemberOut,
     MarketIndustryMembersOut,
     MarketIndustryQuoteOut,
+    Scd2CoverageOut,
 )
 
 logger = logging.getLogger(__name__)
 
-# 与 market_service 同口径的按日缓存 TTL
+# 与 market_service 同口径的按日缓存 TTL（当前读路未挂缓存，留作后续评估；见报告）
 _CACHE_TTL = 300
 
 # 上游 daily_quotes.amount（千元）→ 元
 _AMOUNT_TO_YUAN = 1000.0
+
+MEMBER_SOURCE_LEVEL = "level"
+MEMBER_SOURCE_ROLLUP = "rollup"
 
 SCD2_NO_DATA_NOTE = (
     "SCD2 分类归属尚无数据：sw_industry_member_periods 为空。"
     "请先运行 backend/scripts/ingest_sw_member_periods.py。"
     "本响应中的成分一律为空——这不代表当日无成分。"
 )
-SCD2_STALE_NOTE = "分类归属口径日（最近一次成功 ingest）早于行情口径日，成分可能已变更。"
+SCD2_STALE_NOTE = "分类归属口径日（最近一次完整 ingest）早于行情口径日，成分可能已变更。"
+ROLLUP_NOTE = (
+    "本节点自身层级在 sw_industry_member_periods 中没有记录，成分退回"
+    "「其下 L3 的并集」估算；该并集**不等于**上游该指数的成分（实测 24/31 个一级行业偏少），"
+    "成交额/换手率等聚合同样偏少。请补跑 ingest（默认已灌全部三级）。"
+)
 
 # ---------------------------------------------------------------------------
 # SQL
 # ---------------------------------------------------------------------------
 
-# 成分解析：申万三级链 + SCD2 区间。
-# `:l1` 必填（L1 行业代码）；`:l2` / `:l3` 为空串时该条件恒真（纯 SQL，不做字符串拼接）。
-_MEMBER_SQL = """
-WITH scoped AS (
-    SELECT m.symbol,
-           m.stock_code,
-           m.stock_name,
-           m.industry_code AS l3_code,
-           c3.industry_name AS l3_name,
-           m.effective_from,
-           m.effective_to
-    FROM sw_industry_member_periods m
-    JOIN sw_industry_classes c3
-      ON c3.industry_code = m.industry_code AND c3.level = 3
-    JOIN sw_industry_classes c2
-      ON c2.industry_code = c3.parent_code AND c2.level = 2
-    JOIN sw_industry_classes c1
-      ON c1.industry_code = c2.parent_code AND c1.level = 1
-    WHERE c1.parent_code IS NULL
-      AND (:l1 = '' OR c1.industry_code = :l1)
-      AND (:l2 = '' OR c2.industry_code = :l2)
-      AND (:l3 = '' OR m.industry_code = :l3)
-      AND m.effective_from <= :asof
-      AND (m.effective_to IS NULL OR :asof < m.effective_to)
-)
-SELECT s.symbol,
-       s.stock_code,
-       COALESCE(s.stock_name, st.name) AS name,
-       s.l3_code,
-       s.l3_name,
-       s.effective_from,
-       s.effective_to,
-       q.open, q.high, q.low, q.close, q.pre_close, q.pct_chg,
-       q.volume,
-       q.amount * :amount_to_yuan AS amount,
-       b.turnover_rate, b.volume_ratio
-FROM scoped s
-LEFT JOIN stocks st ON st.symbol = s.symbol
+# 按 **节点自身层级** 取成员（`:scope_code` 是节点自己的行业代码，任意层级）。
+_EXACT_MEMBERS_SQL = """
+SELECT m.symbol,
+       m.stock_code,
+       m.stock_name,
+       m.industry_code AS node_code,
+       m.effective_from,
+       m.effective_to
+FROM sw_industry_member_periods m
+WHERE m.industry_code = :scope_code
+  AND m.effective_from <= :asof
+  AND (m.effective_to IS NULL OR :asof < m.effective_to)
+"""
+
+# 兜底：其下 L3 的并集（只在该节点自身层级无记录时使用）。
+# `distinct`：同一 symbol 可能在其下多个 L3 各有一段区间（上游允许），不去重会重复计数。
+_ROLLUP_MEMBERS_SQL = """
+SELECT DISTINCT ON (m.symbol)
+       m.symbol,
+       m.stock_code,
+       m.stock_name,
+       m.industry_code AS node_code,
+       m.effective_from,
+       m.effective_to
+FROM sw_industry_member_periods m
+JOIN sw_industry_classes c3
+  ON c3.industry_code = m.industry_code AND c3.level = 3
+JOIN sw_industry_classes c2
+  ON c2.industry_code = c3.parent_code AND c2.level = 2
+JOIN sw_industry_classes c1
+  ON c1.industry_code = c2.parent_code AND c1.level = 1
+WHERE (:l1 = '' OR c1.industry_code = :l1)
+  AND (:l2 = '' OR c2.industry_code = :l2)
+  AND (:l3 = '' OR m.industry_code = :l3)
+  AND m.effective_from <= :asof
+  AND (m.effective_to IS NULL OR :asof < m.effective_to)
+ORDER BY m.symbol, m.effective_from
+"""
+
+_MEMBER_JOIN = """
+FROM members m
+LEFT JOIN stocks st ON st.symbol = m.symbol
 LEFT JOIN daily_quotes q ON q.stock_id = st.id AND q.trade_date = :trade_date
 LEFT JOIN daily_basic_indicators b ON b.stock_id = st.id AND b.trade_date = :trade_date
-ORDER BY s.symbol
 """
+
+
+def _members_cte(source: str) -> str:
+    body = _EXACT_MEMBERS_SQL if source == MEMBER_SOURCE_LEVEL else _ROLLUP_MEMBERS_SQL
+    return f"WITH members AS ({body})"
+
 
 # 行业层聚合：7 项字段 + 各自非空覆盖数。
 # `sum(...) FILTER (WHERE x IS NOT NULL)` = 只对有值的股票求和/加权，缺失不拉低也不填 0。
 # K 线用 `percentile_cont(0.5)`（中位数）——不做价格指数，理由见 schemas/sw_drilldown.py。
-_LEVEL_AGG_SQL = """
-WITH members AS (
-    {member_sql}
-)
+_LEVEL_AGG_BODY = """
 SELECT count(*) AS member_count,
        count(q.close) AS quoted_count,
        count(*) FILTER (WHERE q.pct_chg > 0) AS up_count,
@@ -144,14 +171,40 @@ SELECT count(*) AS member_count,
            AS amplitude,
        count(*) FILTER (WHERE q.high IS NOT NULL AND q.low IS NOT NULL AND q.pre_close > 0)
            AS amplitude_covered,
-       -- 成交额：源是 TuShare 原生千元 → ×1000 输出**元**（与 _MEMBER_SQL 同一换算）
+       -- 成交额：源是 TuShare 原生千元 → ×1000 输出**元**
        sum(q.amount * :amount_to_yuan) FILTER (WHERE q.amount IS NOT NULL) AS sum_amount_all,
        count(q.amount) AS amount_covered
-FROM members m
-LEFT JOIN stocks st ON st.symbol = m.symbol
-LEFT JOIN daily_quotes q ON q.stock_id = st.id AND q.trade_date = :trade_date
-LEFT JOIN daily_basic_indicators b ON b.stock_id = st.id AND b.trade_date = :trade_date
 """
+
+
+def _agg_sql(source: str) -> str:
+    return f"{_members_cte(source)}\n{_LEVEL_AGG_BODY}\n{_MEMBER_JOIN}"
+
+
+def _members_sql(source: str) -> str:
+    return f"""
+{_members_cte(source)}
+SELECT m.symbol,
+       m.stock_code,
+       COALESCE(m.stock_name, st.name) AS name,
+       m.node_code,
+       m.effective_from,
+       m.effective_to,
+       q.open, q.high, q.low, q.close, q.pre_close, q.pct_chg,
+       q.volume,
+       q.amount * :amount_to_yuan AS amount,
+       b.turnover_rate, b.volume_ratio
+{_MEMBER_JOIN}
+ORDER BY m.symbol
+"""
+
+
+_EXACT_EXISTS_SQL = text("""
+SELECT EXISTS (
+    SELECT 1 FROM sw_industry_member_periods m
+    WHERE m.industry_code = :scope_code
+) AS has_rows
+""")
 
 _CHILDREN_SQL = text("""
 SELECT industry_code, industry_name, level, parent_code
@@ -160,17 +213,26 @@ WHERE parent_code IS NOT DISTINCT FROM :parent
 ORDER BY industry_code
 """)
 
-
-def _agg_sql() -> str:
-    return _LEVEL_AGG_SQL.format(member_sql=_MEMBER_SQL)
+_CLASS_NODE_SQL = text("""
+SELECT industry_code, industry_name, level, parent_code
+FROM sw_industry_classes
+WHERE industry_code = :code AND level = :level
+""")
 
 
 def _member_params(
-    *, asof: date, trade_date: date | None, l1: str = "", l2: str = "", l3: str = ""
+    *,
+    asof: date,
+    trade_date: date | None,
+    scope_code: str = "",
+    l1: str = "",
+    l2: str = "",
+    l3: str = "",
 ) -> dict[str, Any]:
     return {
         "asof": asof,
         "trade_date": trade_date,
+        "scope_code": scope_code,
         "l1": l1,
         "l2": l2,
         "l3": l3,
@@ -192,7 +254,13 @@ def _i(value: Any) -> int:
 
 
 def assemble_quote(
-    row: dict[str, Any], *, code: str, name: str, level: int, parent_code: str | None
+    row: dict[str, Any],
+    *,
+    code: str,
+    name: str,
+    level: int,
+    parent_code: str | None,
+    member_source: str = MEMBER_SOURCE_LEVEL,
 ) -> MarketIndustryQuoteOut:
     """聚合行 + 节点身份 → ``MarketIndustryQuoteOut``（纯函数）。"""
     return MarketIndustryQuoteOut(
@@ -200,6 +268,8 @@ def assemble_quote(
         name=name,
         level=level,
         parent_code=parent_code,
+        member_source=cast(Any, member_source),
+        member_source_note=ROLLUP_NOTE if member_source == MEMBER_SOURCE_ROLLUP else None,
         member_count=_i(row.get("member_count")),
         quoted_count=_i(row.get("quoted_count")),
         up_count=_i(row.get("up_count")),
@@ -209,7 +279,7 @@ def assemble_quote(
             high=_f(row.get("median_high")),
             low=_f(row.get("median_low")),
             close=_f(row.get("median_close")),
-            member_count=_i(row.get("quoted_count")),
+            quoted_count=_i(row.get("quoted_count")),
         ),
         pct_chg_weighted=_f(row.get("pct_chg_weighted")),
         pct_chg_covered=_i(row.get("pct_chg_covered")),
@@ -267,10 +337,30 @@ def scd2_note(*, available: bool, scd2_as_of: date | None, as_of: date | None) -
 # ---------------------------------------------------------------------------
 
 
-async def _scd2_as_of(db: AsyncSession) -> date | None:
-    from app.services.sw_member_scd2_service import get_member_as_of  # noqa: PLC0415
+async def _scd2_state(db: AsyncSession) -> tuple[date | None, dict[str, Any] | None]:
+    from app.services.sw_member_scd2_service import (  # noqa: PLC0415
+        get_last_run,
+        get_member_as_of,
+    )
 
-    return await get_member_as_of(db)
+    return await get_member_as_of(db), await get_last_run(db)
+
+
+async def _coverage_out(db: AsyncSession) -> Scd2CoverageOut:
+    """最近一次运行的覆盖摘要（Fix round 1 · 评审 I5：把下界信号外露到读面）。"""
+    _as_of_value, last = await _scd2_state(db)
+    if last is None:
+        return Scd2CoverageOut()
+    return Scd2CoverageOut(
+        last_run_as_of=cast(date | None, last["as_of"]),
+        last_run_status=cast(str, last["status"]),
+        fully_ingested=bool(last["fully_ingested"]),
+        index_codes=int(last["index_codes"]),
+        rows_inserted=int(last["rows_inserted"]),
+        rows_updated=int(last["rows_updated"]),
+        zero_row_indices=int(last["zero_row_indices"]),
+        detail=cast(str | None, last["detail"]),
+    )
 
 
 async def _resolve_day(
@@ -300,14 +390,54 @@ def _scd2_query_day(as_of: date | None, trade_date: date | None) -> date:
     return _today_sh()
 
 
-async def _agg(db: AsyncSession, params: dict[str, Any]) -> dict[str, Any]:
-    row = (await db.execute(text(_agg_sql()), params)).mappings().one()
+async def _has_exact_level(db: AsyncSession, scope_code: str) -> bool:
+    """该节点自身层级是否有任何 SCD2 记录（有则用自身层级，无则上卷兜底）。"""
+    return bool((await db.execute(_EXACT_EXISTS_SQL, {"scope_code": scope_code})).scalar())
+
+
+async def _member_source_for(db: AsyncSession, scope_code: str) -> str:
+    if await _has_exact_level(db, scope_code):
+        return MEMBER_SOURCE_LEVEL
+    return MEMBER_SOURCE_ROLLUP
+
+
+async def _agg(db: AsyncSession, params: dict[str, Any], source: str) -> dict[str, Any]:
+    row = (await db.execute(text(_agg_sql(source)), params)).mappings().one()
     return dict(row)
 
 
 async def _children(db: AsyncSession, parent_code: str | None) -> list[dict[str, Any]]:
     rows = (await db.execute(_CHILDREN_SQL, {"parent": parent_code})).mappings().all()
     return [dict(r) for r in rows]
+
+
+async def _class_node(db: AsyncSession, code: str, *, level: int) -> dict[str, Any] | None:
+    result = await db.execute(_CLASS_NODE_SQL, {"code": code, "level": level})
+    row = result.mappings().one_or_none()
+    return None if row is None else dict(row)
+
+
+_ANCESTORS_SQL = text("""
+WITH RECURSIVE up AS (
+    SELECT industry_code, parent_code, level FROM sw_industry_classes WHERE industry_code = :code
+  UNION ALL
+    SELECT c.industry_code, c.parent_code, c.level
+    FROM sw_industry_classes c JOIN up ON c.industry_code = up.parent_code
+)
+SELECT level, industry_code FROM up WHERE level IN (1, 2)
+""")
+
+
+async def _ancestor_scope(db: AsyncSession, code: str) -> tuple[str, str]:
+    """节点的 (L1 代码, L2 代码)——上卷兜底查询要用它限定子树。
+
+    为什么需要：``_ROLLUP_MEMBERS_SQL`` 的 ``:l1/:l2/:l3`` 是**子树**过滤器，
+    只有把节点自己的祖先链填进去，"其下 L3 的并集"才真的是**这个节点**的并集
+    （不填 = 全市场并集，实测会算出 4951 只）。
+    """
+    rows = (await db.execute(_ANCESTORS_SQL, {"code": code})).all()
+    by_level = {int(r[0]): str(r[1]) for r in rows}
+    return by_level.get(1, ""), by_level.get(2, "")
 
 
 async def _node(
@@ -319,15 +449,26 @@ async def _node(
     parent_code: str | None,
     asof: date,
     trade_date: date | None,
-    scope_l1: str,
-    scope_l2: str,
-    scope_l3: str,
+    source: str | None = None,
 ) -> MarketIndustryLevelItemOut:
-    """一个子行业节点：自身 7 项聚合 + 成分家数。"""
+    """一个行业节点：**自身层级**的 7 项聚合（缺失时才上卷）+ 成分家数。"""
+    src = source or await _member_source_for(db, code)
+    l1, l2 = await _ancestor_scope(db, code)
     row = await _agg(
-        db, _member_params(asof=asof, trade_date=trade_date, l1=scope_l1, l2=scope_l2, l3=scope_l3)
+        db,
+        _member_params(
+            asof=asof,
+            trade_date=trade_date,
+            scope_code=code,
+            l1=l1,
+            l2=l2,
+            l3=code if level == 3 else "",
+        ),
+        src,
     )
-    metrics = assemble_quote(row, code=code, name=name, level=level, parent_code=parent_code)
+    metrics = assemble_quote(
+        row, code=code, name=name, level=level, parent_code=parent_code, member_source=src
+    )
     return MarketIndustryLevelItemOut(
         code=code,
         name=name,
@@ -354,30 +495,27 @@ async def get_level_items(
     day, quality, reason = await _resolve_day(db, cache)
     trade_date = as_of or day
     asof = _scd2_query_day(as_of, trade_date)  # SCD2 归属口径日必须具体
-    scd2_as_of = await _scd2_as_of(db)
+    scd2_as_of, _last = await _scd2_state(db)
+    coverage = await _coverage_out(db)
+    available = scd2_as_of is not None
+    note = scd2_note(available=available, scd2_as_of=scd2_as_of, as_of=trade_date)
 
     if not level1_code:
-        # L1 列表：逐个 L1 行业聚合（31 次轻查询；无 N+1 到股票级）
         out_level, parent = 1, None
-        nodes = await _children(db, None)
-        items = []
-        for node in nodes:
-            items.append(
-                await _node(
-                    db,
-                    code=node["industry_code"],
-                    name=node["industry_name"],
-                    level=1,
-                    parent_code=None,
-                    asof=asof,
-                    trade_date=trade_date,
-                    scope_l1=node["industry_code"],
-                    scope_l2="",
-                    scope_l3="",
-                )
+        items = [
+            await _node(
+                db,
+                code=node["industry_code"],
+                name=node["industry_name"],
+                level=1,
+                parent_code=None,
+                asof=asof,
+                trade_date=trade_date,
             )
+            for node in await _children(db, None)
+        ]
     elif not level2_code:
-        out_level, parent = 2, None
+        out_level = 2
         l1 = await _class_node(db, level1_code, level=1)
         if l1 is None:
             raise LookupError(f"SW level1 {level1_code} not found")
@@ -389,9 +527,6 @@ async def get_level_items(
             parent_code=None,
             asof=asof,
             trade_date=trade_date,
-            scope_l1=l1["industry_code"],
-            scope_l2="",
-            scope_l3="",
         )
         items = [
             await _node(
@@ -402,18 +537,15 @@ async def get_level_items(
                 parent_code=level1_code,
                 asof=asof,
                 trade_date=trade_date,
-                scope_l1=level1_code,
-                scope_l2=node["industry_code"],
-                scope_l3="",
             )
             for node in await _children(db, level1_code)
         ]
     else:
-        out_level, parent = 3, None
+        out_level = 3
         l1 = await _class_node(db, level1_code, level=1)
         l2 = await _class_node(db, level2_code, level=2)
-        if l1 is None or l2 is None:
-            raise LookupError(f"SW level2 {level1_code}/{level2_code} not found")
+        _require_chain(l1, l2, None, level1_code, level2_code, "")
+        assert l2 is not None  # _require_chain 已保证
         parent = await _node(
             db,
             code=l2["industry_code"],
@@ -422,9 +554,6 @@ async def get_level_items(
             parent_code=level1_code,
             asof=asof,
             trade_date=trade_date,
-            scope_l1=level1_code,
-            scope_l2=level2_code,
-            scope_l3="",
         )
         items = [
             await _node(
@@ -435,9 +564,6 @@ async def get_level_items(
                 parent_code=level2_code,
                 asof=asof,
                 trade_date=trade_date,
-                scope_l1=level1_code,
-                scope_l2=level2_code,
-                scope_l3=node["industry_code"],
             )
             for node in await _children(db, level2_code)
         ]
@@ -447,31 +573,46 @@ async def get_level_items(
         as_of_quality=cast(Any, quality),
         as_of_reason=reason,
         scd2_as_of=scd2_as_of,
-        scd2_available=scd2_as_of is not None,
-        scd2_note=scd2_note(
-            available=scd2_as_of is not None, scd2_as_of=scd2_as_of, as_of=trade_date
-        ),
+        scd2_available=available,
+        scd2_note=note,
+        scd2_coverage=coverage,
         level=out_level,
         parent=parent,
         items=items,
     )
 
 
-async def _class_node(db: AsyncSession, code: str, *, level: int) -> dict[str, Any] | None:
-    row = (
-        (
-            await db.execute(
-                text(
-                    "SELECT industry_code, industry_name, level, parent_code "
-                    "FROM sw_industry_classes WHERE industry_code = :code AND level = :level"
-                ),
-                {"code": code, "level": level},
+def _require_chain(
+    l1: dict[str, Any] | None,
+    l2: dict[str, Any] | None,
+    l3: dict[str, Any] | None,
+    level1_code: str,
+    level2_code: str,
+    level3_code: str,
+) -> None:
+    """层级归属校验（Fix round 1 · 评审 Minor）。
+
+    原先只校验"代码存在于该层"：传一组**不构成父子关系**的 (l1, l2) 会命中一个
+    0 成员的节点、静默返回空成分，而不是 404。这里逐级核对 ``parent_code``。
+    """
+    if l1 is None:
+        raise LookupError(f"SW level1 {level1_code} not found")
+    if level2_code:
+        if l2 is None:
+            raise LookupError(f"SW level2 {level1_code}/{level2_code} not found")
+        if l2["parent_code"] != l1["industry_code"]:
+            raise LookupError(
+                f"SW level2 {level2_code} 不属于 {level1_code}"
+                f"（其 parent_code={l2['parent_code']}）"
             )
-        )
-        .mappings()
-        .one_or_none()
-    )
-    return None if row is None else dict(row)
+    if level3_code:
+        if l3 is None:
+            raise LookupError(f"SW level3 {level1_code}/{level2_code}/{level3_code} not found")
+        if l3["parent_code"] != (l2 or {}).get("industry_code"):
+            raise LookupError(
+                f"SW level3 {level3_code} 不属于 {level2_code}"
+                f"（其 parent_code={l3['parent_code']}）"
+            )
 
 
 async def get_level_metrics(
@@ -493,18 +634,17 @@ async def get_level_metrics(
         node_level, code = 2, level2_code
     else:
         node_level, code = 1, level1_code
-    node = await _class_node(db, code, level=node_level)
-    if node is None:
-        raise LookupError(f"SW level{node_level} {code} not found")
+    l1 = await _class_node(db, level1_code, level=1)
+    l2 = await _class_node(db, level2_code, level=2) if level2_code else None
+    l3 = await _class_node(db, level3_code, level=3) if level3_code else None
+    _require_chain(l1, l2, l3, level1_code, level2_code, level3_code)
+    node = l3 if level3_code else (l2 if level2_code else l1)
+    assert node is not None  # _require_chain 已保证
+    src = await _member_source_for(db, code)
     row = await _agg(
         db,
-        _member_params(
-            asof=asof,
-            trade_date=trade_date,
-            l1=level1_code,
-            l2=level2_code,
-            l3=level3_code,
-        ),
+        _member_params(asof=asof, trade_date=trade_date, scope_code=code),
+        src,
     )
     return assemble_quote(
         row,
@@ -512,6 +652,7 @@ async def get_level_metrics(
         name=node["industry_name"],
         level=node_level,
         parent_code=node["parent_code"],
+        member_source=src,
     )
 
 
@@ -527,31 +668,62 @@ async def get_members(
     """末级（L3）成分股列表（逐只 7 项字段）+ 该节点聚合 + L1→L2→L3 链。"""
     day, quality, reason = await _resolve_day(db, cache)
     trade_date = as_of or day
-    scd2_as_of = await _scd2_as_of(db)
+    asof = _scd2_query_day(as_of, trade_date)
+    scd2_as_of, _last = await _scd2_state(db)
+    coverage = await _coverage_out(db)
 
     l1 = await _class_node(db, level1_code, level=1)
     l2 = await _class_node(db, level2_code, level=2)
     l3 = await _class_node(db, level3_code, level=3)
-    if l1 is None or l2 is None or l3 is None:
-        raise LookupError(f"SW level3 {level1_code}/{level2_code}/{level3_code} not found")
+    _require_chain(l1, l2, l3, level1_code, level2_code, level3_code)
+    assert l1 is not None and l2 is not None and l3 is not None
 
-    asof = _scd2_query_day(as_of, trade_date)
+    src = await _member_source_for(db, level3_code)
     params = _member_params(
         asof=asof,
         trade_date=trade_date,
+        scope_code=level3_code,
         l1=level1_code,
         l2=level2_code,
         l3=level3_code,
     )
-    rows = (await db.execute(text(_MEMBER_SQL), params)).mappings().all()
-    aggregate = await _agg(db, params)
+    rows = (await db.execute(text(_members_sql(src)), params)).mappings().all()
+    aggregate = await _agg(db, params, src)
     metrics = assemble_quote(
         aggregate,
         code=l3["industry_code"],
         name=l3["industry_name"],
         level=3,
         parent_code=level2_code,
+        member_source=src,
     )
+    # chain 的每一级都带该级的真实成分家数（Fix round 1 · 评审 Minor：原先是 0 占位，
+    # 而本响应契约明写"缺失一律 None、不得用 0 顶替"——0 会让前端误显示"0 只成分"）
+    chain: list[MarketIndustryLevelItemOut] = []
+    for node, lvl in ((l1, 1), (l2, 2), (l3, 3)):
+        if lvl == 3:
+            chain.append(
+                MarketIndustryLevelItemOut(
+                    code=l3["industry_code"],
+                    name=l3["industry_name"],
+                    level=3,
+                    stock_count=metrics.member_count,
+                    metrics=metrics,
+                )
+            )
+            continue
+        chain.append(
+            await _node(
+                db,
+                code=node["industry_code"],
+                name=node["industry_name"],
+                level=lvl,
+                parent_code=node["parent_code"],
+                asof=asof,
+                trade_date=trade_date,
+            )
+        )
+
     return MarketIndustryMembersOut(
         as_of=trade_date,
         as_of_quality=cast(Any, quality),
@@ -561,20 +733,8 @@ async def get_members(
         scd2_note=scd2_note(
             available=scd2_as_of is not None, scd2_as_of=scd2_as_of, as_of=trade_date
         ),
-        chain=[
-            MarketIndustryLevelItemOut(
-                code=l1["industry_code"], name=l1["industry_name"], level=1, stock_count=0
-            ),
-            MarketIndustryLevelItemOut(
-                code=l2["industry_code"], name=l2["industry_name"], level=2, stock_count=0
-            ),
-            MarketIndustryLevelItemOut(
-                code=l3["industry_code"],
-                name=l3["industry_name"],
-                level=3,
-                stock_count=metrics.member_count,
-            ),
-        ],
+        scd2_coverage=coverage,
+        chain=chain,
         metrics=metrics,
         items=[assemble_member(dict(r)) for r in rows],
     )

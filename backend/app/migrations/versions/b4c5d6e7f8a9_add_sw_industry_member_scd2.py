@@ -62,12 +62,6 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "industry_code",
-            "stock_code",
-            "effective_from",
-            name="uq_sw_member_period_code_stock_from",
-        ),
     )
     # 下钻主路径：某行业在 T 日的成分 → (industry_code, [effective_from, effective_to))
     op.create_index(
@@ -86,6 +80,25 @@ def upgrade() -> None:
         "idx_sw_member_period_open",
         "sw_industry_member_periods",
         ["industry_code", "effective_to"],
+    )
+    # 幂等键（Fix round 1）：**表达式唯一索引**，把 NULL 终点折叠成哨兵日期。
+    #
+    # 为什么不是普通 `UniqueConstraint(..., effective_to)`：PostgreSQL 的 UNIQUE 把
+    # NULL 视为彼此不同，于是"至今仍在成分"（effective_to IS NULL）的行**永远不会
+    # 冲突** —— 重复 ingest 会插出重复行，幂等当场失效（实测：第二次 upsert 插了
+    # 第 2 行）。`COALESCE(effective_to, DATE '9999-12-31')` 把 NULL 折叠成同一个值，
+    # 唯一性才真的生效；同时 `effective_from` 也进键，多段区间（同一股票多次进出）
+    # 仍各占一行。
+    op.create_index(
+        "uq_sw_member_period_code_stock_from_to",
+        "sw_industry_member_periods",
+        [
+            "industry_code",
+            "stock_code",
+            "effective_from",
+            sa.text("COALESCE(effective_to, DATE '9999-12-31')"),
+        ],
+        unique=True,
     )
 
     op.create_table(

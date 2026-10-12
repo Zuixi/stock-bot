@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -38,8 +39,34 @@ class KlineMedianOut(BaseModel):
     high: float | None = None
     low: float | None = None
     close: float | None = None
-    # 成分股家数（分母；中位数覆盖数见 MarketIndustryQuoteOut.quoted_count）
-    member_count: int = 0
+    # 参与中位数的家数 = **当日真有行情行**的家数（= MarketIndustryQuoteOut.quoted_count）。
+    # 名字不叫 member_count：它不是成分总数（那在 MarketIndustryQuoteOut.member_count），
+    # 两个数在停牌/未采集时不同（Fix round 1 · 评审 Minor 指出原先文档与取值不一致）。
+    quoted_count: int = 0
+
+
+class Scd2CoverageOut(BaseModel):
+    """最近一次 SCD2 成分 ingest 的覆盖摘要（**缺数对账的机械外露**，Fix round 1 · 评审 I5）。
+
+    为什么放在读面而不是只写日志：spec §S1.4 要求"缺数有对账告警"。可核查的最小形态是——
+    ingest 时算下界（每个指数要有行、单层行数不得塌方、0 行响应不得过多），
+    把结论写进 ``sw_member_ingest_runs``，读面把**最近一次运行**原样外露。
+    任何一个信号异常 → ``last_run_status != 'ok'`` 且 ``fully_ingested=false``，
+    前端在 ``as_of`` 条上显示红标，而不是让缺数静默留在数据里。
+    """
+
+    last_run_as_of: date | None = None
+    last_run_status: str | None = None
+    fully_ingested: bool = False
+    index_codes: int = 0
+    rows_inserted: int = 0
+    rows_updated: int = 0
+    zero_row_indices: int = 0
+    detail: str | None = None
+
+    @property
+    def healthy(self) -> bool:
+        return self.last_run_status == "ok" and self.fully_ingested
 
 
 class MarketIndustryQuoteOut(BaseModel):
@@ -63,6 +90,10 @@ class MarketIndustryQuoteOut(BaseModel):
 
     # ── 7 项字段 ────────────────────────────────────────────────────────
     # 1. K 线（成分股中位数，见 KlineMedianOut 的"不是指数点位"声明）
+    # 成员来源：`level` = 节点自身层级的 SCD2 成员；`rollup` = 退回到"其下 L3 的并集"估算
+    member_source: Literal["level", "rollup"] = "level"
+    member_source_note: str | None = None
+
     kline_median: KlineMedianOut
     # 2. 涨跌幅（成交额加权，%）
     pct_chg_weighted: float | None = None
@@ -109,6 +140,7 @@ class MarketIndustryLevelOut(BaseModel):
     scd2_as_of: date | None = None
     scd2_available: bool = False
     scd2_note: str | None = None
+    scd2_coverage: Scd2CoverageOut = Scd2CoverageOut()
     level: int
     parent: MarketIndustryLevelItemOut | None = None
     items: list[MarketIndustryLevelItemOut]
@@ -148,6 +180,7 @@ class MarketIndustryMembersOut(BaseModel):
     scd2_as_of: date | None = None
     scd2_available: bool = False
     scd2_note: str | None = None
+    scd2_coverage: Scd2CoverageOut = Scd2CoverageOut()
     chain: list[MarketIndustryLevelItemOut] = []
     metrics: MarketIndustryQuoteOut | None = None
     items: list[MarketIndustryMemberOut] = []

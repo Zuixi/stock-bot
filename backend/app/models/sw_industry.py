@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Index, String, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, Index, String, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -89,19 +89,28 @@ class SwIndustryMemberPeriod(Base):
       ingest 日期，见 ``SwMemberIngestRun``）与上述口径。
     * 本表**不含**指数历史权重、也不含退市股补齐——上游没给的字段一律不编。
 
-    唯一键 ``(industry_code, stock_code, effective_from)``：同一只股票可以在
-    不同区间反复进出同一行业（实测 ``000034.SZ`` 在 801010.SI 有 3 段），
-    但同一区间起点不会重复。唯一键**不含** ``effective_to``：区间终点由上游
-    修订时（罕见）就地 UPDATE 覆盖同一行。
+    唯一键 ``(industry_code, stock_code, effective_from, effective_to)``：
+    同一只股票可以在不同区间反复进出同一行业（实测 ``000034.SZ`` 在 801010.SI
+    有 3 段），而**同一 (行业, 股票, 起点, 终点) 不会重复**。终点也进键的理由
+    （Fix round 1 · 评审 Minor）：不含终点时同一 (行业, 股票, 起点) 的**重叠区间**
+    在结构上被允许——实测当时为 0 行，但"允许"本身就是缺陷；带上终点后
+    重叠区间会被数据库直接拒绝。
     """
 
     __tablename__ = "sw_industry_member_periods"
     __table_args__ = (
-        UniqueConstraint(
+        # 幂等键：**表达式唯一索引**（不是 UniqueConstraint）——PostgreSQL 的 UNIQUE
+        # 把 NULL 视为彼此不同，`effective_to IS NULL`（至今仍在成分）的行永不冲突，
+        # 重复 ingest 会插重复行（Fix round 1 实测）。`COALESCE(..., DATE '9999-12-31')`
+        # 把 NULL 折叠成同一哨兵值，唯一性才真生效；`effective_from` 进键保证
+        # 同一股票多次进出同一行业的多段区间各占一行。
+        Index(
+            "uq_sw_member_period_code_stock_from_to",
             "industry_code",
             "stock_code",
             "effective_from",
-            name="uq_sw_member_period_code_stock_from",
+            text("COALESCE(effective_to, DATE '9999-12-31')"),
+            unique=True,
         ),
         Index("idx_sw_member_period_industry_from", "industry_code", "effective_from"),
         Index("idx_sw_member_period_symbol_from", "symbol", "effective_from"),
@@ -131,7 +140,17 @@ class SwMemberIngestRun(Base):
     """SCD2 成分 ingest 的运行记录（**读面用来声明 as_of 上界**）。
 
     没有它，前端无法区分"这只股票今天真的不在某行业"与"我们最后一次采集是三个月前"。
-    ``as_of`` = 最近一次成功运行的 ``trade_date``（ingest 所取的上游快照日）。
+
+    **哪些运行允许抬高读面的 ``scd2_as_of`` 上界**（Fix round 1 · I1/Ruling 50）：
+    只有 ``fully_ingested=True`` **且** ``status='ok'`` 的运行才算数。理由：
+
+    * ``limit`` 截断的冒烟运行（``--limit 20``）只灌了 ~20/346 个指数，
+      若它抬高上界，读面会宣称"分类归属口径日 = 今天"，而实际上 95% 的行业没更新
+      —— 这正是 C1（L1/L2 成分系统性偏少）当初没被发现的原因；
+    * ``status='partial'``（有指数拉取失败 / 有下界断言没过）同理不得抬高上界。
+
+    故 ``fully_ingested`` 是**独立的显式列**而不是靠 ``status`` 的字符串约定——
+    读面按两列过滤，含糊状态无法悄悄变成"口径日"。
     """
 
     __tablename__ = "sw_member_ingest_runs"
@@ -144,10 +163,19 @@ class SwMemberIngestRun(Base):
     as_of: Mapped[date | None] = mapped_column(Date)
     index_codes: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     rows_upserted: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    # Fix round 1 · I2 后半：区分"重跑同一份数据（新增 0）"与"真有新行入库"
+    rows_inserted: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    rows_updated: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    # 本次运行是否覆盖了对照表全部指数（False = limit 截断 / 有失败 → 不得抬高上界）
+    fully_ingested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    # 上游返回 0 行的指数个数（Fix round 1 · I5 下界信号之一）
+    zero_row_indices: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="ok", server_default="ok"
     )
-    detail: Mapped[str | None] = mapped_column(String(255))
+    detail: Mapped[str | None] = mapped_column(String(512))
 
 
 # ---------------------------------------------------------------------------
