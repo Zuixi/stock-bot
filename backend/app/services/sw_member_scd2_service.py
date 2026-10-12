@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -229,11 +230,23 @@ def _as_of() -> date:
     return _today_sh()
 
 
+# 写入端（detail_parts）的逐层计数段格式：``L1:指数 31/31,行 7740``。
+# 解析端 _previous_level_totals 依赖它——**两端必须一致**，且都有 round-trip 测试锁定
+# （tests/test_sw_member_scd2.py::test_detail_round_trip_feeds_previous_level_totals）。
+_LEVEL_PART_RE = re.compile(r"^L(\d+):指数\s+\d+/\d+,行\s+(\d+)$")
+
+
 async def _previous_level_totals(db: AsyncSession) -> dict[int, int]:
     """上一次 ``fully_ingested`` 运行的逐层成员总数（从 ``detail`` 里解析）。
 
     为什么从 ``detail`` 解析而不是单开一张计数表：下界断言只是"别静默塌方"的粗护栏，
     为它建表属过度工程。``detail`` 的形状由本模块唯一写入，格式稳定且有测试锁定。
+
+    格式契约（Fix round 1 re-review · NEW-A）：写入端 ``detail_parts`` 用 ``" | "``
+    join、逐层段为 ``L<级别>:指数 <成功>/<总数>,行 <行数>``。**解析端必须吃这个格式**
+    ——旧版本按 ``";"`` 分割、要求每段含 ``"="``，对写入端的确切输出恒返回 ``{}``，
+    规则 2（单层 ≤20% 塌方 floor）在生产中从未生效。历史行是同一格式写的，本函数
+    不改写入端、只让解析端对齐（改写入端会让库内既有 ``detail`` 全部失效）。
     """
     row = (
         await db.execute(
@@ -247,18 +260,10 @@ async def _previous_level_totals(db: AsyncSession) -> dict[int, int]:
     if not row:
         return {}
     totals: dict[int, int] = {}
-    for part in str(row).split(";"):
-        part = part.strip()
-        if not part.startswith("L") or "=" not in part:
-            continue
-        head, _, tail = part.partition("=")
-        try:
-            level = int(head[1:].split(":")[0])
-            # L2:指数 134/134,行 3105
-            rows_part = [x for x in tail.split(",") if "行" in x]
-            totals[level] = int(rows_part[0].replace("行", "").strip())
-        except (ValueError, IndexError):
-            continue
+    for part in str(row).split("|"):
+        match = _LEVEL_PART_RE.match(part.strip())
+        if match:
+            totals[int(match.group(1))] = int(match.group(2))
     return totals
 
 
@@ -369,7 +374,9 @@ async def ingest_sw_member_periods(
     status = "ok" if fully_ingested else "partial"
 
     detail_parts = [
-        # 逐层计数：既是给人看的证据，也是下一次下界断言的输入（见 _previous_level_totals）
+        # 逐层计数：既是给人看的证据，也是下一次下界断言的输入（见 _previous_level_totals；
+        # 段格式 `L<级别>:指数 <成功>/<总数>,行 <行数>` 是**两端契约**，改动须同步解析端
+        # 与 round-trip 测试）
         f"L{lv}:指数 {idx}/{len([r for r in all_refs if r.level == lv])},行 {rows}"
         for lv, (idx, rows) in sorted(coverage.items())
     ]

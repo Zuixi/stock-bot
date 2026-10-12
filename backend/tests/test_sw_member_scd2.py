@@ -504,6 +504,89 @@ def test_floor_assertions_flag_zero_and_collapse() -> None:
     assert scd2._check_level_floors({1: (31, 4690)}, {1: 5211}) == []
 
 
+@requires_pg
+def test_detail_round_trip_feeds_previous_level_totals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**写入端 → 解析端 round-trip**（re-review · NEW-A 的回归锁）。
+
+    旧版解析端按 ``";"`` 分割、要求 ``"="``，而写入端产出 ``" | "`` join、
+    ``L1:指数 31/31,行 7740`` 形态的 ``detail``——解析恒 ``{}``，
+    规则 2（单层 20% 塌方 floor）**在生产中从未生效**。纯函数单测测不出这类
+    "写入/解析两端不一致"，所以本用例**真跑两次 ingest**（stub 上游）：
+    第一轮各层 1 行、完整成功；第二轮上游塌成 0 行——**生产代码**必须靠
+    第一轮写下的 detail 把第二轮判成 ``partial``（20% floor 真正转红）。
+    旧解析器读不回 previous，第二轮照样 ``ok``，这条断言必然红。
+    """
+    from app.services import sw_member_scd2_service as svc
+
+    class _ToggleStub:
+        """可切换返回内容的假上游：第一轮 1 行/指数，第二轮 0 行。"""
+
+        def __init__(self) -> None:
+            self.frame = pd.DataFrame(
+                [
+                    {
+                        "index_code": "x",
+                        "con_code": "600000.SH",
+                        "in_date": "20200102",
+                        "out_date": None,
+                        "is_new": "Y",
+                    }
+                ]
+            )
+
+        async def fetch_index_member(self, index_code: str = "") -> pd.DataFrame:
+            return self.frame
+
+    stub = _ToggleStub()
+
+    async def _fake_names(_db: Any) -> dict[str, str]:
+        return {}
+
+    monkeypatch.setattr(svc, "_stock_names", _fake_names)
+    import app.core.providers.tushare_client as tc
+
+    monkeypatch.setattr(tc, "get_tushare_client", lambda: stub)
+
+    async def _scenario(db: AsyncSession) -> tuple[dict[int, int], Any, str]:
+        await db.execute(text("DELETE FROM sw_member_ingest_runs"))
+        await db.execute(
+            text(
+                "INSERT INTO sw_industry_classes "
+                "(industry_code, level, industry_name, parent_code) VALUES "
+                "('994011', 1, '往返一级', NULL), ('994012', 3, '往返三级', NULL)"
+            )
+        )
+        await db.flush()
+        refs = [
+            scd2.SwIndexRef("994011", "999911.SI", 1, "往返一级"),
+            scd2.SwIndexRef("994012", "999912.SI", 3, "往返三级"),
+        ]
+        # 第一轮：完整成功（2 个指数、各 1 行）→ detail 落逐层计数
+        first = await svc.ingest_sw_member_periods(db, levels=(1, 3), refs=refs)
+        assert first.fully_ingested and first.status == "ok"
+        previous = await svc._previous_level_totals(db)
+        # 第二轮：上游塌成 0 行——上一轮写下的逐层总数必须让生产代码判 partial
+        stub.frame = pd.DataFrame()
+        second = await svc.ingest_sw_member_periods(db, levels=(1, 3), refs=refs)
+        last = await svc.get_last_run(db) or {}
+        return previous, second, str(last.get("detail"))
+
+    previous, second, second_detail = asyncio.run(_with_rollback(_scenario))
+    # **round-trip 的核心断言**：写入端记下的逐层总数（各 1 行）被解析端原样读回。
+    # 旧解析器对同一 detail 返回 {}，这条断言必然红。
+    assert previous == {1: 1, 3: 1}, (
+        f"写入端 → 解析端 round-trip 失败：previous={previous}"
+        "（{{}} = 旧解析器对写入格式的返回）"
+    )
+    # previous 真的参与生产判定（不是摆设）：第二轮 0 行 = 较上次跌 100% → partial，
+    # 且运行记录写明塌方原因（20% floor 在生产路径上转红）
+    assert second.fully_ingested is False
+    assert second.status == "partial"
+    assert "下界未过" in second_detail and "跌 100%" in second_detail, second_detail
+
+
 class _FakeTuShare:
     """只回一行成分的假上游（用于验证"截断运行不抬高上界"的行为层）。"""
 

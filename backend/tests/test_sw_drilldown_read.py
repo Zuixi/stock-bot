@@ -243,6 +243,74 @@ def test_volume_ratio_missing_is_none_not_zero() -> None:
 
 
 @requires_pg
+def test_level_metrics_rollup_is_scoped_not_whole_market() -> None:
+    """`/metrics` 的上卷兜底必须**限定在本节点子树**（re-review · NEW-B 回归锁）。
+
+    旧实现在 `get_level_metrics` 里调 `_member_params(scope_code=code)` **不带
+    l1/l2**——节点自身层级无行（如 110900 农业综合Ⅱ）时走**未加范围**的 rollup，
+    `/metrics` 拿到全市场并集。这里造**两条互不相交**的链：查询 A 链的 L1
+    （自身层级无行 → rollup），断言只回到 A 链自己的 2 只、B 链的那只**不混入**。
+    旧实现对同样的 fixture 返回 3（两条链的全市场并集），这条断言必然红。
+    """
+    from app.services.sw_drilldown_service import MEMBER_SOURCE_ROLLUP
+
+    # 代码段 996xxx 与本文件其他用例（991xxx）及其他测试文件错开
+    a_l1, a_l2, a_l3 = "996000", "996100", "996101"
+    b_l1, b_l2, b_l3 = "996200", "996300", "996301"
+
+    async def _scenario(db: AsyncSession) -> tuple[Any, int]:
+        for code, level, name, parent in (
+            (a_l1, 1, "A一级", None),
+            (a_l2, 2, "A二级", a_l1),
+            (a_l3, 3, "A三级", a_l2),
+            (b_l1, 1, "B一级", None),
+            (b_l2, 2, "B二级", b_l1),
+            (b_l3, 3, "B三级", b_l2),
+        ):
+            await db.execute(
+                text(
+                    "INSERT INTO sw_industry_classes "
+                    "(industry_code, level, industry_name, parent_code) VALUES (:c,:l,:n,:p)"
+                ),
+                {"c": code, "l": level, "n": name, "p": parent},
+            )
+        # A 链 2 只成分（挂在 A_L3 自身层级）；B 链 1 只。A_L1 自身层级**无行**。
+        await db.execute(
+            text(
+                "INSERT INTO sw_industry_member_periods "
+                "(industry_code, stock_code, symbol, stock_name, effective_from, effective_to, "
+                " is_current, source) VALUES "
+                "(:a3, '996001.SH', '996001', 'A甲', :f, NULL, true, 'test'), "
+                "(:a3, '996002.SH', '996002', 'A乙', :f, NULL, true, 'test'), "
+                "(:b3, '996003.SH', '996003', 'B丙', :f, NULL, true, 'test')"
+            ),
+            {"a3": a_l3, "b3": b_l3, "f": PERIOD_START},
+        )
+        await db.flush()
+        metrics = await svc.get_level_metrics(db, None, level1_code=a_l1, as_of=TRADE_DATE)
+        # 旧实现的对照（未加范围的同款聚合）：全市场并集 = 3 —— 展示判别力
+        unscoped = await svc._agg(
+            db,
+            svc._member_params(asof=TRADE_DATE, trade_date=TRADE_DATE, scope_code=a_l1),
+            MEMBER_SOURCE_ROLLUP,
+        )
+        return metrics, int(unscoped["member_count"])
+
+    metrics, unscoped_count = asyncio.run(_with_rollback(_scenario))
+    assert metrics.member_source == MEMBER_SOURCE_ROLLUP, "A_L1 自身层级无行，必须走 rollup 兜底"
+    assert metrics.member_count == 2, (
+        "A 链 L1 的 /metrics 上卷必须限定在 A 子树（2 只）；"
+        f"实得 {metrics.member_count}（未加范围时 = 全市场并集 {unscoped_count} 只，含 B 链）"
+    )
+    # fixture 自检：不加范围的**同一条 SQL**必须把子树外的成员也混进来
+    # （测试库只有 3 条合成行时 = 3；含真实灌数据的库 = ~4,953，正是 NEW-B 的形态）。
+    # 严格大于 scoped 结果即可，不钉具体数——这个用例断言的是"加范围后不再混入"。
+    assert unscoped_count > metrics.member_count, (
+        f"fixture 自检失败：未加范围聚合 = {unscoped_count}，应严格大于 scoped 的 2"
+    )
+
+
+@requires_pg
 def test_members_respect_scd2_interval() -> None:
     """区间外的股票**不出现**在成分里（"按当时归属还原"的读路证明）。"""
 

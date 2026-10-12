@@ -641,9 +641,21 @@ async def get_level_metrics(
     node = l3 if level3_code else (l2 if level2_code else l1)
     assert node is not None  # _require_chain 已保证
     src = await _member_source_for(db, code)
+    # 上卷兜底必须带**本节点的子树范围**（Fix round 1 re-review · NEW-B）：
+    # `_ROLLUP_MEMBERS_SQL` 的 `:l1/:l2/:l3` 是子树过滤器，不填 = 全市场并集
+    # （自身层级无行的节点，如 110900 农业综合Ⅱ，曾在 /metrics 返回 ~4,951 只）。
+    # 与 list 路径 `_node` 的口径一致：经 `_ancestor_scope` 加范围，L3 再显式钉住自己。
+    l1_scope, l2_scope = await _ancestor_scope(db, code)
     row = await _agg(
         db,
-        _member_params(asof=asof, trade_date=trade_date, scope_code=code),
+        _member_params(
+            asof=asof,
+            trade_date=trade_date,
+            scope_code=code,
+            l1=l1_scope,
+            l2=l2_scope,
+            l3=code if node_level == 3 else "",
+        ),
         src,
     )
     return assemble_quote(

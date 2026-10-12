@@ -2,7 +2,7 @@
 
 Revision ID: b4c5d6e7f8a9
 Revises: f1a2b3c4d5e6
-Create Date: 2026-10-18
+Create Date: 2026-10-12
 
 S1.4 的 SCD2 分类归属：**新建两张表**，不改既有 ``sw_industry_members``。
 

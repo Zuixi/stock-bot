@@ -135,6 +135,10 @@ class MarketIndustryLevelOut(BaseModel):
     """
 
     as_of: date | None = None
+    # ⚠️ 已声明的限度（Task 8 re-review，行为**有意不改**）：`as_of_quality` /
+    # `as_of_reason` 总是描述**最新**完整交易日的行情覆盖（`_resolve_day` 不带 as_of），
+    # 即使本响应按**历史** `as_of` 出数——历史上的那天行情是否齐全并不由此字段回答。
+    # 成分口径另有 `scd2_as_of` / `scd2_coverage` 外露，不受此限度影响。
     as_of_quality: AsOfQuality = "partial"
     as_of_reason: str | None = None
     scd2_as_of: date | None = None
@@ -175,6 +179,7 @@ class MarketIndustryMembersOut(BaseModel):
     """末级（L3）成分股列表 + 该节点自身的 7 项聚合。"""
 
     as_of: date | None = None
+    # 同 MarketIndustryLevelOut.as_of_quality 的已声明限度：历史 as_of 也带最新日的质量。
     as_of_quality: AsOfQuality = "partial"
     as_of_reason: str | None = None
     scd2_as_of: date | None = None
