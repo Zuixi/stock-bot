@@ -5,7 +5,14 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchAllTags } from "@/shared/api/userTags";
 import { useAuth } from "@/features/auth";
 
-export default function TagsPage() {
+/**
+ * 标签总览（自定义标签分组 + 每组个股数）。
+ *
+ * 原 `pages/tags/index.tsx` 的内容**原样提取**为面板，落在 `/me?tab=tags` 下渲染
+ * （Ruling 31：`/me` 必须保留已建成的能力，不得用「规划中」占位覆盖）。
+ * 卡片点击仍去 `/tags/:tagName`（该路由保留，渲染 `TagsPanel`）。
+ */
+export function TagsOverview() {
   const navigate = useNavigate();
   const { user, isAuthenticated } = useAuth();
 
@@ -62,9 +69,7 @@ export default function TagsPage() {
         }
         size="small"
         extra={
-          <Typography.Text type="secondary">
-            点击标签查看对应股票列表
-          </Typography.Text>
+          <Typography.Text type="secondary">点击标签查看对应股票列表</Typography.Text>
         }
       >
         {tags.length === 0 ? (

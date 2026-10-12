@@ -16,8 +16,9 @@ const IndustryLevel3Page = lazy(() => import("@/pages/market-industry-level3"));
 const MarketHotSectorsPage = lazy(() => import("@/pages/market-hot-sectors"));
 const ConceptBoardPage = lazy(() => import("@/pages/market-concept"));
 const StockDetailPage = lazy(() => import("@/pages/stock-detail"));
-const WatchlistPage = lazy(() => import("@/pages/watchlist"));
-const TagsPage = lazy(() => import("@/pages/tags"));
+// `/watchlist`、`/tags` 的内容已分别提取为 `WatchlistPanel` / `TagsOverview`，
+// 统一在 `/me` 下渲染（Ruling 31）——两条旧路由只做 `<Navigate>`，不再有专属页面目录；
+// `/tags/:tagName` 是保留路由，仍渲染 `pages/tags-detail`（薄壳，复用 `TagsPanel`）。
 const TagsDetailPage = lazy(() => import("@/pages/tags-detail"));
 
 // ── 一级导航页面 ───────────────────────────────────────────────────────────
@@ -147,7 +148,7 @@ export function AppRouter() {
           )}
         />
 
-        {/* ══ 旧路由 10 条 redirect（IA §4；目标必须逐字一致）══════════════ */}
+        {/* ══ 旧路由 8 条 redirect（IA §4 + Ruling 30；目标必须逐字一致）════ */}
         {/* 1 市场分类（处理后仍公开）——共 8 条 redirect */}
         <Route path="/market/category" element={<Navigate to="/market/industry" replace />} />
         {/* 2-3 指数 / 个股（处理后仍公开） */}

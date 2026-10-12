@@ -120,6 +120,12 @@ if [ "$FULL" = 1 ]; then
   else
     echo "  （无前端 TS 改动，跳过 tsc）"
   fi
+  # 路由迁移门禁（Task 5 起）：读 router + IA 文档，毫秒级，故不受"是否有前端改动"限制——
+  # 它同样会被 docs/design/ia-investment-research-platform.md 的改动打破。
+  if command -v node >/dev/null 2>&1 && [ -f frontend/scripts/check-routes.mjs ]; then
+    echo "  npm run check:routes ..."
+    (cd frontend && npm run --silent check:routes) || fail "路由迁移门禁未通过（npm run check:routes）"
+  fi
 fi
 
 echo

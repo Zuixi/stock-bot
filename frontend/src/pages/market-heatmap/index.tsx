@@ -3,14 +3,12 @@ import { useLocation, useSearchParams } from "react-router-dom";
 import { SectionCard, StateWrapper } from "@/shared/ui";
 
 /**
- * `/market/heatmap`：热力图页（**今日不存在，本任务新建占位**）。
+ * `/market/heatmap`：热力图页（**今日不存在，本任务新建占位**；真实现归 S1.5）。
  *
- * 承接两条旧路由的 redirect（IA 文档 §4）：
- * - `/market/hot-sectors/:category` → `/market/heatmap?group=:category`
- * - `/market/concept/:boardCode`    → `/market/heatmap?concept=:boardCode`
- *
- * 两种 query 各要能渲染：本任务只**如实把收到的参数显示出来**（证明 redirect 未吞参数），
- * 真正的热力图实现留给市场模块自己的 spec。**不得静默忽略任何一个参数**。
+ * **它不是任何 redirect 的目标**（Ruling 30）：`/market/hot-sectors/:category` 与
+ * `/market/concept/:boardCode` 今天就是有数据的真页面，故**原地保留**，不 redirect 到这里。
+ * 本页只承诺「可达 + 不 404 + 规划中提示」，并**如实回显收到的 query**——S1.5 接管时
+ * `?group=` / `?concept=` 两种口径各要能渲染，且**不得静默忽略任何一个参数**。
  */
 export default function MarketHeatmapPage() {
   const location = useLocation();

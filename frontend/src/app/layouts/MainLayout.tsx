@@ -59,6 +59,13 @@ const TOP_NAV: NavItem[] = [
   { nav: { key: "/trade", title: "交易执行", path: "/trade", icon: <SwapOutlined /> }, visibility: { kind: "authenticated" } },
 ];
 
+/**
+ * 模块内二级/三级树的 payload。本任务**不下发任何模块树**（后续由各模块配置 / 后端下发），
+ * 空数组 → 左侧树整块不渲染（`ModuleSideNav` 的契约）。提到模块级是为了避免每次渲染
+ * 新建数组字面量（无意义的 re-render 依赖）。
+ */
+const MODULE_TREE: NavNode[] = [];
+
 export function MainLayout() {
   const navigate = useNavigate();
   const { hasPermission } = useAuthStore();
@@ -83,10 +90,6 @@ export function MainLayout() {
     () => TOP_NAV.filter((item) => visible(item.visibility)).map((item) => item.nav),
     [visible]
   );
-
-  // 本任务不下发模块内二级/三级树（后续由各模块配置 / 后端 payload 下发）；
-  // 空 payload → 左侧树整块不渲染（ModuleSideNav 的契约）
-  const moduleTree: NavNode[] = [];
 
   return (
     <Layout style={{ minHeight: "100vh", background: "var(--bg-page)" }}>
@@ -124,7 +127,7 @@ export function MainLayout() {
       </Header>
 
       <Layout>
-        <ModuleSideNav nodes={moduleTree} />
+        <ModuleSideNav nodes={MODULE_TREE} />
         <Content style={{ padding: "16px 24px", maxWidth: 1400, width: "100%", margin: "0 auto" }}>
           <Outlet />
         </Content>

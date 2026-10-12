@@ -1,11 +1,18 @@
 import { Typography, Button, Alert, Space } from "antd";
 import { DeleteOutlined, CloudSyncOutlined, LoginOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
-import { WatchlistTable } from "@/features/watchlist/components";
+import { WatchlistTable } from "./WatchlistTable";
 import { useWatchlist } from "@/features/watchlist/useWatchlist";
 import { useAuth } from "@/features/auth";
 
-export default function WatchlistPage() {
+/**
+ * 自选面板：本地模式提示 + 「我的自选（N）」标题 + 「清空」按钮 + `WatchlistTable`。
+ *
+ * 原 `pages/watchlist/index.tsx` 的内容**原样提取**为面板，落在 `/me?tab=watchlist` 下渲染
+ * （Ruling 31：`/me` 必须保留已建成的能力——`WatchlistTable` 自身**没有**批量清空，
+ * 标题与清空按钮只在这里，删掉即为功能性回退；`e2e/userIsolation.spec.ts` 断言该标题可见）。
+ */
+export function WatchlistPanel() {
   const { items, clear, isMutating } = useWatchlist();
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
@@ -35,13 +42,7 @@ export default function WatchlistPage() {
           我的自选（{items.length}）
         </Typography.Title>
         {items.length > 0 && (
-          <Button
-            size="small"
-            icon={<DeleteOutlined />}
-            danger
-            loading={isMutating}
-            onClick={clear}
-          >
+          <Button size="small" icon={<DeleteOutlined />} danger loading={isMutating} onClick={clear}>
             清空
           </Button>
         )}

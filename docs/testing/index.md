@@ -16,6 +16,7 @@
 | 后端单测（排除 e2e/bench） | `self_review.sh --full` · CI `backend-test` · pre-commit `backend-test` | commit / PR | 是 | 见 [`backend.md`](./backend.md) |
 | 前端类型 `tsc --noEmit` | `self_review.sh --full` · CI `frontend-lint` · pre-commit | commit / PR | 是 | 修类型；见 [ADR 0006](../decisions/0006-no-eslint-tsc-as-static-check.md) |
 | 前端设计令牌 | CI `frontend-lint`（`npm run check:design`） | PR | 是 | 涨跌色对比度 ≥ 4.5 且 `theme.ts` ↔ `theme.css` 必须一致 |
+| 前端路由迁移（旧路由/redirect 目标/保留非 redirect/占位页不可为 redirect 目标/IA 文档↔代码一致） | `npm run check:routes` · CI `frontend-lint` · `self_review.sh --full` | PR / 手动全量 | 是 | 改 `frontend/scripts/check-routes.mjs` 或对应契约；新 redirect 必须同步改 `docs/design/ia-investment-research-platform.md` §4 与本脚本契约 |
 | 前端构建 | CI `frontend-build` | PR | 是 | `npm run build`（含 `tsc -b`） |
 | auth-service lint / 类型 / 测试 | CI `auth-service-lint` · `auth-service-typecheck` · `auth-service-test` | PR | 是 | 与后端同口径，但**独立库与版本线** |
 | CPU 基准 Tier 1 | `scripts/bench.sh` · CI `bench-cpu` | 手动 / PR | 是 | 见 [`benchmarks.md`](./benchmarks.md) |

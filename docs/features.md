@@ -12,8 +12,9 @@
 | 行情台首页 | 指数卡、涨跌分布、榜单、板块、资金流、热门板块（免登录可用） | `frontend/src/pages/market` · `frontend/src/features/market` · `/api/v1/market` |
 | 指数详情 | 指数 K 线、SSE 指数快照与盘中序列（路由 `/market/index/:tsCode`，由 `/index/:tsCode` redirect） | `frontend/src/pages/market-index` · `/api/v1/market` |
 | 申万行业浏览 | 申万一级/二级/三级树、下钻、行业表现 | `frontend/src/pages/market-category` · `frontend/src/pages/market-industry-level2` · `frontend/src/pages/market-industry-level3` · `/api/v1/market` |
-| 概念板块 | 板块列表、成分股（成分以 `symbol` 为业务键）；详情页并入 `/market/heatmap`（Task 5 占位，`/market/concept/:boardCode` → `/market/heatmap?concept=`） | `frontend/src/features/concept` · `/api/v1/concepts` |
-| 热门板块与情绪 | 涨停梯队、板块涨停、昨日涨停、情绪日历/盘中；板块详情并入 `/market/heatmap`（Task 5 占位，`/market/hot-sectors/:category` → `/market/heatmap?group=`） | `frontend/src/shared/api/limitUp.ts` · `/api/v1/market` |
+| 概念板块 | 板块列表、详情、成分股（成分以 `symbol` 为业务键）；`/market/concept/:boardCode` **保留**（Ruling 30） | `frontend/src/pages/market-concept` · `frontend/src/features/concept` · `/api/v1/concepts` |
+| 热门板块与情绪 | 涨停梯队、板块涨停、昨日涨停、情绪日历/盘中；`/market/hot-sectors/:category` **保留**（Ruling 30） | `frontend/src/pages/market-hot-sectors` · `frontend/src/shared/api/limitUp.ts` · `/api/v1/market` |
+| 市场热力图 | 板块/概念热力图（Task 5 建占位路由 `/market/heatmap`，真实现归 S1.5；**不是任何 redirect 的目标**） | `frontend/src/pages/market-heatmap` · `/api/v1/market` |
 | 市场面数据 | 北向、龙虎榜、大宗交易、解禁、回购、公告、板块与市场资金流、全球指数 | `/api/v1/market`（`market_data.py`）· `frontend/src/shared/api/marketData.ts` |
 | 数据新鲜度 | 各表最新业务时间、缺口、上游状态（数据面健康度权威入口） | `/api/v1/market/data-freshness` |
 
@@ -30,8 +31,8 @@
 
 | 功能 | 说明 | 代码入口 |
 |---|---|---|
-| 自选股 | 用户自选列表（数据归属按 `user_id` 隔离，需登录） | `frontend/src/pages/watchlist` · `frontend/src/features/watchlist` · `/api/v1/watchlists` |
-| 自定义标签 | 标签分组与按标签看股票 | `frontend/src/pages/tags` · `frontend/src/pages/tags-detail` · `/api/v1/tags` |
+| 自选股 | 用户自选列表 + 标题/清空（数据归属按 `user_id` 隔离，需登录）；路由 `/me?tab=watchlist`（`/watchlist` redirect 到此） | `frontend/src/features/watchlist`（`WatchlistPanel` / `WatchlistTable`） · `/api/v1/watchlists` |
+| 自定义标签 | 标签分组总览与按标签看股票；路由 `/me?tab=tags`（`/tags` redirect 到此）、`/tags/:tagName` 保留 | `frontend/src/features/watchlist`（`TagsOverview` / `TagsPanel`） · `frontend/src/pages/tags-detail` · `/api/v1/tags` |
 | 注册 / 登录 / 会话 | 独立认证库、HttpOnly Cookie、CSRF 双防御 | `frontend/src/pages/login` · `frontend/src/features/auth` · auth-service `/auth` · gateway `forward-auth` |
 
 ## 行业投研

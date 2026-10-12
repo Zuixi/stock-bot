@@ -2,15 +2,16 @@ import { Tabs, Typography } from "antd";
 import { StarOutlined, TagsOutlined, FundOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { PlaceholderPage } from "@/shared/ui/PlaceholderPage";
-import { TagsPanel, WatchlistTable } from "@/features/watchlist/components";
+import { TagsOverview, TagsPanel, WatchlistPanel } from "@/features/watchlist/components";
 
 /**
  * `/me`：我的（顶栏全局工具的目标页，IA 文档 §3；权限 = 登录即可，沿用既有 `RequireAuth`）。
  *
- * 承载三个 tab，query 契约逐字照抄 IA 文档 §4：
- * - `?tab=watchlist`（默认）—— 自选：**复用既有 `WatchlistTable`**，不重写自选能力
- * - `?tab=tags`             —— 标签总览（骨架占位）
- * - `?tab=tags&name=:tagName` —— 该标签下的个股列表：**复用既有 `TagsPanel`**
+ * 承载三个 tab，query 契约逐字照抄 IA 文档 §4（**Ruling 31：已建成的能力一律保留，不许用占位覆盖**）：
+ * - `?tab=watchlist`（默认）—— 自选：`WatchlistPanel`（原 `pages/watchlist` 内容提取，
+ *                              含「我的自选（N）」标题与「清空」按钮——`WatchlistTable` 自己没有清空）
+ * - `?tab=tags`             —— 标签总览：`TagsOverview`（原 `pages/tags` 内容提取，含每组个股数）
+ * - `?tab=tags&name=:tagName` —— 该标签下的个股列表：`TagsPanel`
  *                              （与 `/tags/:tagName` 同一实现，redirect 后行为逐字一致）
  * - `?tab=industry`         —— 我的行业：占位（本任务只交付骨架）
  *
@@ -54,7 +55,7 @@ export default function MePage() {
                 <StarOutlined /> 自选
               </span>
             ),
-            children: <WatchlistTable />,
+            children: <WatchlistPanel />,
           },
           {
             key: "tags",
@@ -67,10 +68,9 @@ export default function MePage() {
               // 带 name 时直接落该标签的个股列表（/tags/:tagName 的 redirect 目标）
               <TagsPanel tagName={tagName} />
             ) : (
-              <PlaceholderPage
-                title="标签"
-                hint="标签总览挂在 /me?tab=tags 下尚未落地；既有 /tags 列表页仍可访问，个股列表见 /me?tab=tags&name=<标签名>。"
-              />
+              // Ruling 31：`/tags` 的标签总览在这里渲染（原 pages/tags 的内容提取为面板），
+              // 不得用「规划中」占位覆盖已建成的能力
+              <TagsOverview />
             ),
           },
           {
