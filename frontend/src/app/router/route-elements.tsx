@@ -18,6 +18,7 @@ const PAGES: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
   LandingPage: lazy(() => import("@/pages/landing")),
   LoginPage: lazy(() => import("@/pages/login")),
   MarketPage: lazy(() => import("@/pages/market")),
+  MarketGlobalPage: lazy(() => import("@/pages/market-global")),
   CategoryPage: lazy(() => import("@/pages/market-category")),
   MarketHeatmapPage: lazy(() => import("@/pages/market-heatmap")),
   MarketIndexPage: lazy(() => import("@/pages/market-index")),

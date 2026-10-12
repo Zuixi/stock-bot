@@ -87,6 +87,14 @@ export const ROUTES: AppRoute[] = [
 
   // 市场 `/market`（公开，含全部子路由）
   { key: "market", path: "/market", kind: "page", component: "MarketPage", parent: "main" },
+  // S1.3：全球市场与跨市场标的（公开；段 B 大宗/外汇只放「数据源待接入」占位）
+  {
+    key: "market-global",
+    path: "/market/global",
+    kind: "page",
+    component: "MarketGlobalPage",
+    parent: "main",
+  },
   { key: "market-industry", path: "/market/industry", kind: "page", component: "CategoryPage", parent: "main" },
   {
     key: "market-industry-l2",

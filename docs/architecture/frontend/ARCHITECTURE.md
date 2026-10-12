@@ -67,6 +67,7 @@ frontend/src/
 | （无 path 的 `main` 外壳） | layout | `MainLayout` | — | 唯一 layout 路由；下表 `parent: "main"` 的行都嵌在它下面（顶栏/页脚由它渲染） |
 | `/login` | page | `pages/login`（`LoginPage`） | 公开 | 登录页 |
 | `/market` | page | `pages/market`（`MarketPage`） | 公开 | 行情台首页 |
+| `/market/global` | page | `pages/market-global`（`MarketGlobalPage`） | 公开 | 全球市场与跨市场标的（S1.3）：按市场分组、五要素齐备；大宗商品/外汇只放「数据源待接入」占位 |
 | `/market/industry` | page | `pages/market-category`（`CategoryPage`） | 公开 | 申万分类浏览（`/market/category` 的 redirect 目标） |
 | `/market/industry/:level1Code` | page | `pages/market-industry-level2`（`IndustryLevel2Page`） | 公开 | 申万一级下钻 |
 | `/market/industry/:level1Code/:level2Code` | page | `pages/market-industry-level3`（`IndustryLevel3Page`） | 公开 | 申万二级下钻 |

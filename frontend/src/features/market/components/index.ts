@@ -1,5 +1,6 @@
 export { GlobalMarketBoard } from "./GlobalMarketBoard";
 export { GlobalIndexCardView } from "./GlobalIndexCardView";
+export { DataSourceBadge, PriceSourceBadge } from "./DataSourceBadge";
 export { CoreIndexCards } from "./CoreIndexCards";
 export { CORE_TS_CODES, pickCoreIndices } from "./coreIndices";
 export { DistributionChart } from "./DistributionChart";

@@ -9,16 +9,29 @@ from pydantic import BaseModel, Field
 
 
 class GlobalIndexCardOut(BaseModel):
+    """全球指数卡片（S1.3）。
+
+    **五要素必填**（名称 / 数据源代码 / 交易时段 / 时区 / 币种）——`session` / `timezone` /
+    `currency` 不给默认值：登记表漏填时读端点必须**炸**（422），不允许静默给出空串让
+    前端显示一片空白（那正是 S1.3「非空率 100%」要防的假绿）。
+    """
+
     ts_code: str
     name: str
     market: str
     region: str
+    session: str  # 交易时段（A50 = 新加坡 T+1 夜盘，不得与 A 股时段混淆）
+    timezone: str  # IANA 时区名，如 America/New_York
+    currency: str  # 计价币种
     price: float | None = None
     change: float | None = None
     pct_change: float | None = None
     spark: list[float] = Field(default_factory=list)
     updated_at: datetime
-    source: str
+    #: 数据源代码/来源（登记表的 `source`：index_global / index_daily / sina_index）
+    data_source: str
+    #: 这一格价来自哪一路：realtime / realtime_sina / eod / none
+    price_source: Literal["realtime", "realtime_sina", "eod", "none"]
 
 
 class SectorMoneyflowOut(BaseModel):

@@ -94,6 +94,8 @@ const ALLOWED_EXTRA = [
   "/market/industry",
   // `/market/heatmap` 仍是**已声明路由**（S1.5 建真热力图），但它不是 redirect 目标
   "/market/heatmap",
+  // S1.3 新增：全球市场与跨市场标的（真功能页，非 redirect 目标、非占位）
+  "/market/global",
   // MainLayout 外壳（无 path）
   "",
 ];

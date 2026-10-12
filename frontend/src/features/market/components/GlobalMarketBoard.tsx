@@ -1,4 +1,5 @@
 import { Card, Col, Row, Skeleton, Tabs } from "antd";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { fetchGlobalIndices } from "@/shared/api/marketData";
 import { GlobalIndexCardView } from "./GlobalIndexCardView";
@@ -43,7 +44,12 @@ export function GlobalMarketBoard() {
   }));
 
   return (
-    <Card title="全球指数" size="small">
+    <Card
+      title="全球指数"
+      size="small"
+      // S1.3 全球市场子页入口：本卡片是缩略视图，时段/时区/币种等五要素在子页逐条列出
+      extra={<Link to="/market/global">全球市场与跨市场标的 →</Link>}
+    >
       <Tabs defaultActiveKey="asia" items={items} />
     </Card>
   );

@@ -15,12 +15,21 @@ interface BackendGlobalIndexCard {
   name: string;
   market: string;
   region: "asia" | "americas";
+  /** 交易时段（S1.3 五要素之一；A50 = 新加坡 T+1 夜盘） */
+  session: string;
+  /** IANA 时区名，如 America/New_York */
+  timezone: string;
+  /** 计价币种 */
+  currency: string;
   price: number | null;
   change: number | null;
   pct_change: number | null;
   spark: number[];
   updated_at: string;
-  source: "realtime" | "eod";
+  /** 数据源代码（登记表的 source：index_global / index_daily / sina_index） */
+  data_source: string;
+  /** 这一格价来自哪一路；`none` = 该标的尚无可用行情（**不得显示成 0**） */
+  price_source: "realtime" | "realtime_sina" | "eod" | "none";
 }
 
 interface BackendSectorMoneyflowItem {
@@ -151,12 +160,19 @@ export interface GlobalIndexCard {
   name: string;
   market: string;
   region: "asia" | "americas";
+  /** 交易时段（展示用原文，不在前端二次加工） */
+  session: string;
+  timezone: string;
+  currency: string;
   price: number | null;
   change: number | null;
   pctChange: number | null;
   spark: number[];
   updatedAt: string;
-  source: "realtime" | "eod";
+  /** 数据源代码（来源徽章用） */
+  dataSource: string;
+  /** 价来源：realtime / realtime_sina / eod / none */
+  priceSource: "realtime" | "realtime_sina" | "eod" | "none";
 }
 
 export interface SectorMoneyflowItem {
@@ -289,12 +305,16 @@ const mapCard = (b: BackendGlobalIndexCard): GlobalIndexCard => ({
   name: b.name,
   market: b.market,
   region: b.region,
+  session: b.session,
+  timezone: b.timezone,
+  currency: b.currency,
   price: b.price,
   change: b.change,
   pctChange: b.pct_change,
   spark: b.spark,
   updatedAt: b.updated_at,
-  source: b.source,
+  dataSource: b.data_source,
+  priceSource: b.price_source,
 });
 
 const mapMarketMoneyflow = (b: BackendMarketMoneyflow): MarketMoneyflow => ({

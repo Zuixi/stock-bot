@@ -27,119 +27,266 @@ logger = logging.getLogger(__name__)
 
 _SH = ZoneInfo("Asia/Shanghai")
 
+#: 交易时段 / 时区 / 币种 三要素的**市场级默认值**。
+#: 依据是 S1.3 契约「名称 + 数据源代码 + 交易时段 + 时区 + 币种」五者必填。
+#:
+#: 做成"按市场取默认"而不是每条手抄：同一市场的时段/时区/币种天然相同，逐条复制只会
+#: 在下一轮加标的时漏改一条。**A50 是唯一的例外**——它不在 A 股时段交易，故在条目上
+#: **显式覆盖**（见下方 `session`），这正是导图点名要防的混淆。
+_MARKET_DEFAULTS: dict[str, dict[str, str]] = {
+    "CN": {"session": "09:30-11:30 / 13:00-15:00", "timezone": "Asia/Shanghai", "currency": "CNY"},
+    "HK": {"session": "09:30-12:00 / 13:00-16:00", "timezone": "Asia/Hong_Kong", "currency": "HKD"},
+    "JP": {"session": "09:00-11:30 / 12:30-15:00", "timezone": "Asia/Tokyo", "currency": "JPY"},
+    "KR": {"session": "09:00-15:30", "timezone": "Asia/Seoul", "currency": "KRW"},
+    "US": {"session": "09:30-16:00", "timezone": "America/New_York", "currency": "USD"},
+    "SG": {
+        "session": "T 09:00-16:30 / T+1 17:00-05:15",
+        "timezone": "Asia/Singapore",
+        "currency": "CNY",
+    },
+}
+
+#: A50（富时中国A50 指数期货）的**显式**时段/时区/币种——不得落回 `_MARKET_DEFAULTS["SG"]` 之外
+#: 的任何隐式默认，也不得与 A 股时段混淆（S1.3 逐字要求「UI 明示」）。币种取 **CNY**：
+#: 该指数成分是 A 股、报价与保证金按人民币口径理解（导图亦标注「CNY 夜盘」）。
+#: 时段依据：新交所 T+1 时段（夜盘）覆盖新加坡时间 17:00–次日 05:15（[新交所 T+1 开盘时间
+#: 调整通知](https://henghua.hk/cmsbigfile/2025/04/f05d5388-013d-4b0f-9444-3e33f1810940/SGSHIJIAN.pdf)、
+#: [SGX 指数商品交易时间异动通知](https://www.ibff.com.tw/Support/Bulletin/75ad66b9-7818-439d-9687-6b736fa4f4a1/2025SGX%E4%BA%A4%E6%98%93%E6%99%82%E9%96%93%E7%95%B0%E5%8B%95%E9%80%9A%E7%9F%A5.pdf)；
+#: 本仓库侧佐证：东财延迟行情对 XIN9 的行情时间戳落在新加坡 17 时后，见
+#: `docs/design/data-source.md` 附.5）。
+_A50_SESSION = "T 09:00-16:30 / T+1 17:00-05:15（新加坡夜盘，非 A 股时段）"
+
+
+def _defaults_for(market: str) -> dict[str, str]:
+    """市场级默认三要素；未登记的市场 → **空串**（由测试断言非空，不许静默兜底成假值）。"""
+    return _MARKET_DEFAULTS.get(market, {"session": "", "timezone": "", "currency": ""})
+
+
+def _instrument(
+    *,
+    ts_code: str,
+    name: str,
+    market: str,
+    region: str,
+    source: str,
+    em_secid: str | None = None,
+    sina_code: str | None = None,
+    session: str | None = None,
+    timezone: str | None = None,
+    currency: str | None = None,
+    quote_provider: str = "eastmoney",
+) -> dict[str, str]:
+    """登记一条全球标的：五要素（名称 / 数据源代码 / 交易时段 / 时区 / 币种）一律非空。
+
+    `session`/`timezone`/`currency` 缺省取 `_defaults_for(market)`；只有确实不落市场默认
+    的标的（当前仅 A50）才显式覆盖——**A50 不得与 A 股时段混淆**是本条的用途。
+
+    `em_secid` / `sina_code` 均可选：缺省表示该标的**没有**对应行情源覆盖，读路径
+    不会把它拼进该源的请求串（避免"取到别人的行情"或静默失败）。
+    """
+    defaults = _defaults_for(market)
+    row = {
+        "ts_code": ts_code,
+        "name": name,
+        "market": market,
+        "region": region,
+        "session": session or defaults["session"],
+        "timezone": timezone or defaults["timezone"],
+        "currency": currency or defaults["currency"],
+        "source": source,
+        "quote_provider": quote_provider,
+    }
+    if em_secid:
+        row["em_secid"] = em_secid
+    if sina_code:
+        row["sina_code"] = sina_code
+    return row
+
+
+#: 标的元数据登记表（S1.3 交付物「全球标的元数据表」）。
+#:
+#: 与改造前的差异（**既有 ts_code 一条未改**，只补字段 + 追加条目）：
+#: - 每条补齐 `session` / `timezone` / `currency`（五要素非空，S1.3 验收判据）；
+#: - 追加 NDX / SOX / HXC / HKTECH / XIN9；
+#: - `em_secid` 改为**可选**：东财延迟行情只覆盖部分标的，无 secid 的标的
+#:   不会进 `fetch_index_snapshot` 的 secids 列表（见 `get_global_index_cards`），
+#:   因而不会静默取到别人的行情。
 GLOBAL_INDICES: list[dict[str, str]] = [
-    {
-        "ts_code": "000001.SH",
-        "name": "上证指数",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "1.000001",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "399001.SZ",
-        "name": "深证成指",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "0.399001",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "399006.SZ",
-        "name": "创业板指",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "0.399006",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "000300.SH",
-        "name": "沪深300",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "1.000300",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "000905.SH",
-        "name": "中证500",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "1.000905",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "000688.SH",
-        "name": "科创50",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "1.000688",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "000016.SH",
-        "name": "上证50",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "1.000016",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "899050.BJ",
-        "name": "北证50",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "0.899050",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "HSI",
-        "name": "恒生指数",
-        "market": "HK",
-        "region": "asia",
-        "em_secid": "100.HSI",
-        "source": "index_global",
-    },
-    {
-        "ts_code": "N225",
-        "name": "日经225",
-        "market": "JP",
-        "region": "asia",
-        "em_secid": "100.N225",
-        "source": "index_global",
-    },
-    {
-        "ts_code": "KS11",
-        "name": "韩国KOSPI",
-        "market": "KR",
-        "region": "asia",
-        "em_secid": "100.KS11",
-        "source": "index_global",
-    },
-    {
-        "ts_code": "DJI",
-        "name": "道琼斯",
-        "market": "US",
-        "region": "americas",
-        "em_secid": "100.DJIA",
-        "source": "index_global",
-    },
-    {
-        "ts_code": "SPX",
-        "name": "标普500",
-        "market": "US",
-        "region": "americas",
-        "em_secid": "100.SPX",
-        "source": "index_global",
-    },
-    {
-        "ts_code": "IXIC",
-        "name": "纳斯达克",
-        "market": "US",
-        "region": "americas",
-        "em_secid": "100.NDX",
-        "source": "index_global",
-    },
+    # ── A 股（8 条，`ts_code` 与改造前逐字一致；时段/时区/币种来自 CN 默认）──────────
+    _instrument(
+        ts_code="000001.SH",
+        name="上证指数",
+        market="CN",
+        region="asia",
+        em_secid="1.000001",
+        source="index_daily",
+    ),
+    _instrument(
+        ts_code="399001.SZ",
+        name="深证成指",
+        market="CN",
+        region="asia",
+        em_secid="0.399001",
+        source="index_daily",
+    ),
+    _instrument(
+        ts_code="399006.SZ",
+        name="创业板指",
+        market="CN",
+        region="asia",
+        em_secid="0.399006",
+        source="index_daily",
+    ),
+    _instrument(
+        ts_code="000300.SH",
+        name="沪深300",
+        market="CN",
+        region="asia",
+        em_secid="1.000300",
+        source="index_daily",
+    ),
+    _instrument(
+        ts_code="000905.SH",
+        name="中证500",
+        market="CN",
+        region="asia",
+        em_secid="1.000905",
+        source="index_daily",
+    ),
+    _instrument(
+        ts_code="000688.SH",
+        name="科创50",
+        market="CN",
+        region="asia",
+        em_secid="1.000688",
+        source="index_daily",
+    ),
+    _instrument(
+        ts_code="000016.SH",
+        name="上证50",
+        market="CN",
+        region="asia",
+        em_secid="1.000016",
+        source="index_daily",
+    ),
+    _instrument(
+        ts_code="899050.BJ",
+        name="北证50",
+        market="CN",
+        region="asia",
+        em_secid="0.899050",
+        source="index_daily",
+    ),
+    # ── 香港（2 条）───────────────────────────────────────────────────────────
+    _instrument(
+        ts_code="HSI",
+        name="恒生指数",
+        market="HK",
+        region="asia",
+        em_secid="100.HSI",
+        source="index_global",
+    ),
+    # 恒生科技指数：TuShare `index_global` 的代码是 **HKTECH**（不是 HSTECH）——
+    # 2026-10-16 实机枚举该接口 22 个 ts_code 得到，HKTECH 2026 年内 190 个交易日可取；
+    # 裸 HSTECH 实测 0 行（见 docs/design/data-source.md 附.5 实机记录）。
+    _instrument(
+        ts_code="HKTECH",
+        name="恒生科技指数",
+        market="HK",
+        region="asia",
+        source="index_global",
+    ),
+    # ── 日本 / 韩国（各 1 条）────────────────────────────────────────────────
+    _instrument(
+        ts_code="N225",
+        name="日经225",
+        market="JP",
+        region="asia",
+        em_secid="100.N225",
+        source="index_global",
+    ),
+    _instrument(
+        ts_code="KS11",
+        name="韩国KOSPI",
+        market="KR",
+        region="asia",
+        em_secid="100.KS11",
+        source="index_global",
+    ),
+    # ── 美国（6 条：既有 3 + 新增 3）─────────────────────────────────────────
+    _instrument(
+        ts_code="DJI",
+        name="道琼斯",
+        market="US",
+        region="americas",
+        em_secid="100.DJIA",
+        source="index_global",
+    ),
+    _instrument(
+        ts_code="SPX",
+        name="标普500",
+        market="US",
+        region="americas",
+        em_secid="100.SPX",
+        source="index_global",
+    ),
+    # ⚠️ **IXIC = 纳斯达克综合指数**（既有约定正确，本任务只补元数据、**不改 `ts_code`**）。
+    # `em_secid` 沿用改造前的 `100.NDX`：它是**改造前就存在**的东财延迟行情映射，
+    # 本任务不得改动既有条目（见任务硬性约束 2）；其与 `NDX` 条目的语义冲突记在
+    # docs/design/data-source.md 附.5 的「已知遗留」里，交由接入 NDX 行情适配器的
+    # 独立任务一并核对（本任务不擅自改既有 secid，避免把改造前的行为改坏）。
+    _instrument(
+        ts_code="IXIC",
+        name="纳斯达克综合指数",
+        market="US",
+        region="americas",
+        em_secid="100.NDX",
+        source="index_global",
+    ),
+    # 纳斯达克100：TuShare `index_global` **无**此标的（裸 NDX / NDX.GI 实测 0 行），
+    # 故走新浪美股指数行情（`gb_$ndx`，2026-10-16 实机取到真实值）；历史回补适配器
+    # 见 docs/design/data-source.md 附.5，本任务只登记元数据、不编造数值。
+    _instrument(
+        ts_code="NDX",
+        name="纳斯达克100指数",
+        market="US",
+        region="americas",
+        source="sina_index",
+        quote_provider="sina",
+        sina_code="gb_$ndx",
+    ),
+    # 费城半导体指数：TuShare 同样无此标的，走新浪 `gb_$sox`（实机取到真实值）。
+    _instrument(
+        ts_code="SOX",
+        name="费城半导体指数",
+        market="US",
+        region="americas",
+        source="sina_index",
+        quote_provider="sina",
+        sina_code="gb_$sox",
+    ),
+    # 纳斯达克中国金龙指数：新浪 `gb_$hxc`（实机取到真实值）。
+    # ⚠️ 注意 `gb_hxc`（无 `$`）是**另一只**标的（实测价 26.275，非指数点位），不得混用。
+    _instrument(
+        ts_code="HXC",
+        name="纳斯达克中国金龙指数",
+        market="US",
+        region="americas",
+        source="sina_index",
+        quote_provider="sina",
+        sina_code="gb_$hxc",
+    ),
+    # ── 新加坡（1 条）：富时中国A50 指数期货 ─────────────────────────────────
+    # TuShare `index_global` 的 XIN9 实测可取（2026-10-09 close=13909.62，年内 4000 行上限）。
+    # **时段显式覆盖**为新加坡 T+1 夜盘，绝不落回 A 股时段（S1.3 点名要求）。
+    _instrument(
+        ts_code="XIN9",
+        name="富时中国A50指数期货",
+        market="SG",
+        region="asia",
+        source="index_global",
+        session=_A50_SESSION,
+    ),
 ]
 
 
@@ -236,15 +383,33 @@ async def _upsert_rows(db: AsyncSession, rows: list[IndexDaily]) -> int:
     return upserted
 
 
+#: 日线回补源 → "怎么拉"。**显式登记**而不是 `if/else` 兜底：新增一个源却忘了登记时，
+#: 行为是"该标的**没有**日线"，不是"拿 index_daily 去试一下"（后者会对非 A 股代码静默
+#: 返回空表，看起来像"上游没数据"，排障时最贵）。
+_DAILY_FETCHERS = ("index_global", "index_daily")
+
+
 async def _collect_index_rows(client: Any, start: str, end: str) -> list[IndexDaily]:
     """按注册表逐指数拉取并映射为 IndexDaily 行。
 
     单指数失败只告警并跳过（部分成功仍入库），避免一次抖动作废整个调度批次。
+
+    `source not in _DAILY_FETCHERS` 的标的（当前 = `sina_index` 的 NDX/SOX/HXC）
+    **本轮不拉日线**：TuShare 无这三个标的，新浪日线回补适配器尚未写（见
+    `docs/design/data-source.md` 附.5 的待办）。这里显式跳过并记一条 INFO，
+    免得读者以为"注册了就该有日线"。
     """
     from app.models.index_daily import IndexDaily  # noqa: PLC0415
 
     rows: list[IndexDaily] = []
     for g in GLOBAL_INDICES:
+        if g["source"] not in _DAILY_FETCHERS:
+            logger.info(
+                "global index %s source=%s has no daily backfill adapter yet; skipped",
+                g["ts_code"],
+                g["source"],
+            )
+            continue
         try:
             if g["source"] == "index_global":
                 df: pd.DataFrame = await client.fetch_index_global(g["ts_code"], start, end)
@@ -283,26 +448,69 @@ async def backfill_global_index_history(db: AsyncSession, years: int = 2) -> dic
     return {"upserted": upserted}
 
 
-GLOBAL_INDICES_CACHE_KEY = "market:global-indices"
+GLOBAL_INDICES_CACHE_KEY = "market:global-indices:v2"
 GLOBAL_INDICES_TTL = 60
+
+#: 卡片契约版本：v2 起每条卡片带齐五要素（`session`/`timezone`/`currency`）与
+#: `price_source`/`data_source`。缓存键同步升到 `:v2`——TTL 只有 60s，但**键不变会让
+#: 正在过期的 v1 payload 被当成合法响应**，而 v1 没有这三个字段（S1.3 的验收判据
+#: 会因此假绿）。旧键无人读取，自然过期。
+
+#: `price_source` 取值（前端按它决定是否显示「数据源待接入」）：
+#:   realtime        —— 东财延迟行情（实时快照）
+#:   realtime_sina   —— 新浪美股指数行情（NDX/SOX/HXC）
+#:   eod             —— 库内最近一根日线兜底
+#:   none            —— 既无实时也无日线（**不得显示 0**，前端显示"待接入/暂无数据"）
+_PRICE_REALTIME = "realtime"
+_PRICE_REALTIME_SINA = "realtime_sina"
+_PRICE_EOD = "eod"
+_PRICE_NONE = "none"
+
+
+def _get_sina_quotes() -> Any:
+    from app.core.providers.sina_index_client import fetch_index_quotes  # noqa: PLC0415
+
+    return fetch_index_quotes
+
+
+async def _fetch_provider_quotes(tushare_codes: list[str], sina_codes: list[str]) -> dict[str, Any]:
+    """两路行情各取一次（**单路失败不拖垮另一路**）；返回按"我们自己的查找键"索引的行情表。
+
+    - 东财：按**完整 secid**（`100.DJIA`）索引——不可用短码，沪/深同号段会互相覆盖；
+    - 新浪：按**新浪原始代码**（`gb_$ndx`）索引。
+    """
+    quotes: dict[str, Any] = {}
+    if tushare_codes:
+        try:
+            em = _get_eastmoney()
+            snap = await em.fetch_index_snapshot(tushare_codes)
+            quotes.update({q["secid"]: q for q in snap if q.get("secid")})
+        except Exception:
+            logger.warning("global index snapshot fetch failed, falling back to EOD", exc_info=True)
+    if sina_codes:
+        try:
+            quotes.update(await _get_sina_quotes()(sina_codes))
+        except Exception:
+            logger.warning("sina index quote fetch failed, falling back to EOD", exc_info=True)
+    return quotes
 
 
 async def get_global_index_cards(cache: CacheClient | None = None) -> list[dict[str, Any]]:
-    """全球市场卡片：东财实时快照（60s 共享缓存）+ 近 30 日 spark + EOD 兜底。"""
+    """全球市场卡片：实时快照（东财 + 新浪，60s 共享缓存）+ 近 30 日 spark + EOD 兜底。
+
+    **每条卡片都带齐五要素**（`name`/`ts_code` + `session`/`timezone`/`currency`，S1.3 硬要求）
+    与 `data_source`（数据源代码/来源徽章用）。`em_secid` 缺省的标的不进东财 secids 请求串，
+    `sina_code` 缺省的标的不进新浪请求串——宁可不取，也不取错。
+    """
     if cache is not None:
         cached = await cache.get(GLOBAL_INDICES_CACHE_KEY)
         if cached:
             cards_cached: list[dict[str, Any]] = cached
             return cards_cached
 
-    quotes: dict[str, dict[str, Any]] = {}
-    try:
-        em = _get_eastmoney()
-        snap = await em.fetch_index_snapshot([g["em_secid"] for g in GLOBAL_INDICES])
-        # 按完整 secid 索引（不可用短码：沪/深同号段会互相覆盖）
-        quotes = {q["secid"]: q for q in snap if q.get("secid")}
-    except Exception:
-        logger.warning("global index snapshot fetch failed, falling back to EOD", exc_info=True)
+    em_secids = [g["em_secid"] for g in GLOBAL_INDICES if g.get("em_secid")]
+    sina_codes = [g["sina_code"] for g in GLOBAL_INDICES if g.get("sina_code")]
+    quotes = await _fetch_provider_quotes(em_secids, sina_codes)
 
     cards: list[dict[str, Any]] = []
     from app.core.database import async_session_factory  # noqa: PLC0415
@@ -318,21 +526,34 @@ async def get_global_index_cards(cache: CacheClient | None = None) -> list[dict[
             except Exception:
                 logger.warning("spark fetch failed for %s", g["ts_code"], exc_info=True)
 
-            q = quotes.get(g["em_secid"])
+            lookup = g.get("em_secid") or g.get("sina_code") or ""
+            q = quotes.get(lookup)
             now = datetime.now(_SH).isoformat(timespec="seconds")
+            # 显式标 `dict[str, Any]`：不标的话 mypy 会按 `"spark": spark`（list[float]）把整个
+            # dict 推成 `dict[str, Sequence[object]]`，下面 update 里的 float 就全是类型错误。
+            base: dict[str, Any] = {
+                "ts_code": g["ts_code"],
+                "market": g["market"],
+                "region": g["region"],
+                "session": g["session"],
+                "timezone": g["timezone"],
+                "currency": g["currency"],
+                "data_source": g["source"],
+                "spark": spark,
+                "updated_at": now,
+            }
             if q and q.get("price") is not None:
-                cards.append(
+                base.update(
                     {
-                        "ts_code": g["ts_code"],
                         "name": q.get("name") or g["name"],
-                        "market": g["market"],
-                        "region": g["region"],
                         "price": q["price"],
                         "change": q.get("change"),
                         "pct_change": q.get("pct_change"),
-                        "spark": spark,
-                        "updated_at": now,
-                        "source": "realtime",
+                        # 名称一律以**我们的登记表**为准会掩盖上游改名，故行情名非空时优先；
+                        # `price_source` 标明这一格价来自哪一路，便于前端与排障区分。
+                        "price_source": (
+                            _PRICE_REALTIME_SINA if g.get("sina_code") else _PRICE_REALTIME
+                        ),
                     }
                 )
             else:
@@ -344,21 +565,19 @@ async def get_global_index_cards(cache: CacheClient | None = None) -> list[dict[
                     else None
                 )
                 pct = round(change / prev * 100, 2) if (change is not None and prev) else None
-                cards.append(
+                base.update(
                     {
-                        "ts_code": g["ts_code"],
                         "name": g["name"],
-                        "market": g["market"],
-                        "region": g["region"],
                         "price": last_close,
                         "change": change,
                         "pct_change": pct,
-                        "spark": spark,
-                        "updated_at": now,
-                        "source": "eod",
+                        "price_source": _PRICE_EOD if last_close is not None else _PRICE_NONE,
                     }
                 )
+            cards.append(base)
 
+    # 全部卡片都无价 → **不写缓存**：缓存一份全 `none` 的 payload 会让端点在整个 TTL 内
+    # 无法通过下一次请求自愈（改造前的判据是 any(price is not None)，保持不变）。
     if cache is not None and any(c["price"] is not None for c in cards):
         await cache.set(GLOBAL_INDICES_CACHE_KEY, cards, ttl=GLOBAL_INDICES_TTL)
     return cards
