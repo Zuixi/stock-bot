@@ -29,6 +29,7 @@
 | [2026-09-24-docs-system-phase2.md](./2026-09-24-docs-system-phase2.md) | 2026-09-24 | 文档系统二期（权威矩阵 · CI doc_gate · first-run · slop_scan） | completed | 正文 status: completed；Changelog 2026-09-24 |
 | [2026-09-29-xuantian-capacity-ingest-gating.md](./2026-09-29-xuantian-capacity-ingest-gating.md) | 2026-09-29 | 玄田产能数据直连 + ingest 三层增量门控 | active | 7 Task 全部完成+final review 修正 |
 | [2026-10-12-market-hotspot-persistence-and-trends.md](./2026-10-12-market-hotspot-persistence-and-trends.md) | 2026-10-12 | 市场热点数据持久化与趋势追踪（个股级涨停事实 · 东财实时源日终捕获 · 覆盖率对账 · 趋势/分位端点） | draft | 头部 `status: draft`；待 owner 评审后启动 Phase 0 |
+| [2026-10-12-investment-research-platform-ia.md](./2026-10-12-investment-research-platform-ia.md) | 2026-10-12 | 投研工作台信息架构与数据模型主线（10 导航 · 6 地基 · 原料视图分离 · 8 Wave 倒序路线图 · 59 spec 拆分） | active | 头部 `status: active`；§11 四项阻塞已定案，Wave 0 可开工；契约在 [docs/specs/](../docs/specs/README.md) |
 
 ## 维护约定
 

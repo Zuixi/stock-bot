@@ -1,3 +1,43 @@
+## 2026-10-12 - 计划评审修正（ponytail）：新增表 16→8，删规则 DSL / 删 action 层 / 缩 Wave 1.5
+
+- **背景**：对同日登记的投研工作台主线计划做「先爬梯子」评审，发现**初版是它自己批判的对象**——主张复用却复制了 4 张既有表，还引入一个解析器去解决 0 个当下问题
+- **四处复制品（全部改为加列复用）**：
+  - `app/models/industry_research.py:30` 的 `industry_metrics` **已经是**统一指标表（`industry_key/stock_id + metric_key + source + source_tier + freq + period + value + unit + extra` + 6 列唯一键 + 2 索引）；原方案要新建 `metric_series`（只多 2 个字段）→ 改为**加 `published_at` / `caliber_version` 两列**，读 API 与徽章复用既有
+  - 同文件 `:102` 的 `industry_signals` 注释即 *"rules engine output history"*，`basis` JSONB 就是证据链；原方案要新建 `signals` → 改为**加 4 列**（`rule_key/rule_version/confidence/severity`）+ 唯一键扩为 `(industry_key, rule_key, effective_date)`
+  - `app/services/cycle_engine.py` 已跑通「纯函数规则 + 阈值进 registry」并明写 *"阈值调整应改 registry 而非本文件逻辑"*；原方案要引入**文本 DSL + 解析器** → **删 DSL**，规则=纯函数、阈值=registry
+  - `app/models/feature.py` 的 `stock_features` 已物化 `return_percentile/max_drawdown/trend_slope` 等（按 `asof_date` 分区）；原方案要建通用 transform 引擎 `factor_defs` → **删表**，复用物化模式
+- **其他删减**：删 `action` 层（ADR-D 已裁定不下单 → "动作"= 通知 + 待办，与 `alerts` 同路径，不建只有一个实现的接口）；删 `backtest_events`（逐笔明细读时 join 即得）；删 `graph_nodes`（节点已是 `stocks`/`sw_industry`/`industry_knowledge` 的行）；删 `content_metrics` 与 `extracted JSONB` 的双写（JSONB 只留 LLM 原始输出）；**事件日历从"地基"降级推迟到 Wave 3**（Wave 1 零消费方）；不预先发明 `strategy:write`/`risk:write`/`trade:write` 权限 scope
+- **命名冲突修正**：新增的发布主体分层原用 `source_tier`，但 `industry_metrics.source_tier` 已被占用（`official|highfreq|calc|manual|derived`，描述**指标怎么来的**）→ 改名 **`publisher_tier`**（描述**谁发布的**），避免同名不同义让 `grep` 与 review 双双失效
+- **事实纠正（B1 的依据）**：原计划以为 owner 图上"2026年5月以后上市的公司"是硬编码业务规则；实际 `app/models/concept.py:3` 写着 *"`stocks` 名录会滞后（**实测冻结在 2026-05-08**，66 只新上市股票缺行）"* ——**同一个日期**，owner 描述的是真实数据陈旧度。而仓库已有更省的解法（`symbol` 业务键 + 可空 `stock_id` + `unresolved_count` 外露）→ S3.5 收缩为**只服务资讯模块**，不做"服务 4 个消费方的通用裁定队列"
+- **量化结果**：新增表 **16 → 8**；Wave 1.5 由 **6 spec → 4 spec**（S2.1 因子不建表 / S2.2 复用 `industry_signals` / S2.3 最小回测 / S2.4 提醒）；spec 总数 **59 → 57**；地基 **6 → 5 真 + 1 推迟**
+- **保留不动**：10 导航 IA · 依赖倒序 · F1 原料视图分离 · F3 PIT 及**两条机械保证**（信号 `published_at ≤ as_of` 护栏 + 回测「披露日 vs 报告期」对照实验）· F4 多态关注池 · 13 条旧路由 redirect · `source_span` 溯源与抽取一致率 ≥95% 门槛
+- **新增防复发机制**：`docs/specs/README.md` 通用约束新增第 0 条「**先爬梯子**」+ 7 行"已有资产 → 不要重复造"清单（`industry_metrics`/`industry_signals`/`cycle_engine`/`industry_registry`/`stock_features`/`concept.py`/前端原语）；主线计划 §1.1 同表补录；§2 非目标新增 6 条"不做"
+- 涉及文件：plans/2026-10-12-investment-research-platform-ia.md、docs/specs/README.md、docs/specs/S0-platform-contracts.md、docs/specs/S1-market-sentiment.md、docs/specs/S2-signal-engine.md、docs/specs/S3-content.md、docs/Changelog.md
+
+## 2026-10-12 - 规格拆分：新建 docs/specs/ 规格层（59 spec）+ 主线计划四项阻塞定案
+
+- **背景**：`plans/2026-10-12-investment-research-platform-ia.md` 只回答"做什么、按什么顺序"，缺每个模块的契约与验收判据；且其 §11 的 4 项待拍板阻塞 Wave 0
+- **新建规格层** `docs/specs/`（与 `plans/` 排期、`architecture/` 当前态、`decisions/` 为什么 分工）：
+  - `README.md` — 编号规则（文件 `S<交付序>-<主题>`、条目 `S<序>.<n>`，**交付序 ≠ Wave 号**：Wave 1.5 在交付序里是 S2）· spec 模板 · **验收判据三类**（数据契约 / 行为 / 门禁，每类必须可机械核对，禁止"体验流畅"式描述）· **跨 spec 通用约束 8 条**（原料视图分离 / 禁止平行实现 / 数据徽章 / 可溯源 / PIT / 口径变更标注 / QUEUES 注册 / 不做项）· **全量 59 spec 目录表**
+  - `S0-platform-contracts.md` — Wave 0 无业务代码：**5 篇 ADR 的完整内容**（原料视图分离 · 多态关注与标签 · PIT 时点数据 · 不做自动下单 · 信号引擎为跨模块基础设施，含 `metric_series` 与 `industry_metrics` 收敛方案二选一）+ **10 导航路由表与 13 条旧路由 redirect 契约**（一条都不能删）+ 7 项数据源三态复核 + 命名与口径字典
+  - `S1-market-sentiment.md` — Wave 1（14 spec）：`metric_series` 统一时序表（含 `published_at` PIT 列与硬性约束）· 全球标的代码映射（**修正纳斯达克综合指数 NDX 串号**）· 行业分类钻取（SCD2 + 补成交额）· 热力图（对标 iFinD）· A 股排行 · **资金流四件套替代北向** · 情绪 7 组指标
+  - `S2-signal-engine.md` — Wave 1.5 拱心石（6 spec）：`factor_defs`（纯函数）· **规则 DSL**（阈值/分位/拐点/交叉/事件/表达式，**时点由引擎注入，表达式无法指定 → 结构性防未来函数**）· `signals` 证据链 · **事件研究回测（PIT 强制 + 样本切分强制 + 退市股不剔除）** · 提醒订阅 · `action` 层接口（append-only 审计，含"应触发未触发"留痕）
+  - `S3-content.md` — Wave 2 资讯地基（7 spec）：内容事实层四表（**用户状态必须归用户维度，不得写在事实行**）· 公告/快讯采集 · **LLM 抽取管线（`source_span` 原文定位必填，一致率 ≥95%）** · 人工裁定队列（人工终态优先于自动）· 资讯视图层 · 「有效研报」三条判据
+- **四项阻塞定案**（owner 采纳建议，落点见 S0.4）：**A** 徽标区分 `已接入数`/`已策展数`（`A股市场 18` 列复核项）· **B1** 「其他分类」兜底**改为动态规则不硬编码日期**并推广为通用人工裁定队列 · **B2** 外资画像**换口径**为资金流四件套（ETF 份额+两融+产业资本+南向），「外资画像」改名「陆股通持仓（季度）」并降级 · **C** 模块边界五处裁定（涨跌分布归情绪 / 资金流计算归一处 / 龙虎榜为资讯原料 / 价值分配与利润流向合并 / `标的分类` 拆为关注池+资产类型）
+- **渐进明细**：S0–S3（Wave 0/1/1.5/2）写详细契约，S4–S7（Wave 3–6）为 `catalog-only`，**启动前一周才细化**——Wave 1 的数据事实底座未落地前，Wave 5 的因子契约必然返工
+- **识别出两个 PIT 的机械保证**（本计划可信度的基石）：`signals.evidence` 中每个引用的 `published_at` 必须非空且 ≤ `as_of`（违反则信号不生成并告警）；回测须构造「用披露日 vs 用报告期」的**对照实验**并产生显著差异（差异为 0 即证明 PIT 未生效）
+- **文档系统扩展**：`docs/index.md` 分层表新增「规格」层 + 变更写哪里新增规格行；`docs/authority.md` 新增"投研平台模块契约与验收判据"权威行
+- 涉及文件：docs/specs/README.md、docs/specs/S0-platform-contracts.md、docs/specs/S1-market-sentiment.md、docs/specs/S2-signal-engine.md、docs/specs/S3-content.md、plans/2026-10-12-investment-research-platform-ia.md、plans/index.md、docs/index.md、docs/authority.md、docs/Changelog.md
+
+## 2026-10-12 - 计划登记：投研工作台信息架构与数据模型主线（10 导航 · 6 地基 · 8 Wave）
+
+- **背景**：owner 给出 10 张手绘思维导图（市场 / 资讯 / 行业分析 / 公司分析 / 宏观分析 / 情绪分析 / 价值网图谱 / 策略引擎 / 风险管理 / 交易执行）+ 6 轮对齐讨论，指出当前产品"还不是一个优秀的投研产品"。代码实测基线：一级导航只有 5 个 tab（`frontend/src/app/layouts/MainLayout.tsx:18-22`），10 个模块里只有"市场 + 半个行业"；关注模型是两套硬绑 `symbol` 的表（`app/models/stock.py:16` 的 `stock_user_tags` + `app/models/watchlist.py` 的 `user_watchlists`/`user_watchlist_items`）；数据形态以数值型为主，缺**文本事件 / 多态关注 / 时点数据**三类新形态与**信号引擎**一类新计算基建
+- **产出**：`plans/2026-10-12-investment-research-platform-ia.md`（10 张图结构逐条转录 → 10 导航 × 子模块 × 依赖表；提炼 **6 个横切地基**：F1 原料/视图分离 · F2 指标→因子→信号→回测→触达(action) 引擎 · F3 PIT 时点数据 · F4 多态关注池与标签 · F5 事件日历 · F6 传导图；**原料→视图映射表**（10 张图自证 6 处同源）；**8 个 Wave 的依赖倒序路线图**；明确不做清单与数据源风险替代口径），并登记 `plans/index.md`
+- **已拍板决策（记入计划 §12）**：① 自选/标签采用**方案 A**——合并为多态 `tag` + `user_target_tag`，一级导航保持 10 个纯净，落为顶栏全局工具 + `/me` 工作台；② 实施顺序**依赖倒序**——市场/情绪 → 资讯 → 行业/公司/宏观 → 价值网 → 策略 → 风险/交易；③ 原料/视图分离确立；④ 图上 4 条蓝色批注升格为全局产品原则（时序性 · 摘要性 · 可对比性 · 可溯源性）
+- **实测纠错（写入计划 §3.4 / §8）**：图1 `纳斯达克综合指数` 与 `纳斯达克100` 都标 NDX（综合应为 IXIC）；**北向资金被 2 处依赖而每日数据已取消**——2024-05-13 取消盘中实时、2024-08-19 取消每日净买入并改按季度披露持股，替代口径为 ETF 份额变化 + 两融 + 产业资本增减持 + 南向；图上 `资金利率` 缺 **7 天 OMO**（2024-07 后 MLF 地位弱化，OMO 成为主要政策利率）；M1 口径 2024-12 修订（2025-01 起纳入个人活期存款 + 非银备付金）造成历史断点，须标 `口径版本`
+- **阻塞**：计划 `status: draft`，阻塞于 §11 的 4 项待拍板（7 个徽标数字口径 / `2026年5月` 时点语义 / 外资画像替代口径 / 模块边界三处），拍板后启动 Wave 0（5 篇 ADR + IA 与路由表冻结）
+- 涉及文件：plans/2026-10-12-investment-research-platform-ia.md、plans/index.md、docs/Changelog.md
+
 ## 2026-10-12 - 计划登记：市场热点数据持久化与趋势追踪（P0–P4）
 
 - **背景（真库实测）**：行情事实底座很深（`daily_quotes` 829 交易日 / `stock_price_limits` 254 交易日 **100%** 覆盖），但派生层浅且有洞——`market_sentiment_daily` 只有 21 天、`sector_moneyflow_snapshots` 13/20（**65%**，含 2026-10-08 缺失）、`market_sentiment_intraday` 6/11（**54.5%**）且只存 4 个计数（盘中池个股明细在 `upsert_intraday_snapshot` 被丢弃）；`/market/hot-boards` 完全不落库（Redis 60s）；`daily_quotes.pct_chg` 在 2026-09 之前非空率 ≈0.5%，导致 254 个限价交易日里只有 **17 天**过 `market_day_service.is_day_complete`；`reconciliation_service.DOMAINS` 只覆盖 4 个域 → 上述洞当天不告警
