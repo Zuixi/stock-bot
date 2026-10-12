@@ -31,6 +31,12 @@ class SectorMoneyflowSnapshot(Base):
     ``HotBoardItem`` 契约消费的字段：``amount``（``f6`` 成交额，``Numeric(20,4)``）与
     ``flat_count``（``f106`` 平盘家数；``f104+f105+f106`` 恒等于该板块成分股总数）。
     上游对无成分股/停牌的板块给 ``-`` → 落 **NULL，绝不 0**（0 是"平盘 0 家"这一事实断言）。
+
+    ``capture_kind``（Ruling 11）是**行级产地**：``poll`` = 盘中 5 分钟轮询（``fid=f62``
+    Top-100 子集）；``eod_full`` = 15:05 收盘后分页全量（覆盖上游 ``data.total``，当日所有
+    板块）。因为 ``clist`` 的 ``pz`` 上限是 100，盘中表行只是"每次轮询 Top-100 的并集、
+    旧行永不刷新"，既不是完整当日态、也不是 hot-boards 要的 ``f3``（涨幅）全集 —— 所以
+    读表闸门只认 ``eod_full``（当日已全量捕获）。
     """
 
     __tablename__ = "sector_moneyflow_snapshots"
@@ -64,6 +70,11 @@ class SectorMoneyflowSnapshot(Base):
     # Task 2 追加（迁移 e7b1c9d4a2f3）：上游缺值恒 NULL，绝不 0
     amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))  # 成交额，元（f6）
     flat_count: Mapped[int | None] = mapped_column(Integer)  # 平盘家数（f106）
+    # Task 2 追加（迁移 a3f8c2d6e9b1）：行级产地 poll | eod_full；
+    # 既有行由 server_default 一次性回填 'poll'
+    capture_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="poll", default="poll"
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

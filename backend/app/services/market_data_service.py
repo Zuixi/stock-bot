@@ -9,6 +9,7 @@ import asyncio
 import logging
 import math
 import sys
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
@@ -374,37 +375,94 @@ HOT_BOARD_SNAPSHOT_LIMIT = 100
 
 
 async def ingest_sector_moneyflow(db: AsyncSession) -> dict[str, int]:
-    """盘中轮询：industry/concept/region 三维当日快照 upsert。"""
+    """盘中轮询：industry/concept/region 三维当日快照 upsert（``capture_kind='poll'``）。
+
+    每维只发**一次** ``clist``（``fid=f62`` 主力净流入 Top-100）—— 这是盘中新鲜的子集，
+    **不是**当日完整态；完整态由 15:05 的 :func:`ingest_sector_moneyflow_eod_full` 分页全量
+    补齐（读表闸门只认它）。
+    """
     em = _get_eastmoney()
     today = _today_sh()
     result: dict[str, int] = {}
     for dimension in ("industry", "concept", "region"):
         rows = await em.fetch_sector_moneyflow(dimension)
         result[dimension] = await market_data_repo.upsert_sector_moneyflow(
-            db, today, dimension, rows
+            db, today, dimension, rows, capture_kind=market_data_repo.POLL_CAPTURE
         )
     logger.info("ingest_sector_moneyflow %s", result)
     return result
 
 
-async def ingest_sector_moneyflow_if_missing(db: AsyncSession) -> dict[str, Any]:
-    """**当日缺行才**补写（15:35 容器重启兜底）；已有行 → no-op（不覆盖收盘终态）。
+async def ingest_sector_moneyflow_eod_full(db: AsyncSession) -> dict[str, dict[str, int | None]]:
+    """15:05 收盘**全量**捕获：分页覆盖上游 ``data.total`` → ``capture_kind='eod_full'``。
 
-    与 15:05 的 EOD job 共用 :func:`ingest_sector_moneyflow`（同一 service 方法，双轨制）：
-    重启错过 15:05 时这里补一次，正常日子这里什么都不做。判据是**日级**的（三维度由
-    同一次调用写在同一事务里，不存在"只写了一半"的正常状态）；因此"当天盘中已写过行、
-    但 15:05 缺席"的日子这里也会 no-op —— 见
-    :func:`market_data_repo.sector_moneyflow_day_has_rows` 的已知边界。
+    为什么必须全量（Ruling 11）：``clist`` 的 ``pz`` 上限是 100（实测传 1000 仍只回 100
+    行），盘中 5 分钟轮询按主力净流入只拿得到 Top-100，当日表行因此是"每次轮询 Top-100 的
+    并集、旧行永不刷新"（实测 industry 229 个 code 里 84 行停在 09:25 的开盘后第一轮），
+    既不是完整当日态、也不是 ``/market/hot-boards`` 要的 f3（涨幅）全集。收盘后翻页全量
+    （industry ≈5 页 / concept ≈6 页 / region 1 页 ≈12 次请求/日）把当日**所有**板块刷新一次，
+    "并集 + 陈旧行"自然消解，**无需** DELETE 剪枝。
+
+    返回 ``{dimension: {"fetched", "total", "upserted"}}``：``total`` 是上游 ``data.total``，
+    覆盖不足由 :func:`eod_shortfalls` 判定（job 与 worker 两条轨道都要告警 —— **不许静默
+    截断**：短列表看起来完全正常，但读表闸门会照开、T6 会拿它当完整日）。
+    """
+    em = _get_eastmoney()
+    today = _today_sh()
+    result: dict[str, dict[str, int | None]] = {}
+    for dimension in ("industry", "concept", "region"):
+        rows, total = await em.fetch_sector_moneyflow_full(dimension)
+        upserted = await market_data_repo.upsert_sector_moneyflow(
+            db, today, dimension, rows, capture_kind=market_data_repo.EOD_FULL_CAPTURE
+        )
+        result[dimension] = {"fetched": len(rows), "total": total, "upserted": upserted}
+    logger.info("ingest_sector_moneyflow_eod_full %s", result)
+    return result
+
+
+def eod_shortfalls(result: Mapping[str, Any]) -> list[str]:
+    """全量捕获的"覆盖不足"原因（``fetched < total`` / 上游没报 total）→ 人可读列表。
+
+    纯函数：job 与 worker 两条轨道共用同一判据（各自比一遍数就是第二份真相）。
+    ``result`` 可能是 :func:`ingest_sector_moneyflow_eod_full` 的维度统计，也可能是
+    ``ingest_sector_moneyflow_if_missing`` 的 ``{"skipped": ...}`` 形态（后者无短缺）。
+    """
+    out: list[str] = []
+    for dimension, stats in result.items():
+        if not isinstance(stats, Mapping) or "fetched" not in stats:
+            continue
+        fetched = int(stats["fetched"])
+        total = stats.get("total")
+        if total is None:
+            out.append(f"{dimension}: upstream total unknown (fetched={fetched})")
+        elif fetched < int(total):
+            out.append(f"{dimension}: fetched={fetched} < total={int(total)}")
+    return out
+
+
+async def ingest_sector_moneyflow_if_missing(db: AsyncSession) -> dict[str, Any]:
+    """当日**没有 ``eod_full`` 行**才补做收盘全量捕获（15:35 容器重启兜底）。
+
+    与 15:05 的 EOD job 共用 :func:`ingest_sector_moneyflow_eod_full`（同一 service 方法，
+    双轨制）。判据是"当日有没有**全量**捕获"而不是"有没有行"（Ruling 11）：只落了盘中
+    ``poll`` 行、错过 15:05 的日子也能补上收盘态 —— 这正是盘中 Top-100 子集不该被当成
+    当日完整态的另一面。
 
     返回值的键刻意不含 ``status``：worker 结果里 ``status`` 由 BaseWorker 拥有
     （``{"status": "completed", **result}`` 会被内层同名键覆盖）。
     """
     today = _today_sh()
-    if await market_data_repo.sector_moneyflow_day_has_rows(db, today):
-        logger.info("board snapshot rewrite skipped: %s already written", today)
-        return {"skipped": True, "reason": "today_already_written", "trade_date": today.isoformat()}
-    counts = await ingest_sector_moneyflow(db)
-    logger.info("board snapshot rewrite wrote %s for %s", counts, today)
+    if await market_data_repo.sector_moneyflow_day_has_capture(
+        db, today, market_data_repo.EOD_FULL_CAPTURE
+    ):
+        logger.info("board snapshot rewrite skipped: %s already fully captured", today)
+        return {
+            "skipped": True,
+            "reason": "today_already_fully_captured",
+            "trade_date": today.isoformat(),
+        }
+    counts = await ingest_sector_moneyflow_eod_full(db)
+    logger.info("board snapshot rewrite captured %s for %s", counts, today)
     return {"skipped": False, "trade_date": today.isoformat(), **counts}
 
 
@@ -459,15 +517,24 @@ def _hot_board_snapshot_row(snap: Any) -> dict[str, Any]:
 async def load_hot_board_snapshot(
     db: AsyncSession, dimension: str, expected_day: date
 ) -> tuple[date, list[dict[str, Any]]] | None:
-    """读表优先：表内该维度**最近有行的那一天** == ``expected_day`` 时返回 ``(day, rows)``。
+    """读表优先：表内该维度**最近有行的那一天** == ``expected_day`` 且当日已**全量捕获**
+    时返回 ``(day, rows)``。
 
-    否则 ``None``（含"表里完全没有该维度"、"最近日已陈旧"、"明细为空"三种）——
-    调用方必须据此回落实时抓取，**绝不**把"表里没有"当成"今天没有热门板块"。
+    否则 ``None``（含"表里完全没有该维度"、"最近日已陈旧"、"当日只落了盘中 poll 行"、
+    "明细为空"四种）—— 调用方必须据此回落实时抓取，**绝不**把"表里没有"当成"今天没有
+    热门板块"。
+
+    为什么闸门是 ``eod_full`` 而不是"有行"（Ruling 11）：``clist`` 的 ``pz`` 上限 100，
+    盘中 5 分钟轮询按 ``fid=f62``（主力净流入）只拿得到 Top-100，当日行集是"每次轮询
+    Top-100 的并集、旧行永不刷新"（实测 industry 229 个 code 里 84 行停在开盘后第一轮）
+    —— 拿它冒充 ``f3``（涨幅）全量榜是错的。只有 15:05 的分页全量捕获（覆盖上游
+    ``data.total``）才能保证"当日所有板块都在表里、且都是收盘态"。
 
     ``expected_day`` 由调用方按"最近**预期**交易日"给出（``last_weekday(_today_sh())``）；
     本函数只做"表内实际持有的最近日 vs 预期"这一条判据，不自己发明第二个"今天是哪天"。
     返回的 ``day`` 就是那批行的 ``trade_date``：调用方据此标 ``as_of``，**不得**改标成今天
-    （陈旧日必须显式陈旧）。行序由 SQL 负责（``pct_change DESC, board_code ASC``）。
+    （陈旧日必须显式陈旧）。行序与产地过滤由 SQL 负责
+    （``pct_change DESC, board_code ASC`` + ``capture_kind='eod_full'``）。
     """
     from app.models.market_data import SectorMoneyflowSnapshot  # noqa: PLC0415
 
@@ -478,8 +545,16 @@ async def load_hot_board_snapshot(
     )
     if day != expected_day:
         return None
+    if not await market_data_repo.sector_moneyflow_day_has_capture(
+        db, day, market_data_repo.EOD_FULL_CAPTURE
+    ):
+        return None
     snaps = await market_data_repo.list_sector_moneyflow_ranked(
-        db, day, dimension, HOT_BOARD_SNAPSHOT_LIMIT
+        db,
+        day,
+        dimension,
+        HOT_BOARD_SNAPSHOT_LIMIT,
+        capture_kind=market_data_repo.EOD_FULL_CAPTURE,
     )
     rows = [_hot_board_snapshot_row(snap) for snap in snaps]
     if not rows:

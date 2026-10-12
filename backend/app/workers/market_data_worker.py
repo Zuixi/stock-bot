@@ -29,6 +29,10 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
         market_day_service,
     )
 
+    # 各分支返回结构不同（计数 dict / 维度统计 dict / {"skipped": …}）→ 显式声明
+    result: dict[str, Any]
+    shortfall_alert: tuple[str, list[str]] | None = None
+
     async with async_session_factory() as db:
         if job == "global_index_daily":
             result = await market_data_service.ingest_global_index_daily(db)
@@ -39,13 +43,15 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
         elif job == "sector_moneyflow":
             result = await market_data_service.ingest_sector_moneyflow(db)
         elif job == "board_snapshot_eod":
-            # 双轨制：与 `board_snapshot_eod_job`（交易日 15:05）调同一个 service 方法
-            # （收盘终态落库；A 类数据当天不落就永久丢失）。
-            result = await market_data_service.ingest_sector_moneyflow(db)
+            # 双轨制：与 `board_snapshot_eod_job`（交易日 15:05）调同一个 service 方法 ——
+            # **分页全量**收盘捕获（capture_kind='eod_full'；A 类数据当天不落就永久丢失）。
+            result = await market_data_service.ingest_sector_moneyflow_eod_full(db)
+            shortfall_alert = ("board_snapshot_eod", market_data_service.eod_shortfalls(result))
         elif job == "board_snapshot_rewrite":
-            # 双轨制：与 `board_snapshot_rewrite_job`（交易日 15:35）同方法 —— **当日缺行才**
-            # 写（容器重启错过 15:05 的兜底）；已有行返回 {"skipped": true}。
+            # 双轨制：与 `board_snapshot_rewrite_job`（交易日 15:35）同方法 —— 当日**没有
+            # eod_full 行**才补做收盘全量（容器重启错过 15:05 的兜底）；否则 {"skipped": true}。
             result = await market_data_service.ingest_sector_moneyflow_if_missing(db)
+            shortfall_alert = ("board_snapshot_rewrite", market_data_service.eod_shortfalls(result))
         elif job == "northbound":
             result = await market_data_service.ingest_northbound(
                 db, days=int(params.get("days", 30))
@@ -113,6 +119,12 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
             # Defensive: unreachable via process() — the type is validated there.
             return {"status": "failed", "error": f"unknown market_data type: {job}"}
         await db.commit()
+    if shortfall_alert is not None and shortfall_alert[1]:
+        # 与定时轨道同款可见性（Task 1 的教训：手动路径不该比定时路径更瞎）：全量捕获
+        # 覆盖不足 = 当日"全量"其实是子集，读表闸门却照开 → 必须进 `job:failures`。
+        await job_alert_service.record_job_failure(
+            shortfall_alert[0], "; ".join(shortfall_alert[1])
+        )
     return {"status": "completed", "type": job, **result}
 
 
@@ -125,8 +137,8 @@ class MarketDataWorker(BaseWorker):
         """Execute one ingest job; service exceptions propagate (BaseWorker marks the
         task failed). Expected payload keys (top-level or nested in "params"):
         global_index_daily/sector_moneyflow/concept_members — none;
-        board_snapshot_eod — none（板块快照收盘终态，与 15:05 job 同方法）;
-        board_snapshot_rewrite — none（当日缺行才写，与 15:35 job 同方法）;
+        board_snapshot_eod — none（板块快照收盘**全量**捕获，与 15:05 job 同方法）;
+        board_snapshot_rewrite — none（当日无 eod_full 行才补做全量，与 15:35 job 同方法）;
         backfill_global_index — years(=2);
         northbound/share_floats/repurchases — days(=30/7/7); dragon_tiger/block_trades —
         trade_date(yyyymmdd, optional); announcements — days(=3); limit_up_stock_facts —

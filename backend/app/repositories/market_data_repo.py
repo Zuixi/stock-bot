@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any, TypeVar, cast
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import desc, func, nullslast, select, text
+from sqlalchemy import case, desc, func, literal, nullslast, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,16 +54,36 @@ def _dec(v: Any) -> Decimal | None:
     return Decimal(str(v))
 
 
-async def upsert_sector_moneyflow(
-    db: AsyncSession, trade_date: date, dimension: str, rows: list[dict[str, Any]]
-) -> int:
-    """当日快照幂等覆盖（盘中每次轮询 upsert）。
+#: ``capture_kind`` 的取值（Ruling 11）：盘中 5 分钟轮询 / 15:05 收盘分页全量。
+POLL_CAPTURE = "poll"
+EOD_FULL_CAPTURE = "eod_full"
+_CAPTURE_KINDS = frozenset({POLL_CAPTURE, EOD_FULL_CAPTURE})
 
-    ``amount``/``flat_count``（Task 2）与其它列同权：冲突时一并刷新 —— 收盘态覆盖盘中态
+
+async def upsert_sector_moneyflow(
+    db: AsyncSession,
+    trade_date: date,
+    dimension: str,
+    rows: list[dict[str, Any]],
+    *,
+    capture_kind: str = POLL_CAPTURE,
+) -> int:
+    """当日快照幂等覆盖（盘中每次轮询 upsert；15:05 用 ``capture_kind='eod_full'``）。
+
+    ``amount``/``flat_count``（Task 2）与其它列同权：冲突时一并刷新 —— 收盘全量覆盖盘中态
     靠的就是这条 DO UPDATE。``amount`` 是 ``Numeric(20,4)``，asyncpg 的 numeric 编码器
     不收 ``float``，故在此显式 ``Decimal(str(v))``（与 ``limit_up_service`` 的
     ``seal_fund`` 同款）；缺值仍走 ``None``（**绝不 0**）。
+
+    ``capture_kind`` 是行级产地。SET 子句里它是**单向**的：已是 ``eod_full`` 的行不会被
+    后续 ``poll`` 写回 ``poll``（``CASE WHEN``）。15:05 EOD 之后仍可能撞上一个 15:05 的
+    盘中 tick 或手动轮询；若允许降级，``capture_kind='eod_full'`` 的"当日已全量捕获"判据
+    与 Task 6 的完整日过滤当天就会丢行/漂移。
     """
+    if capture_kind not in _CAPTURE_KINDS:
+        raise ValueError(
+            f"capture_kind must be one of {sorted(_CAPTURE_KINDS)}, got {capture_kind!r}"
+        )
     if not rows:
         return 0
     values = [
@@ -84,6 +104,7 @@ async def upsert_sector_moneyflow(
             "lead_stock_pct": r.get("lead_stock_pct"),
             "amount": _dec(r.get("amount")),
             "flat_count": r.get("flat_count"),
+            "capture_kind": capture_kind,
         }
         for r in rows
     ]
@@ -106,6 +127,14 @@ async def upsert_sector_moneyflow(
                 "lead_stock_pct": pg_insert(SectorMoneyflowSnapshot).excluded.lead_stock_pct,
                 "amount": pg_insert(SectorMoneyflowSnapshot).excluded.amount,
                 "flat_count": pg_insert(SectorMoneyflowSnapshot).excluded.flat_count,
+                # eod_full 单向：已全量捕获的行不得被后续 poll 降级（T6 的完整日过滤会丢行）
+                "capture_kind": case(
+                    (
+                        SectorMoneyflowSnapshot.capture_kind == EOD_FULL_CAPTURE,
+                        literal(EOD_FULL_CAPTURE),
+                    ),
+                    else_=pg_insert(SectorMoneyflowSnapshot).excluded.capture_kind,
+                ),
                 # pg on_conflict 不走 ORM onupdate → 显式刷 updated_at
                 "updated_at": func.now(),
             },
@@ -134,7 +163,12 @@ async def list_sector_moneyflow(
 
 
 async def list_sector_moneyflow_ranked(
-    db: AsyncSession, trade_date: date, dimension: str, limit: int
+    db: AsyncSession,
+    trade_date: date,
+    dimension: str,
+    limit: int,
+    *,
+    capture_kind: str,
 ) -> list[SectorMoneyflowSnapshot]:
     """当日某维度板块按 **涨幅降序 + 板块码升序** 取 Top-N（Task 2 读表分支专用）。
 
@@ -143,15 +177,16 @@ async def list_sector_moneyflow_ranked(
     在两次请求间不得互换位置（上游 ``fid=f3`` 的次级顺序不保证稳定）。``NULLS LAST``
     让缺涨幅的行排在最后（服务层再稳定排序一次并截断 Top-10）。
 
-    注意行集口径：表里的行来自 ``fid=f62``（主力净流入）Top-100 的**逐次 upsert 并集**，
-    不是 ``fid=f3`` 的 Top-100，名次与"最新一次截取"可能不同（见 Task 2 报告 concerns）。
-    本函数只负责**排序**，不改变行集。
+    ``capture_kind`` **必填**（读表分支传 ``eod_full``）：盘中 poll 行只是 ``fid=f62``
+    Top-100 子集，服务它就等于拿子集冒充 ``f3`` 全量榜（Ruling 11）。必填而不是默认值，
+    是为了让每个调用点都显式写下"服务的是哪一批行"。
     """
     stmt = (
         select(SectorMoneyflowSnapshot)
         .where(
             SectorMoneyflowSnapshot.trade_date == trade_date,
             SectorMoneyflowSnapshot.dimension == dimension,
+            SectorMoneyflowSnapshot.capture_kind == capture_kind,
         )
         .order_by(
             nullslast(desc(SectorMoneyflowSnapshot.pct_change)),
@@ -163,13 +198,20 @@ async def list_sector_moneyflow_ranked(
 
 
 async def list_sector_moneyflow_range(
-    db: AsyncSession, dimension: str, start: date, end: date
+    db: AsyncSession,
+    dimension: str,
+    start: date,
+    end: date,
+    capture_kind: str | None = None,
 ) -> list[SectorMoneyflowSnapshot]:
     """某维度 **[start, end] 闭区间**的窗口读（Task 6 的赛段/连续性统计消费）。
 
     纯读：按 ``trade_date, board_code`` 升序返回全部行（不截断）—— 窗口统计要的是
     完整序列，"缺日"由调用方与交易日历对比得出（缺日 **不得** 被当成 0 流入）。
     本任务无消费方，保留单日版 :func:`list_sector_moneyflow` 不动。
+
+    ``capture_kind`` 可选（Ruling 11）：传 ``'eod_full'`` = 只取"当日已全量捕获"的行
+    （T6 的完整日口径）；不传 = 全序列（含盘中 poll 行）。
     """
     stmt = (
         select(SectorMoneyflowSnapshot)
@@ -183,23 +225,27 @@ async def list_sector_moneyflow_range(
             SectorMoneyflowSnapshot.board_code.asc(),
         )
     )
+    if capture_kind is not None:
+        stmt = stmt.where(SectorMoneyflowSnapshot.capture_kind == capture_kind)
     return list((await db.execute(stmt)).scalars().all())
 
 
-async def sector_moneyflow_day_has_rows(db: AsyncSession, trade_date: date) -> bool:
-    """该日是否已有**任何**维度的快照行（Task 2 的 15:35 缺行补写判据）。
+async def sector_moneyflow_day_has_capture(
+    db: AsyncSession, trade_date: date, capture_kind: str = EOD_FULL_CAPTURE
+) -> bool:
+    """该日是否存在**该产地**的快照行（Task 2 的 15:35 补写判据 + 读表闸门）。
 
-    三维度由一次 ``ingest_sector_moneyflow`` 在同一事务里写入，故"日级"判据足够：要么
-    三个维度都有当日行，要么一行都没有（不存在"只写了一半"的正常状态）。
-
-    **已知边界**（ruling 的字面口径，未擅自放宽）：盘中轮询写的行也算"有行"，所以
-    "容器 15:05 缺席、但当天盘中已经写过" 的日子 15:35 会 no-op —— 那天不会补抓收盘
-    终态。`updated_at` 无法区分"盘中 tick"与"15:05 EOD"（15:00 的 tick 与 15:05 同分钟），
-    故没有可靠的新鲜度判据；务实收敛点应是"15:05 之后是否还有抓取"（见 Task 2 报告 concerns）。
+    Ruling 11：盘中 5 分钟轮询写的 ``poll`` 行只是 ``fid=f62`` Top-100 子集（且旧行永不
+    刷新），所以"当日有没有行"不是正确的判据 —— 正确的判据是"当日有没有 **eod_full**
+    行"（15:05 分页全量，覆盖上游 ``data.total``）。这同时修掉了
+    "容器 15:05 缺席、但当天盘中已写过 → 15:35 不再补抓收盘态"的缺口。
     """
     stmt = (
         select(SectorMoneyflowSnapshot.id)
-        .where(SectorMoneyflowSnapshot.trade_date == trade_date)
+        .where(
+            SectorMoneyflowSnapshot.trade_date == trade_date,
+            SectorMoneyflowSnapshot.capture_kind == capture_kind,
+        )
         .limit(1)
     )
     return (await db.execute(stmt)).first() is not None

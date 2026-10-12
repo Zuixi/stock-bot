@@ -5,16 +5,20 @@
 1. ``fetch_sector_moneyflow`` 的 ``fields`` 是**超集**（含 ``f6`` 成交额 / ``f106`` 平盘家数）
    且**只发一次** clist 请求 —— 不新增第二次 ``fetch_board_list``，也不丢既有
    ``f66``/``f72``（丢了会回归 ``/market/sector-moneyflow`` 卡片）。
-2. 快照表 2 新列（``amount Numeric(20,4)`` / ``flat_count Integer``）：upsert 写它们；
-   上游缺值恒 NULL，**绝不填 0**。
-3. 读表优先：表内该维度的最近日 == 最近**预期**交易日（``last_weekday(_today_sh())``）时服务表行；
-   否则回落实时抓取（**绝不返回空表**）。读表日若与今天不同，``as_of`` 就报那一日 ——
-   不把陈旧日改标成今天。
+2. 快照表 3 列（``amount Numeric(20,4)`` / ``flat_count Integer`` / ``capture_kind``）：
+   upsert 写它们；上游缺值恒 NULL，**绝不填 0**；``eod_full`` 不被后续 poll 降级。
+2b. **15:05 EOD 分页全量**（Ruling 11）：复用 ``_paged_clist`` 翻页直到覆盖上游 ``data.total``
+   （``clist`` 的 ``pz`` 上限 100），行数不足要 WARNING + `job:failures`（不许静默截断）；
+   同一个 mapper 与单次 poll 路径共用（口径不分叉）。
+3. 读表闸门（Ruling 11）：表内该维度的最近日 == 最近**预期**交易日，**且**该
+   ``(day, dimension)`` 存在 ``capture_kind='eod_full'``（15:05 分页全量捕获）行时才服务
+   表行；否则回落实时抓取（**绝不返回空表**）。读表日若与今天不同，``as_of`` 就报那一日 ——
+   不把陈旧日改标成今天。盘中只有 ``f62`` Top-100 的 poll 行，**不得**冒充 f3 全量榜。
 4. 读表 items 的字段集 ⊇ 前端 ``HotBoardItem``（直接解析
    ``frontend/src/shared/api/market.ts``，不是抄一份字面量：前端加字段而这里不补 → 红）。
 5. 读表行序 ``pct_change DESC, board_code ASC``（确定性 tiebreak；SQL 侧守卫 + repo 契约）。
-6. 当日 EOD job（15:05）/ 缺行补写 job（15:35）+ 双轨制（worker 与 job 调同一 service 方法）；
-   cron 显式 ``Asia/Shanghai``；**不新增队列**。
+6. 当日 EOD job（15:05 全量）/ 缺 ``eod_full`` 才补写的 job（15:35）+ 双轨制（worker 与 job
+   调同一 service 方法）；覆盖不足两条轨道都要告警；cron 显式 ``Asia/Shanghai``；**不新增队列**。
 7. A 类边界：东财无历史接口 → 本文件（与实现）不含任何"补昨天"的路径，缺行只回落实时。
 
 **离线**：默认门禁用例全部打桩（东财 ``_get_json`` 夹具 / 读表 seam / 判据日），不碰
@@ -24,6 +28,7 @@ PG、Redis、网络。真库用例标 ``e2e``（默认 deselect），自建自�
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -108,6 +113,41 @@ class _EmptyResult:
     def scalar(self) -> None:
         return None
 
+    def first(self) -> None:
+        return None
+
+
+class _PagedEM:
+    """按 ``pn`` 返回预置页的 ``_get_json`` 替身（翻页用）；记录每次请求参数。"""
+
+    def __init__(self, pages: dict[int, dict[str, Any]]) -> None:
+        self.pages = pages
+        self.calls: list[dict[str, Any]] = []
+
+    async def __call__(self, base: str, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(params)
+        return self.pages[params["pn"]]
+
+
+def _raw_flow_row(code: str, *, pct: float = 1.0) -> dict[str, Any]:
+    """一页里的东财原始行（含全部 fields，供翻页替身用）。"""
+    return {
+        "f12": code,
+        "f14": f"板块{code}",
+        "f3": pct,
+        "f6": 1000.0,
+        "f62": 200.0,
+        "f66": 100.0,
+        "f72": 100.0,
+        "f104": 10,
+        "f105": 5,
+        "f106": 2,
+        "f184": 3.0,
+        "f128": "龙头",
+        "f136": 1.0,
+        "f140": "600000",
+    }
+
 
 def _snap(**overrides: Any) -> Any:
     """一行 ``sector_moneyflow_snapshots``（含 2 新列；``amount`` 是 Numeric 的 Decimal）。"""
@@ -187,8 +227,20 @@ def _patch_snapshot(
     return calls
 
 
+def _patch_full_capture(monkeypatch: pytest.MonkeyPatch, present: bool) -> list[Any]:
+    """打桩"该 (day, dimension) 是否已有 eod_full 行"；记录 ``(day, capture_kind)``。"""
+    calls: list[Any] = []
+
+    async def _has(db: Any, day: date, capture_kind: str = "eod_full") -> bool:
+        calls.append((day, capture_kind))
+        return present
+
+    monkeypatch.setattr(mds.market_data_repo, "sector_moneyflow_day_has_capture", _has)
+    return calls
+
+
 # ---------------------------------------------------------------------------
-# 1) 客户端：一次请求、fields 超集、2 列映射
+# 1) 客户端：一次请求、fields 超集、2 列映射；EOD 分页全量
 # ---------------------------------------------------------------------------
 
 
@@ -280,6 +332,97 @@ async def test_fetch_sector_moneyflow_asks_for_amount_and_flat_in_one_request() 
     assert rows[1]["pct_change"] is None and rows[1]["main_net_inflow"] is None
 
 
+async def test_fetch_sector_moneyflow_full_paginates_until_upstream_total() -> None:
+    """EOD 全量必须翻页（``pz`` 服务端上限 100）：3 页 250 行 → 250 行 + ``total=250``。
+
+    Ruling 11：15:05 用分页全量（industry ≈5 页 / concept ≈6 页 / region 1 页）。
+    这里同时钉住"恰好请求到覆盖 total 为止"（不多不少）。
+    """
+    from app.core.providers.eastmoney_client import EastmoneyClient
+
+    pages = {
+        1: {"data": {"total": 250, "diff": [_raw_flow_row(f"BK{i:04d}") for i in range(100)]}},
+        2: {"data": {"total": 250, "diff": [_raw_flow_row(f"BK{i:04d}") for i in range(100, 200)]}},
+        3: {"data": {"total": 250, "diff": [_raw_flow_row(f"BK{i:04d}") for i in range(200, 250)]}},
+    }
+    client = EastmoneyClient()
+    fake = _PagedEM(pages)
+    client.__dict__["_get_json"] = fake
+
+    rows, total = await client.fetch_sector_moneyflow_full("industry")
+
+    assert (len(rows), total) == (250, 250)
+    assert [c["pn"] for c in fake.calls] == [1, 2, 3], "覆盖 total 后不得再多请求一页"
+    assert all(c["pz"] == 100 for c in fake.calls)
+    fields = set(str(fake.calls[0]["fields"]).split(","))
+    assert {"f6", "f106", "f66", "f72"} <= fields, fields
+
+
+async def test_fetch_sector_moneyflow_full_region_is_a_single_page() -> None:
+    """地域 whole-universe 只有 31 个 → 一页即收敛（total=31）。"""
+    from app.core.providers.eastmoney_client import EastmoneyClient
+
+    client = EastmoneyClient()
+    fake = _PagedEM(
+        {1: {"data": {"total": 31, "diff": [_raw_flow_row(f"BK{i:04d}") for i in range(31)]}}}
+    )
+    client.__dict__["_get_json"] = fake
+
+    rows, total = await client.fetch_sector_moneyflow_full("region")
+
+    assert (len(rows), total, len(fake.calls)) == (31, 31, 1)
+
+
+async def test_fetch_sector_moneyflow_full_reuses_the_poll_mapper() -> None:
+    """全量路径与单次请求路径必须**同一个 mapper**（口径不能分叉）。"""
+    from app.core.providers.eastmoney_client import EastmoneyClient
+
+    raw = _raw_flow_row("BK1203", pct=7.86)
+    payload = {"data": {"total": 1, "diff": [raw]}}
+    poll_client = EastmoneyClient()
+    poll_client.__dict__["_get_json"] = _PagedEM({1: payload})
+    full_client = EastmoneyClient()
+    full_client.__dict__["_get_json"] = _PagedEM({1: payload})
+
+    poll_rows = await poll_client.fetch_sector_moneyflow("industry")
+    full_rows, total = await full_client.fetch_sector_moneyflow_full("industry")
+
+    assert full_rows == poll_rows
+    assert total == 1
+    assert full_rows[0]["amount"] == 1000.0 and full_rows[0]["flat_count"] == 2
+
+
+async def test_fetch_sector_moneyflow_full_warns_and_reports_short_coverage(caplog) -> None:
+    """覆盖不足（第 2 页回空页、total 仍报 496）→ 必须 WARNING + 把 total 交回调用方。
+
+    这是"不许静默截断"的唯一可观测面：短列表看起来完全正常，但当日"全量"其实是子集。
+    """
+    from app.core.providers.eastmoney_client import EastmoneyClient
+
+    pages = {
+        1: {"data": {"total": 496, "diff": [_raw_flow_row(f"BK{i:04d}") for i in range(100)]}},
+        2: {"data": {"total": 496, "diff": []}},
+    }
+    client = EastmoneyClient()
+    client.__dict__["_get_json"] = _PagedEM(pages)
+
+    with caplog.at_level(logging.WARNING):
+        rows, total = await client.fetch_sector_moneyflow_full("industry")
+
+    assert (len(rows), total) == (100, 496)
+    assert "clist paging incomplete" in caplog.text
+
+
+async def test_fetch_sector_moneyflow_full_rejects_unknown_dimension() -> None:
+    from app.core.providers.eastmoney_client import EastmoneyClient
+
+    client = EastmoneyClient()
+    client.__dict__["_get_json"] = _PagedEM({})
+
+    with pytest.raises(ValueError, match="industry\\|concept\\|region"):
+        await client.fetch_sector_moneyflow_full("sector")
+
+
 # ---------------------------------------------------------------------------
 # 2) repo：2 新列写路径 + 缺失 NULL + 读路径排序
 # ---------------------------------------------------------------------------
@@ -331,17 +474,75 @@ async def test_upsert_sector_moneyflow_converts_amount_float_to_decimal() -> Non
     assert amounts == [Decimal("7621248698.0")], amounts
 
 
+async def test_upsert_sector_moneyflow_records_capture_kind() -> None:
+    """``capture_kind`` 必须进 INSERT 列并带上本次调用的值（行级产地：poll/eod_full）。"""
+    db = _RecordingDb()
+
+    await market_data_repo.upsert_sector_moneyflow(
+        db,
+        D_TODAY,
+        "industry",
+        [dict(_hot_board_row())],
+        capture_kind="eod_full",
+    )
+
+    stmt = db.statements[0]
+    sql = str(stmt.compile(dialect=postgresql.dialect()))
+    insert_cols = sql.split(") VALUES", 1)[0]
+    assert "capture_kind" in insert_cols, insert_cols
+    # INSERT 的绑定值 + SET 里 CASE 的绑定值都必须是本次调用的产地
+    bound = [
+        v
+        for k, v in stmt.compile(dialect=postgresql.dialect()).params.items()
+        if k.startswith("capture_kind")
+    ]
+    assert bound and set(bound) == {"eod_full"}, bound
+
+
+async def test_upsert_sector_moneyflow_never_downgrades_eod_full() -> None:
+    """SET 子句里的 ``capture_kind`` 必须是"已 eod_full 就保持"的 CASE。
+
+    15:05 EOD 之后仍可能撞上一个 15:05 的盘中 tick（或手动轮询）：若它把行改回
+    ``'poll'``，T6 的 ``capture_kind='eod_full'`` 过滤当天就会丢行，读表闸门的语义也会漂。
+    """
+    db = _RecordingDb()
+
+    await market_data_repo.upsert_sector_moneyflow(
+        db, D_TODAY, "industry", [dict(_hot_board_row())], capture_kind="poll"
+    )
+
+    set_clause = str(db.statements[0].compile(dialect=postgresql.dialect())).split(
+        "DO UPDATE SET", 1
+    )[1]
+    assert "CASE WHEN" in set_clause, set_clause
+    assert "excluded.capture_kind" in set_clause, set_clause
+
+
+async def test_upsert_sector_moneyflow_rejects_unknown_capture_kind() -> None:
+    """拼错的 capture_kind 必须当场炸 —— 否则闸门/过滤会静默失效（谁都筛选不到）。"""
+    with pytest.raises(ValueError, match="capture_kind"):
+        await market_data_repo.upsert_sector_moneyflow(
+            _RecordingDb(), D_TODAY, "industry", [dict(_hot_board_row())], capture_kind="nightly"
+        )
+
+
 async def test_list_sector_moneyflow_ranked_is_day_scoped_and_deterministic() -> None:
-    """读表分支的行序由 repo SQL 保证：``pct_change DESC NULLS LAST, board_code ASC``。"""
+    """读表分支的行序由 repo SQL 保证：``pct_change DESC NULLS LAST, board_code ASC``。
+
+    同时钉住 ``capture_kind`` 过滤：读表分支只服务"当日全量捕获"那一批行。
+    """
     db = _RecordingDb(_EmptyResult())
 
-    await market_data_repo.list_sector_moneyflow_ranked(db, D_TODAY, "industry", 100)
+    await market_data_repo.list_sector_moneyflow_ranked(
+        db, D_TODAY, "industry", 100, capture_kind="eod_full"
+    )
 
     assert len(db.statements) == 1
     sql = str(db.statements[0].compile(dialect=postgresql.dialect()))
     assert "WHERE" in sql
     assert "sector_moneyflow_snapshots.trade_date" in sql
     assert "sector_moneyflow_snapshots.dimension" in sql
+    assert "sector_moneyflow_snapshots.capture_kind" in sql
     order = sql.split("ORDER BY", 1)[1]
     assert "sector_moneyflow_snapshots.pct_change DESC NULLS LAST" in order, order
     assert "sector_moneyflow_snapshots.board_code ASC" in order, order
@@ -349,7 +550,10 @@ async def test_list_sector_moneyflow_ranked_is_day_scoped_and_deterministic() ->
 
 
 async def test_list_sector_moneyflow_range_is_a_plain_window_read() -> None:
-    """Task 6 的窗口读：按 ``trade_date, board_code`` 排序，区间闭区间，无 limit。"""
+    """Task 6 的窗口读：按 ``trade_date, board_code`` 排序，区间闭区间，无 limit。
+
+    不给 ``capture_kind`` = 全量行（含盘中 poll）—— 这里是 Task 6 的"全序列"默认。
+    """
     db = _RecordingDb(_EmptyResult())
 
     await market_data_repo.list_sector_moneyflow_range(db, "industry", D_PREV, D_TODAY)
@@ -362,6 +566,35 @@ async def test_list_sector_moneyflow_range_is_a_plain_window_read() -> None:
     params = db.statements[0].compile(dialect=postgresql.dialect()).params
     assert D_PREV in params.values() and D_TODAY in params.values()
     assert ">=" in sql and "<=" in sql
+    where = sql.split("WHERE", 1)[1].split("ORDER BY", 1)[0]
+    assert "capture_kind" not in where, "不给 capture_kind = 不过滤"
+
+
+async def test_list_sector_moneyflow_range_can_restrict_to_full_capture_days() -> None:
+    """``capture_kind='eod_full'`` → 只取收盘全量行（T6 的"完整日"口径）。"""
+    db = _RecordingDb(_EmptyResult())
+
+    await market_data_repo.list_sector_moneyflow_range(
+        db, "industry", D_PREV, D_TODAY, capture_kind="eod_full"
+    )
+
+    sql = str(db.statements[0].compile(dialect=postgresql.dialect()))
+    assert "sector_moneyflow_snapshots.capture_kind" in sql
+    params = db.statements[0].compile(dialect=postgresql.dialect()).params
+    assert "eod_full" in params.values()
+
+
+async def test_sector_moneyflow_day_has_capture_filters_by_kind() -> None:
+    """15:35 补写判据 = "当日有没有 **eod_full** 行"，不是"有没有行"。"""
+    db = _RecordingDb(_EmptyResult())
+
+    assert await market_data_repo.sector_moneyflow_day_has_capture(db, D_TODAY, "eod_full") is False
+
+    sql = str(db.statements[0].compile(dialect=postgresql.dialect()))
+    assert "sector_moneyflow_snapshots.capture_kind" in sql
+    assert "LIMIT" in sql
+    params = db.statements[0].compile(dialect=postgresql.dialect()).params
+    assert "eod_full" in params.values()
 
 
 # ---------------------------------------------------------------------------
@@ -375,12 +608,17 @@ async def test_load_hot_board_snapshot_requires_the_expected_trading_day(
     """表内该维度最近日 != 预期交易日 → None（调用方回落实时，不服务陈旧行）。"""
     seen: list[Any] = []
 
-    async def _ranked(db: Any, day: date, dimension: str, limit: int) -> list[Any]:
-        seen.append((day, dimension, limit))
+    async def _ranked(
+        db: Any, day: date, dimension: str, limit: int, *, capture_kind: str
+    ) -> list[Any]:
+        seen.append((day, dimension, limit, capture_kind))
         return [_snap()]
 
     monkeypatch.setattr(mds, "_latest_snapshot_day", _async_return(D_PREV))
     monkeypatch.setattr(mds.market_data_repo, "list_sector_moneyflow_ranked", _ranked)
+    monkeypatch.setattr(
+        mds.market_data_repo, "sector_moneyflow_day_has_capture", _async_return(True)
+    )
     db = object()
 
     assert await mds.load_hot_board_snapshot(db, "industry", D_TODAY) is None
@@ -391,8 +629,33 @@ async def test_load_hot_board_snapshot_requires_the_expected_trading_day(
     assert found is not None
     day, rows = found
     assert day == D_PREV
-    assert seen == [(D_PREV, "industry", mds.HOT_BOARD_SNAPSHOT_LIMIT)]
+    assert seen == [(D_PREV, "industry", mds.HOT_BOARD_SNAPSHOT_LIMIT, "eod_full")]
     assert rows[0]["board_code"] == "BK1211"
+
+
+async def test_load_hot_board_snapshot_requires_an_eod_full_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**读表闸门**：当日只有盘中轮询行（inflow Top-100 子集）→ None，回落实时。
+
+    Ruling 11：盘中表里只有 f62 Top-100，拿它冒充 f3（涨幅）全量榜是错的，所以只有当日
+    存在 ``eod_full``（15:05 分页全量）行时才服务表行。
+    """
+    detail: list[Any] = []
+
+    async def _ranked(
+        db: Any, day: date, dimension: str, limit: int, *, capture_kind: str
+    ) -> list[Any]:
+        detail.append((day, dimension, capture_kind))
+        return [_snap()]
+
+    monkeypatch.setattr(mds, "_latest_snapshot_day", _async_return(D_TODAY))
+    monkeypatch.setattr(mds.market_data_repo, "list_sector_moneyflow_ranked", _ranked)
+    gate = _patch_full_capture(monkeypatch, False)
+
+    assert await mds.load_hot_board_snapshot(object(), "industry", D_TODAY) is None
+    assert gate == [(D_TODAY, "eod_full")], gate
+    assert detail == [], "闸门未过时不得再读明细"
 
 
 async def test_load_hot_board_snapshot_no_rows_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -406,9 +669,10 @@ async def test_load_hot_board_snapshot_no_rows_is_none(monkeypatch: pytest.Monke
 async def test_load_hot_board_snapshot_empty_detail_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """日匹配但明细为空（竞态/被清）→ 仍 None：绝不把空表当"当日无热点板块"发出去。"""
+    """日匹配 + 闸门过了但明细为空（竞态/被清）→ 仍 None：绝不把空表当"当日无热点板块"。"""
     monkeypatch.setattr(mds, "_latest_snapshot_day", _async_return(D_TODAY))
     monkeypatch.setattr(mds.market_data_repo, "list_sector_moneyflow_ranked", _async_return([]))
+    _patch_full_capture(monkeypatch, True)
 
     assert await mds.load_hot_board_snapshot(object(), "industry", D_TODAY) is None
 
@@ -630,48 +894,101 @@ async def test_hot_boards_read_from_table_never_writes(
 
 
 # ---------------------------------------------------------------------------
-# 5) 15:35 缺行补写（当日缺行才重写，跨日不承诺）
+# 5) 15:05 全量 EOD + 15:35 缺 eod_full 才补写（跨日不承诺）
 # ---------------------------------------------------------------------------
 
 
-async def test_rewrite_ingest_skips_when_today_already_has_rows(
+async def test_eod_full_ingest_pages_every_dimension_and_marks_eod_full(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """15:05 全量捕获：三维度各走分页全量，落库 mark ``eod_full``，``fetched``/``total`` 回传。"""
+    fetched: list[str] = []
+
+    async def _full(dimension: str) -> tuple[list[dict[str, Any]], int]:
+        fetched.append(dimension)
+        rows = [_hot_board_row(board_code=f"BK{dimension[:2].upper()}{i:04d}") for i in range(3)]
+        return rows, 3
+
+    upserts: list[tuple[date, str, int, str]] = []
+
+    async def _upsert(
+        db: Any, trade_date: date, dimension: str, rows: list[Any], *, capture_kind: str = "poll"
+    ) -> int:
+        upserts.append((trade_date, dimension, len(rows), capture_kind))
+        return len(rows)
+
     monkeypatch.setattr(mds, "_today_sh", lambda: D_TODAY)
-    monkeypatch.setattr(mds.market_data_repo, "sector_moneyflow_day_has_rows", _async_return(True))
+    monkeypatch.setattr(
+        mds, "_get_eastmoney", lambda: SimpleNamespace(fetch_sector_moneyflow_full=_full)
+    )
+    monkeypatch.setattr(mds.market_data_repo, "upsert_sector_moneyflow", _upsert)
 
-    async def _boom(_db: Any) -> dict[str, int]:
-        raise AssertionError("当日已有行 → 补写 job 必须 no-op（不许覆盖已落库的快照）")
+    out = await mds.ingest_sector_moneyflow_eod_full(object())
 
-    monkeypatch.setattr(mds, "ingest_sector_moneyflow", _boom)
+    assert fetched == ["industry", "concept", "region"]
+    assert upserts == [
+        (D_TODAY, "industry", 3, "eod_full"),
+        (D_TODAY, "concept", 3, "eod_full"),
+        (D_TODAY, "region", 3, "eod_full"),
+    ]
+    assert out["industry"] == {"fetched": 3, "total": 3, "upserted": 3}
+    assert mds.eod_shortfalls(out) == []
+
+
+async def test_eod_shortfalls_flags_incomplete_and_unknown_coverage() -> None:
+    """纯函数判据（job 与 worker 共用）：覆盖不足 / 上游没报 total 都要可见。"""
+    assert mds.eod_shortfalls({"industry": {"fetched": 496, "total": 496}}) == []
+    assert mds.eod_shortfalls({"industry": {"fetched": 95, "total": 496}}) == [
+        "industry: fetched=95 < total=496"
+    ]
+    assert mds.eod_shortfalls({"concept": {"fetched": 100, "total": None}}) == [
+        "concept: upstream total unknown (fetched=100)"
+    ]
+    # 15:35 的 skipped 形态没有维度统计 → 不算短缺
+    assert mds.eod_shortfalls({"skipped": True, "trade_date": "2026-09-18"}) == []
+
+
+async def test_rewrite_ingest_skips_when_today_is_already_fully_captured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """当日已有 ``eod_full`` 行 → no-op（不许覆盖已落库的收盘全量）。"""
+    monkeypatch.setattr(mds, "_today_sh", lambda: D_TODAY)
+    _patch_full_capture(monkeypatch, True)
+
+    async def _boom(_db: Any) -> dict[str, Any]:
+        raise AssertionError("当日已全量捕获 → 补写 job 必须 no-op")
+
+    monkeypatch.setattr(mds, "ingest_sector_moneyflow_eod_full", _boom)
 
     out = await mds.ingest_sector_moneyflow_if_missing(object())
 
     assert out["skipped"] is True
     assert out["trade_date"] == D_TODAY.isoformat()
     assert "status" not in out, "worker 结果里 status 由 BaseWorker 拥有（不得被内层覆盖）"
+    assert mds.eod_shortfalls(out) == []
 
 
-async def test_rewrite_ingest_writes_when_today_has_no_rows(
+async def test_rewrite_ingest_runs_the_full_capture_when_eod_full_is_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """容器重启错过 15:05 → 15:35 补写走**同一个** ingest 方法。"""
+    """只落了盘中轮询、错过 15:05 → 15:35 **仍要**补做收盘全量（Ruling 11 关闭的缺口）。"""
     monkeypatch.setattr(mds, "_today_sh", lambda: D_TODAY)
-    monkeypatch.setattr(mds.market_data_repo, "sector_moneyflow_day_has_rows", _async_return(False))
+    gate = _patch_full_capture(monkeypatch, False)
     seen: list[Any] = []
 
-    async def _ingest(db: Any) -> dict[str, int]:
+    async def _full(db: Any) -> dict[str, Any]:
         seen.append(db)
-        return {"industry": 100, "concept": 100, "region": 31}
+        return {"industry": {"fetched": 496, "total": 496, "upserted": 496}}
 
-    monkeypatch.setattr(mds, "ingest_sector_moneyflow", _ingest)
+    monkeypatch.setattr(mds, "ingest_sector_moneyflow_eod_full", _full)
     db = object()
 
     out = await mds.ingest_sector_moneyflow_if_missing(db)
 
-    assert seen == [db], "必须复用 ingest_sector_moneyflow（双轨制：同一条 ingest 路径）"
+    assert gate == [(D_TODAY, "eod_full")], "守卫看的是 eod_full，不是'有没有行'"
+    assert seen == [db], "补写必须复用同一个全量捕获方法（双轨制）"
     assert out["skipped"] is False
-    assert out["industry"] == 100 and out["region"] == 31
+    assert out["industry"]["fetched"] == 496 and out["trade_date"] == D_TODAY.isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -688,11 +1005,11 @@ def test_job_types_registered() -> None:
 async def test_worker_dispatches_board_snapshot_eod(monkeypatch: pytest.MonkeyPatch) -> None:
     called: list[Any] = []
 
-    async def _ingest(db: Any) -> dict[str, int]:
+    async def _full(db: Any) -> dict[str, Any]:
         called.append(db)
-        return {"industry": 100}
+        return {"industry": {"fetched": 496, "total": 496, "upserted": 496}}
 
-    monkeypatch.setattr(mds, "ingest_sector_moneyflow", _ingest)
+    monkeypatch.setattr(mds, "ingest_sector_moneyflow_eod_full", _full)
     from tests.test_market_data_worker import _fake_session_factory
 
     monkeypatch.setattr(
@@ -703,7 +1020,37 @@ async def test_worker_dispatches_board_snapshot_eod(monkeypatch: pytest.MonkeyPa
     result = await MarketDataWorker().process(task_id=None, payload={"type": "board_snapshot_eod"})
 
     assert result["status"] == "completed" and result["type"] == "board_snapshot_eod"
-    assert result["industry"] == 100 and called
+    assert result["industry"]["fetched"] == 496 and called
+
+
+async def test_worker_board_snapshot_alerts_on_short_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """worker 轨道与定时轨道同款可见性：全量覆盖不足必须进 `job:failures`。"""
+    recorded: list[Any] = []
+
+    async def _full(db: Any) -> dict[str, Any]:
+        return {"industry": {"fetched": 95, "total": 496, "upserted": 95}}
+
+    async def _record(job_id: str, error: str, **kwargs: Any) -> None:
+        recorded.append((job_id, error))
+
+    from tests.test_market_data_worker import _fake_session_factory
+
+    monkeypatch.setattr(mds, "ingest_sector_moneyflow_eod_full", _full)
+    from app.services import job_alert_service as jas
+    from app.workers.market_data_worker import MarketDataWorker
+
+    monkeypatch.setattr(jas, "record_job_failure", _record)
+    monkeypatch.setattr(
+        "app.workers.market_data_worker.async_session_factory", _fake_session_factory
+    )
+
+    result = await MarketDataWorker().process(task_id=None, payload={"type": "board_snapshot_eod"})
+
+    assert result["status"] == "completed"
+    assert recorded and recorded[0][0] == "board_snapshot_eod"
+    assert "fetched=95 < total=496" in recorded[0][1]
 
 
 async def test_worker_dispatches_board_snapshot_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -742,7 +1089,7 @@ async def _session_factory() -> AsyncGenerator[_Session, None]:
 @pytest.mark.parametrize(
     ("job_func", "service_name", "job_id"),
     [
-        ("board_snapshot_eod_job", "ingest_sector_moneyflow", "board_snapshot_eod"),
+        ("board_snapshot_eod_job", "ingest_sector_moneyflow_eod_full", "board_snapshot_eod"),
         (
             "board_snapshot_rewrite_job",
             "ingest_sector_moneyflow_if_missing",
@@ -758,9 +1105,9 @@ async def test_board_snapshot_jobs_call_the_worker_service(
 
     events: list[str] = []
 
-    async def _service(db: Any) -> dict[str, int]:
+    async def _service(db: Any) -> dict[str, Any]:
         events.append("service")
-        return {"industry": 100}
+        return {"industry": {"fetched": 496, "total": 496, "upserted": 496}}
 
     monkeypatch.setattr(mds, service_name, _service)
     monkeypatch.setattr("app.core.database.async_session_factory", _session_factory)
@@ -773,6 +1120,39 @@ async def test_board_snapshot_jobs_call_the_worker_service(
     assert events == ["service"], f"{job_id} 必须调 {service_name}"
 
 
+@pytest.mark.parametrize(
+    ("job_func", "job_id"),
+    [
+        ("board_snapshot_eod_job", "board_snapshot_eod"),
+        ("board_snapshot_rewrite_job", "board_snapshot_rewrite"),
+    ],
+)
+async def test_board_snapshot_jobs_alert_on_short_coverage(
+    monkeypatch: pytest.MonkeyPatch, job_func: str, job_id: str
+) -> None:
+    """ "当日全量"其实是子集时必须告警（且 job 不整体失败）—— A 类静默丢失的唯一可观测面。"""
+    from app.scheduler import jobs as scheduler_jobs
+
+    async def _service(db: Any) -> dict[str, Any]:
+        return {"industry": {"fetched": 12, "total": 496, "upserted": 12}}
+
+    alerts: list[Any] = []
+
+    async def _alert(ids: Any, exc: BaseException) -> None:
+        alerts.append((ids, exc))
+
+    monkeypatch.setattr(mds, "ingest_sector_moneyflow_eod_full", _service)
+    monkeypatch.setattr(mds, "ingest_sector_moneyflow_if_missing", _service)
+    monkeypatch.setattr("app.core.database.async_session_factory", _session_factory)
+    monkeypatch.setattr(scheduler_jobs, "_is_workday", lambda: True)
+    monkeypatch.setattr(scheduler_jobs, "_alert_job_failure", _alert)
+
+    await getattr(scheduler_jobs, job_func)()
+
+    assert alerts and alerts[0][0] == job_id
+    assert "fetched=12 < total=496" in str(alerts[0][1])
+
+
 @pytest.mark.parametrize("job_func", ["board_snapshot_eod_job", "board_snapshot_rewrite_job"])
 async def test_board_snapshot_jobs_noop_on_non_workday(
     monkeypatch: pytest.MonkeyPatch, job_func: str
@@ -781,11 +1161,15 @@ async def test_board_snapshot_jobs_noop_on_non_workday(
 
     events: list[str] = []
 
-    async def _service(db: Any) -> dict[str, int]:
+    async def _service(db: Any) -> dict[str, Any]:
         events.append("service")
         return {}
 
-    for name in ("ingest_sector_moneyflow", "ingest_sector_moneyflow_if_missing"):
+    for name in (
+        "ingest_sector_moneyflow",
+        "ingest_sector_moneyflow_eod_full",
+        "ingest_sector_moneyflow_if_missing",
+    ):
         monkeypatch.setattr(mds, name, _service)
     monkeypatch.setattr("app.core.database.async_session_factory", _session_factory)
     monkeypatch.setattr(scheduler_jobs, "_is_workday", lambda: False)
@@ -796,7 +1180,7 @@ async def test_board_snapshot_jobs_noop_on_non_workday(
 
 
 async def test_scheduler_registers_board_snapshot_jobs_with_shanghai_cron() -> None:
-    """15:05 收盘终态 + 15:35 缺行补写；两者都 mon-fri / Asia/Shanghai。"""
+    """15:05 收盘**全量** + 15:35 缺 ``eod_full`` 才补写；都 mon-fri / Asia/Shanghai。"""
     from apscheduler.triggers.cron import CronTrigger
 
     from app.scheduler.runner import create_scheduler
@@ -851,7 +1235,11 @@ async def _clean_scratch_day() -> AsyncGenerator[None, None]:
 
 @pytest.mark.e2e
 async def test_snapshot_columns_round_trip_in_pg(_clean_scratch_day: None) -> None:
-    """真库：``amount``/``flat_count`` 往返（有值保留、缺值仍 NULL）；重跑收敛。"""
+    """真库：``amount``/``flat_count``/``capture_kind`` 往返；缺值仍 NULL；重跑收敛。
+
+    并证明 **eod_full 不被降级**：全量写入后再来一次盘中 poll upsert（capture_kind='poll'），
+    行仍是 ``eod_full``（SET 子句的 CASE 在真 PG 上的行为）。
+    """
     from sqlalchemy import func, select
 
     from app.core.database import async_session_factory
@@ -861,11 +1249,9 @@ async def test_snapshot_columns_round_trip_in_pg(_clean_scratch_day: None) -> No
         {**_hot_board_row(board_code="BK9001", pct_change=1.0), "amount": 1234.5678},
         _hot_board_row(board_code="BK9002", pct_change=1.0, amount=None, flat_count=None),
     ]
-    async with async_session_factory() as db:
-        n = await market_data_repo.upsert_sector_moneyflow(db, D_ANCIENT, "industry", rows)
-        await db.commit()
-        assert n == 2
-        got = (
+
+    async def _read() -> list[SectorMoneyflowSnapshot]:
+        return list(
             (
                 await db.execute(
                     select(SectorMoneyflowSnapshot)
@@ -876,9 +1262,26 @@ async def test_snapshot_columns_round_trip_in_pg(_clean_scratch_day: None) -> No
             .scalars()
             .all()
         )
+
+    async with async_session_factory() as db:
+        n = await market_data_repo.upsert_sector_moneyflow(
+            db, D_ANCIENT, "industry", rows, capture_kind="eod_full"
+        )
+        await db.commit()
+        assert n == 2
+        got = await _read()
         assert [float(r.amount) for r in got[:1]] == [1234.5678]
         assert got[0].flat_count == 11
         assert got[1].amount is None and got[1].flat_count is None, "缺失必须 NULL，不是 0"
+        assert {r.capture_kind for r in got} == {"eod_full"}
+
+        # 15:05 之后撞上来的盘中 tick：值可以刷新，capture_kind 不得降级回 poll
+        await market_data_repo.upsert_sector_moneyflow(
+            db, D_ANCIENT, "industry", rows, capture_kind="poll"
+        )
+        await db.commit()
+        assert {r.capture_kind for r in await _read()} == {"eod_full"}, "eod_full 被降级了"
+
         # 重跑收敛：同键同值，不产生第 3 行
         await market_data_repo.upsert_sector_moneyflow(db, D_ANCIENT, "industry", rows)
         await db.commit()
@@ -890,31 +1293,105 @@ async def test_snapshot_columns_round_trip_in_pg(_clean_scratch_day: None) -> No
             )
         ).scalar()
         assert total == 2
+        assert await market_data_repo.sector_moneyflow_day_has_capture(db, D_ANCIENT, "eod_full")
+        # 粘性：那次 poll upsert 没有把这天变成"有 poll 行"（行级产地保持 eod_full）
+        assert not await market_data_repo.sector_moneyflow_day_has_capture(db, D_ANCIENT, "poll")
 
 
 @pytest.mark.e2e
 async def test_list_sector_moneyflow_ranked_orders_in_pg(_clean_scratch_day: None) -> None:
-    """真库：行序 = ``pct_change DESC NULLS LAST, board_code ASC``（同涨幅看 code）。"""
+    """真库：行序 = ``pct_change DESC NULLS LAST, board_code ASC``，且**只取 eod_full 行**。"""
     from app.core.database import async_session_factory
 
-    rows = [
+    full_rows = [
         _hot_board_row(board_code="BK9003", pct_change=None),
         _hot_board_row(board_code="BK9002", pct_change=5.0),
         _hot_board_row(board_code="BK9001", pct_change=5.0),
         _hot_board_row(board_code="BK9004", pct_change=9.0),
     ]
+    poll_row = _hot_board_row(board_code="BK9009", pct_change=99.0)  # 盘中残留：必须被排除
+
     async with async_session_factory() as db:
-        await market_data_repo.upsert_sector_moneyflow(db, D_ANCIENT, "industry", rows)
+        await market_data_repo.upsert_sector_moneyflow(
+            db, D_ANCIENT, "industry", full_rows, capture_kind="eod_full"
+        )
+        await market_data_repo.upsert_sector_moneyflow(
+            db, D_ANCIENT, "industry", [poll_row], capture_kind="poll"
+        )
         await db.commit()
-        got = await market_data_repo.list_sector_moneyflow_ranked(db, D_ANCIENT, "industry", 100)
+        got = await market_data_repo.list_sector_moneyflow_ranked(
+            db, D_ANCIENT, "industry", 100, capture_kind="eod_full"
+        )
 
     assert [r.board_code for r in got] == ["BK9004", "BK9001", "BK9002", "BK9003"]
-    # 区间读（Task 6 seam）不该漏掉这一天
+    # 区间读（Task 6 seam）默认给全序列；指定 eod_full 则排除盘中残留
     async with async_session_factory() as db:
         window = await market_data_repo.list_sector_moneyflow_range(
             db, "industry", D_ANCIENT, D_ANCIENT
         )
-    assert [r.board_code for r in window] == ["BK9001", "BK9002", "BK9003", "BK9004"]
+        full_only = await market_data_repo.list_sector_moneyflow_range(
+            db, "industry", D_ANCIENT, D_ANCIENT, capture_kind="eod_full"
+        )
+    assert [r.board_code for r in window] == [
+        "BK9001",
+        "BK9002",
+        "BK9003",
+        "BK9004",
+        "BK9009",
+    ]
+    assert [r.board_code for r in full_only] == ["BK9001", "BK9002", "BK9003", "BK9004"]
+
+
+@pytest.mark.e2e
+async def test_eod_full_row_counts_match_upstream_total_in_pg(
+    _clean_scratch_day: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """真库：全量抓取的落库行数 == 上游 ``total``（三维度分别核对），闸门随之打开。"""
+    from sqlalchemy import func, select
+
+    from app.core.database import async_session_factory
+    from app.models.market_data import SectorMoneyflowSnapshot
+
+    totals = {"industry": 496, "concept": 506, "region": 31}
+
+    async def _full(dimension: str) -> tuple[list[dict[str, Any]], int]:
+        total = totals[dimension]
+        rows = [
+            _hot_board_row(board_code=f"BK9{i % 9000:04d}", pct_change=float(i % 7))
+            for i in range(total)
+        ]
+        return rows, total
+
+    monkeypatch.setattr(mds, "_today_sh", lambda: D_ANCIENT)
+    monkeypatch.setattr(
+        mds, "_get_eastmoney", lambda: SimpleNamespace(fetch_sector_moneyflow_full=_full)
+    )
+
+    async with async_session_factory() as db:
+        out = await mds.ingest_sector_moneyflow_eod_full(db)
+        await db.commit()
+        for dimension, total in totals.items():
+            count = (
+                await db.execute(
+                    select(func.count())
+                    .select_from(SectorMoneyflowSnapshot)
+                    .where(
+                        SectorMoneyflowSnapshot.trade_date == D_ANCIENT,
+                        SectorMoneyflowSnapshot.dimension == dimension,
+                        SectorMoneyflowSnapshot.capture_kind == "eod_full",
+                    )
+                )
+            ).scalar()
+            assert count == total, f"{dimension}: rows={count} != upstream total={total}"
+        assert await market_data_repo.sector_moneyflow_day_has_capture(db, D_ANCIENT, "eod_full")
+        # 闸门打开后：读表分支真的能服务这一天（eod_full 明细非空）
+        # `_latest_snapshot_day` 打桩成 scratch 日：共享 dev 库里还有真实交易日（今天）的行，
+        # 不打桩会解析到今天而不是 scratch 日（这里要测的是"闸门 + eod_full 过滤 + SQL"）。
+        monkeypatch.setattr(mds, "_latest_snapshot_day", _async_return(D_ANCIENT))
+        found = await mds.load_hot_board_snapshot(db, "region", D_ANCIENT)
+    assert found is not None and len(found[1]) == totals["region"]
+    assert out["industry"] == {"fetched": 496, "total": 496, "upserted": 496}
+    assert mds.eod_shortfalls(out) == []
 
 
 class _RecordingCache:

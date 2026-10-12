@@ -157,13 +157,21 @@ next-action: Task 1（market_limit_up_stock_daily + EOD enrichment）在 worktre
 
 **口径裁定：** `/market/hot-boards` 的 items 由表行按 `pct_change DESC, board_code ASC`（确定性 tiebreak）排序取 Top-N —— 与上游 `fid=f3` 语义一致，故**不存 `rank`**；`as_of`/`as_of_quality` 语义与 `/market/sector-moneyflow` 统一（同一次抓取、同一行）。
 
-**验收（真库实测，数字回填本文件）：** `/market/hot-boards?category=industry` 读表分支与实时分支**同 code 行资金口径一致**；`amount`/`flat_count` 非空率 ≥99%（上游为空的板块允许 NULL）；**明确记录**：历史 15 个缺失交易日不可补，覆盖率目标 = 上线日起 100%。
+**行集与新鲜度裁决（Ruling 11，实施中实测发现）：** 上游 `clist` **`pz` 上限 100 且忽略更大值**（实测 `pz=1000` 仍只回 100 行：industry `total=496` / concept `506` / region `31`），而 5 分钟轮询按 `fid=f62`（主力净流入）取 Top-100 → 当日表行是"每次轮询 Top-100 的并集、旧行永不刷新"（实测 industry 当日 229 个 code，其中 84 行停在 09:25），且**该行集不是 hot-boards 的 `f3`（涨幅）榜全集**。故：
+- 新增 **`capture_kind`** 列（`String(16)`，非空，默认 `'poll'`；取值 `poll` | `eod_full`），行级记录"这一行来自盘中轮询还是收盘全量"
+- **15:05 EOD 改为分页全量抓取**（复用既有 `_paged_clist` 模式；industry 5 页 + concept 6 页 + region 1 页 ≈ 12 次请求/日），写 `capture_kind='eod_full'` → 当日**所有板块**在收盘时被刷新一次，"并集+陈旧行"问题自然消解（无需 DELETE 剪枝）
+- **读表闸门**：仅当该 `(day, dimension)` 存在 `eod_full` 行（当日已全量捕获）才走表；否则走既有实时路径（盘中本来就更新）。交易日盘中不走表 = 不引入"用 Top-100 子集冒充 f3 全量榜"的错误
+- **15:35 重写 job 的守卫从"当日无任何行"改为"当日无 `eod_full` 行"** → 只落了盘中轮询、错过 15:05 的日子也能补上收盘态（修正 Ruling 11 同时发现的第二个缺口）
+- `list_sector_moneyflow_range(dimension, start, end, capture_kind=None)` 供 T6 只取完整日
+- 延迟项（记入账本，交 final review）：`_is_workday()` 是纯 weekday 判断 → 节假日工作日的行会带节假日日期（既有约定，非本任务引入）
 
-- [ ] Step 1: 迁移 2 列 + 模型
-- [ ] Step 2: `fetch_sector_moneyflow` fields 扩参（含"不新增第二次请求"的断言测试）
-- [ ] Step 3: 失败测试（读表优先 / 回落 / 字段集 ⊇ 契约 / 缺行不返空）
-- [ ] Step 4: `get_hot_boards` 读表分支 + EOD/当日补写 job + worker 分支
-- [ ] Step 5: 真库实测并回填数字
+**验收（真库实测，数字回填本文件）：** `/market/hot-boards?category=industry` 读表分支与实时分支**同 code 行资金口径一致**；`amount`/`flat_count` 非空率 ≥99%（上游为空的板块允许 NULL）；EOD 全量抓取的行数 ≈ 上游 `total`（industry 496 / concept 506 / region 31）；**明确记录**：历史 15 个缺失交易日不可补，覆盖率目标 = 上线日起 100%。
+
+- [ ] Step 1: 迁移 `amount`/`flat_count`/`capture_kind` + 模型
+- [ ] Step 2: `fetch_sector_moneyflow` fields 扩参（含"不新增第二次请求"的断言测试）+ 分页全量 helper
+- [ ] Step 3: 失败测试（读表闸门 `eod_full` / 回落 / 字段集 ⊇ 契约 / 缺行不返空 / 分页覆盖 total）
+- [ ] Step 4: `get_hot_boards` 读表分支 + 15:05 全量 EOD + 15:35 补写（守卫=`eod_full` 缺失）+ worker 分支
+- [ ] Step 5: 真库实测并回填数字（含 EOD 全量行数 vs 上游 total）
 
 ---
 
