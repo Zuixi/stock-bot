@@ -150,16 +150,22 @@ def ensure_migration_state() -> Any:
 
     前置用绝对定位（先 ``upgrade head`` 再 ``downgrade PREV_REVISION``）——相对
     ``downgrade -1`` 在库已处于 PREV 时会多降一版、把下层的表也拆掉（旧实现的
-    坑）。后置 ``upgrade head`` 是硬不变量：``pytest`` 跑完 dev 库必须仍在
+    坑）。后置 ``upgrade head`` 是硬不变量：``pytest`` 跑完库必须仍在
     ``alembic heads``（否则后续 e2e/手工验证拿到的是缺表的库）。
+
+    **Fix round 1（评审 I2 的连带面）**：后置恢复原先只包住 ``yield``，而**前置的
+    downgrade 在 try 之外** —— 库若不可达/停在别的 revision，前置就抛错，后置永远
+    不执行，库被留在**丢表的中间版本**上（实测：本文件 ERROR 之后
+    ``sw_industry_member_periods`` 被拆掉且没人恢复）。现在前置也进 try，恢复一定执行。
+    该环境级兜底另见 ``conftest.py`` 的 session fixture。
     """
-    # Pre: 任意起点 → HEAD → PREV（表确定不存在）
-    _alembic_upgrade_to("head")
-    _alembic_downgrade_to(PREV_REVISION)
     try:
+        # Pre: 任意起点 → HEAD → PREV（表确定不存在）
+        _alembic_upgrade_to("head")
+        _alembic_downgrade_to(PREV_REVISION)
         yield
     finally:
-        # Post: 恢复 HEAD —— 即使测试失败/异常也不把库留在中间版本
+        # Post: 恢复 HEAD —— 即使测试失败/异常/前置失败也不把库留在中间版本
         _alembic_upgrade_to("head")
 
 

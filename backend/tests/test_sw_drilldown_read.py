@@ -160,7 +160,11 @@ async def _seed_fixture(db: AsyncSession, *, with_volume_ratio: bool = True) -> 
 
 @requires_pg
 def test_aggregate_seven_fields_and_null_coverage() -> None:
-    """7 项字段：有值的算出、无值的 `None`；每项带覆盖数；成交额 ×1000 → 元。"""
+    """7 项字段：有值的算出、无值的 `None`；每项带覆盖数；成交额 ×1000 → 元。
+
+    另锁 ``member_source == 'level'``（Fix round 1 · 评审 C1）：fixture 的三只成分
+    都挂在 L3 自身层级，故聚合成员必须来自**自身层级**而不是上卷。
+    """
 
     async def _scenario(db: AsyncSession) -> Any:
         await _seed_fixture(db)
@@ -180,13 +184,14 @@ def test_aggregate_seven_fields_and_null_coverage() -> None:
     # 成分数 = 3（SCD2 三段都有效）；真有行情 = 2（丙股无行情行）
     assert m.member_count == 3
     assert m.quoted_count == 2
+    assert m.member_source == "level"
 
     # ① K 线（中位数）：开 (10+20)/2=15、高 16、低 14、收 15.5
     assert m.kline_median.open == pytest.approx(15.0)
     assert m.kline_median.high == pytest.approx(16.0)
     assert m.kline_median.low == pytest.approx(14.0)
     assert m.kline_median.close == pytest.approx(15.5)
-    assert m.kline_median.member_count == 2
+    assert m.kline_median.quoted_count == 2  # Fix round 1：该字段=参与中位数的家数
 
     # ② 涨跌幅：成交额加权，只有甲股有 amount → 等于甲股自己的 5.0
     assert m.pct_chg_weighted == pytest.approx(5.0)

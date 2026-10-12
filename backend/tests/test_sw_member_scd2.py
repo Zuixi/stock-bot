@@ -5,25 +5,31 @@
 ``TEST_DATABASE_URL`` 取 URL、默认落到 ``stock_bot_test``（端口 5433），
 库不可达时 skip 而不是红。
 
+**本文件不依赖库内既有数据**（Fix round 1 · 评审 I4）：所有用例要么纯函数、
+要么真 PG + **事务内 ROLLBACK**，并且**自己在事务里建最小分类树**——
+不再 ``pytest.skip`` 于"树为空"（那会让 CI 上的断言静默消失、套件照样绿）。
+
 覆盖：
 1. 迁移：SCD2 两表存在；``effective_from`` 为 NOT NULL、``effective_to`` 可空；
    **既有 ``sw_industry_members`` 一列未动**（不给既有行硬塞 NOT NULL）
-2. ``upgrade head → downgrade -1 → upgrade head`` 干净往返
-3. 对照表（``data/sw_index_mapping.csv``）511 行 = 31/134/346，代码唯一
+2. 迁移干净往返（降一级只回退覆盖列）
+3. 对照表（``data/sw_index_mapping.csv``）511 行 = 31/134/346，代码唯一；
+   默认灌全部三级
 4. ``normalize_member_rows``：``in_date`` 缺失的行被丢弃；``is_current`` 取 ``is_new``
-5. 重跑同一份上游行 → **新增行 0**（唯一键幂等）
+5. 重跑同一份上游行 → **新增行 0**，且 ``rows_inserted/updated`` 能区分两种情形
 6. **SCD2 区间还原**：同一 (行业, 股票) 多段区间下，任取两个历史日各取到"当日有效"
-   的那一段（这是 spec §S1.4「任取一个历史交易日…与当日实际分类快照一致」的机制层验证）
-7. ``as_of`` 上界：读面返回的 ``scd2_as_of`` = 最近一次**成功** ingest，且**无 ingest 记录
-   时为 None**（不得把"没采过"说成"当日无成分"）
-8. 31 个一级行业**全部可下钻到三级且无断链**（L1→L2→L3 每级都有映射）
+   的那一段（spec §S1.4「任取一个历史交易日…与当日实际分类快照一致」的机制层验证）
+7. ``as_of`` 上界：只认 ``fully_ingested AND status='ok'``；**``--limit`` 冒烟运行
+   与 ``status='partial'`` 都不抬高它**（Fix round 1 · 评审 I1）
+8. **成员取自节点自身层级**（Fix round 1 · 评审 C1）：自身层级优先、缺失才上卷，
+   且上卷**明确标注不等价**；末级 ``chain`` 每级带真实成分数（不是 0 占位）
+9. 31 个一级行业**全部可下钻到三级**：机械版本**在事务里自建 31 个 L1 的树与 as_of**，
+   断言每 L1 都有 L2/L3/当日成分，**不会静默跳过**；库内真有申万树时另按真实树核对
 
-**运维顺序（重要）**：本文件与 ``tests/test_industry_metric_pit_roundtrip.py`` 都跑
-``alembic downgrade → upgrade``；后者 downgrade 到的 ``f1a2b3c4d5e6`` 在本任务之前，
-会**连带 drop 掉 ``sw_industry_member_periods`` / ``sw_member_ingest_runs``**，
-故整套 pytest 跑完后 ``sw_member_ingest_runs`` 会回到空表。所有用例因此都必须
-自建 fixture（本文件全部如此，事务内 ROLLBACK），**不得**假设"库里有 SCD2 数据"。
-运营侧的顺序是：**先跑测试，再跑回填**（``scripts/ingest_sw_member_periods.py``）。
+**运维顺序（重要）**：``tests/test_industry_metric_pit_roundtrip.py`` 的破坏性
+``downgrade`` 已改为 **opt-in**（``SC_DESTRUCTIVE_MIGRATION_TESTS=1``），故默认
+pytest 不再 drop 本任务的两张表。顺序仍是"先跑测试、再回填"，见
+``docs/deployment/index.md``。
 """
 
 from __future__ import annotations
@@ -44,8 +50,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.models.sw_industry import SwMemberIngestRun
 from app.services import sw_member_scd2_service as scd2
 
-REVISION = "b4c5d6e7f8a9"
-PREV_REVISION = "f1a2b3c4d5e6"
+REVISION = "c5d6e7f8a9b0"
+PREV_REVISION = "b4c5d6e7f8a9"
 
 _DEFAULT_ASYNC = "postgresql+asyncpg://stock_user:stock_pass@localhost:5433/stock_bot_test"
 ASYNC_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL") or _DEFAULT_ASYNC
@@ -53,6 +59,12 @@ SYNC_URL = ASYNC_URL.replace("+asyncpg", "")
 
 ALEMBIC_BIN = str(Path(__file__).resolve().parents[1] / ".venv" / "bin" / "alembic")
 BACKEND_DIR = str(Path(__file__).resolve().parents[1])
+
+# 本文件自建的测试树（99xxxx 段，与其他测试文件错开，避免唯一键互撞）
+L1 = "992000"
+L2 = "992100"
+L3 = "992101"
+ASOF = date(2026, 10, 12)
 
 
 def _pg_reachable() -> bool:
@@ -120,7 +132,7 @@ def test_migration_scd2_nullability_and_existing_table_untouched() -> None:
     """`effective_from` NOT NULL / `effective_to` 可空；既有 `sw_industry_members` 未加列。"""
     _alembic("upgrade", "head")
 
-    async def _go() -> tuple[dict[str, str], list[str], list[str]]:
+    async def _go() -> tuple[dict[str, str], list[str], list[str], str]:
         rows = await _fetch(
             "SELECT column_name, is_nullable FROM information_schema.columns WHERE table_name = $1",
             "sw_industry_member_periods",
@@ -134,9 +146,19 @@ def test_migration_scd2_nullability_and_existing_table_untouched() -> None:
             "SELECT indexname FROM pg_indexes WHERE tablename = $1",
             "sw_industry_member_periods",
         )
-        return state, [r["column_name"] for r in member_cols], [r["indexname"] for r in indexes]
+        uq = await _fetch(
+            "SELECT indexdef AS def FROM pg_indexes "
+            "WHERE tablename = 'sw_industry_member_periods' AND indexname = $1",
+            "uq_sw_member_period_code_stock_from_to",
+        )
+        return (
+            state,
+            [r["column_name"] for r in member_cols],
+            [r["indexname"] for r in indexes],
+            uq[0]["def"] if uq else "",
+        )
 
-    state, member_cols, indexes = asyncio.run(_go())
+    state, member_cols, indexes, uq_def = asyncio.run(_go())
 
     assert state["effective_from"] == "NO", "新表的 effective_from 必须 NOT NULL"
     assert state["effective_to"] == "YES", "effective_to 必须可空（NULL = 至今仍在成分）"
@@ -151,43 +173,66 @@ def test_migration_scd2_nullability_and_existing_table_untouched() -> None:
         "stock_name",
         "updated_at",
     ]
-    assert "uq_sw_member_period_code_stock_from" in indexes
+    assert "uq_sw_member_period_code_stock_from_to" in indexes
     assert "idx_sw_member_period_industry_from" in indexes
     assert "idx_sw_member_period_open" in indexes
+    # Fix round 1：幂等键必须是**表达式**唯一索引，且 NULL 终点被 COALESCE 折叠
+    # （普通 UNIQUE 视 NULL 彼此不同 → NULL 终点行永不冲突 → 幂等失效）
+    assert "effective_to" in uq_def, f"幂等键未含 effective_to：{uq_def}"
+    assert "COALESCE" in uq_def, f"幂等键未折叠 NULL 终点（幂等会失效）：{uq_def}"
+    assert "UNIQUE" in uq_def.upper(), uq_def
 
 
 def test_migration_file_contract() -> None:
-    """本迁移**只建新表**、不 add_column 到既有表；down_revision = 当时 head。"""
+    """只建新表 / 只加列，不碰既有 `sw_industry_members`；down_revision 逐级正确。"""
     path = (
         Path(BACKEND_DIR)
         / "app"
         / "migrations"
         / "versions"
-        / f"{REVISION}_add_sw_industry_member_scd2.py"
+        / "b4c5d6e7f8a9_add_sw_industry_member_scd2.py"
     )
     text_src = path.read_text()
-    assert f'down_revision: str | None = "{PREV_REVISION}"' in text_src
+    assert 'down_revision: str | None = "f1a2b3c4d5e6"' in text_src
     assert "add_column" not in text_src, "不得给既有表加列（会导致 NOT NULL 回填问题）"
     assert text_src.count("op.create_table") == 2
     assert text_src.count("op.drop_table") == 2
 
+    path2 = (
+        Path(BACKEND_DIR)
+        / "app"
+        / "migrations"
+        / "versions"
+        / f"{REVISION}_sw_member_ingest_coverage.py"
+    )
+    text2 = path2.read_text()
+    assert f'down_revision: str | None = "{PREV_REVISION}"' in text2
+    assert "fully_ingested" in text2 and "rows_inserted" in text2
+    # 只允许动这两张新表；不得出现对既有 sw_industry_members 的 DDL（注释里的提及不算）
+    ddl_body = text2.split('"""', 2)[-1]
+    assert "sw_industry_members\n" not in ddl_body.replace("sw_industry_member_periods", ""), (
+        "不得对既有 sw_industry_members 做 DDL"
+    )
+
 
 @requires_pg
 def test_migration_up_down_up_round_trip() -> None:
-    """down 掉两表 → up 回来；失败也把库恢复到 head。"""
+    """降一级（覆盖列消失）→ 升回 head（覆盖列回来）；失败也把库恢复到 head。"""
 
-    async def _table_exists(name: str) -> bool:
-        rows = await _fetch("SELECT to_regclass($1) AS t", f"public.{name}")
-        return rows[0]["t"] is not None
+    async def _cols() -> list[str]:
+        rows = await _fetch(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'sw_member_ingest_runs'"
+        )
+        return [r["column_name"] for r in rows]
 
     _alembic("upgrade", "head")
-    assert asyncio.run(_table_exists("sw_industry_member_periods"))
+    assert "fully_ingested" in asyncio.run(_cols())
     try:
         _alembic("downgrade", PREV_REVISION)
-        assert not asyncio.run(_table_exists("sw_industry_member_periods"))
-        assert not asyncio.run(_table_exists("sw_member_ingest_runs"))
+        assert "fully_ingested" not in asyncio.run(_cols())
         _alembic("upgrade", "head")
-        assert asyncio.run(_table_exists("sw_industry_member_periods"))
+        assert "fully_ingested" in asyncio.run(_cols())
     finally:
         _alembic("upgrade", "head")
 
@@ -206,7 +251,12 @@ def test_index_mapping_covers_all_three_levels() -> None:
     assert all(r.index_code.endswith(".SI") for r in refs)
 
 
-# ── 4/5) 规范化 + 幂等 ─────────────────────────────────────────────────
+def test_default_levels_are_all_three() -> None:
+    """默认必须灌全部三级 —— C1 的根因就是"只灌 L3 再上卷"。"""
+    assert scd2.DEFAULT_LEVELS == (1, 2, 3)
+
+
+# ── 4/5) 规范化 + 幂等 + 新增/更新计数 ─────────────────────────────────
 
 
 def _frame(records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -259,13 +309,13 @@ def test_normalize_member_rows_rejects_missing_columns() -> None:
 
 
 @requires_pg
-def test_upsert_is_idempotent_on_unique_key() -> None:
-    """同一份上游行跑两次 → 第二次新增行 0（唯一键生效）。"""
-    ref = scd2.SwIndexRef("990001", "999901.SI", 3, "测试行业")
+def test_upsert_is_idempotent_and_counts_are_distinguishable() -> None:
+    """同一份上游行跑两次 → 第二次新增行 0；`rows_inserted/updated` 能区分两种情形。"""
+    ref = scd2.SwIndexRef("993001", "999903.SI", 3, "测试行业")
     df = _frame(
         [
             {
-                "index_code": "999901.SI",
+                "index_code": "999903.SI",
                 "con_code": "600000.SH",
                 "in_date": "20200102",
                 "out_date": None,
@@ -275,43 +325,35 @@ def test_upsert_is_idempotent_on_unique_key() -> None:
     )
     rows = scd2.normalize_member_rows(df, ref)
 
-    async def _scenario(db: AsyncSession) -> tuple[int, int, int]:
-        await scd2.upsert_period_rows(db, rows)
+    async def _scenario(db: AsyncSession) -> tuple[int, int, int, int, int]:
+        first_ins, first_upd = await scd2.upsert_period_rows(db, rows)
         await db.flush()
-        first = (
+        count1 = (
             await db.execute(
-                text(
-                    "SELECT count(*) FROM sw_industry_member_periods WHERE industry_code = '990001'"
-                )
+                text("SELECT count(*) FROM sw_industry_member_periods WHERE industry_code='993001'")
             )
         ).scalar_one()
-        await scd2.upsert_period_rows(db, rows)
+        second_ins, _second_upd = await scd2.upsert_period_rows(db, rows)
         await db.flush()
-        second = (
-            await db.execute(
-                text(
-                    "SELECT count(*) FROM sw_industry_member_periods WHERE industry_code = '990001'"
-                )
-            )
-        ).scalar_one()
         dup = (
             await db.execute(
                 text(
                     "SELECT count(*) FROM (SELECT industry_code, stock_code, effective_from "
-                    "FROM sw_industry_member_periods WHERE industry_code = '990001' "
+                    "FROM sw_industry_member_periods WHERE industry_code='993001' "
                     "GROUP BY 1,2,3 HAVING count(*) > 1) d"
                 )
             )
         ).scalar_one()
-        return first, second, dup
+        return first_ins, first_upd, count1, second_ins, dup
 
-    first, second, dup = asyncio.run(_with_rollback(_scenario))
-    assert first == 1
-    assert second == 1, "重跑同一份数据不得新增行"
+    first_ins, first_upd, count1, second_ins, dup = asyncio.run(_with_rollback(_scenario))
+    assert (first_ins, first_upd) == (1, 0), "首次写入应记为 inserted"
+    assert count1 == 1
+    assert second_ins == 0, "重跑同一份数据不得新增行（inserted=0，而不是 len(rows)）"
     assert dup == 0, "唯一键上不得出现重复区间"
 
 
-# ── 6/7) SCD2 区间还原 + as_of 上界（纯 SQL，不依赖库内已灌数据）────────
+# ── 6/7) SCD2 区间还原 + as_of 上界 ─────────────────────────────────────
 
 
 _PERIOD_COLUMNS = (
@@ -355,12 +397,10 @@ def _period(
 def test_scd2_interval_reconstruction_picks_period_valid_at_query_day() -> None:
     """三段区间的同一只股票：两个历史日各取到"当日有效"的那一段（SCD2 机制）。"""
     rows = [
-        # 600001 在 990002 三次进出：…2009 段 / 2015-2017 段 / 2021 至今段
-        _period("990002", "600001.SH", date(2007, 7, 3), date(2009, 6, 1), False),
-        _period("990002", "600001.SH", date(2015, 7, 1), date(2017, 6, 30), False),
-        _period("990002", "600001.SH", date(2021, 12, 13), None, True),
-        # 600002 只在中段：用来证明"当日不在成分"与"没有记录"不是一回事
-        _period("990002", "600002.SH", date(2015, 7, 1), date(2017, 6, 30), False),
+        _period("993002", "600001.SH", date(2007, 7, 3), date(2009, 6, 1), False),
+        _period("993002", "600001.SH", date(2015, 7, 1), date(2017, 6, 30), False),
+        _period("993002", "600001.SH", date(2021, 12, 13), None, True),
+        _period("993002", "600002.SH", date(2015, 7, 1), date(2017, 6, 30), False),
     ]
     query = text(
         "SELECT stock_code, effective_from, effective_to "
@@ -374,115 +414,154 @@ def test_scd2_interval_reconstruction_picks_period_valid_at_query_day() -> None:
         await _insert_periods(db, rows)
         out: dict[str, list[tuple[Any, ...]]] = {}
         for label, day in (
-            ("2016-01-04", date(2016, 1, 4)),
-            ("2022-01-04", date(2022, 1, 4)),
-            ("2008-01-02", date(2008, 1, 2)),
+            ("mid", date(2016, 1, 4)),
+            ("now", date(2022, 1, 4)),
+            ("early", date(2008, 1, 3)),
         ):
-            got = (await db.execute(query, {"code": "990002", "d": day})).all()
+            got = (await db.execute(query, {"code": "993002", "d": day})).all()
             out[label] = [tuple(r) for r in got]
         return out
 
     out = asyncio.run(_with_rollback(_scenario))
-    assert out["2016-01-04"] == [
+    assert out["mid"] == [
         ("600001.SH", date(2015, 7, 1), date(2017, 6, 30)),
         ("600002.SH", date(2015, 7, 1), date(2017, 6, 30)),
     ]
-    assert out["2022-01-04"] == [("600001.SH", date(2021, 12, 13), None)]
-    # 2008-01-02 落在第一段内（2007-07-03 ~ 2009-06-01）
-    assert out["2008-01-02"] == [("600001.SH", date(2007, 7, 3), date(2009, 6, 1))]
+    assert out["now"] == [("600001.SH", date(2021, 12, 13), None)]
+    # 2008-01-03 落在第一段内（2007-07-03 ~ 2009-06-01）
+    assert out["early"] == [("600001.SH", date(2007, 7, 3), date(2009, 6, 1))]
 
 
 @requires_pg
-def test_member_as_of_is_none_without_successful_run() -> None:
-    """没有任何成功 ingest 时读面必须返回 None（= 读面声明"尚无 SCD2"，不是"当日无成分"）。"""
+def test_member_as_of_only_counts_fully_ingested_ok_runs() -> None:
+    """**只认** ``fully_ingested=True AND status='ok'``（Fix round 1 · 评审 I1）。
 
-    async def _scenario(db: AsyncSession) -> tuple[date | None, date | None]:
-        # 事务内看不到别人已提交的 run 记录吗？看得到——但为避免依赖库内既有数据，
-        # 这里只断言"删掉全部成功记录后为 None"，故先在事务里 DELETE 成功记录。
-        await db.execute(text("DELETE FROM sw_member_ingest_runs WHERE status = 'ok'"))
+    ``status='partial'`` 与 ``--limit`` 截断的运行都**不得**抬高上界 ——
+    这是 C1 当初没被发现的直接原因。
+    """
+
+    async def _scenario(db: AsyncSession) -> tuple[Any, ...]:
+        await db.execute(text("DELETE FROM sw_member_ingest_runs"))
         await db.flush()
         without = await scd2.get_member_as_of(db)
         db.add(
-            SwMemberIngestRun(as_of=date(2026, 10, 12), index_codes=1, rows_upserted=1, status="ok")
-        )
-        await db.flush()
-        with_run = await scd2.get_member_as_of(db)
-        return without, with_run
-
-    without, with_run = asyncio.run(_with_rollback(_scenario))
-    assert without is None
-    assert with_run == date(2026, 10, 12)
-
-
-@requires_pg
-def test_member_as_of_ignores_partial_runs() -> None:
-    """`status='partial'` 的运行不得抬高 as_of 上界（只认整批成功的）。"""
-
-    async def _scenario(db: AsyncSession) -> date | None:
-        await db.execute(text("DELETE FROM sw_member_ingest_runs"))
-        db.add(
-            SwMemberIngestRun(as_of=date(2026, 1, 1), index_codes=1, rows_upserted=1, status="ok")
-        )
-        db.add(
             SwMemberIngestRun(
-                as_of=date(2026, 6, 1), index_codes=1, rows_upserted=1, status="partial"
+                as_of=date(2026, 6, 1),
+                index_codes=1,
+                rows_upserted=1,
+                rows_inserted=1,
+                fully_ingested=False,
+                status="partial",
             )
         )
         await db.flush()
-        return await scd2.get_member_as_of(db)
+        only_partial = await scd2.get_member_as_of(db)
+        db.add(
+            SwMemberIngestRun(
+                as_of=date(2026, 9, 1),
+                index_codes=20,
+                rows_upserted=20,
+                rows_inserted=20,
+                fully_ingested=False,
+                status="partial",
+            )
+        )
+        await db.flush()
+        with_limit = await scd2.get_member_as_of(db)
+        db.add(
+            SwMemberIngestRun(
+                as_of=date(2026, 10, 12),
+                index_codes=511,
+                rows_upserted=100,
+                rows_inserted=100,
+                fully_ingested=True,
+                status="ok",
+            )
+        )
+        await db.flush()
+        full_ok = await scd2.get_member_as_of(db)
+        return without, only_partial, with_limit, full_ok
 
-    assert asyncio.run(_with_rollback(_scenario)) == date(2026, 1, 1)
+    without, only_partial, with_limit, full_ok = asyncio.run(_with_rollback(_scenario))
+    assert without is None
+    assert only_partial is None, "status='partial' 不得抬高口径日"
+    assert with_limit is None, "limit 截断的运行不得抬高口径日（C1 未被发现的根因）"
+    assert full_ok == date(2026, 10, 12)
 
 
-# ── 8) 31/31 无断链（直连 SQL；不依赖库内既有 SCD2 数据）─────────────────
+def test_floor_assertions_flag_zero_and_collapse() -> None:
+    """下界断言的绿/红输入（Fix round 1 · 评审 I5；破坏验证见报告）。"""
+    # 绿：三层都有指数、都有行
+    assert scd2._check_level_floors({1: (31, 7740), 2: (134, 8170), 3: (346, 7624)}, {}) == []
+    # 红 1：某层 0 个成功指数 / 0 行
+    bad1 = scd2._check_level_floors({1: (0, 0), 3: (346, 7624)}, {})
+    assert any("L1 成功指数为 0" in r for r in bad1)
+    assert any("L1 区间行总数为 0" in r for r in bad1)
+    # 红 2：单层行数塌方（-33% 超过 20% 阈值）
+    bad2 = scd2._check_level_floors({1: (31, 3500)}, {1: 5211})
+    assert any("跌" in r for r in bad2), bad2
+    # 绿：跌幅在阈值内（-10%）
+    assert scd2._check_level_floors({1: (31, 4690)}, {1: 5211}) == []
+
+
+class _FakeTuShare:
+    """只回一行成分的假上游（用于验证"截断运行不抬高上界"的行为层）。"""
+
+    async def fetch_index_member(self, index_code: str = "") -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "index_code": index_code,
+                    "con_code": "600000.SH",
+                    "in_date": "20200102",
+                    "out_date": None,
+                    "is_new": "Y",
+                }
+            ]
+        )
 
 
 @requires_pg
-def test_all_31_l1_industries_have_l2_and_l3_chain() -> None:
-    """31 个一级行业**每个**都有 ≥1 个二级、且经二级有 ≥1 个三级（树层无断链）。
+def test_limit_run_is_recorded_as_not_fully_ingested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--limit`` 冒烟运行必须落 ``fully_ingested=False`` + ``status='partial'``（I1 行为层）。"""
+    from app.services import sw_member_scd2_service as svc
 
-    覆盖两棵树：
-    * ``sw_industry_classes``（本地分类树）——必须 31/134/346 且层次计数自洽；
-    * ``data/sw_index_mapping.csv``（上游指数对照）——L3 必须 100% 能沿
-      ``parent_code`` 上卷到 L1（这是 drill 读路 SQL 的 ``JOIN parent_code`` 前提）。
-    """
+    async def _fake_names(_db: Any) -> dict[str, str]:
+        return {}
 
-    async def _go() -> list[asyncpg.Record]:
-        return await _fetch(
-            """
-            SELECT c1.industry_code AS l1,
-                   count(DISTINCT c2.industry_code) AS l2_count,
-                   count(DISTINCT c3.industry_code) AS l3_count
-            FROM sw_industry_classes c1
-            LEFT JOIN sw_industry_classes c2
-                   ON c2.parent_code = c1.industry_code AND c2.level = 2
-            LEFT JOIN sw_industry_classes c3
-                   ON c3.parent_code = c2.industry_code AND c3.level = 3
-            WHERE c1.level = 1
-            GROUP BY c1.industry_code
-            ORDER BY c1.industry_code
-            """
+    monkeypatch.setattr(svc, "_stock_names", _fake_names)
+    import app.core.providers.tushare_client as tc
+
+    monkeypatch.setattr(tc, "get_tushare_client", lambda: _FakeTuShare())
+
+    async def _scenario(db: AsyncSession) -> tuple[Any, Any, dict[str, Any]]:
+        await db.execute(text("DELETE FROM sw_member_ingest_runs"))
+        # 先把它放进分类树，否则 ingest 会把它当"孤儿代码"记 failed 而不是截断
+        await db.execute(
+            text(
+                "INSERT INTO sw_industry_classes "
+                "(industry_code, level, industry_name, parent_code) VALUES "
+                "('994001', 3, '限流测试', NULL), ('994002', 3, '限流测试2', NULL)"
+            )
         )
+        await db.flush()
+        refs = [
+            scd2.SwIndexRef("994001", "999904.SI", 3, "限流测试"),
+            scd2.SwIndexRef("994002", "999905.SI", 3, "限流测试2"),
+        ]
+        res = await svc.ingest_sw_member_periods(db, levels=(3,), limit=1, refs=refs)
+        after = await svc.get_member_as_of(db)
+        last = await svc.get_last_run(db) or {}
+        return res, after, last
 
-    rows = asyncio.run(_go())
-    if not rows:
-        pytest.skip("sw_industry_classes 为空（需先导入 data/sw_seed.sql）")
-
-    assert len(rows) == 31, f"一级行业应为 31 个，实得 {len(rows)}"
-    broken = [r["l1"] for r in rows if r["l2_count"] == 0 or r["l3_count"] == 0]
-    assert broken == [], f"以下一级行业断链（缺 L2 或 L3）：{broken}"
-    assert sum(r["l3_count"] for r in rows) == 346
-
-
-def test_index_mapping_l3_all_roll_up_to_l1() -> None:
-    """纯函数层：346 个 L3 的 ``parent_code`` 前缀链必须能上卷到某个 L1 代码。"""
-    refs = scd2.parse_sw_index_mapping()
-    l1 = {r.industry_code for r in refs if r.level == 1}
-    # 本地代码是层次编码：L1=前 2 位+0000，L2=前 4 位+00，L3=6 位
-    unresolved = [
-        r.industry_code for r in refs if r.level == 3 and f"{r.industry_code[:2]}0000" not in l1
-    ]
-    assert unresolved == [], f"以下 L3 无法上卷到 L1：{unresolved[:10]}"
+    res, after, last = asyncio.run(_with_rollback(_scenario))
+    assert res.fully_ingested is False
+    assert res.status == "partial"
+    assert after is None, "截断运行的 as_of 不得成为读面口径日"
+    assert last["status"] == "partial"
+    assert "limit 截断" in str(last["detail"]), f"detail 应写明截断：{last['detail']}"
 
 
 def test_scd2_query_day_falls_back_to_today() -> None:
@@ -494,16 +573,11 @@ def test_scd2_query_day_falls_back_to_today() -> None:
     assert _scd2_query_day(None, date(2026, 1, 1)) == date(2026, 1, 1)
     fallback = _scd2_query_day(None, None)
     assert isinstance(fallback, date)
-    # 兜底日必须"不太旧"：与今天相差不超过 1 天（时区边界）
     assert abs((date.today() - fallback).days) <= 1
 
 
 def test_scd2_interval_semantics_are_half_open() -> None:
-    """区间是 **[effective_from, effective_to)**：`effective_to` 当天已不算成分。
-
-    与上游 ``out_date`` 的语义一致（实测样例：``000034.SZ`` 段
-    ``20070703 ~ 20090601``，2009-06-01 当天不在此行业）。
-    """
+    """区间是 **[effective_from, effective_to)**：`effective_to` 当天已不算成分。"""
     from datetime import timedelta as _td
 
     start, end = date(2015, 7, 1), date(2017, 6, 30)
@@ -515,3 +589,318 @@ def test_scd2_interval_semantics_are_half_open() -> None:
     assert in_period(end - _td(days=1))
     assert not in_period(end)
     assert not in_period(start - _td(days=1))
+
+
+def test_assemble_quote_never_substitutes_zero() -> None:
+    """空聚合行（LEFT JOIN 全空）→ 所有字段 `None`，**没有一个是 0**。"""
+    from app.services.sw_drilldown_service import assemble_quote
+
+    empty: dict[str, Any] = dict.fromkeys(
+        (
+            "median_open",
+            "median_high",
+            "median_low",
+            "median_close",
+            "pct_chg_weighted",
+            "turnover_rate_weighted",
+            "sum_volume",
+            "volume_ratio_weighted",
+            "amplitude",
+            "sum_amount_all",
+        )
+    )
+    empty.update(dict.fromkeys(("member_count", "quoted_count", "up_count", "down_count"), 0))
+    empty.update(
+        dict.fromkeys(
+            (
+                "pct_chg_covered",
+                "turnover_rate_covered",
+                "volume_covered",
+                "volume_ratio_covered",
+                "amplitude_covered",
+                "amount_covered",
+            ),
+            0,
+        )
+    )
+    q = assemble_quote(empty, code="993003", name="测试三级", level=3, parent_code="993002")
+    for field in (
+        "pct_chg_weighted",
+        "turnover_rate_weighted",
+        "volume",
+        "volume_ratio_weighted",
+        "amplitude",
+        "amount",
+    ):
+        assert getattr(q, field) is None, f"{field} 在无数据时必须为 None（不得为 0）"
+    assert q.kline_median.open is None and q.kline_median.close is None
+    assert q.member_count == 0 and q.amount_covered == 0
+
+
+# ── 8/9) 自身层级优先 + 31/31 无断链（自建树，不静默跳过）────────────────
+
+_TREE_ROWS = [
+    (L1, 1, "测试一级", None),
+    (L2, 2, "测试二级", L1),
+    (L3, 3, "测试三级", L2),
+]
+
+
+async def _seed_tree(db: AsyncSession, as_of: date) -> None:
+    """在**事务内**建最小分类树 + 两层各自的 SCD2 成员。
+
+    L1 自身层级有 2 只（``992001/992002``），L3 只有 1 只（``992001``）——
+    这样"自身层级 vs 上卷"必然不同，C1 的回归就能被测到（旧实现返回 1）。
+    """
+    for code, level, name, parent in _TREE_ROWS:
+        await db.execute(
+            text(
+                "INSERT INTO sw_industry_classes "
+                "(industry_code, level, industry_name, parent_code) VALUES (:c, :l, :n, :p)"
+            ),
+            {"c": code, "l": level, "n": name, "p": parent},
+        )
+    await _insert_periods(
+        db,
+        [
+            _period(L1, "992001.SH", as_of, None, True),
+            _period(L1, "992002.SH", as_of, None, True),
+        ],
+    )
+    await _insert_periods(db, [_period(L3, "992001.SH", as_of, None, True)])
+
+
+@requires_pg
+def test_member_source_prefers_own_level_then_rollup() -> None:
+    """C1 回归：L1 用**自身层级**（2 只），L3 用自身层级（1 只）；两者不等价且如实标注。"""
+    from app.services.sw_drilldown_service import (
+        MEMBER_SOURCE_LEVEL,
+        get_level_items,
+        get_members,
+    )
+
+    async def _scenario(db: AsyncSession) -> tuple[Any, Any, Any]:
+        await _seed_tree(db, ASOF)
+        l1_items = await get_level_items(db, None, as_of=ASOF)
+        l1_node = next(i for i in l1_items.items if i.code == L1)
+        l3_list = await get_level_items(db, None, level1_code=L1, level2_code=L2, as_of=ASOF)
+        l3_node = next(i for i in l3_list.items if i.code == L3)
+        members = await get_members(
+            db, None, level1_code=L1, level2_code=L2, level3_code=L3, as_of=ASOF
+        )
+        return l1_node, l3_node, members
+
+    l1_node, l3_node, members = asyncio.run(_with_rollback(_scenario))
+
+    assert l1_node.metrics is not None
+    assert l1_node.metrics.member_source == MEMBER_SOURCE_LEVEL
+    assert l1_node.metrics.member_count == 2, (
+        "L1 必须取自身层级的 2 只；旧实现（硬钉 level=3 上卷）会返回 1 只 —— 这就是 C1"
+    )
+    assert l1_node.metrics.member_source_note is None
+
+    assert l3_node.metrics is not None
+    assert l3_node.metrics.member_source == MEMBER_SOURCE_LEVEL
+    assert l3_node.metrics.member_count == 1
+
+    # 末级页：chain 的每一级都带**真实**成分数（不是 0 占位）。
+    # L1 = 自身层级 2 只；L2 自身层级无记录 → 上卷（其唯一 L3 只有 1 只）；L3 = 1 只
+    assert [c.stock_count for c in members.chain] == [2, 1, 1]
+    assert members.metrics is not None and members.metrics.member_count == 1
+
+
+@requires_pg
+def test_rollup_fallback_is_labelled_not_claimed_equivalent() -> None:
+    """节点自身层级无记录时退回上卷，并**明确标注**不等价（不静默、不冒充等价）。"""
+    from app.services.sw_drilldown_service import (
+        MEMBER_SOURCE_ROLLUP,
+        ROLLUP_NOTE,
+        get_level_items,
+    )
+
+    async def _scenario(db: AsyncSession) -> Any:
+        for code, level, name, parent in _TREE_ROWS:
+            await db.execute(
+                text(
+                    "INSERT INTO sw_industry_classes "
+                    "(industry_code, level, industry_name, parent_code) VALUES (:c,:l,:n,:p)"
+                ),
+                {"c": code, "l": level, "n": name, "p": parent},
+            )
+        await _insert_periods(db, [_period(L3, "992001.SH", ASOF, None, True)])
+        return await get_level_items(db, None, as_of=ASOF)
+
+    out = asyncio.run(_with_rollback(_scenario))
+    node = next(i for i in out.items if i.code == L1)
+    assert node.metrics is not None
+    assert node.metrics.member_source == MEMBER_SOURCE_ROLLUP
+    assert node.metrics.member_count == 1
+    assert node.metrics.member_source_note == ROLLUP_NOTE, "上卷必须带「不等于上游」的明确说明"
+
+
+@requires_pg
+def test_all_31_l1_industries_drill_to_l3_with_members() -> None:
+    """31 个一级行业**每个**都有 L2、每 L2 有 L3、每 L1 至少 1 个当日成分。
+
+    **自建树 + 自建 as_of，不 skip**（Fix round 1 · 评审 I4）：旧版本在
+    ``sw_industry_classes`` 为空时 ``pytest.skip``，而 conftest 从不灌 seed ——
+    CI 上这条断言会静默消失、套件照样绿。这里在事务内**真造** 31 个一级行业
+    （每个 1 个 L2 + 1 个 L3 + 1 只当日成分），断言 31/31 无断链。
+    """
+
+    async def _scenario(db: AsyncSession) -> list[tuple[str, int, int, int]]:
+        for i in range(31):
+            l1 = f"99{i:02d}000"
+            l2 = f"99{i:02d}100"
+            l3 = f"99{i:02d}101"
+            sym = f"99{i:02d}01"
+            for code, level, name, parent in (
+                (l1, 1, f"合成一级{i}", None),
+                (l2, 2, f"合成二级{i}", l1),
+                (l3, 3, f"合成三级{i}", l2),
+            ):
+                await db.execute(
+                    text(
+                        "INSERT INTO sw_industry_classes "
+                        "(industry_code, level, industry_name, parent_code) VALUES (:c,:l,:n,:p)"
+                    ),
+                    {"c": code, "l": level, "n": name, "p": parent},
+                )
+            await _insert_periods(db, [_period(l3, f"{sym}.SH", ASOF, None, True)])
+        rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT c1.industry_code AS l1,
+                           count(DISTINCT c2.industry_code) AS l2_count,
+                           count(DISTINCT c3.industry_code) AS l3_count,
+                           count(DISTINCT m.symbol) AS members
+                    FROM sw_industry_classes c1
+                    LEFT JOIN sw_industry_classes c2
+                           ON c2.parent_code = c1.industry_code AND c2.level = 2
+                    LEFT JOIN sw_industry_classes c3
+                           ON c3.parent_code = c2.industry_code AND c3.level = 3
+                    LEFT JOIN sw_industry_member_periods m
+                           ON m.industry_code = c3.industry_code
+                          AND m.effective_from <= :d
+                          AND (m.effective_to IS NULL OR :d < m.effective_to)
+                    WHERE c1.level = 1 AND c1.industry_code LIKE '99%'
+                    GROUP BY c1.industry_code
+                    ORDER BY c1.industry_code
+                    """
+                ),
+                {"d": ASOF},
+            )
+        ).all()
+        return [(r[0], int(r[1]), int(r[2]), int(r[3])) for r in rows]
+
+    rows = asyncio.run(_with_rollback(_scenario))
+    assert len(rows) == 31, f"一级行业应为 31 个，实得 {len(rows)}"
+    broken = [r for r in rows if r[1] == 0 or r[2] == 0 or r[3] == 0]
+    assert broken == [], f"以下一级行业断链（L2/L3/当日成分）：{broken}"
+
+
+async def _has_real_tree() -> bool:
+    rows = await _fetch(
+        "SELECT count(*) AS n FROM sw_industry_classes WHERE level = 1 AND industry_code LIKE '1%'"
+    )
+    return bool(rows and rows[0]["n"])
+
+
+@requires_pg
+def test_seeded_tree_chain_when_available() -> None:
+    """库内**真有**申万树时按真实树核对 31/134/346。
+
+    树为空时直接返回（无断言）——"无树"是环境事实，而"31/31 无断链"这条不变量
+    已由 ``test_all_31_l1_industries_drill_to_l3_with_members`` 用合成树锁住，
+    故本用例不需要 skip 也不会假绿。
+    """
+
+    async def _go() -> asyncpg.Record:
+        rows = await _fetch(
+            """
+            SELECT count(*) FILTER (WHERE level = 1) AS l1,
+                   count(*) FILTER (WHERE level = 2) AS l2,
+                   count(*) FILTER (WHERE level = 3) AS l3
+            FROM sw_industry_classes
+            WHERE industry_code ~ '^[1-7][0-9]{2}'
+            """
+        )
+        return rows[0]
+
+    row = asyncio.run(_go())
+    if not row["l1"]:
+        return
+    assert int(row["l1"]) == 31, f"真实树 L1 = {row['l1']}，期望 31"
+    assert int(row["l2"]) == 134, f"真实树 L2 = {row['l2']}，期望 134"
+    assert int(row["l3"]) == 346, f"真实树 L3 = {row['l3']}，期望 346"
+
+
+@requires_pg
+def test_real_tree_l3_all_roll_up_via_parent_code() -> None:
+    """真实树里 346 个 L3 **逐个**沿 ``parent_code`` 上卷到某个 L1（读 DB，不是字符串前缀）。"""
+    if not asyncio.run(_has_real_tree()):
+        return
+
+    async def _go() -> list[asyncpg.Record]:
+        # 从每个 L3 出发，递归沿 parent_code 往上走，必须至少命中一个 level=1。
+        # 递归项必须**重新取一遍分类树行**（不能把锚点里的 level=3 带上去，
+        # 否则向上走到的祖先会一直标着 level=3，`filter (level=1)` 永远为空）
+        return await _fetch(
+            """
+            WITH RECURSIVE up AS (
+                SELECT industry_code, parent_code, level,
+                       industry_code AS root
+                FROM sw_industry_classes WHERE level = 3
+              UNION ALL
+                SELECT c.industry_code, c.parent_code, c.level, up.root
+                FROM sw_industry_classes c JOIN up ON c.industry_code = up.parent_code
+            )
+            SELECT root AS l3
+            FROM up
+            GROUP BY root
+            HAVING count(*) FILTER (WHERE level = 1) = 0
+            ORDER BY root
+            """
+        )
+
+    unresolved = asyncio.run(_go())
+    assert unresolved == [], (
+        f"以下 L3 沿真实 parent_code 链上卷不到 L1：{[r['l3'] for r in unresolved[:10]]}"
+    )
+
+
+@requires_pg
+def test_chain_validation_rejects_mismatched_pair() -> None:
+    """层级不构成父子关系时必须 404（LookupError），而不是返回 0 成员节点。"""
+    from app.services.sw_drilldown_service import get_members
+
+    async def _scenario(db: AsyncSession) -> None:
+        await _seed_tree(db, ASOF)
+        await db.execute(
+            text(
+                "INSERT INTO sw_industry_classes "
+                "(industry_code, level, industry_name, parent_code) "
+                "VALUES ('992999', 2, '野二级', NULL)"
+            )
+        )
+        await get_members(
+            db, None, level1_code=L1, level2_code="992999", level3_code=L3, as_of=ASOF
+        )
+
+    with pytest.raises(LookupError, match="不属于"):
+        asyncio.run(_with_rollback(_scenario))
+
+
+@requires_pg
+def test_duplicate_period_key_is_rejected() -> None:
+    """唯一键含 ``effective_to`` 后，同键重复行仍必须被数据库拒绝。"""
+
+    async def _scenario(db: AsyncSession) -> None:
+        row = [_period("995001", "600009.SH", date(2020, 1, 1), date(2021, 1, 1), False)]
+        await _insert_periods(db, row)
+        await _insert_periods(db, row)
+
+    with pytest.raises(Exception) as exc_info:
+        asyncio.run(_with_rollback(_scenario))
+    assert "uq_sw_member_period_code_stock_from_to" in str(exc_info.value)

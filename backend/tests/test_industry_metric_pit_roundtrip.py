@@ -42,6 +42,25 @@ from app.services import industry_metric_service as service
 REVISION = "f1a2b3c4d5e6"
 PREV_REVISION = "a9b3c7d1e5f2"
 
+# Fix round 1 · 评审 I2：**破坏性 downgrade 必须显式 opt-in**。
+#
+# 为什么：`downgrade a9b3c7d1e5f2` 是 f1a2b3c4d5e6 之前两个版本，会**连带 drop**
+# 之后所有迁移建的表——包括 S1.4 的 `sw_industry_member_periods` /
+# `sw_member_ingest_runs`（`b4c5d6e7f8a9` / `c5d6e7f8a9b0`）。而 `ASYNC_URL` 会回退到
+# `DATABASE_URL`，所以"顺手跑一次 pytest"在指向 dev 库时**会清空已回填的 SCD2 历史**。
+# 默认 addopts 会跑本文件，故必须默认跳过；要验证迁移往返时显式打开：
+#     SC_DESTRUCTIVE_MIGRATION_TESTS=1 .venv/bin/python -m pytest \\
+#         tests/test_industry_metric_pit_roundtrip.py
+# 运营顺序（先跑测试、再回填）见 docs/deployment/index.md「S1.4 申万成分 SCD2 的运维顺序」。
+_ALLOW_DESTRUCTIVE = os.environ.get("SC_DESTRUCTIVE_MIGRATION_TESTS") == "1"
+no_destructive = pytest.mark.skipif(
+    not _ALLOW_DESTRUCTIVE,
+    reason=(
+        "破坏性迁移往返（downgrade 到 f1a2b3c4d5e6 之前）会 drop 更晚的表；"
+        "设 SC_DESTRUCTIVE_MIGRATION_TESTS=1 显式启用"
+    ),
+)
+
 # 目标库 = stock_bot_test（Ruling 17）；与 brief 的运行环境变量一致
 _DEFAULT_ASYNC = "postgresql+asyncpg://stock_user:stock_pass@localhost:5433/stock_bot_test"
 ASYNC_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL") or _DEFAULT_ASYNC
@@ -134,8 +153,13 @@ def test_migration_file_has_no_create_table() -> None:
 
 
 @requires_pg
+@no_destructive
 def test_migration_up_down_up_round_trip() -> None:
-    """down 掉两列 → up 回来。失败也把库恢复到 head（不把库留在中间版本）。"""
+    """down 掉两列 → up 回来。失败也把库恢复到 head（不把库留在中间版本）。
+
+    **默认跳过**（`SC_DESTRUCTIVE_MIGRATION_TESTS=1` 才跑）：该 downgrade 会连带
+    drop 更晚迁移建的表（S1.4 的 SCD2 两表），默认 addopts 下跑一次就会清空回填历史。
+    """
     _alembic("upgrade", "head")
     assert set(asyncio.run(_column_state())) == {"published_at", "caliber_version"}
     try:
