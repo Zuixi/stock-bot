@@ -13,6 +13,8 @@ const MarketHeatmapPage = lazy(() => import("@/pages/market-heatmap"));
 const MarketIndexPage = lazy(() => import("@/pages/market-index"));
 const IndustryLevel2Page = lazy(() => import("@/pages/market-industry-level2"));
 const IndustryLevel3Page = lazy(() => import("@/pages/market-industry-level3"));
+const MarketHotSectorsPage = lazy(() => import("@/pages/market-hot-sectors"));
+const ConceptBoardPage = lazy(() => import("@/pages/market-concept"));
 const StockDetailPage = lazy(() => import("@/pages/stock-detail"));
 const WatchlistPage = lazy(() => import("@/pages/watchlist"));
 const TagsPage = lazy(() => import("@/pages/tags"));
@@ -63,7 +65,9 @@ function LegacyTagRedirect() {
 
 /**
  * 应用路由表。**本文件是 IA 文档 §4「完整路由表（既有 15 条，一条不漏）」的落地**：
- * 10 条 redirect（`<Navigate replace>`，不得静默 404）+ 5 条保留（语义未变）。
+ * 8 条 redirect（`<Navigate replace>`，不得静默 404）+ 7 条保留（语义未变）。
+ * （Ruling 30 后：`/market/hot-sectors/:category` 与 `/market/concept/:boardCode` 退回「保留」，
+ *   因为它们的 redirect 目标 `/market/heatmap` 今天还是占位页——redirect 不许把可用页面换成占位页。）
  * 逐条对照的机械校验见 `scripts/check-routes.mjs`。
  *
  * 权限三态（IA §1 / ADR 0008，**不新增 scope**）：
@@ -92,7 +96,8 @@ export function AppRouter() {
           path="/market/industry/:level1Code/:level2Code"
           element={withSuspense(<IndustryLevel3Page />)}
         />
-        {/* `/market/hot-sectors/:category` 与 `/market/concept/:boardCode` 共用此目标页 */}
+        {/* `/market/heatmap`：**不是任何 redirect 的目标**——S1.5 才落地真热力图。
+            Ruling 30：redirect 不得把"今天可用的页面"换成"今天的占位页" */}
         <Route path="/market/heatmap" element={withSuspense(<MarketHeatmapPage />)} />
         {/* `/index/:tsCode` → 此处（参数名保持 :tsCode） */}
         <Route path="/market/index/:tsCode" element={withSuspense(<MarketIndexPage />)} />
@@ -143,42 +148,30 @@ export function AppRouter() {
         />
 
         {/* ══ 旧路由 10 条 redirect（IA §4；目标必须逐字一致）══════════════ */}
-        {/* 1-3 市场三兄弟（处理后仍公开） */}
+        {/* 1 市场分类（处理后仍公开）——共 8 条 redirect */}
         <Route path="/market/category" element={<Navigate to="/market/industry" replace />} />
-        <Route
-          path="/market/hot-sectors/:category"
-          element={<LegacyMarketHotSectorsRedirect />}
-        />
-        <Route path="/market/concept/:boardCode" element={<LegacyMarketConceptRedirect />} />
-        {/* 4-5 指数 / 个股（处理后仍公开） */}
+        {/* 2-3 指数 / 个股（处理后仍公开） */}
         <Route path="/index/:tsCode" element={<LegacyIndexRedirect />} />
         <Route path="/stock/:symbol" element={<LegacyStockRedirect />} />
-        {/* 6-7 投研（必须继续兑现 research:read，redirect 不得放宽为"登录即可"） */}
+        {/* 4-5 投研（必须继续兑现 research:read，redirect 不得放宽为"登录即可"） */}
         <Route path="/research" element={<Navigate to="/industry" replace />} />
         <Route path="/research/:industryKey" element={<LegacyResearchRedirect />} />
-        {/* 8-10 自选 / 标签（登录即可，与现状相同） */}
+        {/* 6-8 自选 / 标签（登录即可，与现状相同） */}
         <Route path="/watchlist" element={<Navigate to="/me?tab=watchlist" replace />} />
         <Route path="/tags" element={<Navigate to="/me?tab=tags" replace />} />
         <Route path="/tags/:tagName" element={<LegacyTagRedirect />} />
 
-        {/* ══ 5 条保留（语义未变）═══════════════════════════════════════════
-            `/market` / `/market/industry/:level1Code` / `/market/industry/:level1Code/:level2Code`
-            已在上面按新前缀声明；`/`（landing）与 `/login` 同样保留。 */}
+        {/* ══ 7 条保留（语义未变，不是 redirect）════════════════════════════
+            `/`（landing）/ `/login` / `/market` /
+            `/market/industry/:level1Code` / `/market/industry/:level1Code/:level2Code` 已在上面声明；
+            以下两条是**今天就有数据的真页面**，Ruling 30 把它们从 redirect 退回「保留」——
+            它们的"新位置"（`/market/heatmap` / 合并视图）是 S1.5 才存在的东西，
+            把今天可用的页面换成今天的占位页 = 功能性回退，且会静默丢掉来源 URL 的其它 query 参数。 */}
+        <Route path="/market/hot-sectors/:category" element={withSuspense(<MarketHotSectorsPage />)} />
+        <Route path="/market/concept/:boardCode" element={withSuspense(<ConceptBoardPage />)} />
       </Route>
     </Routes>
   );
-}
-
-/** `/market/hot-sectors/:category` → `/market/heatmap?group=:category`（IA §4 第 7 行） */
-function LegacyMarketHotSectorsRedirect() {
-  const { category } = useParams<{ category: string }>();
-  return <Navigate to={`/market/heatmap?group=${encodeURIComponent(category ?? "")}`} replace />;
-}
-
-/** `/market/concept/:boardCode` → `/market/heatmap?concept=:boardCode`（IA §4 第 8 行） */
-function LegacyMarketConceptRedirect() {
-  const { boardCode } = useParams<{ boardCode: string }>();
-  return <Navigate to={`/market/heatmap?concept=${encodeURIComponent(boardCode ?? "")}`} replace />;
 }
 
 /** `/stock/:symbol` → `/company/:symbol`（IA §4 第 10 行） */
