@@ -8,7 +8,7 @@
 > 这六项是后续 7 个 Wave 会反复引用的口径，**变更必须走 spec 修订**，不在本文件就地改。
 >
 > **与其它文档的边界**（避免同一决策两份权威，必有一份腐烂）：
-> - **数据源事实**（来源 URL / 频率 / 历史深度 / 三态结论 / 实机调用记录）→ [`docs/design/data-source.md`](./data-source.md) §附.1–附.4
+> - **数据源事实**（来源 URL / 频率 / 历史深度 / 三态结论 / 实机调用记录）→ [`docs/design/data-source.md`](./data-source.md) §附.1–附.5
 > - **指标注册表**（单位 / 频率 / 阈值 / 展示分组 / mock 基准）→ [`backend/app/services/industry_registry.py`](../../backend/app/services/industry_registry.py)
 > - **为什么这么定**（候选与否决原因）→ [`docs/decisions/`](../decisions/) 的 ADR
 > - 本文件只回答「**同一个词在不同模块里指的是不是同一件事**」

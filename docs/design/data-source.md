@@ -308,3 +308,79 @@ Phase 4 取「未来某段日历」须**按日循环 `pre_date`**（或按报告
 
 > **口径断点汇总（Wave 1 建表时必须带 `口径版本` 与断点标记）**：北向资金 **2024-08-19**（日频净买入终止、个股持股转季度）；
 > 陆股通个股持股 **2024-08-19**（旧日频 → 新季度，不可拼接）；M1 **2025-01**（纳入个人活期存款 + 非银行支付机构客户备付金，见附.2 第 19 条）。
+
+---
+
+## 附.5 段 B 可行性复核：大宗商品 / 外汇（S1.3 · 2026-10-16）
+
+> 本节是 [S1.3 市场/全球市场与跨市场标的](../specs/S1-market-sentiment.md#s13-市场全球市场与跨市场标的) 里
+> 「大宗商品 29 · 外汇 5」两段的**数据源可行性交付物**。方法沿用仓库纪律「**先实机验证再写适配器**」，
+> 结论格式与 [附.1](#附1-七项复核结论) 一致（来源 / 频率 · 历史深度 / 三态结论 / 替代方案）。
+> **核查日期：2026-10-16**（与附.1 的 2026-10-12 不同批，故单列一节，不改既有内容）。
+>
+> **本节的边界**：只给结论与验证方法。**未通过验证前不写适配器、不建表、不往 UI 填数字**；
+> `/market/global` 页对这两段只放「数据源待接入」占位（无清单、无图表、无占位数值）。
+
+### 附.5.1 结论总览
+
+| 数据源（行标签） | 来源 | 频率 / 历史深度 | 三态结论 | 替代方案 |
+|---|---|---|---|---|
+| ⑧ **国内商品期货**（主力连续 + 单合约日线） | ①**TuShare（单一主源，优先）**：`fut_basic` / `fut_daily` / `fut_mapping`——[TuShare 期货日线文档](https://tushare.pro/document/2?doc_id=138)；②AKShare `futures_zh_daily_sina` / `futures_main_sina`（新浪 InnerFuturesNewService）；③AKShare `futures_zh_spot` / `futures_zh_minute_sina`（盘中）；④实时与规则面 `futures_comm_info` · **实机记录**：附.5.2 #1–#9 | **日频**。历史深度**深**：TuShare `fut_daily` 单次返回上限 **2000 行**（`CU.SHF` 实机 `min_date=20180710 → max_date=20261009`，须按日期窗口分片回补，不能"一次拉全"）；AKShare 新浪侧**一次调用即返回全历史**（`RB0` 4256 行 `2009-03-27` 起、`CU0` 5292 行 `2005-01-04` 起、`LH0` 1391 行 `2021-01-08` 起）；盘中另有 1 分钟线（`RB0` 1023 行）与快照 | `可得` | **不需要替代方案，但需要"品种清单"**。29 个标的的**具体品种名录**在 owner 导图里只有数量（29），没有名单，**本轮不替它发明**——名单须由投研侧裁定（`.github`/计划文件都无此清单）。建议入库键沿用既有 `industry_metrics` 的 `metric_key` 命名纪律（见 ⑪），**不新建商品专表** |
+| ⑨ **国际商品期货**（原油/天然气/黄金/白银/铜/农产品） | ①AKShare `futures_foreign_hist`（新浪外盘历史）；②TuShare `fx_daily` 的 `COMMODITY` 类别（**疑似 2023-06 起停更**，见"频率/历史深度"栏）；③`futures_global_*_em`（东财全球期货）· **实机记录**：附.5.2 #10–#12 | **日频**。①实机：`futures_foreign_hist("CL")` **7689 行**，`1996-10-14 → 2026-10-12`（**深度最深、且在更新**，但 `volume`/`position` 实测恒为 0/running 空值，**只有价没有量**）；②实机：`XAUUSD.FXCM` 4000 行 `20111227 → 20261011`（在更新）、`USOil.FXCM` 4000 行 `20080312 → 20230601`（**止于 2023-06-01**）、`NGAS.FXCM` 2845 行 `20120623 → 20230601`（**同上止于 2023-06-01**）→ 该类别**对油气已停更、对贵金属仍在更**，**不得**当成一个整体源用 | `受限` | 能用但**须按品种分流**：贵金属/铜可用 TuShare `fx_daily`（`COMMODITY`），原油/天然气改走 AKShare `futures_foreign_hist`；③东财全球期货接口**本环境 `push2` 域拒连**（附.5.2 #12），未取得一手数据 → **不得**据此排期。**降级口径**：若某品种两源都拿不到，宁可不接入，也不要用"相近品种"顶替（原油 ≠ 燃料油） |
+| ⑩ **外汇**（5 个标的） | ①**TuShare `fx_obasic` + `fx_daily`（单一主源，优先，本仓库客户端尚未接入）**——`fx_obasic` 实测 **69 个标的**（`FX` 40 / `INDEX` 13 / `COMMODITY` 9 / `CRYPTO` 5 / `BUND` 1 / `FX_BASKET` 1），**并自带 `trading_hours` 字段**（FX 全体实测 = `Sun 17.00 - Fri 16.55`，即**连续 5×24 小时**）；②AKShare `currency_boc_sina`（中行牌价，日频）；③AKShare `currency_boc_safe`（外管局月度）；④AKShare `fx_spot_quote`（实时买卖报价）· **实机记录**：附.5.2 #13–#19 | **日频**（`fx_daily`）。历史深度：`USDCNH.FXCM` 4000 行 `20131004 → 20261011`、`EURUSD.FXCM` 9 行（10-01→10-16 窗口内）；**4000 行/次上限**同 ⑧，长历史须分片。②`currency_boc_sina("美元")` 244 行 `2026-01-01 → 2026-10-12`（**长历史未验证**）；③`currency_boc_safe` **8062 行 `1994-01-01 → 2026-10-12`**、26 个币种列，但**是月度口径**（同一报价在月内重复，见附.5.2 #18 的 head 两行完全相同）；④`fx_spot_quote` 25 个货币对**实时买/卖报价**（无历史） | `可得` | **不适用（本项可得）**，但**取数口径必须先定**：5 个标的若指"人民币汇率"（USD/CNY、EUR/CNY、JPY/CNY、HKD/CNY、GBP/CNY），**建议走 ②`currency_boc_sina`**（中行牌价，与 A 股投研的"人民币中间价"直觉一致，日频、含 `央行中间价` 列）；若指"外盘直盘"（EURUSD/GBPUSD/AUDUSD/USDJPY/USDCNH），**走 ①`fx_daily`**。**两者不得混进同一个 `metric_key`**（牌价 vs 市场价是两种口径，同 ⑥ 的"操作利率 ≠ 成交利率"纪律）。⚠️ `currency_boc_safe` **标称月度**，同月内多行重复同一值，**只有日频需求时不得用它**（会把月度值灌成日频序列） |
+| ⑪ **落库形态（两段共用，前置决策）** | **既有基建**：`industry_metrics`（`backend/app/models/industry_research.py`，S1.2 已加 `published_at` / `caliber_version`）+ `industry_metric_service._AKSHARE_SPECS`（表驱动规格）+ `AkShareClient.fetch_lh_future_daily`（**已在跑**：`metric_key = lh_future_main`、`source = akshare_sina`，见 `app/services/industry_metric_service.py:199`）· **实机记录**：附.5.2 #20 | — | `可得`（复用既有） | **建议不新建商品/外汇表**：既有表已是「scope + `metric_key` + `source` + `freq` + `period` + `value`」形状，S1.2 又把 scope 泛化到 `industry_key='market'`。29 + 5 个标的按"一个标的 = 一个 `metric_key`"落进 `industry_metrics` 即可（**`metric_key` 命名须先在 metric-dictionary 落册**，本任务无权定名——见 [S0.4 §4.2](../specs/S0-platform-contracts.md)）。**唯一需要新增的是"日线级别的商品/外汇读面"**（`industry_metrics` 的读路径是指标式，不是行情式 K 线）；若确需 K 线，须先量测再决定是否复用 `index_dailies` 的 `ts_code` 维度，**不得**直接开新表 |
+
+> **三态取值说明**：⑧ 与 ⑪ 判 `可得`（实机取到真实数据 + 既有管道已在跑）；⑨ 判 `受限`（贵金属可得、油气停更、东财一路未验证）；
+> ⑩ 判 `可得` 但**附带一句口径前置条件**（人民币牌价 vs 外盘直盘二选一，不得混用）。
+> **未验证项一律 `blocked-on-verification` 并在 [附.5.4](#附54-未验证余项open-items-接入前必须补验) 写明补验方法**，本节不填任何估计值。
+
+### 附.5.2 实机调用记录（本节专属，2026-10-16）
+
+> 与附.2 同规矩：记录**真实发出的调用与原始返回要点**。失败项**逐字记录上游文案**。
+> 全部调用环境 = 本 worktree（`backend/.venv`，`akshare 1.18.94`，`tushare` 用 `backend/.env` 的有效 token）。
+
+| # | 实测对象 | 返回要点 | 结论 |
+|---|---|---|---|
+| 1 | TuShare `fut_basic(exchange="SHFE")` | **3633 行** · 列含 `ts_code / symbol / exchange / name / fut_code / multiplier / trade_unit / per_unit / quote_unit / list_date`，样例 `AO2507.SHF 氧化铝2507` | 品种/合约主数据可得 |
+| 2 | TuShare `fut_daily(ts_code="CU.SHF")` | **2000 行**（**命中单次上限**）· `min_date=20180710` / `max_date=20261009` · 列含 `pre_close/pre_settle/open/high/low/close/settle/vol/amount/oi` → **分片回补是硬要求** | ⑧ 主源可用 |
+| 3 | TuShare `fut_mapping(ts_code="CU.SHF", 20261001–20261016)` | **3 行** · `CU2611.SHF`（主力连续 → 具体合约的映射） | 主力连续可解析 |
+| 4 | AKShare `futures_zh_daily_sina("RB0")` | **4256 行** · `2009-03-27 → 2026-10-09` · 列 `date/open/high/low/close/volume/hold/settle`（**一次调用即全历史**） | ⑧ 备用源可用 |
+| 5 | AKShare `futures_zh_daily_sina("CU0")` | **5292 行** · `2005-01-04 → 2026-10-09` | 同上（历史最深样本） |
+| 6 | AKShare `futures_zh_daily_sina("LH0")` | **1391 行** · `2021-01-08 → 2026-10-09`（生猪期货 2021-01 上市，深度与上市日一致） | 既有 `lh_future_main` 同源 |
+| 7 | AKShare `futures_zh_spot(symbol="V0", market="CF")` | **1 行** · `symbol="PVC连续"` · `time=113000` · `current_price=4924.0` / `bid_price` / `ask_price` / `hold` | 盘中快照可得 |
+| 8 | AKShare `futures_zh_minute_sina("RB0", period="1")` | **1023 行** · `2026-09-30 09:14` 起 · `datetime/open/high/low/close/volume/hold` | 分钟线可得（本任务不用） |
+| 9 | AKShare `futures_comm_info(symbol="所有")` | **822 行** · 含 `交易所名称/合约名称/合约代码/现价/涨停板/跌停板/保证金/手续费/价格更新时间`；样例 `ag2610 白银2610 现价 14589.0` | 合约规则/实时面可得 |
+| 10 | AKShare `futures_foreign_hist("CL")` | **7689 行** · `1996-10-14 → 2026-10-12` · 列 `date/open/high/low/close/volume/position/settlement`；**`volume` 与 `position` 实测为 0**（样例首行 `volume=0, position=0`） | ⑨ 原油：**可得但无量** |
+| 11 | AKShare `futures_foreign_detail("CL")` | **4 行** · 返回的是**规格说明表**（`交易品种/交易单位/报价单位/最小变动价位/上市交易所/交易代码`），非行情 | 合约规格可得 |
+| 12 | AKShare `futures_global_hist_em(symbol="伦敦金")` | **失败逐字**：`ConnectionError: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))` · 同批 `forex_hist_em("USDCNH")` / `forex_spot_em()` 同款失败；旁证：`push2.eastmoney.com/api/qt/clist/get` 亦 `RemoteProtocolError`，而 `futsseapi.eastmoney.com/list/113` **HTTP 200**（沪银 278 个合约）、`forex.eastmoney.com` **HTTP 200** → **失败限 `push2` 域**，非域名整体不通 | **`blocked-on-verification`**（③ 未取到一手数据） |
+| 13 | TuShare `fx_obasic()`（不带参数） | **69 行** · `classify` 分布 = `FX 40 / INDEX 13 / COMMODITY 9 / CRYPTO 5 / BUND 1 / FX_BASKET 1` · 列含 **`trading_hours` / `break_time` / `pip` / `traget_spread`**；FX 全体 `trading_hours = "Sun 17.00 - Fri 16.55"` | ⑩ 标的+**时段元数据**可得 |
+| 14 | TuShare `fx_daily(ts_code="USDCNH.FXCM", 20000101–20261016)` | **4000 行**（**命中上限**）· `min_date=20131004` / `max_date=20261011` · 列 `bid_open/bid_close/bid_high/bid_low/ask_open/ask_close/tick_qty`（**买卖双档**） | ⑩ 主源可用 |
+| 15 | TuShare `fx_daily(ts_code="EURUSD.FXCM", 20261001–20261016)` | **9 行** · 样例 `20261011 bid_open=1.11853 bid_close=1.12046 ask_close=1.12059 tick_qty=4586` | ⑩ 可用 |
+| 16 | TuShare `fx_daily(ts_code="XAUUSD.FXCM", 20000101–20261016)` | **4000 行** · `20111227 → 20261011`（**在更新**） | ⑨ 贵金属走此路 |
+| 17 | TuShare `fx_daily(ts_code="USOil.FXCM" / "NGAS.FXCM")` | 各 **4000 / 2845 行**，但 `max_date` **均为 `20230601`**（油气**止于 2023-06-01**，此后无新数据） | ⑨ 油气**停更**，`受限` |
+| 18 | AKShare `currency_boc_safe()` | **8062 行** · `1994-01-01 → 2026-10-12` · 26 个币种列（美元/欧元/日元/港元/…）；**head 两行（01-01 与 01-03）取值逐字相同** → 月度重复口径 | `可得`但**月度** |
+| 19 | AKShare `currency_boc_sina("美元", 20260101–20261016)` · `fx_spot_quote()` | 前者 **244 行** · `2026-01-01 → 2026-10-12` · 列 `日期/中行汇买价/中行钞买价/中行钞卖价（汇卖价）/央行中间价/中行折算价`；后者 **25 行**实时买卖报价（`USD/CNY 买 6.6925 卖 6.6928`） | 人民币牌价可得 |
+| 20 | 既有管道旁证（不新发调用）：`app/services/industry_metric_service.py:199` | `("lh_future_main", "akshare_sina", "fetch_lh_future_daily", "date", "close", 100000.0)` —— 商品期货**已经在往 `industry_metrics` 落数**（2026-09-03 验证批） | ⑪ 复用路径已存在 |
+
+### 附.5.3 与 S1.3 覆盖数的对照
+
+| spec 条目 | 数量 | 本轮结论 | 差距 |
+|---|---|---|---|
+| 美国市场 | 6 | **已交付**（`DJI/SPX/IXIC/NDX/SOX/HXC`，其中 `IXIC` 为纳斯达克综合、`NDX` 为纳斯达克100，两者不同标的） | 无 |
+| 香港市场 | 2 | **已交付**（`HSI` 恒生指数 / `HKTECH` 恒生科技指数） | 无 |
+| 其他市场 | 3 | **1 已交付**（`XIN9` 富时中国A50，新加坡 · CNY 夜盘）；`N225`/`KS11` 属既有条目 | 导图未给"其他 3"的**名录**；若指欧洲（`FCHI`/`GDAXI`/`FTSE`）则 TuShare `index_global` **已覆盖且本轮实机确认在库**（`FCHI`/`GDAXI`/`FTSE` 均在 22 个 `ts_code` 内）→ **可低成本补齐，但需投研侧先裁名录**（本任务不擅自扩） |
+| 大宗商品 | 29 | **数据源已定（⑧`可得`）**，名录未定 → 未接入 | 名录 + `metric_key` 落册 |
+| 外汇 | 5 | **数据源已定（⑩`可得`）**，名录口径未定（人民币牌价 vs 外盘直盘）→ 未接入 | 口径选择 + 名录 + `metric_key` 落册 |
+
+### 附.5.4 未验证余项（open items，接入前必须补验）
+
+| # | 余项 | 影响 | 补验方式 |
+|---|---|---|---|
+| 1 | **大宗商品 29 的品种名录** | 无法建 `metric_key` / 无法定"已接入"判据 | 投研侧裁定名录（本仓库无此清单）；裁定后按 ⑪ 逐条落 `metric_key` |
+| 2 | **外汇 5 的口径**（人民币牌价 vs 外盘直盘） | 选错口径会让序列与"人民币汇率"直觉不符；两口径**不得混进同一 key** | 产品侧确认；若选牌价 → 走 ②`currency_boc_sina`（注意其长历史**未验证**，244 行只覆盖 2026 年内）；若选直盘 → 走 ①`fx_daily` |
+| 3 | **`currency_boc_sina` 的长历史** | ② 只实测到 2026-01-01 起 244 行；更早是否可得未知 | 用更大 `start_date`/`end_date`（如 `20200101–20261016`）复跑，确认返回行数是否随窗口增长；不增长则记"近端窗口"并靠滚动 ingest 累积 |
+| 4 | **东财全球期货 / 外汇接口在正常网络下的可用性**（附.5.2 #12） | ③ 是本轮唯一被判 `blocked` 的一手证据缺口 | 在 `push2` 域可达的环境复跑 `futures_global_hist_em("伦敦金")` / `forex_spot_em()`；返回真实行情则把 ⑨ 的"东财一路"补为可用，并把 [eastmoney_client](../../backend/app/core/providers/eastmoney_client.py) 的"本环境 push2 拒连"备注更新为最新实测 |
+| 5 | **TuShare `COMMODITY` 类别停更是否为账户权限所致** | 若是权限问题，升级后可恢复油气；若上游确已停更，则 ⑨ 必须永久走新浪 | 用更高积分账户复跑 `fx_daily(ts_code="USOil.FXCM")`；若 `max_date` 仍为 2023-06-01 → 判上游停更并在此处**逐字**记录 |
+
+> **本节与附.1 的关系**：附.1 复核的是**情绪/资金/政策**侧的七个源（①②③④⑤⑥⑦），与市场的商品/外汇无交集；
+> 两节的 `metric_key` **不得互相顶替**（例如附.1 ① 的"ETF 份额"与本节 ⑧ 的"商品期货持仓"是两件不同的事）。
