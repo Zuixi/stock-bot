@@ -15,25 +15,33 @@
 
 顺序即顶栏默认排列。
 
-| # | 导航名 | 路由前缀 | 分区 | 权限 | 落地波次（现状） |
+| # | 导航名 | 路由前缀 | 分区 | 权限（三态，沿用既有口径） | 落地波次（现状） |
 |---|---|---|---|---|---|
-| 1 | 市场 | `/market` | 研究（只读） | 登录即可 | Wave 1（既有 `/market` 扩展） |
-| 2 | 资讯 | `/news` | 研究（只读） | 登录即可 | Wave 2（新建；Wave 1 零消费方） |
-| 3 | 行业分析 | `/industry` | 研究（只读） | 登录即可 | Wave 3（吸收既有 `/research`） |
-| 4 | 公司分析 | `/company` | 研究（只读） | 登录即可 | Wave 3（吸收既有 `/stock/:symbol`） |
-| 5 | 宏观分析 | `/macro` | 研究（只读） | 登录即可 | Wave 3 |
-| 6 | 情绪分析 | `/sentiment` | 研究（只读） | 登录即可 | Wave 1 |
-| 7 | 价值网图谱 | `/valuegraph` | 研究（只读） | 登录即可 | Wave 4 |
-| 8 | 策略引擎 | `/strategy` | 决策（写） | 登录即可 | Wave 5（不存在） |
-| 9 | 风险管理 | `/risk` | 决策（写） | 登录即可 | Wave 6（不存在） |
-| 10 | 交易执行 | `/trade` | 执行（写） | 登录即可 | Wave 6（不存在） |
+| 1 | 市场 | `/market` | 研究（只读） | **公开（免登录）** | Wave 1（既有 `/market` 扩展） |
+| 2 | 资讯 | `/news` | 研究（只读） | **待定** | Wave 2（新建；Wave 1 零消费方） |
+| 3 | 行业分析 | `/industry` | 研究（只读） | **`research:read`** | Wave 3（吸收既有 `/research`） |
+| 4 | 公司分析 | `/company` | 研究（只读） | **公开（免登录）** | Wave 3（吸收既有 `/stock/:symbol`） |
+| 5 | 宏观分析 | `/macro` | 研究（只读） | **待定** | Wave 3 |
+| 6 | 情绪分析 | `/sentiment` | 研究（只读） | **待定** | Wave 1 |
+| 7 | 价值网图谱 | `/valuegraph` | 研究（只读） | **待定** | Wave 4 |
+| 8 | 策略引擎 | `/strategy` | 决策（写） | **待定** | Wave 5（不存在） |
+| 9 | 风险管理 | `/risk` | 决策（写） | **待定** | Wave 6（不存在） |
+| 10 | 交易执行 | `/trade` | 执行（写） | **待定** | Wave 6（不存在） |
 
 **分区**（plan §3.1）：前 7 个是「看」，后 3 个是「做」。研究层用户只读、系统写；决策层由系统产出信号、风控产生动作；执行层是**用户写**（交易记录 / 复盘）。
 
-**权限口径（冻结）**：**全部 10 个导航一律「登录即可」，不发明任何模块级 scope。**
-- 三个写侧模块（策略 / 风险 / 交易）**尚不存在**：现在为不存在的模块预置模块级写权限 scope，得到的只是空字符串，故本表**不写出任何写侧 scope 名**。
-- 待模块真落地时，按既有做法（[ADR 0008](../decisions/0008-research-read-requires-permission.md)：后端 router 级权限依赖）逐个补，不在本表预先承诺。
-- 与 spec §S0.2 表中「市场 = 公开、资讯 / 行业分析 / 公司分析 / 宏观分析 = `research:read`」的差异：本表按控制器裁定统一为「登录即可」；**「市场」的公开性与既有 `/research*` 的 `research:read` 守卫如何平移，见 §4 末的「开发项」**，未裁定前不在本表单方面改写。
+**权限口径（冻结）——三态不是新决策，而是沿用既有口径（[ADR 0008](../decisions/0008-research-read-requires-permission.md)，accepted）+ 不发明 scope：**
+
+1. **公开（免登录）**：市场 `/market`（含全部子路由）· 公司分析 `/company`（原 `/stock/:symbol`）。
+   依据 ADR 0008 决策第 3 条原文：「**公开行情不受影响**：`/market/**`、`/stock/:symbol`、`/index/:tsCode` 维持免登录」。本表沿用，**不收紧**。
+2. **`research:read`**：行业分析 `/industry`（原 `/research` / `/research/:industryKey`）。
+   依据 ADR 0008 决策第 1、2 条：`backend/app/api/v1/industries.py` 的 `APIRouter(dependencies=[require_permissions("research:read")])`；前端 `/research*` 用 `RequireAuth permissions={["research:read"]}`。**沿用，不放宽**——ADR 0008 明文否决过「只要求登录」：注册全开放且新账号固定 `trader` 角色，「只要求登录」等于公网自助注册即可读投研。故 §4 的 `/research*` → `/industry*` redirect **必须继续兑现该权限**（无权限者得 403 页，而非放开）。
+3. **待定**：资讯 `/news` · 宏观 `/macro` · 情绪 `/sentiment` · 价值网图谱 `/valuegraph` · 策略 `/strategy` · 风险 `/risk` · 交易 `/trade`。
+   **后端尚不存在，此刻写死就是假契约。模块落地时按数据敏感度定；在此之前导航对已登录用户可见，后端未就绪故无门禁。**
+4. **顶栏「我的 `/me`」（原 `/watchlist`、`/tags`）= 登录即可**：沿用既有 `RequireAuth`（无具体权限参数）。
+
+**严禁发明模块级写权限 scope**：三个写侧模块（策略 / 风险 / 交易）**尚不存在**，现在为不存在的模块预置 `*:write` scope，得到的只是空字符串，故本表**不写出任何写侧 scope 名**；模块落地时按 ADR 0008 的既有做法（后端 router 级权限依赖）逐个加。
+**本列语义 = 「沿用既有口径，不得新增 scope」，不是「无需权限」。**
 
 ---
 
@@ -134,11 +142,11 @@
 
 ## 3. 顶栏全局工具（不进一级导航）
 
-| 工具 | 路由 | 说明 |
-|---|---|---|
-| 全局搜索 | `/search?q=` | 跨股票 / 行业 / 指数 / 概念 / 资讯 |
-| 自选 | **抽屉（无独立路由）** | 任意页面可加自选 / 打标签，**不离开上下文** |
-| 我的 | `/me` | 自选 · 标签 · 我的行业 · 提醒（`?tab=watchlist` / `?tab=tags`） |
+| 工具 | 路由 | 权限（沿用既有口径） | 说明 |
+|---|---|---|---|
+| 全局搜索 | `/search?q=` | 公开（免登录） | 跨股票 / 行业 / 指数 / 概念 / 资讯。既有顶栏 `SearchBar` 已渲染在**公开**的 `/market` 上、走免登录的 `fetchStocksMerged`（`/api/v1/stocks`，`APIRouter()` 无权限依赖），故全局搜索页沿用公开 |
+| 自选 | **抽屉（无独立路由）** | 登录即可 | 任意页面可加自选 / 打标签，**不离开上下文** |
+| 我的 | `/me` | **登录即可** | 自选 · 标签 · 我的行业 · 提醒（`?tab=watchlist` / `?tab=tags`）；沿用既有 `RequireAuth`（无具体权限参数） |
 
 **明确不含 `/calendar`。** 事件日历已推迟到 Wave 3：Wave 1 零消费方（最近的消费方是 Wave 3 的「政策到期提醒」与「财报披露日」），把没有当期消费者的东西当前置「地基」是给它发免死金牌。落到 Wave 3 的 `S4.12` 之一。
 
@@ -173,9 +181,20 @@
 
 **redirect 契约**：13 条 redirect 必须真跳转（301/302 或前端 `<Navigate replace>` 均可），**不得静默 404**；保留类路由语义不变。
 
-**开发项（需 controller 裁定，本表不单方面改写）**
-- 「市场」的公开性与既有 `/research*` 的 `research:read` 守卫如何平移：§1 按裁定全写「登录即可」，但既有 `/research*` 路由带 `RequireAuth permissions={["research:read"]}`（[ADR 0008](../decisions/0008-research-read-requires-permission.md)），新前缀为 `/industry`。`research:read` 是保留、收敛到 `/industry*`，还是按「登录即可」放开，属产品口径决策。
-- `/me`、`/search`、`/market/heatmap`、`/market/index/:tsCode` 是**新的目标路由**，由 Task 5 建；本表只冻结目标形态。
+**redirect 后各路由的权限（沿用既有口径，[ADR 0008](../decisions/0008-research-read-requires-permission.md)；无权限者 403 页，不是放开）**
+
+| 旧路由 | 处理后权限 | 依据 |
+|---|---|---|
+| `/market`、`/market/category`、`/market/industry/:level1Code`、`/market/industry/:level1Code/:level2Code`、`/market/hot-sectors/:category`、`/market/concept/:boardCode` | **公开（免登录）** | ADR 0008「`/market/**` 维持免登录」 |
+| `/stock/:symbol` → `/company/:symbol` | **公开（免登录）** | ADR 0008「`/stock/:symbol` 维持免登录」，redirect 不改变可见性 |
+| `/index/:tsCode` → `/market/index/:tsCode` | **公开（免登录）** | ADR 0008「`/index/:tsCode` 维持免登录」（且新位置在 `/market/**` 之下） |
+| `/research`、`/research/:industryKey` → `/industry*` | **`research:read`**（必须继续兑现，**不得放宽为「登录即可」**） | ADR 0008 明文：router 级 `require_permissions("research:read")` + 前端 `RequireAuth permissions={["research:read"]}`；「只要求登录」已被 ADR 0008 否决 |
+| `/watchlist`、`/tags`、`/tags/:tagName` → `/me*` | **登录即可**（无具体权限） | 既有 `RequireAuth` |
+| `/`（landing）、`/login` | 公开（免登录） | 既有：landing 不套 `MainLayout`，登录页本身必须可匿名访问 |
+
+**新目标路由的建立归属**：`/me`、`/search`、`/market/heatmap`、`/market/index/:tsCode` 由 Task 5 建；本表只冻结目标形态与权限归属。
+
+> **redirect 净效果（供 Task 5 逐条照做，不得静默加严）**：13 条 redirect 里 **10 条不涉及可见性变化**（6 条 `/market/**` 保持公开；`/stock/:symbol` → `/company/:symbol` 保持公开；`/index/:tsCode` → `/market/index/:tsCode` 保持公开；2 条 `/research` → `/industry*` 保持 `research:read`）；余 3 条 `/watchlist`、`/tags`、`/tags/:tagName` → `/me*` 的可见性**与现状相同**（既有这三条本就带 `RequireAuth`，未登录者同样会被引导登录）。**没有一条被放宽或收紧。**
 
 ---
 

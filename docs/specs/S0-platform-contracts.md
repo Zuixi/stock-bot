@@ -48,20 +48,26 @@ alter table industry_metrics
 
 ### 一级导航（10 个，顺序即默认排列）
 
-| # | 导航 | 路由前缀 | 分区 | 权限 |
+| # | 导航 | 路由前缀 | 分区 | 权限（三态，沿用既有口径）|
 |---|---|---|---|---|
-| 1 | 市场 | `/market` | 研究（只读）| 公开 |
-| 2 | 资讯 | `/news` | 研究（只读）| `research:read` |
+| 1 | 市场 | `/market` | 研究（只读）| 公开（免登录）|
+| 2 | 资讯 | `/news` | 研究（只读）| 待定 |
 | 3 | 行业分析 | `/industry` | 研究（只读）| `research:read` |
-| 4 | 公司分析 | `/company` | 研究（只读）| `research:read` |
-| 5 | 宏观分析 | `/macro` | 研究（只读）| `research:read` |
-| 6 | 情绪分析 | `/sentiment` | 研究（只读）| 登录即可 |
-| 7 | 价值网图谱 | `/valuegraph` | 研究（只读）| 登录即可 |
-| 8 | 策略引擎 | `/strategy` | 决策（写）| 登录即可 |
-| 9 | 风险管理 | `/risk` | 决策（写）| 登录即可 |
-| 10 | 交易执行 | `/trade` | 执行（写）| 登录即可 |
+| 4 | 公司分析 | `/company` | 研究（只读）| 公开（免登录）|
+| 5 | 宏观分析 | `/macro` | 研究（只读）| 待定 |
+| 6 | 情绪分析 | `/sentiment` | 研究（只读）| 待定 |
+| 7 | 价值网图谱 | `/valuegraph` | 研究（只读）| 待定 |
+| 8 | 策略引擎 | `/strategy` | 决策（写）| 待定 |
+| 9 | 风险管理 | `/risk` | 决策（写）| 待定 |
+| 10 | 交易执行 | `/trade` | 执行（写）| 待定 |
 
-> **不预先发明权限 scope。** 三个写侧模块（策略/风险/交易）尚不存在，`strategy:write` / `risk:write` / `trade:write` 现在加了也只是空字符串。**先全部"登录即可"**，等模块真落地时按 [ADR 0008](../../docs/decisions/0008-research-read-requires-permission.md) 的既有做法（后端 router 级权限依赖）逐个加。
+> **权限列的语义是「沿用既有口径，不得新增 scope」，不是「无需权限」。** 三态各有依据，且**都是照抄现状、不是新决策**：
+> - **公开（免登录）**：市场 `/market`（含全部子路由）与公司分析 `/company`（原 `/stock/:symbol`）——[ADR 0008](../../docs/decisions/0008-research-read-requires-permission.md)「公开行情不受影响：`/market/**`、`/stock/:symbol`、`/index/:tsCode` 维持免登录」。
+> - **`research:read`**：行业分析 `/industry`（原 `/research*`）——ADR 0008 正文明文，`backend/app/api/v1/industries.py` 的 router 级依赖；普通注册账号（`trader`）得 403。
+> - **待定**（资讯 / 宏观 / 情绪 / 价值网图谱 / 策略 / 风险 / 交易）：后端尚不存在，此刻写死就是假契约。**模块落地时按数据敏感度定；在此之前导航对已登录用户可见，后端未就绪故无门禁。**
+> - 顶栏「我的 `/me`」（原 `/watchlist`、`/tags`）为**登录即可**（既有 `RequireAuth`，无具体权限）。
+>
+> **含义**：本列**不得新增任何模块级写权限 scope**（`*:write` 之类）——为不存在的模块预置 scope 只会得到空字符串。待模块真落地时按 [ADR 0008](../../docs/decisions/0008-research-read-requires-permission.md) 的既有做法（后端 router 级权限依赖）逐个加。
 
 ### 顶栏全局工具（不进一级导航）
 
