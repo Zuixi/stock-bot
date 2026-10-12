@@ -91,7 +91,7 @@ export function YesterdayLimitUp({ data, degraded = false }: Props) {
         size="small"
         columns={columns}
         dataSource={data?.items ?? []}
-        pagination={false}
+        pagination={{ pageSize: 10, size: "small", hideOnSinglePage: true, showSizeChanger: false }}
         scroll={{ x: 700 }}
         locale={{ emptyText: "无昨日涨停样本" }}
       />
