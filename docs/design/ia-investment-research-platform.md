@@ -131,12 +131,12 @@
 
 - 依赖的原料：**持仓数据（来自交易执行）** + 情绪 / 宏观 / 资讯
 
-### 2.10 交易执行 `/trade`（3）
+### 2.10 交易执行 `/trade`（原图 3 → 按 plan §3.4 拆为 4）
 
-**标的分类**（经行业分析筛出的长期追踪池）、交易日志（记录 · 复盘 · **盈亏归因** · 统计）、持仓管理。
+原图：**标的分类**（经行业分析筛出的长期追踪池）、交易日志（记录 · 复盘 · **盈亏归因** · 统计）、持仓管理。
 
 - 依赖的原料：行情 + 行业分析
-- **转录说明（plan §3.4 裁定，非新增子模块）**：原图「标的分类」的批注说的是「经行业分析后具备长期追踪价值的**标的池**」——那是**关注池**，不是资产类型；落地时拆为 **`关注池`** + **`资产类型`** 两项（子模块数仍按原图记为 3：标的分类 → 关注池与资产类型）。
+- **转录说明（plan §3.4 裁定）**：原图「标的分类」的批注说的是「经行业分析后具备长期追踪价值的**标的池**」——那是**关注池**，不是资产类型。故**原图 3 个子模块 → 落地为 4 个**：**`关注池`** · **`资产类型`**（由「标的分类」拆出）· 交易日志 · 持仓管理。数字差异来自 plan §3.4 的既定拆分，**不是本次转录新增子模块**。
 
 ---
 
@@ -144,7 +144,7 @@
 
 | 工具 | 路由 | 权限（沿用既有口径） | 说明 |
 |---|---|---|---|
-| 全局搜索 | `/search?q=` | 公开（免登录） | 跨股票 / 行业 / 指数 / 概念 / 资讯。既有顶栏 `SearchBar` 已渲染在**公开**的 `/market` 上、走免登录的 `fetchStocksMerged`（`/api/v1/stocks`，`APIRouter()` 无权限依赖），故全局搜索页沿用公开 |
+| 全局搜索 | `/search?q=` | **待定** | 跨股票 / 行业 / 指数 / 概念 / 资讯。**可见性待定**：它不在 10 个导航内，且结果面横跨「资讯」，而资讯本身是待定；按裁定只能记待定，不得由既有实现反推。**资讯结果面按资讯模块最终权限收敛**——既有顶栏 `SearchBar` 走免登录的 `/api/v1/stocks`、且已渲染在公开的 `/market` 上，这只作先例参考，**不构成新路由的授权依据** |
 | 自选 | **抽屉（无独立路由）** | 登录即可 | 任意页面可加自选 / 打标签，**不离开上下文** |
 | 我的 | `/me` | **登录即可** | 自选 · 标签 · 我的行业 · 提醒（`?tab=watchlist` / `?tab=tags`）；沿用既有 `RequireAuth`（无具体权限参数） |
 
@@ -179,7 +179,7 @@
 
 **参数名差异（转录校对，按既有代码用词）**：spec §S0.2 表里写 `/market/industry/:l1`、`/market/industry/:l1/:l2`（简写），既有代码是 `:level1Code` / `:level2Code`。**同一路由、同一语义**，本表按既有代码的参数名书写；redirect 目标（`/market/industry`、`/market/heatmap?...`）与 spec §S0.2 逐字一致。
 
-**redirect 契约**：13 条 redirect 必须真跳转（301/302 或前端 `<Navigate replace>` 均可），**不得静默 404**；保留类路由语义不变。
+**redirect 契约**：本表 15 条旧路由中 **10 条 redirect、5 条保留**（「13 条」是 spec §S0.2 表的行数 = 10 redirect + 3 保留，**不是** redirect 条数——13 这个数会把 3 条保留误读成 redirect）。10 条 redirect 必须真跳转（301/302 或前端 `<Navigate replace>` 均可），**不得静默 404**；保留类路由语义不变。
 
 **redirect 后各路由的权限（沿用既有口径，[ADR 0008](../decisions/0008-research-read-requires-permission.md)；无权限者 403 页，不是放开）**
 
@@ -192,9 +192,32 @@
 | `/watchlist`、`/tags`、`/tags/:tagName` → `/me*` | **登录即可**（无具体权限） | 既有 `RequireAuth` |
 | `/`（landing）、`/login` | 公开（免登录） | 既有：landing 不套 `MainLayout`，登录页本身必须可匿名访问 |
 
-**新目标路由的建立归属**：`/me`、`/search`、`/market/heatmap`、`/market/index/:tsCode` 由 Task 5 建；本表只冻结目标形态与权限归属。
+**新目标路由的建立归属（Task 5；本节是「今天是 404」的完整清单，逐条核对完毕）**
 
-> **redirect 净效果（供 Task 5 逐条照做，不得静默加严）**：13 条 redirect 里 **10 条不涉及可见性变化**（6 条 `/market/**` 保持公开；`/stock/:symbol` → `/company/:symbol` 保持公开；`/index/:tsCode` → `/market/index/:tsCode` 保持公开；2 条 `/research` → `/industry*` 保持 `research:read`）；余 3 条 `/watchlist`、`/tags`、`/tags/:tagName` → `/me*` 的可见性**与现状相同**（既有这三条本就带 `RequireAuth`，未登录者同样会被引导登录）。**没有一条被放宽或收紧。**
+下表 = 上面 15 条旧路由里**所有今天尚不存在的跳转目标**（按 `frontend/src/app/router/index.tsx` 实测，该文件当前只有 `/`、`/login`、`/market`、`/research`、`/research/:industryKey`、`/market/category`、`/market/industry/:level1Code`、`/market/industry/:level1Code/:level2Code`、`/market/hot-sectors/:category`、`/market/concept/:boardCode`、`/index/:tsCode`、`/stock/:symbol`、`/watchlist`、`/tags`、`/tags/:tagName` 这 15 条）：
+
+| # | 今天不存在的目标（§4 表中的新位置） | 服务的旧路由 | 说明 |
+|---|---|---|---|
+| 1 | `/market/industry` | `/market/category` | **裸路径**：既有只有 `/market/industry/:level1Code`，裸路径**不存在**，必须单独建 |
+| 2 | `/market/heatmap`（接收 `?group=` / `?concept=`） | `/market/hot-sectors/:category`、`/market/concept/:boardCode` | 两条 redirect 共用同一目标页，两种 query 各要能渲染 |
+| 3 | `/market/index/:tsCode` | `/index/:tsCode` | 参数名保持 `:tsCode` |
+| 4 | `/company` | `/stock/:symbol` | 新前缀根路径；与下一条带参变体**都要存在** |
+| 5 | `/company/:symbol` | `/stock/:symbol` | 带参变体；`/stock/:symbol` 的 redirect 落到这里 |
+| 6 | `/industry` | `/research` | **裸路径**；须兑现 `research:read`（见上表） |
+| 7 | `/industry/:industryKey` | `/research/:industryKey` | 带参变体；同样须兑现 `research:read` |
+| 8 | `/me`（接收 `?tab=watchlist` / `?tab=tags` / `?tab=tags&name=`） | `/watchlist`、`/tags`、`/tags/:tagName` | 三个 tab 变体都要能渲染 |
+| 9 | `/search`（接收 `?q=`） | —（§3 顶栏全局工具，非 redirect） | 与 `/me`、`/market/heatmap` 同属顶栏工具的目标页；可见性**待定** |
+
+> **硬性要求**：**未落地的目标与其 redirect 必须在同一个 commit 里一起交付**，且目标页以「规划中」占位路由承载（见 §5.2）。**只加 redirect、目标页留空 = 把 404 从旧路径搬到新路径**，spec §S0.2「13 条旧路由逐条访问返回 200」的验收依然过不了——本表的冻结意义正是让 Task 5 一次交付就能过该验收。
+> 已存在的目标（`/market`、`/market/industry/:level1Code`、`/market/industry/:level1Code/:level2Code`、`/`、`/login`）**不需要新建**，只在需要时改语义。
+
+> **redirect 净效果（供 Task 5 逐条照做，不得静默加严）**：10 条 redirect **没有一条被放宽或收紧**，逐组如下：
+> - 6 条 `/market/**`（`/market/category`、`/market/hot-sectors/:category`、`/market/concept/:boardCode` 及保留项）= **公开（免登录）** 不变；
+> - `/stock/:symbol` → `/company/:symbol`、`/index/:tsCode` → `/market/index/:tsCode` = **公开（免登录）** 不变（ADR 0008）；
+> - `/research`、`/research/:industryKey` → `/industry*` = **`research:read`** 不变，**不得放宽为「登录即可」**；
+> - `/watchlist`、`/tags`、`/tags/:tagName` → `/me*` = **登录即可**，与现状相同（既有这三条本就带 `RequireAuth`，未登录者同样被引导登录）。
+>
+> 3 条保留（`/`、`/login`、`/market`）语义未变。
 
 ---
 
@@ -222,9 +245,14 @@
 - **徽标计数语义见 `docs/design/metric-dictionary.md` §4.1**（本文只定义「徽标数值从 payload 来」，不定义它是什么意思）。
 - 越界兜底规则（外键留空 + 计数外露，不静默丢数据）见 spec §S0.4 §4.6，不在本层重复。
 
-### 5.2 未实现导航的占位
+### 5.2 未实现导航与未建成目标的占位（**no-404 契约**）
 
-10 个导航全部可点击进入；未落地模块显示「规划中」占位页，**无 404**（spec §S0.2 验收判据）。
+**占位范围 = 10 个导航根 + 全部 redirect 目标（含裸路径与带参变体），不是只覆盖 10 个根。** 只给导航根建占位、让 redirect 目标仍 404，等于把 404 从旧路径搬到新路径，spec §S0.2「13 条旧路由逐条访问返回 200」照样过不了。
+
+1. **10 个导航根**：`/market`、`/news`、`/industry`、`/company`、`/macro`、`/sentiment`、`/valuegraph`、`/strategy`、`/risk`、`/trade` 全部可点击进入；未落地模块显示「规划中」占位页，**无 404**。
+2. **redirect 目标的裸路径与带参变体同样要有占位路由**（清单见 §4「新目标路由的建立归属」，逐条为：`/market/industry`（裸）/ `/market/heatmap`（含 `?group=` `?concept=`）/ `/market/index/:tsCode` / `/company` + `/company/:symbol` / `/industry`（裸）+ `/industry/:industryKey` / `/me`（含 `?tab=watchlist` `?tab=tags` `?tab=tags&name=`）/ `/search`（含 `?q=`））。占位页必须**保留 query 参数与路径参数**（redirect 不吞参数），不能把带参访问收敛成一个无参空页。
+3. **交付原子性**：某个目标页及其 redirect **必须在同一个 commit 里一起落地**；**不允许**「先加 redirect、目标页留到以后」。
+4. 占位页只承诺「可达 + 不 404 + 规划中提示」，**不承诺数据**；模块真正的页面落地时替换占位实现即可，路由形状不变。
 
 ---
 
