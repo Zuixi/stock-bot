@@ -1,18 +1,20 @@
 """spec §S1.2 通用指标读面：纯单测（不触 DB / 不触 Redis）。
 
-覆盖三块：
-1. `range` 语法 → 行数上限（`range_limit`，含钳制与非法值）
+覆盖四块：
+1. `range` 语法 → **真实时间窗**（`parse_series_range`：窗口天数 + 规范化文本 + 上界钳制）
 2. registry 的 metric_key 白名单与口径版本登记位（未登记即拒绝）
-3. 四徽章投影（`_latest_out`）—— 尤其 `published_at` 为 NULL 时 as_of 回退 period
-   但 `published_at` 字段本身必须仍是 None（不许把回退值写回 PIT 字段）
+3. 四徽章投影（`_latest_out`）—— `published_at` 为 NULL 时 as_of 回退 period，但
+   **必须**伴随 `as_of_source == "period"`（Ruling 34：不静默回退）；有 `published_at`
+   时按 Asia/Shanghai 取日历日（Ruling 35）；`published_at` 字段本身保持 None
 4. 路由层：db/cache 依赖直调（不走 TestClient，不起服务）—— 未登记 key → 404、
-   非法 range → 404、正常路径四徽章齐备、series 命中缓存键含换算后的 limit
+   非法 range / 空 metric_keys → 422、正常路径四徽章齐备、缓存键按规范化 range
 """
 
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi import HTTPException
@@ -31,33 +33,55 @@ from app.services.industry_registry import (
 
 
 @pytest.mark.parametrize(
-    ("range_key", "expected"),
+    ("range_key", "days", "canonical"),
     [
-        ("30d", 30),
-        ("6w", 42),
-        ("3m", 93),
-        ("1y", 366),
-        ("all", service.SERIES_MAX_LIMIT),
-        ("ALL", service.SERIES_MAX_LIMIT),  # 大小写不敏感
-        ("1Y", 366),
+        ("30d", 30, "30d"),
+        ("6w", 42, "42d"),
+        ("3m", 93, "93d"),
+        ("1y", 366, "366d"),
+        ("1Y", 366, "366d"),  # 大小写不敏感
+        ("366d", 366, "366d"),  # 与 1y 是同一个窗口 → 同一 canonical 文本
     ],
 )
-def test_range_limit_parses_units(range_key: str, expected: int) -> None:
-    assert service.range_limit(range_key) == expected
+def test_parse_series_range_window_and_canonical_text(
+    range_key: str, days: int, canonical: str
+) -> None:
+    """range 是**时间窗**：窗口天数与规范化文本（缓存键/响应都用后者）。"""
+    parsed = service.parse_series_range(range_key)
+    assert parsed is not None
+    assert parsed.days == days
+    assert parsed.text == canonical
+
+
+def test_parse_series_range_all_has_no_window() -> None:
+    parsed = service.parse_series_range("ALL")
+    assert parsed is not None
+    assert parsed.days is None and parsed.text == "all"
+    assert parsed.limit == service.SERIES_MAX_LIMIT
+    assert parsed.period_from(date(2026, 10, 12)) is None  # 无窗 = 不设下界
+
+
+def test_parse_series_range_period_from_is_calendar_window() -> None:
+    parsed = service.parse_series_range("30d")
+    assert parsed is not None
+    assert parsed.period_from(date(2026, 10, 12)) == date(2026, 9, 12)
 
 
 @pytest.mark.parametrize("range_key", ["", "y", "1", "1x", "-3d", "0d", "1.5y", "1y2m"])
-def test_range_limit_rejects_garbage(range_key: str) -> None:
-    assert service.range_limit(range_key) is None
+def test_parse_series_range_rejects_garbage(range_key: str) -> None:
+    assert service.parse_series_range(range_key) is None
 
 
-def test_range_limit_clamps_to_max() -> None:
-    """`999y` 不许把全表拖出来（上界钳制）。"""
-    assert service.range_limit("999y") == service.SERIES_MAX_LIMIT
+def test_parse_series_range_clamps_limit_to_max() -> None:
+    """`999y` 不许把全表拖出来（行数上界钳制），但窗口天数照实记。"""
+    parsed = service.parse_series_range("999y")
+    assert parsed is not None
+    assert parsed.limit == service.SERIES_MAX_LIMIT
+    assert parsed.days == 999 * 366
 
 
 def test_series_default_range_is_valid() -> None:
-    assert service.range_limit(service.SERIES_DEFAULT_RANGE) is not None
+    assert service.parse_series_range(service.SERIES_DEFAULT_RANGE) is not None
 
 
 # ── 2) registry 白名单 + 口径版本登记位 ────────────────────────────────
@@ -79,11 +103,15 @@ def test_find_metric_rejects_unregistered_key() -> None:
 
 
 def test_every_metric_def_has_caliber_version_slot() -> None:
-    """口径版本登记位存在：本期不预填具体口径，故全部为 None。"""
+    """每个登记项都有口径版本登记位，且类型是 str | None（**不断言全为 None**）。
+
+    断言"全为 None"是个时间炸弹：任何后续任务按 registry:73 的口径修订要求合法声明
+    ``caliber_version="M1-2026"`` 都会把它打红。这里只锁能力与类型。
+    """
     for cfg in INDUSTRIES.values():
         for m in cfg.metrics:
             assert hasattr(m, "caliber_version")
-            assert m.caliber_version is None  # 只要求能力存在，不回填口径
+            assert m.caliber_version is None or isinstance(m.caliber_version, str)
 
 
 def test_metric_def_caliber_version_is_settable() -> None:
@@ -127,22 +155,38 @@ def test_latest_out_carries_four_badges() -> None:
     out = service._latest_out(m, _row(published_at=published, caliber="M1"), row_scope="pig")
     assert out.source == "akshare_soozhu"
     assert out.freq == "daily"
-    assert out.as_of == date(2026, 10, 8)  # PIT 徽章取实际可得时点
+    assert out.as_of == date(2026, 10, 9)  # 上海时间 10-09 00:30（见下一个测试）
+    assert out.as_of_source == service.AS_OF_FROM_PUBLISHED  # 真 PIT，判别式明确
     assert out.published_at == published
     assert out.caliber_version == "M1"
     assert out.caliber_version_registered is None  # registry 尚未回填口径
     assert out.scope_key == "pig"
 
 
-def test_latest_out_falls_back_as_of_but_not_pit_field() -> None:
-    """`published_at` NULL：as_of 回退 period，但 published_at 仍为 None。
+def test_as_of_uses_shanghai_calendar_not_utc() -> None:
+    """Ruling 35：`published_at` 的"实际可得日"按 Asia/Shanghai 判定。
 
-    这是"不许静默回退"的读面表达：消费方能分辨"真 PIT"与"回退值"。
+    北京 2026-10-09 00:30 = UTC 2026-10-08 16:30。用 `.date()` 直接取 UTC 日会得到
+    10-08（比真实可得日早一天 = 回测偷看未来）。
+    """
+    beijing = datetime(2026, 10, 9, 0, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+    assert beijing.astimezone(UTC).date() == date(2026, 10, 8)  # 证明这不是空断言
+    as_of, source = service._pit_as_of(_row(published_at=beijing))
+    assert as_of == date(2026, 10, 9)
+    assert source == service.AS_OF_FROM_PUBLISHED
+
+
+def test_latest_out_falls_back_as_of_with_explicit_discriminant() -> None:
+    """`published_at` NULL：as_of 回退 period，但**必须**带 `as_of_source="period"`。
+
+    ADR 0011「绝不静默回退到 period」的读面表达：值仍有用于展示，回退事实显式标注，
+    规则/回测路径（S2.2）据此拒绝。
     """
     m = PIG_INDUSTRY.metric("hog_price")
     assert m is not None
     out = service._latest_out(m, _row(published_at=None), row_scope="pig")
     assert out.as_of == date(2026, 9, 30)
+    assert out.as_of_source == service.AS_OF_FROM_PERIOD
     assert out.published_at is None
 
 
@@ -153,6 +197,7 @@ def test_latest_out_without_row_is_a_skeleton() -> None:
     assert out.metric_key == "hog_price"
     assert out.value is None
     assert out.as_of is None
+    assert out.as_of_source is None  # 无数据不假装有值：判别式也空
     assert out.published_at is None
     assert out.caliber_version_registered is None
 
@@ -208,6 +253,7 @@ async def test_latest_endpoint_returns_four_badges(
     assert {"source", "as_of", "freq", "caliber_version"} <= set(body.model_dump())
     assert body.source == "akshare_soozhu"
     assert body.as_of == date(2026, 10, 8)
+    assert body.as_of_source == service.AS_OF_FROM_PUBLISHED  # 判别式随四徽章一起下发
     assert body.freq == "daily"
     assert body.caliber_version == "M1"
 
@@ -227,20 +273,44 @@ async def test_latest_endpoint_maps_unregistered_metric_to_404(
     assert "nope" in str(exc.value.detail)
 
 
-async def test_series_endpoint_rejects_bad_range_before_touching_db() -> None:
+@pytest.mark.parametrize("empty", ["metric_keys", "scope_keys"])
+async def test_latest_endpoint_rejects_empty_lists_with_422(
+    monkeypatch: pytest.MonkeyPatch, empty: str
+) -> None:
+    """空列表 ≠ 省略：省略=全部，空列表=问了个空问题 → 422（不许静默当成"全部"）。"""
+    from app.api.v1 import metrics as api
+
+    async def _never(*_a: Any, **_kw: Any) -> list[Any]:
+        raise AssertionError("空列表必须在触 service 前被拒")
+
+    monkeypatch.setattr(service, "get_latest_metrics_across_scopes", _never)
+    kwargs: dict[str, Any] = {"metric_keys": None, "scope_keys": None}
+    kwargs[empty] = []
+    with pytest.raises(HTTPException) as exc:
+        await api.get_latest_metrics(db=None, **kwargs)  # type: ignore[arg-type]
+    assert exc.value.status_code == 422
+
+
+async def test_series_endpoint_rejects_bad_range_with_422_not_404() -> None:
+    """参数不合法是 422（"资源不存在"才是 404），且在触 DB 前返回。"""
     from app.api.v1 import metrics as api
 
     with pytest.raises(HTTPException) as exc:
         await api.get_series(
             db=None, cache=_NoneCache(), scope_key="pig", metric_key="hog_price", range="weekly"
         )  # type: ignore[arg-type]
-    assert exc.value.status_code == 404
+    assert exc.value.status_code == 422
+    assert "range" in str(exc.value.detail)
 
 
-async def test_series_endpoint_caches_with_canonical_limit_key(
+async def test_series_endpoint_caches_with_canonical_range_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """缓存键用换算后的 limit → `1y` 与 `366d` 同键（不会各存一份）。"""
+    """缓存键 = 规范化 range 文本：`1y` 与 `366d` 是同一窗口 → 同一把键。
+
+    （原实现用 limit 做键，会把不同窗口的 `30d`/`30m`… 折叠，或反过来让同一窗口
+    因字面量不同各存一份。）
+    """
     from app.api.v1 import metrics as api
 
     async def _fake(_db: Any, scope_key: str, metric_key: str, range_key: str) -> MetricSeriesOut:
@@ -253,7 +323,9 @@ async def test_series_endpoint_caches_with_canonical_limit_key(
             freq="daily",
             source="mock",
             range=range_key,
-            limit=service.range_limit(range_key) or 0,
+            limit=(
+                service.parse_series_range(range_key) or service.SeriesRange("all", None, 0)
+            ).limit,
         )
 
     monkeypatch.setattr(service, "get_series", _fake)
@@ -263,9 +335,11 @@ async def test_series_endpoint_caches_with_canonical_limit_key(
             db=None, cache=cache, scope_key="pig", metric_key="hog_price", range=range_key
         )  # type: ignore[arg-type]
     assert [k for k, _v, _t in cache.sets] == [
-        "metrics:series:pig:hog_price:366",
-        "metrics:series:pig:hog_price:366",
+        "metrics:series:pig:hog_price:366d",
+        "metrics:series:pig:hog_price:366d",
     ]
+    # 响应的 range 是规范化文本，请求 `1y` 也不会回一个和窗口不符的字面量
+    assert cache.sets[0][1]["range"] == "366d"
     assert all(ttl == service.SERIES_CACHE_TTL for _k, _v, ttl in cache.sets)
 
 

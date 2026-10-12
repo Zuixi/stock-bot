@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# PIT 时点口径：中国市场的"实际可得日"按 Asia/Shanghai 日历判定（timestamptz 的 .date()
+# 取的是 UTC 日期，北京 00:30 发布会被算成前一天 = 回测偷看未来，故一律先转上海再取日期）。
+CN_TZ_NAME = "Asia/Shanghai"
 
 
 class MetricDelta(BaseModel):
@@ -17,9 +21,10 @@ class MetricLatestOut(BaseModel):
     """一个 scope 的一个指标最新值。
 
     四徽章字段（spec §S1.2）：``source`` / ``as_of`` / ``freq`` / ``caliber_version``。
-    ``as_of`` = 该值**实际可得时点**（PIT）：有 ``published_at`` 用它，否则回退到
-    ``period``（历史行情"发布即连续可得"）；``published_at`` 另单独回传，让消费方
-    能区分"真 PIT"与"回退值"，而不是被静默糊过去。
+    ``as_of`` = 该值**实际可得时点**（PIT）；``published_at`` 为 NULL 的行情类序列
+    （"发布即连续可得"）由 ``as_of_source`` 显式标注回退，**绝不静默**（ADR 0011:26-27）：
+    ``as_of_source == "published_at"`` → 真 PIT；``"period"`` → 回退值，规则/回测路径
+    （S2.2）应要求前者。``as_of`` 与 ``period`` 均为 Asia/Shanghai 日历日。
     ``caliber_version_registered`` = registry 声明的当前口径；与 ``caliber_version``
     （行上实际口径）不一致即上游口径断点。
     """
@@ -32,7 +37,9 @@ class MetricLatestOut(BaseModel):
     source: str | None = None
     freq: str | None = None
     period: date | None = None
-    as_of: date | None = None  # PIT 徽章：published_at 的日期，NULL 时回退 period
+    as_of: date | None = None  # PIT 徽章：published_at 的上海日历日；无则回退 period
+    # 回退判别式（Ruling 34）：published_at = 真 PIT；period = 回退，消费方必须能分辨
+    as_of_source: str | None = None  # published_at | period
     published_at: datetime | None = None  # PIT 原值（NULL = 未登记）
     caliber_version: str | None = None  # 口径版本徽章（行上实际值）
     caliber_version_registered: str | None = None  # registry 声明的当前口径
@@ -127,7 +134,8 @@ class MetricHistoryPointOut(BaseModel):
     value: float | None
     source: str
     freq: str
-    as_of: date | None = None  # PIT：published_at 的日期，NULL 时回退 period
+    as_of: date | None = None  # PIT：published_at 的上海日历日，NULL 时回退 period
+    as_of_source: str | None = None  # 回退判别式（Ruling 34）：published_at | period
     published_at: datetime | None = None
     caliber_version: str | None = None
 
@@ -147,7 +155,12 @@ class MetricHistoryOut(BaseModel):
 
 
 class MetricSeriesOut(BaseModel):
-    """升序序列 + 四徽章（Redis 缓存）。``range`` 为请求的预设窗口，``limit`` 为实际行数上限。"""
+    """升序序列 + 四徽章（Redis 缓存）。
+
+    ``range`` 是**真实时间窗**：``period_from`` 给出窗口下界（含），返回的点全部
+    ``period >= period_from``；``limit`` 只是防御性行数上界（防病态数据拉爆）。
+    请求什么 range 就回什么 range —— 上限截断发生时 ``truncated=True``，不假装完整。
+    """
 
     scope_key: str
     metric_key: str
@@ -155,11 +168,14 @@ class MetricSeriesOut(BaseModel):
     unit: str | None = None
     tier: str = "manual"
     freq: str
-    source: str | None = None  # 最新一点的源（序列可能跨源）
+    source: str | None = None  # 采纳的源（registry 优先级最高者）
+    source_mismatch: bool = False  # True = 库里源的都不在 registry 优先级表里（发出而非静默丢弃）
     caliber_version: str | None = None
     caliber_version_registered: str | None = None
     range: str
+    period_from: date | None = None  # 窗口下界（含）；"all" 为 None
     limit: int
+    truncated: bool = False  # 命中 limit 上界（还有更早的点未返回）
     points: list[MetricHistoryPointOut] = []
 
 
@@ -175,6 +191,21 @@ class MetricBatchItem(BaseModel):
     published_at: datetime | None = None
     # 口径版本：仅当本次导入的上游口径与既有不同才填（留断点）
     caliber_version: str | None = None
+
+    @field_validator("published_at")
+    @classmethod
+    def _published_at_must_be_aware(cls, v: datetime | None) -> datetime | None:
+        """PIT 时点必须带时区：naive datetime 的"实际可得日"是歧义的（F3）。
+
+        拒绝而不是猜（猜错即回测偷看未来）。调用方应传 ISO 8601 带偏移，
+        如 ``2026-10-09T00:30:00+08:00``。
+        """
+        if v is not None and v.tzinfo is None:
+            raise ValueError(
+                "published_at 必须带时区（如 2026-10-09T00:30:00+08:00）："
+                "naive 时点的实际可得日不可判定"
+            )
+        return v
 
 
 class MetricBatchRequest(BaseModel):

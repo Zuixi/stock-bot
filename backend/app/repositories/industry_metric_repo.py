@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,22 +21,28 @@ _METRIC_CONFLICT_COLS = ("industry_key", "stock_id", "metric_key", "source", "fr
 async def upsert_metrics(db: AsyncSession, rows: list[dict]) -> int:
     """Idempotent bulk upsert of metric rows. Returns affected row count.
 
-    ``published_at`` / ``caliber_version`` 在冲突更新集中：人工导入补齐 PIT 或口径版本时，
-    重跑同一 (scope, metric, source, freq, period) 必须把新值写上，否则"能写入"只对
-    首次插入成立（ADR 0011 的修订留痕依赖覆盖写）。
+    ``published_at`` / ``caliber_version`` 用 ``coalesce(excluded, 既有)``：重导入**省略**
+    这两列时必须保留已记录的值（人工通道字段可选，默认 None；若直接取 excluded.*，
+    一次不带 PIT 的重发就会把已登记的 PIT 抹成 NULL —— 而保住 PIT 正是本表加列的目的）。
+    显式给了非 NULL 值时照常覆盖（修订留痕，ADR 0011）。
+    ``extra`` 同理保留既有值（人工导入 extra 恒 None）。
     """
     if not rows:
         return 0
-    stmt = pg_insert(IndustryMetric).values(rows)
+    columns = frozenset(key for row in rows for key in row)  # 混合批次列集取并集
+    values = [{col: row.get(col) for col in columns} for row in rows]
+    stmt = pg_insert(IndustryMetric).values(values)
     stmt = stmt.on_conflict_do_update(
         constraint="uq_industry_metrics_key",
         set_={
             "source_tier": stmt.excluded.source_tier,
             "value": stmt.excluded.value,
-            "unit": stmt.excluded.unit,
-            "extra": stmt.excluded.extra,
-            "published_at": stmt.excluded.published_at,
-            "caliber_version": stmt.excluded.caliber_version,
+            "unit": func.coalesce(stmt.excluded.unit, IndustryMetric.unit),
+            "extra": func.coalesce(stmt.excluded.extra, IndustryMetric.extra),
+            "published_at": func.coalesce(stmt.excluded.published_at, IndustryMetric.published_at),
+            "caliber_version": func.coalesce(
+                stmt.excluded.caliber_version, IndustryMetric.caliber_version
+            ),
         },
     )
     result = await db.execute(stmt)
@@ -93,6 +99,46 @@ async def get_metric_history(
         .order_by(desc(IndustryMetric.period))
         .limit(limit)
     )
+    if freq:
+        stmt = stmt.where(IndustryMetric.freq == freq)
+    if source:
+        stmt = stmt.where(IndustryMetric.source == source)
+    result = await db.execute(stmt)
+    return list(reversed(result.scalars().all()))
+
+
+async def get_metric_window(
+    db: AsyncSession,
+    industry_key: str,
+    metric_key: str,
+    *,
+    period_from: date | None,
+    period_to: date | None = None,
+    limit: int = 5000,
+    freq: str | None = None,
+    source: str | None = None,
+) -> list[IndustryMetric]:
+    """Ascending series **within a period window**（``period_from`` 含、``period_to`` 含）。
+
+    与 ``get_metric_history`` 的区别：那个取"最近 N 行"，这个取"窗口内的行"。
+    通用读面的 `range` 是时间窗语义（``range=30d`` 对月度指标只应给窗内 1~2 个点，
+    而不是 30 个月），故走本函数。``limit`` 仍是防御性上界，调用方据
+    ``len(rows) == limit`` 判定是否截断。
+    """
+    stmt = (
+        select(IndustryMetric)
+        .where(
+            IndustryMetric.industry_key == industry_key,
+            IndustryMetric.stock_id == 0,
+            IndustryMetric.metric_key == metric_key,
+        )
+        .order_by(desc(IndustryMetric.period))
+        .limit(limit)
+    )
+    if period_from is not None:
+        stmt = stmt.where(IndustryMetric.period >= period_from)
+    if period_to is not None:
+        stmt = stmt.where(IndustryMetric.period <= period_to)
     if freq:
         stmt = stmt.where(IndustryMetric.freq == freq)
     if source:
