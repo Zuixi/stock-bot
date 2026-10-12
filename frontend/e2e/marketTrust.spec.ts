@@ -306,8 +306,11 @@ test.describe("可点击条目语义与键盘可达（Task 16）", () => {
     const drawer = page.getByRole("dialog");
     await expect15s(drawer).toBeVisible();
     await expect15s(drawer.getByText("BK1518")).toBeVisible();
-    // 抽屉不该改 URL（与跳转型条目的分野）
-    await expect(page).toHaveURL(/\/market$/);
+    // 抽屉不该改 URL（与跳转型条目的分野）。分类 Tab 现在写 `?tab=`，故断言路径与 board 参数：
+    // 抽屉既没换页、也没塞板块码。
+    const url = new URL(page.url());
+    expect(url.pathname).toBe("/market");
+    expect(url.searchParams.get("board")).toBeNull();
   });
 
   test("回落本地分组（无板块码）的行不是可点条目", async ({ page }) => {
