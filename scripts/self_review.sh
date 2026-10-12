@@ -4,7 +4,8 @@
 # 被 AGENTS.md「完成前自检门禁」引用，并挂进 .pre-commit 兜底。
 #
 # 用法（在仓库根目录执行）：
-#   bash scripts/self_review.sh            # 快检：空白/冲突 + 改动文件 ruff(check+format) + 文档同步告警 + doc_gate
+#   bash scripts/self_review.sh            # 快检：空白/冲突 + 改动文件 ruff(check+format) + 文档同步告警
+#                                          #       + doc_gate + **check:routes（路由迁移门禁，前端脚本，读清单与 IA 文档）**
 #   bash scripts/self_review.sh --full     # 全量：快检 + 后端 mypy/pytest + 前端 tsc
 #
 # 退出码：0 = 通过；1 = 有硬性未过项（空白/ruff/mypy/test/tsc）。

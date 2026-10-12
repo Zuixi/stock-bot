@@ -4,7 +4,7 @@ import { Spin } from "antd";
 import { MainLayout } from "@/app/layouts/MainLayout";
 import { RequireAuth } from "@/features/auth";
 import { PlaceholderNotice } from "@/shared/ui/PlaceholderNotice";
-import { ROUTES, getPageRoutes, type AppRoute } from "./route-manifest";
+import { type AppRoute } from "./route-manifest";
 
 /**
  * 路由清单的 React 侧：懒加载注册表 + 元素渲染。
@@ -13,7 +13,7 @@ import { ROUTES, getPageRoutes, type AppRoute } from "./route-manifest";
  * 好处：门禁不再解析 JSX（Ruling 33），而渲染行为与改造前逐条等价（Suspense / lazy / RequireAuth）。
  */
 
-// ── 页面懒加载注册表（键 = `routes.ts` 里 `component` 的取值）─────────────────
+// ── 页面懒加载注册表（键 = `route-manifest.ts` 里 `component` 的取值）────────────
 const PAGES: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
   LandingPage: lazy(() => import("@/pages/landing")),
   LoginPage: lazy(() => import("@/pages/login")),
@@ -32,7 +32,7 @@ const PAGES: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
   MePage: lazy(() => import("@/pages/me")),
   IndustryPage: lazy(() => import("@/pages/industry")),
   IndustryWorkbenchPage: lazy(() => import("@/pages/industry/workbench")),
-  // 占位模块（`isPlaceholder: true`）：页面落地时把 `routes.ts` 的标记去掉、并把这里的 import 换成真页面
+  // 占位模块（`isPlaceholder: true`）：页面落地时把 `route-manifest.ts` 的标记去掉、并把这里的 import 换成真页面
   NewsPage: lazy(() => import("@/pages/news")),
   SearchPage: lazy(() => import("@/pages/search")),
   CompanyPage: lazy(() => import("@/pages/company")),
@@ -46,7 +46,7 @@ const PAGES: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
 
 /**
  * 占位路由的通告条——**由路由注入**，不依赖页面文件里有没有某个 import/字符串。
- * `routes.ts` 里 `isPlaceholder: true` 的页面，其下一定渲染本组件（可机械验证 testid）。
+ * `route-manifest.ts` 里 `isPlaceholder: true` 的页面，其下一定渲染本组件（可机械验证 testid）。
  */
 const PLACEHOLDER_NOTICE: Record<string, { title: string; hint?: string }> = {
   "/market/heatmap": { title: "市场热力图" },
@@ -138,9 +138,8 @@ export function renderRoute(route: AppRoute): ReactNode {
   }
 }
 
-/** 供门禁/自检核对：清单里每条 page 路由的 component 都必须已注册 */
-export const PAGE_COMPONENT_KEYS = Object.keys(PAGES);
-export const PLACEHOLDER_PATHS = getPageRoutes()
-  .filter((r) => r.isPlaceholder)
-  .map((r) => r.path);
-export { ROUTES };
+// 注：这里曾经导出 `PAGE_COMPONENT_KEYS` / `PLACEHOLDER_PATHS` / `ROUTES` 供"门禁/自检核对"，
+// 但 `check-routes.mjs` 由 node 直接 import 纯数据文件；本文件是 `.tsx`（JSX + React/antd import），
+// node 的 type stripping **加载不了它**，所以那三个导出从来没有消费者 → 已按 Ruling 33 的同一理由删除。
+// 门禁对本文件的漂移探针是**源码正则**（`check-routes.mjs` 的"占位保护面"一节）：`PAGES` 的注册键、
+// `lazy(() => import("@/pages/<dir>"))` 的页面目录、`PLACEHOLDER_NOTICE` 的文案键——解析不到时会响亮报错，不静默跳过。

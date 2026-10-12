@@ -10,7 +10,8 @@ import { useAuth } from "@/features/auth";
  *
  * 原 `pages/tags/index.tsx` 的内容**原样提取**为面板，落在 `/me?tab=tags` 下渲染
  * （Ruling 31：`/me` 必须保留已建成的能力，不得用「规划中」占位覆盖）。
- * 卡片点击仍去 `/tags/:tagName`（该路由保留，渲染 `TagsPanel`）。
+ * 卡片点击仍去 `/tags/:tagName`——该路径**是 redirect**（→ `/me?tab=tags&name=:tagName`，
+ * 见 `app/router/route-manifest.ts`），个股列表由 `TagsPanel` 渲染 `/me?tab=tags&name=` 这一支。
  */
 export function TagsOverview() {
   const navigate = useNavigate();

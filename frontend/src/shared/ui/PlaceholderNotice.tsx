@@ -3,7 +3,8 @@ import { Space, Typography } from "antd";
 /**
  * 「规划中」通告条（占位路由的统一标记）。
  *
- * **由路由清单注入**（见 `app/router/routes.tsx` 的 `placeholderNotice`）：某条路由在 `ROUTES` 里
+ * **由路由清单注入**（见 `app/router/route-elements.tsx` 的 `PLACEHOLDER_NOTICE`，数据源
+ * `app/router/route-manifest.ts`）：某条路由在 `ROUTES` 里
  * 标了 `isPlaceholder: true`，它的页面就一定会渲染本组件——判定不再依赖"页面文件里有没有某个 import"
  * 或"页面自己的文件里有没有某个字符串"（Ruling 33：那两种推断都出过假绿）。
  *

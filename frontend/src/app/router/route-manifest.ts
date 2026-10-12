@@ -8,10 +8,11 @@
 // 路由与门禁读同一份，不再有"JSX 解析"这一层。
 //
 // **本文件是纯数据**（不 import React 或任何组件：`check-routes.mjs` 由 node 直接 import 它），
-// React 侧（懒加载注册表与元素渲染）在 `routes.tsx`。
+// React 侧（懒加载注册表与元素渲染）在 `route-elements.tsx`。
 //
-// 维护契约：模块真页面落地时，把对应条目的 `isPlaceholder: true` 去掉，并同步 `routes.tsx` 的
-// `placeholderNotice`——门禁会断言"任何 redirect 的目标不得是 `isPlaceholder` 路由"。
+// 维护契约：模块真页面落地时，把对应条目的 `isPlaceholder: true` 去掉，并同步 `route-elements.tsx` 的
+// `PLACEHOLDER_NOTICE` 文案与 `check-routes.mjs` 的 `PLACEHOLDER_CONTRACT`（占位集合的成员与基数都是
+// 被断言的契约）——门禁还会断言"任何 redirect 的目标不得是 `isPlaceholder` 路由"。
 
 /**
  * 顶栏 10 个一级导航（顺序 = IA 文档 §1 的表序，逐字）。
@@ -52,7 +53,7 @@ export interface AppRoute {
    * - `layout`   —— 只做 `<Outlet />` 外壳（当前只有 MainLayout 一条，`path` 为空串）
    */
   kind: RouteKind;
-  /** `kind === "page"`：`routes.tsx` 的 `PAGES` 注册表键 */
+  /** `kind === "page"`：`route-elements.tsx` 的 `PAGES` 注册表键 */
   component?: string;
   /** `kind === "redirect"`：目标（可含 `:param` 与 query） */
   redirectTo?: string;
