@@ -454,12 +454,23 @@ async def persist_snapshot(
     backfill_only = fact_source == limit_up_repo.BACKFILL_SOURCE
     if db is None:
         async with async_session_factory() as session:
-            await limit_up_repo.upsert_sentiment_daily(session, row, backfill_only=backfill_only)
+            upserted = await limit_up_repo.upsert_sentiment_daily(
+                session, row, backfill_only=backfill_only
+            )
             await session.commit()
     else:
-        await limit_up_repo.upsert_sentiment_daily(db, row, backfill_only=backfill_only)
+        upserted = await limit_up_repo.upsert_sentiment_daily(db, row, backfill_only=backfill_only)
     await _invalidate_calendar_cache()
-    return {"status": "ok", "trade_date": trade_date, "zt_count": k["zt_count"]}
+    return {
+        "status": "ok",
+        "trade_date": trade_date,
+        "zt_count": k["zt_count"],
+        # **实际受影响行数**（不是"打算写几行"）：回补 upsert 被 Ruling 18 守卫拒绝时 PG 的
+        # rowcount 就是 0。丢掉它会让调用方把"被守卫拒改的实时行"当成"成功回补"
+        # （T4 评审 Important #1：21 个 local_calc 日被报成 ok 正是这个丢 rowcount 的后果）。
+        "upserted": upserted,
+        "kept_realtime": backfill_only and upserted == 0,
+    }
 
 
 # ----- 个股级涨停事实 + 东财 EOD 增强（Task 1）------------------------------------
@@ -561,6 +572,11 @@ async def persist_stock_facts(
 
     `fact_source=BACKFILL_SOURCE`（历史回补）→ upsert 走 Ruling 18 守卫：只修
     `fact_source='backfill'` 的行，当天实时行（含东财增强列）字节不变。
+
+    返回 `rows`（行集大小）与 `upserted`（**实际受影响行数**，即 PG rowcount 之和）：
+    守卫拒绝的实时行不计入 `upserted`，故 `upserted < rows` 说明这一天有行被"当作实时行
+    保留"（`kept_realtime`）——调用方不得把它当"成功回补"（T4 评审 Important #1）。
+    `build_stock_fact_rows` 保证 `(trade_date, stock_id)` 唯一，故 `rows` 就是 dedup 后的行数。
     """
     market_days = await limit_up_repo.list_recent_trade_dates(
         db, as_of, window_trade_days(calc.LOOKBACK_TRADE_DAYS)
@@ -571,7 +587,14 @@ async def persist_stock_facts(
             as_of,
             market_days[-3:],
         )
-        return {"rows": 0, "is_lu": 0, "is_zb": 0, "prev_is_lu": 0}
+        return {
+            "rows": 0,
+            "is_lu": 0,
+            "is_zb": 0,
+            "prev_is_lu": 0,
+            "upserted": 0,
+            "kept_realtime": False,
+        }
     window_rows = await limit_up_repo.fetch_limit_up_window(
         db, as_of=as_of, as_of_prev=market_days[-2], window_start=market_days[0]
     )
@@ -584,11 +607,14 @@ async def persist_stock_facts(
         market_days=market_days,
         fact_source=fact_source,
     )
-    await limit_up_repo.upsert_limit_up_stock_daily(
+    upserted = await limit_up_repo.upsert_limit_up_stock_daily(
         db, rows, backfill_only=fact_source == limit_up_repo.BACKFILL_SOURCE
     )
     return {
         "rows": len(rows),
+        "upserted": upserted,
+        # 有行被守卫拒绝（已存在的实时行）即 True：整日被拒时 upserted == 0。
+        "kept_realtime": bool(rows) and upserted < len(rows),
         "is_lu": sum(1 for r in rows if r["is_lu"]),
         "is_zb": sum(1 for r in rows if r["is_zb"]),
         "prev_is_lu": sum(1 for r in rows if r["prev_is_lu"]),

@@ -151,13 +151,32 @@ def test_default_start_is_the_e2_safe_start() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _patch_window(monkeypatch: Any, days: list[date], missing: list[date]) -> None:
+def _patch_window(
+    monkeypatch: Any,
+    days: list[date],
+    missing: set[date],
+    *,
+    spy: list[list[date]] | None = None,
+) -> None:
+    """替身**必须真的读它收到的参数**，否则用例无法否证被点名的性质（评审 Important #2）。
+
+    - `fake_list` 断言 `limit` 与 `as_of`（守卫必须为**该日**取窗）；
+    - `fake_missing` 把收到的 `dates` 记进 `spy`，并按收到的集合算"缺限价"。
+    于是把实现回退成 `missing_price_limit_dates(db, [as_of])`（E2 要防的那个 bug）时：
+    `spy != [window]` 直接红；且只查 `as_of` 的调用会把"缺限价的窗口起点"看不见 →
+    true/false 两个方向都咬得住。
+    """
+
     async def fake_list(db: Any, as_of: date, limit: int) -> list[date]:
         assert limit == limit_up_service.window_trade_days(calc.LOOKBACK_TRADE_DAYS)
+        expected_as_of = days[-1] if days else None
+        assert as_of == expected_as_of, f"窗口必须为 as_of={expected_as_of} 取，收到 {as_of}"
         return days
 
     async def fake_missing(db: Any, dates: list[date]) -> list[date]:
-        return missing
+        if spy is not None:
+            spy.append(list(dates))
+        return [d for d in dates if d in missing]
 
     monkeypatch.setattr(limit_up_repo, "list_recent_trade_dates", fake_list)
     monkeypatch.setattr(limit_up_repo, "missing_price_limit_dates", fake_missing)
@@ -165,28 +184,44 @@ def _patch_window(monkeypatch: Any, days: list[date], missing: list[date]) -> No
 
 async def test_window_limits_complete_true_when_every_window_day_has_limits(monkeypatch) -> None:
     window = [date(2025, 9, 16) + timedelta(days=i) for i in range(16)]
-    _patch_window(monkeypatch, window, [])
+    spy: list[list[date]] = []
+    _patch_window(monkeypatch, window, set(), spy=spy)
     assert await limit_up_service.window_limits_complete("DB", window[-1]) is True
+    assert spy == [window], "缺失检查必须收到**整段窗口**，而不是只有 as_of"
 
 
 async def test_window_limits_complete_false_when_any_window_day_lacks_limits(monkeypatch) -> None:
-    """不是只看目标日：窗口**起点**缺限价（限价上线前的日子）也必须判不完备。"""
+    """不是只看目标日：窗口**起点**缺限价（限价上线前的日子）也必须判不完备。
+
+    缺失日**只通过全窗查询可见**（`fake_missing` 按收到的 dates 求交）——只查 `as_of`
+    的实现会返回"无缺失"→ True → 本用例红。
+    """
     window = [date(2025, 9, 16) + timedelta(days=i) for i in range(16)]
-    _patch_window(monkeypatch, window, [window[0]])
+    spy: list[list[date]] = []
+    _patch_window(monkeypatch, window, {window[0]}, spy=spy)
     assert await limit_up_service.window_limits_complete("DB", window[-1]) is False
+    assert spy == [window], "缺失检查必须收到**整段窗口**，而不是只有 as_of"
 
 
 async def test_window_limits_complete_false_when_window_is_short(monkeypatch) -> None:
     """窗口凑不满（数据起点附近）→ 不完备：截断窗口会把 streak 拉平。"""
     window = [date(2025, 10, 15) + timedelta(days=i) for i in range(2)]
-    _patch_window(monkeypatch, window, [])
+    _patch_window(monkeypatch, window, set())
     assert await limit_up_service.window_limits_complete("DB", window[-1]) is False
 
 
 async def test_window_limits_complete_false_when_as_of_is_not_the_window_end(monkeypatch) -> None:
     """as_of 自己不是窗口末日（无行情/非交易日）→ 不完备。"""
     window = [date(2025, 9, 16) + timedelta(days=i) for i in range(16)]
-    _patch_window(monkeypatch, window, [])
+
+    async def fake_list(db: Any, as_of: date, limit: int) -> list[date]:
+        return window  # 窗口末日 != as_of，故不能用会断言 as_of 的 _patch_window
+
+    async def fake_missing(db: Any, dates: list[date]) -> list[date]:
+        return []
+
+    monkeypatch.setattr(limit_up_repo, "list_recent_trade_dates", fake_list)
+    monkeypatch.setattr(limit_up_repo, "missing_price_limit_dates", fake_missing)
     assert await limit_up_service.window_limits_complete("DB", date(2025, 11, 30)) is False
 
 
@@ -238,6 +273,95 @@ async def test_run_backfill_sentiment_iterates_ascending_and_records_reasons(mon
     assert summary.reason_counts() == {bmh.REASON_OK: 2, bmh.REASON_WINDOW_INCOMPLETE: 1}
     assert summary.written_days() == 2
     assert db.commits == 2, "逐日落库逐日 commit（可中断续跑）"
+
+
+async def test_run_backfill_reports_guard_rejected_day_as_kept_realtime(monkeypatch) -> None:
+    """评审 Important #1：被 Ruling 18 守卫拒绝的日**不得**报成 `ok`。
+
+    场景：D1 已有实时行（`local_calc`，守卫拒改 → `upserted=0`）、D2 是真回补（`upserted=1`）。
+    → 逐日原因 `[kept_realtime, ok]`，`written_days` 只数 1 天，独立计数列
+    `skipped_kept_realtime=1`，`rows` 只数**实际受影响**的行（1，不是 2）。
+    """
+    _patch_days(monkeypatch, [D1, D2])
+
+    async def fake_review(db: Any, trade_date: date, lookback: int = 0) -> None:
+        return None
+
+    async def fake_persist(
+        db: Any, cache: Any, as_of: date | None = None, **kwargs: Any
+    ) -> dict[str, Any]:
+        if as_of == D1:  # 已存在实时行 → 守卫让 rowcount 归零
+            return {
+                "status": "ok",
+                "trade_date": as_of,
+                "zt_count": 7,
+                "upserted": 0,
+                "kept_realtime": True,
+            }
+        return {
+            "status": "ok",
+            "trade_date": as_of,
+            "zt_count": 7,
+            "upserted": 1,
+            "kept_realtime": False,
+        }
+
+    monkeypatch.setattr(bmh, "review_day", fake_review)
+    monkeypatch.setattr(limit_up_service, "persist_snapshot", fake_persist)
+
+    summary = await bmh.run_backfill(_FakeDb(), domain=bmh.DOMAIN_SENTIMENT, start=D1, end=D2)
+
+    assert [o.reason for o in summary.days] == [bmh.REASON_KEPT_REALTIME, bmh.REASON_OK]
+    assert summary.written_days() == 1, "被守卫拒绝的日不得计入 written_days"
+    assert summary.skipped_kept_realtime() == 1
+    assert summary.rows() == 1, "rows 必须是实际受影响行数（0 + 1）"
+    table = summary.format_table()
+    assert bmh.REASON_KEPT_REALTIME in table
+    assert "skipped_kept_realtime=1" in table and "written_days=1" in table
+    assert f"{D1.isoformat()}  {bmh.REASON_KEPT_REALTIME}" in table, "被拒日要逐日列出来"
+
+
+async def test_run_backfill_stock_day_partial_guard_rejection_is_kept_realtime(
+    monkeypatch,
+) -> None:
+    """个股域：行集里只要有行被守卫保留（`upserted < rows`）→ 整日 `kept_realtime`。"""
+    _patch_days(monkeypatch, [D1, D2])
+
+    async def fake_review(db: Any, trade_date: date, lookback: int = 0) -> None:
+        return None
+
+    async def fake_breadth(db: Any, as_of: date) -> dict[str, int]:
+        return {"zt_count": 75, "dt_count": 1, "zb_count": 39, "quoted": 5400}
+
+    async def fake_facts(db: Any, as_of: date, **kwargs: Any) -> dict[str, Any]:
+        if as_of == D1:  # 150 行已存在实时行、28 行新写 → 部分被拒
+            return {
+                "rows": 178,
+                "is_lu": 75,
+                "is_zb": 39,
+                "prev_is_lu": 95,
+                "upserted": 28,
+                "kept_realtime": True,
+            }
+        return {
+            "rows": 178,
+            "is_lu": 75,
+            "is_zb": 39,
+            "prev_is_lu": 95,
+            "upserted": 178,
+            "kept_realtime": False,
+        }
+
+    monkeypatch.setattr(bmh, "review_day", fake_review)
+    monkeypatch.setattr(limit_up_repo, "fetch_day_breadth", fake_breadth)
+    monkeypatch.setattr(limit_up_service, "persist_stock_facts", fake_facts)
+
+    summary = await bmh.run_backfill(_FakeDb(), domain=bmh.DOMAIN_LIMIT_UP_STOCKS, start=D1, end=D2)
+
+    assert [o.reason for o in summary.days] == [bmh.REASON_KEPT_REALTIME, bmh.REASON_OK]
+    assert summary.written_days() == 1 and summary.skipped_kept_realtime() == 1
+    assert summary.rows() == 28 + 178, "rows 必须是 rowcount 之和（被拒的行不算）"
+    assert "upserted=28/178" in (summary.days[0].detail or "")
 
 
 async def test_run_backfill_sentiment_records_service_skip_reason(monkeypatch) -> None:
@@ -625,6 +749,92 @@ async def test_persist_snapshot_backfill_marks_source_and_guards_upsert(monkeypa
     assert captured["row"]["source"] == "backfill"
     assert captured["backfill_only"] is True
     assert captured["enrich"] is False and enrich_calls == []
+    # 实际受影响行数必须透上来（评审 Important #1）：只有真写了才算 ok
+    assert result["upserted"] == 1 and result["kept_realtime"] is False
+
+
+async def test_persist_snapshot_reports_kept_realtime_when_guard_blocks(monkeypatch) -> None:
+    """守卫拒改（rowcount=0）→ `upserted=0` + `kept_realtime=True`，不得谎报成功写入。
+
+    这条是「脚本把被守卫拒绝的日报成 ok」的根因接线测试：service 层丢掉 rowcount，
+    上层就永远无法区分"写了"与"被拒绝"。
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_snapshot(cache: Any, as_of: date | None = None, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "as_of": as_of,
+            "source": "local_calc",
+            "degraded_reason": None,
+            "is_partial": False,
+            "kpis": {
+                "zt_count": 39,
+                "dt_count": 0,
+                "zb_count": 1,
+                "broken_rate": 0.0,
+                "yzt_avg_pct": 0.0,
+                "promo_1to2": 0.0,
+                "promo_1to2_n": 0,
+                "promo_2to3": 0.0,
+                "promo_2to3_n": 0,
+                "max_streak": 1,
+            },
+            "echelons": [],
+        }
+
+    async def fake_upsert(db: Any, row: dict[str, Any], *, backfill_only: bool = False) -> int:
+        captured["backfill_only"] = backfill_only
+        return 0  # PG：ON CONFLICT DO UPDATE ... WHERE false → rowcount 0
+
+    async def fake_invalidate() -> int:
+        return 0
+
+    monkeypatch.setattr(limit_up_service, "get_snapshot", fake_snapshot)
+    monkeypatch.setattr(limit_up_repo, "upsert_sentiment_daily", fake_upsert)
+    monkeypatch.setattr(limit_up_service, "_invalidate_calendar_cache", fake_invalidate)
+
+    result = await limit_up_service.persist_snapshot(
+        "DB", None, D1, fact_source="backfill", enrich=False
+    )
+    assert captured["backfill_only"] is True
+    assert result["upserted"] == 0 and result["kept_realtime"] is True
+
+
+async def test_persist_stock_facts_surfaces_guard_rejections(monkeypatch) -> None:
+    """个股事实：`upserted < rows` → `kept_realtime=True`（整日被拒时 `upserted=0`）。"""
+    monkeypatch.setattr(
+        limit_up_service,
+        "build_stock_fact_rows",
+        lambda *a, **k: [{"is_lu": True, "is_zb": False, "prev_is_lu": True}],
+    )
+
+    async def fake_days(db: Any, as_of: date, limit: int) -> list[date]:
+        return [D1, D2]
+
+    async def fake_window(db: Any, as_of: date, as_of_prev: date, window_start: date) -> list[Any]:
+        return []
+
+    async def fake_broken(db: Any, as_of: date) -> list[Any]:
+        return []
+
+    monkeypatch.setattr(limit_up_repo, "list_recent_trade_dates", fake_days)
+    monkeypatch.setattr(limit_up_repo, "fetch_limit_up_window", fake_window)
+    monkeypatch.setattr(limit_up_repo, "fetch_day_broken_board_stocks", fake_broken)
+
+    state = {"upserted": 0}
+
+    async def fake_upsert(db: Any, rows: list[Any], *, backfill_only: bool = False) -> int:
+        return state["upserted"]
+
+    monkeypatch.setattr(limit_up_repo, "upsert_limit_up_stock_daily", fake_upsert)
+
+    blocked = await limit_up_service.persist_stock_facts("DB", D2, fact_source="backfill")
+    assert blocked["rows"] == 1 and blocked["upserted"] == 0
+    assert blocked["kept_realtime"] is True
+
+    state["upserted"] = 1
+    written = await limit_up_service.persist_stock_facts("DB", D2, fact_source="backfill")
+    assert written["upserted"] == 1 and written["kept_realtime"] is False
 
 
 async def test_persist_snapshot_realtime_defaults_are_unchanged(monkeypatch) -> None:
@@ -830,12 +1040,12 @@ async def test_backfill_upsert_never_relabels_realtime_sentiment_row(
         assert len(before) == 2
 
         # 回补尝试覆写两天：实时行必须纹丝不动，回补行必须被修好
-        await limit_up_repo.upsert_sentiment_daily(
+        rejected_rows = await limit_up_repo.upsert_sentiment_daily(
             db,
             _sentiment_row(SENTINEL_REALTIME, source="backfill", zt_count=999),
             backfill_only=True,
         )
-        await limit_up_repo.upsert_sentiment_daily(
+        repaired_rows = await limit_up_repo.upsert_sentiment_daily(
             db,
             _sentiment_row(SENTINEL_BACKFILL, source="backfill", zt_count=999),
             backfill_only=True,
@@ -858,6 +1068,9 @@ async def test_backfill_upsert_never_relabels_realtime_sentiment_row(
 
     realtime_before, backfill_before = before
     realtime_after, backfill_after = after
+    # 真库 rowcount 语义：守卫拒改 → 0（评审 Important #1 的依据），回补行 → 1
+    assert rejected_rows == 0, "被守卫拒绝的实时行 rowcount 必须是 0"
+    assert repaired_rows == 1, "回补行必须真的被更新（rowcount=1）"
     assert realtime_after == realtime_before, "实时行被回补改写了（Ruling 18 违规）"
     assert realtime_after["source"] == "local_calc" and realtime_after["zt_count"] == 7
     assert backfill_after["zt_count"] == 999, "回补行必须可被回补修复"
@@ -899,7 +1112,7 @@ async def test_backfill_upsert_never_touches_realtime_fact_row(
         )[0]
 
         # 回补尝试"修"实时行（is_lu 反转 + 重标 fact_source）→ 必须被守卫拒绝
-        await limit_up_repo.upsert_limit_up_stock_daily(
+        rejected_rows = await limit_up_repo.upsert_limit_up_stock_daily(
             db,
             [
                 _fact_row(
@@ -923,6 +1136,7 @@ async def test_backfill_upsert_never_touches_realtime_fact_row(
             .all()
         )[0]
 
+    assert rejected_rows == 0, "被守卫拒绝的实时事实行 rowcount 必须是 0"
     assert after == before, "实时事实行被回补改写了（Ruling 18 违规）"
     assert after["fact_source"] == "local_calc" and after["enrich_source"] == "eastmoney_eod"
     assert after["is_lu"] is True and after["streak"] == 1

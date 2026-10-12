@@ -35,8 +35,15 @@ lookback + 6`（默认 10+6=16）个交易日窗口算，而窗口取自 `daily_
 | `price_limits_missing` | 当日无任何限价行 |
 | `window_limits_incomplete` | 窗口内存在缺限价的交易日（E2 守卫） |
 | `partial_day` | 当日行情行数不足（`is_partial`，半截 ingest）——**不写半截事实** |
+| `kept_realtime` | **被 Ruling 18 守卫拒绝**：该日已有实时行，回补不改它 |
 | `no_limit_up_rows` / `no_fact_rows` | 实时路径自己的降级判据（原样透传） |
 | `error` | 单日异常（已 rollback，不中断整段；有 error 则进程退出码 1） |
+
+`ok` 只表示**真的写入/更新了行**（依据 upsert 返回的 rowcount，不是"我打算写"）。
+`kept_realtime` = 该日已存在实时行（`local_calc`）而被守卫拒改：情绪域 `upserted == 0`；
+个股域只要行集里有行被保留（`upserted < rows`，含部分被拒）就整日算 `kept_realtime`——
+它**不是**"成功回补"，有独立计数列 `skipped_kept_realtime`，`written_days` 不含这些天。
+dry-run 不写库、无法预判守卫结果，通过只读闸门的日记 `would_write`（"真跑会尝试写入"）。
 
 **Ruling 18（回补对实时行不可变）**：两个域都以 `backfill` 标记写入，upsert 带
 `DO UPDATE ... WHERE <已存储的 source/fact_source> = 'backfill'` 守卫 —— 只修回补行；
@@ -89,6 +96,7 @@ REASON_WINDOW_INCOMPLETE = "window_limits_incomplete"
 REASON_PARTIAL_DAY = "partial_day"
 REASON_NO_LIMIT_UP_ROWS = "no_limit_up_rows"
 REASON_NO_FACT_ROWS = "no_fact_rows"
+REASON_KEPT_REALTIME = "kept_realtime"
 REASON_ERROR = "error"
 
 # 交易日区间：真源是 `daily_quotes` 实际有行的日期（与
@@ -126,9 +134,15 @@ class BackfillSummary:
         return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
     def written_days(self) -> int:
+        """**真的写入/更新了行**的天数（`kept_realtime` 的天不计入）。"""
         return sum(1 for o in self.days if o.reason == REASON_OK)
 
+    def skipped_kept_realtime(self) -> int:
+        """被 Ruling 18 守卫拒绝（已存在实时行、回补不改）的天数 —— 独立计数列。"""
+        return sum(1 for o in self.days if o.reason == REASON_KEPT_REALTIME)
+
     def rows(self) -> int:
+        """实际受影响行数之和（upsert rowcount），不是"打算写"的行数。"""
         return sum(o.rows for o in self.days)
 
     def errors(self) -> int:
@@ -139,7 +153,8 @@ class BackfillSummary:
         header = (
             f"=== backfill summary: domain={self.domain} dry_run={self.dry_run}"
             f" range={self.from_date}→{self.to_date} days={len(self.days)}"
-            f" written_days={self.written_days()} rows={self.rows()}"
+            f" written_days={self.written_days()}"
+            f" skipped_kept_realtime={self.skipped_kept_realtime()} rows={self.rows()}"
             f" elapsed={self.elapsed_s:.1f}s ==="
         )
         lines = [header, f"{'reason':<28}{'days':>6}{'rows':>8}"]
@@ -191,7 +206,12 @@ async def review_day(db: AsyncSession, trade_date: date, lookback: int = LOOKBAC
 async def backfill_sentiment_day(
     db: AsyncSession, trade_date: date, *, dry_run: bool = False
 ) -> DayOutcome:
-    """单日情绪聚合：复用实时路径的 `persist_snapshot`（零新口径），只换 source/增强开关。"""
+    """单日情绪聚合：复用实时路径的 `persist_snapshot`（零新口径），只换 source/增强开关。
+
+    `ok` 的依据是 upsert 的 **rowcount**（`result["upserted"]`），不是"调用了就成功"：
+    该日已有实时行时守卫会让 rowcount=0 → `kept_realtime`（独立原因码），
+    绝不报成"成功回补"（T4 评审 Important #1）。
+    """
     reason = await review_day(db, trade_date)
     if reason is not None:
         return DayOutcome(trade_date, reason)
@@ -207,14 +227,29 @@ async def backfill_sentiment_day(
         return DayOutcome(trade_date, REASON_ERROR, detail=f"{type(exc).__name__}: {exc}")
     if result.get("status") == "ok":
         await db.commit()
-        return DayOutcome(trade_date, REASON_OK, detail=f"zt={result.get('zt_count')}", rows=1)
+        # 缺 `upserted` 只可能是测试替身：宁可按"已写入"算（老替身语义），也不静默算 0 行。
+        upserted = int(result.get("upserted", 1))
+        if result.get("kept_realtime"):
+            return DayOutcome(
+                trade_date,
+                REASON_KEPT_REALTIME,
+                detail=f"已存在实时行，守卫拒改（upserted={upserted}）",
+                rows=upserted,
+            )
+        return DayOutcome(
+            trade_date, REASON_OK, detail=f"zt={result.get('zt_count')}", rows=upserted
+        )
     return DayOutcome(trade_date, str(result.get("reason") or REASON_NO_LIMIT_UP_ROWS))
 
 
 async def backfill_stock_day(
     db: AsyncSession, trade_date: date, *, dry_run: bool = False
 ) -> DayOutcome:
-    """单日个股事实：只落判定列（**不**调东财 EOD 增强），半截行情日不写。"""
+    """单日个股事实：只落判定列（**不**调东财 EOD 增强），半截行情日不写。
+
+    行集里有任何一行被守卫拒绝（该行已存在且是实时行）→ 整日 `kept_realtime`：
+    这一天**不是**一次全新的回补，不能计入 `written_days`；`rows` 记实际 rowcount。
+    """
     reason = await review_day(db, trade_date)
     if reason is not None:
         return DayOutcome(trade_date, reason)
@@ -234,8 +269,15 @@ async def backfill_stock_day(
     if not result.get("rows"):
         return DayOutcome(trade_date, REASON_NO_FACT_ROWS)
     await db.commit()
-    detail = f"is_lu={result['is_lu']} is_zb={result['is_zb']} prev_is_lu={result['prev_is_lu']}"
-    return DayOutcome(trade_date, REASON_OK, detail=detail, rows=int(result["rows"]))
+    planned = int(result["rows"])
+    upserted = int(result.get("upserted", planned))  # 缺 `upserted` 只可能是测试替身
+    detail = (
+        f"is_lu={result['is_lu']} is_zb={result['is_zb']} prev_is_lu={result['prev_is_lu']}"
+        f" upserted={upserted}/{planned}"
+    )
+    if result.get("kept_realtime") or upserted < planned:
+        return DayOutcome(trade_date, REASON_KEPT_REALTIME, detail=detail, rows=upserted)
+    return DayOutcome(trade_date, REASON_OK, detail=detail, rows=upserted)
 
 
 async def _backfill_day(
