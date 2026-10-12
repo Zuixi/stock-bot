@@ -206,12 +206,29 @@ cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -c \
 > 自建行的 `extra` 恒带 `caliber='free_float_weighted'`、`weight_period`、
 > `member_coverage`、`weight_coverage`、`attribution='current_index_weight_snapshot'`。
 >
+> **`idx_turnover_ratio_star`（科创综指）244 天的限制来自哪一侧（Ruling 59.3a，已实机判定）**：
+> 来自**上游 `index_weight` 成分权重快照的起点 2025-09-30**（实测 13 期），
+> **不是该指数的成立日/基日**——TuShare `index_basic` 实测
+> `000680.SH`：`base_date=20191231`、`list_date=20250120`；`index_daily` 实测自
+> **2019-12-31** 起共 1639 行。也就是说指数自身的日线序列比权重快照早 5.75 年，
+> 缺的只是"每月成分与权重"这一份源侧数据。**结论：spec §S1.9 的「≥3 年」对科创综指
+> 当前不可满足，但属源侧限制、可由上游补齐**（不是"结构上不可能"）；这些日子在库里
+> 逐行标 `missing_reason='no_weight_snapshot'`，且**不替换成科创50**（spec 点名的是
+> 科创综指，换指数 = 交付另一个指标）。
+>
 > **`erp_10y` 的 PE 口径与指数（spec §S1.11 验收判据：两者都必须在 UI 可查）**：
 > **整体法**（指数总市值 / 指数口径净利润，**不是成分中位数**）、**指数 = 沪深300
 > （`000300.SH`）**，取 TuShare `index_dailybasic.pe`。公式
 > `erp_10y = 1/PE × 100 − cn_treasury_yield_10y`（单位：百分点）。
 > PE 与收益率都落 `extra`（`pe` / `earnings_yield_pct` / `treasury_yield`），可逐日手算。
 > **PE 单独落 `pe_csi300`**，让 `1/PE` 这一半能从库里独立复原。
+>
+> **`erp_10y` / `cn_treasury_yield_10y` 的落库天（Ruling 59.3b）**：锚在**自身输入的
+> 可得性交集**上 —— 10Y 中债曲线日 ∩ 沪深300 PE 日；**与 `daily_quotes` 无关**
+> （`erp_10y = 1/PE − 10Y` 里根本没有它）。v1 曾把落库天绑在 `daily_quotes` 的交易日上，
+> 于是被一个无关输入截断到 **829 天（3.4 年 < spec §S1.11 的「≥5 年」）**；
+> v2 起为 **2021-07-27 → 2026-10-09 = 1259 天（≈5.2 年）**。其余 11 个依赖本地行情的
+> 指标仍锚在 `daily_quotes` 交易日（829 天）。
 >
 > **§S1.9 的杠杆资金口径**：`margin_financing_balance` / `margin_short_balance` 是交易所
 > 汇总口径（TuShare `margin`）**三所求和**（SSE + SZSE + BSE），原生单位**元**、
@@ -223,8 +240,15 @@ cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -c \
 > （不是一律 15:00，也不是回退 `period`）——行情类与 `erp_10y` 当日 **15:00**、
 > 三个 `margin_*` 当日 **18:00**（交易所收盘后清算发布）、`cn_treasury_yield_10y`
 > 当日 **19:00**（银行间收市后中债/东财发布）。均带 `Asia/Shanghai` 时区。
+> **落库前的机械守卫（Ruling 59.1）**：`market_activity_service._upsert_batched` 拒绝
+> 任何缺 `published_at`（或该值非带时区 datetime）/ 缺 `caliber_version` 的行 ——
+> 这两列在表里**可空**，漏带会**静默**落 NULL（本批次曾有 12036 行全部 NULL 而无人报错）。
 >
-> **口径版本**：`caliber_version = 's1.9s1.11-v1'`。
+> **口径版本**：`caliber_version = 's1.9s1.11-v2'`（Ruling 59 fix round 1 从 v1 bump）。
+> v1 → v2 的三处差异：① `erp_10y` / `cn_treasury_yield_10y` 的落库天改锚（见上，
+> 829 天 → 1259 天）；② 自建换手率的增量缓存改为**口径感知**且命中的 (key, day)
+> **不再重写**（v1 的重跑会把好值覆盖成 `source_empty` 的 NULL，即"有值/空值抖动"的
+> 根因）；③ 落库前新增 PIT 守卫。两版的可比值**逐值相同**（公式未变）。
 >
 > **A/B/C 归类（ADR 0014）**：13 个全属 **B 类**（只用当日点内事实，可回算、允许回补）。
 > 自建的两个换手率**含 C 类成分权重快照**，但只作**归属**用且**字段级标注**
@@ -465,3 +489,71 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --project backend python backend/scripts/check
 理由：现在建就是**为不存在的需求写框架**。当前每个消费方各有自己的兜底模式（本节的"稳定键 + 可空外键 + 计数外露"）已经够用；等到**真的出现第 2 个需要同一队列的消费方**、且能写出它的状态机与权限模型时再抽象（那是 **Wave 3+** 的事，不属于 Wave 0）。
 
 **本条只保证**：每个分类场景能用上面的条件表达式独立兜底，且缺失量可观测。**不保证**提供统一裁定 UI / 状态机 / 审计表。
+
+---
+
+## §4.7 市场排行榜排序指标的窗口与 PIT 口径（S1.6，**榜级口径**）
+
+> **本节是榜级口径，不是 registry 注册项。** 下面 5 个标识（`monthly_pct_chg` /
+> `total_mv` / `dv_ratio` / `n_income_attr_p` / `roe`）**都不在
+> `industry_registry`**（实测 43 个已注册 `metric_key` 与 `FACTORS` 里一个都没有），
+> 它们是**排行榜的排序键**，只在 `GET /api/v1/market/rankings/{key}` 的
+> `meta.caliber` 披露面上出现。故本节**不转录 registry**、也不进 §4.2 的样例表
+> （进去会被 `check_metric_dictionary.py` 判成 `MISSING IN REGISTRY`）。
+> 唯一权威实现 = `backend/app/services/ranking_board_service.py`。
+>
+> **来源更正（Ruling 56.4，诚实记账）**：spec §S1.6 写「由 `industry_metrics` 的指标值
+> + 排序查询产出」与实现不符 —— 真实来源是 `daily_basic_indicators`（`total_mv` /
+> `dv_ratio`）、`income_statement_facts`（`n_income_attr_p`）、`financial_metrics`
+> （长表 `roe`）与 `daily_quotes`（月度涨跌窗口聚合）。**`industry_metrics` 里没有这 5 项。**
+> spec 绑定的实质（**只读计算结果、不落新表**）仍然满足：无迁移、无新表，
+> 榜单由既有表的排序查询产出。
+
+### 1. 股价月度涨幅 / 跌幅（榜 `monthly_gain` / `monthly_loss`，排序键 `monthly_pct_chg`）
+
+- **窗口**：口径交易日往前第 **20 个交易日**（模块常量
+  `ranking_board_service.MOMENTUM_WINDOW_TRADING_DAYS = 20`；与 `industry_registry` 的
+  `close_above_ma20`、`market_sentiment_service` 的 `win = 20` 同一惯例）。
+  窗口长度由**同一常量**渲染进口径文案，不手写数字。
+- **复权**：`close × coalesce(adj_factor, 1)` 的**比值** `cur / ref − 1`（前复权收益率，
+  免取基准日；与 `quote_service.apply_qfq` 同思路）。
+- **日历回看上限**：**40 天**（`MOMENTUM_LOOKBACK_CALENDAR_DAYS`，20 个交易日 ≈ 28 个
+  日历日，留长假余量）；不向前取更早的日期。
+- **窗口不足整只剔除**：次新股 / 长期停牌在窗口内取不到参考日行情时，该标的
+  **不进分子也不进分母**（与 `market_sentiment_service` 同构）。
+
+### 2. `total_mv`（市值，榜 `market_cap`）
+
+- **来源** `daily_basic_indicators.total_mv`，单位 **万元**，**原样透传不做换算**。
+- **样本** = 该交易日 `total_mv IS NOT NULL`（全市场，**含 ST、含次新股**；
+  逐行以 `is_new_stock` / `is_st` 标记供前端筛选）。
+
+### 3. `dv_ratio`（股息率，榜 `dividend_yield`）
+
+- **来源** `daily_basic_indicators.dv_ratio`，单位 **%**，原样透传。
+- **样本** = `dv_ratio IS NOT NULL AND dv_ratio > 0` —— **0 与 NULL 都不进榜**。
+  0 表示"该指标无值"，不是"股息率极低"；把 0 排进榜尾会造出假名次。
+
+### 4. `n_income_attr_p`（归母净利润，榜 `half_year_profit` / `annual_profit`）
+
+- **来源** `income_statement_facts.n_income_attr_p`（宽表同名列），单位 **元**。
+- **期语义** = 该交易日**已公告的最新一期**，**不把报告期钉在 06-30 / 12-31**
+  （中报/年报/季报都算"一期"，故榜上可能同时出现 H1 与 Q1，逐行给出报告期）。
+- `report_type = '1'` 合并报表、**累计**口径（TuShare `income` 只有累计值，单季需另算；
+  该限制逐榜写进 `meta.caliber.notes`）。
+
+### 5. `roe`（ROE，榜 `roe`）
+
+- **来源** `financial_metrics`（**长表**：`metric_key = 'roe'`，值在 `value` 列），单位 **%**。
+- 原样取自 TuShare `fina_indicator.roe`（**非本地重算**）；期语义同第 4 条。
+
+### 6. 第 4/5 条共同的 PIT 规则（**与 §4.4 的口径版本纪律配套**）
+
+- **可见性判据**：`coalesce(f_ann_date, ann_date) <= 交易日`（`f_ann_date` 实际公告日优先，
+  缺失才回退 `ann_date`；回退逐行以 `ann_date_source` 判别式下发）。
+- **取期末排序**：`(end_date DESC, ann_date DESC)` —— 同一期末的更正披露取更晚可见的那条。
+- **无已公告期、或该期排序列为 NULL 的标的都不进榜**；财务字段是 `None` **不是 0**。
+- **分母与排序严格同一列判据**（Ruling 56.3）：`eligible_rows` 的分母谓词与排序谓词共用
+  同一个指标值 JOIN（`n_income_attr_p` / `roe` 各自的 `... IS NOT NULL`），
+  不允许"选期只看 `metric_key` 存在性"（那会让标的计入分母却排不进榜）。
+  榜 `notes` 自述该判据，并与 `eligible_rows` 同源可核。
