@@ -16,7 +16,10 @@ function buildOption(items: SectorMoneyflowItem[], c: ThemePalette) {
   const names = top.map((i) => i.boardName ?? i.boardCode).reverse();
   const bars = top
     .map((i) => ({
-      value: (i.mainNetInflow ?? 0) / 1e8,
+      // 同 MarketMoneyflowCard：`mainNetInflow` 可空，折成 0 会画出一根与"真实 0 亿"
+      // 无法区分的零高度柱。透传 null → 该板块**不画柱**，tooltip 的
+      // `if (!d || d.value == null) return ""` 分支也才真正生效。
+      value: i.mainNetInflow == null ? null : i.mainNetInflow / 1e8,
       pct: i.pctChange,
       ratio: i.mainNetRatio,
       leadName: i.leadStockName,
@@ -34,7 +37,7 @@ function buildOption(items: SectorMoneyflowItem[], c: ThemePalette) {
           params as Array<{
             name: string;
             data: {
-              value: number;
+              value: number | null;
               pct: number | null;
               ratio: number | null;
               leadName: string | null;

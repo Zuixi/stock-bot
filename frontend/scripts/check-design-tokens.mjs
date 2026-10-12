@@ -64,6 +64,11 @@ const MODES = [
 ];
 
 let failed = 0;
+/** 统一失败记账（解析错误与"未定义变量"走同一条路径，避免两套计数各说各话）。 */
+const fail = (msg) => {
+  console.log(`FAIL ${msg}`);
+  failed += 1;
+};
 for (const { label, marker, tsMode, surfaces } of MODES) {
   const b = blockOf(css, marker);
   for (const name of ["up", "down"]) {
@@ -85,16 +90,6 @@ for (const { label, marker, tsMode, surfaces } of MODES) {
   }
 }
 
-// ── 死变量检查（Ruling 43）──────────────────────────────────────────────────
-//
-// 为什么要有这一段：`--flat` 这类"看起来该存在"的变量被写进组件后，声明在
-// computed-value time 失效、元素**静默继承**别的颜色——不报错、不闪、测试也不红，
-// 只有人去比对 `theme.css` 才会发现。同一处已经栽过两次：
-//   ① `#cf1322` 写死色值（暗色对比度 ≈2.8:1，门禁只查 token 自身 → 漏过）；
-//   ② 修①时写出 `var(--flat)`（`--flat` 是 CSS **类名修饰符** `.delta--flat`，
-//      不是自定义属性；真正存在的是 `--text-secondary`）。
-// 因此把"**引用的每一个 `var(--x)` 都必须真的被定义**"机械化——这条完全可以机械检测。
-//
 // ── 死变量检查（Ruling 43 / 45 / 46）──────────────────────────────────────
 //
 // 为什么要有这一段：`--flat` 这类"看起来该存在"的变量被写进组件后，声明在
@@ -151,7 +146,15 @@ for (const file of sourceFiles) {
   //   引用 = 出现在**字符串字面量**里的 `var(...)`（`style={{ color: "var(--up)" }}`、
   //          模板串整段 CSS）。字符串内容是文本，故按文本解析 `var()`，但**只在 AST
   //          给出的那一个字符串值上解析**，不接触文件全文 → NEW-3 无法复现。
-  const sf = parseSource(file, raw);
+  let sf;
+  try {
+    sf = parseSource(file, raw, (message) => {
+      fail(`${message} —— 该文件已从本门禁视野里消失，必须修好语法才能被校验`);
+    });
+  } catch (err) {
+    fail(`${file} 解析失败：${err.message}`);
+    continue;
+  }
   walk(sf, (node) => {
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
       const value = node.text;

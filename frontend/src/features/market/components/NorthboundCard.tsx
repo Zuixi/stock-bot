@@ -54,9 +54,18 @@ export function NorthboundCard() {
   // 自己渲染整句，`source_status` 不再走徽标通道——同一句里已含「已停更」结论，不漏标注。
   const latestDay = northbound?.asOf ? northbound.asOf.slice(5) : null;
   const last = data.length > 0 ? data[data.length - 1] : undefined;
-  const total = data.reduce((acc, p) => acc + (p.netAmount ?? 0), 0);
-  const lastColor = (last?.netAmount ?? 0) > 0 ? colors.up : (last?.netAmount ?? 0) < 0 ? colors.down : colors.flat;
-  const totalColor = total > 0 ? colors.up : total < 0 ? colors.down : colors.flat;
+  // 缺值不得渲染成 0：`netAmount` 逐日是**可空**的（`_map_hsgt_rows` 把上游 NaN 映射为
+  // null = "该日缺失"）。原先 `acc + (p.netAmount ?? 0)` 把缺失并成 0，于是**30 天全缺**
+  // 时会显示"近30日累计 0.00亿"——一个看起来正常的数字，实际是"没有数据"。
+  // 现在逐日缺失即整段未知（`null`），由 `fmtNorthYi` 渲染成 `—`（它本来就有 null 分支：
+  // `v == null ? DASH : …`，只是原先永远收不到 null）。
+  // 本卡其余部分早就是这个口径：`buildOption` 里 `p.netAmount == null ? null : …`
+  // 让折线在该日**断开**，tooltip 也走 `v == null ? "—"`。这里只是把累计值对齐到同一口径。
+  const total =
+    data.length === 0 ? null : data.reduce<number | null>((acc, p) => (p.netAmount == null || acc == null ? null : acc + p.netAmount), 0);
+  const lastNet = last?.netAmount ?? null;
+  const lastColor = lastNet == null ? colors.flat : lastNet > 0 ? colors.up : lastNet < 0 ? colors.down : colors.flat;
+  const totalColor = total == null ? colors.flat : total > 0 ? colors.up : total < 0 ? colors.down : colors.flat;
   return (
     <Card
       title="北向资金"

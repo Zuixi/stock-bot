@@ -14,15 +14,44 @@
  * 剥掉 CSS 块注释（保留换行以维持行号）。
  *
  * ⚠️ **只用于 `.css` 文件**。不要再用它处理 `.ts/.tsx`：那条路已交给解析器，
- * 手工词法正是 NEW-3 的成因。CSS 侧之所以安全：CSS 没有正则字面量、没有 `//` 行注释
- * （`url(https://…)` 必须加引号；未加引号的 `url(...)` 里也不会出现块注释起始符）。
+ * 手工词法正是 NEW-3 的成因。
+ *
+ * **必须跳过字符串**（Ruling 47 修的回归）：CSS 里 `content: "/*"`、
+ * `url("https://ex.com/*")` 都是**字符串内容**，其中的 `/*` 不是注释起始符。
+ * 上一版删掉了字符串跳过逻辑，于是 `content: "/*"` 会把**文件余部全部吞掉**——
+ * 同时制造一次假绿（后面的引用全看不见）与一次假红（后面的定义也全看不见）。
+ * 基准版 `stripComments` 本就处理对了这一点，本版按同样规则补回。
+ *
+ * 为什么 CSS 侧这样够了（不需要 JS 那套词法）：CSS 没有正则字面量、没有模板串、
+ * 没有 `//` 行注释；字符串只有单引号与双引号两种，且转义只用反斜杠。
  */
 export function stripCssComments(source) {
   let out = "";
   let i = 0;
   const n = source.length;
   while (i < n) {
-    if (source[i] === "/" && source[i + 1] === "*") {
+    const ch = source[i];
+    // 字符串：原样保留（含引号与内容），只跳过反斜杠转义——字符串里的 `/*` 不是注释
+    if (ch === '"' || ch === "'") {
+      const quote = ch;
+      out += ch;
+      i += 1;
+      while (i < n) {
+        if (source[i] === "\\") {
+          out += source[i] + (source[i + 1] ?? "");
+          i += 2;
+          continue;
+        }
+        out += source[i];
+        if (source[i] === quote) {
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === "/" && source[i + 1] === "*") {
       out += "  ";
       i += 2;
       while (i < n && !(source[i] === "*" && source[i + 1] === "/")) {
@@ -35,13 +64,13 @@ export function stripCssComments(source) {
       }
       continue;
     }
-    out += source[i];
+    out += ch;
     i += 1;
   }
   return out;
 }
 
-/** 1-based 行号。 */
+/** 1-based 行号（诊断信息用；`index` 为字符串下标）。 */
 export function lineOf(text, index) {
   let line = 1;
   for (let i = 0; i < index && i < text.length; i += 1) {
@@ -56,7 +85,7 @@ export function lineOf(text, index) {
  *
  * 手写而不是正则：`var(--a, var(--b, #fff))` 有嵌套括号，正则会切错。
  */
-export function readVarArgs(text, start) {
+function readVarArgs(text, start) {
   const args = [];
   let depth = 0;
   let current = "";

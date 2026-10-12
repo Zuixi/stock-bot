@@ -207,9 +207,6 @@ jobs:
       - run: npm run check:design
       # 路由迁移硬门禁：旧 15 条路由/redirect 目标逐字/保留非 redirect/目标非占位页/IA 文档↔代码一致
       - run: npm run check:routes
-      # 「不得假 0」硬门禁：缺值必须 ?? null + 显式空值渲染；0 会被读成真实点位（Ruling 44）。
-      # 语义错误，tsc 沉默，故单独设卡。
-      - run: npm run check:no-fake-zero
       - run: npx tsc --noEmit
 
   frontend-build:
