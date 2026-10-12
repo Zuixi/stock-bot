@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -44,6 +44,114 @@ class SectorMoneyflowListOut(BaseModel):
     as_of: str | None = None  # ISO 日期（返回 items 的日）；无 items 时 None
     stale_days: int | None = None  # 自然日差（今天 - as_of）；无 items 时 None
     items: list[SectorMoneyflowOut] = Field(default_factory=list)
+
+
+# ── Task 6b：板块趋势（GET /market/sector-trends）───────────────────────────────
+#
+# 读时计算，**不物化**。三条硬约束（Ruling 21/22 + 计划缺日语义）：
+# 1. 序列只吃"完整日"（`capture_kind='eod_full'`）；窗口内缺完整日的交易日 → `missing_days`，
+#    **绝不**当成 0 流入；
+# 2. `attribution` 必填且如实：`industry`/`region` = 按当前快照归属（UI 固定文案
+#    "按当前分类回溯，非当时成分"）、`concept` = 时点成分（`concept_member_changes` 反推）；
+# 3. `top_n` 是显式维度（默认 20）—— 榜单口径写进响应，不藏在代码里。
+
+#: 归属口径（Ruling 22）。`industry`/`region` 无成分差分表 → 只能按当前分类回溯；
+#: `concept` 有 `concept_member_changes`（2026-09-20 起）→ 时点成分。
+Attribution = Literal["current_sw_snapshot", "point_in_time"]
+
+#: 板块涨停家数序列的归属来源。`industry`/`region` 没有"东财板块 → 个股"的映射表
+#: （`concept_members` 只覆盖 concept；`sw_industry_members` 是申万 L3 码，与东财 BK 码
+#: 体系不同源），故只有 concept 能算 —— 其余维度显式 `null`，**不**用名字相近的申万码
+#: 冒充东财板块（那会造出"看起来有"的错误归属）。
+LuCountSource = Literal["point_in_time_membership", "unavailable"]
+
+
+class SectorTrendPointOut(BaseModel):
+    """板块在某个**完整日**的观测（缺日不出现在序列里）。"""
+
+    trade_date: date
+    main_net_inflow: float | None = None  # 元
+    pct_change: float | None = None  # %
+    up_count: int | None = None
+    down_count: int | None = None
+    # 板块涨停家数：只有 concept 维度能算（见 LuCountSource）；None = 不适用/缺数据
+    lu_count: int | None = None
+
+
+class SectorTrendBoardOut(BaseModel):
+    """单板块在窗口内的连续性统计 + 逐日序列。
+
+    四组连续性指标（`streak_*` = **截至窗口最后一天**的当前连击；`max_streak_*` =
+    窗口内最长连击）都只在**完整日**上计算：缺日既不续接也不打断连击，因为"这天没有
+    完整快照"根本不是一个观测（Ruling 21）。
+
+    `series` 只含完整日（缺日不出现在这里，见 `missing_days`）；`main_net_inflow` 是
+    **最后完整日**的值，为 None 表示该行上游缺值（**不是** 0 流入）。
+    """
+
+    board_code: str
+    board_name: str | None = None
+    main_net_inflow: float | None = None  # 元（最后完整日）
+    pct_change: float | None = None  # %
+    up_count: int | None = None
+    down_count: int | None = None
+    # 上榜口径：当日 `main_net_inflow` 降序前 `top_n`（tiebreak `board_code ASC`）
+    streak_on_top_n: int = 0
+    max_streak_on_top_n: int = 0
+    streak_inflow: int = 0  # 截至末日的连续净流入天数
+    max_streak_inflow: int = 0
+    streak_outflow: int = 0
+    max_streak_outflow: int = 0
+    series: list[SectorTrendPointOut] = Field(default_factory=list)
+
+
+class SectorTrendWindowOut(BaseModel):
+    """窗口自描述。`samples` = 实际纳入的**完整日**数（= 序列长度）；`days` = 请求数。
+
+    `from`/`to` 是实际纳入的首/末完整日（全缺时均 None）。
+    """
+
+    days: int
+    from_: date | None = Field(default=None, alias="from")
+    to: date | None = None
+    samples: int = 0
+
+    model_config = {"populate_by_name": True}
+
+
+class LeaderChangeOut(BaseModel):
+    """龙头更替事件：`trade_date` 当日榜首换人（首日不算更替）。
+
+    每行的 `board_code`/`board_name` 是**当日**的新龙头（不是被替换掉的旧龙头）。
+    """
+
+    trade_date: date
+    board_code: str
+    board_name: str | None = None
+
+
+class SectorTrendsOut(BaseModel):
+    """``GET /market/sector-trends`` 响应。
+
+    `available_from` 必填（可为 ``None`` = 该维度**还没有**任何完整日，如 T2 的 15:05
+    EOD job 上线前；此时 `boards=[]`、`missing_days` 覆盖整个请求窗口 —— 绝不拿 `poll`
+    行冒充、绝不 0 流入）。`attribution` 必填且随 `dimension` 变化。
+    """
+
+    dimension: str
+    as_of: date | None = None  # 最后完整日；无完整日时 None
+    available_from: date | None = None  # 该维度最早完整日（Ruling 21 必填字段）
+    attribution: Attribution
+    attribution_note: str
+    lu_count_source: LuCountSource = "unavailable"
+    top_n: int = 20
+    window: SectorTrendWindowOut
+    boards: list[SectorTrendBoardOut] = Field(default_factory=list)
+    #: 请求窗口内**缺完整日**的交易日（isoformat 升序）。缺日 ≠ 0 流入：它们不出现在
+    #: 任何序列/连击里，只在这里被显式暴露。
+    missing_days: list[str] = Field(default_factory=list)
+    leader_change_count: int = 0
+    leader_changes: list[LeaderChangeOut] = Field(default_factory=list)
 
 
 class MarketMoneyflowTotalOut(BaseModel):

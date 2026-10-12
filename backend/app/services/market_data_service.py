@@ -704,6 +704,441 @@ MARKET_MONEYFLOW_CACHE_KEY = "market:market-moneyflow:{history_as_of}"
 MARKET_MONEYFLOW_TTL = 60
 
 
+# ----- Task 6b：板块趋势（读时计算，不物化）------------------------------------------
+#
+# 三条硬约束（Ruling 21/22 + 计划"缺日 ≠ 0"）：
+# 1. **完整日闸门**：只统计 `capture_kind='eod_full'` 的日子。`poll`-only 日（盘中
+#    `fid=f62` Top-100 子集）既不进序列、也不算 0 流入，只落进 `missing_days`；
+# 2. **归属显式**：`industry`/`region` 只能按当前分类回溯（无成分差分表），
+#    `concept` 走 `concept_member_changes` 反推的时点成分；
+# 3. **不插值**：`series` 里没有的日子就是没有（不是 0），连击在完整日序列上连续。
+
+SECTOR_TRENDS_CACHE_KEY = "market:sector-trends:{dimension}:{days}:{top_n}"
+SECTOR_TRENDS_TTL = 300
+
+#: 归属口径（Ruling 22）。两个字面量与 `app.schemas.market_data.Attribution` 对齐；
+#: service 不 import schema（schema 只描述出参），故这里保留字面量并由端点断言兜住。
+ATTRIBUTION_CURRENT_SW = "current_sw_snapshot"
+ATTRIBUTION_POINT_IN_TIME = "point_in_time"
+
+_ATTRIBUTION_NOTES = {
+    ATTRIBUTION_CURRENT_SW: "按当前分类回溯，非当时成分",
+    ATTRIBUTION_POINT_IN_TIME: "成分按 concept_member_changes 反推的时点口径",
+}
+
+#: 只有 concept 维度有"东财板块 → 个股"映射（`concept_members`）。industry/region 没有
+#: 同源映射（`sw_industry_members` 是申万码、`stocks.province` 与"XX板块"不同名）——
+#: 用相近名字硬凑会造出**看起来有**的错误归属，故显式不可用。
+_LU_COUNT_UNAVAILABLE = "unavailable"
+_LU_COUNT_POINT_IN_TIME = "point_in_time_membership"
+
+
+def _as_date(value: Any) -> date:
+    """日期归一：`date` 原样、ISO 字符串解析（缓存 JSON 回读会变成 str）。"""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value))
+
+
+def eod_full_days_from_rows(rows: list[Any]) -> set[date]:
+    """行集里**完整日**的集合（Ruling 21：`capture_kind='eod_full'` 才计数）。
+
+    直接读属性而不是 `getattr(..., 'eod_full')` 兜底：列改名/拼错必须炸，不能把
+    "产地列没了"静默降级成"所有行都不是完整日"（那会把整个端点变成空响应）。
+    """
+    return {
+        _as_date(r.trade_date) for r in rows if r.capture_kind == market_data_repo.EOD_FULL_CAPTURE
+    }
+
+
+def missing_eod_days(trading_days: list[date], complete_days: set[date]) -> list[str]:
+    """请求窗口内**缺完整日**的交易日（isoformat 升序）。
+
+    缺日 ≠ 0 流入：这些日子不出现在任何序列/连击里，只在这里被显式暴露（Ruling 21）。
+    """
+    return [d.isoformat() for d in trading_days if d not in complete_days]
+
+
+def intersect_complete(trading_days: list[date], complete_days: set[date]) -> list[date]:
+    """请求窗口内**有完整日**的交易日（升序）—— 统计只在它们上面做。"""
+    return [d for d in trading_days if d in complete_days]
+
+
+def resolve_available_from(complete_days: list[date], _trading_days: list[date]) -> date | None:
+    """`available_from` = 该维度最早的**完整日**；一个都没有 → `None`（绝不假装有）。"""
+    return min(complete_days) if complete_days else None
+
+
+def concept_membership_snapshots(
+    current: dict[str, set[str]],
+    changes: list[dict[str, Any]],
+    *,
+    on_days: list[date],
+) -> dict[date, dict[str, set[str]]]:
+    """时点成分快照（**反推**：当前态 - 之后的 add + 之后的 remove）。
+
+    `concept_members` 是**当前态**（每轮覆盖），`concept_member_changes` 是追加式差分
+    （2026-09-20 起）。要把"今天谁属于谁"还原成"某天谁属于谁"，必须从当前态**倒着**应用
+    **该日之后**的差分：
+
+    - 在 `d` 之后被 `add` 的 symbol：`d` 时还不在板 → 从 `d` 的集合里**去掉**；
+    - 在 `d` 之后被 `remove` 的 symbol：`d` 时还在板 → **加回** `d` 的集合。
+
+    直接用当前成分冒充历史成分会把"后来才进板"的股票算进历史涨停家数（前视偏差）；
+    这是 Ruling 22 允许 `attribution="point_in_time"` 的全部依据。
+
+    变更日**当天**的差分不计入（`observed_on == d` 是当日观测到的变化，`d` 的成分应以
+    此前状态为准），否则同日 add+remove 会自我抵消。
+    """
+    by_board: dict[str, list[tuple[date, str, str]]] = {}
+    for change in changes:
+        by_board.setdefault(str(change["board_code"]), []).append(
+            (
+                _as_date(change["observed_on"]),
+                str(change["change_type"]),
+                str(change["symbol"]),
+            )
+        )
+    ordered = {
+        board: sorted(events, key=lambda e: e[0], reverse=True)
+        for board, events in by_board.items()
+    }
+
+    def state_at(day: date) -> dict[str, set[str]]:
+        out: dict[str, set[str]] = {}
+        for board in set(current) | set(by_board):
+            # 倒序（新→旧）应用"day 之后"的事件；遇到 `<= day` 即 break —— 剩下的都是
+            # 更早的差分，与该时点无关（同一 symbol 的多个事件按新→旧逐个反转，语义正确）。
+            symbols = set(current.get(board, set()))
+            for observed_on, kind, symbol in ordered.get(board, []):
+                if observed_on <= day:
+                    break
+                if kind == "add":
+                    symbols.discard(symbol)
+                elif kind == "remove":
+                    symbols.add(symbol)
+            out[board] = symbols
+        return out
+
+    return {day: state_at(day) for day in on_days}
+
+
+def limit_up_counts_by_board(
+    facts: list[dict[str, Any]],
+    membership: dict[date, dict[str, set[str]]],
+) -> dict[tuple[date, str], int]:
+    """`(完整日, 板块码) → 当日该板涨停家数`（**时点成分**归属）。
+
+    `facts` 是 `market_limit_up_stock_daily` 的 `is_lu` 行（`trade_date` + `symbol`）；
+    `membership` 是 `concept_membership_snapshots` 的产物。没有时点成分的日子不参与
+    （宁可少算，也不用当前成分冒充 —— Ruling 22）。
+    """
+    counts: dict[tuple[date, str], int] = {}
+    for fact in facts:
+        day = _as_date(fact["trade_date"])
+        day_sets = membership.get(day)
+        if not day_sets:
+            continue
+        symbol = str(fact["symbol"])
+        for board, symbols in day_sets.items():
+            if symbol in symbols:
+                counts[(day, board)] = counts.get((day, board), 0) + 1
+    return counts
+
+
+def rank_boards(rows: list[Any], day: date, *, top_n: int) -> list[Any]:
+    """某**完整日**按 `main_net_inflow DESC, board_code ASC` 排序取前 `top_n`。
+
+    确定性 tiebreak（Ruling 6）：同额的两块板在两次请求间不得互换位置。缺净流入
+    （`None`）的行排在**最后**（`NULLS LAST` 的服务层等价物）—— 缺值不是"0 流入"，
+    更不该排在某额之上。
+    """
+    day_rows = [r for r in rows if _as_date(r.trade_date) == day]
+    return sorted(
+        day_rows,
+        key=lambda r: (
+            r.main_net_inflow is None,
+            -(r.main_net_inflow if r.main_net_inflow is not None else 0.0),
+            r.board_code,
+        ),
+    )[:top_n]
+
+
+def _tail_streak(values: list[Any], pred: Any) -> int:
+    """从**末位往前**数连续满足 `pred` 的个数（当前连击：截至窗口最后一天）。"""
+    n = 0
+    for value in reversed(values):
+        if value is None or not pred(value):
+            break
+        n += 1
+    return n
+
+
+def _max_streak(values: list[Any], pred: Any) -> int:
+    """窗口内最长连击（`None` 视为断点，**不**当作满足/不满足的观测）。"""
+    best = 0
+    current = 0
+    for value in values:
+        if value is not None and pred(value):
+            current += 1
+            best = max(best, current)
+        else:
+            current = 0
+    return best
+
+
+def compute_board_stats(
+    rows: list[Any],
+    *,
+    complete_days: list[date],
+    top_n: int,
+    lu_counts: dict[tuple[date, str], int] | None = None,
+) -> list[dict[str, Any]]:
+    """窗口内每块板的连续性统计 + 逐日序列（**只在 `complete_days` 上计算**）。
+
+    返回的板按**末日榜序**（`main_net_inflow DESC, board_code ASC`，缺值最后）排列，
+    与 `rank_boards` 同一 tiebreak。`series` 每个完整日一行；该板当日无行 → 该点
+    `main_net_inflow/pct_change/up_count/down_count` 全 `None`（**不是 0**），
+    `lu_count` 取 `lu_counts`（concept 才有；缺 → `None`）。
+    """
+    lu_counts = lu_counts or {}
+    by_day: dict[date, dict[str, Any]] = {d: {} for d in complete_days}
+    for row in rows:
+        day = _as_date(row.trade_date)
+        if day in by_day:
+            by_day[day][row.board_code] = row
+
+    codes: set[tuple[str, str | None]] = set()
+    for day in complete_days:
+        for code, row in by_day[day].items():
+            codes.add((code, row.board_name))
+
+    ranked_by_day = {
+        day: [r.board_code for r in rank_boards(rows, day, top_n=top_n)] for day in complete_days
+    }
+    board_names = {code: name for code, name in codes}
+
+    stats: list[dict[str, Any]] = []
+    for code in sorted({c for c, _ in codes}):
+        flows: list[float | None] = []
+        series: list[dict[str, Any]] = []
+        for day in complete_days:
+            row = by_day[day].get(code)
+            flow = row.main_net_inflow if row is not None else None
+            flows.append(flow)
+            series.append(
+                {
+                    "trade_date": day,
+                    "main_net_inflow": flow,
+                    "pct_change": row.pct_change if row is not None else None,
+                    "up_count": row.up_count if row is not None else None,
+                    "down_count": row.down_count if row is not None else None,
+                    "lu_count": lu_counts.get((day, code)),
+                }
+            )
+        on_top = [code in ranked_by_day[day] for day in complete_days]
+        last = series[-1] if series else None
+        stats.append(
+            {
+                "board_code": code,
+                "board_name": board_names.get(code),
+                "main_net_inflow": last["main_net_inflow"] if last else None,
+                "pct_change": last["pct_change"] if last else None,
+                "up_count": last["up_count"] if last else None,
+                "down_count": last["down_count"] if last else None,
+                "streak_on_top_n": _tail_streak(on_top, bool),
+                "max_streak_on_top_n": _max_streak(on_top, bool),
+                "streak_inflow": _tail_streak(flows, lambda v: v > 0),
+                "max_streak_inflow": _max_streak(flows, lambda v: v > 0),
+                "streak_outflow": _tail_streak(flows, lambda v: v < 0),
+                "max_streak_outflow": _max_streak(flows, lambda v: v < 0),
+                "series": series,
+            }
+        )
+
+    # 末日榜序（与 rank_boards 同 tiebreak）→ 未上榜的板排在其后（仍可见，不静默丢）
+    last_ranked = ranked_by_day[complete_days[-1]] if complete_days else []
+    order = {code: i for i, code in enumerate(last_ranked)}
+    stats.sort(
+        key=lambda s: (
+            order.get(s["board_code"], len(order)),
+            s["board_code"],
+        )
+    )
+    return stats
+
+
+def leader_changes(
+    rows: list[Any], complete_days: list[date], *, top_n: int
+) -> list[dict[str, Any]]:
+    """完整日相邻两天之间的**龙头更替**事件（首日不算更替）。
+
+    龙头 = 当日榜序第一名（`main_net_inflow DESC, board_code ASC`）。某日一行都没有
+    （该日仍在完整日集合里，但该维度没有行）→ 不产出事件，也不把"无行"当成新龙头。
+    """
+    out: list[dict[str, Any]] = []
+    previous: str | None = None
+    for day in complete_days:
+        ranked = rank_boards(rows, day, top_n=top_n)
+        current = ranked[0].board_code if ranked else None
+        if current is None:
+            continue
+        if previous is not None and current != previous:
+            out.append(
+                {
+                    "trade_date": day,
+                    "board_code": current,
+                    "board_name": next(
+                        (r.board_name for r in ranked if r.board_code == current), None
+                    ),
+                }
+            )
+        previous = current
+    return out
+
+
+def sector_trends_payload(
+    *,
+    rows: list[Any],
+    complete_days: list[date],
+    all_complete_days: list[date],
+    trading_days: list[date],
+    dimension: str,
+    days: int,
+    top_n: int,
+    lu_counts: dict[tuple[date, str], int] | None = None,
+) -> dict[str, Any]:
+    """组装 6b 响应（**纯函数**，无 IO；缓存由 :func:`get_sector_trends` 负责）。
+
+    `complete_days` = 请求窗口内的完整日（统计口径）；`all_complete_days` = 该维度
+    **全部**完整日（`available_from` 的口径 —— 它描述"这类数据自哪日起可用"，不是
+    "窗口里最早那天"）。
+    """
+    in_window = intersect_complete(trading_days, set(complete_days))
+    attribution = ATTRIBUTION_POINT_IN_TIME if dimension == "concept" else ATTRIBUTION_CURRENT_SW
+    boards = (
+        compute_board_stats(rows, complete_days=in_window, top_n=top_n, lu_counts=lu_counts)
+        if in_window
+        else []
+    )
+    changes = leader_changes(rows, in_window, top_n=top_n) if in_window else []
+
+    return {
+        "dimension": dimension,
+        "as_of": in_window[-1] if in_window else None,
+        "available_from": resolve_available_from(all_complete_days, trading_days),
+        "attribution": attribution,
+        "attribution_note": _ATTRIBUTION_NOTES[attribution],
+        "lu_count_source": (
+            _LU_COUNT_POINT_IN_TIME if dimension == "concept" else _LU_COUNT_UNAVAILABLE
+        ),
+        "top_n": top_n,
+        "window": {
+            "days": len(trading_days),
+            "from": in_window[0] if in_window else None,
+            "to": in_window[-1] if in_window else None,
+            "samples": len(in_window),
+        },
+        "boards": boards,
+        "missing_days": missing_eod_days(trading_days, set(complete_days)),
+        "leader_change_count": len(changes),
+        "leader_changes": changes,
+    }
+
+
+async def get_sector_trends(
+    cache: CacheClient | None,
+    dimension: str = "industry",
+    days: int = 60,
+    top_n: int = 20,
+) -> dict[str, Any]:
+    """`GET /market/sector-trends` 的编排（读时计算 + Redis 缓存，**不物化**）。
+
+    窗口 = 该维度**最近有行的 `days` 个交易日**（右端锚定该维度自己的最近日，不拉过
+    数据末端造一串假缺日）；`missing_days` = 窗口内缺 `eod_full` 的交易日。
+    缓存键含 `dimension`/`days`/`top_n`（三者都会改变结果）；空结果不缓存。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+
+    key = SECTOR_TRENDS_CACHE_KEY.format(dimension=dimension, days=days, top_n=top_n)
+    if cache is not None:
+        cached: dict[str, Any] | None = await cache.get(key)
+        if cached:
+            return cached
+
+    async with async_session_factory() as db:
+        snapshot_days = await market_data_repo.list_sector_moneyflow_trading_days(
+            db, dimension, limit=days
+        )
+        trading_days = await market_data_repo.list_trading_days(
+            db,
+            snapshot_days[0] if snapshot_days else date.min,
+            snapshot_days[-1] if snapshot_days else date.min,
+        )
+        if not trading_days:
+            trading_days = list(snapshot_days)
+        all_complete = await market_data_repo.earliest_sector_moneyflow_complete_day(db, dimension)
+        earliest = trading_days[0] if trading_days else None
+        latest = trading_days[-1] if trading_days else None
+        rows: list[Any] = []
+        if earliest is not None and latest is not None:
+            # **显式传 `capture_kind`**：窗口读只要完整日（Ruling 21）。不传会把 poll 行
+            # 一起拉回来 —— 那些行的 `main_net_inflow` 是盘中 Top-100 子集的值，一旦被
+            # 当成 `eod_full` 的候选就会把"缺完整日"的日子混进序列（实测踩过）。
+            rows = await market_data_repo.list_sector_moneyflow_range(
+                db,
+                dimension,
+                earliest,
+                latest,
+                capture_kind=market_data_repo.EOD_FULL_CAPTURE,
+            )
+        lu_counts: dict[tuple[date, str], int] = {}
+        if dimension == "concept" and earliest is not None and latest is not None:
+            lu_counts = await _concept_lu_counts(db, earliest, latest, rows)
+        complete_days = sorted(eod_full_days_from_rows(rows))
+
+    payload = sector_trends_payload(
+        rows=rows,
+        complete_days=complete_days,
+        all_complete_days=[all_complete] if all_complete is not None else [],
+        trading_days=trading_days,
+        dimension=dimension,
+        days=days,
+        top_n=top_n,
+        lu_counts=lu_counts,
+    )
+    if cache is not None and payload["boards"]:
+        await cache.set(key, payload, ttl=SECTOR_TRENDS_TTL)
+    return payload
+
+
+async def _concept_lu_counts(
+    db: AsyncSession,
+    start: date,
+    end: date,
+    rows: list[Any],
+) -> dict[tuple[date, str], int]:
+    """概念维度的"板块涨停家数"（**时点成分**归属，Ruling 22）。
+
+    只有 concept 有"东财板块 → 个股"映射（`concept_members`）；industry/region 没有同源
+    映射，故本函数只被 concept 调用（其余维度 `lu_count=null`，见 `lu_count_source`）。
+
+    成分窗口取 `[请求窗口起点, 请求窗口终点]`：`concept_members` 的当前态按 `last_seen_on`
+    过滤（本次请求要还原的时点区间），`concept_member_changes` 取同区间（它从
+    2026-09-20 起才有，早于该日的时点成分无法还原 → 那些日子的 `lu_count=null`）。
+    """
+    changes = await market_data_repo.list_concept_membership_changes(db, start, end)
+    current = await market_data_repo.list_concept_members_current(db, start, end)
+    complete = [d for d in sorted(eod_full_days_from_rows(rows)) if start <= d <= end]
+    if not complete or not current:
+        return {}
+    membership = concept_membership_snapshots(current, changes, on_days=complete)
+    facts = await market_data_repo.list_limit_up_facts_in_range(db, start, end)
+    return limit_up_counts_by_board(facts, membership)
+
+
 async def ingest_market_moneyflow_daily(db: AsyncSession, days: int = 10) -> dict[str, int]:
     """大盘资金流日线（东财 fflow/daykline 沪深合成）幂等 upsert。"""
     client = _get_eastmoney()

@@ -13,10 +13,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.concept import ConceptMember, ConceptMemberChange
 from app.models.market_data import (
     Announcement,
     BlockTrade,
     DragonTigerEntry,
+    MarketLimitUpStockDaily,
     MarketMoneyflowDaily,
     MarketSentimentIntraday,
     NorthboundDaily,
@@ -24,6 +26,7 @@ from app.models.market_data import (
     ShareFloat,
     StockRepurchase,
 )
+from app.models.quote import DailyQuote
 from app.models.stock import Stock
 
 # asyncpg 单条语句 bind 参数上限 32767（实测解禁任务 share_float 近 7 日窗口一次
@@ -250,6 +253,197 @@ async def sector_moneyflow_day_has_capture(
         .limit(1)
     )
     return (await db.execute(stmt)).first() is not None
+
+
+# ----- Task 6b：板块趋势窗口读（纯读，不物化）----------------------------------------
+#
+# Ruling 21 的"完整日" = 当日有 `capture_kind='eod_full'` 行的日子。下面四个函数是
+# 趋势端点**唯一**的板块读路径；`poll` 行永远只用来判"这天缺完整日"，不被聚合
+# （盘中 Top-100 子集不是当日全量态，见 Ruling 11）。
+
+
+async def latest_sector_moneyflow_day(db: AsyncSession, dimension: str) -> date | None:
+    """该维度 `max(trade_date)`（**不限**产地）。
+
+    用途与 :func:`list_sector_moneyflow_complete_days` 不同：这个只回答"表里最新的一天
+    是哪天"，供趋势窗口**末端锚定**（窗口右端取它，避免把窗口拉过数据末端造出一串
+    假缺日）；完整日判据一律走下面那个。
+    """
+    return (
+        await db.execute(
+            select(func.max(SectorMoneyflowSnapshot.trade_date)).where(
+                SectorMoneyflowSnapshot.dimension == dimension
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def earliest_sector_moneyflow_complete_day(
+    db: AsyncSession, dimension: str, *, capture_kind: str = EOD_FULL_CAPTURE
+) -> date | None:
+    """该维度**最早**的完整日（趋势端点的 `available_from`，Ruling 21 必填字段）。"""
+    return (
+        await db.execute(
+            select(func.min(SectorMoneyflowSnapshot.trade_date)).where(
+                SectorMoneyflowSnapshot.dimension == dimension,
+                SectorMoneyflowSnapshot.capture_kind == capture_kind,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def list_sector_moneyflow_complete_days(
+    db: AsyncSession,
+    dimension: str,
+    start: date,
+    end: date,
+    *,
+    capture_kind: str = EOD_FULL_CAPTURE,
+) -> list[SectorMoneyflowSnapshot]:
+    """`[start, end]` 内该维度的**完整日**行（按 `trade_date, board_code` 升序）。
+
+    `capture_kind` 默认但**显式**可传：调用点必须知道自己在服务哪一批行（与
+    :func:`list_sector_moneyflow_ranked` 同款约定）。`poll`-only 的日子在这里**没有行**
+    —— 正是"缺日 ≠ 0 流入"的实现基础（调用方据此把它们列进 `missing_days`，绝不补 0）。
+    """
+    stmt = (
+        select(SectorMoneyflowSnapshot)
+        .where(
+            SectorMoneyflowSnapshot.dimension == dimension,
+            SectorMoneyflowSnapshot.trade_date >= start,
+            SectorMoneyflowSnapshot.trade_date <= end,
+            SectorMoneyflowSnapshot.capture_kind == capture_kind,
+        )
+        .order_by(
+            SectorMoneyflowSnapshot.trade_date.asc(),
+            SectorMoneyflowSnapshot.board_code.asc(),
+        )
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def list_trading_days(
+    db: AsyncSession, start: date, end: date, *, limit: int | None = None
+) -> list[date]:
+    """`[start, end]` 内 `daily_quotes` 实际持有的交易日（升序）。
+
+    趋势端点的"交易日分母"：**不用** weekday / `trade_cal` 推算——"哪些日子真有行情"
+    本身就是最准的可用性判据（与 `limit_up_repo.list_recent_trade_dates` 同一口径）。
+    `daily_quotes` 为空（迁移未跑）→ 返回空列表，调用方据此把 `missing_days` 留空而
+    不是造出一串假缺日。
+    """
+    stmt = (
+        select(DailyQuote.trade_date)
+        .where(DailyQuote.trade_date >= start, DailyQuote.trade_date <= end)
+        .group_by(DailyQuote.trade_date)
+        .order_by(DailyQuote.trade_date.asc())
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def list_sector_moneyflow_trading_days(
+    db: AsyncSession, dimension: str, *, limit: int
+) -> list[date]:
+    """该维度快照**当日在场**的交易日（升序，最多 ``limit`` 天）——趋势窗口的自然骨架。
+
+    为什么不用全市场交易日：板块快照是 A 类数据，只在采集跑过的日子有行（历史缺口
+    不可补，见 E7）。窗口按"该维度自己有行的日子"右对齐，才能让"最近 N 天趋势"里
+    **没有**一整天完全空白（否则 60 天窗口可能只有 10 天有行、其余 50 天全在
+    `missing_days` 里，图表没有信息量）。真正"有行但缺完整日"的日子仍会在差集里
+    报成 `missing_days`——这正是闸门要暴露的东西。
+    """
+    stmt = (
+        select(SectorMoneyflowSnapshot.trade_date)
+        .where(SectorMoneyflowSnapshot.dimension == dimension)
+        .group_by(SectorMoneyflowSnapshot.trade_date)
+        .order_by(SectorMoneyflowSnapshot.trade_date.desc())
+        .limit(max(limit, 0))
+    )
+    rows = list((await db.execute(stmt)).scalars().all())
+    return list(reversed(rows))
+
+
+async def list_concept_members_current(
+    db: AsyncSession, start: date, end: date
+) -> dict[str, set[str]]:
+    """`concept_members` 当前态里 `last_seen_on ∈ [start, end]` 的板 → symbol 集合。
+
+    `[start, end]` 是趋势请求要还原的**时点区间**（不是"全部当前态"）：当前态里
+    `last_seen_on < start` 的 symbol 在窗口内早已离板（09-22 的 remove 已把它移出），
+    带进来会在 :func:`market_data_service.concept_membership_snapshots` 的**反推**里
+    被当成"窗口内一直在板"而虚增涨停归属。
+    """
+    stmt = (
+        select(
+            ConceptMember.board_code,
+            ConceptMember.symbol,
+        )
+        .where(
+            ConceptMember.last_seen_on >= start,
+            ConceptMember.last_seen_on <= end,
+        )
+        .order_by(ConceptMember.board_code.asc(), ConceptMember.symbol.asc())
+    )
+    out: dict[str, set[str]] = {}
+    for board_code, symbol in (await db.execute(stmt)).all():
+        out.setdefault(board_code, set()).add(symbol)
+    return out
+
+
+async def list_concept_membership_changes(
+    db: AsyncSession, start: date, end: date
+) -> list[dict[str, Any]]:
+    """`concept_member_changes` 在 `[start, end]` 内的差分事件（按 observed_on 升序）。
+
+    追加式差分表（2026-09-20 起累积）——时点成分由它 + 当前态**反推**
+    （见 `market_data_service.concept_membership_snapshots`）。返回 **dict 列表**
+    而不是 ORM 行：`observed_on` 是 `date`，但从缓存/JSON 路径进来可能是 ISO 字符串，
+    服务层需要一个统一的归一入口（`:func:`market_data_service._as_date``）。
+    """
+    stmt = (
+        select(
+            ConceptMemberChange.observed_on,
+            ConceptMemberChange.board_code,
+            ConceptMemberChange.symbol,
+            ConceptMemberChange.change_type,
+        )
+        .where(
+            ConceptMemberChange.observed_on >= start,
+            ConceptMemberChange.observed_on <= end,
+        )
+        .order_by(
+            ConceptMemberChange.observed_on.asc(),
+            ConceptMemberChange.board_code.asc(),
+            ConceptMemberChange.symbol.asc(),
+        )
+    )
+    return [dict(r._mapping) for r in (await db.execute(stmt)).all()]
+
+
+async def list_limit_up_facts_in_range(
+    db: AsyncSession, start: date, end: date
+) -> list[dict[str, Any]]:
+    """`market_limit_up_stock_daily` 在 `[start, end]` 内 `is_lu` 的 `(trade_date, symbol)`。
+
+    只回**涨停**行（`is_lu`）：板块涨停家数序列的分子，炸板/断板行不参与。行集按
+    `trade_date, symbol` 升序，消费方（`limit_up_counts_by_board`）不依赖顺序但也
+    不因乱序而改变结果。
+    """
+    stmt = (
+        select(MarketLimitUpStockDaily.trade_date, MarketLimitUpStockDaily.symbol)
+        .where(
+            MarketLimitUpStockDaily.trade_date >= start,
+            MarketLimitUpStockDaily.trade_date <= end,
+            MarketLimitUpStockDaily.is_lu.is_(True),
+        )
+        .order_by(
+            MarketLimitUpStockDaily.trade_date.asc(),
+            MarketLimitUpStockDaily.symbol.asc(),
+        )
+    )
+    return [dict(r._mapping) for r in (await db.execute(stmt)).all()]
 
 
 async def upsert_northbound(db: AsyncSession, rows: list[dict[str, Any]]) -> int:

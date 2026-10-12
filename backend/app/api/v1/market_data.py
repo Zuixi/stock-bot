@@ -17,6 +17,7 @@ from app.schemas.limit_up import (
     SectorLimitUpOut,
     SentimentCalendarPointOut,
     SentimentIntradayPointOut,
+    SentimentTrendsOut,
     YesterdayLimitUpOut,
 )
 from app.schemas.market_data import (
@@ -29,6 +30,7 @@ from app.schemas.market_data import (
     NorthboundSeriesOut,
     RepurchaseOut,
     SectorMoneyflowListOut,
+    SectorTrendsOut,
     ShareFloatOut,
 )
 from app.services import limit_up_service, market_data_service
@@ -238,6 +240,63 @@ async def get_sentiment_calendar(
 ) -> list[SentimentCalendarPointOut]:
     rows = await limit_up_service.get_calendar(cache, days)
     return [SentimentCalendarPointOut(**r) for r in rows]
+
+
+@router.get("/sentiment/trends", response_model=SentimentTrendsOut)
+async def get_sentiment_trends(
+    cache: CacheDep,
+    days: int = Query(
+        default=250,
+        ge=5,
+        le=500,
+        description="窗口交易日数（读时计算，不物化）；上限 500",
+    ),
+) -> SentimentTrendsOut:
+    """情绪趋势 + 历史分位（读时计算，**不物化**）。
+
+    - `series` 来自 `market_sentiment_daily` 的最近 `days` 个交易日（升序）；
+    - `percentile` **只有 3 个指标**（`zt_count`/`broken_rate`/`promo_1to2`），
+      且只用**有效样本**：某字段当日为 NULL（分母为 0）不进该字段样本、**不计 0**；
+    - `insufficient_history` 为真时 `percentile=null`（有效样本 < 60，不给假分位）；
+    - **不插值**：缺日就是没有这一天，`window.samples` 如实少于 `window.days`。
+    """
+    payload = await limit_up_service.get_sentiment_trends(cache, days)
+    return SentimentTrendsOut.model_validate(payload)
+
+
+@router.get("/sector-trends", response_model=SectorTrendsOut)
+async def get_sector_trends(
+    cache: CacheDep,
+    dimension: Literal["industry", "concept", "region"] = "industry",
+    days: int = Query(
+        default=60,
+        ge=5,
+        le=120,
+        description="窗口交易日数（只统计完整日：当日有 eod_full 行）；上限 120",
+    ),
+    top_n: int = Query(
+        default=20,
+        ge=1,
+        le=100,
+        description="上榜口径 N：当日 main_net_inflow 降序（tiebreak board_code 升序）前 N 名",
+    ),
+) -> SectorTrendsOut:
+    """板块趋势（连续上榜/连续净流入流出/龙头更替/板块涨停家数），读时计算。
+
+    三条硬约束：
+
+    1. **完整日闸门**（Ruling 21）：只有当日存在 `capture_kind='eod_full'` 行的交易日
+       才进统计；窗口内缺完整日的日子列在 `missing_days`，**绝不**当成"0 净流入"。
+       `available_from` = 该维度最早的完整日（可为 `null`：还没有任何完整日）。
+    2. **归属显式**（Ruling 22）：`dimension=industry|region` 回
+       `attribution="current_sw_snapshot"`（**按当前分类回溯，非当时成分**）；
+       `dimension=concept` 回 `attribution="point_in_time"`（成分差分反推的时点成分）。
+    3. **`top_n` 显式**：连续上榜天数的 N 由查询参数定义（默认 20），并列进响应。
+    """
+    payload = await market_data_service.get_sector_trends(
+        cache, dimension=dimension, days=days, top_n=top_n
+    )
+    return SectorTrendsOut.model_validate(payload)
 
 
 @router.get("/sentiment/intraday", response_model=list[SentimentIntradayPointOut])

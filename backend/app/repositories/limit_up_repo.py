@@ -389,3 +389,51 @@ async def list_sentiment_calendar(db: AsyncSession, days: int) -> list[dict[str,
         }
         for r in reversed(rows)
     ]
+
+
+# ----- Task 6a：情绪趋势窗口读（纯读，不物化）--------------------------------------
+#
+# 与 `list_sentiment_calendar` 的分工：那个只回"图表要的 9 个字段"、且**缺
+# `promo_1to2_n`**——分位必须知道"这天该字段到底有没有值"（NULL ≠ 0，见 Ruling 4），
+# 所以趋势读单独一条，回整行 + 有效样本判据列。不要合并：calendar 的字段集是前端
+# 周期图契约，吃进 `promo_1to2_n` 会让两个消费方的口径糊在一起。
+
+
+async def latest_sentiment_day(db: AsyncSession) -> date | None:
+    """`market_sentiment_daily` 的最近交易日（趋势端点的 `as_of`，不是"今天"）。"""
+    return (
+        await db.execute(select(func.max(MarketSentimentDaily.trade_date)))
+    ).scalar_one_or_none()
+
+
+async def list_sentiment_days(db: AsyncSession, days: int) -> list[MarketSentimentDaily]:
+    """近 N 个交易日情绪行（**升序**返回）。
+
+    实现取"降序 limit days"再反转：跨月时序图从左到右，且窗口是"最近 N 天"而不是
+    "最早 N 天"。`days <= 0` 时 SQL 的 `LIMIT 0` 回空（不抛），调用方的 samples=0。
+    """
+    stmt = (
+        select(MarketSentimentDaily)
+        .order_by(MarketSentimentDaily.trade_date.desc())
+        .limit(max(days, 0))
+    )
+    rows = list((await db.execute(stmt)).scalars().all())
+    return list(reversed(rows))
+
+
+async def sentiment_days_in_range(db: AsyncSession, start: date, end: date) -> list[date]:
+    """`[start, end]` 闭区间内 `market_sentiment_daily` 实际持有的交易日（升序）。
+
+    供趋势端点的"窗口内缺日"（有交易日行情、但没有情绪行）与日历对拍——分母是**情绪
+    表自己持有的日子**，不是 weekday 推算（节假日工作日的脏日期不会被当成交易日）。
+    """
+    stmt = (
+        select(MarketSentimentDaily.trade_date)
+        .where(
+            MarketSentimentDaily.trade_date >= start,
+            MarketSentimentDaily.trade_date <= end,
+        )
+        .order_by(MarketSentimentDaily.trade_date.asc())
+        .group_by(MarketSentimentDaily.trade_date)
+    )
+    return list((await db.execute(stmt)).scalars().all())

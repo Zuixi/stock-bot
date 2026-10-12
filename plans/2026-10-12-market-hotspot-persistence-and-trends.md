@@ -3,7 +3,7 @@ status: active
 scope: 市场热点/情绪/资金数据的日级持久化边界与统计追踪——个股级涨停事实、东财实时源日终捕获、覆盖率只读巡检、情绪与板块趋势端点
 touches: backend/app/models/market_data.py, backend/app/migrations/versions/, backend/app/repositories/market_data_repo.py, backend/app/repositories/limit_up_repo.py, backend/app/services/market_data_service.py, backend/app/services/limit_up_service.py, backend/app/services/reconciliation_service.py, backend/app/core/providers/eastmoney_client.py, backend/app/scheduler/jobs.py, backend/app/scheduler/runner.py, backend/app/workers/market_data_worker.py, backend/app/schemas/task.py, backend/app/schemas/market_data.py, backend/app/api/v1/market_data.py, backend/scripts/, backend/tests/, frontend/src/shared/api/, frontend/src/features/market/, docs/decisions/, docs/features.md, docs/Changelog.md
 updated: 2026-10-12
-next-action: Task 5a 完成（真库实测：365 天窗口 241/241 限价日过 pct_chg≥0.99、1,322,196 行、2m45s；254 天口径 17→241，13 个窗口外限价日保持未回填）；Task 5b 经裁定跳过。下一步 Task 6
+next-action: Task 6 完成（6a days=250 → samples=239、三指标 sample_count=239、days=30 → insufficient_history；6b 真库 eod_full=0 → available_from=null + 20/20 缺日如实，哨兵行 e2e 验证闸门与同源同值）；下一步 Task 7（前端 chip + sparkline）
 ---
 
 # 市场热点数据持久化与趋势追踪 实施计划（v2）
@@ -298,12 +298,18 @@ next-action: Task 5a 完成（真库实测：365 天窗口 241/241 限价日过 
 - 指标：连续上榜天数（按当日 `main_net_inflow` Top-N）、连续净流入/流出天数、龙头更替次数、板块涨停家数序列（读 T1 事实 + 归属）
 - 缺日语义：**不做插值**，`missing_days` 显式返回；缺日不得计成"0 流入"
 
-**验收（真库实测）：** 6a `days=250` → `samples ≥ 230`（依赖 T4）；`days=30` → `insufficient_history=true`；6b `available_from` = 表内最早日，与 `/market/sector-moneyflow` 当日值一致；`docs/features.md` 增两行。
+**验收（真库实测 2026-10-12，最后一次全量 pytest 之后；数字回填本行）：**
+- **6a `days=250`** → `window.samples` = **239**（`2025-10-15 → 2026-10-09`，≥230 目标达成，依赖 T4）、`insufficient_history=false`，三个指标 `sample_count` 全 **239**：`zt_count` p0/p50/p100 = **32/76/226**、`broken_rate` **0.0763/0.2921/0.681**、`promo_1to2` **0.0/0.1591/0.4762**（`promo_1to2` p0=0.0 = "0 是可达的正经样本值"的端点证据，不是缺失）。`as_of=2026-10-09`、`as_of_quality=complete`、`streak.zt_above_median_days=119`
+- **6a `days=30`** → `samples=30` → `insufficient_history=true`、`percentile=null`（59/60 边界由单测逐字钉住）
+- **6b 当前真库如实**：`capture_kind='eod_full'` 行数 = **0**（T2 的 15:05 EOD job 上线前）→ 三个维度 `available_from=null`、`window.samples=0`、`boards=[]`，**且窗口内 20 个交易日全部列进 `missing_days`**（`2026-09-04 … 2026-10-09`；用 poll 行冒充完整日或把缺日算成 0 流入都会让这组数字变得"好看而错"）
+- **6b 完整日闸门的实测证据（`@e2e`，自建自清哨兵行）**：往"窗口内最早交易日"写一行 `board_code='BK9999'` 的 `eod_full` 后 → `available_from=as_of=2026-09-04`、`window.samples=1`、`missing_days` 由 20 → **19**、`leader_change_count=0`（单一完整日没有"更替"）、`attribution="current_sw_snapshot"`；该行的 `main_net_inflow/pct_change/up_count/down_count` 与 `list_sector_moneyflow` 读同一行的值**逐字相等**。**注意**：哨兵日必须落在"窗口内"，写在窗口外的早期日期（如 1999-01-04）会因窗口下界被 `daily_quotes` 起点夹住而从序列中消失——这不是 bug，是"窗口=两端都得有数据"的口径（单测已覆盖）
+- **代理不可用的显式声明**：`concept` 的 `attribution="point_in_time"`、`lu_count_source="point_in_time_membership"`；`industry`/`region` 没有"东财板块码 → 个股"的同源映射（`concept_members` 只覆盖 concept）→ `lu_count_source="unavailable"`、序列 `lu_count=null`，**不**用名字相近的申万码冒充
+- `docs/features.md` 增两行（情绪趋势与历史分位 / 板块趋势）；`docs/Changelog.md` 一句；全量 **803 passed / 67 deselected / 0 failed**
 
-- [ ] Step 1: 纯函数 + 单测（分位/样本/边界/缺日）
-- [ ] Step 2: repo 窗口查询 + 两个 service + 两端点 + schema
-- [ ] Step 3: 真库实测并回填数字
-- [ ] Step 4: `docs/features.md` 同步
+- [x] Step 1: 纯函数 + 单测（分位/样本/边界/缺日）
+- [x] Step 2: repo 窗口查询 + 两个 service + 两端点 + schema
+- [x] Step 3: 真库实测并回填数字
+- [x] Step 4: `docs/features.md` 同步
 
 ---
 
@@ -371,6 +377,6 @@ next-action: Task 5a 完成（真库实测：365 天窗口 241/241 限价日过 
 - [ ] `/market/hot-boards` 读表分支与实时分支同 code 口径一致；`amount`/`flat_count` 非空率 ≥99%
 - [ ] `market_sentiment_daily` 21 → ≥235 天，黄金日 2026-09-08 字节不变
 - [ ] 个股事实 239 天回补完成（行数与抽样一致性实测回填）
-- [ ] 两个 trends 端点上线，样本不足返回 `insufficient_history`，`attribution`/`available_from` 必填
+- [x] 两个 trends 端点上线，样本不足返回 `insufficient_history`，`attribution`/`available_from` 必填（真库实测见 Task 6 验收行）
 - [ ] 前端 chip + e2e 绿；`tsc`/`build` 绿；现有 market e2e 零回归
 - [ ] `bash scripts/self_review.sh --full` 绿；`docs/Changelog.md` 逐 Task 有记录

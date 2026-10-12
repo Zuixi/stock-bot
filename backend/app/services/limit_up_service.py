@@ -10,11 +10,14 @@ source 由**数据可用性**决定，不由偏好决定：有完整限价 + 完
 from __future__ import annotations
 
 import logging
+import math
+import statistics
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from app.core.database import async_session_factory
 from app.repositories import limit_up_repo
+from app.schemas.limit_up import MIN_PERCENTILE_SAMPLES, PERCENTILE_FIELDS
 from app.services import limit_up_calculator as calc
 from app.services import market_day_service
 from app.services.market_data_service import _today_sh
@@ -700,3 +703,177 @@ async def get_calendar(cache: CacheClient | None, days: int = 30) -> list[dict[s
     if cache is not None and rows:
         await cache.set(key, rows, ttl=CALENDAR_TTL)
     return rows
+
+
+# ----- Task 6a：情绪趋势 + 历史分位（读时计算，不物化）--------------------------------
+#
+# 三层分工（计划 Architecture §3）：
+# - **repo**：只做窗口读（`list_sentiment_days` / `latest_sentiment_day`）；
+# - **本模块的纯函数**：把行投影成序列、按**有效样本**算分位、组装 payload；
+# - **服务函数**：编排 + Redis 缓存（键含 `days`，空结果不缓存）。
+#
+# 不物化：没有新表、没有新 Job、没有写路径。分位每次请求现算（窗口 ≤ 500 行，
+# `statistics` 级开销可忽略；一旦需要 SQL 侧 `percentile_cont` 再谈，但那时必须
+# 同步"NULL 被 `FILTER (WHERE col IS NOT NULL)` 排除"这条口径）。
+
+TRENDS_TTL = 900
+_TRENDS_CACHE_KEY = "market:limit-up:trends:{days}"
+
+#: 分位口径（Ruling 4）：只 3 个指标（`PERCENTILE_FIELDS`，拍板 R6 —— 契约常量在
+#: schema 里，服务层**不复制一份**，加了指标两处一起动）。`zt_count` 每日必有效；
+#: 另两个在分母为 0 的日子是 NULL，必须**排除**而不是按 0 计。
+#: `promo_1to2_n` 是第二重判据：分母为 0 时比值无意义（写入方目前恒写 NULL，防御未来改口径）。
+_PERCENTILE_VALIDITY: dict[str, str] = {f: f for f in PERCENTILE_FIELDS}
+_PERCENTILE_POINTS: tuple[int, ...] = (0, 10, 25, 50, 75, 90, 100)
+
+
+def sentiment_series_row(row: Any) -> dict[str, Any]:
+    """`market_sentiment_daily` 行 → 趋势序列行（**直读属性**：列改名即 AttributeError）。
+
+    只投影 brief 6a 列出的 7 个字段 + `promo_1to2_n`（分位的有效样本判据，见
+    `_PERCENTILE_VALIDITY`）。缺值恒 `None`（前端 `--`），**绝不** 0。
+    """
+    return {
+        "trade_date": _as_date(row.trade_date),
+        "zt_count": row.zt_count,
+        "dt_count": row.dt_count,
+        "zb_count": row.zb_count,
+        "broken_rate": row.broken_rate,
+        "promo_1to2": row.promo_1to2,
+        "promo_1to2_n": row.promo_1to2_n,
+        "max_streak": row.max_streak,
+    }
+
+
+def _as_date(value: Any) -> date:
+    """日期归一：`date` 原样、ISO 字符串解析（缓存 JSON 回读会变成 str）。
+
+    与 `persist_snapshot` 里 `date.fromisoformat(str(...))` 是同一坑的两处防御：
+    Redis 回读把 `date` 变 `str`，不归一就会在 `toordinal`/比较上炸。
+    """
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value))
+
+
+def percentile_from_series(series: list[dict[str, Any]], field: str) -> dict[str, Any] | None:
+    """单指标的历史分位（**nearest-rank**，只用有效样本）。
+
+    - 定义：升序样本第 `ceil(pct/100 × n)` 个（`pct=0` → 第 1 个 = 最小值，
+      `pct=100` → 第 n 个 = 最大值）→ **端点值 0/100 可达且正确**，全程无插值。
+    - **有效样本**：该字段非 `None` 才计入（NULL 的日子既不进样本也不计 0）；
+      `promo_1to2` 还要求 `promo_1to2_n > 0`（分母为 0 时比值无意义）。
+    - 样本为 0 → 返回 `None`（**不是**一个全 0 的分位对象）。
+    """
+    values: list[float] = []
+    stamps: list[date] = []
+    flag_field = "promo_1to2_n" if field == "promo_1to2" else None
+    for row in series:
+        value = row.get(_PERCENTILE_VALIDITY[field])
+        if value is None:
+            continue
+        if flag_field is not None and not row.get(flag_field):
+            continue
+        values.append(float(value))
+        stamps.append(row["trade_date"])
+    if not values:
+        return None
+
+    values.sort()
+    n = len(values)
+
+    def at(pct: int) -> float:
+        rank = max(1, math.ceil(pct / 100 * n))
+        return values[rank - 1]
+
+    return {
+        "field": field,
+        "sample_count": n,
+        "from": stamps[0],
+        "to": stamps[-1],
+        **{f"p{pct}": at(pct) for pct in _PERCENTILE_POINTS},
+    }
+
+
+def zt_above_median_days(series: list[dict[str, Any]]) -> int:
+    """`zt_count` **严格大于**窗口中位数的天数（中位数为偶数样本的均值）。"""
+    values = [float(r["zt_count"]) for r in series if r.get("zt_count") is not None]
+    if not values:
+        return 0
+    median = statistics.median(values)
+    return sum(1 for v in values if v > median)
+
+
+def sentiment_trends_payload(
+    rows: list[Any],
+    *,
+    as_of: date | None,
+    as_of_quality: str,
+    days: int,
+) -> dict[str, Any]:
+    """组装 6a 响应（**纯函数**，无 IO —— 缓存由 :func:`get_sentiment_trends` 负责）。
+
+    **行序 = 交易日升序**（repo 保证，这里再排一次以便缓存 JSON 回读后仍然稳定）。
+    `insufficient_history = samples < MIN_PERCENTILE_SAMPLES`（Ruling 4）→
+    `percentile=None`（不是空 dict、更不是 0 分位）。`days` 原样带回请求值；
+    `window.days` 是**请求**的交易日数，`window.samples` 才是实际纳入的行数。
+    **不碰 Redis**：缓存（含"空结果不缓存"）全部由 :func:`get_sentiment_trends` 负责。
+    """
+    series = [sentiment_series_row(r) for r in rows]
+    series.sort(key=lambda r: r["trade_date"])
+    samples = len(series)
+    insufficient = samples < MIN_PERCENTILE_SAMPLES
+
+    return {
+        "as_of": as_of,
+        "as_of_quality": as_of_quality,
+        "window": {
+            "days": days,
+            "from": series[0]["trade_date"] if series else None,
+            "to": series[-1]["trade_date"] if series else None,
+            "samples": samples,
+        },
+        "series": series,
+        "percentile": (
+            None
+            if insufficient
+            else {
+                f: p
+                for f in _PERCENTILE_VALIDITY
+                if (p := percentile_from_series(series, f)) is not None
+            }
+        ),
+        "streak": {"zt_above_median_days": zt_above_median_days(series)},
+        "insufficient_history": insufficient,
+    }
+
+
+async def get_sentiment_trends(cache: CacheClient | None, days: int = 250) -> dict[str, Any]:
+    """`GET /market/sentiment/trends` 的编排（读时计算 + Redis 缓存，**不物化**）。
+
+    - `as_of` = `market_sentiment_daily` 的 `max(trade_date)`：这是**派生表的最近日**，
+      不是"今天"（表滞后时如实陈旧，与 `/market/sector-moneyflow` 同款约定）；
+    - `as_of_quality` 复用 `market_day_service.resolve_latest_complete_day` 的完整性判据
+      （完整/回落/部分），避免这里发明第二套"这天数据够不够"；
+    - 缓存键含 `days`（改变结果集的唯一维度）；**空结果不缓存**（空图不得被冻结）。
+    """
+    from app.services import market_day_service  # noqa: PLC0415
+
+    key = _TRENDS_CACHE_KEY.format(days=days)
+    if cache is not None:
+        cached: dict[str, Any] | None = await cache.get(key)
+        if cached:
+            return cached
+
+    async with async_session_factory() as db:
+        as_of = await limit_up_repo.latest_sentiment_day(db)
+        rows = await limit_up_repo.list_sentiment_days(db, days)
+        market = await market_day_service.resolve_latest_complete_day(db)
+    quality = market.quality if market is not None else "partial"
+
+    payload = sentiment_trends_payload(rows, as_of=as_of, as_of_quality=quality, days=days)
+    if cache is not None and payload["window"]["samples"]:
+        await cache.set(key, payload, ttl=TRENDS_TTL)
+    return payload
