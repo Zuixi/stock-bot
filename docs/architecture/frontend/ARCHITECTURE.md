@@ -27,7 +27,7 @@ frontend/src/
 │   ├── ui/         # UI 原语：EChart · StateWrapper · DegradedNotice · FreshnessNote · NumberText · ChangeText · DataRow · SectionCard
 │   ├── types/      # 共享类型
 │   └── config/
-└── scripts/check-design-tokens.mjs   # 设计令牌门禁（涨跌色对比度 + theme.ts ↔ theme.css 一致）
+└── ../scripts/      # 门禁脚本（在 frontend/scripts/，不在 src/ 下）：check-design-tokens.mjs 设计令牌（涨跌色对比度 + theme.ts ↔ theme.css 一致）· check-routes.mjs 路由清单 ↔ IA 文档 + 本文件 §6
 ```
 
 边界约定：

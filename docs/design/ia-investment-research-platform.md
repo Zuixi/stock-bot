@@ -3,7 +3,7 @@
 > 冻结日期：2026-10-12。**本文是 10 个一级导航与旧路由迁移的唯一权威**，Task 5 的前端导航骨架按本文实现。
 > 上游契约：[`docs/specs/S0-platform-contracts.md`](../specs/S0-platform-contracts.md) §S0.2（路由表 / 分区 / redirect 契约）；
 > 结构转录：[`plans/2026-10-12-investment-research-platform-ia.md`](../../plans/2026-10-12-investment-research-platform-ia.md) §3.1 / §3.2 / §3.3。
-> 既有路由的唯一真相：[`frontend/src/app/router/index.tsx`](../../frontend/src/app/router/index.tsx)（15 条）；
+> 既有路由的唯一真相：[`frontend/src/app/router/route-manifest.ts`](../../frontend/src/app/router/route-manifest.ts)（15 条；`index.tsx` 由它生成 `<Route>`）；
 > 既有导航：[`frontend/src/app/layouts/MainLayout.tsx`](../../frontend/src/app/layouts/MainLayout.tsx)（5 个 tab）。
 >
 > **本文不定义徽标计数语义**（`ingested_count` / `curated_count` 的含义不在本层）——徽标计数语义见 `docs/design/metric-dictionary.md` §4.1（Task 4 产出）。本文只定义「哪里放徽标、徽标数据从哪来」。
@@ -157,7 +157,7 @@
 
 ## 4. 完整路由表（既有 15 条，一条不漏）
 
-旧路由集合以 `frontend/src/app/router/index.tsx` 为准（**合计 15 条**）。spec §S0.2 的 redirect 表列了 13 条，**漏了 `/`（landing）与 `/login`**：这两条语义未变，按「保留（语义未变）」补入本表。**一条都不能直接删。**
+旧路由集合以 `frontend/src/app/router/route-manifest.ts` 为准（**合计 15 条**）。spec §S0.2 的 redirect 表列了 13 条，**漏了 `/`（landing）与 `/login`**：这两条语义未变，按「保留（语义未变）」补入本表。**一条都不能直接删。**
 
 | # | 旧路由 | 新位置 | 处理 |
 |---|---|---|---|
