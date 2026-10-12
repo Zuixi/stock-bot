@@ -18,8 +18,8 @@
 //      —— 旧版只守"集合非空"，摘掉一条 `isPlaceholder` 就假绿（Task 5 re-review 实测）；
 //   7. 站内链接不得再写已迁移的旧裸路径；不含 `/calendar`；
 //   8. **IA §4 文档 ↔ 清单契约 双向比对**（表行成员、净效果块分组合计与成员数、合计式、契约段声明数字）；
-//   9. **ARCHITECTURE（前端当前态权威）§6 路由一览 ↔ 清单 双向比对**（路径集合 + `kind` + 页面目录/组件 +
-//      redirect 去向 + 鉴权口径；详见文件尾）。
+//   9. **ARCHITECTURE（前端当前态权威）§6 路由一览 ↔ 清单 双向比对**（表尾「为准」指针句 + 每行路径唯一 +
+//      路径集合 + `kind` + 页面目录/组件 + redirect 去向 + 鉴权口径；详见文件尾断言 9 的注释）。
 
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -462,19 +462,33 @@ if (contractNums) {
 // 9：ARCHITECTURE（前端**当前态权威**，见 docs/authority.md）§6 路由一览 ↔ 清单**双向比对**。
 // 为什么要有这条：§6 是"路由当前态"的单点权威，Task 5 改完 15 条路由后它整表过期、表尾指针还写
 // 「以 app/router/index.tsx 为准」（那时 index.tsx 已不手写 `<Route>`）。靠人眼复核文档 = 又一处假绿，
-// 故把它机械化：**路径集合双向**（表里有清单没有 = 幽灵路由；清单有表里没有 = 文档漏记）+ 逐行字段
-// （kind / 页面目录 / 组件 / redirect 去向 / 鉴权）。破坏验证：删掉表里任一行、改任一 kind 或去向 → 应红。
+// 故把它机械化：**路径集合双向**（表里有清单没有 = 幽灵路由；清单有表里没有 = 文档漏记）+ **每行路径唯一**
+// + 逐行字段（kind / 页面目录 / 组件 / redirect 去向 / 鉴权）+ **表尾指针句**（见下方注释，别退回恒真断言）。
+// 破坏验证：删/复制表里任一行、改任一 kind 或去向、把表尾指针改回 index.tsx → 都应转红。
 const ARCH_DOC = join(root, "..", "docs/architecture/frontend/ARCHITECTURE.md");
 const archDoc = readFileSync(ARCH_DOC, "utf8");
 const sec6 = archDoc.split(/^## /m).find((s) => s.startsWith("6. "));
 if (!sec6) {
   fail("ARCHITECTURE.md 找不到「## 6. 路由一览」小节（前端当前态权威文档）");
 } else {
-  if (sec6.includes("route-manifest.ts")) pass("ARCHITECTURE §6 指向 `route-manifest.ts`（不再指向手写 `<Route>` 的 index.tsx）");
-  else fail("ARCHITECTURE §6 未指向 `route-manifest.ts` —— 路由清单才是唯一真相（index.tsx 只由它生成 `<Route>`）");
+  // 指针断言必须落在**表尾指针句**上。踩过的坑（re-review F1）：原先只断言 `sec6.includes("route-manifest.ts")`，
+  // 而 §6 **头部**（"index.tsx 由清单生成 `<Route>`"）恒含该串 → 把表尾改回「以 `app/router/index.tsx` 为准」
+  // 仍然 exit 0。这就是本任务要消灭的"看着在、其实不触发"。故只认「为准」句，且逐句核对指向：
+  const pointerLines = sec6.split("\n").filter((l) => l.includes("为准"));
+  const badPointer = pointerLines.filter((l) => !l.includes("route-manifest.ts") || l.includes("index.tsx"));
+  if (pointerLines.length === 0) {
+    fail("ARCHITECTURE §6 缺「以 … 为准」的表尾指针句（没有它就无法机械判定谁是权威来源）");
+  } else if (badPointer.length === 0) {
+    pass(`ARCHITECTURE §6 指针句指向 \`route-manifest.ts\`（\"为准\"句 ${pointerLines.length} 条，无一条指向 index.tsx）`);
+  } else {
+    fail(
+      "ARCHITECTURE §6 指针句未指向 `route-manifest.ts`（表尾指针必须写清单，index.tsx 只由清单生成 `<Route>`）：" +
+        `\n      ${badPointer.map((l) => (l.trim().length > 90 ? `${l.trim().slice(0, 90)}…` : l.trim())).join("\n      ")}`
+    );
+  }
 
-  const docRows = new Map();
-  let layoutRow = null;
+  const docRowList = [];
+  const layoutRows = [];
   for (const line of sec6.split("\n")) {
     if (!line.trim().startsWith("|")) continue;
     const cells = line
@@ -483,17 +497,29 @@ if (!sec6) {
       .map((c) => c.trim());
     if (cells.length < 5) continue;
     const pathCell = cells[0].match(/`(\/[^`]*)`/);
-    if (pathCell) docRows.set(pathCell[1], cells);
-    else if (cells[1] === "layout") layoutRow = cells;
+    if (pathCell) docRowList.push({ path: pathCell[1], cells });
+    else if (cells[1] === "layout") layoutRows.push(cells);
   }
-  if (layoutRow) pass("ARCHITECTURE §6 含 `kind = layout` 的 MainLayout 外壳行");
-  else fail("ARCHITECTURE §6 缺少 `kind = layout` 的 MainLayout 外壳行");
+  // 用 Map 存行会让**重复行静默塌陷**（re-review F2：复制一条 `/login` 后门禁仍打印「表 31 条」并 exit 0），
+  // 故先按 list 查重，再建 Map。
+  const docPathList = docRowList.map((r) => r.path);
+  const dupPaths = [...new Set(docPathList.filter((p, i) => docPathList.indexOf(p) !== i))];
+  if (dupPaths.length === 0) {
+    pass(`ARCHITECTURE §6 每行路径唯一（${docPathList.length} 行，无重复）`);
+  } else {
+    fail(`ARCHITECTURE §6 有重复行（同一路由只许出现一次）：${dupPaths.join("、")}`);
+  }
+  const docRows = new Map(docRowList.map((r) => [r.path, r.cells]));
+  if (layoutRows.length === 1) pass("ARCHITECTURE §6 含且仅含 1 行 `kind = layout` 的 MainLayout 外壳行");
+  else fail(`ARCHITECTURE §6 的 \`kind = layout\` 外壳行 = ${layoutRows.length} 行，应为 1 行`);
 
   const manifestPathList = declaredRoutes.filter((r) => r.kind !== "layout").map((r) => r.path);
   const missingInDoc = manifestPathList.filter((p) => !docRows.has(p));
   const extraInDoc = [...docRows.keys()].filter((p) => !manifestPathList.includes(p));
   if (missingInDoc.length === 0 && extraInDoc.length === 0) {
-    pass(`ARCHITECTURE §6 表 ↔ 清单**路径集合双向一致**（表 ${docRows.size} 条 / 清单 ${manifestPathList.length} 条）`);
+    pass(
+      `ARCHITECTURE §6 表 ↔ 清单**路径集合双向一致**（表 ${docPathList.length} 行 / 清单 ${manifestPathList.length} 条）`
+    );
   } else {
     fail(
       "ARCHITECTURE §6 表与清单路径集合不一致" +
@@ -507,7 +533,8 @@ if (!sec6) {
     if (route.kind === "layout") continue;
     const cells = docRows.get(route.path);
     if (!cells) continue;
-    const expectKind = route.isPlaceholder ? "page（占位）" : route.kind;
+    // 先看 `kind` 再看 `isPlaceholder`：反过来的写法对非 page 路由是**死代码**（F3）。
+    const expectKind = route.kind === "page" && route.isPlaceholder ? "page（占位）" : route.kind;
     if (cells[1] !== expectKind) docDrift.push(`${route.path}：kind 列 = ${cells[1]}，应为 ${expectKind}`);
     if (route.kind === "page" && route.component) {
       const dir = pageModules.get(route.component);
