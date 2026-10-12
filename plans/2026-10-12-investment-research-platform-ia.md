@@ -3,7 +3,7 @@ status:      active
 scope:       投研工作台的信息架构与数据模型主线——10 个一级导航、5 个横切地基（原料/视图分离 · 信号与因子【复用既有基建】 · PIT · 多态关注池 · 传导图）+ 1 个推迟（事件日历→Wave 3）、原料→视图映射、8 个 Wave 的分期路线图与 **57 个 spec** 的拆分（评审后由 59 收缩：S2 由 6 个并为 4 个）
 touches:     plans/, docs/specs/, docs/design/, docs/decisions/, docs/Changelog.md, backend/app/models/, backend/app/migrations/versions/, backend/app/api/v1/, backend/app/services/, backend/app/schemas/, backend/app/workers/, backend/app/scheduler/, backend/tests/, frontend/src/app/router/, frontend/src/app/layouts/, frontend/src/pages/, frontend/src/features/, frontend/src/shared/
 updated:     2026-10-12
-next-action: Wave 0 已关门（5 任务 / 16 提交 / 4 修复轮 / 6 次评审，见 §13）。执行 Wave 1：先 S1.1 导航骨架与路由迁移（前端，Task 5），再 S1.2 `industry_metrics` 加 2 列 + 统一读面（后端，Task 6）
+next-action: Wave 0 已关门（5 任务 / 16 提交）。Wave 1 进行中：S1.1 导航骨架与路由迁移 ✅ · S1.2 `industry_metrics` 加 2 列 + 统一读面 ✅ · S1.3 全球市场与跨市场标的 ✅ · **S1.4 行业分类钻取（实现完成，修复收口中）**。下一步 S1.5 热力图 → S1.6 排行 7 榜（两份 brief 已就绪，见 §13 Wave 1 段）。执行到第 10 轮时进度：**52 提交 / 约 51 条 Ruling**，剩约 18 个 spec
 ---
 
 # 投研工作台：信息架构与数据模型主线 实施计划
@@ -587,3 +587,37 @@ graph_edges(
 
 **下一步**：Wave 1 —— Task 5（S1.1 导航骨架与路由迁移，前端）→ Task 6（S1.2 `industry_metrics` 加 2 列 + 统一读面，后端）→ S1.3–S1.14。
 **Wave 1 前置**：Ruling 20 —— `资金流四件套` 中 **ETF 份额取数路径尚未验证**（仓库 `fund_daily` 只有价格/成交、无份额），须在 S1.7 开工前完成验证，否则四件套只有三件。
+
+---
+
+### Wave 1 市场 + 情绪 —— **进行中**（S1.1 / S1.2 / S1.3 已收口；S1.4 实现完成、修复中）
+
+同 Wave 0 的执行模式。**本 Wave 新增经验：任务级评审之外，门禁本身也必须被反例证明会红。**
+
+| 任务 | 交付 | 提交 | 评审结论 |
+|---|---|---|---|
+| **Task 5** · S1.1 导航骨架与路由迁移 | 顶栏 **10 个一级导航** + 数据驱动导航树原语 `features/nav/` + **15 条既有路由全量迁移（8 redirect + 7 保留）** + 10 个占位页 + `/me` 工作台；**路由清单化**（`route-manifest.ts` 成唯一真相，`index.tsx` 只生成 `<Route>`）；新增路由门禁 `check:routes`（77→78 项，接入 CI 与**默认快检**） | `1fb5fb4` `e5f1ff6` `77912a5` `b52cfc4` `46f46b3` `c9c6981` `3311bd0` | Spec ✅ / **3 轮修复 + Ruling 33 重构** 后 All addressed |
+| **Task 5.5** · 前端当前态文档同步 + 门禁补洞（**计划外**） | `docs/architecture/frontend/ARCHITECTURE.md` §6 路由一览按清单重写（32 行一一对应）+ 陈旧指针改正 + 门禁补 3 处（计数取自断言集合 / 占位集合契约化 / **§6 ↔ 清单双向比对**——把"权威文档与代码不一致"整类机械化） | `0b20ee3` `d78e5f6` `25068e6` `d65c1c5` `b5133e2` | Spec ✅ / **1 修复轮**后 All addressed + **Ruling 38**（评审一条 finding 被控制器实测推翻） |
+| **Task 6** · S1.2 `industry_metrics` 加 2 列 + 统一读面 | 迁移 `f1a2b3c4d5e6` **只加 2 列**（`published_at` / `caliber_version`，无 `create_table`）；`industry_key` 语义泛化为通用 scope 键 + `ponytail:` 升级路径；registry 口径版本登记位；`/api/v1/metrics`（latest + series，**复用**既有 service/repo，未造平行栈）；前端 `MetricBadge` 四徽章（逐字复用 `SourceBadge` 视觉） | `f16163e` `a5a6ce1` `209cac2` `415cd44` | Spec ✅ / **2 轮修复**后 All addressed |
+| **Task 7** · S1.3 全球市场与跨市场标的 | 既有 14 条 `ts_code` 一条未改 + 新增 `NDX/SOX/HXC/HKTECH/XIN9`，**19 条五要素非空率 100%**；`IXIC`（综合）与 `NDX`（100）消歧；`/market/global` 公开分组 + A50 标「新加坡 · CNY 夜盘」；段 B 大宗/外汇 **20 条实机记录**（4 项三态 + 5 项 `blocked-on-verification`）；`check-design-tokens` 扩为 **TS 编译器 API** 解析全部 `var(--x)` | `99e6326` `3b7df9e` `1e79f57` `e21a7b8` `ce6b2fd` `c8a14ea` `567ec83` `700c960` `6391630` `6053186` | Spec ✅ / **4 轮修复 + cap 裁定（Ruling 47 撤除一个门禁）+ 收口轮 + 最终验证**后 clean |
+| **Task 8** · S1.4 行业分类钻取（申万） | **第 0 步实机验证**：`index_member` 带 `in_date`/`out_date`，**31/31 一级**、最早 `19901210` → **spec 判据无需收窄**；新建 `sw_industry_member_periods`（SCD2）+ `sw_member_ingest_runs`（**既有表一列未改**——其唯一键装不下多段区间，且整表 DELETE 会清空历史）；三级读面 7 项字段 + 末级成分股页 | `f1a04e4` `513bd99` `41c20f7` `5b1a4f2` `1fff3ad` `046561b` | Spec ❌ / Needs fixes（**1 Critical + 5 Important**）→ 修复中 |
+
+**本 Wave 暴露并已修正的自身错误（留证，不掩盖）**：
+1. **我在 brief 里以"控制器已核实"口吻写的两条事实是错的**（Task 7）：说"Tushare 无 `fx_daily`/商品接口"，**只在仓库 client 层成立**，上游 API 层不成立（`fx_daily` 实机 4000 行）；说"恒生科技 = `HSTECH`"，实际是 **`HKTECH`**。根因：**我只枚举了 `tushare_client.py` 已实现的方法，没有枚举上游 API 的可用性**。由实现方实机纠正。→ **"控制器已核实"必须有明确的核实边界。**
+2. **我的 brief 授权删除了可用能力**（Task 5）：`market-concept` / `market-hot-sectors` 被改成 redirect，导致 3 处站内活链接点进「规划中」，且 `SectorHeatmap` 的 `?board=` 参数被静默丢弃。由评审实测发现，**Ruling 30** 恢复为「保留」（8 redirect + 7 保留）。另 `/me` 吞掉了已建成的 `/watchlist`、`/tags` 能力（**Ruling 31**）。
+3. **我批准新建的一个门禁最终必须撤回**（Task 7，**Ruling 47**）：`check-no-fake-zero` 四轮后证明**在当前仓库已有 ≥5 处真实漏判**（绿灯而漏判）、**6 处结构性逃逸**（"值会不会被渲染"是**数据流**问题，靠 AST 父节点形状猜不出）、且**误红合法的空安全写法**。撤回同时**直接修那 5 处真实站点**——理由是"撤了门禁又不修站点，这一类就彻底无人管，**比留着门禁更糟**"。
+4. **实现方的验证表出现过两次不可复现的声明**（Task 7）：声称 `?.toFixed()` → exit 0（实际 exit 1）；声称"41 处告警全是非展示面"（实际 ≥5 处是真实展示面）。→ **"不要采信报告"必须包括实现方的验证表**；现固定要求每条破坏验证**贴原始输出**并由独立评审在 `/tmp` **复现**（含反向证明）。
+5. **评审也会报假 finding**（Task 5.5，**Ruling 38**）：评审称 §6 指针断言可被"同一行同时含 `index.tsx` 与 `route-manifest.ts`"绕过；控制器读码发现判据是 `!has_manifest || has_index.tsx`（同时含两者必然为真）→ **亲自在 `/tmp` 复现同一注入 → exit 1**，判定该 finding 不成立、不派修复轮。→ **控制器有实证义务，评审结论同样要被验证。**
+
+**本 Wave 建立且沿用的纪律**：
+- **门禁必须真的断言**（Ruling 32）：每条断言须配**注入反例**证明会红；"看着在、其实不触发"不算验证。
+- **门禁也必须不误报**（Ruling 45）：假阳性会逼下一个人放宽规则。
+- **停止手写源码解析**（Ruling 33 / 46）：能换数据清单就换；`.ts/.tsx` 走 **TypeScript 编译器 API**，注释与正则字面量的歧义交给解析器。
+- **证据必须可复现**（Ruling 51）：文档引用的实机记录必须能被**已入库的脚本**复现——"不可复现的实机记录等于没有记录"。
+- **不落数据就用 `None`，不折 0**：缺失与真实的 0 必须在展示层可区分（Task 6/7）。
+
+**遗留（交终审 triage）**：Wave 0 的 13 条 + 本 Wave 累积约 25 条（含 Task 5 门禁类 2 条、Task 7 的 `100.IXIC` 一手验证、`quote_provider` 死元数据、`price_source` 按字段存在判定、过期 e2e mock、周期 ingest 未注册队列等）。全部记于 `.superpowers/sdd/<plan>/progress.md`。
+
+**⚠️ 合并期待办（同上，见 Ruling 11）**：本分支取 ADR **0009–0013**；`feat/market-hotspot-persistence` 的计划声明要建 `0009-market-derived-fact-persistence.md`。**合并时才会碰撞**，后合者重命名（机械操作）。**仍未定夺。**
+
+**下一步**：Task 8（S1.4）修复收口 → **S1.5 热力图**（brief 已就绪；关键风险：**现有行情端点上限均 ≤200，"≥3000 标的"必须新建批量读路**）→ **S1.6 排行 7 榜**（brief 已就绪；关键：**既有 5 个榜与 spec 的 7 个榜没有交集**，且财务类榜必须 **PIT 正确**——按交易日已公告可得的那一期排序，不得取"最新一期"）→ S1.7–S1.14。
