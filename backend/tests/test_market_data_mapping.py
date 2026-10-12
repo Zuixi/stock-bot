@@ -881,3 +881,57 @@ async def test_card_name_comes_from_registry_not_upstream(monkeypatch):
     ixic = next(g for g in mds.GLOBAL_INDICES if g["ts_code"] == "IXIC")
     ndx = next(g for g in mds.GLOBAL_INDICES if g["ts_code"] == "NDX")
     assert ixic["em_secid"] != ndx.get("em_secid")
+
+
+@pytest.mark.asyncio
+async def test_price_source_none_when_no_quote_and_no_history(monkeypatch):
+    """**"没有价"必须是 `None` + `price_source="none"`，绝不落成 0。**
+
+    这是 S1.3 brief 最在意的那条不变量（"不得显示假数据"）：`0` 会被读成"平盘"、
+    在页面上是一个合法点位，而 `None` + `none` 会被前端渲染成 `—` 与「数据源待接入」。
+
+    什么情况下红：有人把缺价分支写成 `last_close or 0`、把 `_PRICE_NONE` 误标成 `_PRICE_EOD`，
+    或让 `any(price is not None)` 的缓存判据在全空时也写缓存（那样一次上游抖动会冻结 60s）。
+    """
+
+    class _Cache:
+        def __init__(self) -> None:
+            self.store: dict = {}
+            self.writes = 0
+
+        async def get(self, key):
+            return self.store.get(key)
+
+        async def set(self, key, value, ttl=None):
+            self.writes += 1
+            self.store[key] = value
+
+    cache = _Cache()
+
+    async def empty_snapshot(secids):
+        return []  # 东财一路空
+
+    async def empty_sina(codes):
+        return {}  # 新浪一路空
+
+    async def empty_kline(db, ts_code):
+        return []  # 库内无日线
+
+    monkeypatch.setattr(
+        mds,
+        "_get_eastmoney",
+        lambda: type("C", (), {"fetch_index_snapshot": staticmethod(empty_snapshot)})(),
+    )
+    monkeypatch.setattr(mds, "_get_sina_quotes", lambda: empty_sina)
+    monkeypatch.setattr(mds.index_repo, "get_kline", empty_kline)
+
+    cards = await mds.get_global_index_cards(cache=cache)
+    for c in cards:
+        assert c["price"] is None, f"{c['ts_code']} 无行情时 price 应为 None，实得 {c['price']!r}"
+        assert c["price_source"] == "none", f"{c['ts_code']} 应标 none，实得 {c['price_source']}"
+        assert c["change"] is None and c["pct_change"] is None
+        assert c["spark"] == []
+        # 五要素不因"没价"而丢——元数据与行情是两件事
+        assert c["session"] and c["timezone"] and c["currency"]
+    # 全空 payload **不写缓存**：否则一次上游抖动会把"全无价"冻结整个 TTL
+    assert cache.writes == 0

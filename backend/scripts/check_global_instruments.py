@@ -15,7 +15,8 @@
 `--live` 会真发一次上游请求（东财 `push2delay` 或新浪 `hq.sinajs.cn`）。**本仓库的开发沙箱
 里东财 `push2` 域被拒连**（见 `docs/references/best-practices.md` 数据源章节与
 `eastmoney_client.py` 顶部备注），此时 IXIC 会回落到"库内最近一根日线"，脚本会把
-`price_source` 一并打印出来——**看到 `eod`/`none` 不等于失败，`0` 才是失败**。
+`price_source` 一并打印出来——**回落 `eod` 不算失败；空价（`None`）算失败**
+（"没有"不得当成 0；无价时应去查上游与库内日线，而不是让它静静显示 0）。
 """
 
 from __future__ import annotations
@@ -31,6 +32,11 @@ FIELDS = ("name", "ts_code", "session", "timezone", "currency")
 
 #: 串号回归的两个主角（S1.3 行为判据）
 PAIR = ("IXIC", "NDX")
+
+#: S1.3 覆盖数契约（spec §S1.3「覆盖：美国市场 6 · 香港市场 2」）。
+#: **在这里也断言一遍**（pytest 里另有逐条 `ts_code` 清单）：脚本是"人肉会跑的那个"，
+#: 只打印不断言的话，US 从 6 掉到 5 时脚本仍然 exit 0 —— 名字叫 assert 的函数必须真的 assert。
+EXPECTED_MARKET_COUNTS = {"US": 6, "HK": 2}
 
 
 def check_registry() -> int:
@@ -53,15 +59,30 @@ def check_registry() -> int:
             f"{g['session']:46s} | {g['timezone']:18s} | {g['currency']:4s} | "
             f"src={g['source']}"
         )
-    assert_market_counts()
+    failures += assert_market_counts()
     return failures
 
 
-def assert_market_counts() -> None:
+def assert_market_counts() -> int:
+    """S1.3 覆盖数：**真的断言**（返回失败计数，由调用方汇总）。
+
+    之前这里只 `print` 不 `assert`，名字却叫 `assert_*` —— US 从 6 掉到 5 时脚本照样
+    exit 0，而报告把它当成"覆盖核对通过"的依据。名字声称断言而函数体只打印，
+    是同一类问题反复出现的那种假绿。
+    """
     from collections import Counter
 
     counts = Counter(g["market"] for g in GLOBAL_INDICES)
     print(f"-- 按市场分组：{dict(counts)}（美国 {counts['US']} / 香港 {counts['HK']}）")
+    failures = 0
+    for market, expected in EXPECTED_MARKET_COUNTS.items():
+        actual = counts.get(market, 0)
+        if actual != expected:
+            failures += 1
+            print(f"FAIL {market} 市场标的数 = {actual}，应为 {expected}（S1.3 覆盖契约）")
+        else:
+            print(f"PASS {market} 市场标的数 = {actual}（S1.3 覆盖契约）")
+    return failures
 
 
 async def check_live() -> int:

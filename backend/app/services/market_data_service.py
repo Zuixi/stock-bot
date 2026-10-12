@@ -240,11 +240,14 @@ GLOBAL_INDICES: list[dict[str, str]] = [
     # 若也写 `100.NDX`，两条标的会**从同一格行情取数**，即"最新值必然相等"；而 S1.3 的行为判据
     # 恰恰是"两者最新值不得相等"。故：NDX 拿 `100.NDX`（东财给"纳斯达克100"的 secid，
     # 见 `docs/design/data-source.md` §七 的东财 ulist 参数串）、IXIC 拿 `100.IXIC`。
-    # ⚠️ `100.IXIC` **未取得一手验证**（本沙箱东财 push2 域拒连，见附.5 #12）：若该 secid 不被
-    # 上游接受，IXIC 会回落库内日线（`price_source=eod`），**不会取到 NDX 的价**——失败模式是
-    # "降级"，不是"串号"。补验方式：在 push2 可达环境跑
-    # `backend/.venv/bin/python scripts/check_global_instruments.py --live`，看 IXIC 是否
-    # `price_source=realtime` 且价接近东财"纳斯达克"页而非"纳斯达克100"页。
+    # ⚠️ `100.IXIC` **未取得一手验证**（本沙箱东财 push2 域拒连，见附.5.2 #12）：两种失败形态——
+    # (a) **良性**：上游不认它 → IXIC 回落库内日线（`price_source=eod`），**不会取到 NDX 的价**；
+    # (b) **有害**：上游认它却指向别的标的 → 综合指数卡片显示另一个指数的价。必须排除 (b)。
+    # 补验方式已登记为 **docs/design/data-source.md 附.5.5 的 open item #6**（含"去哪跑 /
+    # 跑什么 / 看什么字段 / 判定标准"）：在 push2 可达主机跑
+    # `backend/.venv/bin/python scripts/check_global_instruments.py --live`，
+    # 确认 IXIC 的 `price_source=realtime` 且值跟踪 TuShare `index_global(IXIC)`；
+    # 任一条不满足 → 回退为"无 `em_secid`"（明确降级），**不得**留一个可能取错的 secid 在线上。
     _instrument(
         ts_code="IXIC",
         name="纳斯达克综合指数",

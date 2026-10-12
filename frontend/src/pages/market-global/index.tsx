@@ -37,15 +37,49 @@ function marketLabel(market: string): string {
   return MARKET_LABEL[market] ?? `${market} 市场`;
 }
 
+/**
+ * 各市场在「交易时段」列上额外要标的**市场身份**标签（按 `row.market` 取，不按 `tsCode`）。
+ *
+ * 为什么按市场而不是按标的：标签要回答的是"这行属不属于 A 股那套交易时段"，
+ * 那是**市场级**属性。绑在字面量 `tsCode` 上时，第二个 SG 标的会静默丢掉标记，
+ * 且元数据改了之后页面依旧宣称旧标签（"文档与实现两处真相"那类腐烂）。
+ *
+ * A50（富时中国A50 指数期货）：`market=SG`、`currency=CNY`、时段是 T+1 夜盘。
+ * 导图点名要求它在页面上显式可见，避免与 A 股交易时段混淆。
+ */
+const MARKET_MARKER: Record<string, (row: GlobalIndexCard) => React.ReactNode> = {
+  SG: (row) => (
+    <Space size={4}>
+      <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+        新加坡
+      </Tag>
+      {row.currency === "CNY" && (
+        <Tag color="volcano" style={{ marginInlineEnd: 0 }}>
+          CNY 夜盘
+        </Tag>
+      )}
+    </Space>
+  ),
+};
+
 function fmtPrice(v: number | null): string {
   if (v == null) return "—"; // 「没有」显示破折号，绝不补 0（0 会被读成"平盘"）
   return v.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-/** 涨跌渲染：null → `—`（不可判），不 0 填充。 */
+/**
+ * 涨跌渲染：null → `—`（不可判），不 0 填充。
+ *
+ * 颜色走**主题 CSS 变量**（`--up`/`--down`/`--flat`，定义见 `app/styles/theme.css`），
+ * 与 `SentimentThermometer.css` / `GlobalIndexCardView` 同一口径。
+ * **不得写死 hex**：审查实测 `#cf1322` 在暗色面板 `#1e222d` 上只有 ≈2.8:1，
+ * 低于仓库要求的 4.5:1（暗色 `--up` = `#f2555a` → 4.71:1）；而 `check:design`
+ * 只校验主题 token 自身，**抓不到组件里的写死色值**，所以这条只能靠"用变量"保证。
+ */
 function PctText({ card }: { card: GlobalIndexCard }) {
   if (card.pctChange == null) return <span>—</span>;
-  const color = card.pctChange > 0 ? "#cf1322" : card.pctChange < 0 ? "#389e0d" : "#6b7686";
+  const color =
+    card.pctChange > 0 ? "var(--up)" : card.pctChange < 0 ? "var(--down)" : "var(--flat)";
   return (
     <span style={{ color, fontVariantNumeric: "tabular-nums" }}>
       {card.pctChange > 0 ? "+" : ""}
@@ -106,23 +140,16 @@ const columns: ColumnsType<GlobalIndexCard> = [
     dataIndex: "session",
     key: "session",
     width: 260,
-    render: (session: string, row) =>
-      row.tsCode === "XIN9" ? (
-        <Space direction="vertical" size={2}>
-          <Typography.Text style={{ fontSize: 12 }}>{session}</Typography.Text>
-          {/* 导图点名要求：A50 必须在页面上显式标出「新加坡 · CNY 夜盘」 */}
-          <Space size={4}>
-            <Tag color="orange" style={{ marginInlineEnd: 0 }}>
-              新加坡
-            </Tag>
-            <Tag color="volcano" style={{ marginInlineEnd: 0 }}>
-              CNY 夜盘
-            </Tag>
-          </Space>
-        </Space>
-      ) : (
+    render: (session: string, row) => (
+      <Space direction="vertical" size={2}>
         <Typography.Text style={{ fontSize: 12 }}>{session}</Typography.Text>
-      ),
+        {/* 导图点名要求：A50 必须在页面上显式标出「新加坡 · CNY 夜盘」。
+            标记**按 `row.market` 派生**（不按字面量 tsCode）：`tsCode === "XIN9"` 会让
+            第二个 SG 标的静默丢掉标记，也会在元数据改了之后继续宣称"CNY 夜盘"。
+            币种标签同样取 `row.currency`，不写死。 */}
+        {MARKET_MARKER[row.market]?.(row)}
+      </Space>
+    ),
   },
   { title: "时区", dataIndex: "timezone", key: "timezone", width: 150 },
   {
@@ -250,6 +277,17 @@ export default function MarketGlobalPage() {
       {error ? (
         <Card size="small">
           <DegradedNotice reason={`全球指数读取失败：${(error as Error).message}`} />
+        </Card>
+      ) : null}
+
+      {/* 空态：端点正常但返回 0 条（不是错误）。没有它页面只剩「全部（0）」与段 B 占位，
+          用户分不清"这一波还没接"与"接口挂了"。空图/0 一律不画，只给一句话。 */}
+      {!error && !isLoading && indices.length === 0 ? (
+        <Card size="small" style={{ marginBottom: 16 }}>
+          <Typography.Text type="secondary">
+            暂无全球标的元数据（接口返回 0 条）。这不是"没有行情"，而是标的登记表为空或读面未就绪——
+            请查 <code>GET /api/v1/market/global-indices</code> 与后端登记表日志。
+          </Typography.Text>
         </Card>
       ) : null}
 
