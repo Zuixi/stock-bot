@@ -6,7 +6,8 @@ interface Props {
   loading?: boolean;
   error?: Error | null;
   empty?: boolean;
-  emptyText?: string;
+  /** 空态文案；需要分行/带链接时可直接传节点（antd `Empty.description` 支持 ReactNode） */
+  emptyText?: ReactNode;
   onRetry?: () => void;
   children: ReactNode;
 }

@@ -43,7 +43,7 @@ export function SearchBar() {
     <AutoComplete
       options={options}
       onSelect={(val) => {
-        navigate(`/stock/${val}`);
+        navigate(`/company/${val}`);
         setKeyword("");
       }}
       onSearch={setKeyword}
