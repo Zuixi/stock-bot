@@ -1,3 +1,15 @@
+## 2026-10-12 - S1.4 行业分类钻取（申万）：SCD2 成分历史 + 三级下钻 7 项字段
+
+- **第 0 步实机验证**（`docs/design/data-source.md` 附.6，10 条实机记录）：TuShare `index_member` **带 `in_date`/`out_date`**，31/31 一级行业可得、`in_date` 最早 `19901210`（可回溯到 1990 年）→ spec「任取历史交易日还原当时成分」的判据**原样成立，无需收窄**。并记录一个真陷阱：`index_classify` 的 `src='SW'` **静默返回 0 行**（正确值 `src='SW2021'` = 511 节点）
+- **SCD2 建表**（迁移 `b4c5d6e7f8a9`）：**新建** `sw_industry_member_periods`（`effective_from` 必填 / `effective_to` 可空 / `is_current`）+ `sw_member_ingest_runs`，**既有 `sw_industry_members` 一列未改**——其唯一键 `(industry_code, stock_code)` 装不下多段区间，且整表 DELETE 会清空历史。回填实测：346 指数 / **7,624 行** / 0 失败，重跑新增 0（幂等）
+- **三级下钻读面** `/api/v1/market/sw-industry/drill/*`：31 个一级 → 二级 → 三级 → 成分股，**7 项字段**（K线开/收/高/低 · 涨跌幅 · 换手率 · 成交量 · 量比 · 振幅 · **成交额**）全部**复用既有列**（`daily_quotes` + `daily_basic`），缺失一律 `None` 不填 0；**公开免登录**；前端末级成分股页（路由走 `route-manifest.ts` + `ARCHITECTURE.md` §6 各加一行）
+- **纠正一处既有单位注释错误**：`daily_quotes.amount` 是 TuShare 原生**千元**（×1000 才是元），原注释写成"源为亿元，×1e8"
+- **评审抓到并修复 1 处 Critical**：L1/L2 成分原先**靠"L3 上卷"**，而「祖级指数返回其下全部成分的并集」这一前提**经真实上游实测为假**（24/31 一级偏少，最多 −35%；`union(L2) ≠ L1`）→ 农林牧渔一级**成交额被低估 25.7%**（`23,743,561,160` 元 → 真值 **`29,851,841,770` 元**）。修法：读路**优先取节点自身层级**的成员、L3 上卷仅为兜底，响应以 `member_source` / `member_source_note` **显式标注来源而不声称等价**；回填改为三级全灌。**31 条 L1 逐条对账 `0/31 不一致；合计 5,211 = 5,211`**
+- **配套的护栏**（同一评审驱动）：ingest 的 0 行响应 / `--limit` 截断 / 下界断言未过的运行一律 `fully_ingested=False` / `status='partial'`，**不再抬高分类归属口径日**；三条下界断言（逐层零行 / 环比跌幅 ≤20% / 零行比例 ≤30%）+ 读面 `scd2_coverage` + 前端徽章；破坏性迁移 round-trip 改为 **`SC_DESTRUCTIVE_MIGRATION_TESTS=1` 显式 opt-in**（默认 `pytest` 不再清空数据），运维顺序写入 `docs/deployment/index.md`
+- **可复现性**：`backend/scripts/spike_sw_member_history.py` 补 `src` 枚举与 31 个 L1 全扫（空列表响亮失败）；`backend/scripts/reconcile_sw_member_counts.py` 入库（逐 L1 比对本地 own-level 当前成分 vs 上游，不一致非零退出）——`docs/design/data-source.md` 附.6.2 #11/#13 的证据**可由入库脚本复现**
+- **测试**：+30（SCD2 契约、下钻读面、成员来源回归锁 `member_count==2` 旧实现返回 1、31/31 自建树断言不再依赖 CI 库恰好有 seed、detail 写入→解析 round-trip）；后端 **698 → 728 passed**
+- 涉及文件：`backend/app/models/sw_industry.py`、`backend/app/migrations/versions/{b4c5d6e7f8a9,c5d6e7f8a9b0}_*.py`、`backend/app/{services,schemas,api/v1}`、`backend/scripts/{spike_sw_member_history,reconcile_sw_member_counts,ingest_sw_member_periods,gen_sw_index_mapping}.py`、`backend/tests/test_sw_*.py`、`backend/tests/test_industry_metric_pit_roundtrip.py`、`frontend/src/pages/market-industry-*`、`frontend/src/app/router/route-manifest.ts`、`frontend/scripts/check-routes.mjs`、`docs/design/data-source.md`、`docs/deployment/index.md`、`docs/architecture/frontend/ARCHITECTURE.md`
+
 ## 2026-10-12 - S1.3 全球市场与跨市场标的（含一次门禁撤回裁定）
 
 - **段 A · 全球标的与 `/market/global`**（`99e6326`）：既有 **14 条 `ts_code` 一条未改**，新增 `NDX`（纳斯达克100）/`SOX`（费半）/`HXC`（金龙中国）/`HKTECH`（恒生科技）/`XIN9`（富时中国A50 期货）；**每条标的补齐五要素**（名称 / 数据源代码 / 交易时段 / 时区 / 币种），19 条**非空率 100%**，覆盖 CN8·HK2·JP1·KR1·US6·SG1；`/market/global` 按市场分组、**公开免登录**；A50 显式标注「新加坡 · CNY 夜盘」（与 A 股时段区分）
