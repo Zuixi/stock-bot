@@ -10,7 +10,7 @@
 | 后端分层 / 队列 / API | [`architecture/backend/ARCHITECTURE.md`](./architecture/backend/ARCHITECTURE.md) | — |
 | 前端当前态（栈与目录） | [`architecture/frontend/ARCHITECTURE.md`](./architecture/frontend/ARCHITECTURE.md) | [`frontend-architecture.md`](./frontend-architecture.md)（Tailwind/shadcn 时代，已转发；原文归档 [archive/frontend-architecture-tailwind-202604.md](./archive/frontend-architecture-tailwind-202604.md)） |
 | 前端交互规格 | [`frontend-ux-spec.md`](./frontend-ux-spec.md) · [`frontend-service-prd.md`](./frontend-service-prd.md) | — |
-| 命名与口径（徽标语义 / `metric_key` / `publisher_tier` / 口径版本 / 模块边界 / 兜底规则） | [`design/metric-dictionary.md`](./design/metric-dictionary.md) | 勿在 `architecture/` 或 `plans/` 重复定义口径 |
+| 命名与口径（徽标语义 / `metric_key` / `publisher_tier` / 口径版本 / 模块边界 / 兜底规则） | [`specs/S0-platform-contracts.md`](./specs/S0-platform-contracts.md) §S0.4（契约）+ [`design/metric-dictionary.md`](./design/metric-dictionary.md)（落地细则，**冲突以 spec 为准**） | 勿在 `architecture/` 或 `plans/` 重复定义口径 |
 | **投研平台模块契约与验收判据** | [`specs/README.md`](./specs/README.md)（总目录）· [`specs/S0`](./specs/S0-platform-contracts.md) · [`S1`](./specs/S1-market-sentiment.md) · [`S2`](./specs/S2-signal-engine.md) · [`S3`](./specs/S3-content.md) | 勿把契约写进 `architecture/`（那是当前态）或 `plans/`（那是排期）|
 | 部署 / 端口 / env | [`deployment/index.md`](./deployment/index.md) | [`build.md`](./build.md) |
 | 首次搭环境（Tutorial） | [`deployment/first-run.md`](./deployment/first-run.md) | — |

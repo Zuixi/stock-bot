@@ -22,9 +22,11 @@
 | 语义 | 命名（API 字段） | 定义 | 判定标准（可机械核对） |
 |---|---|---|---|
 | **已接入数** | `ingested_count` | 该入口下**已有真实数据可展示**的条目数 | 该条目在事实层存在 ≥1 条真实来源的行（非 mock、非占位）；**不要求**有策展摘要、对比视图或完整详情页 |
-| **已策展数** | `curated_count` | 该入口下**已人工策展 / 已建成完整体验**的条目数 | 该条目已进入 `industry_registry`（有指标定义 + 阈值 + 展示分组）或已有策展产物（overlay 种子 / 策展摘要），即「点进去是一个完整页面，不是一张空表」 |
+| **已策展数** | `curated_count` | 该入口下**已有策展产物**的条目数 | 该条目满足二者之一：① 在 `industry_registry` 中有**指标定义**（`MetricDef`：单位 + 频率 + 阈值 + 展示分组）② 已有**策展产物**（overlay 种子 / 策展摘要 / 行业页 / 榜单配置）。**唯一判定标准就是这两条**，不使用"完整体验""做得好不好"这类无法判定的表述 |
 
-**不变量**：`curated_count ≤ ingested_count`。若某入口 `curated_count > ingested_count`，是数据或口径错误，必须先修数再上徽标。
+> **`curated_count` 的定义只在本表这一处**（这就是唯一定义）。下文任何地方提到"已策展"都指本行，不再另给定义。
+
+**不变量**：数据健康的入口应满足 `curated_count ≤ ingested_count`。**若出现 `curated_count > ingested_count`**，意味着"有策展产物但事实层无数据"（如已配 registry 定义却没有真实序列）——这是**数据或配置错误**，记 open item，**不上徽标**（展示一个用户点进去看不到数据的数字，比不显示更糟）。
 
 ### 7 个数字的逐项归属
 
@@ -34,8 +36,8 @@
 | 2 | 外汇市场 **5** | 5 个汇率品种（美元 / 欧元 / 日元 / 港元 / 英镑等） | `ingested_count` | 同上：有真实序列，无策展层 |
 | 3 | 主要指数 **9** | 9 个指数（上证 / 深证 / 创业板 / 科创50 / 沪深300 / 中证500 / 恒生 / 标普500 / 纳斯达克综合等） | `ingested_count` | 行情事实层已覆盖，不依赖任何人工策展 |
 | 4 | 申万一级 **31** | 申万一级行业 **31** 个（分类体系全集） | `ingested_count` | 分类体系本身全量落库（SCD2 归属表），属于"名录已接入" |
-| 5 | 行业看板 **3** | 已建成完整体验的行业工作台 | `curated_count` | 每个都有 registry 指标定义 + 阈值带 + 展示分组 + 周期阶段，是"点进去即完整页面"的口径基准 |
-| 6 | **行业分类（申万）16** | 申万一级中**已策展的行业**数 | **`curated_count`** | 见下方"16 的归类裁定" |
+| 5 | 行业看板 **3** | 已有策展产物的行业工作台 | `curated_count` | **语义**已定（走上面 `curated_count` 的唯一定义）；**数值 3 是 owner 图上的标注值，尚未与数据侧核对**——registry 当前只注册 **2** 个行业（`INDUSTRIES` = `pig` / `broiler`），核对方法见下方"语义归类已定 vs 数值待核" |
+| 6 | **行业分类（申万）16** | 申万一级中**已策展的行业**数 | **`curated_count`** | 与第 5 行 `行业看板 3` 同语义（同一钻取路径）；**语义**归类见下方"`行业分类（申万）16` 的归类裁定"，**数值 16 是 owner 标注值、尚未与数据侧核对**（registry 今日实测 = 2）|
 | 7 | ~~**A股市场 18**~~ | —— | **删除（不再存在）** | 见下方 Ruling 4 |
 
 ### Ruling 4：`A股市场 18` 徽标**删除**
@@ -52,15 +54,35 @@
 
 ### `行业分类（申万）16` 的归类裁定：`curated_count`
 
+> 本表裁定的是**语义归类**（`16` 归哪一套语义），**不是**声称 `16` 这个数值已被核实——数值状态见本表最后一行与紧随其后的"语义归类已定 vs 数值待核"。
+
 | 项 | 内容 |
 |---|---|
-| **归类** | `curated_count`（已策展数） |
+| **归类** | `curated_count`（已策展数，定义见上表**唯一一处**） |
 | **它数的不是** | **不是**申万一级的**分类总数**——分类总数是 `申万一级 31`（上表第 4 行，归 `ingested_count`）|
-| **它数的是** | 申万一级行业里**已完成策展**（有 registry 指标定义 + 阈值 + 展示分组）的行业数 |
+| **它数的是** | 申万一级行业里**已有策展产物**（`industry_registry` 指标定义 / 行业页 / 榜单配置）的行业数 |
 | **依据 1（语义自洽）** | 与上表第 5 行 `行业看板 3` 同源同义：`行业分类（申万）→ 逐行业` 是同一个钻取路径，`16` 与 `3` 只能同属一套语义；否则同一个入口的两个数字互不可比 |
-| **依据 2（与 spec 落位一致）** | spec §4.1 已把 `行业分类 16` 排在 `已策展数` 一列（原文标注"待 owner 复核归类"，本行即完成该复核）；`ingested_count` 一列是 29 / 5 / 9 / 31 |
-| **依据 3（可验收）** | 判定标准机械可查：`industry_registry` 中已注册的行业数 = `curated_count`；分类体系全量数（31）= `ingested_count` |
-| **因此不许** | 不允许把 `16` 读成"16 个行业有数据"（那是 `ingested_count` 的口径，且与 `31` 冲突）。**同一入口同时展示两个语义时必须带标签**（如「已策展 16 / 已接入 31」），裸数字不再出现 |
+| **依据 2（与 spec 落位一致）** | spec §4.1 已把 `行业分类 16` 排在 `已策展数` 一列（原文标注"待 owner 复核归类"，本行即完成**语义**复核）；`ingested_count` 一列是 29 / 5 / 9 / 31 |
+| **依据 3（可验收：核对方法）** | 核对方法 = **数 `industry_registry.INDUSTRIES` 的 key 数**（`industries[].metrics` 里含 `MetricDef` 的行业）。**今日实测 = 2**（`pig` / `broiler`，见 `industry_registry.py` 的 `INDUSTRIES` 定义）→ **与图上的 `16` 不符**，故 `16` 只作 owner 标注值、**待数据侧复核**（不在本任务裁决范围）|
+| **数值状态** | 图上的 `16` **尚未与数据侧核对**（当前 registry 实际注册 2 个行业）。**不作为已核实事实使用**；UI 上架前必须先核对 |
+| **因此不许** | ① 不允许把 `16` 读成"16 个行业有数据"（那是 `ingested_count` 的口径，且与 `31` 冲突）② **不允许把未经核对的 `16` 写成已核实事实** ③ **同一入口同时展示两个语义时必须带标签**（如「已策展 16 / 已接入 31」），裸数字不再出现 |
+
+**语义归类已定 vs 数值待核（必须显式分开，不许混写）**：
+
+| 徽标 | 语义归类（本次裁定，已定） | 数值（owner 图上标注，**待核**） | 核对方法 |
+|---|---|---|---|
+| `行业分类（申万）16` | `curated_count` | **16 —— 未与数据侧核对** | 数 `industry_registry.INDUSTRIES` 的 key 数（今日 = **2**，与 16 不符 → 待复核）|
+| `行业看板 3` | `curated_count` | **3 —— 未与数据侧核对** | 同上（今日 = **2**）|
+
+**可复跑的核对命令**（"今日 = 2"的出处）：
+
+```bash
+cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -c \
+  "from app.services.industry_registry import INDUSTRIES; print(len(INDUSTRIES), list(INDUSTRIES))"
+# → 2 ['pig', 'broiler']
+```
+
+> **口径纪律**：本文件只负责把**语义**钉死；**数值**必须由数据侧核对后才可写成事实。凡本文件出现"今日 = N"的写法，都是**截至编写时可复跑的实测值**（附核对命令），不是定格口径——数值变化时改数据侧或徽标，不改本节的语义裁定。
 
 ---
 
@@ -72,38 +94,56 @@
 
 | # | 规则 | 正例 | 反例与原因 |
 |---|---|---|---|
-| 1 | **全小写 + 下划线**，不含大写、空格、连字符 | `hog_price` · `margin_financing_balance` | `HogPrice` / `hog-price` / `hog price` —— 大小写与分隔符混用会让 `grep` 与前端映射双双失效 |
+| 1 | **全小写 + 下划线**，不含大写、空格、连字符 | `hog_price` · `hog_corn_ratio` · `sow_inventory` | `HogPrice` / `hog-price` / `hog price` —— 大小写与分隔符混用会让 `grep` 与前端映射双双失效 |
 | 2 | **语义完整，不自造缩写** | `sow_inventory`（能繁母猪存栏）· `idx_turnover_ratio_sse`（上证换手率） | `sow_inv` / `turnover_ratio` —— 缩写不可检索；省略"哪个市场的换手率"会产生歧义键 |
-| 3 | **单位与频率随 key 在 registry 固定**，**不在展示层换算** | `piglet_price_15kg`（元/公斤，周度）单位写在 `MetricDef.unit` / `freq` | 前端 `value * 100` 换单位 —— 同一 key 两种量纲，序列被污染且不可回溯 |
+| 3 | **单位与频率随 key 在 registry 固定**，**不在展示层换算** | `piglet_price_15kg`：`unit="元/kg"` / `freq="weekly"` 写在 `MetricDef`（本文件只**转录** registry，改单位 = 改 registry） | 前端 `value * 100` 换单位 —— 同一 key 两种量纲，序列被污染且不可回溯 |
 | 4 | **与既有 `industry_metrics.metric_key` 同一命名空间** | 新 key 与 `hog_price` 同级注册，不另建 `market_metric_key` 之类平行空间 | 另起命名空间 → 需要第二张指标表（ADR-E 已禁止）与两套前端映射 |
 | 5 | **同一口径一个 key**（口径不同则必须分 key） | 央行 OMO **操作利率** `reverse_repo_7d_rate` 与市场侧 **成交** 利率 `fr007` / `fdr007` 各占一个 key | 把操作利率与成交加权利率塞进同一 key —— 两套口径的数值混成一条序列，事后无法拆分 |
 
 ### 真实命名样例（照此风格新增）
 
-**已存在（既有 registry / spec 中的真 key，可直接引用）**：
+> **本表的单位与频率逐字抄自 `industry_registry.py` 的 `MetricDef`**（这就是规则 3 的落地：unit/freq 固定在 registry，本文件只是**转录**）。若本表与 registry 不一致，**以 registry 为准**，改本表——改完请跑随附核对脚本（见下），不要靠眼看。
 
-| `metric_key` | 含义 | 单位 | 频率 |
+**已存在（代码中真实注册的 key，`industry_registry.INDUSTRIES[].metrics` 可直接引用）**：
+
+| `metric_key` | registry `name` | 单位 `unit` | 频率 `freq` |
 |---|---|---|---|
-| `hog_price` | 生猪出场价 | 元/公斤 | 日 |
-| `corn_price` | 玉米价格 | 元/吨 | 日 |
-| `piglet_price_15kg` | 15 公斤仔猪价格 | 元/头 | 周 |
-| `hog_corn_ratio` | 猪粮比价（派生） | 比值 | 周 |
-| `sow_inventory` | 能繁母猪存栏 | 万头 | 月 |
-| `margin_financing_balance` | 融资余额 | 元 | 日 |
-| `etf_share_change` | 宽基 ETF 份额变化 | 份 | 日 |
-| `southbound_net_buy` | 南向资金净买入 | 元 | 日 |
-| `industrial_capital_net_change` | 产业资本净增减持 | 元 | 事件驱动 |
+| `hog_price` | 生猪均价 | 元/kg | daily |
+| `corn_price` | 玉米价格 | 元/kg | daily |
+| `piglet_price_15kg` | 仔猪价格（15kg） | 元/kg | weekly |
+| `hog_corn_ratio` | 猪粮比 | （**空串** = 无量纲比值） | daily |
+| `sow_inventory` | 能繁母猪存栏 | 万头 | monthly |
+| `company.hogs_sold_monthly` | 月度出栏量 | 万头 | monthly |
+| `company.cost_complete` | 完全成本 | 元/kg | quarterly |
+| `mcap_per_head` | 头均市值 | 元/头 | monthly |
 
-**本文件落册的新增提案**（命名按上表 5 条规则，具体接源见 `data-source.md` 附.1）：
+> 上表 `unit` 列的"（空串 = 无量纲比值）"对应 registry 里的 `unit=""`（`hog_corn_ratio` 是纯比值，没有量纲单位）——**这是 registry 的原值，不是省略**。
+
+**可复跑的核对脚本**（§4.2 规则 3 的机械验证；本文件上表 = registry 的转录，此脚本专治"抄错"）：
+
+```bash
+cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python ../scripts/check_metric_dictionary.py
+```
+
+脚本逐行打印 `文档 unit/freq` vs `registry unit/freq` 的对比，任一行不一致即非 0 退出（可直接当门禁）。
+**已实测**：`核对 8 行，MISMATCH 0 行 → ✔ 全绿`。改本表后**必须重跑**，不要靠眼看。
+
+**本文件落册的新增提案**（**尚未注册**，命名按上表 5 条规则；接源见 `data-source.md` 附.1，注册动作在 Wave 1）：
 
 | `metric_key` | 含义 | 单位 | 频率 | 备注 |
 |---|---|---|---|---|
+| `etf_share_change` | 宽基 ETF 份额变化 | 份 | 日 | 提案见 spec §S1.7（**不在 registry 中**）|
+| `margin_financing_balance` | 融资余额 | 元 | 日 | 提案见 spec §S1.7 / §S1.9（**不在 registry 中**，勿当既有 key 引用）|
+| `southbound_net_buy` | 南向资金净买入 | 元 | 日 | 提案见 spec §S1.7（**不在 registry 中**）|
+| `industrial_capital_net_change` | 产业资本净增减持 | 元 | 事件驱动 | 提案见 spec §S1.7，依赖 S3.2（**不在 registry 中**）|
 | `idx_turnover_ratio_sse` | 上证换手率 | % | 日 | 市场模块 |
 | `erp_10y` | 股债收益差（10 年期） | % | 日 | 情绪模块 |
 | `reverse_repo_7d_rate` | 7 天期逆回购操作利率（政策利率锚） | % | 日 | 与市场侧回购利率分 key（规则 5）|
 | `fr007` | 银行间 7 天回购定盘利率 | % | 日 | 市场侧成交口径 |
 | `fdr007` | 银银间 7 天回购定盘利率 | % | 日 | 市场侧成交口径 |
 | `northbound_holdings_quarterly` | 陆股通持仓（季度，香港中央结算汇总账户） | 股 | 季度 | **禁止**命名为 `foreign_*`（不得读作"外资"，见 `data-source.md` 附.1②）|
+
+> **两张表的区别**：上表是**已注册事实**（有代码可核）；本表是**命名提案**（无代码可核，只有 spec 出处）。**引用时必须分开**——把提案 key 写成"既有 key"会让实现者去找一个不存在的 `MetricDef`。
 
 **历史遗留与例外（明说不许复制）**：`industry_registry.py` 的公司级指标键 `company.hogs_sold_monthly` / `company.cost_complete` **在实现里含 `.`**，是既有兼容键（已入库 `industry_metrics`，行数与测试引用 `backend/tests/test_industry_companies.py` 均在），**不在本次改名范围**（改名要动数据 + 迁移 + 测试，收益为 0）。**新键一律按规则 1 只用下划线**，不得以"既有键带点"为由新增带点键。
 
@@ -159,7 +199,7 @@
 
 任何**上游统计口径发生修订**的指标，其序列上必须**同时**带两样东西：
 
-1. **`caliber_version`**：口径版本标识（落在 `industry_metrics.caliber_version`，列已按 ADR-E 附带裁定新增）
+1. **`caliber_version`**：口径版本标识。**落在 `industry_metrics.caliber_version`，该列当前不存在、待加**（Wave 1 / `T1.2`，`plans/2026-10-12-investment-research-platform-ia.md` 仍未勾选）。列的新增依据是 **ADR 0013 的附带裁定**与 `docs/specs/S0-platform-contracts.md` §S0.1 的 `alter table industry_metrics add column caliber_version text`（**以"待应用"呈现，不是既成事实**）。本文件只约定**该列一旦加上后的口径纪律**，不声称它已存在
 2. **断点标记**：在修订生效时点显式标注，**禁止**把断点前后拼成一条连续序列、**禁止**静默回填
 
 并遵守 PIT 契约（ADR 0011）：口径修订的**实际可得时点**要落 `published_at`，不得用修订后的口径回填修订前的历史。
@@ -228,13 +268,13 @@
 
 ### 复用既有模式（不新造机制）
 
-该模式**仓库里已经跑了**（`backend/app/models/concept.py:3-5` + `concept_members` 的列定义），新分类场景**照抄**：
+该模式**仓库里已经跑了**（`backend/app/models/concept.py:3-5` 业务键与可空外键的列定义 + 缺失量的 API/schema 聚合层），新分类场景**照抄**：
 
-| 要素 | 既有实现（`ConceptMember`） | 新场景照抄 |
+| 要素 | 既有实现 | 新场景照抄 |
 |---|---|---|
-| **业务键取稳定标识** | `symbol`（不取 `stock_id`） | 一律用稳定业务键，**不用**会被名录滞后影响的代理键 |
-| **外键降级为可空解析列** | `stock_id` 声明为**可空整数列**（非 NOT NULL）| 解析不到就留空，**不阻塞采集**、不丢弃整行 |
-| **缺失量外露** | `unresolved_count` 对外暴露 | 同样以 `unresolved_count` 计数外露，**不静默丢数据** |
+| **业务键取稳定标识** | `ConceptMember.symbol`（不取 `stock_id`，`concept.py:64`）| 一律用稳定业务键，**不用**会被名录滞后影响的代理键 |
+| **外键降级为可空解析列** | `ConceptMember.stock_id` 是**可空整数列**（`concept.py:66`，非 NOT NULL）| 解析不到就留空，**不阻塞采集**、不丢弃整行 |
+| **缺失量外露** | `unresolved_count` —— **不是** `ConceptMember` 的列，而是 **API/schema 聚合**：`schemas/concept.py` 的响应字段 + `repositories/concept_repo.py` 的 `count(*) FILTER (WHERE cm.stock_id IS NULL)` | 同样以 `unresolved_count` 计数外露，**不静默丢数据** |
 | **人工覆盖优先** | 人工策展走 overlay 种子（[ADR 0005](../decisions/0005-overlay-seed-files.md)） | 人工结果**永久优先于**自动结果，重跑采集不得覆盖人工值 |
 
 **四条底线**（缺一条即视为实现错误）：
