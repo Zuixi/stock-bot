@@ -215,6 +215,6 @@ alter table industry_metrics
 
 - [ ] S0.1 五篇 ADR 合入并登记，`doc_gate` [1/13] [2/13] 绿
 - [ ] S0.2 路由表覆盖全部既有路由，旧路由 redirect 无一遗漏
-- [ ] S0.3 七个数据源全部有三态结论，无"待定"超过一项
+- [ ] S0.3 七个数据源全部有三态结论；`blocked-on-verification` 者必须给出具体验证方法，其数量不构成阻塞（依据 Ruling 3）
 - [ ] S0.4 徽标语义、`metric_key` 命名、`publisher_tier`、口径版本、模块边界、兜底规则六节齐备
 - [ ] `bash scripts/doc_gate.sh` + `bash scripts/self_review.sh` 全绿
