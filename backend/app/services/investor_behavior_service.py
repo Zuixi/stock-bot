@@ -14,7 +14,7 @@ spec 的契约表是**四条腿 + 一条不做**，处置逐条不同（这不�
 | 基金申购赎回 → ETF 份额变化 | `etf_share_change` | **不重做**：§S1.7 已落，只**引用** |
 | 新增散户开户数 | —— | **判为不可得 ⇒ 整项不存在**（不注册 key、UI 无此项、不填估算值）|
 | 新基金发行规模 → 新成立基金份额 | `new_fund_share` | **落库**（月频序列）|
-| 公募基金仓位 | `public_fund_equity_position` | **落库但仅背景展示**（低频；**不进信号链路**）|
+| 公募基金仓位 | `public_fund_equity_position` | **落库但仅背景展示**（实测周度；**不进信号链路**）|
 | 主动基金申赎 | —— | spec 明写**不做**（不公开）|
 
 ## Step 0 结论（实机验证，2026-10-13；探针 `scripts/spike_s112_investor_behavior_sources.py`）
@@ -36,8 +36,10 @@ spec 的契约表是**四条腿 + 一条不做**，处置逐条不同（这不�
   相邻观测间隔 **6–8 天占 90.3% ⇒ 实测是周度**（**不是** spec 写的季度）；
   上游 JSON 只有 `date/close/position` 三个字段（**无**报告期/发布日期/编制方法）
   ⇒「股票投资占基金总资产比」这一口径**无法从产地复算**。故本模块把它标成
-  `source_tier='calc'`（第三方编制，**不是**官方口径）、文案显式写「低频参考值 / 季报口径、
+  `source_tier='calc'`（第三方编制，**不是**官方口径）、文案显式写「低频参考值、
   滞后 ~15 工作日」，并且**禁止任何消费方把它接进信号链路**（判据 2 的 grep）。
+  `freq` 按**产地实测的周度**登记（`weekly`；Ruling 64：机读字段不得与实测不符，
+  spec §S1.12 已同步修正）。
 
 三态结论、逐条实机输出与未验证余项见 `docs/design/data-source.md` **附.10**。
 
@@ -45,7 +47,8 @@ spec 的契约表是**四条腿 + 一条不做**，处置逐条不同（这不�
 
 落在**两处、都是可机读/可渲染字段**（不是活在代码里的常量）：
 
-- `MetricDef.freq`（`monthly` / `quarterly`）→ 前端 `FREQ_LABELS` 徽章直接渲染；
+- `MetricDef.freq`（`monthly` / `weekly`）→ 前端 `FREQ_LABELS` 徽章直接渲染；
+  ⚠️ 必须等于**产地实测频率**（Ruling 64）——仓位产地实测周度，故登记 `weekly`；
 - `MetricDef.description` 里同时写明**频率**与**滞后**（含具体天数/口径），
   由 `industry_registry._assert_investor_behavior_keys()` 在**导入期**强制
   （缺任一词即 `RuntimeError`）。
@@ -63,6 +66,9 @@ spec 的契约表是**四条腿 + 一条不做**，处置逐条不同（这不�
   （= 真实全月规模的**下界**），并在 `extra` 里显式登记 `n_funds` / `n_missing_share`
   / `is_lower_bound=True`（值不完整时），让读的人自行判断；
   **绝不**把缺的份额当 0（那会把下界冒充成精确值）。
+  ⚠️ 下界必须**对使用者可见**（Ruling 64）：`extra.is_lower_bound` 是**必要非充分**条件，
+  故 registry 的 `description` 与字典 §4.2 都写明「值 = 有值成员之和 = 该月真实规模的
+  下界，不得读成完整总额」——前端批次据此在 UI 上明示"下界"。
   ⚠️ 若某个**整月**的 `募集份额` 全空 → 那才是"缺数"，落 NULL（见上）。
   该月上游**一行都没有** → 不落行（结构性不存在，不是缺数）。
 - `public_fund_equity_position`：上游该观测日无值 → NULL + `source_empty`。
@@ -84,7 +90,8 @@ spec 的契约表是**四条腿 + 一条不做**，处置逐条不同（这不�
 - `new_fund_share`：该月**最后一个成立日** + **4 个日历日**
   （东财「新成立基金」页在基金成立后数日收录，保守取值）；
 - `public_fund_equity_position`：观测日 + **15 个工作日（跳过周末的近似）**
-  （spec 原话「季报、滞后 ~15 工作日」的**推算** —— 产地无发布字段，故只能推算）。
+  （**推算值** —— 产地无发布字段，故只能推算；本指标实测是**周度**序列，
+  该偏移量是保守取值，见 data-source.md 附.10.4）。
 
 ⚠️ 两个偏移量**都是保守取值、未经实测**：上游都没有给出发布时刻字段，
 故它们属于附.10 的未验证余项，**不得**被当成"已证实的发布时刻"。
@@ -150,9 +157,11 @@ UNITS: dict[str, str] = {
     PUBLIC_FUND_EQUITY_POSITION: "%",
 }
 #: 各 key 的落库 `freq`（= registry 的 `MetricDef.freq`，逐字）。
+#: ⚠️ 必须是**产地实测频率**（Ruling 64）：仓位的产地实测是周度观测（455 行、
+#: 6–8 天间隔占 90.3%），故 `weekly` —— 机读字段不得与实测不符。
 FREQS: dict[str, str] = {
     NEW_FUND_SHARE: "monthly",
-    PUBLIC_FUND_EQUITY_POSITION: "quarterly",
+    PUBLIC_FUND_EQUITY_POSITION: "weekly",
 }
 #: 各 key 的 `published_at` 时刻（当日几点可得）。两者都是**日粒度**披露（无盘中时点），
 #: 取 21:00 与 §S1.7 的"盘后/次日收录"同档，偏保守。
@@ -160,8 +169,9 @@ _PUBLISH_AT = dtime(21, 0)
 
 #: `new_fund_share` 的发布滞后：上游"新成立基金"页在基金成立后数日收录（**保守取值**）。
 NEW_FUND_ESTABLISH_LAG_DAYS = 4
-#: `public_fund_equity_position` 的发布滞后：spec 原话「季报、滞后 ~15 工作日」。
-#: 按**工作日**计（跳过周末，不查节假日日历）—— **推算值**，产地无发布字段。
+#: `public_fund_equity_position` 的发布滞后：观测日 + 15 个**工作日**（跳过周末的近似）。
+#: **推算值**（产地不给任何发布字段）——**不是**"季报编制期"的实测值：该产地实测是
+#: **周度**观测（`freq='weekly'`，Ruling 64），本偏移量只是保守取值。
 POSITION_PUBLISH_LAG_DAYS = 15
 
 #: `new_fund_share` 认为"该产地有完整数据"的起点（实测：2023-01 起连续，之前只剩孤例）。
@@ -438,11 +448,14 @@ def public_fund_position_by_day(
         extra: dict[str, Any] = {
             "upstream": "akshare.fund_stock_position_lg ← legulegu.com fund-position",
             "source_tier_note": "第三方编制（乐咕乐股），**不是**交易所官方口径；口径不可复算",
-            "frequency_note": "产地实测为周度观测；本 key 按 spec 标为季报口径（仅背景展示）",
+            "frequency_note": (
+                "产地实测为**周度观测**（455 行 / 2017-12-04…2026-09-30，6–8 天间隔占 90.3%）；"
+                "本 key 的 `freq` 按实测登记 `weekly`（机读字段不得与实测不符；仅背景展示）"
+            ),
             "publish_lag_note": (
                 f"published_at = 观测日 + {POSITION_PUBLISH_LAG_DAYS} 个**工作日**"
-                "（跳过周末，不查节假日日历；产地无发布字段 ⇒ 按 spec 的"
-                "「滞后 ~15 工作日」推算，属未验证余项）"
+                "（跳过周末，不查节假日日历；产地无发布字段 ⇒ 该偏移是**推算值**，"
+                "属 data-source.md 附.10.4 的未验证余项）"
             ),
             "signal_chain": "forbidden",
         }

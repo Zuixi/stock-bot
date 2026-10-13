@@ -15,12 +15,20 @@
 6. 公募基金仓位：0 行、列集合变化 → 报错。
 
 **C. 聚合的缺数纪律（绝不静默为 0）**
-7. 该月有任一基金份额为空 → 整月 `None` + `source_empty`（**不**拿部分和冒充全月）。
-8. 该月上游一行都没有 → **不产出该月**（"不存在"与"缺数"是两回事）。
+7. 该月**部分**基金份额为空（字段级缺值）→ 落**有值成员之和** = **下界**，
+   并显式登记 `extra.is_lower_bound=True`（**不**把缺的当 0、**不**把下界当精确值）。
+8. 该月**全部**基金份额都为空 → `None` + `source_empty`（缺数 ≠ 0）。
+9. 该月上游一行都没有 → **不产出该月**（"不存在"与"缺数"是两回事）。
 
 **D. PIT：不得静默回退 `period`**
-9. `new_fund_share` 的 `published_at.日期` = 该月**最后一个成立日** + 4 天（不是月首）；
-10. `public_fund_equity_position` 的 `published_at.日期` = 观测日 + 15 个**工作日**（跳过周末）。
+10. `new_fund_share` 的 `published_at.日期` = 该月**最后一个成立日** + 4 天（不是月首）；
+11. `public_fund_equity_position` 的 `published_at.日期` = 观测日 + 15 个**工作日**（跳过周末）。
+
+**E. `freq` 的唯一真相（Ruling 64）**
+12. 机读 `freq` 必须是**产地实测频率**：仓位产地实测周度 ⇒ `weekly`
+    （服务 `FREQS` 与 registry `MetricDef.freq` 逐字相等，UI 徽章文案 `周度`）。
+13. **下界必须可见**：registry 的 `description` 里必须写明"有值成员之和 = 下界、
+    不得读成完整总额"（`extra.is_lower_bound` 是必要非充分条件）。
 """
 
 from __future__ import annotations
@@ -69,9 +77,36 @@ class TestRegistrySurface:
                 assert token in metric.description, f"{key} 的描述里没有「{token}」"
 
     def test_freq_values_are_the_declared_ones(self):
-        """spec 判据 1 的具体取值（改了必须同步报告与字典）。"""
+        """spec 判据 1：`freq` 必须是**实测频率**（Ruling 64；改了必须同步报告与字典）。"""
         assert svc.FREQS["new_fund_share"] == "monthly"
-        assert svc.FREQS["public_fund_equity_position"] == "quarterly"
+        # 仓位产地实测是周度观测（455 行、6–8 天间隔占 90.3%）⇒ 机读字段必须写 weekly，
+        # **不得**为了迎合最初那句已被控制器推翻的「季报」措辞而写 quarterly。
+        assert svc.FREQS["public_fund_equity_position"] == "weekly"
+
+    def test_service_freq_matches_registry_freq(self):
+        """机读字段只有一个真相：服务落库的 `freq` 必须与 registry 的 `MetricDef.freq` 逐字相等。
+
+        两处漂移就是一句机器可读的假话（例如 registry 写 `weekly` 而服务照旧落 `quarterly`，
+        那么序列读面按 registry 过滤就一行都取不到）。导入期断言只是兜底，这里显式锁住。
+        """
+        defs = _market_defs()
+        for key in svc.ALL_METRIC_KEYS:
+            assert svc.FREQS[key] == defs[key].freq, f"{key} 的 freq 在服务与 registry 之间漂移"
+        assert defs["public_fund_equity_position"].freq in FREQ_LABELS
+        assert FREQ_LABELS["weekly"] == "周度", "前端徽章文案变了（FREQ_LABELS 是 UI 的唯一来源）"
+
+    def test_new_fund_share_description_states_the_lower_bound(self):
+        """Ruling 64：下界必须**可见**（机读 `extra.is_lower_bound` 是必要非充分）。
+
+        前端读的是 registry 的 `description`，故「有值成员之和 = 下界」必须写在里面，
+        而不是只说一句"缺数恒 NULL"（那与实现相反）。
+        """
+        desc = _market_defs()["new_fund_share"].description
+        assert "有值成员之和" in desc
+        assert "下界" in desc
+        assert "不得" in desc and "完整" in desc, "必须写明不得把部分和读成完整总额"
+        # 与实现相反的旧措辞不得留在描述里（本描述只说"整月全空才 NULL"）。
+        assert "有任一基金" not in desc
 
     def test_account_openings_metric_is_absent(self):
         """判据 3：开户数不可得 ⇒ 在 UI（registry）**不存在**，连空壳 key 都不许有。"""
@@ -338,7 +373,7 @@ class TestPublishedAt:
         row = svc._row(date(2026, 1, 2), metric)
         assert row["caliber_version"] == "s1.12-v1"
         assert row["published_at"] is not None
-        assert row["freq"] == "quarterly"
+        assert row["freq"] == "weekly"
         assert row["source"] == svc._SOURCES["public_fund_equity_position"]
         assert row["extra"]["missing_reason"] if row["value"] is None else True
 

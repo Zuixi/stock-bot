@@ -233,11 +233,12 @@ class TestWritePath:
         )
         assert rows[("new_fund_share", _OK_MONTH)].freq == "monthly"
         assert rows[("new_fund_share", _OK_MONTH)].unit == "亿元"
-        # 低频背景指标：published_at = 观测日 + 15 个工作日（跳过周末）
+        # 低频背景指标（产地实测周度 ⇒ freq='weekly'，Ruling 64）：
+        # published_at = 观测日 + 15 个工作日（跳过周末）
         assert rows[("public_fund_equity_position", _OK_DAY)].published_at.astimezone(
             _CN
         ).date() == (date(2019, 4, 5))
-        assert rows[("public_fund_equity_position", _OK_DAY)].freq == "quarterly"
+        assert rows[("public_fund_equity_position", _OK_DAY)].freq == "weekly"
         assert rows[("public_fund_equity_position", _OK_DAY)].source_tier == "calc"
         assert rows[("public_fund_equity_position", _OK_DAY)].source == (
             "akshare_legulegu_fund_position"
