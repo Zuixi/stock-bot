@@ -30,6 +30,11 @@ export interface BackendMetricLatest {
   warn_severity: string | null;
   spark: number[] | null;
   description: string;
+  // 缺数语义（Ruling 61）：取值来自该行 `extra.missing_reason`；`coverage` 是覆盖率徽章。
+  // 后端 `MetricLatestOut` 一直有这两个字段，此前前端类型未声明 ⇒ 被静默丢弃，
+  // 消费端只能看到 `value=null`，分不清"源侧滞后"与"真缺数"。
+  missing_reason: string | null;
+  coverage: number | null;
 }
 
 /** 通用读面 `GET /api/v1/metrics/series`（spec §S1.2）：窗口内升序序列 + 四徽章 */
@@ -246,6 +251,10 @@ export interface MetricLatest {
   warnSeverity: string | null;
   spark: number[] | null;
   description: string;
+  /** `extra.missing_reason` 缺数原因码；无缺口/未登记时为 `null`（见 Ruling 61）。 */
+  missingReason: string | null;
+  /** 覆盖率徽章（`coverage` → `weight_coverage` → `member_coverage` 取首个数值）。 */
+  coverage: number | null;
 }
 
 export interface MetricSeriesPoint {
@@ -418,6 +427,8 @@ function mapMetricLatest(m: BackendMetricLatest): MetricLatest {
     warnSeverity: m.warn_severity,
     spark: m.spark,
     description: m.description,
+    missingReason: m.missing_reason ?? null,
+    coverage: m.coverage ?? null,
   };
 }
 

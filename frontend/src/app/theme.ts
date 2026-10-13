@@ -29,6 +29,13 @@ export interface ThemePalette {
   primary: string;
   /** --hover 悬浮背景 */
   hover: string;
+  /**
+   * --sent-extreme-cold 情绪分位 < 10 的极冷带（键名与 CSS 变量逐字同形，
+   * 使 `check-design-tokens.mjs` 的对比度门禁能对同一名字同时校验两处）。
+   */
+  "sent-extreme-cold": string;
+  /** --sent-extreme-hot 情绪分位 > 90 的极热带（同上） */
+  "sent-extreme-hot": string;
 }
 
 /**
@@ -50,6 +57,8 @@ export const THEME_COLORS: Record<ThemeMode, ThemePalette> = {
     flat: "#6a6d78",
     primary: "#2962ff",
     hover: "rgba(41, 98, 255, 0.06)",
+    "sent-extreme-cold": "#5b4bd6",
+    "sent-extreme-hot": "#a35f00",
   },
   dark: {
     bgPage: "#131722",
@@ -64,6 +73,8 @@ export const THEME_COLORS: Record<ThemeMode, ThemePalette> = {
     flat: "#787b86",
     primary: "#2962ff",
     hover: "rgba(41, 98, 255, 0.12)",
+    "sent-extreme-cold": "#8b7cff",
+    "sent-extreme-hot": "#ffb020",
   },
 };
 

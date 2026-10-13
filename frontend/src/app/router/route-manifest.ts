@@ -185,17 +185,21 @@ export const ROUTES: AppRoute[] = [
     parent: "main",
   },
 
-  // 待定权限的一级导航（后端尚不存在 → 登录可见、无门禁）
-  { key: "news", path: "/news", kind: "page", component: "NewsPage", isPlaceholder: true, parent: "main" },
-  { key: "macro", path: "/macro", kind: "page", component: "MacroPage", isPlaceholder: true, parent: "main" },
+  // S1.8–S1.13 已兑现真页面：`/sentiment` 从占位转为真页面，并按最小一致口径**要求登录**
+  // （页面消费受保护的 `/api/v1/metrics/*`；匿名访问与 `/me` 一样走既有 `RequireAuth` 的
+  // 登录重定向，而不是渲染一个"空页"）。IA §1 的权限列原为「待定」，本行是落地时的最小选择。
   {
     key: "sentiment",
     path: "/sentiment",
     kind: "page",
     component: "SentimentPage",
-    isPlaceholder: true,
+    requiresAuth: true,
     parent: "main",
   },
+
+  // 待定权限的一级导航（后端尚不存在 → 登录可见、无门禁）
+  { key: "news", path: "/news", kind: "page", component: "NewsPage", isPlaceholder: true, parent: "main" },
+  { key: "macro", path: "/macro", kind: "page", component: "MacroPage", isPlaceholder: true, parent: "main" },
   {
     key: "valuegraph",
     path: "/valuegraph",

@@ -83,7 +83,7 @@ frontend/src/
 | `/industry/:industryKey` | page | `pages/industry/workbench`（`IndustryWorkbenchPage`） | `research:read` | 行业投研工作台（`/research/:industryKey` 的 redirect 目标） |
 | `/news` | page（占位） | `pages/news`（`NewsPage`） | 待定（当前无门禁） | 资讯；占位，权限口径待模块落地 |
 | `/macro` | page（占位） | `pages/macro`（`MacroPage`） | 待定（当前无门禁） | 宏观分析；占位 |
-| `/sentiment` | page（占位） | `pages/sentiment`（`SentimentPage`） | 待定（当前无门禁） | 情绪分析；占位 |
+| `/sentiment` | page | `pages/sentiment`（`SentimentPage`） | 需登录 | 情绪分析的深度读出台（S1.8–S1.13）：综合指数 hero（读新端点 `/api/v1/market/sentiment/composite`，明示「N/11 条腿 + 生效权重」）+ 9 个模块面板（唯一模块表 `features/sentiment/moduleTable.ts` + 唯一渲染器 `SentimentModulePanel`）；⑧ 散户舆情与 ⑩ 情绪预警与预判按 spec 就地说明未落地。**权限**：IA §1 原列「待定」，本页消费受保护的 `/api/v1/metrics/*`，故按最小一致口径取「需登录」（沿用既有 `RequireAuth`，不新增 scope） |
 | `/valuegraph` | page（占位） | `pages/valuegraph`（`ValueGraphPage`） | 待定（当前无门禁） | 价值网图谱；占位 |
 | `/strategy` | page（占位） | `pages/strategy`（`StrategyPage`） | 待定（当前无门禁） | 策略引擎；占位 |
 | `/risk` | page（占位） | `pages/risk`（`RiskPage`） | 待定（当前无门禁） | 风险管理；占位 |

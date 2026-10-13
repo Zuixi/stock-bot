@@ -253,10 +253,11 @@ const PLACEHOLDER_CONTRACT = [
   // `/market/heatmap` 已随 S1.5 兑现真实现摘除占位（S1.5 落地前它是契约成员，
   // 定点断言曾守「不得摘标志冒充真页面」；现在反向守「真页面不许退回占位」，
   // 见下方定点断言——同一行占位契约的两个方向各守各的时期）。
+  // `/sentiment` 已随 S1.8–S1.13 兑现真页面（综合指数 hero + 9 个模块面板）摘除占位，
+  // 并在清单里改为 `requiresAuth`（消费受保护的 /api/v1/metrics/*）——同样只许前进不许退回。
   "/company",
   "/news",
   "/macro",
-  "/sentiment",
   "/valuegraph",
   "/strategy",
   "/risk",

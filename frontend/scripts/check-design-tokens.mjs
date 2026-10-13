@@ -36,7 +36,9 @@ function varOf(text, name) {
 function tsColor(mode, name) {
   const start = themeTsSource.indexOf(`${mode}: {`);
   const sec = themeTsSource.slice(start, themeTsSource.indexOf("},", start));
-  const m = sec.match(new RegExp(`${name}:\\s*"(#[0-9a-fA-F]{6})"`));
+  // 键名允许带引号：多词令牌（如 `sent-extreme-cold`）在 TS 里只能写成字符串键。
+  // 只放宽**键的引号**，色值仍是必须逐字相等的 6 位 hex —— 不放宽任何实质断言。
+  const m = sec.match(new RegExp(`"?${name}"?:\\s*"(#[0-9a-fA-F]{6})"`));
   if (!m) throw new Error(`THEME_COLORS.${mode}.${name} not found`);
   return m[1].toLowerCase();
 }
@@ -71,7 +73,10 @@ const fail = (msg) => {
 };
 for (const { label, marker, tsMode, surfaces } of MODES) {
   const b = blockOf(css, marker);
-  for (const name of ["up", "down"]) {
+  // `up`/`down`（价格方向）+ `sent-extreme-cold`/`sent-extreme-hot`（/sentiment 情绪分位极值带）：
+  // 同一张表里逐块校验对比度（≥4.5 on bg-page 与 bg-panel）与 theme.ts 一致性。
+  // 新增颜色刻度必须进本数组，否则"看一眼觉得能读"就会成为唯一门禁。
+  for (const name of ["up", "down", "sent-extreme-cold", "sent-extreme-hot"]) {
     const hex = varOf(b, name);
     for (const surface of surfaces) {
       const bg = varOf(b, surface);

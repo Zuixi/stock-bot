@@ -42,6 +42,8 @@ const PAGES: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
   SearchPage: lazy(() => import("@/pages/search")),
   CompanyPage: lazy(() => import("@/pages/company")),
   MacroPage: lazy(() => import("@/pages/macro")),
+  // `/sentiment` 已兑现真页面（S1.8–S1.13，含综合指数 hero）：不再在 PLACEHOLDER_NOTICE 里，
+  // 也不套占位壳——清单的 `isPlaceholder` 已摘除，`requiresAuth` 由 renderPageRoute 统一兑现。
   SentimentPage: lazy(() => import("@/pages/sentiment")),
   ValueGraphPage: lazy(() => import("@/pages/valuegraph")),
   StrategyPage: lazy(() => import("@/pages/strategy")),
@@ -62,7 +64,6 @@ const PLACEHOLDER_NOTICE: Record<string, { title: string; hint?: string }> = {
   },
   "/news": { title: "资讯" },
   "/macro": { title: "宏观分析" },
-  "/sentiment": { title: "情绪分析" },
   "/valuegraph": { title: "价值网图谱" },
   "/strategy": { title: "策略引擎" },
   "/risk": { title: "风险管理" },

@@ -16,6 +16,9 @@
   --up: #c62828;
   --down: #0a7d5f;
   --hover: rgba(41, 98, 255, 0.06);
+  /* 情绪分位极值带（/sentiment）：避开 --up/--down（红绿已被价格方向占用） */
+  --sent-extreme-cold: #5b4bd6;
+  --sent-extreme-hot: #a35f00;
   color-scheme: light;
 }
 
@@ -30,6 +33,9 @@
   --up: #c62828;
   --down: #0a7d5f;
   --hover: rgba(41, 98, 255, 0.06);
+  /* 情绪分位极值带（/sentiment）：避开 --up/--down（红绿已被价格方向占用） */
+  --sent-extreme-cold: #5b4bd6;
+  --sent-extreme-hot: #a35f00;
   color-scheme: light;
 }
 
@@ -44,6 +50,9 @@
   --up: #f2555a;
   --down: #0aa088;
   --hover: rgba(41, 98, 255, 0.12);
+  /* 情绪分位极值带（/sentiment）：暗色下提亮，仍与 --up/--down 区分 */
+  --sent-extreme-cold: #8b7cff;
+  --sent-extreme-hot: #ffb020;
   color-scheme: dark;
 }
 
