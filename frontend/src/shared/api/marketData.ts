@@ -4,6 +4,7 @@ import {
   mapStaleList,
   type BackendNorthboundEnvelope,
   type BackendSnapshotEnvelope,
+  type NorthboundAmountKind,
   type NorthboundEnvelope,
   type StaleEnvelope,
 } from "./marketEnvelope";
@@ -88,7 +89,8 @@ interface BackendMarketMoneyflow {
 
 interface BackendNorthboundPoint {
   date: string;
-  net_amount: number | null;
+  amount: number | null;
+  amount_kind?: string | null;
 }
 
 interface BackendDragonTigerItem {
@@ -249,7 +251,9 @@ export interface SectorMoneyflowItem {
 
 export interface NorthboundPoint {
   date: string;
-  netAmount: number | null; // 万元
+  /** 万元。**口径见 `amountKind`**：`net_buy` 是净买入（可负），`turnover` 是成交额（恒正）。 */
+  amount: number | null;
+  amountKind: NorthboundAmountKind;
 }
 
 export interface MarketMoneyflowDay {
@@ -514,7 +518,10 @@ const mapSectorMoneyflow = (b: BackendSectorMoneyflowItem): SectorMoneyflowItem 
 
 const mapNorthbound = (b: BackendNorthboundPoint): NorthboundPoint => ({
   date: b.date,
-  netAmount: b.net_amount,
+  amount: b.amount,
+  // 口径白名单解析：缺字段/未知取值 → `unknown`（保守，绝不猜成净买入）
+  amountKind:
+    b.amount_kind === "net_buy" || b.amount_kind === "turnover" ? b.amount_kind : "unknown",
 });
 
 const mapDragonTiger = (b: BackendDragonTigerItem): DragonTigerItem => ({
@@ -648,8 +655,12 @@ export function fetchSectorMoneyflow(
 }
 
 /**
- * 北向净流入序列。同 {@link fetchSectorMoneyflow}：返回 `{items, asOf, staleDays, sourceStatus}`
- * 信封（上游停更时 `sourceStatus` 为 `discontinued`）。
+ * 北向 `moneyflow_hsgt.north_money` 日序列（**成交额口径**，Ruling 62/63）。
+ *
+ * 同 {@link fetchSectorMoneyflow}：返回 `{items, asOf, staleDays, sourceStatus, amountKind}`
+ * 信封（上游停更时 `sourceStatus` 为 `discontinued`）。⚠️ 该列在 2024-08-19 换过语义：
+ * 每个点带 `amountKind`，信封的 `amountKind` 是本窗口口径（跨断点 = `mixed`）。
+ * **不得把 `amount` 当净流入**，`mixed`/`unknown` 不得求和。
  */
 export function fetchNorthbound(days = 30): Promise<NorthboundEnvelope<NorthboundPoint>> {
   return apiGet<BackendNorthboundEnvelope<BackendNorthboundPoint>>("/api/v1/market/northbound", { days }).then((b) =>

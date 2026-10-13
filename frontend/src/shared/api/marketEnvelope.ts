@@ -17,6 +17,19 @@ export type AsOfQuality = "complete" | "partial" | "fallback";
 /** 上游数据源状态；`discontinued` = 已停更（如北向 `northbound_daily` 断流）。 */
 export type SourceStatus = "live" | "discontinued";
 
+/**
+ * 北向数值的**口径**（Ruling 62/63）：`moneyflow_hsgt.north_money` 在 2024-08-19
+ * **换过语义**——之前是**净买入**（可负），之后是**成交额**（恒正）。同一列两种含义，
+ * 故口径由数据自己携带，前端先看口径再决定怎么念这个数。
+ *
+ * `unknown` 是**前端兜底态**（后端漏字段时的保守归类），不是第三种口径：它只用于
+ * **拒绝**渲染任何方向的结论，绝不参与"按正负判净流入"。
+ */
+export type NorthboundAmountKind = "net_buy" | "turnover" | "unknown";
+
+/** 窗口口径：同一口径 → 该值；跨断点混装 → `mixed`（**禁止求和**）；无 items → `unknown`。 */
+export type NorthboundWindowKind = "net_buy" | "turnover" | "mixed" | "unknown";
+
 // ---- 后端原始 payload（snake_case，只在本文件的 mapper 里解包） ----
 
 /**
@@ -72,6 +85,8 @@ export interface BackendBoardStockOut {
 /** `app/schemas/market_data.py::NorthboundSeriesOut`。 */
 export interface BackendNorthboundEnvelope<Raw> extends BackendSnapshotEnvelope<Raw> {
   source_status?: SourceStatus;
+  /** 本窗口口径：`net_buy` / `turnover` / 跨断点 `mixed`；无 items 时缺省。 */
+  amount_kind?: string | null;
 }
 
 // ---- 前端信封（camelCase；组件读 `.items`，Phase 1 读其余字段） ----
@@ -93,9 +108,11 @@ export interface StaleEnvelope<T> {
   staleDays: number | null;
 }
 
-/** 北向信封：陈旧度之外再带停更标注。 */
+/** 北向信封：陈旧度之外再带停更标注与**本窗口口径**。 */
 export interface NorthboundEnvelope<T> extends StaleEnvelope<T> {
   sourceStatus: SourceStatus;
+  /** 窗口口径：`mixed`（跨 2024-08-19 断点）与 `unknown`（无 items / 后端漏字段）都**不可累计**。 */
+  amountKind: NorthboundWindowKind;
 }
 
 /** 热门板块信封：`MarketListOut` 元数据 + 产地（东财板块 / 本地分组回落）。 */
@@ -190,7 +207,13 @@ export function mapStaleList<Raw, T = Raw>(
   };
 }
 
-/** 解包北向 envelope：`.items` 逐项映射后附上 `asOf` / `staleDays` / `sourceStatus`。 */
+/**
+ * 解包北向 envelope：`.items` 逐项映射后附上 `asOf` / `staleDays` / `sourceStatus` / `amountKind`。
+ *
+ * 窗口口径按**白名单**解析：只认 `net_buy` / `turnover` / `mixed`，其余（缺字段、未知取值）
+ * 一律保守归为 `unknown` —— 宁可让卡片说不出结论，也不能把成交额当成净流入（这正是本次
+ * 要修的错标）。同理 `sourceStatus` 缺省即 `discontinued`。
+ */
 export function mapNorthboundList<Raw, T = Raw>(
   b: BackendNorthboundEnvelope<Raw>,
   map?: (raw: Raw) => T,
@@ -201,5 +224,9 @@ export function mapNorthboundList<Raw, T = Raw>(
     staleDays: b.stale_days ?? null,
     // 后端缺省即 `discontinued`：标注未知宁可从「停更」一侧保守兜底
     sourceStatus: b.source_status ?? "discontinued",
+    amountKind:
+      b.amount_kind === "net_buy" || b.amount_kind === "turnover" || b.amount_kind === "mixed"
+        ? b.amount_kind
+        : "unknown",
   };
 }

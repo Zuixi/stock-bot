@@ -15,8 +15,18 @@ export const fmtWanGu = (v: number | null | undefined): string =>
 export const fmtYiGu = (v: number | null | undefined): string =>
   v == null ? DASH : `${(v / 1e4).toFixed(2)}亿股`;
 
+/** 净买入（万元）→ 亿元：**带正负号**（净买入有方向）。 */
 export const fmtNorthYi = (v: number | null | undefined): string =>
   v == null ? DASH : `${v > 0 ? "+" : ""}${(v / 1e4).toFixed(2)}亿`;
+
+/**
+ * 成交额（万元）→ 亿元：**不带正负号**。
+ *
+ * 成交额没有方向，标 `+`/`−` 会诱导读者把它当成净流入（这正是 2024-08-19 之后
+ * `north_money` 被错标的那类误读）。缺值仍是 `—`，绝不回落 0.00。
+ */
+export const fmtTurnoverYi = (v: number | null | undefined): string =>
+  v == null ? DASH : `${(v / 1e4).toFixed(2)}亿`;
 
 /**
  * TuShare 原生 `amount`（千元）→ 元 → 万亿元/亿元，拆成 `DataRow` 的 value/unit 两段。

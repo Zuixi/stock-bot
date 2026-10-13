@@ -433,6 +433,7 @@ async def test_ingest_sector_moneyflow_uses_today_and_both_dims(monkeypatch):
 
 
 def test_map_hsgt_rows_string_to_float():
+    """``north_money`` → ``amount``（万元），并按交易日打上行级口径（Ruling 62/63）。"""
     df = mds.pd.DataFrame(
         [
             {"trade_date": "20260902", "north_money": "244809.28"},
@@ -441,8 +442,26 @@ def test_map_hsgt_rows_string_to_float():
     )
     rows = mds._map_hsgt_rows(df)
     assert rows == [
-        {"trade_date": date(2026, 9, 2), "net_amount": 244809.28},
-        {"trade_date": date(2026, 9, 1), "net_amount": 273259.26},
+        {"trade_date": date(2026, 9, 2), "amount": 244809.28, "amount_kind": "turnover"},
+        {"trade_date": date(2026, 9, 1), "amount": 273259.26, "amount_kind": "turnover"},
+    ]
+
+
+def test_map_hsgt_rows_labels_pre_breakpoint_as_net_buy():
+    """断点（2024-08-19）之前的上游值必须是 ``net_buy``，**不是**成交额。
+
+    这正是本次要修的错标：同一列两种口径，行级标记必须跟着交易日走，不能整表一个假设。
+    """
+    df = mds.pd.DataFrame(
+        [
+            {"trade_date": "20240816", "north_money": "-3209.23"},
+            {"trade_date": "20240819", "north_money": "77584.24"},
+        ]
+    )
+    rows = mds._map_hsgt_rows(df)
+    assert rows == [
+        {"trade_date": date(2024, 8, 16), "amount": -3209.23, "amount_kind": "net_buy"},
+        {"trade_date": date(2024, 8, 19), "amount": 77584.24, "amount_kind": "turnover"},
     ]
 
 

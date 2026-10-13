@@ -481,7 +481,13 @@ async def list_limit_up_facts_in_range(
 
 
 async def upsert_northbound(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
-    """北向净流入日序列幂等 upsert（冲突时只刷 net_amount；source 首写后不变）。"""
+    """北向日序列幂等 upsert（冲突时刷 ``amount`` 与 ``amount_kind``；``source`` 首写后不变）。
+
+    ``amount`` 的口径**不是**列的属性而是行的属性（Ruling 62/63：``north_money`` 在
+    2024-08-19 换语义），故写入必须自带 ``amount_kind``（``net_buy`` | ``turnover``）。
+    冲突时两者**一起**刷：若只刷数值不刷口径，"成交额被当成净买入"就能从写路径回来。
+    库层的 ``ck_northbound_amount_kind`` 是最后一道闸——未标注口径的行根本插不进去。
+    """
     if not rows:
         return 0
     stmt = (
@@ -489,7 +495,10 @@ async def upsert_northbound(db: AsyncSession, rows: list[dict[str, Any]]) -> int
         .values([{**r, "source": "tushare:moneyflow_hsgt"} for r in rows])
         .on_conflict_do_update(
             constraint="uq_northbound_date",
-            set_={"net_amount": pg_insert(NorthboundDaily).excluded.net_amount},
+            set_={
+                "amount": pg_insert(NorthboundDaily).excluded.amount,
+                "amount_kind": pg_insert(NorthboundDaily).excluded.amount_kind,
+            },
         )
     )
     # Core INSERT 的 execute 运行时返回 CursorResult（带 rowcount）；Result 存根无该属性
@@ -499,7 +508,11 @@ async def upsert_northbound(db: AsyncSession, rows: list[dict[str, Any]]) -> int
 
 
 async def list_northbound(db: AsyncSession, days: int) -> list[NorthboundDaily]:
-    """近 N 日北向净流入按交易日升序（上海时区语义，与 ingest 窗口对齐）。"""
+    """近 N 日北向日序列按交易日升序（上海时区语义，与 ingest 窗口对齐）。
+
+    行里既有断点前的**净买入**历史也可能有断点后的**成交额**，调用方必须读
+    ``amount_kind`` 再解释 ``amount``（见 ``app/services/northbound_caliber.py``）。
+    """
     cutoff = datetime.now(ZoneInfo("Asia/Shanghai")).date() - timedelta(days=days)
     stmt = (
         select(NorthboundDaily)

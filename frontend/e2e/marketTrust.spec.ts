@@ -339,11 +339,15 @@ test.describe("可点击条目语义与键盘可达（Task 16）", () => {
  * Task 16：北向停更标注与数据版图降级。
  * 北向（`moneyflow_hsgt`）上游已停更：卡片要能说「数据源已停更」**并给出最新数据日**，
  * 日期必须取自 payload（`as_of`），换一天文案跟着变——写死日期就是假标注。
+ *
+ * Task 16（口径重标）追加：2024-08-19 之后 `north_money` 是**成交额**口径，卡片必须据此
+ * 念数（「成交额」「累计成交额」、无正负号），**不得**再出现「净流入」文案。mock 里的
+ * 值全部为正且带 `amount_kind="turnover"`——负值在成交额口径下是不可能出现的。
  */
 test.describe("北向停更标注与数据版图降级（Task 16）", () => {
   const NORTHBOUND_ITEMS = [
-    { date: "2026-09-06", net_amount: 12345.6 },
-    { date: "2026-09-07", net_amount: -7890.1 },
+    { date: "2026-09-06", amount: 123456.7, amount_kind: "turnover" },
+    { date: "2026-09-07", amount: 78901.2, amount_kind: "turnover" },
   ];
 
   async function mockNorthbound(page: Page, asOf: string, staleDays: number) {
@@ -355,6 +359,7 @@ test.describe("北向停更标注与数据版图降级（Task 16）", () => {
           as_of: asOf,
           stale_days: staleDays,
           source_status: "discontinued",
+          amount_kind: "turnover",
           items: NORTHBOUND_ITEMS,
         }),
       })
@@ -376,6 +381,20 @@ test.describe("北向停更标注与数据版图降级（Task 16）", () => {
     const card2 = page.locator(".ant-card").filter({ hasText: "北向资金" });
     await expect15s(card2.getByText("数据源已停更（最新 08-21）")).toBeVisible();
     await expect(card2.getByText("（最新 09-07）")).toHaveCount(0);
+  });
+
+  test("北向卡按成交额口径念数，不出现「净流入」", async ({ page }) => {
+    await mockNorthbound(page, "2026-09-07", 11);
+    await page.goto("/market");
+    await page.getByRole("tab", { name: "资金流向" }).click();
+    const card = page.locator(".ant-card").filter({ hasText: "北向资金" });
+    await expect15s(card.getByText("盘后成交额 · 亿元")).toBeVisible();
+    await expect15s(card.getByText("当日成交额")).toBeVisible();
+    await expect15s(card.getByText("近30日累计成交额")).toBeVisible();
+    // 成交额无方向：不带正负号（净买入才带）。末项 78901.2 万元 → 恰好 "7.89亿"（精确匹配，
+    // 若被写成 "+7.89亿" 这条会红）
+    await expect15s(card.getByText("7.89亿", { exact: true })).toBeVisible();
+    await expect(card.getByText(/净流入|净买入/)).toHaveCount(0);
   });
 
   test("数据版图把北向一行标为「规划中」，且不冒充已上线数据域", async ({ page }) => {

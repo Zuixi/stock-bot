@@ -68,8 +68,13 @@ async def get_sector_moneyflow_endpoint(
 async def get_northbound(
     cache: CacheDep, days: int = Query(default=30, ge=1, le=180)
 ) -> NorthboundSeriesOut:
-    """北向净流入序列；`as_of` 是**返回的 items 末项**的日期，窗口内无项时 None
-    （此时 `source_status="discontinued"`，上游停更也从该状态体现）。
+    """北向 ``moneyflow_hsgt.north_money`` 日序列（**成交额口径**，Ruling 62/63）。
+
+    ⚠️ 该列在 ``2024-08-19`` 换过语义：之前是**净买入**（可负），之后是**成交额**。
+    故每个点带 ``amount_kind``，信封的 ``amount_kind`` 给出本窗口口径
+    （``net_buy`` / ``turnover`` / 跨断点 ``mixed``）；**求和只在同一口径内成立**。
+    ``as_of`` 是**返回的 items 末项**的日期，窗口内无项时 None（此时
+    ``source_status="discontinued"``，上游停更也从该状态体现）。
     """
     payload = await market_data_service.get_northbound_series(cache, days)
     return NorthboundSeriesOut.model_validate(payload)

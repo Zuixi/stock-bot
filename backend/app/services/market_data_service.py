@@ -19,6 +19,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories import index_repo, market_data_repo
+from app.services.northbound_caliber import (
+    NORTHBOUND_AMOUNT_KINDS,
+    northbound_amount_kind,
+)
 
 if TYPE_CHECKING:
     from app.core.redis import CacheClient
@@ -1602,23 +1606,39 @@ def _dedupe_block_trade_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 def _map_hsgt_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """moneyflow_hsgt 全列字符串 → northbound rows（north_money 万元，缺失/NaN 置 None）。"""
+    """moneyflow_hsgt → northbound rows（``amount`` 万元，缺失/NaN 置 None；带行级口径）。
+
+    ``north_money`` **同一列两种口径**（Ruling 62/63）：断点前是净买入、断点起是成交额。
+    口径在这里按交易日打成行级标记（``amount_kind``），**不留给读面靠日期或正负去猜**——
+    ingest 是唯一知道"这个数是从哪一版上游语义拿来的"的地方。
+    """
     rows: list[dict[str, Any]] = []
     for rec in df.to_dict("records"):
         raw = rec.get("north_money")
-        net: float | None = None
+        amount: float | None = None
         if raw is not None:
             try:
                 f = float(raw)
             except (TypeError, ValueError):
                 f = float("nan")
-            net = None if math.isnan(f) else f
-        rows.append({"trade_date": _d(rec["trade_date"]), "net_amount": net})
+            amount = None if math.isnan(f) else f
+        trade_date = _d(rec["trade_date"])
+        rows.append(
+            {
+                "trade_date": trade_date,
+                "amount": amount,
+                "amount_kind": northbound_amount_kind(trade_date),
+            }
+        )
     return rows
 
 
 async def ingest_northbound(db: AsyncSession, days: int = 30) -> dict[str, int]:
-    """盘后采集：近 N 日沪深港通北向净流入（moneyflow_hsgt，幂等 upsert）。"""
+    """盘后采集：近 N 日沪深港通北向序列（moneyflow_hsgt，幂等 upsert）。
+
+    该列断点前是**净买入**、断点后是**成交额**，逐行由 ``amount_kind`` 标注；
+    采集本身上下不变（能力保留，Ruling 30）。
+    """
     client = _get_tushare()
     start = (_today_sh() - timedelta(days=days)).strftime("%Y%m%d")
     end = _today_sh().strftime("%Y%m%d")
@@ -1634,23 +1654,28 @@ NORTHBOUND_DISCONTINUED_AFTER_DAYS = 5
 
 
 async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> dict[str, Any]:
-    """北向净流入日序列（升序）+ 数据源状态（Redis 300s 共享缓存，键含最近日）。
+    """北向日序列（升序）+ **行级口径** + 数据源状态（Redis 300s 共享缓存，键含最近日）。
+
+    ⚠️ **这不是"北向净流入"序列**（Ruling 62/63）：上游 ``moneyflow_hsgt.north_money``
+    在 ``2024-08-19`` 换过语义 —— 之前是**净买入**（可负），之后是**成交额**（恒正）。
+    故每个 item 带 ``amount_kind``（``"net_buy"`` | ``"turnover"``），信封再给本窗口的
+    统一口径 ``amount_kind``（同一口径 → 该值；跨断点混装 → ``"mixed"``；无 items →
+    ``None``）。**读方不得把 ``amount`` 当净流入**：求和只在同一口径内有意义，
+    ``"mixed"`` 必须拒绝求和。能力保留、数值一个不改（Ruling 30），只是不再错标。
 
     ``source_status``：``stale_days <= 5`` → ``"live"``，否则 ``"discontinued"``
     （``stale_days`` 为自然日差 ``_today_sh() - as_of``）。负的 ``stale_days`` 意味着
     表内存在未来日期的脏行（``trade_date`` 无上界）：此时 ``<= 5`` 会把它算成
-    ``"live"``，前端适配层必须把负值识别为异常而不是"新鲜"，人工核查脏行。上游 TuShare
-    ``moneyflow_hsgt`` 已停更（实测 30 天窗口最新只到 2026-08-21，表内最近日
-    2026-09-07），卡片必须能说"该源已停更"而不是画一条不带截止标注的线。
+    ``"live"``，前端适配层必须把负值识别为异常而不是"新鲜"，人工核查脏行。
 
     **元数据只描述实际返回的 ``items``（Task 8 修正）**：``items`` 由
     ``trade_date >= 今天-days`` 的窗口过滤，而表内最大日可能早于该窗口——
     旧实现用"表级 max"当 ``as_of``，于是 ``days=5`` 可以返回"非空 as_of + 空
-    items"。现在 ``as_of``/``stale_days``/``source_status`` 全部由 ``items`` 自己
-    的末行日期推导，无行即 ``as_of=None`` / ``stale_days=None`` /
-    ``source_status="discontinued"``（拿不到任何数据就谈不上 live）。缓存命中时
-    ``stale_days`` 与 ``source_status`` 按当下重算（``as_of`` 是 items 的属性、
-    不是 payload 的冻结字段）。
+    items"。现在 ``as_of``/``stale_days``/``source_status``/``amount_kind`` 全部由
+    ``items`` 自己的内容推导，无行即 ``as_of=None`` / ``stale_days=None`` /
+    ``source_status="discontinued"`` / ``amount_kind=None``（拿不到任何数据就谈不上
+    live）。缓存命中时 ``stale_days`` 与 ``source_status`` 按当下重算（``as_of`` 是
+    items 的属性、不是 payload 的冻结字段），口径缺失的旧缓存条目按断点补正。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.models.market_data import NorthboundDaily  # noqa: PLC0415
@@ -1671,7 +1696,13 @@ async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> di
         items: list[dict[str, Any]] = []
         if as_of is not None:  # 表空（as_of=None）时明细必然为空，不查
             for n in await market_data_repo.list_northbound(db, days):
-                items.append({"date": n.trade_date.isoformat(), "net_amount": n.net_amount})
+                items.append(
+                    {
+                        "date": n.trade_date.isoformat(),
+                        "amount": n.amount,
+                        "amount_kind": n.amount_kind,
+                    }
+                )
 
     # ``as_of`` 由 items 的末行（升序）推导，而不是回看表级 max：窗口过滤后可能
     # 一行都不剩，此时元数据必须一起归零（见 docstring）。
@@ -1681,9 +1712,52 @@ async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> di
     return payload
 
 
+def _normalize_northbound_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把 items 归一到"**口径必填**"的形状（缺字段的历史缓存条目也要补上）。
+
+    只对两件历史遗留做兼容，两件都不改变语义：
+
+    - ``amount_kind`` 缺失（本改动上线前写进 Redis 的条目）→ 按断点由交易日重算。
+      口径是 ``trade_date`` 的纯函数，故可无损补正；**绝不**回落到 ``net_buy``——
+      那正是本次要修的错标（把成交额说成净买入）。
+    - 值仍挂在旧字段名 ``net_amount`` 上 → 平移到 ``amount``（同一列的改名）。
+
+    两件都补不上（条目没有可解析日期）时不猜口径，直接**响亮失败**：宁可 500 也不能
+    再产出一行"口径未知的北向数值"。取值恒为 :data:`NORTHBOUND_AMOUNT_KINDS` 之一。
+    """
+    normalized: list[dict[str, Any]] = []
+    for item in items:
+        raw_kind = item.get("amount_kind")
+        trade_date = _iso_date(item.get("date"))
+        if raw_kind in NORTHBOUND_AMOUNT_KINDS:
+            kind = str(raw_kind)
+        elif trade_date is not None:
+            kind = northbound_amount_kind(trade_date)
+        else:
+            raise ValueError(f"northbound item has no parseable date: {item!r}")
+        amount = item["amount"] if "amount" in item else item.get("net_amount")
+        normalized.append({"date": item.get("date"), "amount": amount, "amount_kind": kind})
+    return normalized
+
+
+def _northbound_window_kind(items: list[dict[str, Any]]) -> str | None:
+    """本窗口的统一口径：同一口径 → 该值；跨断点混装 → ``"mixed"``；无行 → ``None``。
+
+    ``"mixed"`` 是**必须存在的第三态**（不是"未标注"）：断点前净买入与断点后成交额
+    一旦同窗出现，任何"累计"都必须被拒绝——否则就是把两种量相加。
+    """
+    kinds = {str(item["amount_kind"]) for item in items}
+    if not kinds:
+        return None
+    if len(kinds) == 1:
+        return next(iter(kinds))
+    return "mixed"
+
+
 def _northbound_payload(as_of: date | None, items: list[dict[str, Any]]) -> dict[str, Any]:
-    """北向信封：``as_of``/``stale_days``/``source_status`` 全由返回的 items 推导。"""
+    """北向信封：``as_of``/``stale_days``/``source_status``/``amount_kind`` 全由 items 推导。"""
     stale_days = _stale_days(as_of)
+    normalized = _normalize_northbound_items(items)
     return {
         "as_of": as_of.isoformat() if as_of is not None else None,
         "stale_days": stale_days,
@@ -1692,7 +1766,8 @@ def _northbound_payload(as_of: date | None, items: list[dict[str, Any]]) -> dict
             if stale_days is not None and stale_days <= NORTHBOUND_DISCONTINUED_AFTER_DAYS
             else "discontinued"
         ),
-        "items": items,
+        "amount_kind": _northbound_window_kind(normalized),
+        "items": normalized,
     }
 
 

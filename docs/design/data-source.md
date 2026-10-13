@@ -890,3 +890,28 @@ $ AKShare bond_china_yield 逐年翻窗（窗口 < 1 年）
    —— 这是一次**跨表/跨 API/跨前端**的改名，且会动到 `scheduler` 任务名与迁移，
    属独立的修订批次。若控制器批准，建议与"北向成交额"指标在 `industry_metrics` 的登记
    一并做（本任务已把 `moneyflow_hsgt` 的客户端方法与断点实证备好）。
+
+### 附.9.6 控制器裁定与 Task 16 处置结果（2026-10-13，后续批次补记）
+
+> 本节只补记"附.9.1–附.9.5 写完之后发生了什么"，**不改写**上面的实机证据。
+
+- 控制器**采纳了附.9.5 的方案 A**，并把 §S1.7 的验收判据改成**语义判据**（Ruling 62/63）：
+  凡承载 2024-08-19 之后 `north_money` 的字段名 / DTO 字段 / UI 文案必须体现**成交额**口径，
+  不得呈现为净买入/净流入；`grep -rn "北向\|northbound" backend/app/ frontend/src/` 的每一处
+  命中都要能归入「断点前的净买入历史（显式标注断点）」或「成交额口径（命名已体现）」。
+- **Task 16 已按方案 A 落地**（`feat/research-platform-ia`）：
+  - 行级口径列：迁移 `b6a1f0c2d7e4` 给 `northbound_daily` 加 `amount_kind`
+    （`'net_buy'` | `'turnover'`，`NOT NULL` + `CHECK`），按断点回填既有行；
+    并把 `net_amount` **改名**为 `amount`（数值一个不改）。
+  - 断点常量的唯一活来源：`app/services/northbound_caliber.py`（`NORTHBOUND_TURNOVER_SINCE`）。
+  - 读面：`GET /api/v1/market/northbound` 每点带 `amount_kind`，信封再给本窗口口径
+    （`net_buy` / `turnover` / 跨断点 `mixed` / 无行 `None`）。
+  - 前端 `NorthboundCard`：按口径念数（成交额不带正负号、不着涨跌色、零轴仅净买入时画）；
+    原「近30日累计（净流入）」改为「近30日累计成交额」，跨断点 `mixed` **不累计**。
+  - 覆盖矩阵公开文案的「沪深港通净流入」改为「沪深港通成交额（2024-08-19 起）」
+    （与 `docs/design/landing-market-theme.md` §5 同源）。
+  - 能力**一行未删**：表 / `ingest_northbound` / `northbound_daily_job` / 读端点全部保留；
+    断点前的净买入历史如出现，会被标成 `amount_kind='net_buy'` 而不是混进成交额序列。
+- 因此本节 3 号问题（"是否改名"）所设想的 `net_amount → turnover_amount` 单一改名**未被采用**：
+  同一列两种口径，只把列名改成"成交额"会让断点前的净买入行说谎；改用
+  **`amount` + 行级 `amount_kind`** 的单值列加口径判别列。

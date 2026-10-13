@@ -27,9 +27,9 @@
   （净买入语义，可为负）；断点后（2024-08-19…2026-10-12）**502 日全非空、零负值、零零值**
   —— 该列**换了语义**（仍在日更的成交量口径），而独立产地（东财 `stock_hsgt_hist_em`）
   同期的北向**当日净买额 502 行全空** ⇒ 「北向每日净买入 2024-08-19 取消」**成立**。
-  既有的 `northbound_daily` / `get_northbound_series`（把该列标成"净流入"）属**语义错标**，
-  已**不在本任务范围内**处置（删除是删活能力，Ruling 30；改名属控制器裁定）——
-  详见 `docs/design/data-source.md` 附.9 与 Task 15 报告。
+  既有的 `northbound_daily` / `get_northbound_series` **已按 Ruling 62/63 改成成交额口径**
+  （`amount` + 行级 `amount_kind`，见 `app/services/northbound_caliber.py`）：
+  能力保留、数值一个不改，只是不再把断点后的成交额标成"净流入"。
 - **南向：日频净买入**仍披露，但 `south_money` **不是**日频值 —— 它是
   **历史累计净买额（亿元）**。逐值对拍（东财 `stock_hsgt_hist_em`）：
   `south_money` == 东财「历史累计净买额」×1e4（**650/650 日**），

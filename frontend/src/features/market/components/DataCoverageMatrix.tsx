@@ -7,8 +7,13 @@ interface CoverageRow {
   source: string;
   /**
    * 尚未上线：来源/频率留空、徽章改「规划中」。
-   * 北向资金 `northbound_daily` 实测全表 0 行（非仅滞后），公开文案不得把规划中的
-   * 数据域算进「已上线」统计，也不得标注来源（无源可溯即不署名）。
+   * 公开文案不得把规划中的数据域算进「已上线」统计，也不得标注来源（无源可溯即不署名）。
+   *
+   * 北向资金的原判据是 `northbound_daily` 实测全表 0 行（非仅滞后）。**2026-10-13 复测该
+   * 判据已不成立**：表内 42 行 —— 但**全部**是 2024-08-19 之后的 `north_money`，即
+   * **成交额**口径（行级 `amount_kind='turnover'`、零负值），**不是**净买入（断点前才是，
+   * 见 docs/design/data-source.md 附.9）。故本行内容列由「净流入」改为「成交额」；
+   * 是否从「规划中」转「已上线」属公开覆盖口径的裁定，本轮不动。
    */
   planned?: boolean;
 }
@@ -22,8 +27,9 @@ const COVERAGE_ROWS: CoverageRow[] = [
   // T16 触点 E：概念板块（东财 BK 代码）列表 + 成分股，与其他行同形（有源可溯才署名）
   { domain: "概念板块成分", content: "板块列表 + 成分股", freq: "每日 18:20", source: "东财" },
   { domain: "资金流向", content: "大盘四档/板块/个股主力净流入", freq: "盘中+盘后", source: "东财" },
-  // 规划中：北向 `northbound_daily` 0 行，首页已整卡移除，公开矩阵不宣称已覆盖
-  { domain: "北向资金", content: "沪深港通净流入", freq: "—", source: "—", planned: true },
+  // 规划中：北向 `northbound_daily` 现有行全在 2024-08-19 之后（成交额口径），公开矩阵
+  // 不宣称已覆盖；内容列只写口径（「成交额」），不得再写「净流入」（Ruling 63）
+  { domain: "北向资金", content: "沪深港通成交额（2024-08-19 起）", freq: "—", source: "—", planned: true },
   { domain: "龙虎榜/大宗/解禁/回购", content: "每日榜单", freq: "盘后", source: "东财" },
   { domain: "ETF/可转债", content: "日线行情", freq: "日度", source: "TuShare" },
   { domain: "财务三表", content: "利润/资产负债/现金流+衍生指标", freq: "季度", source: "TuShare/巨潮" },
