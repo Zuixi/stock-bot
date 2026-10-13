@@ -47,6 +47,8 @@ TIER_LABELS: dict[str, str] = {
 
 FREQ_LABELS: dict[str, str] = {
     "daily": "日度",
+    # 事件驱动（spec §S1.7 的产业资本增减持：一行 = 一次公告事件，不是等间隔序列）
+    "event": "事件驱动",
     "weekly": "周度",
     "monthly": "月度",
     "quarterly": "季度",
@@ -1638,6 +1640,241 @@ def _assert_volatility_derivatives_keys() -> None:
 
 _assert_volatility_derivatives_keys()
 
+# ── 全市场资金流四件套（spec §S1.7）──────────────────────────────────────
+#
+# 四条腿的落地方式**逐条不同**（源现状不同，不是偷懒）：
+#   · 两融 `margin_financing_balance` / `margin_short_balance` —— **引用 S1.9 的既有登记**，
+#     **不重复登记**（重复登记会让 `find_metric` 的白名单出现两份可能漂移的定义）。
+#   · 南向 `southbound_net_buy` —— 落库（`moneyflow_hsgt.south_money` 的**一阶差分**）。
+#   · ETF 份额变化 `etf_share_change` —— 落库（六只宽基 ETF 的份额日变化之和）。
+#   · 产业资本增减持 `industrial_capital_net_change` —— **只登记、不落行**：
+#     原料是公告（S3.2），S3.2 未完成；spec 原话「标记为待接，**不得用假数据填充**」。
+# 另有一条**同批次的登记**（不是四件套之一）：`northbound_holding_quarterly`
+# （陆股通持仓（季度））—— 只落口径与滞后说明，ingest 与页面待后续批次。
+#
+# 计算与落库在 `app/services/capital_flows_service.py`；Step-0 实机结论见
+# `docs/design/data-source.md` 附.9。
+#
+# 方法论禁令（Ruling 19）：**不得**把「香港中央結算持仓」称作"外资"（它是名义持有人
+# **汇总账户**，持仓主体不可拆分）——故本批次一律用「陆股通持仓」。
+#
+# v2（口径断点修正）与 v1 的差异：v1 把 `south_money` **整段历史**都当"历史累计净买额"
+# 去差分 —— 实测该列在 **2023-11-23 / 2023-11-24 之间换过语义**
+# （此前 = 日频净买入/百万元，含负值；此后 = 历史累计净买额/亿元，恒正），
+# 于是 v1 在断点前落的是**日频序列的二阶差分（纯噪声）**。v2：①南向只落断点及之后的
+# 差分窗口（断点日自身落 NULL + `prev_connect_day_missing`，因为它的前值还是旧口径）；
+# ②落库前加"断点后出现 ≤ 阈值 的累计值即响亮失败"的**口径回退守卫**。
+# 两版的行**不可混用**（ADR 0011 第 4 条），故 v2 起 v1 的南向行必须重灌。
+CAPITAL_FLOWS_CALIBER_VERSION = "s1.7-v2"
+
+#: 南向 `south_money` 的**口径断点**（同日切换：日频净买入/百万元 → 历史累计净买额/亿元）。
+#:
+#: 实证（`scripts/spike_s17_capital_flows_sources.py` 的 PROBE 3c）：把每一天的
+#: `south_money` 同时与东财「当日成交净买额×100」和「历史累计净买额×1e4」比较，
+#: 2023-06-01…2023-11-23 共 114 日全部匹配**日频**（其中 37 日为负），
+#: 2023-11-24 起共 61 日全部匹配**累计**（无一日 ≤0）。
+#: ⇒ `southbound_net_buy` 的落库窗口下界就是这个日期（更早的整段**不落**）。
+SOUTHBOUND_CUMULATIVE_FROM = date(2023, 11, 24)
+
+#: ETF 份额的产地（TuShare `fund_share`，`fd_share` 原生单位**万份**）。
+ETF_SHARE_SOURCE = "tushare_fund_share"
+#: 南向资金的产地（TuShare `moneyflow_hsgt` 的 `south_money` = **历史累计净买额/亿元**）。
+SOUTHBOUND_SOURCE = "tushare_moneyflow_hsgt"
+#: 产业资本增减持的**计划**产地（公告采集，S3.2）。⚠️ S3.2 未完成 ⇒ 本 key **无行**。
+INDUSTRIAL_CAPITAL_SOURCE = "s3.2_announcement_ingest"
+#: 陆股通持仓（季度）的产地（TuShare `hk_hold`，含 `exchange ∈ {SH,SZ}` 的陆股通持股行）。
+NORTHBOUND_HOLDING_SOURCE = "tushare_hk_hold"
+
+#: §S1.7 的 `extra.missing_reason` 缺数语义。**缺数恒 NULL，绝不填 0**：
+#: 0 份净申购是"今天真的没有净申购"这一事实断言，与"这天没有数据"完全相反。
+CAPITAL_FLOWS_MISSING_REASONS: dict[str, str] = {
+    "source_empty": "上游当日返回了行但没有值（或该指标自身输入缺当日值）",
+    "partial_basket_coverage": (
+        "宽基 ETF 篮子里有成员当日或前一日无份额行 —— 份额变化是**可加量**，"
+        "缺成员时按覆盖率归一会得到一个假的「全市场净申购」，故整日落 NULL"
+    ),
+    "prev_value_missing": (
+        "上一个交易日的累计值缺失 ⇒ 差分**跨了缺口**，不落数字（把跨多日的变化记成"
+        "「一天」是静默错标；也不回退到更早的行）"
+    ),
+    "no_prev_fund_day": ("该基金在取数窗口内**没有前一个份额日**（序列起点）⇒ 变化量结构性不可得"),
+    "prev_connect_day_missing": (
+        "该交易日没有**前一个累计口径**的交易日的值可相减（口径断点当天、或上游缺行）——"
+        "不回退到更早的行（那会把跨多日的累计变化记成「一天」，或把旧口径的值混算进来）"
+    ),
+    "upstream_dependency_pending": (
+        "**待接**：原料来自公告采集（spec §S3.2），S3.2 未完成 ⇒ 本指标**没有任何行**"
+        "（spec 原话：不得用假数据填充）"
+    ),
+    "not_ingested_page_pending": (
+        "**只登记口径**：陆股通持仓（季度）本轮只落口径与滞后说明，ingest 与页面待后续批次"
+    ),
+}
+
+#: ETF 份额变化的口径说明（写进 registry `description`，字典只转录 registry）。
+ETF_BASKET_CALIBER = (
+    "口径 = 六只宽基 ETF（沪深300 510300 · 上证50 510050 · 中证500 510500 · "
+    "中证1000 512100 · 科创50 588000 · 创业板指 159915）的 `fd_share` **日变化之和**，"
+    "单位**亿份**（上游原生单位万份，÷1e4）。篮子按「每个宽基指数族里**规模**"
+    "（份额×收盘价）最大的一只」选定（实机排名与原文证据见 data-source.md 附.9）；"
+    "⚠️ 已知收窄：沪深300 族的 510310 / 159919 未纳入。"
+    "**为什么是「份额变化」而非份额水平**：净申购赎回才是「国家队」护盘痕迹。"
+    "任一成员缺当日或前一日份额 → 整日 NULL + `missing_reason='partial_basket_coverage'`。"
+)
+
+
+def _capital_flow_def(
+    key: str,
+    name: str,
+    unit: str,
+    freq: str,
+    tier: str,
+    sources: list[str],
+    group: str,
+    note: str,
+    *,
+    higher_is_better: bool | None = None,
+) -> MetricDef:
+    """§S1.7 各指标的共同形状（口径文案统一点，避免复制会腐烂）。"""
+    return MetricDef(
+        key=key,
+        name=name,
+        unit=unit,
+        freq=freq,
+        tier=tier,
+        sources=sources,
+        group=group,
+        higher_is_better=higher_is_better,
+        caliber_version=CAPITAL_FLOWS_CALIBER_VERSION,
+        description=note,
+    )
+
+
+CAPITAL_FLOWS_METRICS: list[MetricDef] = [
+    # ── ① ETF 份额变化（spec §S1.7「宽基 ETF 份额变化」，日频）──────────
+    _capital_flow_def(
+        "etf_share_change",
+        "宽基 ETF 份额变化",
+        "亿份",
+        "daily",
+        TIER_DERIVED,
+        [ETF_SHARE_SOURCE],
+        "capital_flow",
+        ETF_BASKET_CALIBER,
+        higher_is_better=True,
+    ),
+    # ── ② 南向资金（spec §S1.7「南向资金」，日频）──────────────────────
+    _capital_flow_def(
+        "southbound_net_buy",
+        "南向资金净买入",
+        "亿元",
+        "daily",
+        TIER_DERIVED,
+        [SOUTHBOUND_SOURCE],
+        "capital_flow",
+        (
+            "口径 = `south_money(T) − south_money(前一个港股通交易日)`，单位**亿元**。"
+            "**必须差分**：`south_money` 是**历史累计净买额**（与东财「历史累计净买额」"
+            "逐值相等 650/650 日），直接落库就是把累计值冒充日频净买入；"
+            "一阶差分与东财「当日成交净成交额」逐值相等（649/649 日）——见 data-source.md 附.9。"
+            f"⚠️ **口径断点**：该列在 {SOUTHBOUND_CUMULATIVE_FROM.isoformat()} **换过语义**"
+            "（此前 = 日频净买入/百万元，含负值），故本指标**只落断点及之后**的窗口；"
+            "断点日自身无累计前值 → NULL + `prev_connect_day_missing`。"
+            "落库天 = 上游有行的日（港股通交易日是 A 股交易日的**子集**）。"
+        ),
+        higher_is_better=True,
+    ),
+    # ── ③ 产业资本增减持（spec §S1.7；**待接**，不落行）────────────────
+    _capital_flow_def(
+        "industrial_capital_net_change",
+        "产业资本净增减持",
+        "亿元",
+        "event",
+        TIER_MANUAL,
+        [INDUSTRIAL_CAPITAL_SOURCE],
+        "capital_flow",
+        (
+            "**待接（blocked-on-verification）**：原料是上市公司**公告**（spec §S3.2"
+            "「原料/视图分离」的直接体现），而 S3.2 未完成 ⇒ 本指标**没有任何行**"
+            "（spec 原话：标记为待接、不得用假数据填充）。"
+            "已登记的目的：①让读面显式返回「已登记但无数据」而不是 404；"
+            "②把「缺什么」写进口径字典。"
+            "上游替代 `stk_holdertrade`（结构化增减持，实测单日 3000 行撞上限）"
+            "**本轮不采用** —— 换原料会绕开公告面的 `publisher_tier` 与正文可回溯，属控制器裁定权。"
+        ),
+    ),
+    # ── ④ 陆股通持仓（季度）（spec §S1.7「改按季度披露持股」；页面待建）──
+    _capital_flow_def(
+        "northbound_holding_quarterly",
+        "陆股通持仓（季度）",
+        "万股",
+        "quarterly",
+        TIER_OFFICIAL,
+        [NORTHBOUND_HOLDING_SOURCE],
+        "capital_flow",
+        (
+            "**陆股通持仓（季度）**：`hk_hold` 的 `exchange ∈ {SH,SZ}` 行（沪深股通持有"
+            "A 股明细）。⚠️ **命名禁令（Ruling 19）**：香港中央結算（HKSCC）是**名义持有人"
+            "汇总账户**，持仓主体不可拆分 ⇒ 只说「陆股通持仓」，**不得**称「外资」。"
+            "**滞后说明（UI 必须明示）**：2024-08-19 起沪深港通持股**改为按季度披露**"
+            "（北向每日净买入同期取消），故本指标落后当季最多约一个季度 + 源侧发布滞后；"
+            "季度末的可得性实测**不规则**（12 个季度末里 10 个给出陆股通行：20240329 返回 0 行、"
+            "20260930 只回港股通行），单次上限 4200 行。"
+            "**本轮只落口径与滞后说明，不落任何数据**（`missing_reason='not_ingested_page_pending'`），"
+            "ingest 与页面待后续批次。"
+        ),
+    ),
+]
+
+#: 四件套里**本任务实际落库**的两个 key（= `capital_flows_service.INGEST_METRIC_KEYS`）。
+CAPITAL_FLOWS_METRIC_KEYS: tuple[str, ...] = ("etf_share_change", "southbound_net_buy")
+
+#: 四件套里**引用既有登记**的两个 key（S1.9 已落）—— 本批次**不重复登记**。
+CAPITAL_FLOWS_REUSED_KEYS: tuple[str, ...] = (
+    "margin_financing_balance",
+    "margin_short_balance",
+)
+
+#: **已登记但按 spec 待接、不落任何行**的 key。
+CAPITAL_FLOWS_PENDING_KEYS: tuple[str, ...] = ("industrial_capital_net_change",)
+
+#: registry 里登记的**全部**本批次 key（4 个）。
+CAPITAL_FLOWS_ALL_KEYS: tuple[str, ...] = tuple(m.key for m in CAPITAL_FLOWS_METRICS)
+
+
+def _assert_capital_flows_keys() -> None:
+    """§S1.7 的登记面必须自洽，且"两融引用不重做"必须**机械可证**。
+
+    - 登记项恰好 = 2 个落库 key + 1 个待接 key + 1 个陆股通持仓 key；
+    - 四件套里被引用的两个两融 key **必须在 S1.9 的登记面里**（否则"引用"就成了空话）；
+    - 陆股通持仓的**频率标识必须是 `quarterly`**（spec 判据：「频率标识为季度」）；
+    - 待接 key 的频率必须是 `event`（spec 表格：事件驱动）。
+    """
+    registered = set(CAPITAL_FLOWS_ALL_KEYS)
+    declared = set(CAPITAL_FLOWS_METRIC_KEYS) | set(CAPITAL_FLOWS_PENDING_KEYS)
+    if registered - declared != {"northbound_holding_quarterly"}:
+        raise RuntimeError(
+            "CAPITAL_FLOWS_METRICS 与声明的 key 集不一致："
+            f"只登记={sorted(registered - declared)} 只声明={sorted(declared - registered)}"
+        )
+    if len(CAPITAL_FLOWS_ALL_KEYS) != len(registered):
+        raise RuntimeError("§S1.7 的 metric_key 有重复")
+    missing_reused = [k for k in CAPITAL_FLOWS_REUSED_KEYS if k not in MARKET_ACTIVITY_ALL_KEYS]
+    if missing_reused:
+        raise RuntimeError(
+            "§S1.7 声称「两融引用 S1.9 的既有登记」，但 S1.9 的登记面里没有："
+            f"{missing_reused} —— 引用落空（要么 S1.9 没落，要么 key 拼错）"
+        )
+    by_key = {m.key: m for m in CAPITAL_FLOWS_METRICS}
+    if by_key["northbound_holding_quarterly"].freq != "quarterly":
+        raise RuntimeError("spec §S1.7 判据要求陆股通持仓的频率标识为「季度」")
+    for key in CAPITAL_FLOWS_PENDING_KEYS:
+        if by_key[key].freq != "event":
+            raise RuntimeError(f"spec §S1.7 要求 {key} 为事件驱动（freq='event'）")
+
+
+_assert_capital_flows_keys()
+
 #: `INDUSTRIES['market']` **只有一个** `IndustryConfig`（scope 键必须唯一）：
 #: §S1.8 的 8 个、§S1.9/S1.11 的 14 个与本批次 §S1.10 的 11 个 key **合并登记在同一个
 #: scope** 下 —— 它们本来就落在同一张 `industry_metrics`、走同一个读面，
@@ -1646,11 +1883,14 @@ _assert_volatility_derivatives_keys()
 #: 语义从"全市场情绪"扩展为"全市场（情绪 + 活跃度 + 估值 + 波动率与衍生品）"。
 MARKET_SENTIMENT = IndustryConfig(
     key="market",
-    name="全市场情绪 · 活跃度 · 估值 · 波动率与衍生品",
+    name="全市场情绪 · 活跃度 · 估值 · 波动率 · 资金流",
     description=(
         "全市场 scope（非行业）：情绪/市场宽度与动量（spec §S1.8）"
         " + 交易活跃度与杠杆资金（spec §S1.9） + 估值与风险溢价（spec §S1.11）"
-        " + 波动率与衍生品（spec §S1.10：QVIX 期权隐含波动率 / 股指期货升贴水 / IC·IM 贴水率）。"
+        " + 波动率与衍生品（spec §S1.10）"
+        " + 资金流四件套（spec §S1.7：宽基 ETF 份额变化 / 南向净买入 / "
+        "两融（引用 §S1.9）/ 产业资本增减持（待接 S3.2）"
+        " + 陆股通持仓（季度）只登记口径）。"
         "指标值与行业指标同表同读面，代码即配置"
     ),
     sw_l3_codes=[],  # 非行业 scope：不挂申万分类
@@ -1658,6 +1898,7 @@ MARKET_SENTIMENT = IndustryConfig(
         *MARKET_METRICS,
         *MARKET_ACTIVITY_METRICS,
         *VOLATILITY_DERIVATIVES_METRICS,
+        *CAPITAL_FLOWS_METRICS,
     ],
     phases=[],  # 周期判定是行业工作台的产物，全市场 scope 不参与
     position_templates={},

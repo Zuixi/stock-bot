@@ -33,6 +33,15 @@ class MetricLatestOut(BaseModel):
     name: str
     value: float | None = None
     unit: str | None = None
+    # 缺数可见（Ruling 61）：`value=null` 时**必须**能区分"源侧滞后"与"真缺数"。
+    # 取值来自该行 `extra.missing_reason`（缺数原因码，见各 registry 的
+    # `*_MISSING_REASONS`）；`None` = 该行没有缺口（有值，或未登记原因码）。
+    missing_reason: str | None = None
+    # 覆盖/对账（Ruling 61）：该行 `extra` 里最能说明"分母够不够"的那一个覆盖率
+    # （优先 `coverage`，其次 `weight_coverage`，再次 `member_coverage`；详见 service
+    # 的 `_missing_info`）。有值的行也可能覆盖率 <1（如权重覆盖 95%），故与
+    # `missing_reason` 并列返回，前端不必猜。
+    coverage: float | None = None
     tier: str = "manual"
     source: str | None = None
     freq: str | None = None
@@ -138,6 +147,10 @@ class MetricHistoryPointOut(BaseModel):
     as_of_source: str | None = None  # 回退判别式（Ruling 34）：published_at | period
     published_at: datetime | None = None
     caliber_version: str | None = None
+    # 缺数可见（Ruling 61）：序列里的 NULL 点必须自带原因，否则前端只看到断点。
+    # 语义与取值口径同 `MetricLatestOut.missing_reason` / `.coverage`。
+    missing_reason: str | None = None
+    coverage: float | None = None
 
 
 class MetricHistoryOut(BaseModel):

@@ -49,7 +49,7 @@
 | 行业列表 | 已产品化行业（当前：生猪养殖"猪智投"）；路由前缀迁移到 `/industry`（由 `/research` redirect） | `frontend/src/pages/industry` · `/api/v1/industries` |
 | 投研工作台 | 四 Tab：投资看板 / 行业知识库 / 行情调研追踪 / 交易管理（路由 `/industry/:industryKey`，由 `/research/:industryKey` redirect） | `frontend/src/pages/industry/workbench` · `frontend/src/features/industry-research` · `/api/v1/industries` |
 | 指标注册表 | `metric_key → {名称,单位,频率,源优先级,层级,参考区间,口径版本}` 由后端下发驱动前端渲染；未登记 `metric_key` 一律拒绝（404） | `backend/app/services/`（industry registry）· `/api/v1/industries` · `/api/v1/metrics` |
-| 统一指标读面 | 行业/情绪/宏观/策略因子共用 `industry_metrics` 单表，`scope_key`（DB 列名仍为 `industry_key`）区分 scope；每指标最新值 + 窗口内序列，均带 `source / as_of / freq / caliber_version` 四徽章，其中 `as_of_source` 标注 PIT 实际可得日是否回退（`published_at` \| `period`） | `/api/v1/metrics/latest` · `/api/v1/metrics/series` · `frontend/src/features/industry-research/components/MetricBadge.tsx` |
+| 统一指标读面 | 行业/情绪/宏观/策略因子共用 `industry_metrics` 单表，`scope_key`（DB 列名仍为 `industry_key`）区分 scope；每指标最新值 + 窗口内序列，均带 `source / as_of / freq / caliber_version` 四徽章，其中 `as_of_source` 标注 PIT 实际可得日是否回退（`published_at` \| `period`）；**缺数可见**：`value=null` 的点另带 `missing_reason`（缺数原因码）与 `coverage`（该行覆盖率，取 `extra` 里 `coverage`/`weight_coverage`/`member_coverage` 之首），前端据此区分「源侧滞后」与「真缺数」（Ruling 61） | `/api/v1/metrics/latest` · `/api/v1/metrics/series` · `frontend/src/features/industry-research/components/MetricBadge.tsx` |
 | 规则引擎与信号 | 周期阶段判定、参考区间随政策生效日切换、信号可回测可审计 | `/api/v1/industries` · `backend/tests/benchmarks/test_rule_engine_bench.py` |
 
 ## 数据管道与运维

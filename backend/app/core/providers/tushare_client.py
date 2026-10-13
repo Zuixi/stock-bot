@@ -300,6 +300,34 @@ class TuShareClient(RateLimitedSyncProvider):
             kwargs["end_date"] = end_date
         return await self._query("fund_daily", **kwargs)
 
+    async def fetch_fund_share(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> pd.DataFrame:
+        """Fetch ETF/LOF 份额（TuShare fund_share，``fd_share`` 单位**万份**）.
+
+        两处实测约束（spec §S1.7 Step-0，见
+        ``backend/scripts/spike_s17_capital_flows_sources.py``）：
+
+        - **单次 2000 行上限，且超限时截"最近"**：不带 ``ts_code`` 的宽窗（如
+          ``20000101→20261016``）只回最近 2000 行（实测只覆盖 ``20261009..20261016``）——
+          按区间拉全市场会**静默缺头**，取一只基金的长历史必须**逐 ts_code**。
+        - ``fd_share`` 实测全列非空、无 0 值、每只基金每交易日至多一行（无重复日）。
+        """
+        kwargs: dict[str, str] = {}
+        if ts_code:
+            kwargs["ts_code"] = ts_code
+        if trade_date:
+            kwargs["trade_date"] = trade_date
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        return await self._query("fund_share", **kwargs)
+
     async def fetch_cb_daily(
         self,
         ts_code: str = "",

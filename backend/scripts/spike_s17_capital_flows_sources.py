@@ -29,6 +29,7 @@ NOTE: spike 里直接用客户端私有的 ``_query()``（不是生产路径）�
 import asyncio
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -56,10 +57,12 @@ HOLDER_TRADE_ROW_CAP = 3000
 
 #: 宽基 ETF 篮子：**一族一只**。族名 → (ts_code, 交易所, 基金全名)。
 #:
-#: 依据（见 PROBE 2b 的实机排名输出）：每个宽基指数族里 **``fd_share`` 最大**的一只。
+#: 依据（见 PROBE 2b 的实机排名输出）：每个宽基指数族里 **规模（份额 × 收盘价）最大**的一只。
+#: ⚠️ **不能只比份额**：低净值的行业主题 ETF 份额更大而规模更小（实测
+#: ``512010.SH`` 沪深300医药卫生ETF 有 387 万份却只有 147 亿元）。
 #: ⚠️ ``fund_basic.benchmark`` 的文本**不能单独当依据**：``510050.SH`` 的 benchmark 是
 #: 「上海证券交易所50成份指数×100%」、``510500.SH`` 是「中证小盘500指数×100%」——
-#: 按指数名做文本匹配会把这两只**族内最大**的 ETF 漏掉（实测漏掉，见 [MISS] 行）。
+#: 按指数名做文本匹配会把这两只**族内规模最大**的 ETF 漏掉（实测漏掉，见 [MISS] 行）。
 BROAD_BASE_BASKET: list[tuple[str, str, str, str]] = [
     ("沪深300", "510300.SH", "SH", "华泰柏瑞沪深300ETF"),
     ("上证50", "510050.SH", "SH", "华夏上证50ETF"),
@@ -84,6 +87,9 @@ BENCHMARK_PATTERNS: dict[str, list[str]] = {
     "科创50": ["上证科创板50成份指数"],
     "创业板指": ["创业板指数"],
 }
+
+#: 南向口径断点的**待核窗口**（PROBE 3c 在这里面找断点，不预设断点日期）。
+SOUTH_VINTAGE_WINDOWS = (("20230601", "20231231"), ("20240101", "20240229"))
 
 #: 季度末（陆股通持仓按季度披露）—— 用于 PROBE 5 的可得性抽样。
 QUARTER_ENDS = [
@@ -305,22 +311,69 @@ async def probe_fund_share(client: Any) -> None:
     _assert_nonempty("fund_basic(market=E)", basic, "基金基础信息取不到，无法核篮子")
     live = basic[(basic["status"] == "L") & (basic["invest_type"] == "被动指数型")]
     print(f"[OK  ] fund_basic(market=E) rows={len(basic)}；被动指数型 & L = {len(live)}")
+    # 「规模」= 份额 × 收盘价：**不能只比份额** —— 低净值的行业主题 ETF 份额更大但规模更小
+    # （实测 512010.SH 沪深300医药卫生ETF 有 387 万份却只有 147 亿元）。
+    px = await client._query("fund_daily", trade_date="20261012")
+    _assert_nonempty("fund_daily(trade_date=20261012)", px, "拿不到收盘价，无法算规模")
     merged = live.merge(snap[["ts_code", "fd_share"]], on="ts_code", how="inner")
+    merged = merged.merge(px[["ts_code", "close"]], on="ts_code", how="left")
+    merged["scale_yi"] = merged["fd_share"] * merged["close"] / 1e4  # 万份 × 元 / 1e4 = 亿元
     for family, code, _exch, name in BROAD_BASE_BASKET:
         pats = BENCHMARK_PATTERNS[family]
         hit = merged[merged["benchmark"].astype(str).apply(lambda b: any(p in b for p in pats))]
-        hit = hit.sort_values("fd_share", ascending=False)
+        hit = hit.sort_values("scale_yi", ascending=False)
         lead = hit.iloc[0] if len(hit) else None
         own = merged[merged["ts_code"] == code]
-        rank = int((hit["fd_share"] > float(own["fd_share"].iloc[0])).sum()) + 1 if len(own) else -1
-        lead_txt = f"{lead['ts_code']}({float(lead['fd_share']):.1f})" if lead is not None else "-"
-        print(f"[RANK] {family}: 文本命中 {len(hit)} 只；命中里最大 = {lead_txt}")
-        print(f"       选定 {code}({name}) 的族内 fd_share 排名 = {rank}")
-        if rank != 1:
-            print(
-                f"[MISS] ⚠️ 文本匹配漏掉了族内最大者 {code}"
-                "（benchmark 文案不含标准指数名）⇒ **文本匹配不得单独作为选篮依据**"
+        if not len(own):
+            raise SystemExit(f"[FATAL] 选定的 {code}({name}) 不在 fund_basic(market=E) 的活 ETF 里")
+        own_scale = float(own["scale_yi"].iloc[0])
+        own_share = float(own["fd_share"].iloc[0])
+        own_close = float(own["close"].iloc[0])
+        own_bm = str(own["benchmark"].iloc[0])
+        in_bm = code in set(hit["ts_code"])
+        lead_scale = float(lead["scale_yi"]) if lead is not None else float("nan")
+        lead_txt = f"{lead['ts_code']}({lead_scale:.1f}亿)" if lead is not None else "-"
+        print(
+            f"[RANK] {family}: 选定 {code} 规模={own_scale:.1f} 亿元"
+            f"（fd_share={own_share:.1f} 万份 × close={own_close}）；"
+            f"benchmark 文本命中 {len(hit)} 只、其中最大={lead_txt}、含选定者={in_bm}"
+        )
+        print(f"       选定者 benchmark 原文 = {own_bm!r}")
+        if own_scale < lead_scale:
+            raise SystemExit(
+                f"[FATAL] 选定的 {code} 规模 {own_scale:.1f} 亿 < benchmark 文本命中集最大者 "
+                f"{lead_txt} —— 选篮依据不成立（选了个更小的），附.9 必须重写"
             )
+        if not in_bm:
+            print(
+                f"[MISS] ⚠️ benchmark 文本匹配**漏掉**了族内规模最大者 {code}"
+                f"（规模 {own_scale:.1f} 亿 > 命中集最大者 {lead_txt}；原因是 benchmark 文案"
+                "不写标准指数名）⇒ **benchmark 文本匹配不得单独作为选篮依据**"
+            )
+
+    # ---- 上游脏行：份额序列里是否有"非交易日"行（实测 159915.SZ 有周六行）----
+    print("\n[PROBE 2c] 份额序列的脏行（非交易日的行）")
+    weekend_hits: dict[str, list[str]] = {}
+    for _family, code, _exch, name in BROAD_BASE_BASKET:
+        sub = await client._query(
+            "fund_share", ts_code=code, start_date="20260101", end_date="20261231"
+        )
+        days = sorted({str(d) for d in sub["trade_date"]})
+        odd = [d for d in days if datetime.strptime(d, "%Y%m%d").weekday() >= 5]
+        if odd:
+            weekend_hits[code] = odd
+            print(f"[DIRTY] {code}({name}) 非交易日行 = {odd}")
+    if not weekend_hits:
+        raise SystemExit(
+            "[FATAL] 2026 年全年的 fund_share 里没有非交易日行 —— 附.9.2 #13 记的"
+            "『159915.SZ 有 20260117 周六行』不再成立，该条结论必须重核（不得静默保留）"
+        )
+    else:
+        print(
+            f"[VERDICT 2d] 上游 `fund_share` **有非交易日行**（{list(weekend_hits)}）"
+            " ⇒ 并集日历会因此多出一天，而那天只有部分成员可得 → 落 NULL + "
+            "`partial_basket_coverage`（**不拿一只成员冒充全篮子**）"
+        )
 
     # ---- 篮子逐只深度 ----
     print(f"\n[PROBE 2c] 篮子逐只：{BASKET_LO} 起的可得性（spec 要 ≥1 年日频）")
@@ -435,6 +488,108 @@ async def probe_southbound(client: Any) -> None:
     print(
         "[VERDICT 3] south_money = 历史累计净买额（亿元），**不是**日频净买入；"
         "日频值必须由一阶差分得出，且差分与东财逐值一致。"
+    )
+
+
+# ---------------------------------------------------------------------------
+# PROBE 3c — 南向 `south_money` 在**同一列里换过语义**（口径断点）
+# ---------------------------------------------------------------------------
+
+
+async def probe_southbound_vintage_break(client: Any) -> None:
+    """`south_money` 不是"一直一种口径"：它**中途换过语义**。
+
+    判据不靠猜：把每一天的 `south_money` 同时与东财的
+    ①「当日成交净买额 × 100」（日频/百万元 假设）与
+    ②「历史累计净买额 × 1e4」（累计/亿元 假设）比较，谁逐值相等就归谁。
+    **断点前的那一段如果当"累计"去差分，得到的是日频序列的二阶差分（纯噪声）。**
+    """
+    import pandas as pd
+
+    print(f"\n{'=' * 78}\n[PROBE 3c] south_money 的口径断点（同一列换语义）")
+    frames = []
+    for lo, hi in SOUTH_VINTAGE_WINDOWS:
+        df = await client._query("moneyflow_hsgt", start_date=lo, end_date=hi)
+        _assert_nonempty(f"moneyflow_hsgt({lo}-{hi})", df, "南向断点窗口取不到")
+        frames.append(df)
+    rows = pd.concat(frames, ignore_index=True).drop_duplicates("trade_date")
+    rows["trade_date"] = rows["trade_date"].astype(str)
+    rows["south_money"] = pd.to_numeric(rows["south_money"], errors="coerce")
+    rows = rows.sort_values("trade_date")
+
+    east = _eastmoney_hsgt("南向资金")
+    print()
+    east["日期"] = [str(d).replace("-", "") for d in east["日期"]]
+    pairs = zip(east["日期"], east["当日成交净买额"], strict=False)
+    day = {d: float(v) for d, _, v in ((d, None, v) for d, v in pairs) if v == v}
+    pairs2 = zip(east["日期"], east["历史累计净买额"], strict=False)
+    cum = {d: float(v) for d, v in pairs2 if v == v}
+
+    tags: list[tuple[str, str, float]] = []
+    for r in rows.itertuples():
+        d, v = str(r.trade_date), float(r.south_money)
+        a, b = day.get(d), cum.get(d)
+        if a is not None and abs(v - a * 100) < 0.01:
+            tags.append((d, "DAILY", v))
+        elif b is not None and abs(v - b * 1e4) < 0.01:
+            tags.append((d, "CUM", v))
+        else:
+            tags.append((d, "??", v))
+    first_cum = next((d for d, t, _v in tags if t == "CUM"), None)
+    pre = [(d, v) for d, t, v in tags if first_cum is not None and d < first_cum]
+    post = [(d, t, v) for d, t, v in tags if first_cum is not None and d >= first_cum]
+    print(
+        f"[TAGS ] 窗口内 {len(tags)} 日：DAILY={sum(1 for _d, t, _v in tags if t == 'DAILY')} "
+        f"CUM={sum(1 for _d, t, _v in tags if t == 'CUM')} "
+        f"??={sum(1 for _d, t, _v in tags if t == '??')}"
+    )
+    if first_cum is None:
+        raise SystemExit("[FATAL] 窗口内没有任何一天符合「累计」假设 —— 断点结论必须重写")
+    print(
+        f"[BREAK ] 第一个「累计」日 = {first_cum}（此前最后一日 = "
+        f"{max(d for d, _v in pre) if pre else '-'}）"
+    )
+    pre_neg = [d for d, v in pre if v < 0]
+    print(
+        f"[PRE   ] 断点前 {len(pre)} 日，其中负值 {len(pre_neg)} 日"
+        f"（例：{pre_neg[:3]}）⇒ 断点前是**日频净买入**（百万元）"
+    )
+    post_bad = [d for d, t, v in post if t != "CUM" or v <= 0]
+    print(f"[POST  ] 断点后 {len(post)} 日，不符「累计」假设或 ≤0 的 {len(post_bad)} 日")
+    if not pre_neg:
+        raise SystemExit(
+            "[FATAL] 断点前的 south_money 没有负值 —— 「断点前 = 日频净买入」不成立，结论须重写"
+        )
+    if post_bad:
+        raise SystemExit(
+            f"[FATAL] 断点后有 {len(post_bad)} 日不符合「累计」假设（例：{post_bad[:3]}）—— "
+            "南向口径结论必须重写，**不得**据此差分落库"
+        )
+    # 手算：**第一个"有累计前值"的日子**的 diff 必须等于东财当日净买额。
+    # ⚠️ 断点日自身算不出 diff —— 它的前一日还是日频口径的值（混算是错的），
+    # 故 `southbound_net_buy` 在断点日必须落 NULL + `prev_connect_day_missing`。
+    cum_days = [d for d, t, _v in tags if t == "CUM"]
+    idx = {d: v for d, _t, v in tags}
+    print(
+        f"[HAND  ] 断点日 {first_cum} 无累计前值 ⇒ 差分不可得"
+        "（必须落 missing_reason='prev_connect_day_missing'）"
+    )
+    if len(cum_days) < 2:
+        raise SystemExit("[FATAL] 累计日少于 2 天 —— 无法验证 diff 口径")
+    d0, d1 = cum_days[0], cum_days[1]
+    delta = idx[d1] - idx[d0]
+    expect = day.get(d1)
+    print(
+        f"[HAND  ] {d1}: diff = {idx[d1]:.2f} − {idx[d0]:.2f} = {delta:.4f}；"
+        f"东财当日净买额 = {expect}"
+    )
+    if expect is None or abs(delta - expect) > 0.01:
+        raise SystemExit(f"[FATAL] 累计窗口首日 diff 与东财当日净买额对不上（{delta} vs {expect}）")
+    print(
+        f"[VERDICT 3c] `south_money` 在 **{first_cum}** 换过语义：此前 = 日频净买入（百万元，"
+        f"含负值），此后 = 历史累计净买额（亿元，恒正）。"
+        f"⇒ `southbound_net_buy` 只落**断点及之后**的差分窗口，且**必须**有"
+        "「断点后出现 ≤0 值即响亮失败」的守卫（那是上游口径被改回去的信号）。"
     )
 
 
@@ -555,6 +710,7 @@ async def main() -> None:
     await probe_northbound_semantics(client)
     await probe_fund_share(client)
     await probe_southbound(client)
+    await probe_southbound_vintage_break(client)
     await probe_industrial_capital(client)
     await probe_northbound_holding(client)
     print(

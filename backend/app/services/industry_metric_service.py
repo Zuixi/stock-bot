@@ -162,6 +162,35 @@ def _pit_as_of(row: IndustryMetric | None) -> tuple[date | None, str | None]:
     return row.period, AS_OF_FROM_PERIOD
 
 
+#: `extra` 里"覆盖率"字段的**取用优先级**（Ruling 61 的机械口径）。
+#:
+#: 为什么要有优先级而不是只认一个名字：各批次的覆盖率分母语义不同 ——
+#: §S1.8 用 `coverage`（可用 `pct_chg` 行占比）、§S1.9 自建换手率用
+#: `weight_coverage`（权重覆盖）与 `member_coverage`（成分行情覆盖）、
+#: §S1.7 ETF 篮子用 `member_coverage`。读面**不猜**，按固定顺序取第一个存在的。
+COVERAGE_EXTRA_KEYS: tuple[str, ...] = ("coverage", "weight_coverage", "member_coverage")
+
+
+def _missing_info(row: IndustryMetric | None) -> tuple[str | None, float | None]:
+    """行上的 (缺数原因, 覆盖率) —— 读面全部投影点的**唯一**取数口（Ruling 61）。
+
+    `extra` 是 JSONB：既可能没有 `missing_reason`（该行无缺口、或该批次未登记原因码），
+    也可能把它写成非字符串/非数字（人工导入）。非字符串原因码一律当 `None`
+    （**不**把 `{}` / 数字伪装成原因），覆盖率同理。
+    """
+    if row is None or not isinstance(row.extra, dict):
+        return None, None
+    raw_reason = row.extra.get("missing_reason")
+    reason = raw_reason if isinstance(raw_reason, str) and raw_reason else None
+    coverage: float | None = None
+    for key in COVERAGE_EXTRA_KEYS:
+        value = row.extra.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            coverage = float(value)
+            break
+    return reason, coverage
+
+
 def _stamp_caliber(cfg: IndustryConfig, rows: list[dict]) -> list[dict]:
     """给缺 ``caliber_version`` 的行盖上 registry 声明的当前口径（就地，返回同一列表）。
 
@@ -855,6 +884,8 @@ async def _build_metric_latest(
     out.as_of, out.as_of_source = _pit_as_of(row)
     out.caliber_version, _ = _caliber_of(m, row)
     out.scope_key = row.industry_key
+    # 缺数可见（Ruling 61）：NULL 点带原因 + 覆盖率，前端才分得清"源侧滞后"与"真缺数"
+    out.missing_reason, out.coverage = _missing_info(row)
 
     if out.value is not None:
         label = {
@@ -939,12 +970,16 @@ async def get_metric_history(
                 value=float(r.value) if r.value is not None else None,
                 source=r.source,
                 freq=r.freq,
-                as_of=_pit_as_of(r)[0],
-                as_of_source=_pit_as_of(r)[1],
+                as_of=as_of,
+                as_of_source=as_of_source,
                 published_at=r.published_at,
                 caliber_version=r.caliber_version,
+                missing_reason=missing_reason,
+                coverage=coverage,
             )
-            for r in rows
+            for r, (as_of, as_of_source), (missing_reason, coverage) in (
+                (r, _pit_as_of(r), _missing_info(r)) for r in rows
+            )
         ],
     )
 
@@ -981,6 +1016,7 @@ def _latest_out(
     out.period = row.period
     out.published_at = row.published_at
     out.as_of, out.as_of_source = _pit_as_of(row)
+    out.missing_reason, out.coverage = _missing_info(row)
     return out
 
 
@@ -1101,12 +1137,16 @@ async def get_series(
                 value=float(r.value) if r.value is not None else None,
                 source=r.source,
                 freq=r.freq,
-                as_of=_pit_as_of(r)[0],
-                as_of_source=_pit_as_of(r)[1],
+                as_of=as_of,
+                as_of_source=as_of_source,
                 published_at=r.published_at,
                 caliber_version=r.caliber_version,
+                missing_reason=missing_reason,
+                coverage=coverage,
             )
-            for r in rows
+            for r, (as_of, as_of_source), (missing_reason, coverage) in (
+                (r, _pit_as_of(r), _missing_info(r)) for r in rows
+            )
         ],
     )
 
