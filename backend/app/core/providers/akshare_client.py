@@ -166,6 +166,56 @@ class AkShareClient(RateLimitedSyncProvider):
             )
         return await self.invoke_async(func_name, func)
 
+    # ------------------------------------------------------------------
+    # §S1.12 投资者行为：新成立基金募集份额（月频）+ 公募基金仓位（周度观测）
+    # ------------------------------------------------------------------
+
+    async def fetch_fund_new_found(self) -> pd.DataFrame:
+        """**东财「新成立基金」**（`fund.eastmoney.com/data/xinfound.html`）全表.
+
+        已验证 2026-10-13 · akshare 1.18.94
+        （`scripts/spike_s112_investor_behavior_sources.py` PROBE 2）：
+        返回列 = ``基金代码, 基金简称, 发行公司, 基金类型, 集中认购期, 募集份额,
+        成立日期, 成立来涨幅, 基金经理, 申购状态, 优惠费率``。
+
+        ⚠️ **三条实测陷阱**（详见 `docs/design/data-source.md` 附.10）：
+
+        1. **只有「募集份额」一列有份额语义**（无独立的「成立份额」/「发行份额」列）；
+           本表全是**新成立**基金 ⇒ 发行份额 == 成立份额 == 募集份额。单位**亿元**。
+        2. **A/C 份额双计**：同一基金的 A、C 代码各有**独立行**（代码不同、`募集份额`
+           常相同）⇒ 按行求和会把一次募集计两次。服务侧按行业惯例保留双计并登记口径。
+        3. **不是全历史**：实测 7012 行、成立日期 2023-01-01…2026-09-30 完整，更早只剩
+           2013/2018 两行孤例，**2019–2022 该产地没有数据**。逐页取（`page=1..3,50000`）
+           合计同为 7012 行 ⇒ **无分页丢行**（与 `hk_hold`/`fut_daily` 的"截最近"不同族）。
+           ``募集份额`` 实测 340/7012 为空 ⇒ 服务侧落 NULL（**不填 0**）。
+        """
+        return await self.invoke_async("fund_new_found_em", lambda: self._ak.fund_new_found_em())
+
+    async def fetch_fund_stock_position(self) -> pd.DataFrame:
+        """**乐咕乐股「基金仓位 · 股票型基金 · 总仓位」**（第三方编制，周度观测）.
+
+        已验证 2026-10-13 · akshare 1.18.94
+        （`scripts/spike_s112_investor_behavior_sources.py` PROBE 3）：
+        返回列 = ``date, close, position``（455 行 / 2017-12-04…2026-09-30）。
+
+        ⚠️ **spec §S1.12 写的是「季报、滞后 ~15 工作日」，但实测与此不符**（附.10）：
+
+        1. **实测是周度观测**（相邻间隔 6–8 天占 410/454 = 90.3%），不是季度披露值。
+        2. **上游 JSON 只有 `date/close/position` 三列** —— **没有**报告期
+           （`report_period`）/ 发布日期（`publish_date`）/ 编制方法说明。故
+           「股票投资占基金总资产比」这一口径**无法从产地复算**，`published_at` 只能按
+           spec 的「滞后 ~15 工作日」推算（服务侧落该保守值并登记为未验证余项）。
+        3. ``close`` 是乐咕乐股随行的**指数收盘**（实测 2026-09-30 = 4357.62，与同期
+           上证指数 3800–4900 同量级）；本指标**不使用**它（口径不可复算），服务侧只取
+           ``position``。
+
+        ⚠️ 本方法**不做**任何插值/填充/反解，也**不**把它标成官方口径
+        （`source_tier='calc'`）；spec 明令它**仅作背景展示、不进信号链路**。
+        """
+        return await self.invoke_async(
+            "fund_stock_position_lg", lambda: self._ak.fund_stock_position_lg()
+        )
+
 
 _default_client: AkShareClient | None = None
 

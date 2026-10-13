@@ -1875,6 +1875,240 @@ def _assert_capital_flows_keys() -> None:
 
 _assert_capital_flows_keys()
 
+# ══════════════════════════════════════════════════════════════════════════
+# §S1.12 情绪 · 投资者行为（增量资金的入场行为）
+# ══════════════════════════════════════════════════════════════════════════
+#
+# spec §S1.12 的契约表是**四条腿**，处置逐条不同（与 §S1.7 同样的"四条腿四条路"）：
+#
+# | 原图口径 | 处置（spec 明文） | 本批次 |
+# |---|---|---|
+# | 基金申购赎回 → ETF 份额变化 | 采用，**复用 S1.7** | **不重做**：S1.7 已落（引用） |
+# | 新增散户开户数 | 「待 S0.3 实机验证；不可得则删除，不用估算值填充」 | **不可得 ⇒ 不存在** |
+# | 新基金发行规模 → 新成立基金份额 | 采用 | **落库** `new_fund_share`（月频） |
+# | 公募基金仓位 | 「季报、滞后 ~15 工作日 → **仅背景展示，不进信号链路**」 | **仅背景** 落库 |
+# | 主动基金申赎 | **不做**（不公开） | — |
+#
+# **Step 0 实机结论（2026-10-13，探针 `scripts/spike_s112_investor_behavior_sources.py`）**：
+#
+# - **新增散户开户数 = 不可得**。候选源东财 `stock_account_statistics_em`
+#   （``RPT_STOCK_OPEN_DATA``）实机可得但**最新月停在 2023-08**（101 行 = 该接口单页
+#   上限，`count` 字段亦为 101），距观测日已停滞约 3 年；中国结算（chinaclear.cn）月报
+#   是唯一权威产地而 AKShare **未封装**（无对应 `fetch_*` 方法）⇒ **无权威第二源**。
+#   ⇒ 按 spec 的「不可得则删除」**不注册 `metric_key`**：本 registry 里**不存在**
+#   开户数键（因此读面不会回骨架、UI 不会出现占位空图），也没有任何估算值填充。
+# - **新成立基金份额 = 可得**：东财 `FundNewIssue.aspx`（AKShare `fund_new_found_em`）
+#   实机 7012 行（逐页取三页合计同为 7012 ⇒ **无分页丢行**），`成立日期`
+#   2023-01-01…2026-09-30 **完整**（更早只剩 2013/2018 两行孤例 + 2019–2022 无数据）。
+#   取值列 = **`募集份额`**（单位**亿元**）：该表**没有**独立的「成立份额/发行份额」列，
+#   而本表只含**新成立**基金，故"发行份额 == 成立份额 == 成立时的募集份额"。**不估不补**。
+# - **公募基金仓位 = 可得但口径与 spec 的假设不符**：乐咕乐股
+#   `fund_stock_position_lg`（`type=pos_stock`、`category=总仓位`）实机 455 行 /
+#   2017-12-04…2026-09-30，相邻观测间隔 **6–8 天占 90.3% ⇒ 实测是周度**（**不是** spec
+#   写的季度），上游 JSON 只有 `date/close/position` 三个字段（**无** 报告期/发布日期/
+#   编制方法）⇒「股票投资占基金总资产比」这一口径**无法从产地复算**。故本 key
+#   一律 `source_tier='calc'`（测算/第三方编制，**不是** `official`）且文案显式写
+#   「低频参考值 / 季报口径、滞后 ~15 工作日」，并**禁止进任何信号链路**（判据 2 的 grep）。
+#
+# **频率与发布滞后（spec §S1.12 判据 1：必须在 UI 明示）** 落在两处、都是可机读字段：
+# `MetricDef.freq`（机器读）+ `MetricDef.description`（人读；含滞后的具体天数与口径）。
+# 前端的 `FREQ_LABELS` 徽章直接渲染 `freq`，描述进指标说明。
+#
+# **A/B/C 归类（ADR 0014）**：两个落库指标都是 **B 类**（只用当期点内事实、可回算、
+# 允许回补）。**无 A 类**（不消费盘中明细）、**无 C 类**（不用成分快照回算）。
+
+#: §S1.12 的口径版本（ADR 0011 第 4 条：口径修订即 bump，两版的行不可混用）。
+INVESTOR_BEHAVIOR_CALIBER_VERSION = "s1.12-v1"
+
+#: 新成立基金份额的产地（东财 `FundNewIssue.aspx`，AKShare `fund_new_found_em` 封装）。
+NEW_FUND_SHARE_SOURCE = "akshare_fund_new_found_em"
+#: 公募基金仓位的产地（乐咕乐股 `legulegu.com/api/stockdata/fund-position`，
+#: AKShare `fund_stock_position_lg` 封装）—— **第三方编制**，不是交易所官方口径。
+PUBLIC_FUND_POSITION_SOURCE = "akshare_legulegu_fund_position"
+
+#: §S1.12 的 `extra.missing_reason` 缺数语义。**缺数恒 NULL，绝不填 0**：
+#: 0 亿元的新成立基金份额是"这个月真的没有基金成立"这一事实断言，
+#: 与"这个月的数据还没到"完全相反。
+INVESTOR_BEHAVIOR_MISSING_REASONS: dict[str, str] = {
+    "source_empty": "上游返回了该周期的行但值全部为空（有行 ≠ 有值）",
+    "upstream_no_rows": "该周期上游**没有任何行**（如该月无基金成立 / 序列起点之前）",
+}
+
+#: 开户数**不可得**的处置依据（写进字典，让"为什么没有这个 key"可查）。
+#: ⚠️ 这里是**注释与文档**，**不是**一个待注册的 `MetricDef` —— spec 判据 3 要求
+#: "本项在 UI 不存在"，所以 `INVESTOR_BEHAVIOR_METRICS` 里**没有**它。
+ACCOUNT_STATS_UNAVAILABLE_NOTE = (
+    "新增散户开户数 = **不可得**（Step 0 实机：东财 `stock_account_statistics_em` 最新月 "
+    "2023-08、101 行 = 单页上限；中国结算月报是唯一权威产地而 AKShare 未封装 ⇒ 无第二源）。"
+    "按 spec §S1.12「不可得则删除，不用估算值填充」⇒ **不注册 metric_key**，UI 无此项。"
+)
+
+
+def _investor_behavior_def(
+    key: str,
+    name: str,
+    unit: str,
+    freq: str,
+    tier: str,
+    sources: list[str],
+    note: str,
+    *,
+    higher_is_better: bool | None = None,
+) -> MetricDef:
+    """§S1.12 各指标的共同形状（口径文案与版本统一点，避免复制会腐烂）。"""
+    return MetricDef(
+        key=key,
+        name=name,
+        unit=unit,
+        freq=freq,
+        tier=tier,
+        sources=sources,
+        group="capital_flow",
+        higher_is_better=higher_is_better,
+        caliber_version=INVESTOR_BEHAVIOR_CALIBER_VERSION,
+        description=note,
+    )
+
+
+INVESTOR_BEHAVIOR_METRICS: list[MetricDef] = [
+    # ── ① 新成立基金份额（spec：新基金发行规模 → 新成立基金份额；月频）──────
+    _investor_behavior_def(
+        "new_fund_share",
+        "新成立基金募集份额",
+        "亿元",
+        "monthly",
+        TIER_DERIVED,
+        [NEW_FUND_SHARE_SOURCE],
+        (
+            "**频率：月频**（按 `成立日期` 归月，`period` = 该月 1 日）。"
+            "**发布滞后：约 4 个日历日**（`published_at` = 该月**最后一个成立日** + 4 天，"
+            "该偏移是沿用 probe 实机观测（成立日与源侧可见约有数日差）的**保守取值**，"
+            "精确更新时刻未验证——见 data-source.md 附.10 的未验证余项）。"
+            "口径 = 该月**全部新成立基金**的 `募集份额` 之和，单位**亿元**"
+            "（上游 `fund_new_found_em.募集份额`；东财页面亦标亿元）。"
+            "**为什么取「募集份额」**：该表只有这一列有份额语义（无独立的「成立份额」/"
+            "「发行份额」列），而表内全是**新成立**基金 ⇒ 发行份额 == 成立份额 == 募集份额。"
+            "⚠️ **A/C 双计是已知的口径特征**：同一基金的 A、C 两个代码**各有独立份额与"
+            "成立日**，故按行求和会把一次募集计两次；本指标按**行业惯例**（新发基金规模按"
+            "份额类别分别统计）保留双计，**不**在代码里「顺手除以 2」——"
+            "该选择与「不纳入 2019–2022」（产地无数据）一并登记为已知口径边界。"
+            "缺数恒 NULL：该月有任一基金 `募集份额` 为空 → 整月 NULL + "
+            "`missing_reason='source_empty'`（`extra.n_null` 记个数），"
+            "**不拿部分成员的和冒充全月**、**不填 0**。"
+        ),
+    ),
+    # ── ② 公募基金仓位（spec：仅作背景展示，不进信号链路）──────────────────
+    _investor_behavior_def(
+        "public_fund_equity_position",
+        "公募基金仓位（股票型基金·总仓位，背景参考）",
+        "%",
+        "quarterly",
+        TIER_CALC,
+        [PUBLIC_FUND_POSITION_SOURCE],
+        (
+            "**⚠️ 仅作背景展示，不得当情绪指标、不得进任何信号链路**"
+            "（spec §S1.12 原话：「季报、滞后 ~15 工作日 → 仅作背景展示，不进信号链路」）。"
+            "本 key 在代码里**没有任何消费者**（唯一的登记消费者是读面与字典）；"
+            "S2.2 落地 `signal_rules.py` 后必须保持 0 命中（判据 2 的可复跑 grep）。"
+            "**频率：`quarterly`（季报口径）**；**发布滞后：约 15 个工作日**"
+            "（`published_at` = 观测日 + 21 个日历日 ≈ 15 个工作日，按 spec 的滞后量取值）。"
+            "**口径（产地原始说明，未经证实）**：乐咕乐股「基金仓位 · 股票型基金 · 总仓位」，"
+            "AKShare `fund_stock_position_lg`（`type=pos_stock`）；值 = 股票型基金持股市值"
+            "占其基金总资产的百分比，**第三方编制**（故 `source_tier='calc'`，**不是**官方口径）。"
+            "⚠️ **与 spec 的两处已实测偏差（登记为限制，不掩盖）**：①产地实测为**周度观测**"
+            "（455 行 / 2017-12-04…2026-09-30，相邻间隔 6–8 天占 90.3%），**不是**季度披露值；"
+            "②上游 JSON 只有 `date/close/position` 三列，**无**报告期/发布日期/编制方法，"
+            "故「股票投资占基金总资产比」这一描述**无法从产地复算**，`published_at` 只能按 spec "
+            "的「滞后 ~15 工作日」推算。两项均已列为附.10 的未验证余项与契约修正请求。"
+            "缺数恒 NULL（上游某观测日无值 → `missing_reason='source_empty'`），**不填 0**。"
+        ),
+    ),
+]
+
+#: §S1.12 中**由本批次实际落库**的 key（= `investor_behavior_service.INGEST_METRIC_KEYS`）。
+INVESTOR_BEHAVIOR_METRIC_KEYS: tuple[str, ...] = (
+    "new_fund_share",
+    "public_fund_equity_position",
+)
+
+#: §S1.12 中**引用既有登记、不重做**的 key（§S1.7 已落，见
+#: :data:`CAPITAL_FLOWS_METRIC_KEYS`）—— spec 原话「ETF 份额变化（复用 S1.7）」。
+INVESTOR_BEHAVIOR_REUSED_KEYS: tuple[str, ...] = ("etf_share_change",)
+
+#: §S1.12 中**判为不可得、故不注册**的项（spec：「不可得则删除，不用估算值填充」）。
+#: 这里是**文字记录**而非 key —— 让"为什么 UI 里没有开户数"可查（判据 3 的证据面）。
+INVESTOR_BEHAVIOR_DROPPED_ITEMS: dict[str, str] = {
+    "新增散户开户数": ACCOUNT_STATS_UNAVAILABLE_NOTE,
+}
+
+#: registry 里登记的**全部**§S1.12 key（2 个；被判不可得的开户数**不在其中**）。
+INVESTOR_BEHAVIOR_ALL_KEYS: tuple[str, ...] = tuple(m.key for m in INVESTOR_BEHAVIOR_METRICS)
+
+
+def _assert_investor_behavior_keys() -> None:
+    """§S1.12 的登记面必须自洽，且三条验收判据里可机械化的两条必须**当场**成立。
+
+    - 登记项恰好 = 2 个落库 key；
+    - 「ETF 份额变化复用 S1.7」必须**机械可证**：`etf_share_change` 确实在 §S1.7 的
+      登记面里（否则"复用"就成了空话，与 §S1.7 断言两融引用的做法同构）；
+    - **判据 1（频率与滞后必须在 UI 可明示）**：两个 key 的 `freq` 必须是
+      `FREQ_LABELS` 里**有标签**的取值（前端徽章靠它），且 `description` 里必须同时
+      出现「频率」与「滞后」两个词（滞后值住在描述里，**不得**只活在服务代码里）；
+    - **判据 3（开户数不可得则 UI 不存在）**：`new_investor_accounts` /
+      `retail_investor_accounts` 这类键**必须不在**登记面里（写死断言，防"后来有人
+      顺手补一个空壳 key 当占位"），且"不可得"的结论必须在 `INVESTOR_BEHAVIOR_DROPPED_ITEMS`
+      里有记录（防"删了但没记为什么"）。
+    """
+    registered = set(INVESTOR_BEHAVIOR_ALL_KEYS)
+    if registered != set(INVESTOR_BEHAVIOR_METRIC_KEYS):
+        raise RuntimeError(
+            "INVESTOR_BEHAVIOR_METRICS 与声明的 key 集不一致："
+            f"只登记={sorted(registered - set(INVESTOR_BEHAVIOR_METRIC_KEYS))} "
+            f"只声明={sorted(set(INVESTOR_BEHAVIOR_METRIC_KEYS) - registered)}"
+        )
+    if len(INVESTOR_BEHAVIOR_ALL_KEYS) != len(registered):
+        raise RuntimeError("§S1.12 的 metric_key 有重复")
+
+    missing_reused = [k for k in INVESTOR_BEHAVIOR_REUSED_KEYS if k not in CAPITAL_FLOWS_ALL_KEYS]
+    if missing_reused:
+        raise RuntimeError(
+            "§S1.12 声称「ETF 份额变化复用 S1.7」，但 §S1.7 的登记面里没有："
+            f"{missing_reused} —— 引用落空（要么 S1.7 没落，要么 key 拼错）"
+        )
+
+    # 判据 3：开户数**必须不存在**（占位空壳 key 也算违反——spec 要的是"UI 不存在"）。
+    forbidden = {
+        "new_investor_accounts",
+        "retail_investor_accounts",
+        "investor_account_openings",
+        "stock_account_statistics",
+    }
+    leaked = sorted(forbidden & registered)
+    if leaked:
+        raise RuntimeError(
+            "spec §S1.12 判据 3：开户数实测不可得 ⇒ 本项**不得**出现在 UI/registry；"
+            f"但登记面里出现了 {leaked}（占位空图同样违反判据，不得用估算值填充）"
+        )
+    if not INVESTOR_BEHAVIOR_DROPPED_ITEMS:
+        raise RuntimeError("开户数被判不可得却没有任何文字记录 —— 「删除」必须留下为什么")
+
+    # 判据 1：频率必须可渲染（FREQ_LABELS 有标签），描述必须同时写明频率与滞后。
+    for metric in INVESTOR_BEHAVIOR_METRICS:
+        if metric.freq not in FREQ_LABELS:
+            raise RuntimeError(
+                f"§S1.12 判据 1：{metric.key} 的 freq={metric.freq!r} 没有 UI 标签"
+                f"（FREQ_LABELS={sorted(FREQ_LABELS)}）—— 前端无法明示频率"
+            )
+        for token in ("频率", "滞后"):
+            if token not in metric.description:
+                raise RuntimeError(
+                    f"§S1.12 判据 1：{metric.key} 的 description 里没有「{token}」—— "
+                    "频率/发布滞后必须能在 UI 明示（不得只活在服务代码里）"
+                )
+
+
+_assert_investor_behavior_keys()
+
 #: `INDUSTRIES['market']` **只有一个** `IndustryConfig`（scope 键必须唯一）：
 #: §S1.8 的 8 个、§S1.9/S1.11 的 14 个与本批次 §S1.10 的 11 个 key **合并登记在同一个
 #: scope** 下 —— 它们本来就落在同一张 `industry_metrics`、走同一个读面，
@@ -1883,14 +2117,17 @@ _assert_capital_flows_keys()
 #: 语义从"全市场情绪"扩展为"全市场（情绪 + 活跃度 + 估值 + 波动率与衍生品）"。
 MARKET_SENTIMENT = IndustryConfig(
     key="market",
-    name="全市场情绪 · 活跃度 · 估值 · 波动率 · 资金流",
+    name="全市场情绪 · 活跃度 · 估值 · 波动率 · 资金流 · 投资者行为",
     description=(
         "全市场 scope（非行业）：情绪/市场宽度与动量（spec §S1.8）"
         " + 交易活跃度与杠杆资金（spec §S1.9） + 估值与风险溢价（spec §S1.11）"
         " + 波动率与衍生品（spec §S1.10）"
         " + 资金流四件套（spec §S1.7：宽基 ETF 份额变化 / 南向净买入 / "
         "两融（引用 §S1.9）/ 产业资本增减持（待接 S3.2）"
-        " + 陆股通持仓（季度）只登记口径）。"
+        " + 陆股通持仓（季度）只登记口径）"
+        " + 投资者行为（spec §S1.12：新成立基金募集份额（月频）/ 公募基金仓位"
+        "（季报口径、仅背景展示且不进信号链路）；新增散户开户数实测不可得 ⇒ "
+        "本 scope **不登记**该项，UI 无此项）。"
         "指标值与行业指标同表同读面，代码即配置"
     ),
     sw_l3_codes=[],  # 非行业 scope：不挂申万分类
@@ -1899,6 +2136,7 @@ MARKET_SENTIMENT = IndustryConfig(
         *MARKET_ACTIVITY_METRICS,
         *VOLATILITY_DERIVATIVES_METRICS,
         *CAPITAL_FLOWS_METRICS,
+        *INVESTOR_BEHAVIOR_METRICS,
     ],
     phases=[],  # 周期判定是行业工作台的产物，全市场 scope 不参与
     position_templates={},

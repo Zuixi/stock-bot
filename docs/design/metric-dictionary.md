@@ -461,6 +461,94 @@ cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -c \
 > [`data-source.md` 附.9](./data-source.md#附9-s17-段资金流四件套--陆股通持仓季度的数据源复核含北向每日净买入的裁决2026-10-13)。**本批次没有
 > 新增提案 key**：4 个 key 全部有代码可核，已直接登记在上表。
 
+**已注册（投资者行为，scope = `market`；spec §S1.12，2026-10-13 落地）**：
+
+> 单位 / 频率逐字抄自 `industry_registry.INVESTOR_BEHAVIOR_METRICS`（本表只是转录）。
+> spec §S1.12 的契约表是**四条腿 + 一条不做**，处置逐条不同：**ETF 份额变化复用 §S1.7**
+> （`etf_share_change` 已有，本批次**不重做、不重登记**，由
+> `_assert_investor_behavior_keys()` 机械断言"引用落位"）；**新增散户开户数实测不可得
+> ⇒ 本表与 registry 里都*不存在*该项**（见下）；新成立基金份额与公募基金仓位**落库**；
+> 主动基金申赎按 spec **不做**（不公开）。
+
+| `metric_key` | registry `name` | 单位 `unit` | 频率 `freq` |
+|---|---|---|---|
+| `new_fund_share` | 新成立基金募集份额 | 亿元 | monthly |
+| `public_fund_equity_position` | 公募基金仓位（股票型基金·总仓位，背景参考） | % | quarterly |
+
+> **`new_fund_share` 的口径（spec：新基金发行规模 → **新成立基金份额**）**：
+> **频率 = 月频**（按 `成立日期` 归月，`period` = 该月 **1 日**）；
+> **发布滞后 = 约 4 个日历日**（`published_at` = 该月**最后一个成立日** + 4 天，当日 21:00，
+> Asia/Shanghai，带时区——**不是**月首、**不回退 `period`**）。
+> 值 = 该月**全部新成立基金**的 `募集份额` 之和，单位**亿元**（产地
+> `akshare.fund_new_found_em` ← 东财 `FundNewIssue.aspx`；东财页面亦标亿元）。
+> **为什么取「募集份额」**：该表**没有**独立的「成立份额」/「发行份额」列，而表内全是
+> **新成立**基金 ⇒ 发行份额 == 成立份额 == 成立时的募集份额。
+> **实测深度 = `2023-01 … 2026-09`（45 个月）**；更早只剩 2013/2018 两行孤例，
+> **2019–2022 该产地无数据**（登记为已知口径边界）。
+> ⚠️ **A/C 双计是已知的口径特征**：同一基金的 A、C 两个代码**各有独立份额与成立日**，
+> 故按行求和会把一次募集计两次；本指标按**行业惯例**（新发基金规模按份额类别分别统计）
+> 保留双计，**不**在代码里"顺手除以 2"。
+> ⚠️ **缺值是字段级、不是整月级**（实测 `募集份额` 有 **4.8%（340/7012）** 空缺，均匀散布
+> 在各类型与各月）：故落"**有值成员之和**"= 真实全月规模的**下界**，并在 `extra` 里显式登记
+> `is_lower_bound=True` / `n_funds` / `n_missing_share` / `missing_note`——**缺的份额未被
+> 当成 0**，本值也**不得**被当成精确值。只有**整月一位有值的基金都没有**才落
+> `value = NULL` + `missing_reason = 'source_empty'`；该月上游**一行都没有**则**不落行**
+> （"不存在" ≠ "缺数" ≠ 0）。**不填 0、不估算、不用部分和冒充完整月**。
+> **上游截断排查（此产地是干净的）**：逐页取（`page=1..3,50000`）合计与 AKShare 单次
+> 返回值**同为 7012 行** ⇒ **无分页丢行**（与 `fund_share` 2000 行上限 / `hk_hold` 4200 行
+> 上限的"截最近"**不同族**）。服务侧仍加**形状守卫**：0 行 / 缺列 / 行数 < 5000 /
+> 单只份额 ∉ `[0.01, 500]` 亿元 ⇒ **响亮失败**。
+
+> **`public_fund_equity_position` 的口径（spec：**季报、滞后 ~15 工作日 → 仅作背景展示，
+> 不进信号链路**）**：
+> **⚠️ 硬约束：仅背景展示，不得当情绪指标、不得进任何信号链路。** 本 key 在代码里
+> **没有任何消费者**（唯一的登记消费者是读面与字典）；S2.2 落地 `signal_rules.py` 后
+> 必须保持 **0 命中**（可复跑 `grep` 证据见 data-source.md 附.10 与任务报告）。
+> **频率 = `quarterly`（季报口径）**；**发布滞后 = ~15 个工作日**
+> （`published_at` = 观测日 + **15 个工作日**，跳过周末、不查节假日日历；当日 21:00，
+> 带时区——**不回退 `period`**）。
+> 值 = 乐咕乐股「基金仓位 · 股票型基金 · 总仓位」（产地
+> `akshare.fund_stock_position_lg` ← `legulegu.com/api/stockdata/fund-position`，
+> `type=pos_stock`）——**第三方编制**，故 `source_tier='calc'`，**不是**官方口径。
+> ⚠️ **与 spec 的两处实测偏差（登记为限制，不掩盖）**：①产地实测为**周度观测**
+> （455 行 / `2017-12-04 … 2026-09-30`，相邻间隔 6–8 天占 **90.3%**），**不是**季度披露值；
+> ②上游 JSON 只有 `date` / `close` / `position` 三个字段，**无**报告期（`report_period`）/
+> 发布日期（`publish_date`）/ 编制方法 ⇒ 「股票投资占基金总资产比」这一口径**无法从产地
+> 复算**，`published_at` 只能按 spec 的「滞后 ~15 工作日」**推算**。
+> 两项均已列为附.10.4 的未验证余项，且附.10.5 已向控制器**提出契约修正请求**
+> （是否把 `freq` 改成 `weekly` / 是否裁到季度末）。缺数恒 `NULL` +
+> `missing_reason='source_empty'`（实测 455/455 非空），**不填 0**。
+
+> **`新增散户开户数` = 不可得、故本项不存在（spec 判据 3）**：
+> 按 spec 原话「**待 S0.3 实机验证；不可得则删除，不用估算值填充**」，Step-0 实机裁决为
+> **不可得**——候选源东财 `stock_account_statistics_em`（`RPT_STOCK_OPEN_DATA`）
+> **可调但已停更**：101 行、`2015-04 … 2023-08`（响应自带 `count=101 / pages=1` ⇒
+> 101 行就是总量，不是分页截断），观测日 2026-10-13 时最新月已停 **37 个月**；
+> 中国结算（chinaclear.cn）月报是**唯一权威产地**而 AKShare **未封装** ⇒ **无第二源**。
+> ⇒ **本表与 registry 里都没有它的 `metric_key`**（连占位空壳 key 都不许有：
+> `industry_registry._assert_investor_behavior_keys()` 对
+> `new_investor_accounts` / `retail_investor_accounts` 等名做**写死断言**，出现即导入期失败），
+> 因此**读面不会回骨架、UI 不会出现占位空图**（未登记 key 走白名单 → 404）。
+> "为什么删掉"的结论落在 `industry_registry.INVESTOR_BEHAVIOR_DROPPED_ITEMS`。
+
+> **PIT（ADR 0011 / Ruling 34-35）**：两个**有行**的 key 的 `published_at` 都不是 `period`：
+> `new_fund_share` = 该月**最后一个成立日** + 4 个日历日；`public_fund_equity_position`
+> = 观测日 + 15 个**工作日**。两者均带时区（Asia/Shanghai）。落库前经
+> `market_activity_service.upsert_metric_rows` 的 **PIT 守卫** —— 缺 `published_at`
+> （或该值非带时区 datetime）/ 缺 `caliber_version` 即响亮失败、一行不落。
+> **两个偏移量都未实测**（上游都没有发布时刻字段）⇒ 附.10.4 #2/#3 的未验证余项。
+
+> **口径版本**：`caliber_version = 's1.12-v1'`（本批次首版，无 v1→v2 差异）。
+
+> **A/B/C 归类（ADR 0014）**：两个**有行**的 key 都是 **B 类**（只用当期点内事实，可回算、
+> 允许回补）：`new_fund_share` 只用"该月已成立的基金及其**成立时**募集份额"（成立日即事实
+> 发生日，不用事后修订后的规模）；`public_fund_equity_position` 只用"该观测日乐咕乐股给的
+> 仓位值"。**无 A 类**（不消费"只给当下"的盘中明细）、**无 C 类**（不用成分快照回算）。
+> 复用（`etf_share_change`）与不做（主动基金申赎）的两项不参与归类。
+
+> **Step-0 实机结论 / 开户数的裁决 / 未验证余项 / spec 修正请求**见
+> [`data-source.md` 附.10](./data-source.md#附10-s112-段情绪--投资者行为开户数--新成立基金份额--公募基金仓位的数据源复核2026-10-13)。
+
 **已注册因子（`factor_key` · spec §S2.1；登记地 = `industry_registry.FACTORS`）**：
 
 > **因子不是指标**：`metric_key` 描述**一条序列**，`factor_key` 描述**一次变换**
@@ -531,6 +619,8 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --project backend python backend/scripts/check
 **已实测**（2026-10-12）：`核对 8 行，MISMATCH 0 行 → ✔ 全绿`。改本表后**必须手动重跑**，不要靠眼看。
 
 **已实测**（2026-10-13，spec §S1.7 落地后）：`核对 45 行，MISMATCH 0 行 → ✔ 全绿`（覆盖面 45/58 已注册 key）。
+
+**已实测**（2026-10-13，spec §S1.12 落地后）：`核对 47 行，MISMATCH 0 行 → ✔ 全绿`（覆盖面 47/60 已注册 key）。
 
 **本文件落册的新增提案**（**尚未注册**，命名按上表 5 条规则；接源见 `data-source.md` 附.1，注册动作在 Wave 1）：
 
