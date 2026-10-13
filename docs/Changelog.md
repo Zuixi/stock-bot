@@ -1,3 +1,35 @@
+## 2026-10-13 - **申万行业判据统一到 SCD2** + 前端旧分块 404 恢复通道 + SCD2 数据回填 + 数据卷锚点地雷拆除
+
+### 一、申万行业树与下钻端点**逐节点对齐**（`5de5101`）
+- **缺陷**：同一张卡片渲染的两个接口对同一事实给出不同答案——
+  `GET /market/sw-industry/tree` 走**旧扁平表** `sw_industry_members`（陈旧快照），而 `GET /market/sw-industry/drill/levels/*` 走 SCD2。实测 **29/31 个一级行业数字不一致（94%）**，合计 **旧树 5587 vs SCD2 5211（多算 376 只）**：农林牧渔 107 vs 104、基础化工 **450 vs 410**、钢铁 53 vs 43、电子 524 vs 493。用户在「申万行业网格」「行业分类」卡片上看到的是**偏多的错数**，而同一屏下钻给的才是对的。
+- **根因**：S1.4 已确立「**SCD2 归属是唯一真相：所有成分解析都走它**」（`sw_drilldown_service.py:8`），但 `get_sw_industry_tree` **没有跟着迁过来**。
+- **修复**：官方成员源切到 `sw_industry_member_periods` 且 `is_current`，**按节点自身层级聚合（不做 L3 上卷）**、**不 join `Stock`**（与下钻 `_EXACT_MEMBERS_SQL` 同语义）；层级仍来自 `SwIndustryClass`，**用户自定义标签 `StockCustomSwTag` 行为保持不变**。每个节点新增 `officialCount` + `customCount`，`stockCount = officialCount + customCount`。
+- **顺带修掉两个隐藏问题**：① 缓存 key **硬编码** `market:sw-tree` 导致 `set_sw_tags` 的失效逻辑会在改 key 后**静默失效** → 改为常量 `SW_TREE_CACHE_KEY = "market:sw-tree:v2"`（读写与失效共用），并有测试在 v1 key 放哨兵值断言其**不会被返回** ② 「其他 OTHER」桶原先带 `level == 3` 过滤，使 **261 个直挂 L1/L2 的符号被重复计数**（74 → 63）。
+- **验收**：**511/511 个真实节点（L1 31 + L2 134 + L3 346）差异 = 0**，`sum|diff|` L1/L2/L3 全 0，节点集双向一致；`OTHER`（63）无下钻对应物，`officialCount = 0`，如实标注而非隐藏。控制器**独立复跑对账脚本**并额外抽查活栈 L2/L3（51 节点）确认 0 差异。
+- 门禁：pytest **1373 → 1380 passed / 17 skipped / 0 failed**；mypy app ✓；ruff/format ✓；`self_review.sh` ✓。**无现有测试断言过旧数字**（即没有测试在守护这个 bug）。
+
+### 二、前端「重新部署后旧分块 404」恢复通道（`004aa90`）
+- **缺陷**：Vite 哈希分块在**每次前端重新部署**后改名。**部署前就开着的标签页**内存里是旧 bundle，导航到尚未加载的路由时按**旧哈希**请求分块 → **404** → 懒加载组件不挂载 → **面板静默空白 / "Failed to fetch"**，用户无从得知也无人自愈。本会话实测到 `404 /assets/index-iB5Al3gl.js`（时间戳在重建之后），而当前 `index.html` 引用的是 `index-DKExqQSR.js`；**旧哈希在当前镜像里 0 命中**。同时确认 nginx 缓存头本身**正确**（`index.html` → `no-cache`；`/assets/*` → `public, immutable`）、**无 Service Worker**、后端与数据库全程健康——**纯粹是缺客户端恢复通道**。
+- **修复**：`frontend/src/app/chunk-error-recovery.ts`（新）监听 `vite:preloadError`（并 `preventDefault`）+ `unhandledrejection` 兜底（该路径**必须先过动态 import 报错文案匹配**，以免把后端 5xx 误判成版本更新）；在 `main.tsx` **首行 import**，模块求值期即注册，**早于 React 挂载与任何懒加载分块请求**。决策逻辑是**纯函数** `shouldReload`/`markReloaded`（`sessionStorage['stockbot:chunk-reloaded']` 守卫，**不可能成环**）：首次失败 → 「页面版本已更新，正在刷新…」+ **本会话刷新一次**；同会话再次失败 → 常驻「页面版本仍是旧版，请手动刷新（Ctrl+F5 / Cmd+Shift+R）」**不再刷新**；另有 `handling` 防重入。零硬编码颜色。
+- **验证**：`tsc` exit 0 · `build` exit 0 · `check:design` ✓ · `check:routes` ✓ · **新增 `frontend/e2e/chunkRecovery.spec.ts` 6 passed**（自动刷新 / 提示文案 / 防重入 / 二次失败转常驻 / `unhandledrejection` 兜底 / **噪声不误伤**）+ `navigation` 3 passed。控制器在**容器产物**上复跑：**9 passed**。
+- 注：本仓库**无前端单测运行器**（无 vitest/jest），故守卫由 Playwright 真浏览器驱动验证。
+
+### 三、SCD2 成分归属回填（环境修复，非代码）
+- `sw_industry_member_periods` 在此环境**从未被灌过数据**（0 行，`sw_member_ingest_runs` = 0 行 = 无任何运行记录），而 S1.4 规定所有成分解析都走它 → 下钻页显示「分类归属口径日 无数据」「成分覆盖 0 指数」、7 项行情字段全 `--`、并**显式弹出**「分类归属尚无 SCD2 数据…请先运行 `backend/scripts/ingest_sw_member_periods.py`」（这个**显式失败是好设计**：它明说"成分一律为空，不代表当日无成分"，没有拿 0 冒充真相）。
+- **已执行**：`511/511 指数成功 · 新增 23,534 行 · as_of=2026-10-13 · fully_ingested=True · failed=0`；覆盖 L1 31/L2 134/L3 346；**431/511 个行业**拿到成员，**80 个上游 0 行**（UI 显示为「0 行 80」）。
+- **遗留（部署项）**：该 ingest **未注册进调度**，不会自愈——新环境部署必须跑一次（或登记周期任务）。另 `stock_features` 为空（`features.compute` 队列从未被触发过），属同类"代码在、数据未灌"缺口。
+
+### 四、数据卷锚点地雷拆除（环境修复）
+- **事故复盘**：`docker-compose.yml` 的 `volumes.postgres_data.name: stock_bot_wt_p7_postgres_data` 与**本机真实数据卷** `stock-bot_postgres_data`（5.0G，created 2026-05-09）**不一致** → 控制器跑 `docker compose up` 时 postgres 被重建到**此前不存在的空卷**，表现为"数据全丢"（数据其实一直在旧卷，只是没挂上）。
+- **修复**：把数据**迁进锚定卷**（tar 跨卷拷贝，源卷 `:ro` 只读、目标卷先清空、owner/权限/mtime 保留），随后改用**标准 compose（不带任何 override）** 启动。校验：`postgres` 挂载 **`stock_bot_wt_p7_postgres_data`**、`alembic = b6a1f0c2d7e4`、`industry_metrics = 44,812`、`daily_quotes = 4,433,523`、`scd2_periods = 23,534`。**此后标准 `docker compose up` 即正确**。
+- **旧卷 `stock-bot_postgres_data` 保留未删**（回滚保险）。
+
+### 五、控制器流程教训（该记）
+1. **"代码验证通过" ≠ "环境可用"**：S1.4 当时有 10 条机器记录与真实对拍，却**没把 SCD2 灌进环境**，页面全空。验收标准必须包含"**跑完之后这个页面能看**"。
+2. **验收必须验"同一事实的所有来源是否一致"**，不能只验"每个接口各自对不对"——本次 tree/drill 打架就是漏了这一条。
+3. **跑会重建基础设施的 compose 命令前，必须先核对"配置声明的卷名"与"实际有数据的卷名"是否一致**（`docker volume ls` + `inspect` 看 created/labels）。
+
 ## 2026-10-12 - 移除「数据版图」静态矩阵（市场页底部 + landing 第 6 区块）
 
 - **背景（用户反馈）**：`DataCoverageMatrix` 是 11 行**手写常量**的静态宣传矩阵，挂在 `/market` 的 Tabs **下方**，所以 5 个 Tab 里下滑都会重复看到同一张表；且它与真实数据可用性长期漂移——北向上游停更后靠手改常量把该行标成「规划中」，逐域上线状态全靠人工维护
