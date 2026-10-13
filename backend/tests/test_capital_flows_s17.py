@@ -69,6 +69,21 @@ def test_units_and_freq_projection_matches_registry() -> None:
         assert defs[key].freq == "daily"
 
 
+def test_landed_source_matches_registry_whitelist() -> None:
+    """落库写进的 `source` 必须**逐字**出现在 registry 声明的 `sources` 里。
+
+    这是 best-practices「数据源与采集」已沉淀的坑（`source` 名写错 ⇒ 读面的源优先级
+    裁决永远匹配不到真实行，序列看起来"有行但没数据"）。S1.10 曾因此单独出过一次修复，
+    本批次用一条纯单测把它锁在 §S1.7 上。
+    """
+    defs = {m.key: m for m in registry.CAPITAL_FLOWS_METRICS}
+    for key in svc.INGEST_METRIC_KEYS:
+        assert svc._SOURCES[key] in defs[key].sources, (
+            f"{key} 落库写的 source={svc._SOURCES[key]!r} 不在 registry 的 "
+            f"{defs[key].sources!r} 里 —— 读面会匹配不到，序列等于没数据"
+        )
+
+
 def test_landed_freq_and_pending_freq() -> None:
     """陆股通持仓恒为季度；产业资本是事件驱动（spec §S1.7 的表格逐字要求）。"""
     defs = {m.key: m for m in registry.CAPITAL_FLOWS_METRICS}

@@ -1776,7 +1776,7 @@ CAPITAL_FLOWS_METRICS: list[MetricDef] = [
             "口径 = `south_money(T) − south_money(前一个港股通交易日)`，单位**亿元**。"
             "**必须差分**：`south_money` 是**历史累计净买额**（与东财「历史累计净买额」"
             "逐值相等 650/650 日），直接落库就是把累计值冒充日频净买入；"
-            "一阶差分与东财「当日成交净成交额」逐值相等（649/649 日）——见 data-source.md 附.9。"
+            "一阶差分与东财「当日成交净买额」逐值相等（649/649 日）——见 data-source.md 附.9。"
             f"⚠️ **口径断点**：该列在 {SOUTHBOUND_CUMULATIVE_FROM.isoformat()} **换过语义**"
             "（此前 = 日频净买入/百万元，含负值），故本指标**只落断点及之后**的窗口；"
             "断点日自身无累计前值 → NULL + `prev_connect_day_missing`。"
