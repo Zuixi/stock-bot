@@ -651,6 +651,203 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --project backend python backend/scripts/check
 
 > **注册地唯一**：新增指标 = 在 `industry_registry.py` 加一条 `MetricDef`（单位 / 频率 / 阈值 / 分组同处声明），**不建新表、不在别处再写一份定义**（ADR-E、ADR 0013）。
 
+**已注册（市场情绪综合指数，scope = `market`；spec §S1.13，2026-10-13 落地）**：
+
+> 单位 / 频率逐字抄自 `industry_registry.COMPOSITE_METRICS`（本表只是转录）。
+> 1 个 key 与 §S1.8/S1.9/S1.10/S1.11/S1.7/S1.12 的 key **同一个 scope、同一张
+> `industry_metrics`、同一个读面**（`GET /api/v1/metrics/{latest,series}`）。
+> **没有新表、没有平行读路、没有新增迁移**（单头仍是 `b6a1f0c2d7e4`）。
+
+| `metric_key` | registry `name` | 单位 `unit` | 频率 `freq` |
+|---|---|---|---|
+| `market_sentiment_composite` | 市场情绪综合指数 | 分 | daily |
+
+> **命名**：只叫「**市场情绪综合指数**」。spec §S1.13 明文禁止借用那个 CNN 专有的
+> 美股七项口径指数的名称（禁令原文在 `docs/specs/` 内，本文件**不复述**该名称，
+> 否则本文件自己会进 `grep` 命中面）。机器化挡板两处：registry 的
+> `_assert_composite_spec()` 断言 `name == "市场情绪综合指数"`；
+> `tests/test_market_sentiment_composite.py::test_composite_naming_has_no_borrowed_brand_name`
+> 断言名称与描述不含被禁词根。
+>
+> **允许进信号链路（Ruling 65）**：本指标是**自建**、算法公开、可逐日复算的合成指数
+> ⇒ **允许**被信号链路消费（S2.2 的示例规则 `ctx.percentile("market_sentiment_composite",
+> window=1260)` 消费的正是它）。被禁入信号链路的是**第三方机构编制**的情绪指数
+> （算法不公开、无法复算；本 scope 内为 `public_fund_equity_position`，它被
+> `COMPOSITE_FORBIDDEN_CONSTITUENT_KEYS` 机械挡在成分表外）。
+
+#### 方法与权重（**唯一事实源** = `industry_registry.COMPOSITE_*`；本节是转录）
+
+**一句话口径**：11 条日频情绪腿各自做**滚动分位标准化**（窗口 252 行、最小有效样本 126；
+反向腿先取相反数），再按**公开权重表**加权求和 × 100 ⇒ 0–100 的合成值。
+
+```
+value = 100 × Σ_(i ∈ 当日参与集) w'_i × p_i        w'_i = w_i / Σ_(j ∈ 当日参与集) w_j
+```
+
+**版本**：`caliber_version = s1.13-v1`（= 本题权重表 + 252/126 分位口径 +
+`drop_and_renormalise` 缺失处置的版本号；与 registry 的 `COMPOSITE_CALIBER_VERSION` 同值）。
+**换权重 / 换窗口 / 换缺失规则 = bump 版本 + 同步本节与测试**，两版的行**不可混用**
+（ADR 0011 第 4 条；ADR 0014 的 B 类"回算须指名版本"）。逐值比对两处的用例：
+`tests/test_market_sentiment_composite.py::test_published_weight_table_matches_registry`。
+
+**成分与权重表（11 条腿，权重之和 = 1.00）**：
+
+| `metric_key` | 权重 `w` | 方向 `direction` | 归属组 | 纳入理由 | 成分值起点（实测） |
+|---|---|---|---|---|---|
+| `qvix_50etf` | 0.12 | −1 | 波动率与衍生品（0.35） | 50ETF 期权隐含波动率 = 恐慌的直接价格（反向）；历史最长（2015-02 起） | 2015-02-09 |
+| `if_basis` | 0.09 | +1 | 波动率与衍生品（0.35） | IF 期货基差 = 升贴水；升水 = 多头/对冲拥挤偏乐观；最深历史（2010-04 起） | 2010-04-16 |
+| `ic_basis` | 0.07 | +1 | 波动率与衍生品（0.35） | IC 期货基差；中小盘风险偏好更敏感 | 2015-04-16 |
+| `im_basis` | 0.07 | +1 | 波动率与衍生品（0.35） | IM 期货基差；小盘/投机情绪腿，也是 2026-10 缺 QVIX 时的兜底腿 | 2022-07-22 |
+| `idx_turnover_ratio_csi300` | 0.09 | +1 | 交易活跃度与杠杆（0.25） | 沪深300 换手率（自由流通股本口径）= 参与度；比成交额更可比 | 2023-05-09 |
+| `margin_financing_balance` | 0.08 | +1 | 交易活跃度与杠杆（0.25） | 融资余额 = 杠杆多头的存量意愿（交易所三所汇总） | 2023-05-09 |
+| `margin_financing_buy_ratio` | 0.08 | +1 | 交易活跃度与杠杆（0.25） | 融资买入额占全市场成交额比 = 当日杠杆买入强度（快变量） | 2023-05-09 |
+| `above_ma20_ratio` | 0.12 | +1 | 市场宽度与动量（0.40） | 站上 20 日均线占比 = 宽度（§S1.8 里历史最长、无缺值的腿） | 2025-09-04 |
+| `advance_decline_ratio` | 0.10 | +1 | 市场宽度与动量（0.40） | 涨跌比 = 当日方向性宽度 | 2025-09-04 |
+| `limit_up_break_ratio` | 0.09 | −1 | 市场宽度与动量（0.40） | 炸板率 = 涨停接力失败率（反向） | 2025-09-04 |
+| `max_consecutive_limit_up` | 0.09 | +1 | 市场宽度与动量（0.40） | 连板高度 = 投机热度（与炸板率互补的另一面） | 2025-09-04 |
+| **合计** | **1.00** | | 组权重 0.35 / 0.25 / 0.40 | | |
+
+**纳入判据（逐条可核）**：① `freq='daily'`（日频合成纳入月/周频成分必然要前向填充 =
+制造数据）；② 风险偏好方向唯一（`direction` 能写死成 +1/−1）；③ 同组内不重复计同一
+信号（冗余腿剔除）；④ 该 key **未**被标注禁止进信号链路。
+
+**为什么"没有它"（`industry_registry.COMPOSITE_EXCLUDED_KEYS` 的展开；每个未纳入的
+已注册 key 都有因由，`test_every_non_constituent_market_metric_has_a_written_reason`
+机械核对"没有静默漏掉的腿"）**：
+
+- `public_fund_equity_position`：spec §S1.12 明令"仅背景展示、不进信号链路"；且实测**周度**。
+- `new_fund_share`：**月频**；日频合成必须前向填充（其值本身还是"下界"口径）。
+- `etf_share_change`：方向不唯一 —— 净申购既可读作抄底（逆向）也可读作追涨（顺向），
+  纳入会把一个**未公开的符号假设**藏进权重表。
+- `southbound_net_buy`：方向有争议 —— 资金南下既可读作"离开 A 股"也可读作"全球风险偏好上升"。
+- `pe_csi300` / `erp_10y` / `cn_treasury_yield_10y`：慢变量（估值状态与无风险利率），
+  不是情绪流量；且"高 ERP = 便宜（看多）"与"高 ERP = 恐慌（看空）"两读皆通。
+  （三者的独立读面照旧保留，见上方 §S1.9/S1.11 表。）
+- `margin_short_balance`：与 `margin_financing_balance` 同属杠杆存量组且量级极小（组内重复计权）。
+- `market_turnover_amount`：与 `idx_turnover_ratio_csi300` 同属活跃度，且含长期抬升趋势
+  ⇒ 取归一化的换手率一条。其余 6 条换手率（`_sse`/`_szse`/`_sse50`/`_bse50`/`_star`/`_chinext`）同理只取沪深300 一条代表。
+- `ih_basis` / `ic_discount_rate` / `im_discount_rate` / `qvix_300etf` / `qvix_500etf` /
+  `qvix_cyb_etf` / `qvix_kcb_etf`：同族冗余（贴水率更是由基差确定性派生）⇒ 纳入只会
+  放大该组权重。
+- `market_advance_count` / `market_decline_count`：是 `advance_decline_ratio` 的分子/分母（重复计数）。
+- `limit_up_down_ratio` / `first_board_promotion_ratio`：与已选的涨停族腿同信号且历史更短。
+- `industrial_capital_net_change` / `northbound_holding_quarterly`：`event` / `quarterly`
+  频率，非日频（同判据 ①）。
+
+#### 分位标准化（窗口与最小样本量**写死并公开**）
+
+- **窗口 = 252 个该成分自身的观测行**（日频成分 ≈ 252 个交易日；单位是"行"而不是
+  "日历日"，故长停牌/源侧滞后不会虚增窗口）。与 `FACTORS['pct_rank']` 的默认窗口 252 同值。
+- **最小有效样本 = 126**（半个窗口）。窗口内非 NULL 样本不足 126 ⇒ 该成分**当日不参与**
+  （**不是** 0 分位、**不是** 0.5、**不是**取最近值）。
+- **分位口径** = `indicators.percentile_rank`（nearest-rank / 无插值；`rank = count(v <= 当前值)/n`，
+  当前值自身计入 ⇒ 全相等时恒为 1.0）；**只用有效样本**，`value IS NULL` 的行不进统计、
+  也**不按 0 计**。
+- **反向腿**（`direction = −1`）先对序列取相反数再算分位（同一函数、同一 tie 规则）——
+  "越高越乐观"这条轴对 11 条腿统一。
+- **无前视**：某日的分位只用**截至该日**的窗口行。用例
+  `test_percentile_has_no_lookahead` 锁定"截断到前 N 行后，那 N 行的分位逐位不变"。
+
+#### 成分缺失的处置（写死：**剔除 + 重新归一化**）
+
+当日**无行** / 有行但 `value IS NULL` / 分位样本不足 ⇒ 该成分**被剔除**，剩余成分的权重
+按 `w'_i = w_i / Σ_(j∈参与集) w_j` **重新归一化**（= `COMPOSITE_RENORMALIZATION =
+drop_and_renormalise`）。**绝不**静默用 0、**绝不**插值或前向填充 —— 当天到底谁参与了、
+权重变成了多少，逐日落 `extra`：
+
+- `extra.participants`（参与集，升序）· `extra.effective_weights`（逐腿生效权重，和为 1）
+  · `extra.effective_weight_sum`（参与腿的**配置**权重之和）· `extra.n_participants`
+  · `extra.n_constituents`（= 11）· `extra.coverage = n_participants / 11`
+  （读面的 `coverage` 徽章直接取它）
+- `extra.constituents[k]` = `{value, direction, percentile, weight_configured,
+  weight_effective, participated, reason}`，`reason ∈ {ok, no_row_today, value_missing,
+  window_below_min_samples}` —— 于是"这一天为什么少了一条腿"不需要猜。
+- ⚠️ `extra` 里的 `percentile` / `weight_effective` 是 **double 全精度**（不四舍五入）：
+  四舍五入到 6 位会让"从 `extra` 重算"漂到另一侧（实测 62.78846… → 62.7884 ≠ 62.7885）。
+  `industry_metrics.value` 仍是 `Numeric(18,4)`（落库量化到 1e-4）。
+
+**worked example（真实库内行，2026-09-10）**：`qvix_50etf` 当日**上游未更新**
+（行在、`value=NULL` ⇒ `reason='value_missing'`）⇒ 被剔除；其余 **10** 条腿的配置权重
+之和 = **0.88** ⇒ 每条生效权重 = 配置权重 / 0.88（例：`above_ma20_ratio` 0.12 → **0.136364**、
+`advance_decline_ratio` 0.10 → 0.113636、`limit_up_break_ratio` 0.09 → 0.102273）。
+`value = 100 × Σ w'_i·p_i = **40.3612**`，与库内值**逐位一致**。
+
+**缺数不静默为 0**：参与成分数 < 2（`extra.missing_reason='insufficient_participants'`）
+或参与腿配置权重之和 < 0.20（`'insufficient_effective_weight'`）⇒ `value = NULL` +
+`extra.missing_reason` + 覆盖率。0 分在这一列上是"市场情绪处于历史最悲观"这一**事实
+断言**，与"这天算不出"完全相反 ⇒ 缺数一律 NULL。
+
+#### PIT（由成分的可得性决定；**不回退 `period`**）
+
+`published_at` = 当日**全部**成分行 `published_at` 的最大值（精确到时刻，Asia/Shanghai；
+`extra.pit_basis = 'max_constituent_published_at'`，`extra.latest_constituent` 给出决定该
+时刻的那条腿）。为什么含**当日不参与**的成分："谁参与"这件事本身也要等各腿的可得性
+落定才算得出来（某腿"今天不可得"同样有它自己的可得时点）。
+**成分行缺 `published_at` ⇒ 响亮失败（`RuntimeError`）**，绝不用 `period` 顶替
+（ADR 0011 / Ruling 34-35）。合成日与成分都是**当日**观测 ⇒ 实测 **4002/4002 行**满足
+`published_at::date = period`（没有跨日的日期偏移，PIT 靠**时刻**而不是日界生效）。
+
+#### 日历与跨度（实测 2026-10-13，`stock_bot@5433`）
+
+- **落行日历 = "当天至少一个成分有值"的日期的并集**（**并集不是交集**）⇒ 行跨度
+  **2010-04-16 → 2026-10-12**，与**最长成分**（`if_basis`，4002 行）**逐日等长**，
+  对任何成分都**不短**（spec 判据 1 的"与成分指标等长"在"行"这个意义上成立）。
+- **有值跨度 = 2015-08-13 → 2026-10-12 = 2708 个交易日**（> S2.2 的 `window=1260`，
+  满足其分位需求）。
+- 2010-04-16…2015-08-12 的 **1294** 天是 `insufficient_participants` 的 **NULL 行**：
+  当时只有 1 条腿攒够 126 个样本（`if_basis`），单腿"加权分位"不是合成指数 ⇒
+  **如实留 NULL 行 + 原因码，不伪造值**。
+- ⚠️ **窗口不齐是本指标的固有约束**（37 个 market scope 指标里 8 条只有 262 天、
+  7 条换手率/两融 829 天、3 条 2021-07 起、`if_basis` 2010 起）⇒ "对**所有**成分同时
+  等长"**不可能**；本指标的处置是"历史尽可能长 + 逐日记录实际参与集与生效权重"。
+
+#### 参与区间（"哪些成分在哪些日期区间生效"；按参与集连续相同切分，实测 **17 段**）
+
+| 起 | 止 | 天数 | 参与腿数 | 参与腿配置权重之和 | 参与腿 |
+|---|---|---|---|---|---|
+| 2015-08-13 | 2015-10-20 | 42 | 2 | 0.21 | `if_basis` `qvix_50etf` |
+| 2015-10-21 | 2023-01-30 | 1770 | 3 | 0.28 | `ic_basis` `if_basis` `qvix_50etf` |
+| 2023-01-31 | 2023-11-09 | 191 | 4 | 0.35 | + `im_basis` |
+| 2023-11-10 | 2024-05-21 | 126 | 7 | 0.60 | + 3 条活跃度/杠杆腿 |
+| 2024-05-22 | 2024-05-27 | 4 | 6 | 0.48 | QVIX 上游缺值（2024-05 已知缺口）|
+| 2024-05-28 | 2024-05-28 | 1 | 7 | 0.60 | QVIX 恢复 |
+| 2024-05-29 | 2024-05-31 | 3 | 6 | 0.48 | QVIX 再次缺值 |
+| 2024-06-03 | 2025-11-07 | 349 | 7 | 0.60 | 7 条腿 |
+| 2025-11-10 | 2025-11-10 | 1 | 6 | 0.48 | QVIX 缺值 |
+| 2025-11-11 | 2026-03-17 | 83 | 7 | 0.60 | 7 条腿 |
+| 2026-03-18 | 2026-04-16 | 21 | 8 | 0.72 | + `above_ma20_ratio` |
+| 2026-04-17 | 2026-04-20 | 2 | 9 | 0.82 | + `advance_decline_ratio` |
+| 2026-04-21 | 2026-09-09 | 98 | 11 | 1.00 | 全部 11 条腿 |
+| 2026-09-10 | 2026-09-11 | 2 | 10 | 0.88 | QVIX 缺值（见 worked example）|
+| 2026-09-14 | 2026-09-30 | 12 | 11 | 1.00 | 全部 11 条腿 |
+| 2026-10-08 | 2026-10-09 | 2 | 10 | 0.88 | QVIX 缺值 |
+| 2026-10-12 | 2026-10-12 | 1 | 3 | 0.23 | 仅三条基差腿（行情类指标当天尚未落库）|
+
+> **读法**：同一段内**生效权重恒定**（参与集不变 ⇒ 归一化因子不变）；
+> "参与腿配置权重之和"就是当天的 `extra.effective_weight_sum`。
+> 逐段生效权重 = 配置权重 ÷ 该段之和（worked example 已给 2026-09-10 的逐腿值）。
+
+#### A/B/C 归类（ADR 0014）
+
+**B 类可回算**：只用"截至该日已发生的成分观测"（分位窗口是回看窗口、不含未来行），
+可由成分序列 + 公开权重表 + 归一化规则逐日重算；允许回补（唯一键幂等）。
+回算必须**指名版本**（`s1.13-v1`）—— 这正是版本号存在的意义。
+**无 A 类**（不消费"只给当下"的盘中明细）、**无 C 类**（不用成分归属快照回填）。
+"滚动分位窗口"本身是**回看**窗口，不构成前视；`published_at` 由成分可得性决定，
+用于回测时合成值在当天最晚成分可得之前不可用。
+
+#### 复跑命令（改本节后必跑）
+
+```bash
+cd backend
+DATABASE_URL=postgresql+asyncpg://stock_user:stock_pass@localhost:5433/stock_bot \
+  .venv/bin/python scripts/backfill_market_sentiment_composite.py          # 全量重算 + 覆盖率 + PIT 审计
+DATABASE_URL=... .venv/bin/python scripts/backfill_market_sentiment_composite.py --coverage-only
+.venv/bin/python -m pytest tests/test_market_sentiment_composite.py tests/test_market_sentiment_composite_db.py
+python scripts/check_metric_dictionary.py                                   # 本文表 ↔ registry 逐值核对
+```
+
+
 ---
 
 ## §4.3 `publisher_tier`（发布主体可信度分层）

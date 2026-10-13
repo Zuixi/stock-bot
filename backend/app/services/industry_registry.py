@@ -2122,6 +2122,347 @@ def _assert_investor_behavior_keys() -> None:
 
 _assert_investor_behavior_keys()
 
+# ── 全市场情绪**综合指数**（spec §S1.13）────────────────────────────────
+#
+# scope='market' 里**唯一的合成指标**：不消费任何新产地，只把上面已登记的成分指标做
+# **滚动分位标准化**后**加权合成**。权重 / 分位窗口 / 最小样本量 / 缺失处置 / 版本号
+# **全部住在本节**（registry 是唯一事实源），由
+# `app/services/market_sentiment_composite_service.py` 读取并落库，同时在
+# `docs/design/metric-dictionary.md` §4.2「市场情绪综合指数（spec §S1.13）」小节
+# **逐字转录公开**。改权重 = 改本节 + bump :data:`COMPOSITE_CALIBER_VERSION` + 同步字典，
+# 由 :func:`_assert_composite_spec`（导入期）挡住自相矛盾的配置。
+COMPOSITE_METRIC_KEY = "market_sentiment_composite"
+
+#: 合成指数的 `source`：与 scope 内其它本地派生指标同值（产地标签与底座一致）。
+COMPOSITE_SOURCE = "local_calc"
+
+#: **权重与方法版本**（spec：「变更时带版本号」+ ADR 0011 口径断点）。
+#: 同一字符串写进 `MetricDef.caliber_version` 与**每一行**的 `caliber_version` ——
+#: 可复算性的前提是"能指名要复现哪一版权重与方法"（ADR 0014 的 B 类要求）。
+#: v1 的内容 = :data:`COMPOSITE_CONSTITUENTS` 的权重表 + 252/126 分位口径 +
+#: `drop_and_renormalise` 缺失处置。
+COMPOSITE_CALIBER_VERSION = "s1.13-v1"
+
+#: 成分分位标准化的**滚动窗口**（单位 = **该成分自身的观测行数**，日频成分即 ≈252 个
+#: 交易日）。与 `FACTORS['pct_rank']` 的默认窗口 252 同值 —— 同一个分位口径，不另造。
+COMPOSITE_PERCENTILE_WINDOW = 252
+#: 窗口内**有效样本**（非 NULL 观测）的下限；不足即该成分当日**不参与**合成
+#: （不是"按 0 算"、不是"取最近值"、更不插值）。126 = 半个窗口。
+COMPOSITE_PERCENTILE_MIN_SAMPLES = 126
+#: 参与成分数下限：低于它当日的合成值落 NULL（1 个成分的"加权分位"不是合成指数）。
+COMPOSITE_MIN_PARTICIPANTS = 2
+#: 生效权重之和下限：防止"只剩一两个零碎小权重腿"时仍报出一个名为合成值的数字。
+COMPOSITE_MIN_EFFECTIVE_WEIGHT = 0.20
+#: 成分缺失的处置（**写死、公开、可机读**）：剔除该成分，对剩余成分的权重**重新归一化**
+#: —— 绝不静默用 0、绝不插值、绝不前向填充。当天的实际参与集与生效权重落
+#: `extra.participants` / `extra.effective_weights`（可复算性的前提）。
+COMPOSITE_RENORMALIZATION = "drop_and_renormalise"
+
+#: 综合指数缺数的原因码（与 §S1.8/§S1.9 同一条纪律：**缺数恒 NULL + 原因码，不落 0**）。
+COMPOSITE_MISSING_REASONS: dict[str, str] = {
+    "insufficient_participants": (
+        "当日具备有效分位的成分数低于下限（extra.n_participants < extra.min_participants）"
+        "—— 成分太少时「加权分位」不再是合成指数，落 NULL 不落数字"
+    ),
+    "insufficient_effective_weight": (
+        "当日参与成分的配置权重之和低于下限（extra.effective_weight_sum < "
+        "extra.min_effective_weight）—— 少数零碎腿的合成不具代表性，落 NULL"
+    ),
+}
+
+
+@dataclass(frozen=True)
+class CompositeConstituent:
+    """综合指数的一个成分：`metric_key` + 权重 + 方向 + 归属组 + 纳入理由.
+
+    `direction` 是**风险偏好方向**（+1 = 原始值越高情绪越乐观；-1 = 反向，先取相反数
+    再算分位）。它把"这条腿怎么读"写死成机读字段，而不是留在某处的注释里。
+    """
+
+    metric_key: str
+    weight: float
+    direction: int  # +1 / -1
+    group: str
+    rationale: str
+
+
+#: 成分的**归属组权重**（组内权重之和 == 组权重；`_assert_composite_spec` 机械校验）。
+#: 组 = 该成分出自哪一批 spec（§S1.8 / §S1.9 / §S1.10）—— 让"综合指数覆盖了哪几类情绪"
+#: 可查，并防止某一类（如涨停族）因为 key 多而自动占大权重。
+COMPOSITE_GROUP_WEIGHTS: dict[str, float] = {
+    "volatility_derivatives": 0.35,  # spec §S1.10 波动率与衍生品
+    "activity_leverage": 0.25,  # spec §S1.9 交易活跃度与杠杆资金
+    "breadth_momentum": 0.40,  # spec §S1.8 市场宽度与动量
+}
+
+#: **v1 成分表**（11 条腿，权重之和 == 1.00）。纳入判据（逐条可查，见字典 §4.2）：
+#: ① 日频（`freq='daily'`）—— 日频合成里纳入月/周频成分必然要前向填充 = 制造数据；
+#: ② 风险偏好方向无歧义（`direction` 能写死）；③ 同组内不重复计同一信号（冗余腿剔除）；
+#: ④ 该 key **未**被标注禁止进信号链路（`signal_chain='forbidden'` 一律排除）。
+COMPOSITE_CONSTITUENTS: tuple[CompositeConstituent, ...] = (
+    # ── 组 1：波动率与衍生品（§S1.10，0.35；三条腿：50ETF 隐含波动率 + IF/IC/IM 基差）──
+    CompositeConstituent(
+        "qvix_50etf",
+        0.12,
+        -1,
+        "volatility_derivatives",
+        "50ETF 期权隐含波动率 = 恐慌的直接价格；越高情绪越差（反向）。历史最长（2015-02 起）",
+    ),
+    CompositeConstituent(
+        "if_basis",
+        0.09,
+        1,
+        "volatility_derivatives",
+        "IF（沪深300）期货基差 = 升贴水；升水 = 多头/对冲拥挤偏乐观，最深历史（2010-04 起）",
+    ),
+    CompositeConstituent(
+        "ic_basis",
+        0.07,
+        1,
+        "volatility_derivatives",
+        "IC（中证500）期货基差；中小盘风险偏好更敏感（2015-04 起）",
+    ),
+    CompositeConstituent(
+        "im_basis",
+        0.07,
+        1,
+        "volatility_derivatives",
+        "IM（中证1000）期货基差；小盘/投机情绪腿（2022-07 起），也是 2026-10 缺 QVIX 时的兜底腿",
+    ),
+    # ── 组 2：交易活跃度与杠杆资金（§S1.9，0.25）──
+    CompositeConstituent(
+        "idx_turnover_ratio_csi300",
+        0.09,
+        1,
+        "activity_leverage",
+        "沪深300 换手率（自由流通股本口径）= 参与度；比成交额更可比（成交额含长期抬升趋势）",
+    ),
+    CompositeConstituent(
+        "margin_financing_balance",
+        0.08,
+        1,
+        "activity_leverage",
+        "融资余额 = 杠杆多头的存量意愿（交易所三所汇总，2023-05 起）",
+    ),
+    CompositeConstituent(
+        "margin_financing_buy_ratio",
+        0.08,
+        1,
+        "activity_leverage",
+        "融资买入额占全市场成交额比 = 当日杠杆买入强度（快变量，与存量互补）",
+    ),
+    # ── 组 3：市场宽度与动量（§S1.8，0.40；2025-09 起，故只在近期参与）──
+    CompositeConstituent(
+        "above_ma20_ratio",
+        0.12,
+        1,
+        "breadth_momentum",
+        "站上 20 日均线占比 = 宽度（历史最长、无缺值的 §S1.8 腿）",
+    ),
+    CompositeConstituent(
+        "advance_decline_ratio",
+        0.10,
+        1,
+        "breadth_momentum",
+        "涨跌比 = 当日方向性宽度；家数（分子分母）不再单独纳入以免重复计权",
+    ),
+    CompositeConstituent(
+        "limit_up_break_ratio",
+        0.09,
+        -1,
+        "breadth_momentum",
+        "炸板率 = 涨停接力失败率；越高情绪越差（反向）",
+    ),
+    CompositeConstituent(
+        "max_consecutive_limit_up",
+        0.09,
+        1,
+        "breadth_momentum",
+        "连板高度 = 投机热度（涨停族里与炸板率互补的另一面）",
+    ),
+)
+
+#: 明令**不得**成为成分的 key（机读的"禁令挡板"）。`public_fund_equity_position` 是
+#: spec §S1.12 写死的"仅作背景展示、不进信号链路"，把它当成分等于绕过该禁令。
+COMPOSITE_FORBIDDEN_CONSTITUENT_KEYS: tuple[str, ...] = ("public_fund_equity_position",)
+
+#: 被**刻意排除**、且理由必须公开可查的 key（不注册成成分，但留痕"为什么没有它"）。
+#: 这里是**短因由**（机读、可查）；展开的逐条论证见字典 §4.2「市场情绪综合指数」小节。
+COMPOSITE_EXCLUDED_KEYS: dict[str, str] = {
+    "public_fund_equity_position": "spec §S1.12 明令不进信号链路；且实测周度",
+    "new_fund_share": "月频；日频合成必须前向填充 = 制造数据",
+    "etf_share_change": "方向不唯一（抄底/追涨两读皆通）",
+    "southbound_net_buy": "方向有争议（离开 A 股 / 全球风险偏好上升）",
+    "margin_short_balance": "与融资余额同属杠杆存量组且量级极小",
+    "market_turnover_amount": "与沪深300换手率同组且含长期抬升趋势",
+    "pe_csi300": "估值状态（慢变量），无唯一情绪方向",
+    "erp_10y": "估值锚（慢变量），「便宜」与「恐慌」两读皆通",
+    "cn_treasury_yield_10y": "无风险利率是宏观状态量，不是情绪",
+    "ih_basis": "与 if_basis 同族（大盘）且历史更短",
+    "ic_discount_rate": "由 ic_basis 确定性派生（同一信号）",
+    "im_discount_rate": "由 im_basis 确定性派生（同一信号）",
+    "qvix_300etf": "与 qvix_50etf 同族且历史更短",
+    "qvix_500etf": "与 qvix_50etf 同族且历史更短",
+    "qvix_cyb_etf": "与 qvix_50etf 同族且历史更短",
+    "qvix_kcb_etf": "与 qvix_50etf 同族且历史更短",
+    "market_advance_count": "是涨跌比的分子（重复计数）",
+    "market_decline_count": "是涨跌比的分母（重复计数）",
+    "limit_up_down_ratio": "与连板高度同属涨停族且历史更短",
+    "first_board_promotion_ratio": "与炸板率同属接力成败信号",
+    "idx_turnover_ratio_sse": "换手率族只取沪深300 一条代表",
+    "idx_turnover_ratio_szse": "换手率族只取沪深300 一条代表",
+    "idx_turnover_ratio_sse50": "换手率族只取沪深300 一条代表",
+    "idx_turnover_ratio_bse50": "换手率族只取沪深300 一条代表",
+    "idx_turnover_ratio_star": "换手率族只取一条代表；且仅有 244 天有值",
+    "idx_turnover_ratio_chinext": "换手率族只取沪深300 一条代表",
+    "industrial_capital_net_change": "事件驱动（一行=一次公告），非等间隔日频序列",
+    "northbound_holding_quarterly": "季度；日频合成必然前向填充",
+}
+
+#: `INDUSTRIES['market']` 的**全部已登记指标**（合并顺序 = 登记顺序；S1.8 → S1.9/S1.11
+#: → S1.10 → S1.7 → S1.12）。:data:`COMPOSITE_METRICS` 追加在最后（§S1.13 是消费方）。
+MARKET_SENTIMENT_METRICS_ALL: list[MetricDef] = [
+    *MARKET_METRICS,
+    *MARKET_ACTIVITY_METRICS,
+    *VOLATILITY_DERIVATIVES_METRICS,
+    *CAPITAL_FLOWS_METRICS,
+    *INVESTOR_BEHAVIOR_METRICS,
+]
+
+#: 综合指数是**派生**指标（无新产地），单位 = 分（0–100 的加权分位）。
+#: ⚠️ 名称只用「市场情绪综合指数」（命名禁令见 spec §S1.13；本指标与 CNN 那个美股七项
+#: 口径的同名指数**没有任何关系**，也**不得**借用其名称）。
+COMPOSITE_METRICS: list[MetricDef] = [
+    MetricDef(
+        key=COMPOSITE_METRIC_KEY,
+        name="市场情绪综合指数",
+        unit="分",
+        freq="daily",
+        tier=TIER_DERIVED,
+        sources=[COMPOSITE_SOURCE],
+        group="composite",
+        higher_is_better=True,
+        caliber_version=COMPOSITE_CALIBER_VERSION,
+        description=(
+            "**自建**合成指标（spec §S1.13）：把 11 个已登记的日频情绪成分做**滚动分位"
+            "标准化**（窗口 252 个成分观测行、最小有效样本 126）后按**公开权重表**加权求和，"
+            "值域 0–100（50 ≈ 历史中位）。成分的「风险偏好方向」写死在 registry"
+            "（direction=+1/-1，反向腿先取相反数再算分位）。**权重、窗口、缺失处置与"
+            "版本号全部公开在 docs/design/metric-dictionary.md §4.2「市场情绪综合指数」**"
+            f"（本节只给指针；方法版本 = {COMPOSITE_CALIBER_VERSION}）。"
+            "**成分缺失的处置**：当日无有效分位的成分被**剔除**，剩余成分的权重**重新"
+            "归一化**（drop_and_renormalise）—— **绝不**静默用 0、**绝不**插值或前向填充；"
+            "当天的实际参与集 extra.participants、生效权重 extra.effective_weights 与"
+            "逐成分明细 extra.constituents 落库，这是**可复算**的前提。"
+            "参与成分数 < 2 或生效权重之和 < 0.20 时落 NULL + missing_reason"
+            "（insufficient_participants / insufficient_effective_weight），**不落 0**。"
+            "**PIT**：published_at = 当日**全部**成分行 published_at 的最大值"
+            "（extra.pit_basis=max_constituent_published_at）—— 合成值不可能早于当天最晚"
+            "定型的成分，**不回退 period**；成分行缺 published_at 时**响亮失败**。"
+            "**允许进信号链路**（spec Ruling 65：被禁入的是第三方机构编制的情绪指数；"
+            "本指标自建、算法公开、可逐日复算）。相关读面 = 通用指标读面"
+            "（industry_key='market'），**没有第二张表、没有平行读路**。"
+        ),
+    ),
+]
+
+
+def _assert_composite_spec() -> None:
+    """§S1.13 的合成配置必须**导入期自洽**（权重表是公开契约，错一位就静默改口径）。
+
+    逐条（都能机械判定）：
+    1. key 不重复、权重 > 0、direction ∈ {+1,−1}、group 已声明；
+    2. 成分权重之和 == 1.00、每组权重之和 == 声明的组权重、组权重之和 == 1.00（容差 1e-9）；
+    3. 每个成分**必须**是已登记的市场 scope 指标且 `freq == 'daily'`（日频纪律）；
+    4. 分位口径自洽：`0 < min_samples <= window`；
+    5. 参与下限自洽：`min_participants >= 2`、`0 < min_effective_weight <= 1`；
+    6. **禁令挡板**：`COMPOSITE_FORBIDDEN_CONSTITUENT_KEYS` 里的 key 不得出现为成分；
+    7. 综合指数自身不得成为自己的成分；被排除项必须有文字理由（不得"删了但没记"）；
+    8. 综合指数的登记项与本节的口径常量**同值**，且描述里必须给出字典指针
+       （spec：「权重与方法必须公开可查」—— 指针缺失 = 公开面断链）。
+    """
+    keys = [c.metric_key for c in COMPOSITE_CONSTITUENTS]
+    if len(set(keys)) != len(keys):
+        dup = sorted({k for k in keys if keys.count(k) > 1})
+        raise RuntimeError(f"§S1.13 成分表有重复 key：{dup}")
+    for c in COMPOSITE_CONSTITUENTS:
+        if c.weight <= 0:
+            raise RuntimeError(f"§S1.13 成分 {c.metric_key} 的权重必须为正（得到 {c.weight}）")
+        if c.direction not in (1, -1):
+            raise RuntimeError(
+                f"§S1.13 成分 {c.metric_key} 的 direction 必须是 +1/-1（得到 {c.direction}）"
+                " —— 风险偏好方向必须写死，不得留在注释里"
+            )
+        if c.group not in COMPOSITE_GROUP_WEIGHTS:
+            raise RuntimeError(
+                f"§S1.13 成分 {c.metric_key} 的 group={c.group!r} 未在 "
+                f"COMPOSITE_GROUP_WEIGHTS 声明（{sorted(COMPOSITE_GROUP_WEIGHTS)}）"
+            )
+    total = sum(c.weight for c in COMPOSITE_CONSTITUENTS)
+    if abs(total - 1.0) > 1e-9:
+        raise RuntimeError(f"§S1.13 成分权重之和必须为 1.00（得到 {total}）")
+    group_total = sum(COMPOSITE_GROUP_WEIGHTS.values())
+    if abs(group_total - 1.0) > 1e-9:
+        raise RuntimeError(f"§S1.13 组权重之和必须为 1.00（得到 {group_total}）")
+    for group, declared in COMPOSITE_GROUP_WEIGHTS.items():
+        actual = sum(c.weight for c in COMPOSITE_CONSTITUENTS if c.group == group)
+        if abs(actual - declared) > 1e-9:
+            raise RuntimeError(
+                f"§S1.13 组 {group} 的成分权重之和 {actual} != 声明的组权重 {declared}"
+            )
+    registered = {m.key: m for m in MARKET_SENTIMENT_METRICS_ALL}
+    for c in COMPOSITE_CONSTITUENTS:
+        metric = registered.get(c.metric_key)
+        if metric is None:
+            raise RuntimeError(f"§S1.13 成分 {c.metric_key} 未在本 scope 登记 —— 引用落空")
+        if metric.freq != "daily":
+            raise RuntimeError(
+                f"§S1.13 成分 {c.metric_key} 的 freq={metric.freq!r} ≠ 'daily'："
+                "日频合成纳入低频成分必然要前向填充 = 制造数据"
+            )
+    if not 0 < COMPOSITE_PERCENTILE_MIN_SAMPLES <= COMPOSITE_PERCENTILE_WINDOW:
+        raise RuntimeError("§S1.13 分位口径不自洽：须 0 < min_samples <= window")
+    if COMPOSITE_MIN_PARTICIPANTS < 2:
+        raise RuntimeError("§S1.13 参与成分下限必须 >= 2（1 个成分的加权分位不是合成指数）")
+    if not 0 < COMPOSITE_MIN_EFFECTIVE_WEIGHT <= 1:
+        raise RuntimeError("§S1.13 生效权重下限必须落在 (0, 1]")
+    forbidden = sorted(set(keys) & set(COMPOSITE_FORBIDDEN_CONSTITUENT_KEYS))
+    if forbidden:
+        raise RuntimeError(
+            f"§S1.13 禁令被绕过：{forbidden} 被标注为不得进信号链路，却出现在成分表里"
+        )
+    if COMPOSITE_METRIC_KEY in keys:
+        raise RuntimeError("§S1.13 综合指数不得成为自己的成分（自我引用 = 无定义的递归）")
+    if not COMPOSITE_EXCLUDED_KEYS:
+        raise RuntimeError("§S1.13 有 key 未纳入成分却没有留下理由 —— 「不纳入」也要可查")
+    if len(COMPOSITE_METRICS) != 1:
+        raise RuntimeError("§S1.13 只登记一个合成指标（多一个就是另一条口径）")
+    reg = COMPOSITE_METRICS[0]
+    if reg.key != COMPOSITE_METRIC_KEY or reg.name != "市场情绪综合指数":
+        raise RuntimeError(
+            f"§S1.13 登记项与常量不一致：key={reg.key!r} name={reg.name!r}"
+            "（名称只允许「市场情绪综合指数」）"
+        )
+    if reg.caliber_version != COMPOSITE_CALIBER_VERSION:
+        raise RuntimeError(
+            f"§S1.13 登记项的 caliber_version={reg.caliber_version!r} 与 "
+            f"COMPOSITE_CALIBER_VERSION={COMPOSITE_CALIBER_VERSION!r} 不一致 —— "
+            "版本号必须与权重表同一处、同一值"
+        )
+    if reg.freq != "daily":
+        raise RuntimeError("§S1.13 综合指数是日频序列")
+    if "docs/design/metric-dictionary.md" not in reg.description:
+        raise RuntimeError(
+            "§S1.13：综合指数的 description 必须给出方法文档指针"
+            "（docs/design/metric-dictionary.md）—— 权重/窗口/归一化规则要公开可查"
+        )
+    for token in ("分位", "归一化", "published_at"):
+        if token not in reg.description:
+            raise RuntimeError(f"§S1.13：综合指数 description 缺关键词「{token}」")
+
+
+_assert_composite_spec()
+
 #: `INDUSTRIES['market']` **只有一个** `IndustryConfig`（scope 键必须唯一）：
 #: §S1.8 的 8 个、§S1.9/S1.11 的 14 个与本批次 §S1.10 的 11 个 key **合并登记在同一个
 #: scope** 下 —— 它们本来就落在同一张 `industry_metrics`、走同一个读面，
@@ -2130,7 +2471,7 @@ _assert_investor_behavior_keys()
 #: 语义从"全市场情绪"扩展为"全市场（情绪 + 活跃度 + 估值 + 波动率与衍生品）"。
 MARKET_SENTIMENT = IndustryConfig(
     key="market",
-    name="全市场情绪 · 活跃度 · 估值 · 波动率 · 资金流 · 投资者行为",
+    name="全市场情绪 · 活跃度 · 估值 · 波动率 · 资金流 · 投资者行为 · 综合指数",
     description=(
         "全市场 scope（非行业）：情绪/市场宽度与动量（spec §S1.8）"
         " + 交易活跃度与杠杆资金（spec §S1.9） + 估值与风险溢价（spec §S1.11）"
@@ -2140,17 +2481,14 @@ MARKET_SENTIMENT = IndustryConfig(
         " + 陆股通持仓（季度）只登记口径）"
         " + 投资者行为（spec §S1.12：新成立基金募集份额（月频，部分成员缺值时为**下界**）/ "
         "公募基金仓位（实测**周度**、口径不可复算，仅背景展示且不进信号链路）；"
-        "新增散户开户数实测不可得 ⇒ 本 scope **不登记**该项，UI 无此项）。"
+        "新增散户开户数实测不可得 ⇒ 本 scope **不登记**该项，UI 无此项）"
+        " + 市场情绪综合指数（spec §S1.13：由上面 11 个日频成分滚动分位加权合成，"
+        "权重表与缺失归一化规则公开在 docs/design/metric-dictionary.md §4.2；"
+        "自建、算法公开、可复算 ⇒ 允许进信号链路）。"
         "指标值与行业指标同表同读面，代码即配置"
     ),
     sw_l3_codes=[],  # 非行业 scope：不挂申万分类
-    metrics=[
-        *MARKET_METRICS,
-        *MARKET_ACTIVITY_METRICS,
-        *VOLATILITY_DERIVATIVES_METRICS,
-        *CAPITAL_FLOWS_METRICS,
-        *INVESTOR_BEHAVIOR_METRICS,
-    ],
+    metrics=[*MARKET_SENTIMENT_METRICS_ALL, *COMPOSITE_METRICS],
     phases=[],  # 周期判定是行业工作台的产物，全市场 scope 不参与
     position_templates={},
 )
