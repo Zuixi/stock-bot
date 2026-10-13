@@ -22,7 +22,7 @@
 | 3 | 行业分析 | `/industry` | 研究（只读） | **`research:read`** | Wave 3（吸收既有 `/research`） |
 | 4 | 公司分析 | `/company` | 研究（只读） | **公开（免登录）** | Wave 3（吸收既有 `/stock/:symbol`） |
 | 5 | 宏观分析 | `/macro` | 研究（只读） | **待定** | Wave 3 |
-| 6 | 情绪分析 | `/sentiment` | 研究（只读） | **待定** | Wave 1 |
+| 6 | 情绪分析 | `/sentiment` | 研究（只读） | **`research:read`** | Wave 1（**已落地**：真页面 `pages/sentiment/`，读 S1.8–S1.13 的指标读面；守卫与 `/industry` 同值——页面消费 `/api/v1/metrics/*`，该读面要求 `research:read`，实测匿名 401 / 普通交易员 **403**，故不能只要求登录）|
 | 7 | 价值网图谱 | `/valuegraph` | 研究（只读） | **待定** | Wave 4 |
 | 8 | 策略引擎 | `/strategy` | 决策（写） | **待定** | Wave 5（不存在） |
 | 9 | 风险管理 | `/risk` | 决策（写） | **待定** | Wave 6（不存在） |

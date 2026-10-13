@@ -185,15 +185,17 @@ export const ROUTES: AppRoute[] = [
     parent: "main",
   },
 
-  // S1.8–S1.13 已兑现真页面：`/sentiment` 从占位转为真页面，并按最小一致口径**要求登录**
-  // （页面消费受保护的 `/api/v1/metrics/*`；匿名访问与 `/me` 一样走既有 `RequireAuth` 的
-  // 登录重定向，而不是渲染一个"空页"）。IA §1 的权限列原为「待定」，本行是落地时的最小选择。
+  // S1.8–S1.13 已兑现真页面：`/sentiment` 从占位转为真页面。守卫必须与**数据需求一致**：
+  // 页面消费 `/api/v1/metrics/*`，而该读面要求 `research:read`（实测：匿名 401、普通交易员 403），
+  // 故与同为研究层的 `/industry` 用**同一个** `permission`，而不是只要求登录——否则普通登录用户
+  // 能进页面却读不到任何模块数据（实测过，页面只能显示"读面未取到"的空表）。
+  // IA §1 的权限列原为「待定」；该表的「分区」列本就写着情绪分析 = 研究（只读），本行据此落地。
   {
     key: "sentiment",
     path: "/sentiment",
     kind: "page",
     component: "SentimentPage",
-    requiresAuth: true,
+    permission: "research:read",
     parent: "main",
   },
 
