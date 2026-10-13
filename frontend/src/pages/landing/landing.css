@@ -544,9 +544,9 @@ html {
   line-height: 1.7;
 }
 
-/* ── 数据覆盖矩阵 / 行业网格 ──────────────────────────────
- * Stage C 起矩阵与网格本体提取至 features/market/components/
- * （DataCoverageMatrix / SwIndustryGrid，随组件 co-locate CSS），
+/* ── 行业网格 ────────────────────────────────────────────
+ * Stage C 起网格本体提取至 features/market/components/
+ * （SwIndustryGrid，随组件 co-locate CSS），
  * 此处仅保留 landing 包装层的脚注样式。 */
 
 .landing-industry-footnote {

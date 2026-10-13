@@ -9,7 +9,6 @@ import { CompactHero } from "./sections/CompactHero";
 import { MarketPulse } from "./sections/MarketPulse";
 import { ValueProps } from "./sections/ValueProps";
 import { ProductShowcase } from "./sections/ProductShowcase";
-import { DataCoverage } from "./sections/DataCoverage";
 import { IndustryGrid } from "./sections/IndustryGrid";
 import { AccountPerks } from "./sections/AccountPerks";
 import { BottomCTA } from "./sections/BottomCTA";
@@ -54,7 +53,6 @@ export default function LandingPage() {
 
         <ValueProps />
         <ProductShowcase />
-        <DataCoverage />
         <IndustryGrid />
         <AccountPerks />
         <BottomCTA />

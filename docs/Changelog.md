@@ -1,3 +1,10 @@
+## 2026-10-12 - 移除「数据版图」静态矩阵（市场页底部 + landing 第 6 区块）
+
+- **背景（用户反馈）**：`DataCoverageMatrix` 是 11 行**手写常量**的静态宣传矩阵，挂在 `/market` 的 Tabs **下方**，所以 5 个 Tab 里下滑都会重复看到同一张表；且它与真实数据可用性长期漂移——北向上游停更后靠手改常量把该行标成「规划中」，逐域上线状态全靠人工维护
+- **改动**：删除组件本体 `features/market/components/DataCoverageMatrix.{tsx,css}` 与 barrel 导出、`/market` 页脚上方那份（`withStats={false}`）、landing 第 6 区块（`landing/sections/DataCoverage.tsx` 及其 import/挂载）；同步删除两处断言它的 e2e（`marketTrust.spec.ts` 的「数据版图把北向一行标为规划中…」、`landing.spec.ts` 的「数据覆盖矩阵含核心数据域与免费徽章」），修正 `marketPolling.spec.ts` 与 `landing.css` 里的过时注释，设计文档 `docs/design/landing-market-theme.md` §5 改为「已下线」并保留表格作历史存档（去掉对已删 `COVERAGE_ROWS` 的同源引用）
+- **替代入口**：数据新鲜度的真实来源是**后端** `GET /market/data-freshness` 的 `coverage`（逐域 `have_days`/`complete_days`/`cover_pct`，由库内实况算出）；前端不再用手写常量对外宣称"已上线/免费"
+- 涉及文件：frontend/src/features/market/components/{DataCoverageMatrix.tsx,DataCoverageMatrix.css,index.ts}、frontend/src/pages/market/index.tsx、frontend/src/pages/landing/{index.tsx,landing.css,sections/DataCoverage.tsx}、frontend/e2e/{marketTrust,landing,marketPolling}.spec.ts、docs/design/landing-market-theme.md、docs/Changelog.md
+
 ## 2026-10-12 - S1.13 市场情绪综合指数（11 条日频腿滚动分位加权合成；**S2.2 的前置**）
 
 - **交付**（`697a138`，6 文件）：**`market_sentiment_composite`**（S2.2 期望的确切键名）落 `industry_metrics(industry_key='market')`，口径 `s1.13-v1`；**无新表、无新迁移**（单头 `b6a1f0c2d7e4`）
@@ -268,6 +275,7 @@
 - **实测纠错（写入计划 §3.4 / §8）**：图1 `纳斯达克综合指数` 与 `纳斯达克100` 都标 NDX（综合应为 IXIC）；**北向资金被 2 处依赖而每日数据已取消**——2024-05-13 取消盘中实时、2024-08-19 取消每日净买入并改按季度披露持股，替代口径为 ETF 份额变化 + 两融 + 产业资本增减持 + 南向；图上 `资金利率` 缺 **7 天 OMO**（2024-07 后 MLF 地位弱化，OMO 成为主要政策利率）；M1 口径 2024-12 修订（2025-01 起纳入个人活期存款 + 非银备付金）造成历史断点，须标 `口径版本`
 - **阻塞**：计划 `status: draft`，阻塞于 §11 的 4 项待拍板（7 个徽标数字口径 / `2026年5月` 时点语义 / 外资画像替代口径 / 模块边界三处），拍板后启动 Wave 0（5 篇 ADR + IA 与路由表冻结）
 - 涉及文件：plans/2026-10-12-investment-research-platform-ia.md、plans/index.md、docs/Changelog.md
+
 
 ## 2026-10-12 - 修复「点个股后按返回键回不到原界面」：Market 分类 Tab 改为 URL 状态 + 错误边界随路由重置
 

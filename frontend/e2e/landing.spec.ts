@@ -155,16 +155,6 @@ test.describe("宣传页数据区块", () => {
     await expect(card.locator(".landing-ticker-chip")).toHaveText("--");
   });
 
-  test("数据覆盖矩阵含核心数据域与免费徽章", async ({ page }) => {
-    await page.goto("/");
-    await expect(page.getByText("A股行情").first()).toBeVisible();
-    await expect(page.getByText("行业产能指标").first()).toBeVisible();
-    await expect(page.getByText("财务三表").first()).toBeVisible();
-    // 北向 `northbound_daily` 零行、首页已整卡移除：矩阵不得再宣称其「免费/已覆盖」
-    await expect(page.locator(".dc-planned-badge")).toHaveText("规划中");
-    await expect(page.getByText("已上线数据域")).toBeVisible();
-  });
-
   test("申万行业网格渲染并带个股数提示", async ({ page }) => {
     await page.goto("/");
     const tile = page.getByTitle(/95 只个股 · 3 个二级行业/);

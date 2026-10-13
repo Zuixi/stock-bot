@@ -336,7 +336,7 @@ test.describe("可点击条目语义与键盘可达（Task 16）", () => {
 });
 
 /**
- * Task 16：北向停更标注与数据版图降级。
+ * Task 16：北向停更标注。
  * 北向（`moneyflow_hsgt`）上游已停更：卡片要能说「数据源已停更」**并给出最新数据日**，
  * 日期必须取自 payload（`as_of`），换一天文案跟着变——写死日期就是假标注。
  *
@@ -344,7 +344,7 @@ test.describe("可点击条目语义与键盘可达（Task 16）", () => {
  * 念数（「成交额」「累计成交额」、无正负号），**不得**再出现「净流入」文案。mock 里的
  * 值全部为正且带 `amount_kind="turnover"`——负值在成交额口径下是不可能出现的。
  */
-test.describe("北向停更标注与数据版图降级（Task 16）", () => {
+test.describe("北向停更标注（Task 16）", () => {
   const NORTHBOUND_ITEMS = [
     { date: "2026-09-06", amount: 123456.7, amount_kind: "turnover" },
     { date: "2026-09-07", amount: 78901.2, amount_kind: "turnover" },
@@ -383,6 +383,7 @@ test.describe("北向停更标注与数据版图降级（Task 16）", () => {
     await expect(card2.getByText("（最新 09-07）")).toHaveCount(0);
   });
 
+
   test("北向卡按成交额口径念数，不出现「净流入」", async ({ page }) => {
     await mockNorthbound(page, "2026-09-07", 11);
     await page.goto("/market");
@@ -397,16 +398,4 @@ test.describe("北向停更标注与数据版图降级（Task 16）", () => {
     await expect(card.getByText(/净流入|净买入/)).toHaveCount(0);
   });
 
-  test("数据版图把北向一行标为「规划中」，且不冒充已上线数据域", async ({ page }) => {
-    await page.goto("/market");
-    const matrix = page.locator(".dc-table");
-    await expect15s(matrix).toBeVisible();
-
-    const northboundRow = matrix.locator(".dc-row").filter({ hasText: "北向资金" });
-    await expect15s(northboundRow.getByText("规划中")).toBeVisible();
-    // 规划中 ≠ 免费可用：该行不得出现「免费」徽章（否则等于宣称已覆盖）
-    await expect(northboundRow.locator(".dc-free-badge")).toHaveCount(0);
-    // 规划中只此一行，别把其它数据域一起降级
-    await expect(matrix.locator(".dc-planned-badge")).toHaveCount(1);
-  });
 });
