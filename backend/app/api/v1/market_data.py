@@ -16,6 +16,7 @@ from app.schemas.limit_up import (
     LimitUpLadderOut,
     SectorLimitUpOut,
     SentimentCalendarPointOut,
+    SentimentCompositeOut,
     SentimentIntradayPointOut,
     SentimentTrendsOut,
     YesterdayLimitUpOut,
@@ -33,7 +34,11 @@ from app.schemas.market_data import (
     SectorTrendsOut,
     ShareFloatOut,
 )
-from app.services import limit_up_service, market_data_service
+from app.services import (
+    limit_up_service,
+    market_data_service,
+    market_sentiment_composite_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -351,6 +356,25 @@ async def get_sentiment_intraday(
     if cache is not None and out:
         await cache.set(cache_key, [p.model_dump(mode="json") for p in out], ttl=60)
     return out
+
+
+@router.get("/sentiment/composite", response_model=SentimentCompositeOut)
+async def get_sentiment_composite() -> SentimentCompositeOut:
+    """市场情绪综合指数 hero：**今天的值 + 它在自身历史里的历史分位**（后端算）。
+
+    - 序列 = `industry_metrics` 的 `market / market_sentiment_composite`（s1.13-v1）；
+    - `percentile` = 尾部 `window`（1260 交易日 ≈ 5 年）个**有效样本**上的
+      nearest-rank 分位（`100 × count(v <= 今天) / n`，**无插值**，2 位小数）；
+      `sample_count` 是实际参与分位的样本数（值为 NULL 的行不进样本、也不计 0）；
+    - `sample_count < MIN_PERCENTILE_SAMPLES`(60) → `insufficient_history=true` 且
+      `percentile=null`（**不给假分位**，与 `/sentiment/trends` 同一条 Ruling 4）；
+    - `legs` / `effective_weight` / `min_effective_weight` / `total_legs` 直读最新一行
+      `extra`（S1.13 写入）；老行缺这些键 → `null` / 0（**不发明**旧口径）；
+    - **公开**端点，与 `/sentiment/{calendar,trends,intraday}` 同一 auth 姿态
+      （不在受保护的 `/api/v1/metrics/*` 下）。
+    """
+    payload = await market_sentiment_composite_service.get_composite_hero()
+    return SentimentCompositeOut.model_validate(payload)
 
 
 @router.get("/data-freshness", response_model=DataFreshnessOut)

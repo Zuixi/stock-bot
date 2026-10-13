@@ -5,8 +5,10 @@
 把 S1.8–S1.12 已登记的情绪指标里**选定的 11 条日频腿**做**滚动分位标准化**，再按
 **公开权重表**加权合成一条 0–100 的序列，写进 `industry_metrics`
 （`industry_key='market'`、`stock_id=0`、`metric_key='market_sentiment_composite'`）。
-读面**不在这里** —— 走 S1.2 已建好的 `GET /api/v1/metrics/{latest,series}`
-（registry 驱动 + 四徽章 + Redis 缓存）。**不新建表、不新建平行读路、不新增迁移。**
+**通用**读面不在这里 —— 走 S1.2 已建好的 `GET /api/v1/metrics/{latest,series}`
+（registry 驱动 + 四徽章 + Redis 缓存）。本模块另有一条**专用读路**（文件末尾）：
+`GET /api/v1/market/sentiment/composite`，回答"今天的值在自身历史里的分位"——
+分位必须由后端算（Ruling 4），前端 hero 不做统计。**不新建表、不新增迁移。**
 
 **权重 / 分位窗口 / 最小样本量 / 缺失处置 / 版本号的唯一事实源是
 `industry_registry` 的 `COMPOSITE_*` 常量**（本模块只读取、不另存一份），公开转录在
@@ -70,7 +72,10 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import async_session_factory
 from app.models.industry_research import IndustryMetric
+from app.repositories import industry_metric_repo
+from app.schemas.limit_up import MIN_PERCENTILE_SAMPLES
 from app.services import industry_registry as registry
 from app.services.indicators import percentile_rank
 from app.services.market_activity_service import upsert_metric_rows
@@ -602,3 +607,116 @@ async def composite_coverage(
     out.participating_days = {k: v for k, v in participating.items() if v}
     out.missing_reasons = dict(sorted(out.missing_reasons.items()))
     return out
+
+
+# ── 读面：hero 端点（`GET /api/v1/market/sentiment/composite`）──────────────────
+#
+# 本模块唯一的**读**路径。它不重算合成（`value` 取库里既有行），只回答
+# "今天的值在它自己的历史里坐在哪"。默认读面（`/api/v1/metrics/*`）不受影响。
+
+#: hero 分位窗口（交易日 ≈ 5 年）：与 spec §S2.2 示例规则
+#: `ctx.percentile("market_sentiment_composite", window=1260)` 同值。**契约冻结**：
+#: 前端 hero 不传参，改这个数 = 改前端契约（不是内部旋钮）。
+COMPOSITE_HISTORY_WINDOW = 1260
+
+#: 序列读的行数上界（**含 NULL 行**）。当前全量 4002 行（2708 有值），留足余量。
+#: 命中上界 = 历史长到该换 SQL 侧窗口读了，而不是继续调大这个数。
+COMPOSITE_READ_LIMIT = 8000
+
+
+def _extra_float(extra: Mapping[str, Any], key: str) -> float | None:
+    """`extra` 里的数字键 → float；缺失 / 非数字（含 bool）→ `None`（**不猜**）。"""
+    value = extra.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def composite_percentile(
+    values: Sequence[float],
+    window: int = COMPOSITE_HISTORY_WINDOW,
+    *,
+    min_samples: int = MIN_PERCENTILE_SAMPLES,
+) -> tuple[int, float | None]:
+    """序列**末值**在自身尾部窗口里的分位（0–100，nearest-rank，**无插值**）。
+
+    - 样本 = `values` 末尾 `window` 个（调用方只传非 `None` 值 —— "有效样本"口径，
+      NULL 既**不进**样本也**不计 0**）；
+    - 定义 = `100 × count(v <= 末值) / n`（末值自身计入 tie，故全相等 → 100，
+      最小值 → `100/n` > 0）；四舍五入 2 位。全程**不插值**；
+    - `n < min_samples`（默认 `MIN_PERCENTILE_SAMPLES` = 60，Ruling 4）→ 分位 `None`
+      （**不给假分位**）；样本为 0 同样 `None`；
+    - 返回 `(sample_count, percentile|None)`：样本数**恒**如实返回（读面据此判
+      `insufficient_history`）。
+
+    ponytail: 这是 `indicators.percentile_rank`（同一 `count(v<=cur)/n` 口径，逐位多值版）
+    与 `limit_up_service.percentile_from_series`（分位**表**版 p10..p90）之外的**第三份**
+    同族实现。两处都读得动，但各自绑着历史形状（前者的 0–1 缩放 + 逐位对齐、后者的
+    `_PERCENTILE_VALIDITY` 三字段 + `row["trade_date"]`）。这里只要"末值一个标量"，
+    故自持 4 行。S2.2 引入规则引擎的 `ctx.percentile(..., window=)` 时**必须**统一成一个
+    共享 helper（届时以 `indicators` 为家），本函数与 `percentile_from_series` 一起改。
+    """
+    samples = values[-window:] if window > 0 else []
+    n = len(samples)
+    if n < min_samples:
+        return n, None
+    current = samples[-1]
+    return n, round(100.0 * sum(1 for v in samples if v <= current) / n, 2)
+
+
+def composite_hero_payload(
+    rows: Sequence[Any], *, window: int = COMPOSITE_HISTORY_WINDOW
+) -> dict[str, Any]:
+    """合成序列（**升序** ORM 行 / 行替身）→ hero 响应（**纯函数**，无 IO、无时钟）。
+
+    只回**库里已有**的事实：`as_of`/`value`/`caliber_version` 取最新一行；
+    `legs`/`effective_weight`/`min_effective_weight`/`total_legs` 直读最新一行 `extra`
+    的既有键（`participants` / `effective_weight_sum` / `min_effective_weight` /
+    `n_constituents`）—— 缺键就 `None`/0，**绝不**回退去别的行或按配置权重现算。
+    今天的值为 NULL（合成日缺数）时 `percentile=None`：没有"今天的位置"可分位
+    （`sample_count` 仍如实返回尾部有效样本数）。
+    """
+    latest = rows[-1] if rows else None
+    values = [float(r.value) for r in rows if r.value is not None]
+    sample_count, percentile = composite_percentile(values, window)
+    if latest is None or latest.value is None:
+        percentile = None
+
+    extra: Mapping[str, Any] = dict(getattr(latest, "extra", None) or {})
+    legs_raw = extra.get("participants")
+    legs = [str(k) for k in legs_raw] if isinstance(legs_raw, list) else None
+    total_legs = extra.get("n_constituents")
+
+    return {
+        "as_of": None if latest is None else latest.period,
+        "value": None if latest is None or latest.value is None else float(latest.value),
+        "window": window,
+        "sample_count": sample_count,
+        "percentile": percentile,
+        "insufficient_history": sample_count < MIN_PERCENTILE_SAMPLES,
+        "legs": legs,
+        "leg_count": 0 if legs is None else len(legs),
+        "total_legs": (
+            int(total_legs)
+            if isinstance(total_legs, int) and not isinstance(total_legs, bool)
+            else 0
+        ),
+        "effective_weight": _extra_float(extra, "effective_weight_sum"),
+        "min_effective_weight": _extra_float(extra, "min_effective_weight"),
+        "caliber_version": None if latest is None else latest.caliber_version,
+    }
+
+
+async def get_composite_hero() -> dict[str, Any]:
+    """`GET /api/v1/market/sentiment/composite` 的编排：一次索引读 + 纯函数组装。
+
+    **不新增 SQL、不新增表、不加缓存**：复用 `industry_metric_repo.get_metric_history`
+    （`idx_industry_metrics_lookup` 覆盖 `(industry_key, metric_key, period)`）。
+    窗口是回看窗口（分位定义在它上面），读全量行是为了**从尾部取足** `window` 个有效样本 ——
+    裁掉窗口前的历史不会改变结果，但少读 NULL 行会（故 `limit` 留足余量）。
+    """
+    async with async_session_factory() as db:
+        rows = await industry_metric_repo.get_metric_history(
+            db, "market", METRIC_KEY, limit=COMPOSITE_READ_LIMIT
+        )
+    return composite_hero_payload(rows)

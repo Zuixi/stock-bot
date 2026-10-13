@@ -1,0 +1,357 @@
+"""Task 21：`GET /api/v1/market/sentiment/composite`（S1.13 hero，读时计算，不物化）。
+
+覆盖点：
+
+1. **分位定义**：`100 × count(v <= 今天) / n`（nearest-rank，无插值，四舍五入 2 位），
+   只数**有效样本**（NULL 行既不进样本也不计 0）；窗口是**尾部** `window` 个样本。
+2. **`insufficient_history`**：`< MIN_PERCENTILE_SAMPLES`(60) → `percentile=null`
+   且 `insufficient_history=true`（59 vs 60 逐字钉住，不给假分位 —— Ruling 4）。
+3. **直读 `extra`、缺键不发明**：`legs`/`effective_weight`/`min_effective_weight`/
+   `total_legs` 取自最新一行的既有键；老行没有这些键 → `null`/0。
+4. **端点级**：匿名（无 cookie/token）200 + 响应键逐字等于契约；`window` 恒 1260。
+5. **今天的值为 NULL** → `value=null` 且 `percentile=null`（没有"今天的位置"）。
+
+**离线**：默认门禁用例全部打桩（repo 替身 + 假 session），不碰 PG、Redis、网络。
+真库用例标 ``e2e``（默认 deselect）。
+"""
+
+from __future__ import annotations
+
+from datetime import date, timedelta
+from decimal import Decimal
+from types import SimpleNamespace
+from typing import Any
+
+import httpx
+import pytest
+from httpx import ASGITransport
+
+from app.main import app
+from app.repositories import industry_metric_repo
+from app.schemas.limit_up import MIN_PERCENTILE_SAMPLES
+from app.services import market_sentiment_composite_service as mscs
+
+# 契约冻结的窗口（交易日）
+CONTRACT_WINDOW = 1260
+CONTRACT_KEYS = {
+    "as_of",
+    "value",
+    "window",
+    "sample_count",
+    "percentile",
+    "insufficient_history",
+    "legs",
+    "leg_count",
+    "total_legs",
+    "effective_weight",
+    "min_effective_weight",
+    "caliber_version",
+}
+
+D_START = date(2025, 10, 15)
+
+
+def _days(n: int) -> list[date]:
+    return [D_START + timedelta(days=i) for i in range(n)]
+
+
+def _row(
+    day: date,
+    value: float | Decimal | None,
+    *,
+    participants: list[str] | None | object = ...,
+    n_constituents: int | object = ...,
+    effective_weight_sum: float | object = ...,
+    min_effective_weight: float | object = ...,
+    caliber: str | None = "s1.13-v1",
+) -> SimpleNamespace:
+    """一行 `industry_metrics`（行替身：直读 `period`/`value`/`extra`/`caliber_version`）。
+
+    `...`（默认）= 该键**不写入** `extra`（模拟老行缺键）；显式 `None` = 键存在但值为 null。
+    """
+    extra: dict[str, Any] = {}
+    if participants is not ...:
+        extra["participants"] = participants
+    if n_constituents is not ...:
+        extra["n_constituents"] = n_constituents
+    if effective_weight_sum is not ...:
+        extra["effective_weight_sum"] = effective_weight_sum
+    if min_effective_weight is not ...:
+        extra["min_effective_weight"] = min_effective_weight
+    return SimpleNamespace(
+        period=day,
+        value=value,
+        extra=extra or None,
+        caliber_version=caliber,
+    )
+
+
+def _full_row(day: date, value: float | Decimal | None = 32.8157) -> SimpleNamespace:
+    """S1.13 的**完整**行（`extra` 四键齐全，与库内 2026-10-12 同形状）。"""
+    return _row(
+        day,
+        value,
+        participants=["if_basis", "ic_basis", "im_basis"],
+        n_constituents=11,
+        effective_weight_sum=0.23,
+        min_effective_weight=0.2,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 1. 分位纯函数：定义 / 尾窗 / 样本不足边界
+# ---------------------------------------------------------------------------
+
+
+def test_composite_percentile_count_le_definition() -> None:
+    """`100 × count(v <= 末值) / n`；末值自身计入 tie；**不插值**。"""
+    # min_samples 显式放到 1：本用例只验定义，样本充足性另有边界用例
+    n, pct = mscs.composite_percentile([5.0, 1.0, 3.0, 2.0, 4.0], 5, min_samples=1)
+    assert (n, pct) == (5, 80.0)  # 4 个 <= 4（4 自身计入）
+
+    # 最小值 → 100/n（不是 0：nearest-rank 的端点可达）
+    assert mscs.composite_percentile([10.0, 10.0, 5.0], 3, min_samples=1) == (
+        3,
+        round(100 / 3, 2),
+    )
+    # 全部相等 → 100（tie 一起计入，与 indicators.percentile_rank 同口径）
+    assert mscs.composite_percentile([9.0, 9.0, 9.0], 3, min_samples=1) == (3, 100.0)
+
+
+def test_composite_percentile_window_is_tail() -> None:
+    """窗口只取**尾部** `window` 个：裁掉窗口前的历史会改变答案。"""
+    values = [float(v) for v in range(1, 101)] + [1.0]  # 1..100 再回到 1
+    # 尾窗内只有 1 个 <= 1
+    assert mscs.composite_percentile(values, 100, min_samples=1) == (100, 1.0)
+    # 全序列有 2 个 <= 1
+    assert mscs.composite_percentile(values, 200, min_samples=1) == (
+        101,
+        round(200 / 101, 2),
+    )
+
+    # window <= 0 不炸（防御）：空样本 → None
+    assert mscs.composite_percentile(values, 0) == (0, None)
+
+
+def test_composite_percentile_insufficient_history_boundary() -> None:
+    """59 个样本 → 不足；60 → 恰好够（边界逐字钉住）。"""
+    assert MIN_PERCENTILE_SAMPLES == 60
+    assert mscs.composite_percentile([float(i) for i in range(59)], 1260) == (59, None)
+    n, pct = mscs.composite_percentile([float(i) for i in range(60)], 1260)
+    assert n == 60
+    assert pct is not None
+
+    # 空序列同样不给分位
+    assert mscs.composite_percentile([], 1260) == (0, None)
+
+
+def test_composite_percentile_min_samples_is_overridable() -> None:
+    """`min_samples` 是参数（默认 Ruling 4 的 60）：传 3 时 3 个样本够。"""
+    n, pct = mscs.composite_percentile([1.0, 2.0, 3.0], 1260, min_samples=3)
+    assert n == 3
+    assert pct == 100.0
+
+
+# ---------------------------------------------------------------------------
+# 2. payload 纯函数：契约字段 / 直读 extra / 缺键不发明 / NULL 今天
+# ---------------------------------------------------------------------------
+
+
+def test_composite_hero_payload_reads_latest_row_extra() -> None:
+    """最新一行的 `extra` 直读：3 条腿 / 生效权重 0.23 / 下限 0.2（2026-10-12 形状）。"""
+    rows = [_row(d, 20.0 + i) for i, d in enumerate(_days(59))]  # 20..78
+    rows.append(_full_row(date(2026, 10, 12), Decimal("32.8157")))
+
+    payload = mscs.composite_hero_payload(rows)
+
+    assert set(payload) == CONTRACT_KEYS
+    assert payload["as_of"] == date(2026, 10, 12)
+    assert payload["value"] == 32.8157  # Numeric(18,4) → Decimal → float
+    assert payload["window"] == CONTRACT_WINDOW
+    assert payload["sample_count"] == 60
+    # 20..32 共 13 个 <= 32.8157，加末值自身 = 14
+    assert payload["percentile"] == round(100 * 14 / 60, 2)
+    assert payload["insufficient_history"] is False
+    assert payload["legs"] == ["if_basis", "ic_basis", "im_basis"]
+    assert payload["leg_count"] == 3
+    assert payload["total_legs"] == 11
+    assert payload["effective_weight"] == 0.23
+    assert payload["min_effective_weight"] == 0.2
+    assert payload["caliber_version"] == "s1.13-v1"
+
+
+def test_composite_hero_payload_ignores_older_rows_extra() -> None:
+    """只有**最新行**的 `extra` 作数：09 日 10 条腿 / 0.88 不得漏进 12 日的响应。"""
+    older = _row(
+        date(2026, 10, 9),
+        44.5068,
+        participants=[f"leg_{i}" for i in range(10)],
+        n_constituents=11,
+        effective_weight_sum=0.88,
+        min_effective_weight=0.2,
+    )
+    rows = [*[_row(d, 10.0) for d in _days(58)], older, _full_row(date(2026, 10, 12))]
+    payload = mscs.composite_hero_payload(rows)
+    assert payload["as_of"] == date(2026, 10, 12)
+    assert payload["leg_count"] == 3
+    assert payload["effective_weight"] == 0.23
+
+
+def test_composite_hero_payload_absent_extra_is_null_not_invented() -> None:
+    """老行（`extra` 无这些键）→ `legs=null`、计数 0、权重 `null` ——**不发明**。"""
+    rows = [_row(d, 10.0) for d in _days(2)]
+    rows.append(_row(date(2026, 1, 1), 12.0, caliber=None))  # extra=None 的最老行
+
+    payload = mscs.composite_hero_payload(rows)
+
+    assert payload["legs"] is None
+    assert payload["leg_count"] == 0
+    assert payload["total_legs"] == 0
+    assert payload["effective_weight"] is None
+    assert payload["min_effective_weight"] is None
+    assert payload["caliber_version"] is None
+
+
+def test_composite_hero_payload_null_today_value_has_no_percentile() -> None:
+    """今天落 NULL（合成日缺数）→ `value=null` 且 `percentile=null`；
+    `sample_count` 仍如实报尾部有效样本数（60 ≥ 60 → `insufficient_history=false`）。"""
+    rows = [_row(d, 10.0) for d in _days(60)]
+    rows.append(_full_row(date(2026, 10, 12), None))
+    payload = mscs.composite_hero_payload(rows)
+
+    assert payload["as_of"] == date(2026, 10, 12)
+    assert payload["value"] is None
+    assert payload["percentile"] is None
+    assert payload["sample_count"] == 60
+    assert payload["insufficient_history"] is False
+
+
+def test_composite_hero_payload_empty_series() -> None:
+    """一行都没有 → 全空 + `insufficient_history=true`（不是 500、不是 0 分位）。"""
+    payload = mscs.composite_hero_payload([])
+    assert set(payload) == CONTRACT_KEYS
+    assert payload["as_of"] is None
+    assert payload["value"] is None
+    assert payload["sample_count"] == 0
+    assert payload["percentile"] is None
+    assert payload["insufficient_history"] is True
+    assert payload["window"] == CONTRACT_WINDOW
+    assert payload["legs"] is None
+
+
+def test_composite_hero_payload_short_history_truncated_window() -> None:
+    """大窗口打在小序列上（in-process）：`window=1260` 但只有 30 个样本 → 不足。"""
+    payload = mscs.composite_hero_payload([_full_row(d, 10.0) for d in _days(30)])
+    assert payload["window"] == CONTRACT_WINDOW
+    assert payload["sample_count"] == 30
+    assert payload["percentile"] is None
+    assert payload["insufficient_history"] is True
+
+
+# ---------------------------------------------------------------------------
+# 3. 端点级：匿名 200 + 契约键 + 样本不足
+# ---------------------------------------------------------------------------
+
+
+class _FakeSessionFactory:
+    """`async_session_factory()` 替身（默认门禁绝不触 PG）。"""
+
+    def __init__(self, db: Any) -> None:
+        self._db = db
+
+    async def __aenter__(self) -> Any:
+        return self._db
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+
+def _patch_composite_read(monkeypatch: pytest.MonkeyPatch, rows: list[Any]) -> list[tuple]:
+    """把 hero 的读路径换成桩，并记录 `(industry_key, metric_key)` 供断言。"""
+    calls: list[tuple] = []
+
+    async def _fake_history(db: Any, industry_key: str, metric_key: str, limit: int = 240):
+        calls.append((industry_key, metric_key, limit))
+        return list(rows)
+
+    monkeypatch.setattr(mscs, "async_session_factory", lambda: _FakeSessionFactory(object()))
+    monkeypatch.setattr(industry_metric_repo, "get_metric_history", _fake_history)
+    return calls
+
+
+async def test_composite_endpoint_anonymous_200_contract_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**匿名**（无 cookie/token）200；响应键逐字等于契约；`window` 恒 1260。"""
+    rows = [_row(d, 20.0 + i) for i, d in enumerate(_days(59))]  # 20..78
+    rows.append(_full_row(date(2026, 10, 12), Decimal("32.8157")))
+    calls = _patch_composite_read(monkeypatch, rows)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/market/sentiment/composite")  # 不带任何认证头
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert set(body) == CONTRACT_KEYS
+    assert body["as_of"] == "2026-10-12"
+    assert body["value"] == 32.8157
+    assert body["window"] == CONTRACT_WINDOW
+    assert body["sample_count"] == 60
+    assert body["percentile"] == round(100 * 14 / 60, 2)
+    assert body["insufficient_history"] is False
+    assert body["legs"] == ["if_basis", "ic_basis", "im_basis"]
+    assert body["leg_count"] == 3
+    assert body["total_legs"] == 11
+    assert body["effective_weight"] == 0.23
+    assert body["min_effective_weight"] == 0.2
+    assert body["caliber_version"] == "s1.13-v1"
+
+    assert calls and calls[0][0] == "market"
+    assert calls[0][1] == "market_sentiment_composite"
+
+
+async def test_composite_endpoint_insufficient_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """30 个样本（< 60）→ `insufficient_history=true` 且 `percentile=null`。"""
+    _patch_composite_read(monkeypatch, [_full_row(d, 10.0) for d in _days(30)])
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/market/sentiment/composite")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["sample_count"] == 30
+    assert body["insufficient_history"] is True
+    assert body["percentile"] is None
+    assert body["window"] == CONTRACT_WINDOW
+
+
+# ---------------------------------------------------------------------------
+# 4. 真库（`-m e2e`）：只读一致性（默认 deselect）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.e2e
+async def test_composite_endpoint_real_db_consistency() -> None:
+    """真库验收：`sample_count <= window`；不足时不给分位；够时给 0–100 的分位。"""
+    from app.core.database import engine
+
+    try:
+        payload = await mscs.get_composite_hero()
+    finally:
+        await engine.dispose()
+
+    assert payload["window"] == CONTRACT_WINDOW
+    assert 0 <= payload["sample_count"] <= CONTRACT_WINDOW
+    if payload["insufficient_history"]:
+        assert payload["percentile"] is None
+    elif payload["value"] is not None:
+        assert payload["percentile"] is not None
+        assert 0.0 <= payload["percentile"] <= 100.0
+    if payload["legs"] is not None:
+        assert payload["leg_count"] == len(payload["legs"])
