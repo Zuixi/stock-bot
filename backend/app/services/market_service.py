@@ -1040,19 +1040,171 @@ async def get_index_kline(
 
 
 # ---------------------------------------------------------------------------
-# SW Industry tree — DB-backed, built from local XLS imports
+# SW Industry tree — DB-backed, SCD2 membership (same truth as the drill-down)
 # ---------------------------------------------------------------------------
+
+#: 「申万行业网格 / 行业分类」树（``GET /market/sw-industry/tree``）的结果缓存键。
+#:
+#: **``:v2`` 是 payload 版本号，不是装饰。** v1 的 ``stockCount`` 取
+#: ``sw_industry_members``（XLS 快照，整表替换、会陈旧）并按"其下 L3 的并集"上卷，
+#: 与 ``/market/sw-industry/drill/levels/*``（SCD2 ``is_current``）口径不一致——
+#: 实测 L1 合计 5587 vs 5211、29/31 个行业计数不同。v2 改用 SCD2 的**自身层级**成员。
+#: Redis 里可能还躺着 v1 的 payload（TTL 300s）：键带版本号后，旧 payload **不可能**
+#: 被当成新口径返回（旧键只是无人再读，等它自己过期）。失效端
+#: （``app/api/v1/stocks.py`` 的 ``set_sw_tags``）必须删同一个键，否则改完标签会读到旧树。
+SW_TREE_CACHE_KEY = "market:sw-tree:v2"
+
+
+def assemble_sw_industry_tree(
+    *,
+    classes: list[dict[str, Any]],
+    official_symbols: dict[str, set[str]],
+    custom_l2_symbols: dict[str, set[str]],
+    custom_l3_symbols: dict[str, set[str]],
+    uncategorized_rows: list[tuple[str, str | None]],
+) -> list[dict[str, Any]]:
+    """Pure: 已取到的行 → 三级树 payload（不经 DB，单测可直接锁口径）。
+
+    **官方成员 = SCD2 ``is_current`` 的自身层级成员**（``sw_industry_member_periods``，
+    与 ``sw_drilldown_service`` 同一真相）：L1/L2 节点**不再**用"其下 L3 的并集"上卷。
+    两条旧口径都实测有偏：``sw_industry_members`` 快照会陈旧（多算，合计 5587），
+    上卷会系统性偏少（上游存在直接挂在 L1/L2 而没落在任何 L3 的成员，实测 24/31
+    个一级行业）。故每个节点的 ``officialCount`` 恒等于 drill 同 ``industry_code``
+    的 ``member_count``。
+
+    每个节点三个计数，且**恒有 ``stockCount = officialCount + customCount``**：
+
+    * ``officialCount``：SCD2 ``is_current`` 里 ``industry_code == 本节点`` 的股票数；
+    * ``customCount``：用户自定义标签（``stock_custom_sw_tags``）带来的**增量**
+      —— 本节点的标签 ∪ 其下 L3 的标签，再减去已计入 ``officialCount`` 的，
+      故不重复计数；上卷行为（给 L3 打标签会加到 L2/L1）与改动前一致；
+    * ``stockCount``：两者之和 = 去重总数（键名与含义对既有消费端不变）。
+
+    **例外（显式声明，不藏）**：合成 ``OTHER``「其他」桶没有 SCD2 对应物
+    （drill 的 L1 只有 31 个真实行业），``officialCount = 0``；桶里的股票是
+    "既非 SCD2 官方归属、也非用户标签"的残差，按 ``stocks.industry`` /
+    ``csrc_desc`` 分组，其数量全部记在 ``customCount`` 上以维持上面的恒等式
+    ——它**不是**用户标签贡献，UI 对 ``code == "OTHER"`` 应单独标注。
+    """
+    l1_nodes: dict[str, dict[str, Any]] = {}
+    l2_nodes: dict[str, dict[str, Any]] = {}
+    l3_nodes: dict[str, dict[str, Any]] = {}
+    #: 自定义标签集合（L3 节点自身；L2 节点自身 + 其下 L3 上卷）
+    l2_custom: dict[str, set[str]] = {}
+    l1_custom: dict[str, set[str]] = {}
+
+    for cls in classes:
+        code = str(cls["industry_code"])
+        name = str(cls["industry_name"])
+        level = int(cls["level"])
+        official = official_symbols.get(code, set())
+        if level == 1:
+            l1_nodes[code] = {
+                "code": code,
+                "name": name,
+                "officialCount": len(official),
+                "customCount": 0,
+                "stockCount": len(official),
+                "children": [],
+            }
+            l1_custom[code] = set()
+        elif level == 2:
+            l2_nodes[code] = {
+                "code": code,
+                "name": name,
+                "officialCount": len(official),
+                "customCount": 0,
+                "stockCount": len(official),
+                "parent_code": cls["parent_code"],
+                "children": [],
+            }
+            l2_custom[code] = set(custom_l2_symbols.get(code, set()))
+        elif level == 3:
+            custom = custom_l3_symbols.get(code, set())
+            l3_nodes[code] = {
+                "code": code,
+                "name": name,
+                "officialCount": len(official),
+                "customCount": len(custom - official),
+                "stockCount": len(official | custom),
+                "parent_code": cls["parent_code"],
+                "symbols": sorted(official | custom),
+            }
+
+    # Attach L3 to L2（自定义标签随层级上卷；官方成员各层各取，不上卷）
+    for code, l3 in l3_nodes.items():
+        parent = l3.pop("parent_code", None)
+        if parent and parent in l2_nodes:
+            l2_nodes[parent]["children"].append(l3)
+            l2_custom[parent] |= custom_l3_symbols.get(code, set())
+
+    # Attach L2 to L1
+    for code, l2 in l2_nodes.items():
+        parent = l2.pop("parent_code", None)
+        official = official_symbols.get(code, set())
+        custom = l2_custom[code] - official
+        l2["officialCount"] = len(official)
+        l2["customCount"] = len(custom)
+        l2["stockCount"] = len(official) + len(custom)
+        if parent and parent in l1_nodes:
+            l1_nodes[parent]["children"].append(l2)
+            l1_custom[parent] |= l2_custom[code]
+
+    for code, l1 in l1_nodes.items():
+        official = official_symbols.get(code, set())
+        custom = l1_custom[code] - official
+        l1["officialCount"] = len(official)
+        l1["customCount"] = len(custom)
+        l1["stockCount"] = len(official) + len(custom)
+
+    tree = list(l1_nodes.values())
+    if uncategorized_rows:
+        # Group uncategorized symbols by effective industry (industry or csrc_desc)
+        industry_groups: dict[str, list[str]] = {}
+        for symbol, eff_industry in uncategorized_rows:
+            key = eff_industry or _SW_OTHER_UNKNOWN_INDUSTRY
+            industry_groups.setdefault(key, []).append(symbol)
+        other_children = [
+            {
+                "code": f"OTHER_{name}",
+                "name": name,
+                "officialCount": 0,
+                "customCount": len(syms),
+                "stockCount": len(syms),
+                "children": [],
+            }
+            for name, syms in sorted(industry_groups.items())
+        ]
+        tree.append(
+            {
+                "code": _SW_OTHER_LEVEL1_CODE,
+                "name": _SW_OTHER_LEVEL1_NAME,
+                "officialCount": 0,
+                "customCount": len(uncategorized_rows),
+                "stockCount": len(uncategorized_rows),
+                "children": other_children,
+            }
+        )
+    return tree
 
 
 async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
     """Build the three-level SW industry tree from DB with stock counts.
 
     Returns a nested structure:
-    [{ code, name, stockCount, children: [
-        { code, name, stockCount, children: [{ code, name, stockCount, symbols }] }
+    [{ code, name, officialCount, customCount, stockCount, children: [
+        { code, name, officialCount, customCount, stockCount, children: [
+            { code, name, officialCount, customCount, stockCount, symbols }
+        ] }
     ] }]
+
+    官方成员走 SCD2 ``sw_industry_member_periods.is_current``（**与 drill-down 同一
+    真相**，见 :mod:`app.services.sw_drilldown_service`）：L1/L2 取节点自身层级的
+    成员，不再上卷 L3 的并集；``officialCount`` 因此恒等于 drill 的 ``member_count``。
+    用户自定义标签（``stock_custom_sw_tags``）是另一条独立特性，贡献记在
+    ``customCount``，行为与改动前一致（可上卷到 L2/L1）。
     """
-    cache_key = "market:sw-tree"
+    cache_key = SW_TREE_CACHE_KEY
     if cache:
         cached = await cache.get(cache_key)
         if cached is not None:
@@ -1061,27 +1213,38 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
     from app.models.sw_industry import (  # noqa: PLC0415
         StockCustomSwTag,
         SwIndustryClass,
-        SwIndustryMember,
+        SwIndustryMemberPeriod,
     )
 
     async with async_session_factory() as db:
-        # Fetch all classification nodes
+        # Fetch all classification nodes (hierarchy unchanged: SwIndustryClass)
         classes_result = await db.execute(
-            select(SwIndustryClass).order_by(SwIndustryClass.industry_code)
+            select(
+                SwIndustryClass.industry_code,
+                SwIndustryClass.industry_name,
+                SwIndustryClass.level,
+                SwIndustryClass.parent_code,
+            ).order_by(SwIndustryClass.industry_code)
         )
-        all_classes = classes_result.scalars().all()
+        class_rows = [dict(row) for row in classes_result.mappings().all()]
 
-        # Collect L3 symbols from both official members and custom L3 tags
-        symbols_by_code: dict[str, set[str]] = {}
-        official_l3_symbols = await db.execute(
-            select(SwIndustryMember.industry_code, SwIndustryMember.symbol).join(
-                Stock, Stock.symbol == SwIndustryMember.symbol
-            )
+        # Official members = SCD2 is_current, by the node's **own** level.
+        # Deliberately *no* Stock join: the drill's member_count counts every SCD2
+        # row (实测 1 个 is_current 代码不在 stocks：300114 → 650000/650500/650501),
+        # so an inner join here would make officialCount ≠ drill.member_count.
+        official_symbols: dict[str, set[str]] = {}
+        official_rows = await db.execute(
+            select(
+                SwIndustryMemberPeriod.industry_code,
+                SwIndustryMemberPeriod.symbol,
+            ).where(SwIndustryMemberPeriod.is_current.is_(True))
         )
-        for row in official_l3_symbols:
-            symbols_by_code.setdefault(row.industry_code, set()).add(row.symbol)
+        for row in official_rows:
+            official_symbols.setdefault(row.industry_code, set()).add(row.symbol)
 
-        custom_l3_symbols = await db.execute(
+        # User custom tags stay a separate feature (L3 tags keep feeding L3 symbols)
+        custom_l3_symbols: dict[str, set[str]] = {}
+        custom_l3_rows = await db.execute(
             select(StockCustomSwTag.industry_code, StockCustomSwTag.symbol)
             .join(
                 SwIndustryClass,
@@ -1090,12 +1253,12 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
             .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
             .where(SwIndustryClass.level == 3)
         )
-        for row in custom_l3_symbols:
-            symbols_by_code.setdefault(row.industry_code, set()).add(row.symbol)
+        for row in custom_l3_rows:
+            custom_l3_symbols.setdefault(row.industry_code, set()).add(row.symbol)
 
         # Keep L2 custom symbols separately: they contribute to L2/L1 totals
         custom_l2_symbols_by_code: dict[str, set[str]] = {}
-        custom_l2_symbols = await db.execute(
+        custom_l2_rows = await db.execute(
             select(StockCustomSwTag.industry_code, StockCustomSwTag.symbol)
             .join(
                 SwIndustryClass,
@@ -1104,17 +1267,21 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
             .join(Stock, Stock.symbol == StockCustomSwTag.symbol)
             .where(SwIndustryClass.level == 2)
         )
-        for row in custom_l2_symbols:
+        for row in custom_l2_rows:
             custom_l2_symbols_by_code.setdefault(row.industry_code, set()).add(row.symbol)
 
-        # Symbols that do not map to any valid L3 industry should go to "其他"
+        # Symbols that do not map to **any** official node or custom tag go to "其他".
+        # The level filter was dropped on purpose: the official counts above are
+        # own-level, so a member attached directly to an L1/L2 (261 such symbols) is
+        # already counted in that industry — keeping the L3-only filter would count it
+        # a second time inside "其他".
         categorized_symbols_subq = union(
-            select(SwIndustryMember.symbol)
+            select(SwIndustryMemberPeriod.symbol)
             .join(
                 SwIndustryClass,
-                SwIndustryClass.industry_code == SwIndustryMember.industry_code,
+                SwIndustryClass.industry_code == SwIndustryMemberPeriod.industry_code,
             )
-            .where(SwIndustryClass.level == 3),
+            .where(SwIndustryMemberPeriod.is_current.is_(True)),
             select(StockCustomSwTag.symbol)
             .join(
                 SwIndustryClass,
@@ -1132,98 +1299,18 @@ async def get_sw_industry_tree(cache: CacheClient | None = None) -> list[dict]:
             .where(categorized_symbols_subq.c.symbol.is_(None))
             .order_by(Stock.exchange, Stock.symbol)
         )
-        uncategorized_rows = list(uncategorized_result.all())
-        uncategorized_symbols = [r.symbol for r in uncategorized_rows]
-
-        # Group uncategorized symbols by effective industry (industry or csrc_desc)
-        industry_groups: dict[str, list[str]] = {}
-        for row in uncategorized_rows:
-            key = row.eff_industry or _SW_OTHER_UNKNOWN_INDUSTRY
-            industry_groups.setdefault(key, []).append(row.symbol)
-
-    # Build tree from flat list
-    l1_nodes: dict[str, dict] = {}
-    l2_nodes: dict[str, dict] = {}
-    l3_nodes: dict[str, dict] = {}
-
-    l2_symbol_sets: dict[str, set[str]] = {}
-    l1_symbol_sets: dict[str, set[str]] = {}
-
-    for cls in all_classes:
-        if cls.level == 1:
-            l1_nodes[cls.industry_code] = {
-                "code": cls.industry_code,
-                "name": cls.industry_name,
-                "stockCount": 0,
-                "children": [],
-            }
-            l1_symbol_sets[cls.industry_code] = set()
-        elif cls.level == 2:
-            l2_nodes[cls.industry_code] = {
-                "code": cls.industry_code,
-                "name": cls.industry_name,
-                "stockCount": 0,
-                "parent_code": cls.parent_code,
-                "children": [],
-            }
-            l2_symbol_sets[cls.industry_code] = set(
-                custom_l2_symbols_by_code.get(cls.industry_code, set())
-            )
-        elif cls.level == 3:
-            l3_symbols = sorted(symbols_by_code.get(cls.industry_code, set()))
-            l3_nodes[cls.industry_code] = {
-                "code": cls.industry_code,
-                "name": cls.industry_name,
-                "stockCount": len(l3_symbols),
-                "parent_code": cls.parent_code,
-                "symbols": l3_symbols,
-            }
-
-    # Attach L3 to L2
-    for l3 in l3_nodes.values():
-        parent = l3.get("parent_code")
-        if parent and parent in l2_nodes:
-            l2_nodes[parent]["children"].append(l3)
-            l2_symbol_sets[parent].update(l3["symbols"])
-
-    # Attach L2 to L1
-    for l2 in l2_nodes.values():
-        parent = l2.get("parent_code")
-        if parent and parent in l1_nodes:
-            l1_node = l1_nodes[parent]
-            l2["stockCount"] = len(l2_symbol_sets.get(l2["code"], set()))
-            # Remove parent_code from output
-            l2_out = {k: v for k, v in l2.items() if k != "parent_code"}
-            l1_node["children"].append(l2_out)
-            l1_symbol_sets[parent].update(l2_symbol_sets.get(l2["code"], set()))
-
-    # Clean parent_code from L3 output
-    for l2 in l2_nodes.values():
-        for child in l2["children"]:
-            child.pop("parent_code", None)
-
-    for l1_code, l1_node in l1_nodes.items():
-        l1_node["stockCount"] = len(l1_symbol_sets.get(l1_code, set()))
-
-    tree = list(l1_nodes.values())
-    if uncategorized_symbols:
-        other_children = [
-            {
-                "code": f"OTHER_{name}",
-                "name": name,
-                "stockCount": len(syms),
-                "children": [],
-            }
-            for name, syms in sorted(industry_groups.items())
+        uncategorized_rows = [
+            (str(row.symbol), cast(str | None, row.eff_industry))
+            for row in uncategorized_result.all()
         ]
-        tree.append(
-            {
-                "code": _SW_OTHER_LEVEL1_CODE,
-                "name": _SW_OTHER_LEVEL1_NAME,
-                "stockCount": len(uncategorized_symbols),
-                "children": other_children,
-            }
-        )
+
+    tree = assemble_sw_industry_tree(
+        classes=class_rows,
+        official_symbols=official_symbols,
+        custom_l2_symbols=custom_l2_symbols_by_code,
+        custom_l3_symbols=custom_l3_symbols,
+        uncategorized_rows=uncategorized_rows,
+    )
 
     if cache and tree:
         await cache.set(cache_key, tree, _MARKET_CACHE_TTL)

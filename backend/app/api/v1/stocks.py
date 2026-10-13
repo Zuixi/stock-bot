@@ -20,6 +20,7 @@ from app.schemas.stock import StockEnrichedOut, StockListParams, StockOut
 from app.services import (
     daily_basic_service,
     feature_service,
+    market_service,
     quote_service,
     stock_service,
     stock_tag_service,
@@ -296,7 +297,9 @@ async def set_sw_tags(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await db.commit()
-    await cache.delete("market:sw-tree")
+    # 自定义标签进树的 customCount，故必须删**当前**版本的树缓存键
+    # （SW_TREE_CACHE_KEY 带版本号；写死 v1 的旧键会静默失效 → 读到旧树）
+    await cache.delete(market_service.SW_TREE_CACHE_KEY)
     return result
 
 
