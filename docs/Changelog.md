@@ -1,3 +1,16 @@
+## 2026-10-12 - Ruling 64/65 收尾：`freq` 改实测周度 + 下界可见 + **「registry 元数据 vs 落库元数据不一致 ⇒ 序列静默 0 点」升级为机械检查** + S1.13 判据修正
+
+- **`freq` 改实测值**（`53bfe07`）：`public_fund_equity_position` `quarterly` → **`weekly`**，共改 **19 处**（registry `MetricDef.freq`、服务 `FREQS`、registry 描述（删「季报口径」，改为「低频参考值」+「频率：`weekly`（周度）——按产地实测登记」）、`extra.frequency_note`/`publish_lag_note`、字典 §4.2、`data-source.md` 附.10 四处、provider/探针注释、4 处测试断言）；前端 `FREQ_LABELS` 本就有 `weekly→周度`，无需改
+  - **导入期断言未放宽**（只加注释），并**新增单测 `test_service_freq_matches_registry_freq`** 防"服务 ↔ registry freq 漂移"
+  - 控制器核验：表内 `freq=weekly`（455 行，pit/cal 各 455）、`new_fund_share` `monthly`（45/45/45）；`alembic heads` 单头 `b6a1f0c2d7e4`
+- **下界可见（Ruling 64）**：registry 描述新增面向使用者的逐字警示（「⚠️ **下界口径（使用者必读）**：…本值 = **「有值成员之和」即该月真实规模的下界**…**读的人不得把部分成员的和当成全月完整总额**」），字典 §4.2 新增 🔴 条目；**并修掉一处与实现相反的旧文案**（原写"有任一基金为空→整月 NULL"，与实际实现不符）。控制器核验：`extra.is_lower_bound` 行数 **42/45** ✓；`source_tier='calc'`、口径不可复算、背景-only/不进信号链路、`published_at` 为推算值（列为未验证余项）**均保留未动**
+- **★ 一类新缺陷被识别并机械覆盖（Ruling 64 收尾）**：`freq` 是**落库列**且**序列读面按 registry 的 `freq` 过滤** → 改 registry 后，dev 库 455 行旧标签会使 `get_series` **静默返回 0 点**。这与 S1.10 发现的「registry `sources` 与落库 `source` 不一致 ⇒ 序列静默 0 点」**是同一类**：**registry 元数据与落库元数据不一致时，读面静默返空**。
+  - 处置：实现方对 dev 库做了一次**幂等定向元数据重标**（`UPDATE … SET freq='weekly' … AND freq='quarterly'` → 455 行，复测 `get_series` = **455 点**）；控制器实测确认（`public_fund_equity_position` 455 点、`new_fund_share` 45 点）
+  - **⚠️ 其它环境（含生产）若已按 `quarterly` 落过行，需要同一次重标**——首选**重跑幂等回补脚本**（`scripts/backfill_investor_behavior.py`），上游不可达时用等价的定向重标。**必须在部署文档留痕**（归入终审 triage 的部署项）
+  - **裁定**：该类"**元数据漂移 ⇒ 静默返空**"**必须机械化**（AGENTS.md 第 5 条：能机械检测的不得只写文档）——要求**新增检查：对所有已落库的 `metric_key`，断言其落库 `freq`/`source` 与 registry 声明一致**（S1.10 已为 `source` 加过单测，本项把它扩到 `freq` 并覆盖全量 key）。排入下一批
+- **S1.13 判据修正（Ruling 65）**：原判据 `grep -rn "恐贪\|fear.*greed" frontend/src/ docs/` **无命中**按字面**不可满足**——实测 3 处命中**全在 `docs/specs/`**，即**契约层自己陈述该禁令**（`S1-market-sentiment.md:305` 禁令本身、`:313` 原判据本身、`README.md:197` 不作项清单）。**判据意图是禁止产品命名，不是禁止契约陈述禁令** → 改为 `--exclude-dir=specs`，且 `docs/specs/` 内的命中**只允许是禁令陈述本身**；并补明「**自建 composite 允许进信号链路**（S2.2 的示例规则正是消费它），被禁的是**第三方机构编制**的情绪指数」
+- 门禁：pytest **1345 → 1347 passed / 17 skipped / 0 failed**（+2）；ruff/format/mypy/`check_metric_dictionary`/`test_db_isolation_guard`/self_review/doc_gate/tsc 全绿；测试**零库名字面量**
+
 ## 2026-10-12 - S1.12 投资者行为（新成立基金份额 + 公募基金仓位；**开户数判不可得并从产品中移除**）
 
 - **交付**（`076d3dd`，9 文件）：
