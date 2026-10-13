@@ -1,3 +1,17 @@
+## 2026-10-12 - S1.12 投资者行为（新成立基金份额 + 公募基金仓位；**开户数判不可得并从产品中移除**）
+
+- **交付**（`076d3dd`，9 文件）：
+  - **`new_fund_share`** 45 行/45 有值（月频，2023-01…2026-09）
+  - **`public_fund_equity_position`** 455 行/455 有值（2017-12-04…2026-09-30）
+  - 两者口径 `s1.12-v1`；**无新表、零新迁移**（单头 `b6a1f0c2d7e4`）
+- **★ 开户数裁决 = `不可得`，按 spec 从产品中移除**（不是占位空图、不是估算值）：东财 `stock_account_statistics_em` 可调但**最新月停在 2023-08**（101 行；**直连东财 API 实测 `count=101/pages=1` ⇒ 101 即全量，非分页截断**）；中国结算月报是唯一权威产地而 AKShare 未封装 ⇒ **无第二源**。处置：**连 `metric_key` 都不注册**（market scope 39 个 key 里没有它；读面对该键 404，有真库用例）+ 结论落 `INVESTOR_BEHAVIOR_DROPPED_ITEMS` + 字典专段 + 对 4 个占位键名写死**导入期断言**防将来误加
+- **PIT**：两 key 均 `count(*) == count(published_at) == count(caliber_version)`（45/45/45、455/455/455）；**并额外验证了否定性质——`published_at::date = period` 的行数 = 0/0 ⇒ 确认未静默回退 `period`**
+- **spec 判据机械化**：频率与滞后已落 registry `MetricDef.freq` + 前端 `FREQ_LABELS` 徽章 + 字典 4 列表，并**用导入期断言强制描述里同时含「频率」「滞后」**（把文档纪律升级为门禁，符合 AGENTS.md 第 5 条）；公募基金仓位**不进信号链路**由 `grep` 可验
+- **spec 依实测修正（Ruling 64）**：spec 原写公募基金仓位为「**季报**、滞后 ~15 工作日」，但**实测产地并非官方季报**——乐咕乐股 `fund_stock_position_lg` 是第三方**周度观测/估算**（相邻观测间隔 6–8 天占 **90.3%**），且上游 JSON **只有 `date/close/position`**（无报告期/发布日期/编制方法）⇒「股票投资占基金总资产比」**无法从产地复算**。spec 已改为描述真实来源；`source_tier='calc'`（第三方编制，**非官方**）、`freq` 按实测、`published_at` 为**推算值并列为未验证余项**；「仅背景展示、不进信号链路」的硬约束保留
+  - 本条与上文「成交额冒充净买入」是**同一类错误**（**机器可读的标签说了假话**）——不能只靠散文披露兜底，故 `freq` 必须等于实测频率
+- **下界口径须对使用者可见（Ruling 64）**：`new_fund_share` 的 42/45 月是**下界**（字段级缺值 ≈4.8%，均匀散布），实现方选「有值成员之和 + `extra.is_lower_bound=true`」而非「整月判 NULL」（后者实测只剩 3 个月，差 15 倍）——控制器**接受该口径判断**，但补明：机读标记是**必要非充分**条件，registry 描述与字典须以**面向使用者**的措辞写明"下界（有值成员之和）"。**A/C 双计不除以 2 是对的**（同一基金的独立份额类别，各自募集份额相加即总募集）；2019–2022 该产地无数据已登记
+- 门禁：pytest **1306 → 1345 passed / 14 → 17 skipped**（+42 = 39 pass + 3 条件 skip，逐项对账吻合）；ruff/format/mypy/`check_metric_dictionary`(47 行 MISMATCH 0)/self_review/doc_gate 全绿；测试**零库名字面量**，`test_db_isolation_guard` 通过
+
 ## 2026-10-12 - **北向成交额口径重标**（关闭上文那处静默数据缺陷）+ 覆盖矩阵口径更正
 
 - **交付**（`b32e778`，23 文件 +1108/−83）：`northbound_daily` 增加**行级 `amount_kind`**（`net_buy` | `turnover`，**NOT NULL + CHECK**，按 2024-08-19 断点回填）+ `net_amount` **改名** `amount`（**数值一个不改**）；断点常量的**唯一活来源** = `app/services/northbound_caliber.py`；**每个 DTO 点带 `amount_kind`**，信封给窗口口径（`net_buy` / `turnover` / 跨断点 `mixed` / 无行 `None`）
