@@ -170,7 +170,10 @@ test("行情调研追踪：标的分析对比表渲染并跳转个股", async ({
     .poll(async () => table.locator("tbody tr.ant-table-row").count())
     .toBeGreaterThanOrEqual(1);
   await table.locator("tbody tr.ant-table-row").first().click();
-  await page.waitForURL(/\/stock\/\d{6}$/);
+  // 规范路由是 `/company/:symbol`（`/stock/:symbol` 只是留给外部旧链接的 redirect）。
+  // 应用内部链接已统一到规范路由，故断言规范路由。**本用例平时会 skip**（缺 E2E_RESEARCH_USER），
+  // 所以"改导航目标时漏了它"直到带真凭据跑才暴露——这正是 skip 型用例长期潜伏的代价。
+  await page.waitForURL(/\/company\/\d{6}$/);
 });
 
 test("行情调研追踪：行业 ETF 表展示畜牧 ETF 日线", async ({ page }) => {
