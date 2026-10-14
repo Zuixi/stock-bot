@@ -127,7 +127,24 @@ cd frontend && npm ci && npm run build && cd ..
 
 # 启动所有服务
 docker compose up --build -d
+
+# 首次部署后：引导第一个管理员（ADR 0010 邀请制，注册已关闭）
+#   默认账号即平台标准管理员身份：freedom / zeebest@freedom.com
+#   （--username / --email 可覆盖；不传即为默认值）
+#   幂等：用户已存在时只补挂 admin 角色，绝不重置密码。
+#   密码只来自 ADMIN_BOOTSTRAP_PASSWORD 或交互输入（不接受命令行明文，
+#   也绝不硬编码默认密码——种下默认密码就是留后门，这正是本 CLI 存在的理由）。
+docker compose run --rm -e ADMIN_BOOTSTRAP_PASSWORD='<强密码>' auth-service \
+  python -m app.cli bootstrap-admin
 ```
+
+> 首登会被强制改密（临时密码 72 小时内有效），改密后可在「账号设置」里自行
+> 修改用户名 / 邮箱 / 显示名。
+
+> 此后所有账号由该 admin 在「用户管理」控制台开户（`/admin/users`）：
+> 开户时**必须指定角色**，初始密码仅在响应中显示一次，72 小时内有效，
+> 新用户首次登录被强制改密。`POST /auth/register` 恒返回
+> `403 AUTH_REGISTRATION_DISABLED`。
 
 `docker-compose.yml` 编排的服务按依赖关系自动启动：
 

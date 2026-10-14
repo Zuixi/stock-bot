@@ -5,6 +5,7 @@ import {
   AppstoreOutlined,
   TagsOutlined,
   FundOutlined,
+  TeamOutlined,
 } from "@ant-design/icons";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { SearchBar } from "@/features/search/components/SearchBar";
@@ -20,6 +21,7 @@ const NAV_ITEMS = [
   { key: "/market/category", icon: <AppstoreOutlined />, label: "分类" },
   { key: "/tags", icon: <TagsOutlined />, label: "标签" },
   { key: "/watchlist", icon: <StarOutlined />, label: "自选" },
+  { key: "/admin/users", icon: <TeamOutlined />, label: "用户" },
 ];
 
 export function MainLayout() {
@@ -28,7 +30,12 @@ export function MainLayout() {
   // 投研入口只对具 research:read 的账号展示（普通账号没有这个功能，见 docs/decisions/0008）
   const { hasPermission } = useAuthStore();
   const navItems = useMemo(
-    () => NAV_ITEMS.filter((n) => n.key !== "/research" || hasPermission("research:read")),
+    () =>
+      NAV_ITEMS.filter((n) => {
+        if (n.key === "/research") return hasPermission("research:read");
+        if (n.key === "/admin/users") return hasPermission("users:manage");
+        return true;
+      }),
     [hasPermission]
   );
 

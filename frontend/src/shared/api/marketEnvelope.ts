@@ -126,7 +126,7 @@ export function hotBoardDegradedText(
   degradedReason: string | null,
 ): string | null {
   if (source !== "local_grouping") return null;
-  return degradedReason === "eastmoney_unavailable" ? "本地分组（东财板块不可用）" : "本地分组（降级）";
+  return degradedReason === "eastmoney_unavailable" ? "本地分组（上游板块不可用）" : "本地分组（降级）";
 }
 
 // ---- 解包（后端信封 → 前端信封） ----

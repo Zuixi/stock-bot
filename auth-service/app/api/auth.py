@@ -2,25 +2,36 @@
 
 import hmac
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import extract_client_meta as _extract_client_meta
+from app.api.deps import get_session_user, verify_session_csrf
 from app.config import settings
-from app.core.crypto import generate_csrf_token, hash_token, verify_csrf_token
+from app.core.crypto import (
+    generate_csrf_token,
+    hash_password,
+    hash_token,
+    verify_and_update_password,
+    verify_csrf_token,
+)
 from app.core.database import get_db
 from app.core.redis import get_redis
+from app.models.user import AuthUser
 from app.schemas.auth import (
     AuthResponse,
+    ChangePasswordRequest,
     CsrfResponse,
     SessionOut,
+    UpdateProfileRequest,
     UserLoginRequest,
     UserOut,
-    UserRegisterRequest,
 )
 from app.services.audit_service import record_audit_event
-from app.services.auth_service import AuthService
+from app.services.auth_service import AuthService, load_user
 from app.services.session_service import SessionService
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -56,22 +67,6 @@ def _extract_trace_id(request: Request, x_request_id: str | None = None) -> str:
     if isinstance(state_trace, str):
         return state_trace
     return "req-unknown"
-
-
-def _extract_client_meta(request: Request) -> tuple[str | None, str | None]:
-    """Extract client IP and user agent.
-
-    X-Forwarded-For is only honored when ``settings.trust_forwarded_for`` is
-    enabled (deployment behind a trusted reverse proxy such as Traefik);
-    otherwise the socket peer address is used, since a client-supplied
-    X-Forwarded-For header would be spoofable and poison audit trails.
-    """
-    ip = request.client.host if request.client else None
-    if settings.trust_forwarded_for:
-        if forwarded := request.headers.get("X-Forwarded-For"):
-            ip = forwarded.split(",")[0].strip()
-    ua = request.headers.get("User-Agent")
-    return ip, ua
 
 
 def _set_auth_cookies(
@@ -123,29 +118,19 @@ def _clear_auth_cookies(response: Response) -> None:
 
 @router.post(
     "/register",
-    response_model=UserOut,
-    status_code=status.HTTP_201_CREATED,
-    summary="Register a new user account",
+    summary="Self-registration is disabled (invite-only, ADR 0010)",
     dependencies=[Depends(_require_csrf_double_submit)],
 )
-async def register(
-    req: UserRegisterRequest,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
-    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
-) -> UserOut:
-    """Register a new user account with default permissions."""
-    ip, ua = _extract_client_meta(request)
-    trace_id = _extract_trace_id(request, x_request_id)
-    auth_service = AuthService(redis)
-
-    return await auth_service.register_user(
-        db=db,
-        req=req,
-        ip_address=ip,
-        user_agent=ua,
-        trace_id=trace_id,
+async def register() -> None:
+    """Invite-only system: accounts are provisioned by an admin (or the
+    bootstrap CLI). The route stays alive to return an explicit code instead
+    of a misleading 404 for old clients."""
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": "AUTH_REGISTRATION_DISABLED",
+            "message": "本系统为邀请制，请联系管理员开户",
+        },
     )
 
 
@@ -318,31 +303,16 @@ async def get_csrf_token(
     summary="List active sessions for current user",
 )
 async def list_active_sessions(
+    user: AuthUser = Depends(get_session_user),
     stockbot_session: str | None = Cookie(default=None),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ) -> list[SessionOut]:
     """List all active login sessions for the currently authenticated user."""
-    session_id = stockbot_session
-    if not session_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "AUTH_UNAUTHORIZED", "message": "未登录或会话已过期"},
-        )
-
-    session_service = SessionService(redis)
-    session_data = await session_service.get_session(session_id, extend_ttl=True)
-    if not session_data or not session_data.get("user_id"):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "AUTH_UNAUTHORIZED", "message": "未登录或会话已过期"},
-        )
-
-    user_id = uuid.UUID(session_data["user_id"])
-    sessions = await session_service.list_user_sessions(
+    sessions = await SessionService(redis).list_user_sessions(
         db=db,
-        user_id=user_id,
-        current_session_id=session_id,
+        user_id=user.id,
+        current_session_id=stockbot_session,
     )
     return [SessionOut(**s) for s in sessions]
 
@@ -353,28 +323,15 @@ async def list_active_sessions(
 )
 async def revoke_session_by_id(
     target_session_id: str,
+    user: AuthUser = Depends(get_session_user),
     stockbot_session: str | None = Cookie(default=None),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ) -> dict[str, str]:
     """Revoke a specific user session (kick out device)."""
-    current_session_id = stockbot_session
-    if not current_session_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "AUTH_UNAUTHORIZED", "message": "未登录或会话已过期"},
-        )
-
     session_service = SessionService(redis)
-    current_data = await session_service.get_session(current_session_id, extend_ttl=True)
-    if not current_data or not current_data.get("user_id"):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "AUTH_UNAUTHORIZED", "message": "未登录或会话已过期"},
-        )
-
     target_data = await session_service.get_session(target_session_id, extend_ttl=False)
-    if target_data and target_data.get("user_id") != current_data["user_id"]:
+    if target_data and target_data.get("user_id") != str(user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "AUTH_FORBIDDEN", "message": "无权操作其他用户的会话"},
@@ -382,3 +339,133 @@ async def revoke_session_by_id(
 
     await session_service.revoke_session(db, target_session_id)
     return {"message": "会话已成功撤销"}
+
+
+@router.patch(
+    "/profile",
+    response_model=UserOut,
+    summary="Update own profile (username / email / display name)",
+)
+async def update_profile(
+    req: UpdateProfileRequest,
+    request: Request,
+    user: AuthUser = Depends(get_session_user),
+    stockbot_session: str | None = Cookie(default=None),
+    x_csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+) -> UserOut:
+    """Self-service profile edit.
+
+    Authentication runs first (``get_session_user``), so an anonymous caller
+    gets 401 rather than a misleading CSRF 403; the forced-password-change gate
+    also applies here — a temp-password session must fix its password before
+    touching the profile. CSRF is then enforced explicitly (route-level
+    dependencies would run before authentication).
+    """
+    await verify_session_csrf(
+        request, redis, stockbot_session=stockbot_session, x_csrf_token=x_csrf_token
+    )
+    ip, _ = _extract_client_meta(request)
+    auth_service = AuthService(redis)
+    updated = await auth_service.update_profile(
+        db,
+        user.id,
+        username=req.username,
+        email=req.email,
+        display_name=req.display_name,
+        ip_address=ip,
+        trace_id=_extract_trace_id(request, x_request_id),
+    )
+    # Keep the session snapshot (and therefore assertion claims) in step.
+    if stockbot_session and updated.username != user.username:
+        await SessionService(redis).update_session_username(stockbot_session, updated.username)
+    return await auth_service.get_user_profile(db, updated.id)
+
+
+@router.post(
+    "/change-password",
+    summary="Change own password (clears the forced temp-password gate)",
+    dependencies=[Depends(verify_session_csrf)],
+)
+async def change_password(
+    req: ChangePasswordRequest,
+    request: Request,
+    response: Response,
+    stockbot_session: str | None = Cookie(default=None),
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+) -> dict[str, str]:
+    """Verify current password, set the new one, clear the temp gate, kick other devices.
+
+    The caller's own session survives (they just proved who they are); every
+    other session of the user is revoked.
+    """
+
+    if not stockbot_session:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_UNAUTHORIZED", "message": "未登录或会话已过期"},
+        )
+    session_service = SessionService(redis)
+    session_data = await session_service.get_session(stockbot_session, extend_ttl=True)
+    if not session_data or not session_data.get("user_id"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_UNAUTHORIZED", "message": "未登录或会话已过期"},
+        )
+    user_id = uuid.UUID(session_data["user_id"])
+
+    user = await load_user(db, user_id)
+    pwd_credential = next((c for c in user.credentials if c.auth_type == "password"), None)
+    if not pwd_credential or not pwd_credential.password_hash:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_INVALID_CREDENTIALS", "message": "未设置密码认证凭证"},
+        )
+
+    is_valid, _ = verify_and_update_password(req.current_password, pwd_credential.password_hash)
+    if not is_valid:
+        ip, ua = _extract_client_meta(request)
+        await record_audit_event(
+            db,
+            event_type="auth.user.password.change_failed",
+            status="FAILED",
+            user_id=user_id,
+            ip_address=ip,
+            user_agent=ua,
+            trace_id=_extract_trace_id(request, x_request_id),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_INVALID_CREDENTIALS", "message": "当前密码不正确"},
+        )
+
+    now_dt = datetime.now(UTC)
+    pwd_credential.password_hash = hash_password(req.new_password)
+    pwd_credential.password_updated_at = now_dt
+    pwd_credential.must_change_password = False
+    pwd_credential.temp_password_expires_at = None
+    user.failed_attempts = 0
+    user.locked_until = None
+    await db.commit()
+
+    # Keep this session, revoke every other device.
+    await session_service.revoke_all_user_sessions(db, user_id, keep_session_id=stockbot_session)
+    # Refresh session flags so the gate lifts immediately for this session.
+    await session_service.flag_session_must_change_password(stockbot_session, False)
+
+    ip, ua = _extract_client_meta(request)
+    await record_audit_event(
+        db,
+        event_type="auth.user.password.changed",
+        status="SUCCESS",
+        user_id=user_id,
+        ip_address=ip,
+        user_agent=ua,
+        trace_id=_extract_trace_id(request, x_request_id),
+        payload={"self_service": True},
+    )
+    return {"message": "密码已修改，其他设备已退出登录"}

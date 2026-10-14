@@ -141,6 +141,13 @@ export async function request<T>(
       }
     }
 
+    // ADR 0010 gate segment 5: funnel temp-password sessions to /change-password
+    if (errorCode === "AUTH_PASSWORD_CHANGE_REQUIRED" && typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("auth:password-change-required", { detail: { message: errorMessage } })
+      );
+    }
+
     throw new ApiError(response.status, errorMessage, errorCode, errorData.details, traceId);
   }
 

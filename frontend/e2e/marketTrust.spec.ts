@@ -226,7 +226,7 @@ test.describe("热门板块信任面（Task 15）", () => {
     await page.getByRole("tab", { name: "A股全景" }).click();
     const card = page.locator(".ant-card").filter({ hasText: "A股热门板块" });
     await expect15s(card.getByText(/本地分组/).first()).toBeVisible();
-    await expect15s(card.getByText(/东财板块不可用/).first()).toBeVisible();
+    await expect15s(card.getByText(/上游板块不可用/).first()).toBeVisible();
 
     // 列表页同样不得吞掉产地
     await page.goto("/market/hot-sectors/industry");
@@ -340,6 +340,19 @@ test.describe("可点击条目语义与键盘可达（Task 16）", () => {
  * 北向（`moneyflow_hsgt`）上游已停更：卡片要能说「数据源已停更」**并给出最新数据日**，
  * 日期必须取自 payload（`as_of`），换一天文案跟着变——写死日期就是假标注。
  */
+test.describe("公开页不披露数据来源", () => {
+  test("/market 整页不得出现供应商名称", async ({ page }) => {
+    await page.goto("/market");
+    await expect15s(page.getByRole("heading", { name: "行情中心" })).toBeVisible();
+
+    // 数据源构成属竞争资产：公开页不披露（含口径标签/降级文案/提示/Tag）
+    const body = await page.locator("body").innerText();
+    for (const vendor of ["TuShare", "tushare", "东方财富", "东财", "巨潮", "AKShare"]) {
+      expect(body, `/market 不应出现数据源「${vendor}」`).not.toContain(vendor);
+    }
+  });
+});
+
 test.describe("北向停更标注（Task 16）", () => {
   const NORTHBOUND_ITEMS = [
     { date: "2026-09-06", net_amount: 12345.6 },

@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 /**
  * 概念板块 E2E（契约 §2.3 / §3 触点 B/C/D/E）：
- * - 「成分截至 X（东财）」必须用 `membership_as_of` 渲染（历史口径声明是契约要求，不是装饰）；
+ * - 「成分截至 X」必须用 `membership_as_of` 渲染（历史口径声明是契约要求，不是装饰）；
  * - 缺失 ≠ 0：无行情成分的涨跌幅/换手/市值渲染 `--`，不得渲染 0/0.00%；
  * - 板内梯队来自 `/concepts/{code}` 的 echelons（与连板梯队卡同形）；
  * - 连板列同样由 echelons 拍平：不在梯队的成分渲染 `--`（缺失 ≠ 0 板）；
@@ -63,7 +63,7 @@ test("概念详情页展示成分与板内梯队，并宣布成分口径", async
   // 历史口径声明必须在页面上，且必须读 `membership_as_of`（09-17）而不是 `as_of`（09-18）：
   // 两个值刻意不同，认错字段即红。分母 n 同时钉住 priced 口径 = up+flat+down（157+3+5）。
   const asofLine = page.getByText(/成分截至/);
-  await expect(asofLine).toContainText("成分截至 9月17日（东财）");
+  await expect(asofLine).toContainText("成分截至 9月17日");
   await expect(asofLine).not.toContainText("9月18日");
   await expect(asofLine).toContainText("n=165 有行情家数");
   // KPI 瓦片（同一响应的 items 口径，不新造指标）
@@ -207,8 +207,8 @@ test("概念列表走本地聚合全量：口径披露 + 全量分页 + 缺行�
   await expect(caption).toBeVisible();
   await expect(caption).toContainText("行情截至 9月18日");
   // 列表页的 `membership_as_of` 是**全库**成分表最大快照日（可能新于某板块自身快照），
-  // 故措辞是「成分快照 X（全库 · 东财）」，与详情页逐板口径的「成分截至 X（东财）」区分。
-  await expect(caption).toContainText("成分快照 9月17日（全库 · 东财）");
+  // 故措辞是「成分快照 X（全库）」，与详情页逐板口径的「成分截至 X」区分。
+  await expect(caption).toContainText("成分快照 9月17日（全库）");
 
   // (b) 全量 > 东财 Top-10：分页器必须出现第 2 页；东财路径 10 行时不会有 `.ant-pagination-item-2`
   const pager = page.locator(".ant-pagination");

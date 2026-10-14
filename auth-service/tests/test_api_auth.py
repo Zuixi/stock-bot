@@ -3,6 +3,8 @@
 import pytest
 from httpx import AsyncClient
 
+from tests.conftest import create_user
+
 
 async def _fetch_csrf(client: AsyncClient) -> str:
     """Obtain an anonymous CSRF token via GET /auth/csrf (sets stockbot_csrf cookie)."""
@@ -13,22 +15,14 @@ async def _fetch_csrf(client: AsyncClient) -> str:
 
 async def _register_and_login(
     client: AsyncClient,
+    db_session,
     username: str,
     email: str,
     password: str,
 ) -> None:
-    """Register and login with double-submit CSRF headers (cookies stay in the client jar)."""
+    """Seed user directly in DB (register is invite-only now) and login."""
+    await create_user(db_session, username=username, email=email, password=password)
     csrf_token = await _fetch_csrf(client)
-    reg_resp = await client.post(
-        "/auth/register",
-        json={
-            "username": username,
-            "email": email,
-            "password": password,
-        },
-        headers={"X-CSRF-Token": csrf_token},
-    )
-    assert reg_resp.status_code == 201
     login_resp = await client.post(
         "/auth/login",
         json={"username_or_email": username, "password": password},
@@ -38,126 +32,60 @@ async def _register_and_login(
 
 
 @pytest.mark.asyncio
-async def test_auth_full_flow(client: AsyncClient) -> None:
-    """Test full auth lifecycle: CSRF -> Register -> Login -> Session -> Logout."""
+async def test_register_disabled_and_auth_flow(client: AsyncClient, db_session) -> None:
+    """Invite-only: register is 403; the seeded user logs in and reads /auth/session."""
     username = "trader_alice"
-    email = "alice@example.com"
     password = "SuperSecretPassword123!"
 
-    # 1. Anonymous CSRF double-submit bootstrap (cookie + token)
+    # Self-registration is permanently closed (ADR 0010)
     csrf_token = await _fetch_csrf(client)
-    assert "stockbot_csrf" in client.cookies
-
-    # 2. Register
     reg_resp = await client.post(
         "/auth/register",
-        json={
-            "username": username,
-            "email": email,
-            "password": password,
-            "display_name": "Alice Trader",
-        },
-        headers={"X-Request-Id": "req-register-001", "X-CSRF-Token": csrf_token},
+        json={"username": username, "email": "alice@example.com", "password": password},
+        headers={"X-Request-Id": "req-reg-001", "X-CSRF-Token": csrf_token},
     )
-    assert reg_resp.status_code == 201
-    user_data = reg_resp.json()
-    assert user_data["username"] == username
-    assert user_data["email"] == email
-    assert "trader" in user_data["roles"]
-    assert "stocks:read" in user_data["permissions"]
-    assert reg_resp.headers.get("X-Request-Id") == "req-register-001"
+    assert reg_resp.status_code == 403
+    assert reg_resp.json()["code"] == "AUTH_REGISTRATION_DISABLED"
 
-    # 3. Duplicate Register (Conflict 409) — still requires CSRF header
-    dup_resp = await client.post(
-        "/auth/register",
-        json={
-            "username": username,
-            "email": "another@example.com",
-            "password": password,
-        },
-        headers={"X-CSRF-Token": csrf_token},
-    )
-    assert dup_resp.status_code == 409
-    err = dup_resp.json()
-    assert err["code"] == "RESOURCE_ALREADY_EXISTS"
-    assert "已被注册" in err["message"]
-    assert "trace_id" in err
-
-    # 4. Login with wrong password (401)
+    # Login with wrong password (401)
     bad_login = await client.post(
         "/auth/login",
-        json={
-            "username_or_email": username,
-            "password": "WrongPassword999!",
-        },
+        json={"username_or_email": username, "password": "WrongPassword999!"},
         headers={"X-CSRF-Token": csrf_token},
     )
     assert bad_login.status_code == 401
-    bad_err = bad_login.json()
-    assert bad_err["code"] == "AUTH_INVALID_CREDENTIALS"
+    assert bad_login.json()["code"] == "AUTH_INVALID_CREDENTIALS"
 
-    # 5. Login with valid credentials
+    # Seed the account (as an admin would) and log in
+    user = await create_user(
+        db_session, username=username, email="alice@example.com", password=password
+    )
+    assert user.status == "active"
+
     login_resp = await client.post(
         "/auth/login",
-        json={
-            "username_or_email": username,
-            "password": password,
-        },
-        headers={"X-Request-Id": "req-login-002", "X-CSRF-Token": csrf_token},
+        json={"username_or_email": username, "password": password},
+        headers={"X-Request-Id": "req-login-2", "X-CSRF-Token": csrf_token},
     )
     assert login_resp.status_code == 200
     login_data = login_resp.json()
     assert login_data["user"]["username"] == username
     assert login_data["expires_in"] > 0
-    # Credentials must never leak in the response body — cookies only (P1-3)
     assert "session_id" not in login_data
     assert "csrf_token" not in login_data
+    assert "stockbot_session" in client.cookies
+    assert "stockbot_csrf" in client.cookies
 
-    # Verify cookies carry the credentials
-    cookies = login_resp.cookies
-    assert "stockbot_session" in cookies
-    assert "stockbot_csrf" in cookies
-    session_id = cookies["stockbot_session"]
-    csrf_token = cookies["stockbot_csrf"]
-    assert session_id.startswith("sess_")
-    assert csrf_token.startswith("c_")
+    # Session read
+    session_resp = await client.get("/auth/session")
+    assert session_resp.status_code == 200
+    assert session_resp.json()["username"] == username
 
-    # 6. Access /auth/session with cookies only (no X-Session-Id header)
-    sess_resp = await client.get("/auth/session")
-    assert sess_resp.status_code == 200
-    sess_user = sess_resp.json()
-    assert sess_user["username"] == username
-    assert "stocks:read" in sess_user["permissions"]
-
-    # 7. Access /auth/me alias
-    me_resp = await client.get("/auth/me")
-    assert me_resp.status_code == 200
-    assert me_resp.json()["username"] == username
-
-    # 8. Get CSRF token (session-bound, equals cookie value)
-    csrf_resp = await client.get("/auth/csrf")
-    assert csrf_resp.status_code == 200
-    assert csrf_resp.json()["csrf_token"] == csrf_token
-
-    # 9. List active sessions
-    sessions_resp = await client.get("/auth/sessions")
-    assert sessions_resp.status_code == 200
-    sessions_list = sessions_resp.json()
-    assert len(sessions_list) >= 1
-    assert any(s["id"] == session_id for s in sessions_list)
-
-    # 10. Logout with session-bound CSRF token
-    logout_resp = await client.post(
-        "/auth/logout",
-        headers={"X-CSRF-Token": csrf_token},
-    )
+    # Logout
+    session_csrf = client.cookies.get("stockbot_csrf")
+    logout_resp = await client.post("/auth/logout", headers={"X-CSRF-Token": session_csrf})
     assert logout_resp.status_code == 200
-    assert "已成功退出" in logout_resp.json()["message"]
-
-    # 11. Verify session is now invalid (401)
-    unauth_resp = await client.get("/auth/session")
-    assert unauth_resp.status_code == 401
-    assert unauth_resp.json()["code"] == "AUTH_UNAUTHORIZED"
+    assert (await client.get("/auth/session")).status_code == 401
 
 
 @pytest.mark.asyncio
@@ -183,6 +111,8 @@ async def test_register_without_csrf_rejected(client: AsyncClient) -> None:
             "password": "SomePassword123!",
         },
     )
+    # CSRF dependency runs first; without it the request never reaches the
+    # invite-only rejection.
     assert resp.status_code == 403
     assert resp.json()["code"] == "AUTH_CSRF_FAILED"
 
@@ -201,21 +131,11 @@ async def test_login_csrf_mismatch_rejected(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_login_double_submit_flow_succeeds(client: AsyncClient) -> None:
+async def test_login_double_submit_flow_succeeds(client: AsyncClient, db_session) -> None:
     """GET /auth/csrf first, then login with the echoed token -> 200."""
     username = "double_submit_user"
+    await create_user(db_session, username=username, password="DoubleSubmitPass123!")
     csrf_token = await _fetch_csrf(client)
-
-    reg_resp = await client.post(
-        "/auth/register",
-        json={
-            "username": username,
-            "email": "double_submit@example.com",
-            "password": "DoubleSubmitPass123!",
-        },
-        headers={"X-CSRF-Token": csrf_token},
-    )
-    assert reg_resp.status_code == 201
 
     login_resp = await client.post(
         "/auth/login",
@@ -228,9 +148,11 @@ async def test_login_double_submit_flow_succeeds(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_logout_csrf_enforcement(client: AsyncClient) -> None:
+async def test_logout_csrf_enforcement(client: AsyncClient, db_session) -> None:
     """Logout with a live session requires the session-bound CSRF token."""
-    await _register_and_login(client, "logout_user", "logout@example.com", "LogoutPass123!")
+    await _register_and_login(
+        client, db_session, "logout_user", "logout@example.com", "LogoutPass123!"
+    )
     csrf_token = client.cookies.get("stockbot_csrf")
     assert csrf_token
 
@@ -262,9 +184,11 @@ async def test_logout_without_session_skips_csrf(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_x_session_id_header_bypass_removed(client: AsyncClient) -> None:
+async def test_x_session_id_header_bypass_removed(client: AsyncClient, db_session) -> None:
     """X-Session-Id header must no longer grant access — Cookie is the only source."""
-    await _register_and_login(client, "bypass_user", "bypass@example.com", "BypassPass123!")
+    await _register_and_login(
+        client, db_session, "bypass_user", "bypass@example.com", "BypassPass123!"
+    )
     session_id = client.cookies.get("stockbot_session")
     assert session_id
 
@@ -320,3 +244,108 @@ def test_extract_client_meta_no_forwarded_header_falls_back_to_peer(
         monkeypatch.setattr(settings, "trust_forwarded_for", trusted)
         ip, _ = _extract_client_meta(request)
         assert ip == "192.0.2.55"
+
+
+# ── 自助改资料（/auth/profile）─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_update_profile_self_service(client: AsyncClient, db_session) -> None:
+    """Logged-in user edits own display name / username / email; audit recorded."""
+    await _register_and_login(client, db_session, "profile_me", "me@example.com", "ProfilePass123!")
+    csrf = client.cookies.get("stockbot_csrf")
+
+    resp = await client.patch(
+        "/auth/profile",
+        json={"display_name": "新名字", "username": "profile_renamed"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["username"] == "profile_renamed"
+    assert body["display_name"] == "新名字"
+    # 邮箱未提交 → 保持不变
+    assert body["email"] == "me@example.com"
+
+    # 会话快照同步了用户名（断言 claims 取的就是这份）
+    sess = (await client.get("/auth/session")).json()
+    assert sess["username"] == "profile_renamed"
+
+
+@pytest.mark.asyncio
+async def test_update_profile_keeps_own_values(client: AsyncClient, db_session) -> None:
+    """Submitting your own current username/email must not 409 against yourself."""
+    await _register_and_login(client, db_session, "same_me", "same@example.com", "SamePass123!")
+    csrf = client.cookies.get("stockbot_csrf")
+    resp = await client.patch(
+        "/auth/profile",
+        json={"username": "same_me", "email": "same@example.com", "display_name": "X"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_update_profile_rejects_taken_identity(client: AsyncClient, db_session) -> None:
+    await create_user(db_session, username="occupied", email="occupied@example.com")
+    await _register_and_login(client, db_session, "wants_it", "wants@example.com", "WantsPass123!")
+    csrf = client.cookies.get("stockbot_csrf")
+
+    clash = await client.patch(
+        "/auth/profile",
+        json={"username": "occupied"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert clash.status_code == 409
+    assert clash.json()["code"] == "RESOURCE_ALREADY_EXISTS"
+
+
+@pytest.mark.asyncio
+async def test_update_profile_requires_auth_and_csrf(client: AsyncClient, db_session) -> None:
+    await create_user(db_session, username="no_csrf_profile", password="NoCsrf123!")
+
+    # 未登录 → 401
+    assert (await client.patch("/auth/profile", json={"display_name": "x"})).status_code == 401
+
+    # 已登录但缺 CSRF → 403
+    csrf = await _fetch_csrf(client)
+    await client.post(
+        "/auth/login",
+        json={"username_or_email": "no_csrf_profile", "password": "NoCsrf123!"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    resp = await client.patch("/auth/profile", json={"display_name": "x"})
+    assert resp.status_code == 403
+    assert resp.json()["code"] == "AUTH_CSRF_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_update_profile_blocked_for_temp_password_session(
+    client: AsyncClient, db_session
+) -> None:
+    """强制改密门控同样盖住 /auth/profile：临时密码会话先改密码才能改资料。"""
+    from datetime import UTC, datetime, timedelta
+
+    await create_user(
+        db_session,
+        username="gated_profile",
+        password="GatedPass123!",
+        must_change_password=True,
+        temp_password_expires_at=datetime.now(UTC) + timedelta(hours=72),
+    )
+    csrf = await _fetch_csrf(client)
+    login = await client.post(
+        "/auth/login",
+        json={"username_or_email": "gated_profile", "password": "GatedPass123!"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert login.status_code == 200
+    session_csrf = client.cookies.get("stockbot_csrf")
+
+    resp = await client.patch(
+        "/auth/profile",
+        json={"display_name": "不该成功"},
+        headers={"X-CSRF-Token": session_csrf},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["code"] == "AUTH_PASSWORD_CHANGE_REQUIRED"

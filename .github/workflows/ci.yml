@@ -324,15 +324,60 @@ jobs:
           wait_for http://localhost:80/health/live 'auth-service health'
           wait_for http://localhost:80/auth/csrf 'auth csrf'
           wait_for http://localhost:80/.well-known/jwks.json 'jwks'
-      - name: Auth login closed-loop smoke (csrf -> register -> csrf -> login -> protected API)
+      - name: "Auth closed-loop smoke (invite-only: register closed -> bootstrap admin -> provision -> temp password -> forced change -> protected API)"
         run: |
-          # 匿名写操作（注册/登录）均需先 GET /auth/csrf 做 double-submit CSRF
-          CSRF=$(curl -sf -c /tmp/jar -b /tmp/jar http://localhost/auth/csrf | python3 -c 'import sys,json;print(json.load(sys.stdin)["csrf_token"])')
-          curl -sf -c /tmp/jar -b /tmp/jar -X POST http://localhost/auth/register -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"username":"smokeuser","email":"smoke@example.com","password":"SmokePass123!","display_name":"Smoke"}'
-          CSRF=$(curl -sf -c /tmp/jar -b /tmp/jar http://localhost/auth/csrf | python3 -c 'import sys,json;print(json.load(sys.stdin)["csrf_token"])')
-          curl -sf -c /tmp/jar -b /tmp/jar -X POST http://localhost/auth/login -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"username_or_email":"smokeuser","password":"SmokePass123!"}'
-          curl -sf -b /tmp/jar http://localhost/api/v1/watchlists | head -c 200   # 必须登录态 200
-          # 未登录必须 401
+          # 邀请制（ADR 0010）：自助注册已关闭，账号只能由管理员开户或 bootstrap CLI 引导。
+          ADMIN_INIT_PW='SmokeAdminInit123!'
+          ADMIN_OWN_PW='SmokeAdminOwn123!'
+          USER_INIT_PW='SmokeUserInit123!'
+
+          csrf() { curl -sf -c /tmp/jar -b /tmp/jar http://localhost/auth/csrf \
+                     | python3 -c 'import sys,json;print(json.load(sys.stdin)["csrf_token"])'; }
+
+          # 1) 自助注册必须已关闭
+          code=$(curl -s -o /tmp/reg.json -w '%{http_code}' -c /tmp/jar -b /tmp/jar \
+                   -X POST http://localhost/auth/register -H 'Content-Type: application/json' \
+                   -H "X-CSRF-Token: $(csrf)" \
+                   -d '{"username":"smokeuser","email":"smoke@example.com","password":"SmokePass123!"}')
+          if [ "$code" != "403" ]; then echo "✗ 注册应已关闭，实际 HTTP $code"; cat /tmp/reg.json; exit 1; fi
+          grep -q AUTH_REGISTRATION_DISABLED /tmp/reg.json || { echo "✗ 缺少 AUTH_REGISTRATION_DISABLED"; cat /tmp/reg.json; exit 1; }
+
+          # 2) 引导首个管理员（幂等；密码经 env 注入，绝不进 argv）
+          docker compose run --rm -e ADMIN_BOOTSTRAP_PASSWORD="$ADMIN_INIT_PW" auth-service \
+            python -m app.cli bootstrap-admin --username smokeadmin --email smokeadmin@example.com
+
+          # 3) 管理员首登 → 强制改密
+          curl -sf -c /tmp/jar -b /tmp/jar -X POST http://localhost/auth/login \
+            -H 'Content-Type: application/json' -H "X-CSRF-Token: $(csrf)" \
+            -d "{\"username_or_email\":\"smokeadmin\",\"password\":\"$ADMIN_INIT_PW\"}" > /tmp/login.json
+          curl -sf -c /tmp/jar -b /tmp/jar -X POST http://localhost/auth/change-password \
+            -H 'Content-Type: application/json' -H "X-CSRF-Token: $(csrf)" \
+            -d "{\"current_password\":\"$ADMIN_INIT_PW\",\"new_password\":\"$ADMIN_OWN_PW\"}" > /dev/null
+
+          # 4) 开户（roles 必填），一次性临时密码只在响应里出现一次
+          curl -sf -c /tmp/jar -b /tmp/jar -X POST http://localhost/auth/admin/users \
+            -H 'Content-Type: application/json' -H "X-CSRF-Token: $(csrf)" \
+            -d '{"username":"smokeuser","email":"smoke@example.com","roles":["analyst"]}' > /tmp/prov.json
+          TEMP_PW=$(python3 -c 'import json;print(json.load(open("/tmp/prov.json"))["initial_password"])')
+
+          # 5) 新用户用临时密码登录 → /api 必须被「强制改密」门控挡住（403，而不是放行）
+          rm -f /tmp/jar2
+          csrf2() { curl -sf -c /tmp/jar2 -b /tmp/jar2 http://localhost/auth/csrf \
+                      | python3 -c 'import sys,json;print(json.load(sys.stdin)["csrf_token"])'; }
+          curl -sf -c /tmp/jar2 -b /tmp/jar2 -X POST http://localhost/auth/login \
+            -H 'Content-Type: application/json' -H "X-CSRF-Token: $(csrf2)" \
+            -d "{\"username_or_email\":\"smokeuser\",\"password\":\"$TEMP_PW\"}" > /dev/null
+          code=$(curl -s -o /tmp/gated.json -w '%{http_code}' -b /tmp/jar2 http://localhost/api/v1/watchlists)
+          if [ "$code" != "403" ]; then echo "✗ 临时密码会话访问 /api 应被门控，实际 HTTP $code"; cat /tmp/gated.json; exit 1; fi
+          grep -q AUTH_PASSWORD_CHANGE_REQUIRED /tmp/gated.json || { echo "✗ 门控错误码不对"; cat /tmp/gated.json; exit 1; }
+
+          # 6) 改密后门控解除（断言缓存只在成功时写入，故无需等待 TTL）
+          curl -sf -c /tmp/jar2 -b /tmp/jar2 -X POST http://localhost/auth/change-password \
+            -H 'Content-Type: application/json' -H "X-CSRF-Token: $(csrf2)" \
+            -d "{\"current_password\":\"$TEMP_PW\",\"new_password\":\"$USER_INIT_PW\"}" > /dev/null
+          curl -sf -b /tmp/jar2 http://localhost/api/v1/watchlists | head -c 200
+
+          # 7) 未登录必须 401
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost/api/v1/watchlists)" = "401"
       - name: Gateway logs on failure
         if: failure()

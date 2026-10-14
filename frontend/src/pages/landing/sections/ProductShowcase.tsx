@@ -7,12 +7,12 @@ const MOCK_PHASES = [
   { name: "复苏", desc: "价格回升 · 补栏启动" },
 ];
 
-const MOCK_BADGES = ["官方", "协会", "平台"];
+const MOCK_BADGES = ["已核验", "已溯源", "待复核"];
 
 const FEATURES = [
   {
     title: "指标带",
-    desc: "生猪价格、能繁母猪存栏、猪粮比等关键指标横向排布，官方/协会/平台四级来源徽章一眼可辨。",
+    desc: "生猪价格、能繁母猪存栏、猪粮比等关键指标横向排布，溯源徽章一眼可辨。",
   },
   {
     title: "周期相位条",
@@ -26,7 +26,7 @@ const FEATURES = [
 
 /**
  * 产品展示区（id="product"）：固定深底（light 模式同样保持深色，契约 §3）。
- * 左侧为纯 CSS+DOM 绘制的工作台示意（周期相位条 + 来源徽章 + 信号卡），不使用截图，
+ * 左侧为纯 CSS+DOM 绘制的工作台示意（周期相位条 + 溯源徽章 + 信号卡），不使用截图，
  * 保证明暗两种主题下视觉完全一致。
  */
 export function ProductShowcase() {

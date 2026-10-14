@@ -9,7 +9,6 @@ from app.schemas.auth import (
     SessionOut,
     UserLoginRequest,
     UserOut,
-    UserRegisterRequest,
     UserRoleUpdateRequest,
 )
 from app.schemas.error import ErrorDetail, ErrorResponse
@@ -23,7 +22,6 @@ from app.schemas.internal import (
 __all__ = [
     "ErrorResponse",
     "ErrorDetail",
-    "UserRegisterRequest",
     "UserLoginRequest",
     "UserOut",
     "SessionOut",

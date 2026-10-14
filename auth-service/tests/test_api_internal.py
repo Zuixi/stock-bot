@@ -5,24 +5,17 @@ from httpx import AsyncClient
 
 from app.config import settings
 from app.core.jwt_signer import key_manager
+from tests.conftest import create_user
 
 
-async def _register_and_login(client: AsyncClient) -> tuple[str, str]:
-    """Register and login, returning (session_id, csrf_token) from response cookies."""
+async def _register_and_login(client: AsyncClient, db_session) -> tuple[str, str]:
+    """Seed user in DB (invite-only) and login; return (session_id, csrf_token)."""
+    await create_user(
+        db_session, username="internal_test_user", password="InternalTestPassword123!"
+    )
     csrf_resp = await client.get("/auth/csrf")
     assert csrf_resp.status_code == 200
     csrf_token = csrf_resp.json()["csrf_token"]
-
-    reg_resp = await client.post(
-        "/auth/register",
-        json={
-            "username": "internal_test_user",
-            "email": "internal_test@example.com",
-            "password": "InternalTestPassword123!",
-        },
-        headers={"X-CSRF-Token": csrf_token},
-    )
-    assert reg_resp.status_code == 201
 
     login_resp = await client.post(
         "/auth/login",
@@ -37,9 +30,9 @@ async def _register_and_login(client: AsyncClient) -> tuple[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_internal_session_introspect_and_assertion(client: AsyncClient) -> None:
+async def test_internal_session_introspect_and_assertion(client: AsyncClient, db_session) -> None:
     """Test Gateway introspection and Principal Assertion signing."""
-    session_id, csrf_token = await _register_and_login(client)
+    session_id, csrf_token = await _register_and_login(client, db_session)
 
     # 2. Introspect valid session
     intro_resp = await client.post(

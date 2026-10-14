@@ -1,14 +1,14 @@
 const PERKS = [
   {
-    tier: "游客",
-    tierSub: "免注册",
+    tier: "公开行情",
+    tierSub: "免登录",
     items: "实时指数脉搏 · 涨跌分布 · 申万 31 行业全景 · 个股详情",
     fill: 0.34,
   },
   {
-    tier: "注册用户",
-    tierSub: "免费",
-    items: "+ 自选股跟踪 · 自定义标签 · 多设备同步 · 周期信号提醒",
+    tier: "受邀账号",
+    tierSub: "邀请制",
+    items: "+ 自选股跟踪 · 自定义标签 · 多设备同步 · 周期信号提醒 · 行业投研工作台",
     fill: 0.67,
   },
   {
@@ -19,14 +19,14 @@ const PERKS = [
   },
 ];
 
-/** 账号能力三档横条（非价格表）：游客 / 注册 / 建设中 */
+/** 账号能力三档横条（非价格表）：公开行情 / 受邀账号 / 建设中（ADR 0010 邀请制） */
 export function AccountPerks() {
   return (
     <section className="landing-section" aria-label="账号能力">
       <div className="landing-container">
         <div className="landing-section-head">
           <h2 className="landing-section-title">现在能用什么</h2>
-          <p className="landing-section-sub">不搞付费墙——行情数据全公开，注册只增加个性化能力（自选、标签、多设备同步）</p>
+          <p className="landing-section-sub">不搞付费墙——行情数据全公开；账号采用邀请制，由管理员开通，解锁个性化与投研能力</p>
         </div>
         <div className="landing-perks">
           {PERKS.map((p) => (

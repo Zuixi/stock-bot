@@ -223,7 +223,7 @@ export default function ConceptBoardPage() {
                 </Typography.Text>
               </Space>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                成分截至 {data.membership_as_of ? formatCnDate(data.membership_as_of) : "--"}（东财）·
+                成分截至 {data.membership_as_of ? formatCnDate(data.membership_as_of) : "--"}·
                 涨跌按本地聚合（n={pricedCount} 有行情家数）
               </Typography.Text>
             </Space>
@@ -252,7 +252,7 @@ export default function ConceptBoardPage() {
               </KpiTile>
             </Col>
             <Col xs={12} md={6}>
-              <KpiTile title="主力净流入" note="东财快照；缺行显示 --">
+              <KpiTile title="主力净流入" note="板块快照；缺行显示 --">
                 <span>{inflowYi == null ? "--" : `${inflowYi.toFixed(2)} 亿`}</span>
               </KpiTile>
             </Col>

@@ -115,7 +115,7 @@ export function RelatedEvents({ symbol }: { symbol: string }) {
           pagination={false} dataSource={repo.data ?? []} columns={repoCols} locale={{ emptyText: "暂无回购记录" }} />
       )}
       <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
-        数据源：TuShare / 巨潮资讯 · 龙虎榜为全市场最新日筛选本股
+        龙虎榜为全市场最新日筛选本股
       </Typography.Text>
     </Card>
   );
