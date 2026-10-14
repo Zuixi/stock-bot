@@ -1,3 +1,29 @@
+## 2026-10-15 - **前端设计整改 Phase 2：设计系统（字体/数字 token · 量级色阶 · 日期口径 · 动效焦点）**
+
+依 `plans/2026-10-13-frontend-design-remediation.md` §4 执行（`a36a58f`）。**Phase 0 的 0.5 与 0.6 由此转绿**。
+
+- **`npm run check:design` 28 项不达标 → 退出 0 / PASS 54 · FAIL 0**。实测对比度（门禁计算并打印，非手算）：light `--mag-0..4` = 15.81 / 14.42 / 12.36 / 8.64 / **4.78**:1；dark = 10.71 / 9.42 / 7.68 / 5.99 / **4.81**:1 ⇒ 10/10 级 ≥4.5。
+- **量级色阶替代 accent 叠 alpha**：`SwIndustryGrid` 删掉 `ALPHA_MIN/ALPHA_MAX/WHITE_TEXT_THRESHOLD` 与 `colors.accent` 透明度写法，改按成分数分位取 `--mag-0..4`；文字**一律 `--text-primary`**，不再有白字分支（原写法用 accent 编码"数量"，语义错位且对比度不可预测）。
+- **等宽数字统一到 `.num`**：`fontVariantNumeric|font-variant-numeric` 出现次数 **67 → 1**（仅 `theme.css` 的 `.num` 定义处），由 §8.1-5 门禁（≤1）守着。
+- **日期口径（0.6 的红线在此）**：`/market/index/000001.SH` 原先直出 payload 的 ISO 串（`数据截至 2026-10-13T15:00:00Z`），改走 `shared/ui/date.ts` 的 `formatAsOf` ⇒ 现渲染 `数据截至：10月13日收盘 · 2天前`。**关键**：静态扫描**结构上抓不到**这类缺陷（源码里没有 ISO 字面量），故本门禁做成**两层**——静态字面量扫（防将来写死）+ **运行时页面文本扫**（抓现在直出），后者才是真红线。
+- **动效与焦点**：`theme.css` 增 `@media (prefers-reduced-motion: reduce)` 全局降级与全局 `:focus-visible` 焦点环（覆盖 1.4s 无限 shimmer 与 `.sw-cell:hover` 位移）。
+- **字体：裁定的 C1 实测超预算，按原定降级路径走 C2**。子集脚本 `frontend/scripts/subset-fonts.sh` 入库（依赖 pyftsubset，仅构建期）：`noto-sans-sc-{400,500,600}.subset.woff2` = 194744 / 197300 / 197764 B vs 预算 122880 B/字重（超 1.58×，三字重超 2.4×）；`ibm-plex-mono` 3300 / 4096 B 在 15KB 内。⇒ **零字体文件、无 `@font-face`**（不指向缺失文件），`--font-ui` 用系统栈、`--font-num` 用 `ui-monospace`；抽象层两条路都落地，故将来切回 C1 只影响字体文件、不改调用点。
+- **实施中自查抓到 1 个真缺陷（门禁看不见的）**：按计划字面把 `.sw-count` 改 `--text-secondary` 后，实测它在 `--mag-3/--mag-4` 上只有 **2.49:1 / 1.38:1**（暗色 1.69:1）——而**最深的格子正是成分数最多的行业**，截图确实糊。改为与名称行同为 `--text-primary`，层次交给字号。**根因是门禁 §8.1-2 只断言 `--mag-*` 对 `--text-primary`，覆盖不到"第二行用次级色"**（"门禁绿了但屏幕仍不好读"）。
+
+## 2026-10-15 - 修 4 类**既有**缺陷：它们都把症状伪装成"设计改动弄坏了页面"
+
+跑全套 e2e 时出现 **16 failed**（而预期只有 2 条响应式红）。逐条诊断后确认**全部与设计整改无关**，均已修到只剩 Phase 3 的 2 条预期红（`7f7b953`）。**这 4 条的共同教训：只跑"自己改过的 spec"会让既有缺陷长期潜伏，因为它们平时被 skip 或从未与其他 spec 同跑。**
+
+| # | 缺陷 | 症状 | 根因 |
+|---|---|---|---|
+| 1 | 应用内仍导航**遗留路由** `/stock/:symbol`（**12 处 / 10 文件**）| 一条"点击后 URL"断言偶发失败 | 该路径在 `route-manifest` 里是 **redirect** → `/company/:symbol`；应用内部却仍在走"需要重定向的旧路径"。改到规范路由（redirect 保留给外部旧链接）。**注**：6 个 spec 里的 `goto("/stock/...")` **故意不动**——那是在测 redirect 契约 |
+| 2 | `/sentiment` 的 e2e mock 用户**缺 `research:read`** | `sentiment.spec.ts` **11 条失败**，看着像"页面坏了" | IA §1 把 `/sentiment` 与 `/industry` 定为同一权限档；该 mock 还是权限收口之前的 `stocks:read` ⇒ 页面渲染 403 视图、hero 不存在。**controller 早先改了权限却漏了这个 spec**（"改了 A 漏了 B"）。修后 11 failed → 1 failed |
+| 3 | 一条断言写死**已删文案**「用户登录」 | 登录页断言失败 | 该文案被 `319dd8f`（邀请制开户，来自 main）删除 ⇒ 断言自合并起即陈旧，**因当时该文件被 skip 而未暴露**。改为钉住登录表单本身 |
+| 4 | `auth.spec.ts` 断言**迁移前**的 URL | `waitForURL` 超时 | `/watchlist`、`/tags`、`/research` 都已是 IA 迁移的 redirect，`returnTo` 记录的是**兑现后的目标**。三个期望值均**实测**所得（`%2Fme%3Ftab%3Dwatchlist` / `%2Fme%3Ftab%3Dtags` / `%2Findustry`） |
+| 5 | `kline.spec.ts` 悬停点**落在视口之外** | tooltip 断言失败，"时好时坏" | 1280×720 下画布顶边约 y=585、高 400 ⇒ `box.y + height*0.35 ≈ 725` **越出视口** ⇒ `mouse.move` 到不了画布；1440×900 时不越界，故只在特定视口/页面高度下复现。改为先 `scrollIntoViewIfNeeded()` 再算坐标 |
+
+**结果**：全套 e2e **16 failed → 2 failed**（158 passed / 12 skipped，仅剩 Phase 3 预期的响应式红）。
+
 ## 2026-10-15 - **前端设计整改 Phase 1：一级导航改左侧栏（A1）+ 工作台信息去重**
 
 依 `plans/2026-10-13-frontend-design-remediation.md`（owner 裁定 A1/B2/C1/D1/`market/data-sources`）执行 Phase 1（`7413c40` + `423388f` + `048f632`）。
