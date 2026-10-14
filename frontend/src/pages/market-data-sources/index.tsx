@@ -3,6 +3,14 @@ import { Alert, Space, Spin, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { SectionCard } from "@/shared/ui";
 import { fetchDataFreshness, type CoverageDomain } from "@/shared/api/dataFreshness";
+import { fetchNorthbound } from "@/shared/api/marketData";
+import {
+  NORTHBOUND_QUERY,
+  NORTHBOUND_SOURCE,
+  normalizeSourceStatus,
+  sourceStatusColor,
+  sourceStatusText,
+} from "@/shared/config/dataSourceCaliber";
 import "./dataSources.css";
 
 /**
@@ -139,6 +147,15 @@ export default function MarketDataSourcesPage() {
   const refreshable = Object.entries(data?.domains ?? {});
   const stale = refreshable.filter(([, d]) => d.status !== "ok");
 
+  // 北向（§5.8）：与 `NorthboundCard` **同一个 query key + 同一个窗口天数** ⇒ 同一次请求、
+  // 同一份缓存；状态也走同一个 `normalizeSourceStatus`（缺字段归 `discontinued`）。
+  const { data: northbound } = useQuery({
+    queryKey: NORTHBOUND_QUERY.key,
+    queryFn: () => fetchNorthbound(NORTHBOUND_QUERY.days),
+    staleTime: 5 * 60 * 1000,
+  });
+  const nbStatus = normalizeSourceStatus(northbound?.sourceStatus);
+
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <SectionCard
@@ -238,6 +255,44 @@ export default function MarketDataSourcesPage() {
               ) : null}
             </>
           )}
+
+          {/* ── 北向资金（Phase 4 §5.8）──────────────────────────────────────
+              这一块**不是**新增的第二份数据版图常量：`NORTHBOUND_SOURCE` 与工作台的
+              `NorthboundCard` 用的是**同一个常量**（`shared/config/dataSourceCaliber.ts`），
+              连 React Query 的 key 与窗口天数也共用 `NORTHBOUND_QUERY`（同一次请求、
+              同一份缓存）——「一处常量、两处表面、不漂移」就是靠这两件事成立的。
+              为什么它不是 `coverage[]` 里的一行：那张表的域集合由后端
+              `GET /market/data-freshness` 的 `coverage[]` 决定（实测 8 个域，不含北向），
+              前端**不得**往里塞一行本地数据（那就又回到被删掉的静态矩阵那条路）。 */}
+          <div className="ds-northbound" data-testid="data-sources-northbound">
+            <div className="ds-northbound__head">
+              <Typography.Text strong style={{ fontSize: 13 }}>
+                {NORTHBOUND_SOURCE.label}
+              </Typography.Text>
+              <Tag
+                color={sourceStatusColor(NORTHBOUND_SOURCE, nbStatus)}
+                style={{ fontSize: 11, lineHeight: "16px", padding: "0 6px", marginInlineEnd: 0 }}
+                data-source-key={NORTHBOUND_SOURCE.key}
+                data-source-status={nbStatus}
+              >
+                {sourceStatusText(NORTHBOUND_SOURCE, nbStatus)}
+              </Tag>
+            </div>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {NORTHBOUND_SOURCE.scope}
+              {northbound?.asOf ? (
+                <>
+                  ；库内最新 <span className="ds-num num">{northbound.asOf}</span>
+                </>
+              ) : (
+                "；库内最新 --"
+              )}
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 2 }}>
+              产地 <code>{NORTHBOUND_SOURCE.upstream}</code>（公开行情页不披露供应商名，
+              本页是运维向的来源登记，见 e2e/marketTrust.spec.ts 的门禁范围）
+            </Typography.Text>
+          </div>
 
           {failed.length > 0 ? (
             <Alert

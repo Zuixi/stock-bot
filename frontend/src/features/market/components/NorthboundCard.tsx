@@ -1,4 +1,4 @@
-import { Card, Spin, Typography } from "antd";
+import { Card, Spin, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchNorthbound } from "@/shared/api/marketData";
 import type { NorthboundAmountKind, NorthboundWindowKind } from "@/shared/api/marketEnvelope";
@@ -6,6 +6,13 @@ import { EChart } from "@/shared/ui/EChart";
 import { FreshnessNote } from "@/shared/ui";
 import { useTheme } from "@/app/theme-context";
 import type { ThemePalette } from "@/app/theme";
+import {
+  NORTHBOUND_QUERY,
+  NORTHBOUND_SOURCE,
+  normalizeSourceStatus,
+  sourceStatusColor,
+  sourceStatusText,
+} from "@/shared/config/dataSourceCaliber";
 import { fmtNorthYi, fmtTurnoverYi } from "./format";
 import { useMarketPolling } from "../hooks/useMarketPolling";
 
@@ -54,10 +61,13 @@ function buildOption(
   points: Array<{ date: string; amount: number | null }>,
   c: ThemePalette,
   windowKind: NorthboundWindowKind,
+  /** 上游已停更 ⇒ **灰化历史曲线**（§5.8）：数据是历史存档，不再当"现行读数"看 */
+  faint: boolean,
 ) {
   const dates = points.map((p) => p.date.slice(5));
   const values = points.map((p) => (p.amount == null ? null : p.amount / 1e4));
   const signed = windowKind === "net_buy";
+  const lineColor = faint ? c.textSecondary : c.primary;
   return {
     grid: { left: 8, right: 16, top: 24, bottom: 8, containLabel: true },
     tooltip: {
@@ -74,9 +84,11 @@ function buildOption(
         symbol: "circle",
         symbolSize: 4,
         connectNulls: true,
-        lineStyle: { width: 2, color: c.primary },
-        itemStyle: { color: c.primary },
-        // 零轴只在**净买入**口径下有意义（正=净流入 / 负=净流出）；成交额恒正，零轴是噪音。
+        // 灰化（`faint`）：线走次级色 + 半透明，且**取消 hover 强调**——
+        // 停更序列不应该还能被"点亮"，那会让它看起来是活的。
+        lineStyle: { width: 2, color: lineColor, opacity: faint ? 0.6 : 1, type: faint ? [5, 3] : "solid" },
+        itemStyle: { color: lineColor, opacity: faint ? 0.6 : 1 },
+        emphasis: { disabled: faint },
         ...(signed
           ? {
               markLine: {
@@ -97,8 +109,8 @@ export function NorthboundCard() {
   const { colors } = useTheme();
   const { refetchInterval } = useMarketPolling();
   const { data: northbound, isLoading } = useQuery({
-    queryKey: ["market", "northbound", 30],
-    queryFn: () => fetchNorthbound(30),
+    queryKey: NORTHBOUND_QUERY.key,
+    queryFn: () => fetchNorthbound(NORTHBOUND_QUERY.days),
     staleTime: STALE_TIME,
     refetchInterval,
   });
@@ -140,6 +152,15 @@ export function NorthboundCard() {
             ? colors.down
             : colors.flat;
   const totalBlocked = WINDOW_TOTAL_BLOCKED[windowKind];
+  /**
+   * §5.8 的**共享常量**通道：状态只从 payload 读一次，文案与颜色都从
+   * `shared/config/dataSourceCaliber.ts` 的 `NORTHBOUND_SOURCE` 取——本卡与
+   * `/market/data-sources` 用的是**同一个常量**，不各写一句。
+   *
+   * `normalizeSourceStatus` 把缺字段归到 `discontinued`（不确定 ≠ 实时可用）。
+   */
+  const sourceStatus = normalizeSourceStatus(northbound?.sourceStatus);
+  const discontinued = sourceStatus === "discontinued";
   return (
     <Card
       title="北向资金"
@@ -151,9 +172,20 @@ export function NorthboundCard() {
       }
     >
       <Spin spinning={isLoading}>
+        {/* 上游可用性徽章（§5.8）：文案来自 `NORTHBOUND_SOURCE`，与数据来源页同源 */}
+        <div style={{ marginBottom: 4 }} data-testid="northbound-source-badge">
+          <Tag
+            color={sourceStatusColor(NORTHBOUND_SOURCE, sourceStatus)}
+            style={{ fontSize: 11, lineHeight: "16px", padding: "0 6px", marginInlineEnd: 0 }}
+            data-source-key={NORTHBOUND_SOURCE.key}
+            data-source-status={sourceStatus}
+          >
+            {sourceStatusText(NORTHBOUND_SOURCE, sourceStatus)}
+          </Tag>
+        </div>
         {/* `stale_days` → 「N 天前」徽标；停更结论见下一行（带最新数据日） */}
         <FreshnessNote asOf={northbound?.asOf} staleDays={northbound?.staleDays} />
-        {northbound?.sourceStatus === "discontinued" ? (
+        {discontinued ? (
           <Typography.Text
             type="warning"
             data-testid="northbound-discontinued"
@@ -182,7 +214,7 @@ export function NorthboundCard() {
           </span>
         </div>
         {data.length > 0 ? (
-          <EChart option={buildOption(data, colors, windowKind)} height={216} />
+          <EChart option={buildOption(data, colors, windowKind, discontinued)} height={216} />
         ) : (
           <div style={{ height: 216, display: "flex", alignItems: "center", justifyContent: "center", color: colors.flat }}>
             暂无北向数据（盘后自动更新）

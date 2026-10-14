@@ -52,3 +52,19 @@ scan "架构与分层" "schema|repository|_dispatch_task|QUEUES|JWT|mTLS|whiteli
 scan "指标建模与规则引擎" "metric_key|freq|period|rollup|report_version|calc_method|match"
 scan "工程流程与文档" "Alembic|revision|Changelog|AGENTS|best-practices|docker-compose"
 echo "（命中本身不一定是错误；须确认未重复已沉淀的坑）"
+
+# ── 树级硬探针（不是"分类复核"，是**失败**）────────────────────────────────
+# Phase 4 §5.1 / §8.3：品牌字标统一为 `StockBot`。`Stock Bot`（带空格）是**改名前**的写法，
+# 出现在渲染层就是漂移——它不像上面那张映射表那样"命中需人工复核"，而是**确定错误**，
+# 故这里直接扫**全树**（不看 diff）并以非零退出。扫描范围排除 `plans/**` 与 `docs/**`
+# （计划正文里"把 `Stock Bot` 改成 `StockBot`"这句话必须保留，那是历史记录），
+# 也排除 `e2e/fixtures/**`（抓下来的后端 payload 是外部数据的原样存档）。
+brand_matches=$(grep -rn --include=*.tsx --include=*.ts --include=*.html --include=*.css \
+  -e "Stock Bot" frontend/src frontend/index.html frontend/public frontend/e2e 2>/dev/null || true)
+if [ -n "$brand_matches" ]; then
+  echo "  ✘ 品牌字标漂移（应为 StockBot，不得出现 Stock Bot）："
+  printf '%s\n' "$brand_matches" | sed 's/^/      /'
+  echo "      → 见 plans/2026-10-13-frontend-design-remediation.md §5.1"
+  exit 1
+fi
+echo "  ✓ 品牌字标探针：frontend 全树 0 处「Stock Bot」"

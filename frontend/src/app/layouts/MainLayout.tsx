@@ -202,7 +202,7 @@ export function MainLayout() {
           style={{ margin: 0, whiteSpace: "nowrap", color: "var(--accent)", cursor: "pointer" }}
           onClick={() => navigate("/market")}
         >
-          Stock Bot
+          StockBot
         </Typography.Title>
         <div style={{ flex: 1 }} />
         <SearchBar />
@@ -254,7 +254,7 @@ export function MainLayout() {
       ) : null}
 
       <Footer style={{ textAlign: "center", color: "var(--text-secondary)", fontSize: 12 }}>
-        本站数据仅供参考，不构成投资建议。Stock Bot ©{new Date().getFullYear()}
+        本站数据仅供参考，不构成投资建议。StockBot ©{new Date().getFullYear()}
       </Footer>
     </Layout>
   );

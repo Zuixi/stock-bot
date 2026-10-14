@@ -65,7 +65,7 @@ export default function LoginPage() {
       >
         <div style={{ textAlign: "center", marginBottom: 24 }}>
           <Typography.Title level={3} style={{ margin: 0, color: "var(--accent)" }}>
-            Stock Bot 投研工作台
+            StockBot 投研工作台
           </Typography.Title>
           <Typography.Text type="secondary" style={{ fontSize: 13 }}>
             专业的量化选股与行业研究分析平台

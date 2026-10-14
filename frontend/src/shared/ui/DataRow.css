@@ -46,3 +46,50 @@
   font-size: 11px;
   color: var(--text-secondary);
 }
+
+/* ── 多列密排（Phase 4 §5.3）───────────────────────────────────────────────
+ * `DataRowList` 的容器：把 n 个 DataRow 排成 columns 列。
+ * - **边框归容器**：`.datarow` 的 `border-bottom` 在栅格里会让第 3、6、9 个元素
+ *   变成"行尾缺线"的断线；栅格容器自己画一条底线，栅格内的行去掉边框
+ *   （间隔交给 column-gap），视觉上等价于单列的时间线，但每行只有原来的 1/3 宽。
+ * - `min-width: 0` 要留着：`.datarow__title` 的 `ellipsis` 依赖它。
+ *
+ * ⚠️ **退档用的是视口媒体查询，不是 `@container`（实测过，容器查询不生效）**：
+ * 最初写成 `container-type: inline-size` + `@container (max-width: 639px)`，在
+ * 390px 视口下实测**仍是 3 列 × 89px**（`gridTemplateColumns` 打印出三个 89px），
+ * 于是 10/10 个标题全被 ellipsis 截成 `…`——正是 §1 目标 5 要避免的那种不可辨识。
+ * 原因：`.datarow-grid` 自身既是容器又是被查询的后代，Chromium 在这种自引用布局下
+ * 让"谁算容器"变得依赖元素自身的 `container-type`，行为不稳定；换成媒体查询后
+ * 390px 实测 1 列、标题 0 截断。
+ * 代价：列数跟视口而非容器走。对**当前唯一的消费方**（landing 的 1120px 定宽容器）两者
+ * 等价；将来若把 `columns={3}` 放进窄卡片，要在这里补一层 `container-type` 到**外层的
+ * `SectionCard`**（容器查询必须挂在祖先上，不能挂在被查询的元素自己身上）。
+ */
+.datarow-grid {
+  display: grid;
+  gap: 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+.datarow-grid--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.datarow-grid--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.datarow-grid .datarow {
+  padding: 7px 0;
+  min-width: 0;
+}
+/* `<768`：单列（一行一个，恢复自然行距） */
+@media (max-width: 767px) {
+  .datarow-grid--2,
+  .datarow-grid--3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* `768–1023`：两列（与 §5.1 断点契约的「卡片 4→3 列 / 2 列」同档） */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .datarow-grid--3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

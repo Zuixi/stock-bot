@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Children } from "react";
 import { Link } from "react-router-dom";
 import { DeltaText } from "./DeltaText";
 import "./DataRow.css";
@@ -58,5 +59,35 @@ export function DataRow({
     </Link>
   ) : (
     <div className="datarow">{body}</div>
+  );
+}
+
+export interface DataRowListProps {
+  /** 同 `DataRowProps.columns`；`1` = 直接透传 children（**不新增任何 DOM 层**，原调用方零影响） */
+  columns?: 1 | 2 | 3;
+  children: ReactNode;
+}
+
+/**
+ * `DataRow` 的多列栅格容器（Phase 4 §5.3）。
+ *
+ * ⚠️ **`columns === 1` 时不渲染包裹元素**，直接返回 `children`：这样既有单列调用方
+ * （`SectorFlow` 的两处）拿到的 DOM 与改造前**逐节点相同**——「多列」是纯增量能力，
+ * 不是把所有人都塞进一层新 div（那会改变既有的 flex/边框继承，且需要重测所有消费方）。
+ *
+ * 列数按**容器宽度**退档（`@container`，不是视口）：同一份 `columns={3}` 在 1120px 的
+ * landing 容器里是 3 列，在窄屏卡片里自动降成 1 列，调用方不必再关心断点
+ * （`useElementWidth` 那类 JS 测量在这里是多余的——纯 CSS 容器查询就够）。
+ */
+export function DataRowList({ columns = 1, children }: DataRowListProps) {
+  if (columns === 1) return <>{children}</>;
+  return (
+    <div
+      className={`datarow-grid datarow-grid--${columns}`}
+      data-columns={columns}
+      data-rows={Children.count(children)}
+    >
+      {children}
+    </div>
   );
 }

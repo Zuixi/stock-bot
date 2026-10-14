@@ -116,7 +116,10 @@ export function renderPageRoute(route: AppRoute): ReactNode {
 
   const page = (
     <>
-      {notice ? <PlaceholderNotice title={notice.title} hint={notice.hint} /> : null}
+      {/* `path` 是 Phase 4 §5.7 加的：`PlaceholderNotice` 按它取路线图
+          （`shared/config/module-roadmap.ts`）。不传就会只渲染一句"规划中"——
+          静默退化，故这里显式传路由自己的 path。 */}
+      {notice ? <PlaceholderNotice title={notice.title} hint={notice.hint} path={route.path} /> : null}
       <Component />
     </>
   );

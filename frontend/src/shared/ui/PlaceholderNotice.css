@@ -1,0 +1,100 @@
+/*
+ * 占位页路线图骨架（Phase 4 §5.7）。
+ *
+ * 主题口径：走 theme.css 的 CSS 变量。色阶只用 `--border` / `--bg-panel` / `--bg-elevated`
+ * 与文本三级色，不引 accent（避免又把"强调色"当装饰用，那是 §3.6 已经改掉的做法）。
+ */
+
+.placeholder-roadmap {
+  margin-top: 16px;
+  text-align: left;
+}
+
+.placeholder-roadmap__requires {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border);
+  background: var(--bg-elevated, transparent);
+  margin-bottom: 12px;
+}
+
+.placeholder-roadmap__requires-label {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.placeholder-roadmap__grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.placeholder-roadmap__item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg-panel);
+  min-width: 0;
+}
+
+.placeholder-roadmap__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.placeholder-roadmap__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.placeholder-roadmap__needs {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.placeholder-roadmap__foot {
+  margin-top: 12px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+/* 窄屏：单列，且标签不再 nowrap（240px 的 `minmax` 在 390 视口下会溢出） */
+@media (max-width: 520px) {
+  .placeholder-roadmap__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 参数保留自证（IA §5.2 契约）：占位路由必须让"带参访问没被收敛成无参空页"可见 */
+.placeholder-params {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  text-align: center;
+  word-break: break-all;
+}
+
+.placeholder-params code {
+  font-family: var(--font-num);
+  color: var(--text-primary);
+}

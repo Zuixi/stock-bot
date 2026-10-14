@@ -10,6 +10,7 @@ import { CyclePhaseStrip } from "@/features/industry-research/components/CyclePh
 import { SignalPanel } from "@/features/industry-research/components/SignalPanel";
 import { PositionAdviceBar } from "@/features/industry-research/components/PositionAdviceBar";
 import { PriceCostChart } from "@/features/industry-research/components/PriceCostChart";
+import { CostScissorsChart } from "@/features/industry-research/components/CostScissorsChart";
 import { SowTrendChart } from "@/features/industry-research/components/SowTrendChart";
 import { SourceBadge } from "@/features/industry-research/components/SourceBadge";
 import { CompanyComparisonTable } from "@/features/industry-research/components/CompanyComparisonTable";
@@ -58,6 +59,18 @@ function Workbench({ dashboard }: { dashboard: Dashboard }) {
             <Col xs={24} lg={14}>
               <Card size="small" title="猪周期阶段定位" extra={<span style={{ fontSize: 11.5, color: "#86909c" }}>判定因子：猪粮比 · 能繁产能 · 行业盈亏</span>}>
                 <CyclePhaseStrip cycle={cycle} />
+                {/* Phase 4 §5.6：右栏信号面板比阶段条高约 400px，左栏第二张卡之前有一段
+                    空洞。这里补的不是新功能——数据取自与下方 `PriceCostChart` **同一份**
+                    `trends.price_vs_cost`，只是把它渲染成"剪刀差"这一个派生量。 */}
+                <div
+                  style={{
+                    marginTop: 12,
+                    paddingTop: 10,
+                    borderTop: "1px dashed var(--border)",
+                  }}
+                >
+                  <CostScissorsChart trend={dashboard.trends.price_vs_cost} />
+                </div>
               </Card>
             </Col>
             <Col xs={24} lg={10}>

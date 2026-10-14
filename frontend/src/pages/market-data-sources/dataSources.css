@@ -52,3 +52,19 @@
   color: var(--text-secondary);
   word-break: break-all;
 }
+
+/* ── 北向资金来源登记（Phase 4 §5.8）──────────────────────────────────────
+ * 与 `NorthboundCard` 的徽章共用 `shared/config/dataSourceCaliber.ts` 的常量；
+ * 这里只负责排版（左侧竖线把它与「可自愈对账域」区分开，不是又一块版图）。
+ */
+.ds-northbound {
+  border-left: 2px solid var(--border);
+  padding: 6px 0 6px 10px;
+}
+
+.ds-northbound__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}

@@ -462,7 +462,11 @@ test("匿名访问 /sentiment 走既有 RequireAuth 重定向（本页消费受�
   );
   await page.goto("/sentiment");
   await page.waitForURL(/\/login\?returnTo=%2Fsentiment/);
-  await expect(page.getByText("Stock Bot 投研工作台")).toBeVisible();
+  // 品牌字标统一为 `StockBot`（Phase 4 §5.1）；用 `.ant-typography` 容器收窄作用域，
+  // 避免中文重文案页面上 `getByText` 撞 strict mode（计划 §1「新断言必须绕开的两个已知坑」）
+  await expect(page.locator("h3.ant-typography").filter({ hasText: "StockBot 投研工作台" })).toHaveText(
+    /StockBot 投研工作台/,
+  );
   await expect(page.getByRole("button", { name: "登 录" })).toBeVisible();
   // 未登录不得渲染任何模块面板
   await expect(page.getByTestId("sentiment-module-index")).toHaveCount(0);

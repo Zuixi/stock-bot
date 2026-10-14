@@ -3,7 +3,7 @@ status: active
 scope: 前端设计整改——一级导航形态与三层布局表达、工作页信息密度（去重复）、设计系统（字体/数字/量级色阶/对比度/动效/焦点）、响应式四档断点、文案与品牌一致性；来源为 2026-10-13 全站设计评审（1440/1280/390 三档实测截图）
 touches: frontend/src/app/, frontend/src/pages/, frontend/src/features/nav/, frontend/src/features/market/, frontend/src/features/industry-research/, frontend/src/shared/ui/, frontend/src/shared/config/, frontend/src/app/router/, frontend/public/fonts/, frontend/scripts/, frontend/e2e/, docs/design/landing-market-theme.md, docs/Changelog.md, plans/index.md
 updated: 2026-10-15
-next-action: Phase 0 / 1 / 2 / **3 已完成**（Phase 3 = W4 响应式：`responsive.spec.ts` 的 2 条既有红转绿 —— 实测真凶是 AntD `Segmented`（833px）与 `.mf-continuity__tag`（388px），**不是**表格；新增 `/market` 5 Tab 扫描 + `/login` 点名 + B2 逐组件证据。§5.1 契约已落进 `docs/design/landing-market-theme.md` §1.4）。下一步 = Phase 4（W5 文案与打磨，§6 的 5.1–5.8）；注意 §6 的 5.2 已按 §0-D = D1 改写。
+next-action: **Phase 0 / 1 / 2 / 3 / 4 全部已完成**。Phase 4（W5 文案与打磨，§6 的 5.1–5.8）的实测回写见 §6 末节：品牌字标统一为 `StockBot`（含 slop 硬探针）· landing `scrollHeight` 5935→5428 · `DataRow` 三列密排（`@container` 不生效、改媒体查询）· 删 Hero 静态药丸与 `01/02/03`（改四项在途流程）· 信号历史 diff 化（纯函数门禁 + 渲染层 e2e）· 左栏补剪刀差 · 占位页路线图骨架（8 路由 ≥3 项）· 北向「一处常量、两处表面」。**剩余可选项**：§10 的 `status → completed` 与 `plans/index.md` 同步（属控制器的收口动作）；§8.3 的 `landing-placeholder` / `WHITE_TEXT_THRESHOLD` 两条探针**未加**（前者仍是 `MarketPulse` 的失败态文案、不是空盒子；后者已随 §3.7 从代码消失，加一条恒不命中的探针无收益）——理由见 §8.3 的 Phase 4 状态。
 ---
 
 # 前端设计整改 实施计划
@@ -24,7 +24,7 @@ next-action: Phase 0 / 1 / 2 / **3 已完成**（Phase 3 = W4 响应式：`respo
 | 移动端指数卡崩 | 名称截成 `上证…`/`上…`（无法区分），代码 `CN 000001` 逐字竖排，单卡约 230px 高 | `GlobalIndexCardView.tsx` |
 | 移动端横向溢出 | `/market/global` 390px 视口下 `scrollWidth = 749px` | `frontend/src/pages/market-global/index.tsx`（仅新 IA 分支） |
 | 日期四种写法 | `10月9日` / `2026-10-12T15:00:00Z` / `1 天前` / `4 天前` | `pages/market-index/index.tsx` 等 |
-| 品牌字标两种 | `Stock Bot`（壳/登录/<title>）vs `StockBot`（landing/页脚） | `MainLayout.tsx:116`、`login/index.tsx:82`、`landing/sections/LandingNav.tsx:36` |
+| 品牌字标两种 | `Stock Bot`（壳/登录/<title>）vs `StockBot`（landing/页脚） | **Phase 4 §5.1 已统一为 `StockBot`**（`MainLayout.tsx` 两处、`login/index.tsx`、`index.html`；另收口 `admin-users`/`change-password` 的 `document.title`） |
 | 动效/焦点 | 全站 0 处 `prefers-reduced-motion`；`.css` 里只有 1 处 `:focus-visible` | `frontend/src/**/*.css` |
 
 **除"导航溢出"与"左树为空"两项只存在于 IA 分支外，上表其余项在 `main` 上同样成立**（已逐项核对 `main` 的 `market/index.tsx`、`SwIndustryGrid.tsx`、`landing/index.tsx`）。
@@ -401,18 +401,33 @@ contain: inline-size                docSW 390 / filter 256   ← 唯一有效
 
 ## 6. Phase 4（P2）—— W5 文案与打磨（1–2 天）
 
-- [ ] **5.1 品牌字标统一为 `StockBot`**：`MainLayout.tsx:116`、`MainLayout.tsx:139`、`login/index.tsx:82`、`index.html` `<title>`。加入 slop 扫描（命中 `Stock Bot` 即告警）。
-- [ ] **5.2 landing 压缩排序**（**依 §0-D 裁定 D1 改写**：维持"免登录行情台"，**不删区块、不迁移区块**）：
+- [x] **5.1 品牌字标统一为 `StockBot`**：`MainLayout.tsx:205`、`MainLayout.tsx:257`、`login/index.tsx:68`、`index.html` `<title>`；**顺带收口同源的另外三处**（`admin-users` 与 `change-password` 的 `document.title`），否则"字标统一"名不副实。加入 slop 扫描（命中 `Stock Bot` 即**失败**，不是告警）。
+- [x] **5.2 landing 压缩排序**（**依 §0-D 裁定 D1 改写**：维持"免登录行情台"，**不删区块、不迁移区块**）：
   - 6 个区块**全部保留**（`实时市场脉搏` / `今日榜单` / `行业与资金` / `资金与情绪` / `日历` / `快讯`）——D1 推翻了原 D2 的"移入 /market + 删除"方案。
   - 只做**压缩排序**：`今日榜单` 改 3 列密排（见 5.3，唯一真正大幅降高的手段）；区块内边距与标题区按 §4.1 的间距刻度收紧；把"信息量最低的区块"排到最后。
   - **目标不再是 `scrollHeight ≤ 4200`**（那是 D2 的产物）：改为"**在 D1 的 6 区块结构下把 scrollHeight 降到尽可能低**"，并把整改前后实测值一同记入 §7。**不接受**为了达成某个数字而删内容。
   - 唯一例外（与 D1/D2 无关）：`日历` 区块里 `日历即将上线` 的**空占位卡**必须删除或填入真实内容 —— 那是"空盒子"不是"区块"，第 4 屏放空盒子在任何首页定位下都是缺陷。
-- [ ] **5.3 `DataRow` 支持多列**：`shared/ui/DataRow.tsx` 加 `columns?: 1|2|3`（默认 1），`RankingMatrix` 用 3 列。根因：现在 10 行 × 64px = 640px，而每行只放"名称+代码 / 价格+涨跌幅"两个数据点，在 1400px 宽里两端相距 1300px（`DataRow.css` 的 `padding: 8px 0` + 两行文本撑出 64px）。3 列后同屏信息量 ×3，高度 ÷3。
-- [ ] **5.4 删装饰性结构装置**：`CompactHero` 的 `A股行情` 药丸（无信息）；`ProductShowcase` 的 `01/02/03` —— 改为在途流程（原料 → 研判 → 信号 → 仓位）**或**去编号，二选一（`01/02/03` 只在内容真的是序列时才是信息）。
-- [ ] **5.5 投研工作台信号历史 diff 化**：`features/industry-research/components/SignalPanel.tsx` 首条给完整 `触发依据`，后续只渲染变化项（`猪粮比 4.65 → 4.34`、`能繁环比第 3 个月回落`）；连续无变化折叠为 `连续 5 日无变化`。E2E 断言：第 2 条起不包含首条的 `触发依据` 全文。
-- [ ] **5.6 两栏均衡**：`industry/workbench.tsx` 的左栏在 `猪周期阶段定位` 下方补 `价格 vs 成本剪刀差` 小图（数据已在 `PriceCostChart` 的同一 payload），消掉现测约 400px 空洞。
-- [ ] **5.7 占位页升级为路线图**：新建 `frontend/src/shared/config/module-roadmap.ts`（每模块 3–5 个子模块 + 状态 `规划中/接入中`，来源 IA 计划 §3.3），`shared/ui/PlaceholderPage.tsx` 渲染为标签化骨架 + 一句"这个模块需要什么数据"。E2E 断言 8 条占位路由每条 ≥3 个 roadmap 项。
-- [ ] **5.8 北向资金口径一致**：`DataCoverageMatrix` 的 `北向资金` 行由 `planned` 改为 `stale`（新枚举），文案 `已接入 · 上游停更`；`NorthboundCard` 顶部加同一徽章并灰化历史曲线。两处措辞由同一常量导出。
+- [x] **5.3 `DataRow` 支持多列**：`shared/ui/DataRow.tsx` 加 `columns?: 1|2|3`（默认 1），`RankingMatrix` 用 3 列。根因：现在 10 行 × 64px = 640px，而每行只放"名称+代码 / 价格+涨跌幅"两个数据点，在 1400px 宽里两端相距 1300px（`DataRow.css` 的 `padding: 8px 0` + 两行文本撑出 64px）。3 列后同屏信息量 ×3，高度 ÷3。
+  - **落法（与计划字面有一处差异，实测后收口）**：新增的不是 `DataRow` 的 prop 而是**容器** `DataRowList`（`columns` 是布局属性，挂在行上会让每个行元素各自为政）。`columns === 1` 时**不渲染任何新 DOM 层**（既有单列消费方 `SectorFlow` 的节点树一字不变）。
+  - **退档用视口媒体查询，不是 `@container`**：最初写成容器查询，390px 实测**仍是 3 列 × 89px**、10/10 标题被 ellipsis 截断（正是 §1 目标 5 要避免的）；换成媒体查询后 390 实测 **1 列、0 截断**。原因与代价写在 `DataRow.css` 的注释里。
+- [x] **5.4 删装饰性结构装置**：`CompactHero` 的 `A股行情` 药丸（无信息）；`ProductShowcase` 的 `01/02/03` —— 改为在途流程（原料 → 研判 → 信号 → 仓位）**或**去编号，二选一（`01/02/03` 只在内容真的是序列时才是信息）。
+  - 选**改为在途流程**：`原料 → 研判 → 结论 → 执行`，四项各自对应真实组件（指标带 / 周期相位条 / 信号面板 / 仓位建议）。第四项不是新编的营销文案，而是把链路补完（原文案的"信号面板"描述里本就含"仓位建议联动"）。
+  - 视觉复核抓到并修掉一个自造缺陷：链路位置后挂的 `↓` 落在行尾成为**孤儿字形**（读起来像"原料 ↓"），已删，方向由纵向排列 + 位置文字承担。
+- [x] **5.5 投研工作台信号历史 diff 化**：`features/industry-research/components/SignalPanel.tsx` 首条给完整 `触发依据`，后续只渲染变化项（`猪粮比 4.65 → 4.34`、`能繁环比第 3 个月回落`）；连续无变化折叠为 `连续 5 日无变化`。E2E 断言：第 2 条起不包含首条的 `触发依据` 全文。
+  - **算法抽成纯函数** `signalHistoryDiff.ts`（无 React/DOM），且**另有一个不需要凭据与浏览器**的门禁 `frontend/scripts/check-signal-diff.mjs`（挂进 `npm run check:design`）；判据用**库内真实 `reason`**（`industry_signals` where `industry_key='pig'`）。
+  - 折叠文案是 **`连续 N 条无变化`**（不是计划写的"N 日"）：`signal_history` 的条目是**信号变更点**、不是逐日快照，说"日"会把变更点误读成日历日。
+  - 渲染层 E2E `signalPanel.spec.ts` **mock session + dashboard**（该路由要 `research:read`，本环境无凭据）——按 `research.spec.ts:24` 的教训，**不是**只 mock `/auth/session` 的假登录态：页面消费的全部读面一起 mock，没有真接口参与。
+- [x] **5.6 两栏均衡**：`industry/workbench.tsx` 的左栏在 `猪周期阶段定位` 下方补 `价格 vs 成本剪刀差` 小图（数据已在 `PriceCostChart` 的同一 payload），消掉现测约 400px 空洞。
+  - 新增 `CostScissorsChart.tsx`：消费**同一份** `dashboard.trends.price_vs_cost`，只画 `生猪价 − 成本` 这一个派生量（头均盈亏按 `PriceCostChart` 的同一系数 115 元/头折算）。用 SVG 而非第二个 ECharts 实例（150px 高、一条线，且要与上方的双线图在视觉上区分）。点数按容器实测宽度取。
+- [x] **5.7 占位页升级为路线图**：新建 `frontend/src/shared/config/module-roadmap.ts`（每模块 3–5 个子模块 + 状态 `规划中/接入中`，来源 IA 计划 §3.3），`shared/ui/PlaceholderPage.tsx` 渲染为标签化骨架 + 一句"这个模块需要什么数据"。E2E 断言 8 条占位路由每条 ≥3 个 roadmap 项。
+  - **渲染落点是 `PlaceholderNotice` 而不是 `PlaceholderPage`**：8 条占位路由由**路由清单注入** `PlaceholderNotice`，`PlaceholderPage`（带 `SectionCard` 的完整壳）只有 `/me` 用它。按计划字面改 `PlaceholderPage` 会让 8 条路由**一行都不变**——这是本 Phase 最容易做成"改了但没生效"的一条。
+  - **顺带补做 IA §5.2 的参数自证**：`placeholder-pathname` 与查询参数原先只在 `PlaceholderPage` 里渲染 ⇒ 8 条占位路由的契约**从未兑现**（实测 `/search?q=生猪` 页面文本无 `q=生猪`）。已在 `PlaceholderNotice` 补上。
+- [x] **5.8 北向资金口径一致**：~~`DataCoverageMatrix` 的 `北向资金` 行由 `planned` 改为 `stale`（新枚举），文案 `已接入 · 上游停更`~~ —— **该组件与那份静态矩阵已由 `1efe65a` 删除**（`git grep DataCoverage frontend/src` = 0）。按控制器的重新定向落地：
+  - 新建 `frontend/src/shared/config/dataSourceCaliber.ts` 的 `NORTHBOUND_SOURCE`：**唯一常量**，状态文案 + 徽章色 + 编号 key；附 `NORTHBOUND_QUERY`（React Query key + 窗口天数）让两个表面**共用一次请求**。
+  - **表面 A** `NorthboundCard`：顶部加 `已接入 · 上游停更 / 已接入 · 上游日更` 徽章（按 payload 的 `source_status` 选文案），停更时历史曲线**灰化**（虚线 + 半透明 + `emphasis.disabled`，不参与 hover 强调）。
+  - **表面 B** `/market/data-sources`：新增 `data-sources-northbound` 登记块，**同样消费 `NORTHBOUND_SOURCE`**（不新造第二个常量）。页面上**原本没有北向行**——`coverage[]` 实测只有 8 个域且不含北向，而前端**不得**往那张表里塞本地行（那就退回被删掉的静态矩阵那条路）。
+  - 状态归一化走 `normalizeSourceStatus`：**缺字段归 `discontinued`**（"不确定"不得读成"实时可用"）。既有 `FreshnessNote` 的 `数据源已停更` 与测试锚点一字未动。
+
 
 ---
 
@@ -426,7 +441,7 @@ contain: inline-size                docSW 390 / filter 256   ← 唯一有效
 | `/market` A股全景 `scrollHeight` | 3141 | ≤ 1900 | 0.7 基准 |
 | `/market/global` 390px `scrollWidth` | 749 | ≤ 391 | 0.2 断言 |
 | 瓦片文字最小对比度 | 2.10:1 | ≥ 4.5:1 | `check:design` |
-| 首页 `scrollHeight` | 7051 | ≤ 4200（D2） | 0.7 基准 |
+| 首页 `scrollHeight` | 5935（§7.1 同口径基线；计划正文原记 **7051** 为旧版/旧口径） | ~~≤ 4200（D2）~~ **已作废**（D1 裁定）；改为"在 6 区块结构下尽量低" | 0.7 基准 |
 | `.css` 中 `:focus-visible` 规则数 | 1 | ≥ 1 全局 + 局部 | 0.5 断言 |
 | 自绘 `fontVariantNumeric` 处数 | **65**（Phase 0 实测；原写 22 为更早的 grep）→ **67**（Phase 1 新增的 `pages/market-data-sources/` 自带 2 处） | 1（`.num` 定义） | §8.1-5 |
 | `--mag-0..4` 各级对 `--text-primary` 对比度 | 2.10:1（accent 叠 alpha） | 10 级全部 ≥4.5 | §8.1-2 |
@@ -442,6 +457,83 @@ contain: inline-size                docSW 390 / filter 256   ← 唯一有效
 | `--mag-4` | #75859f | **4.78:1** | #4c5872 | **4.81:1** |
 
 > 计划 §4.2 里写的 4.77 / 4.80 与门禁的 4.78 / 4.81 是同一组候选值的四舍五入差；**以门禁为准**（它才是判据）。
+
+---
+
+#### §6 Phase 4 实测回写（task-27，2026-10-15）
+
+**① 首页 `scrollHeight`：5935 → 5428（−507px / −8.5%），同口径（1440×900 匿名、`domcontentloaded` → `networkidle` 有界 12s → 停 1.5s）。**
+
+**逐区块实测（改前 → 改后，1440/1280 同值）**：
+
+| 区块 | 改前 | 改后 | Δ | 靠什么 |
+|---|---|---|---|---|
+| `hero` | 230 | **203** | −27 | 删静态药丸 `A股行情`（§5.4） |
+| `pulse` 实时市场脉搏 | 602 | 602 | 0 | 未动（数据驱动） |
+| `rankings` 今日榜单 | **694** | **357** | **−337** | §5.3 三列密排（10 行 → 4 行栅格） |
+| `sectors` 行业与资金 | 607 | 607 | 0 | 未动 |
+| `money` 资金与情绪 | 276 | 276 | 0 | 未动 |
+| `calendar` 日历 | 183 | **0（区块删除）** | **−183** | §5.2 唯一例外：空占位盒 |
+| `news` 快讯 | 502 | 502 | 0 | 未动 |
+| `product` 工作台长什么样 | 586 | **682** | **+96** | §5.4 三条并列特性 → 四项在途流程（**主动加高**，见下） |
+| 其余（ValueProps / IndustryGrid / AccountPerks / BottomCTA / Footer） | — | — | ≈0 | 仅 §5.2 的区块间距 16→12、上下 padding 24/48→16/32 |
+
+> **`product` 变高不是回退，是有意的取舍**：§5.4 的二选一里选的是"改为在途流程"，
+> 而完整链路是**四项**（原料 → 研判 → 结论 → 执行）⇒ 比原三条多一项、且新增的第四项
+> 是真实链路位置（原文案"信号面板"的描述里本就写着"与仓位建议联动"）。已把每项 padding
+> 20→12、gap 16→14 压回去一部分；**没有为了数字把第四项删掉**——那正是 §5.2 说的
+> "不接受为了达成某个数字而删内容"。
+>
+> **净账**：−27（hero）+ −337（rankings）+ −183（日历）+ −96（product 反向）+ 间距≈−24
+> ≈ −667；实测 −507 ⇒ 差额来自 `rankings` 改后 4 行的次像素与间距重新分配。**四舍五入不掩盖**。
+
+**② 三列密排的实测判据（不是"看起来更密"）**：
+
+```
+[BASE] landing@1440 datarow-grid box={"x":177,"y":961,"width":1086,"height":212} rows=10
+        columns=348.656px 348.672px 348.656px   标题截断 0/10
+[BASE] landing@390  datarow-grid box={"x":41,"y":1304,"width":308,"height":530} rows=10
+        columns=308px                            标题截断 0/10   scrollWidth=390=innerWidth
+```
+
+`@390` 的 **1 列 + 0 截断**是修出来的，不是自然结果：最初用 `@container` 时实测**3 列 × 89px、
+10/10 标题全被 ellipsis 截断**（正是 §1 目标 5 要避免的），换成视口媒体查询后才对。
+详细原因与代价写在 `frontend/src/shared/ui/DataRow.css` 的注释里。宽屏 0/10 截断、390 0/10 截断。
+
+**③ 5.5/5.6/5.7/5.8 的机械证据**：
+
+| 条 | 证据 |
+|---|---|
+| 5.5 | 纯函数门禁 `node scripts/check-signal-diff.mjs` → **全部通过**（22 条断言，用库内真实 `reason`）；渲染层 `e2e/signalPanel.spec.ts` → **5 passed**（含"第 2 条起不复述首条全文"与"折叠条数守恒"） |
+| 5.6 | `e2e/signalPanel.spec.ts` 的 `cost-scissors` 用例 → 1 passed（点数为 payload 有效月数） |
+| 5.7 | `e2e/placeholder.spec.ts` → **4 passed**；逐路由打印：`/company 5 · /news 4 · /macro 5 · /valuegraph 3 · /strategy 5 · /risk 4 · /trade 4 · /search 4`（全部 ≥3） |
+| 5.8 | `e2e` 未新增断言（既有 `marketTrust` / `marketDataFace` 的北向用例继续绿）；两态实测文本见下 |
+
+**5.8 两态实测**（既有 mock 机制把 `source_status` 覆写成 `discontinued`；`live` 为真实 payload）：
+
+```
+northbound(live)         = 北向资金 | 盘后成交额 · 亿元 | 已接入 · 上游日更 | 数据截至 10月12日 3 天前 | 当日成交额 24.80亿 | 近30日累计成交额 363.51亿
+northbound(discontinued) = 北向资金 | 盘后成交额 · 亿元 | 已接入 · 上游停更 | 数据截至 10月12日 3 天前 | 数据源已停更（最新 10-12） | 当日成交额 24.80亿 | 近30日累计成交额 363.51亿
+data-sources             = 北向资金 | 已接入 · 上游日更 | 沪深股通日频序列（2024-08-19 起为成交额口径；此前为净买入，两者不可拼接）；库内最新 2026-10-12 | 产地 tushare.moneyflow_hsgt
+```
+
+> 两处的 `已接入 · …` **逐字来自同一个 `NORTHBOUND_SOURCE`**（`shared/config/dataSourceCaliber.ts`），
+> 且共用一个 `NORTHBOUND_QUERY`（React Query key + 窗口天数）⇒ 同一次请求、同一份缓存。
+> ⚠️ 现状真实 payload 是 `source_status="live"`（`as_of=2026-10-12`，3 天前），
+> 故两处现在都显示 **`上游日更`**；`上游停更` 分支由既有 e2e 的 mock 驱动（本环境无法
+> 让上游真的停更来取证）。两态都实测过，截图在 evidence 里。
+
+**④ 视觉复核（截图在 `.superpowers/sdd/2026-10-12-investment-research-platform-ia/evidence/phase4-*.png`）**：
+**自检抓到 2 个自造缺陷并已修**——
+
+1. **`@container` 不生效**（见 ②）：390 下三列 89px、标题全截断。
+2. **流程位置后的 `↓` 是孤儿字形**：`原料 ↓ / 研判 ↓ / 结论 ↓` 渲染在行尾，读起来像
+   "原料 ↓"这个整体，且最后一项没有箭头 ⇒ 视觉上像漏了一个。已删箭头，方向由纵向排列 +
+   位置文字承担（`ProductShowcase.tsx` 注释写明）。
+3. **顺带发现（不是本次改动引入，但本次才被断言抓到）**：IA §5.2 的「把 query 与路径参数
+   原样显示出来」对 8 条占位路由**从未兑现**——那两个 `data-testid` 只在 `/me` 用的
+   `PlaceholderPage` 里渲染。已在 `PlaceholderNotice` 补 `ParamSelfProof`。
+
 
 
 ### 7.1 整改前 `scrollHeight` 基准快照（0.7，2026-10-14 实测）
@@ -502,6 +594,21 @@ contain: inline-size                docSW 390 / filter 256   ← 唯一有效
 > **Phase 2 状态**：**未做**（`WHITE_TEXT_THRESHOLD` 已随 §3.7 从代码里消失，但 `Stock Bot` 的改名是 **5.1** 的范围）。
 > 三条探针一起在 W5 落地更合适——否则 Phase 2 加的两条会在 Phase 5 之前**每天命中既有文案**（`Stock Bot` 现在仍有 4 处），
 > 把 slop_scan 变成噪声。**这是有意的跨 Phase 推迟，不是遗漏。**
+>
+> **Phase 4 状态（据实测收口，三条不是"都加"）**：
+> - **`Stock Bot` —— 已加，且是硬探针（不是告警）**：`scripts/slop_scan.sh` 末尾新增树级检查，
+>   扫 `frontend/src` + `index.html` + `public` + `e2e`，命中即以 **exit 1** 失败。
+>   为什么升级成失败：它不像上面那张映射表"命中需人工复核"，而是**确定错误**（改名前才有的写法）。
+>   实测双向：把 `index.html` 的 `<title>` 临时改回 `Stock Bot` ⇒ **EXIT=1** 并打印命中行；还原后 ⇒ **EXIT=0**。
+>   扫描范围**刻意排除** `plans/**` 与 `docs/**`——那两处的 `Stock Bot` 是"改成 StockBot"这句历史记录本身。
+> - **`landing-placeholder` —— 未加（且不该加）**：Phase 4 删掉的是 landing 日历区块里的**空盒子**，
+>   但 `.landing-placeholder` 这个类**仍然活着**：`MarketPulse` 在行情取不到时用它渲染
+>   "行情数据暂不可用，请稍后重试"（失败态文案，不是空盒子）。按类名扫描会把它判成违规——
+>   一条会命中**正确代码**的探针只会被关掉，不如不加。真正要守的判据是"landing 不存在空占位卡"，
+>   而它已经被 §5.2 的实现（区块删除）与 `e2e/landing.spec.ts` 的结构断言覆盖，不是靠类名。
+> - **`WHITE_TEXT_THRESHOLD` —— 未加**：该常量已随 §3.7 从代码中**整体删除**（§8.1-2 现在直接
+>   逐级算 `--mag-*` 对 `--text-primary` 的对比度并断言 ≥4.5），加一条"不得出现某标识符"的探针
+>   是恒不命中的空转，无收益。
 
 ### 8.4 CI 挂钩
 

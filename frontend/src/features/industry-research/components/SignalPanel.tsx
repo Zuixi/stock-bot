@@ -1,5 +1,11 @@
 import { Timeline, Tooltip } from "antd";
 import type { Signal } from "@/shared/api/industryResearch";
+import {
+  buildSignalHistoryRows,
+  type SignalChange,
+  type SignalHistoryRow,
+} from "./signalHistoryDiff";
+import "./SignalPanel.css";
 
 interface Props {
   current: Signal;
@@ -17,9 +23,76 @@ function metaOf(type: string) {
   return SIGNAL_META[type] ?? { color: "#8c8c8c", desc: "" };
 }
 
-/** 交易信号面板：当前信号徽章 + 历史信号时间线 */
+const HISTORY_LIMIT = 6;
+
+/** 变化项的一行：`猪粮比 4.65 → 4.34`（同一指标换了值）或 `+ 新出现的判据`。 */
+function ChangeLine({ change }: { change: SignalChange }) {
+  if (change.kind === "value") {
+    return (
+      <div className="signal-change" data-change-kind="value">
+        <span className="signal-change__from">{change.from}</span>
+        <span className="signal-change__arrow">→</span>
+        <span className="signal-change__to">{change.text}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="signal-change" data-change-kind="changed">
+      <span className="signal-change__new" aria-label="新增判据">
+        ＋
+      </span>
+      {change.text}
+    </div>
+  );
+}
+
+/** 历史行正文（Phase 4 §5.5：首条给完整触发依据，后续只给变化项，连续无变化折叠） */
+function RowBody({ row, index }: { row: SignalHistoryRow; index: number }) {
+  if (row.kind === "collapsed") {
+    return (
+      <div
+        className="signal-history__collapsed"
+        data-testid={`signal-history-collapsed-${index}`}
+        data-collapsed-count={row.entries}
+      >
+        连续 {row.entries} 条无变化
+        {row.effectiveDate !== row.untilDate ? (
+          <span className="signal-history__range">
+            {" "}
+            （{row.effectiveDate} ~ {row.untilDate}）
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+  if (row.changes.length === 0) {
+    return <div className="signal-history__nochange">与上一条无变化</div>;
+  }
+  return (
+    <div className="signal-history__changes" data-testid={`signal-history-changes-${index}`}>
+      {row.changes.map((c, i) => (
+        <ChangeLine key={`${c.kind}-${i}-${c.text}`} change={c} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 交易信号面板：当前信号徽章 + 历史信号时间线。
+ *
+ * **Phase 4 §5.5 把历史从"每条抄一遍全集"改成 diff**：规则引擎的 `触发依据` 是规则全集，
+ * 相邻两条往往只差一个数——原先一屏 6 条重复同一句话，要逐字找差异。现在：
+ * - 首条给**完整** `触发依据`（`RowBody` 的 `index === 0` 分支渲染 `full` 段）；
+ * - 自第 2 条起只渲染**变化项**（`猪粮比 4.65 → 4.34`、`＋ 新判据`）；
+ * - 连续 ≥2 条完全无变化 → 折叠成一行 `连续 N 条无变化`（**条目数不丢**：折叠行带
+ *   `data-collapsed-count`，且信号日期区间照旧上屏）。
+ *
+ * diff 算法在 `./signalHistoryDiff.ts`（纯函数，边界与对齐规则写在那个文件里）。
+ */
 export function SignalPanel({ current, history }: Props) {
   const meta = metaOf(current.signalType);
+  const rows = buildSignalHistoryRows(history.slice(0, HISTORY_LIMIT));
+  const firstFull = history.length > 0 ? (history[0].reason ?? "") : "";
 
   return (
     <div>
@@ -64,22 +137,29 @@ export function SignalPanel({ current, history }: Props) {
 
       <Timeline
         style={{ marginTop: 16, marginBottom: 0 }}
-        items={history.slice(0, 6).map((s) => {
-          const m = metaOf(s.signalType);
+        items={rows.map((row, index) => {
+          const m = metaOf(row.signalType);
           return {
-            color: m.color,
+            color: row.kind === "collapsed" ? "#d9d9d9" : m.color,
             children: (
-              <div>
+              <div data-testid={`signal-history-row-${index}`} data-row-kind={row.kind}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 9 }}>
-                  <b style={{ fontSize: 14, color: m.color }}>{s.signalType}</b>
-                  <span style={{ fontSize: 12, color: "#86909c", fontFamily: '"Bahnschrift","Segoe UI",sans-serif' }}>
-                    {s.effectiveDate}
+                  <b style={{ fontSize: 14, color: m.color }}>{row.signalType}</b>
+                  <span style={{ fontSize: 12, color: "#86909c" }} className="num">
+                    {row.effectiveDate}
                   </span>
                 </div>
-                {s.reason && (
-                  <div style={{ fontSize: 12, color: "#86909c", marginTop: 2, lineHeight: 1.55 }}>
-                    {s.reason}
+                {/* 首条：完整触发依据（其余条不再重复这段文本——这就是 diff 化的全部意义） */}
+                {index === 0 && firstFull ? (
+                  <div
+                    className="signal-history__full"
+                    data-testid="signal-history-full"
+                    style={{ fontSize: 12, color: "#86909c", marginTop: 2, lineHeight: 1.55 }}
+                  >
+                    {firstFull}
                   </div>
+                ) : (
+                  <RowBody row={row} index={index} />
                 )}
               </div>
             ),

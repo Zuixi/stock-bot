@@ -207,17 +207,8 @@ html {
   padding: 64px 0 12px;
 }
 
-.landing-hero-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 1px 10px;
-  margin-bottom: 4px;
-}
+/* Phase 4 §5.4：`.landing-hero-status`（「A股行情」静态药丸）已删除——
+   规则与 JSX 一起删，不留无人消费的样式（死 CSS 是下一轮 review 的噪音源）。 */
 
 .landing-hero--compact .landing-hero-h1 {
   font-size: clamp(24px, 3vw, 30px);
@@ -236,14 +227,16 @@ html {
 }
 
 /* ── 行情台（公开区块纵列，锚点跳转留吸顶导航位） ───────── */
+/* Phase 4 §5.2 压缩排序：区块间距 16 → 12、上下内边距 24/48 → 16/32。
+   D1 裁定下"降高"只能靠版式，这三处是纯留白，收紧不删任何内容。 */
 .landing-market {
-  padding: 24px 0 48px;
+  padding: 16px 0 32px;
 }
 
 .landing-market-inner {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .landing-root .section-card {
@@ -502,19 +495,26 @@ html {
   line-height: 1.6;
 }
 
-/* 右侧：特性列表 */
-.landing-feature {
+/* 右侧：在途流程（Phase 4 §5.4，取代原 `.landing-feature` 的 01/02/03 编号列表） */
+.landing-flow {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: none;
+}
+
+.landing-flow__item {
   display: flex;
-  gap: 16px;
-  padding: 20px 0;
+  gap: 14px;
+  padding: 12px 0;
   border-bottom: 1px solid #2a2e39;
 }
 
-.landing-feature:last-child {
+.landing-flow__item:last-child {
   border-bottom: none;
 }
 
-.landing-feature-num {
+.landing-flow__marker {
   flex-shrink: 0;
   width: 32px;
   height: 32px;
@@ -522,20 +522,34 @@ html {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 15px;
   color: #ffffff;
   background: #2962ff;
 }
 
-.landing-feature-title {
+.landing-flow__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+/* 「原料 / 研判 / 结论 / 执行」是链路位置，不是装饰编号——用文字承载，可被读屏取用 */
+.landing-flow__step {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: #2962ff;
+}
+
+.landing-flow__title {
   font-size: 15.5px;
   font-weight: 700;
   color: #d1d4dc;
   margin: 0 0 4px;
 }
 
-.landing-feature-desc {
+.landing-flow__desc {
   font-size: 13px;
   color: #787b86;
   margin: 0;
