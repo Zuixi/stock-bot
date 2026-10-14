@@ -232,15 +232,52 @@ test.describe("B2：窄屏下图表仍在（§4.5 逐组件）", () => {
 });
 
 /**
- * `PriceCostChart`（`/industry/pig` 的「价格 vs 成本剪刀差」）**未取到窄屏截图**：
- * 该路由要求 `research:read`，本环境没有可用凭据（实测匿名 401、
- * `/auth/login` 无已知口令；`E2E_ADMIN_USER` / `E2E_ADMIN_PASSWORD` 未设置），
- * 故它由 `responsive.spec.ts` 的 `/industry/pig@390`（此时测的是 `/login`）覆盖"不溢出"，
- * 但**组件本身**的窄屏形态没有截图证据。已如实记入 task-26 报告 §4.5。
+ * `PriceCostChart`（`/industry/pig` 的「生猪价格 vs 行业成本」）。
  *
- * 另：`/market/industry/110000` 的 treemap/`SectorHeatmap` 已覆盖"treemap 窄屏不隐藏"，
- * 而 `market-heatmap` 页（`HeatmapTreemap`）覆盖了"标签防重叠"。
+ * 该路由要 `research:read`，**必须真登录**：
+ * `research.spec.ts:24` 已把这条坑写在文件里——「只 mock `/auth/session` 是**假登录态**：
+ * 没真 cookie 时接口 401 → 全局 `auth:unauthorized` 清态 → 布局反复重挂、卡片永不出现」。
+ * （本条最初写成 `test.skip` 说"环境缺凭据"，方向是对的，但漏了仓库已有的
+ *  `E2E_RESEARCH_USER` / `E2E_RESEARCH_PASSWORD` 约定与真登录写法，故一直没跑起来。
+ *  现在按 `research.spec.ts` 的同一写法落地：有凭据则真断言，无凭据则显式 skip。）
  */
-test.skip("PriceCostChart：窄屏形态（需 research:read 凭据，环境缺）", async () => {
-  /* 见上方注释；留一条显式 skip 以免"漏了"被读成"忘了" */
+const PRICE_COST_USER = process.env.E2E_RESEARCH_USER ?? "";
+const PRICE_COST_PASSWORD = process.env.E2E_RESEARCH_PASSWORD ?? "";
+const PRICE_COST_CARD = ".ant-card:has-text('生猪价格 vs 行业成本')";
+
+test("PriceCostChart：窄屏仍在且有宽度（真登录，见 E2E_RESEARCH_USER）", async ({ page }) => {
+  test.skip(
+    !PRICE_COST_USER || !PRICE_COST_PASSWORD,
+    "需 E2E_RESEARCH_USER / E2E_RESEARCH_PASSWORD（具 research:read 的账号；只 mock /auth/session 是假登录态）"
+  );
+
+  const csrf = (await (await page.request.get("/auth/csrf")).json()).csrf_token as string;
+  const res = await page.request.post("/auth/login", {
+    headers: { "X-CSRF-Token": csrf },
+    data: { username_or_email: PRICE_COST_USER, password: PRICE_COST_PASSWORD },
+  });
+  expect(res.status(), "e2e 登录失败（凭据无效 / 无 research:read）").toBe(200);
+
+  for (const width of [NARROW, WIDE]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/industry/pig", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 12_000 }).catch(() => {});
+    await page.waitForTimeout(1200);
+
+    // 容器按标题定位（该组件自身不挂 testid）；图必须**画出来了**：卡内真有 canvas
+    await expect(
+      page.locator(PRICE_COST_CARD),
+      `@${width} 未渲染该卡（登录态或权限没生效）`
+    ).toHaveCount(1);
+    await expectPresentAndSized(page, `${PRICE_COST_CARD} canvas`, `PriceCostChart@${width}`);
+    expect(
+      await page.locator(`${PRICE_COST_CARD} canvas`).count(),
+      `PriceCostChart@${width}：没有 canvas，图没画出来`
+    ).toBe(1);
+    await shoot(page, "price-cost-chart", width, PRICE_COST_CARD);
+  }
+
+  // 收尾登出：每次运行都会新建会话（TTL 24h），不收回会在 auth 库/Redis 里越积越多
+  const csrf2 = (await page.context().cookies()).find((c) => c.name === "stockbot_csrf")?.value;
+  if (csrf2) await page.request.post("/auth/logout", { headers: { "X-CSRF-Token": csrf2 } });
 });
