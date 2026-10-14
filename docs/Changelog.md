@@ -1,3 +1,39 @@
+## 2026-10-15 - **前端设计整改 Phase 3：响应式四档断点（B2 全量响应式）** —— 0.2 红线转绿
+
+依 `plans/2026-10-13-frontend-design-remediation.md` §5 执行（`c9fb36c` + `7e28366`）。**Phase 0 最后一条红线（0.2 响应式）由此转绿**；至此 **0.2–0.6 全部绿**。
+
+**修掉两个横向溢出（并纠正了"真凶是谁"）**
+
+| 路由 | 改前 → 改后 `scrollWidth` | **实际溢出的元素** |
+|---|---|---|
+| `/market/global@390` | 874 → **390** | **AntD `Segmented`**（7 段共 833px，每项 `nowrap` 不收缩）撑宽 `Space.Item`→卡片体→`Col(min-width:auto)` 到 837px |
+| `/market/global@768` | 874 → **768** | 同上 |
+| `/market?tab=moneyflow@390` | 425 → **390** | `.mf-continuity__tag`（口径 badge，388px `nowrap` 不可压缩）|
+
+- **不是表格**：`.ant-table-content` 本来就 `overflow-x:auto`（390 下宽 308 / scrollWidth 900，表在容器内滚动）——按计划字面"给表格加滚动容器"**修不掉**这个溢出。真正的修法是 `contain: inline-size`；实测 `max-width:100%` / `width:100%` / `padding-inline` **三种写法全部无效**（百分数会回指"被内容撑出来的那个宽度"）。
+- **新增 Tab 级扫描**（计划 §4.2b）：0.2 的路由集只覆盖**路由级**，`/market?tab=moneyflow` 这类 **Tab 级**布局此前**没有任何门禁守着**。现已把 `/market` 五个 Tab × 390/768 纳入断言，并加"**Tab 确实切过去了**"的正对照；另把 `/login` 点名进路由集（原先 `/industry/pig`、`/me` 匿名会重定向到 `/login`，"登录页自己溢出"会表现为**别的**路由红）。
+- **`responsive.spec.ts`：14 → 44 条**，现 **49 passed / 1 skipped**。
+
+**B2 逐组件窄屏形态（§4.5）——不让任何图表在窄屏消失**（这是 B2 与计划原稿的关键差别：原稿说 `<768` 做"行情速览"，**隐藏** sparkline/热力图/K 线；裁定 B2 后"隐藏即违约"）
+
+| 组件 | 窄屏形态 | 证据 |
+|---|---|---|
+| 指数卡 sparkline | **始终渲染**，点数按 `ResizeObserver` 实测容器宽度定（原 `width ≥ 768` 才渲染的条件作废） | `phase3-sparkline-{narrow,wide}*.png` |
+| K 线 | **不隐藏**：`dataZoom` 初始视窗 30 根（宽屏 120），数据全量在手、手势缩放保留 | `phase3-kline-*` |
+| `market-heatmap` treemap | **保留 treemap**：`labelLayout.hideOverlap` + 按画布宽度收矩形预算（900 → 172 块） | `phase3-heatmap-*` |
+| `SectorHeatmap` treemap | 同上 | `phase3-sector-heatmap-*` |
+| `IndustryMetricStrip` | 窄屏改为定宽网格（不再内联换行） | `phase3-industry-metric-strip-*` |
+| `PriceCostChart` | **窄屏仍在且画出来了**（实测 @390 `342×304`、@1440 `684×359`，标题/图例/双序列/数据标签齐备） | `phase3-price-cost-chart-*` |
+
+- 逐组件证据做成了**可运行的 spec**（`e2e/responsive-b2.spec.ts`，6 条）而不只是截图 ⇒ 可机械回归。
+- **四档断点契约写进 `docs/design/landing-market-theme.md` §1.4**（含 B2 作废说明、实现锚点表、实现状态、两个假绿坑），契约不再只活在计划里。
+
+**`PriceCostChart` 那条 skip 的收尾（`7e28366`）**：Phase 3 留了一条显式 `test.skip`，理由是"该路由要 `research:read`，环境没有凭据"。**方向是对的**——`research.spec.ts:24` 早已写明「只 mock `/auth/session` 是**假登录态**：没真 cookie 时接口 401 → 全局 `auth:unauthorized` 清态 → 布局反复重挂、卡片永不出现」（controller 试图用 mock 绕过，**实测完全复现该描述**，故 controller 的批评是错的、agent 是对的）。但该条漏了仓库**已有的**约定：环境变量应为 `E2E_RESEARCH_USER` / `E2E_RESEARCH_PASSWORD`（不是 admin 那两个），且要真登录（`GET /auth/csrf` → `POST /auth/login` 带 `X-CSRF-Token` 双提交 → 收尾登出）。现已按 `research.spec.ts` 同一写法落地：有凭据则真断言、无凭据则显式 skip（实测 1 skipped / 5 passed；带凭据 6 passed）。临时探测账号用完即删（4 会话 + 1 凭据 + 1 用户，残留 0）。
+
+**未达成（如实记录，非"忘了"）**：① `768–1023` 热力图「默认 Top10 列表（可切 treemap）」未做——标签收敛后 treemap 已可读，而 B2 只把列表定为**附加视图**（属新能力而非整改），已写进设计文档 §1.4「实现状态」；② `sparkPointsForWidth` 在当前数据量下几乎不触发（数据源只给 30 点、88px 槽位算出 29 点）——机制已实现且可机械回归（`data-spark-points` vs `data-spark-total`），要看到真下采样需后端给更多点。
+
+**两个新发现的假绿坑（值得机械化）**：① `window.echarts` 在应用包里**不挂**（实测 `undefined`）⇒ 写成 `if (inst) { 断言 }` 会得到**永不执行的假断言**；② canvas 渲染器下**没有 `zr-*` DOM**，故"读 slider 拖动点 / 标签矩形"那两条路根本不存在。
+
 ## 2026-10-15 - **前端设计整改 Phase 2：设计系统（字体/数字 token · 量级色阶 · 日期口径 · 动效焦点）**
 
 依 `plans/2026-10-13-frontend-design-remediation.md` §4 执行（`a36a58f`）。**Phase 0 的 0.5 与 0.6 由此转绿**。
