@@ -1,3 +1,40 @@
+## 2026-10-14 - **合并 main（PR #14 + #15）到研究平台分支**：两套并行开发首次并轨
+
+**背景**：`feat/research-platform-ia`（106 提交，研究平台全部页面）与主 checkout 上的**登录系统重构**（邀请制开户 + 管理员控制台，PR #15）**各自基于 `25a6371` 并行开发**，互不知情。结果是**混装部署**：`auth_service`/`frontend` 从主 checkout 构建（有重构、无研究页），`backend_api` 从本分支构建（有研究后端）——用户以 admin 登录后**看不到任何研究页面**，因为**那份 bundle 里根本没有这些页面**（实测：`admin/users` 命中 2 个分块，`SentimentModulePanel`/`sw-industry/drill`/`chunk-error-recovery`/`market_sentiment_composite` **全部 0 命中**，58 个分块 vs 本分支的 74）。
+
+**不是权限问题**：查的是**实际数据库**，`admin` 确实持有 `research:read`。（中途曾据 `git diff` 怀疑"新种子里 admin 漏了 research:read"，**那是 diff 假象**——未改动的旧行不出现在 diff 里。）
+
+### 合并结果（`8a42743`）
+- **冲突 7 个，逐个按语义解决**，不是照抄一侧：`Changelog`（main 新条目在前 + 去重同一「覆盖率只读巡检」条目）· `plans/index.md`（保留 completed 行 + 追加双方新计划）· `features.md`（保留我的 `/me` 收敛行 + main 新增三行，丢掉两边过期行）· `auth.spec.ts`（取 main，注册已关闭）· `router/index.tsx`（取我的清单驱动版）· `MainLayout.tsx`（取我的 `NAV_ROOTS` 派生版）。
+- **ADR 编号冲突的裁决（判据翻转，值得记）**：PR #15 的 invite-only ADR 占了 main 的 `0010`，与本分支的 `0010-polymorphic-watch-and-tags` 相撞。
+  - 初判"未发布的让号"（我分支 5 篇 +2 位移）→ **实测后撤回**：该方向要约 **55–70 处**引用修改（含 `docs/specs/**` 绑定契约），且 `0011→0013→0015` 是**链式替换**、有双重应用风险；
+  - 实际改走**反向**（main 的 invite-only `0010→0015`）：仅约 **15 处**，且本分支早已把 market-derived 统一为 `0014`（39 处已是正确状态，一动不用动）。
+  - 依据：`doc_gate` 的「只增不改」实现**对改名直接 `continue`**（基准里不存在的新路径跳过），编号最终仍连续；且该篇是**几小时前**才落 main 的。结果 `0001–0015` 连续无重复，`doc_gate` 实测通过。
+  - **教训**：**"谁让号"要看两边的引用面，不要凭规则默认**。规则只给方向，代价要给数据。
+- **PR #15 的路由补登记**：本仓库以 `route-manifest.ts` 为唯一真相（main 那版是手写 `<Route>` JSX），故 `/admin/users`（`users:manage`）与 `/change-password`（只要登录）必须登记进清单 + `route-elements` 懒加载 + **IA §4「新增路由」表（4 → 6 条）** + `check-routes.mjs` 的 `NEW_S1_ROUTES` + `ARCHITECTURE §6`。`check-routes` 对 IA §4 那张表做**双向比对**，漏一处即红——本次正是它先报「表外路由（未经 IA 冻结，需先改契约）」。
+- **`/admin/users` 刻意不进顶栏**：IA §1 的顶栏是 **10 个一级导航**，且 `check-routes` **机械断言 `NAV_ROOTS.length === 10`**（main 那版把它放进顶栏是因为 main 上没有这份清单门禁）。入口改放**账户菜单 `UserMenu`**，仅 `users:manage` 可见。
+
+### 顺带修掉一个本分支自身的 bug
+`/sentiment` 的**导航可见性**原写 `authenticated`，而它的**路由守卫**要 `research:read` ⇒ **普通登录用户看得到入口、点进去撞 403**。已统一为 `permission: research:read`（`MainLayout.tsx` 的 `NAV_PRESENTATION`），并在注释里写明"可见性必须与清单里的 `permission` 一致"。
+（这是本会话第 **4** 次同类错误——**改了 A 处漏了 B 处**。已记入遗留：应把"清单 `permission` ↔ 导航 `visibility` 一致性"也做成门禁，`check:routes` 目前只核对清单↔文档。）
+
+### 验证（全部在同一份合并后代码上）
+| 项 | 结果 |
+|---|---|
+| 前端门禁 | `tsc` 0 · `build` 0 · `check:routes` **86 项** ✓（§6 36 行一致）· `check:design` ✓ |
+| 文档门禁 | `doc_gate` **16 项 ✓**（含 ADR 只增不改 + 编号连续）· `self_review` ✓ |
+| 后端 | pytest **1392 passed / 17 skipped / 0 failed**（与合并前一致，无回归） |
+| auth-service | **105 passed** |
+| **Playwright 实测（同一份代码起栈）** | 匿名 `/sentiment` → 跳登录 ✓ · 登录页已**无「新用户注册」**页签 ✓ · **首登强制改密链路可用** ✓ · admin 看 `/sentiment` **7 张表有数据 + hero 含「N/11 条腿」** ✓ · 顶栏显示「情绪分析」✓ · 账户菜单有「用户管理」✓ · `/admin/users` 可访问 ✓ |
+| **trader 路径**（真实会话，非匿名） | 顶栏 = 市场/资讯/公司分析/宏观分析/价值网图谱/策略引擎/风险管理/交易执行 —— **「情绪分析」与「行业分析」都不在** ✓；`metrics` → **403** ✓；直访 `/sentiment` → **显式 403 权限页** ✓（不是空表） |
+
+> ⚠️ **一次自我纠错**：上述 trader 导航断言**第一次是假绿**——那次 `login` 其实返回 401，页面处于**匿名态**（只显示 市场/公司分析 两个公开项），所以"不显示情绪分析"**空洞地成立**。重做时接住了开户响应里的 `initial_password` 字段、确认 `login → 200`、`metrics → 403` 后才算数。**教训：断言"某东西不存在"之前，必须先证明自己处在能看见它的状态里。**
+
+### 收尾
+- 测试账号（`sentiment_verify` / `sentiment_trader` / `sentiment_trader2`）**全部删除**（auth 库剩余 `sentiment_*` = 0）；测试全走你的**正道**（`app.cli bootstrap-admin` + `/auth/admin/users`），没有手写库。
+- 三个镜像 `backend_api`/`frontend`/`auth_service` **同一批次构建（13:50:43–54）= 同一份代码**，混装消除。
+- 分支 `8a42743`：**落后 main 0 · 领先 107**，工作树干净。
+
 ## 2026-10-14 - 公开页停止披露数据来源（竞争资产不外露）
 
 - **裁定**：数据源构成是核心竞争力，公开页不显示任何数据来源；owner 确认 Landing 页脚署名亦一并删除，且 `/market` 同口径处理
