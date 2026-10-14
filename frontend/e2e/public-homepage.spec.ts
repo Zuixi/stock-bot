@@ -302,13 +302,32 @@ const MOCK_ANNOUNCEMENTS = [
 ];
 
 test.describe("公开行情台首页 · 收口（Task 1.10）", () => {
-  test("页脚含数据来源署名", async ({ page }) => {
+  test("首页不披露任何数据源名称（含页脚）", async ({ page }) => {
     await MOCK_SESSION_ANON(page);
     await page.goto("/");
-    const footer = page.locator(".landing-footer");
-    await expect(footer.getByText("数据来源")).toBeVisible();
-    await expect(footer).toContainText("TuShare");
-    await expect(footer).toContainText("巨潮资讯网");
+    await expect(page.locator(".landing-footer")).toBeVisible();
+
+    // 数据源构成属竞争资产：公开页不得出现供应商名称
+    const body = await page.locator("body").innerText();
+    for (const vendor of [
+      "TuShare",
+      "tushare",
+      "东方财富",
+      "东财",
+      "巨潮",
+      "AKShare",
+      "统计局",
+      "生意社",
+      "上海证券交易所",
+    ]) {
+      expect(body, `首页不应出现数据源「${vendor}」`).not.toContain(vendor);
+    }
+    expect(body).not.toContain("数据来源");
+
+    // 来源类别文案同样不得出现（"四级来源/来源徽章"已改为可溯源口径）
+    expect(body).not.toContain("四级来源");
+    expect(body).not.toContain("来源徽章");
+    expect(body).not.toContain("来源与频率");
   });
 
   test("降级文案不再把行业树/行情与注册绑定", async ({ page }) => {
@@ -329,8 +348,8 @@ test.describe("公开行情台首页 · 收口（Task 1.10）", () => {
     await page.goto("/");
     const perks = page.locator(".landing-section", { hasText: "现在能用什么" });
     await expect(perks).toBeVisible();
-    // 游客档位必须含行情能力，且不把全部投研能力/工作台挂在注册上（仅个性化可注册）
-    await expect(perks).toContainText("免注册");
+    // 公开档位必须含行情能力；账号档位为邀请制口径（ADR 0010），不挂"注册"
+    await expect(perks).toContainText("免登录");
     await expect(perks).not.toContainText("解锁全部投研能力");
     await expect(perks).not.toContainText("工作台完整能力");
   });
@@ -414,10 +433,11 @@ test.describe("公开行情台首页 · 快讯区（Task 1.9）", () => {
     await expect(section).toBeVisible();
     await expect(section.getByRole("tab", { name: /财报|公告/ }).first()).toBeVisible();
     await expect(section.getByRole("tab", { name: "重大事项" })).toBeVisible();
-    // 默认财报页：只呈现 report 条目，带相对时间与来源署名
+    // 默认财报页：只呈现 report 条目，带相对时间
     await expect(section.getByText("2026 年半年度报告")).toBeVisible({ timeout: 15000 });
     await expect(section.getByText("2小时前")).toBeVisible();
-    await expect(section.getByText("巨潮").first()).toBeVisible();
+    // 公告不再署名来源（公开页不披露数据来源）
+    await expect(section.getByText("巨潮")).toHaveCount(0);
     await expect(section.getByText("关于向特定对象发行股票的公告")).toHaveCount(0);
   });
 

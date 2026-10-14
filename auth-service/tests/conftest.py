@@ -13,6 +13,7 @@ from app.core.database import Base, get_db
 from app.core.redis import get_redis
 from app.main import create_app
 from app.models.rbac import AuthPermission, AuthRole, AuthRolePermission
+from app.models.user import AuthUser
 
 
 class FakeRedisPipeline:
@@ -143,6 +144,10 @@ class FakeRedis:
     async def ping(self) -> bool:
         return True
 
+    async def close(self) -> None:
+        """redis-py 的 ``close()`` 是 ``aclose()`` 的别名；生产路径（cli/close_redis）用的是它。"""
+        await self.aclose()
+
     async def aclose(self) -> None:
         self._hashes.clear()
         self._sets.clear()
@@ -184,8 +189,11 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
         roles = [
             AuthRole(id="admin", name="系统管理员", description="全量权限", is_system=True),
             AuthRole(id="researcher", name="专业投研员", description="投研权限", is_system=True),
+            AuthRole(id="analyst", name="分析师", description="投研权限", is_system=True),
             AuthRole(id="trader", name="普通交易员", description="交易权限", is_system=True),
             AuthRole(id="viewer", name="只读访客", description="只读权限", is_system=True),
+            # 仅测试用：只持 roles:manage，用来区分"挂了守卫"与"挂对了守卫"
+            AuthRole(id="roles_only", name="角色管理员", description="仅可改角色", is_system=True),
         ]
         perms = [
             AuthPermission(id="stocks:read", module="stocks", name="查看股票行情"),
@@ -196,6 +204,8 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
             AuthPermission(id="tasks:read", module="tasks", name="查看后台任务"),
             AuthPermission(id="tasks:trigger", module="tasks", name="触发后台任务"),
             AuthPermission(id="users:manage", module="admin", name="管理用户账户"),
+            AuthPermission(id="roles:manage", module="admin", name="分配角色权限"),
+            AuthPermission(id="audit:read", module="admin", name="查看审计日志"),
         ]
         session.add_all(roles)
         session.add_all(perms)
@@ -211,10 +221,18 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
             AuthRolePermission(role_id="admin", permission_id="tasks:read"),
             AuthRolePermission(role_id="admin", permission_id="tasks:trigger"),
             AuthRolePermission(role_id="admin", permission_id="users:manage"),
+            AuthRolePermission(role_id="admin", permission_id="roles:manage"),
+            AuthRolePermission(role_id="admin", permission_id="audit:read"),
+            # Analyst (research tier)
+            AuthRolePermission(role_id="analyst", permission_id="stocks:read"),
+            AuthRolePermission(role_id="analyst", permission_id="market:read"),
+            AuthRolePermission(role_id="analyst", permission_id="research:read"),
             # Trader
             AuthRolePermission(role_id="trader", permission_id="stocks:read"),
             AuthRolePermission(role_id="trader", permission_id="market:read"),
             AuthRolePermission(role_id="trader", permission_id="watchlists:write"),
+            # roles_only (probe role: holds roles:manage and nothing else)
+            AuthRolePermission(role_id="roles_only", permission_id="roles:manage"),
             # Viewer
             AuthRolePermission(role_id="viewer", permission_id="stocks:read"),
             AuthRolePermission(role_id="viewer", permission_id="market:read"),
@@ -249,3 +267,55 @@ async def client(
         yield ac
 
     app.dependency_overrides.clear()
+
+
+async def create_user(
+    db: AsyncSession,
+    *,
+    username: str,
+    email: str | None = None,
+    password: str = "Password123!",
+    status: str = "active",
+    status_reason: str | None = None,
+    roles: tuple[str, ...] = ("trader",),
+    must_change_password: bool = False,
+    temp_password_expires_at=None,
+) -> AuthUser:
+    """Direct-DB user factory for tests (replaces POST /auth/register fixtures).
+
+    The register endpoint is being retired (ADR 0010, invite-only); tests
+    seed users here instead.
+    """
+    import uuid as _uuid
+
+    from app.core.crypto import hash_password
+    from app.models.rbac import AuthUserRole
+    from app.models.user import AuthCredential, AuthUser
+
+    user = AuthUser(
+        id=_uuid.uuid4(),
+        username=username,
+        email=email or f"{username}@test.local",
+        display_name=username,
+        status=status,
+        status_reason=status_reason,
+        is_superuser=False,
+        failed_attempts=0,
+    )
+    db.add(user)
+    await db.flush()
+    db.add(
+        AuthCredential(
+            id=_uuid.uuid4(),
+            user_id=user.id,
+            auth_type="password",
+            password_hash=hash_password(password),
+            must_change_password=must_change_password,
+            temp_password_expires_at=temp_password_expires_at,
+        )
+    )
+    for role_id in roles:
+        db.add(AuthUserRole(user_id=user.id, role_id=role_id))
+    await db.commit()
+    await db.refresh(user, attribute_names=["credentials", "user_roles"])
+    return user

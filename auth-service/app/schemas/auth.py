@@ -7,30 +7,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
-class UserRegisterRequest(BaseModel):
-    """User registration payload."""
-
-    username: str = Field(
-        ...,
-        min_length=3,
-        max_length=64,
-        pattern=r"^[a-zA-Z0-9_-]+$",
-        description="Username (3-64 alphanumeric or dash/underscore)",
-    )
-    email: EmailStr = Field(..., description="User email address")
-    password: str = Field(
-        ...,
-        min_length=8,
-        max_length=128,
-        description="User password (min 8 characters)",
-    )
-    display_name: str | None = Field(
-        default=None,
-        max_length=64,
-        description="User display name",
-    )
-
-
 class UserLoginRequest(BaseModel):
     """User login payload."""
 
@@ -54,10 +30,36 @@ class UserOut(BaseModel):
     display_name: str | None = None
     status: str
     is_superuser: bool
+    must_change_password: bool = False
     roles: list[str] = Field(default_factory=list)
     permissions: list[str] = Field(default_factory=list)
     last_login_at: datetime | None = None
     created_at: datetime
+
+
+class UpdateProfileRequest(BaseModel):
+    """Self-service profile edit. All fields optional (partial update)."""
+
+    username: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=64,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+    )
+    email: EmailStr | None = None
+    display_name: str | None = Field(default=None, max_length=64)
+
+
+class ChangePasswordRequest(BaseModel):
+    """Self-service password change payload."""
+
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(
+        ...,
+        min_length=8,
+        max_length=128,
+        description="New password (min 8 characters)",
+    )
 
 
 class SessionOut(BaseModel):

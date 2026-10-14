@@ -29,6 +29,8 @@
 | [2026-09-24-docs-system-phase2.md](./2026-09-24-docs-system-phase2.md) | 2026-09-24 | 文档系统二期（权威矩阵 · CI doc_gate · first-run · slop_scan） | completed | 正文 status: completed；Changelog 2026-09-24 |
 | [2026-09-29-xuantian-capacity-ingest-gating.md](./2026-09-29-xuantian-capacity-ingest-gating.md) | 2026-09-29 | 玄田产能数据直连 + ingest 三层增量门控 | active | 7 Task 全部完成+final review 修正 |
 | [2026-10-12-market-hotspot-persistence-and-trends.md](./2026-10-12-market-hotspot-persistence-and-trends.md) | 2026-10-12 | 市场热点数据持久化与趋势追踪（个股级涨停事实 · 东财实时源日终捕获 · 覆盖率对账 · 趋势/分位端点） | completed | 8 Task 全部落地（T1–T8 提交见正文「实施结果」）；门禁 **811 passed / 67 deselected / 0 failed**；最终评审见 `docs/Changelog.md` |
+| [2026-10-13-frontend-design-remediation.md](./2026-10-13-frontend-design-remediation.md) | 2026-10-13 | 前端设计整改（导航形态与三层布局 · 信息去重 · 字体与量级色阶 token · 对比度 AA · 四档响应式断点 · 文案与品牌） | draft | 头部 `status: draft`；阻塞于 §0 五项 owner 裁定，Phase 0（基线冻结 + 先红后绿门禁）可先行 |
+| [2026-10-14-invite-only-provisioning-and-admin-console.md](./2026-10-14-invite-only-provisioning-and-admin-console.md) | 2026-10-14 | 邀请制开户与管理员控制台（关闭自助注册 · 管理员预开户 + 临时密码强制改密 · `/auth/admin/*` 用户 CRUD 与角色分配 · 首个 admin 引导 CLI） | completed | 头部 `status: completed`；Phase 0–7 全部落地：auth 89 + forward-auth 14 测试绿，容器实测 bootstrap→开户→强制改密→/api 恢复全链路通过，Playwright 93 passed |
 
 ## 维护约定
 

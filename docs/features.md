@@ -34,7 +34,9 @@
 |---|---|---|
 | 自选股 | 用户自选列表（数据归属按 `user_id` 隔离，需登录） | `frontend/src/pages/watchlist` · `frontend/src/features/watchlist` · `/api/v1/watchlists` |
 | 自定义标签 | 标签分组与按标签看股票 | `frontend/src/pages/tags` · `frontend/src/pages/tags-detail` · `/api/v1/tags` |
-| 注册 / 登录 / 会话 | 独立认证库、HttpOnly Cookie、CSRF 双防御 | `frontend/src/pages/login` · `frontend/src/features/auth` · auth-service `/auth` · gateway `forward-auth` |
+| 账号设置 | 已登录用户自助修改自己的用户名 / 邮箱 / 显示名（唯一性校验 + 审计） | `frontend/src/features/auth/components/ProfileModal.tsx` · `PATCH /auth/profile` |
+| 登录 / 会话 / 改密 | 独立认证库、HttpOnly Cookie、CSRF 双防御；**邀请制**（自助注册已关闭，[ADR 0010](./decisions/0010-invite-only-provisioning-and-admin-console.md)） | `frontend/src/pages/login` · `frontend/src/pages/change-password` · `frontend/src/features/auth` · auth-service `/auth` · gateway `forward-auth` |
+| 用户管理（admin） | 开户（角色必选）· 停用/启用 · 角色替换 · 重置密码 · 审计检索；一次性临时密码 + 强制首登改密 | `frontend/src/pages/admin-users` · `frontend/src/features/admin` · auth-service `/auth/admin/*`（需 `users:manage`） |
 
 ## 行业投研
 

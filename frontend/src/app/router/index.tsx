@@ -19,6 +19,8 @@ const TagsDetailPage = lazy(() => import("@/pages/tags-detail"));
 const ResearchPage = lazy(() => import("@/pages/research"));
 const ResearchWorkbenchPage = lazy(() => import("@/pages/research-workbench"));
 const LoginPage = lazy(() => import("@/pages/login"));
+const ChangePasswordPage = lazy(() => import("@/pages/change-password"));
+const AdminUsersPage = lazy(() => import("@/pages/admin-users"));
 
 function PageLoading() {
   return (
@@ -47,6 +49,24 @@ export function AppRouter() {
           element={
             <Suspense fallback={<PageLoading />}>
               <LoginPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/change-password"
+          element={
+            <Suspense fallback={<PageLoading />}>
+              <ChangePasswordPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/admin/users"
+          element={
+            <Suspense fallback={<PageLoading />}>
+              <RequireAuth permissions={["users:manage"]}>
+                <AdminUsersPage />
+              </RequireAuth>
             </Suspense>
           }
         />

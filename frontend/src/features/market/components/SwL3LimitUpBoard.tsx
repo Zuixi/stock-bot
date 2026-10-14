@@ -115,7 +115,7 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
       </div>
 
       <div className="sw3-head" aria-hidden>
-        <span>{isEastmoney ? "东财板块" : "细分行业"}</span>
+        <span>{isEastmoney ? "板块名" : "细分行业"}</span>
         <span>最高板</span>
         <span>龙头</span>
         <span className="sw3-head__right">涨停家数</span>

@@ -260,13 +260,13 @@ export function NewStockBoard({ data, degraded = false }: Props) {
 
       <div style={{ marginTop: 8 }}>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          次新股 = 东财概念板块 BK0501 成分（上市 ≤1 年滚动）；「高于首日开盘」为替代口径，非破发
+          次新股 = 概念板块 BK0501 成分（上市 ≤1 年滚动）；「高于首日开盘」为替代口径，非破发
           （发行价未采集）；成分每日 18:20 刷新
         </Typography.Text>
         <br />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          平均涨跌幅为成分均值（n={kpi.pricedCount} 有行情家数），非东财板块涨跌幅
-          {data?.membership_as_of ? ` · 成分截至 ${formatCnDate(data.membership_as_of)}（东财）` : ""}
+          平均涨跌幅为成分均值（n={kpi.pricedCount} 有行情家数），非板块指数涨跌幅
+          {data?.membership_as_of ? ` · 成分截至 ${formatCnDate(data.membership_as_of)}` : ""}
         </Typography.Text>
       </div>
     </div>

@@ -200,7 +200,7 @@ export function SectorMoneyflowCard() {
               // 口径声明挂在概念维度本身：东财概念资金流是按净流入排序的 Top100 样本，
               // 不是全量约 500 个概念板块 —— 不声明就会让「板块榜」被读成全量。
               label: (
-                <Tooltip title="主力资金流为东财按净流入排序的 Top100 样本，非全量板块">
+                <Tooltip title="主力资金流为按净流入排序的 Top100 样本，非全量板块">
                   <span>概念</span>
                 </Tooltip>
               ),

@@ -9,7 +9,7 @@ interface Props {
 }
 
 /**
- * 宣传页统一主 CTA：已登录「进入工作台」→ /market，未登录「免费开始」→ /login。
+ * 宣传页统一主 CTA：已登录「进入工作台」→ /market，未登录「登录」→ /login。
  * 会话探测（isAuthReady）完成前隐藏文字，避免登录用户看到错标签闪现，按钮位保留防布局跳动。
  */
 export function CtaButton({ testId, size = "middle" }: Props) {

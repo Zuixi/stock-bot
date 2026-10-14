@@ -1,13 +1,21 @@
 import { useState } from "react";
 import { Avatar, Dropdown, Space, Tag, Modal, Typography, Button } from "antd";
 import type { MenuProps } from "antd";
-import { UserOutlined, LogoutOutlined, CrownOutlined, LoginOutlined } from "@ant-design/icons";
+import {
+  UserOutlined,
+  LogoutOutlined,
+  CrownOutlined,
+  LoginOutlined,
+  SettingOutlined,
+} from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context";
+import { ProfileModal } from "./ProfileModal";
 
 export function UserMenu() {
   const { user, isAuthenticated, logout } = useAuth();
   const [loggingOut, setLoggingOut] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const navigate = useNavigate();
 
   const handleLogoutConfirm = () => {
@@ -80,6 +88,12 @@ export function UserMenu() {
       disabled: true,
     },
     {
+      key: "profile",
+      icon: <SettingOutlined />,
+      label: "账号设置",
+      onClick: () => setProfileOpen(true),
+    },
+    {
       type: "divider",
     },
     {
@@ -92,6 +106,7 @@ export function UserMenu() {
   ];
 
   return (
+    <>
     <Dropdown menu={{ items: menuItems }} placement="bottomRight" arrow>
       <Space style={{ cursor: "pointer", userSelect: "none" }}>
         <Avatar
@@ -103,5 +118,7 @@ export function UserMenu() {
         </Typography.Text>
       </Space>
     </Dropdown>
+    <ProfileModal open={profileOpen} onClose={() => setProfileOpen(false)} />
+    </>
   );
 }

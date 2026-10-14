@@ -14,7 +14,7 @@ const VALUE_PROPS = [
   {
     icon: <SafetyCertificateOutlined />,
     title: "数据权威性",
-    desc: "官方统计、行业协会、平台行情、期货现货四级来源交叉验证，关键指标带来源徽章，数字可追责。",
+    desc: "多源交叉验证且关键指标逐条可溯源，口径与更新频率如实标注，数字可追责。",
   },
 ];
 
