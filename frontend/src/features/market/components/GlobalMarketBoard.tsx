@@ -28,14 +28,16 @@ export function GlobalMarketBoard() {
       <Row gutter={[12, 12]}>
         {isLoading
           ? Array.from({ length: 6 }, (_, i) => (
-              <Col key={i} xs={12} sm={8} xl={4}>
+              <Col key={i} xs={24} sm={8} xl={4}>
                 <Skeleton active paragraph={{ rows: 2 }} />
               </Col>
             ))
           : indices
               .filter((i) => i.region === r.key)
               .map((i) => (
-                <Col key={i.tsCode} xs={12} sm={8} xl={4}>
+                // `<768` 一张卡独占整行 —— 与 `CoreIndexCards` 同一理由（§4.1：
+                // 名称允许 2 行、名称列下限 104px，152px 的半宽卡装不下）。
+                <Col key={i.tsCode} xs={24} sm={8} xl={4}>
                   <GlobalIndexCardView index={i} />
                 </Col>
               ))}

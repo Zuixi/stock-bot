@@ -4,6 +4,7 @@ import { Button, Card, Empty, Segmented, Space, Spin, Tooltip as AntTooltip } fr
 import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "@/app/theme-context";
+import { useIsNarrowViewport } from "@/shared/ui";
 import type { AdjustMode, KLinePoint } from "@/shared/types";
 import { buildKlineOption } from "./klineOption";
 import {
@@ -26,6 +27,8 @@ export interface KlineChartProps {
 
 export function KlineChart({ title, queryKey, fetcher, showAdjust = false }: KlineChartProps) {
   const { colors } = useTheme();
+  // 契约 §5.1 的 `<768`：窄屏形态 = 最近 30 根 + 手势缩放（**不隐藏**，见 §4.4）
+  const narrow = useIsNarrowViewport();
   const [freq, setFreq] = useState<KlineFreq>("day");
   const [adjust, setAdjust] = useState<AdjustMode>(showAdjust ? "qfq" : "raw");
   const [visibleMas, setVisibleMas] = useState<MaKey[]>(DEFAULT_VISIBLE_MAS);
@@ -49,8 +52,8 @@ export function KlineChart({ title, queryKey, fetcher, showAdjust = false }: Kli
   }, [points]);
 
   const option = useMemo(
-    () => buildKlineOption({ points, maSeries, visibleMas, colors }),
-    [points, maSeries, visibleMas, colors],
+    () => buildKlineOption({ points, maSeries, visibleMas, colors, narrow }),
+    [points, maSeries, visibleMas, colors, narrow],
   );
 
   const resetZoom = () =>
@@ -109,7 +112,23 @@ export function KlineChart({ title, queryKey, fetcher, showAdjust = false }: Kli
       ) : points.length > 0 ? (
         <div style={{ position: "relative" }}>
           {points.length > 0 && (
-            <div style={{ position: "absolute", top: 6, left: 66, right: 20, display: "flex", gap: 12, fontSize: 11, zIndex: 5 }}>
+            // MA 数值行：窄屏必须 `flexWrap` + 左偏移跟随网格（`narrow ? 46 : 60`）。
+            // 实测成因：写死 `left: 66` 且不换行时，四个 MA（`MA5 12.34` 这类）在 308px 宽里
+            // 排成一行会溢出卡片右侧，并把上面的 K 线图区域挤窄（§5.1「不横向溢出」）。
+            <div
+              data-testid="kline-ma-legend"
+              style={{
+                position: "absolute",
+                top: 6,
+                left: narrow ? 46 : 60,
+                right: narrow ? 12 : 20,
+                display: "flex",
+                gap: narrow ? 6 : 12,
+                flexWrap: "wrap",
+                fontSize: narrow ? 10 : 11,
+                zIndex: 5,
+              }}
+            >
               {MA_DEFS.map((d) => {
                 const on = visibleMas.includes(d.key);
                 const v = maSeries[d.key]?.[points.length - 1] ?? null;

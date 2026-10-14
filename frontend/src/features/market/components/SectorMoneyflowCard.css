@@ -28,6 +28,16 @@
   border-radius: 999px;
   background: var(--hover);
   font-size: 11px;
+  /* `nowrap` 是**版式主张**（口径 badge 不该折成两行），保留；
+     但必须同时给出"放不下时怎么办"：`max-width: 100%` + 省略号。
+     为什么必须有（Phase 3 §4.2b 实测）：`.mf-continuity__head` 是弹性行，而 `nowrap`
+     子项**不可压缩**——`请求近 60 交易日 · 实际观察 22 个交易日（2026-10-13 → …）`
+     实测宽 388px，把头部、卡片、`Col`(`min-width:auto`) 一路顶宽到整页
+     `scrollWidth = 425`（视口 390）。省略号是**如实降级**：完整口径仍在
+     `title`/tooltip 与下方「缺完整日」逐日列表里，不是把事实删掉。 */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

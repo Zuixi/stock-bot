@@ -3,7 +3,7 @@ status: active
 scope: 前端设计整改——一级导航形态与三层布局表达、工作页信息密度（去重复）、设计系统（字体/数字/量级色阶/对比度/动效/焦点）、响应式四档断点、文案与品牌一致性；来源为 2026-10-13 全站设计评审（1440/1280/390 三档实测截图）
 touches: frontend/src/app/, frontend/src/pages/, frontend/src/features/nav/, frontend/src/features/market/, frontend/src/features/industry-research/, frontend/src/shared/ui/, frontend/src/shared/config/, frontend/src/app/router/, frontend/public/fonts/, frontend/scripts/, frontend/e2e/, docs/design/landing-market-theme.md, docs/Changelog.md, plans/index.md
 updated: 2026-10-15
-next-action: Phase 0 / 1 / **2 已完成**（Phase 2 = W3 设计系统：0.5 与 0.6 双绿，`npm run check:design` 退出 0，六个 §8.1 组 + 日期双层门禁全过）。下一步 = Phase 3（W4 响应式，§5.1–5.1 / 4.1–4.5）；注意它要背着**两条已知红**（`responsive.spec.ts` 的 `/market/global@390`·`@768`，实测 `scrollWidth` 已漂到 874）。
+next-action: Phase 0 / 1 / 2 / **3 已完成**（Phase 3 = W4 响应式：`responsive.spec.ts` 的 2 条既有红转绿 —— 实测真凶是 AntD `Segmented`（833px）与 `.mf-continuity__tag`（388px），**不是**表格；新增 `/market` 5 Tab 扫描 + `/login` 点名 + B2 逐组件证据。§5.1 契约已落进 `docs/design/landing-market-theme.md` §1.4）。下一步 = Phase 4（W5 文案与打磨，§6 的 5.1–5.8）；注意 §6 的 5.2 已按 §0-D = D1 改写。
 ---
 
 # 前端设计整改 实施计划
@@ -349,14 +349,53 @@ next-action: Phase 0 / 1 / **2 已完成**（Phase 2 = W3 设计系统：0.5 与
 > - K 线：窄屏改为 `dataZoom` 默认聚焦最近 N 根 + 手势缩放，**不隐藏**；
 > - sparkline：**保留**，按容器宽度决定画点数（不是按断点隐藏）。
 
-- [ ] **4.1 指数卡移动端**（`GlobalIndexCardView.tsx`）：`<768` 左列 `min-width: 104px`；名称 `white-space: normal` 允许 2 行（**名称优先级高于代码**，禁止把 `上证指数` 截成 `上证…`）；`CN 000001` 并入名称行做 10px 后缀；sparkline **始终渲染**，画点数按容器宽度自适应（**B2 修订**：原 `width ≥ 768` 才渲染的条件作废）。
-- [ ] **4.2 表格横向滚动容器**：`market-global/index.tsx` 与所有 AntD `Table` 外层统一包 `.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }`；`Table` 加 `scroll={{ x: 'max-content' }}`。修掉 `scrollWidth=877`（**Phase 0 实测**；计划原写 749，取自更早测量，同一成因）。
-- [ ] **4.2b Tab 级横向溢出扫描（Phase 0 发现的新增项）**：0.2 的路由集只覆盖**路由级**，漏掉 **Tab 级**布局。Phase 0 实测 **`/market?tab=moneyflow@390` `scrollWidth=420` > 390**（资金流向 Tab 的三个卡片）——它在 0.2 的断言集之外，**至今没有任何门禁守着**。做法：`responsive.spec.ts` 增加一遍 `/market` **五个 Tab** 逐一测横向溢出，并纳入 4.2 验收。
-- [ ] **4.3 热力图移动端**（**B2 修订**）：`market-heatmap` 在 `<768` **仍渲染 treemap**，但必须解决标签重叠（ECharts `labelLayout: { hideOverlap: true }` + 面积阈值下隐藏标签；实测若仍不可读，才允许"默认列表 + 可切 treemap"）。**不得**改成"小屏只给列表"。
-- [ ] **4.4 首页移动端**：`landing.css` 检查 `.landing-container` 的 `max-width` 与内边距；目标 `<768` 无横向溢出（当前 `scrollWidth=392` vs 390，1–2px 溢出同样判失败）。
-- [ ] **4.5 移动端形态清单（B2 新增）**：逐个点名需要窄屏形态的图表组件并各留一条 e2e/截图证据 —— K 线（`kline`）、treemap（`SectorHeatmap` / `market-heatmap`）、sparkline（`GlobalIndexCardView`）、`IndustryMetricStrip`（本计划第一个样本，见 §Phase 1 W2）、`PriceCostChart`（`/industry/pig`）。**B2 的成本主要在这里**（约 B1 的 3 倍工作量），§7 按此重估。
+- [x] **4.1 指数卡移动端**（`GlobalIndexCardView.tsx`）：`<768` 左列 `min-width: 104px`；名称 `white-space: normal` 允许 2 行（**名称优先级高于代码**，禁止把 `上证指数` 截成 `上证…`）；`CN 000001` 并入名称行做 10px 后缀；sparkline **始终渲染**，画点数按容器宽度自适应（**B2 修订**：原 `width ≥ 768` 才渲染的条件作废）。
+- [x] **4.2 表格横向滚动容器**：`market-global/index.tsx` 与所有 AntD `Table` 外层统一包 `.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }`；`Table` 加 `scroll={{ x: 'max-content' }}`。修掉 `scrollWidth=877`（**Phase 0 实测**；计划原写 749，取自更早测量，同一成因）。
+- [x] **4.2b Tab 级横向溢出扫描（Phase 0 发现的新增项）**：0.2 的路由集只覆盖**路由级**，漏掉 **Tab 级**布局。Phase 0 实测 **`/market?tab=moneyflow@390` `scrollWidth=420` > 390**（资金流向 Tab 的三个卡片）——它在 0.2 的断言集之外，**至今没有任何门禁守着**。做法：`responsive.spec.ts` 增加一遍 `/market` **五个 Tab** 逐一测横向溢出，并纳入 4.2 验收。
+- [x] **4.3 热力图移动端**（**B2 修订**）：`market-heatmap` 在 `<768` **仍渲染 treemap**，但必须解决标签重叠（ECharts `labelLayout: { hideOverlap: true }` + 按画布宽度收矩形预算）。**不得**改成"小屏只给列表"。
+- [x] **4.4 首页移动端**：`landing.css` 检查 `.landing-container` 的 `max-width` 与内边距；目标 `<768` 无横向溢出。
+- [x] **4.5 移动端形态清单（B2 新增）**：逐个点名需要窄屏形态的图表组件并各留一条 e2e/截图证据 —— K 线（`kline`）、treemap（`SectorHeatmap` / `market-heatmap`）、sparkline（`GlobalIndexCardView`）、`IndustryMetricStrip`、`PriceCostChart`（`/industry/pig`）。**B2 的成本主要在这里**（约 B1 的 3 倍工作量）。
 
-**W4 验收**：0.2 全绿（7 条路由 × 4 档视口）；`/market/global@390` 的 `scrollWidth ≤ 391`；`/market@390` 指数卡内的名称文本**可区分**——作用域限定到首张卡再断言（`page.locator(".ant-card").filter({ hasText: "3,797.24" }).first()` 内 `toContainText("上证指数")`），**不得**用全局 `getByText('上证指数')`（"全球指数"与"A股核心指数"两处同名，必 strict violation，见 §1「新断言必须绕开的两个已知坑」）。
+**W4 验收**：0.2 全绿（7 条路由 × 4 档视口）；`/market/global@390` 的 `scrollWidth ≤ 391`；`/market@390` 指数卡内的名称文本**可区分**——作用域限定到首张卡再断言（`page.locator(".ant-card").filter({ hasText: …, })` 内 `toContainText`/`toHaveText("上证指数")`），**不得**用全局 `getByText('上证指数')`（"全球指数"与"A股核心指数"两处同名，必 strict violation，见 §1「新断言必须绕开的两个已知坑」）。
+
+---
+
+#### §5 Phase 3 实测回写（task-26，2026-10-15）
+
+**① 两条已知红的**真实成因**都不是表格** —— 计划 §4.2 假设"包一层 `.table-scroll` 就好"，实测不成立：
+
+| 页面/视口 | 整改前 `scrollWidth` | 真正溢出的元素 | 处置 | 整改后 |
+|---|---|---|---|---|
+| `/market/global@390` | **874** | AntD **`Segmented`**（`.ant-segmented`，7 段共 **833px**）——每一项 `white-space: nowrap`、不换行不收缩，它自己不是滚动容器，于是把 `.ant-space-item` → 卡片体 → `Col`（`min-width: auto`）一路撑到 **837px** | `.market-global__filter` 加 **`contain: inline-size`** + `overflow-x: auto`（`max-width:100%` / `width:100%` / `padding-inline` **实测均无效**，见下） | **390** |
+| `/market/global@768` | **874** | 同上 | 同上 | **768** |
+| `/market?tab=moneyflow@390` | **425** | **`.mf-continuity__tag`**（口径 badge，`white-space: nowrap` 且不可压缩，实测宽 388px）把 `.mf-continuity__head` → 卡片 → `Col` 撑宽 | `max-width: 100%` + 省略号（完整口径仍在 title/tooltip 与逐日列表里） | **390** |
+| 其余 6 路由 × 4 档 + 5 Tab × 2 档 | — | — | — | **全部 = 视口宽** |
+
+表格**不是**元凶：`.ant-table-content` 在 `scroll.x` 下本就有 `overflow-x: auto`，实测 390 下它宽 308px、`scrollWidth` 900（表在**容器内**滚动）。`.market-global__table-scroll` 仍补上了外层容器（防将来出现不可断行的单元格把宽度传上去），但**它不是这两条红的解**。
+
+**② `contain: inline-size` 是唯一生效的约束**（同一页面、同一布局，逐变体实测）：
+
+```
+baseline（无任何约束）              docSW 874 / filter 837
+max-width:100% + width:auto         docSW 874 / filter 837
+padding-inline:8px                  docSW 890 / filter 853   ← 更糟（包含块自己就是被撑出来的）
+width:100%                          docSW 890 / filter 853
+contain: inline-size                docSW 390 / filter 256   ← 唯一有效
+```
+
+原因：`max-width` 的百分数、`padding-inline` 的"包含块 − padding"都**回指一个由内容撑出来的宽度**；`contain: inline-size` 的语义正是"本元素行内尺寸与内容无关"，才切断了这条传播链。
+
+**③ sparkline 的 B2 落法与我最初的写法相反**：我先写成"窄屏让 sparkline 占满整行"（`max-width: none; width: 100%`），结果它把点数的决定权**又交回视口断点**（窄屏容器必然宽 ⇒ 点数必然多），正是 B2 否掉的那件事。改为**全档同宽**（`max-width: 88px`）+ `sparkPointsForWidth(容器实测宽度)`（`ResizeObserver`），首帧宽度未知时**不采样**（画全部点，而不是先画一条假走势）。实测四档视口下点数与画布宽**完全一致**（29 点 / 88px），可机械回归（`data-spark-points`）。副作用：数据源只给 30 个点 ⇒ 88px 槽位算出 29 点，采样在**当前数据量下几乎不触发**（`total` 一涨就会触发）；这是诚实的结果，不是"没实现"。
+
+**④ §4.3 的 `labelLayout` 措辞实测更正**：treemap 的 `labelFormatter(params)` **拿不到**方块尺寸（`params.data` 只有 `name/value/pct_chg/symbol/itemStyle`，`width/height` 均 `undefined`），但 `labelLayout` **确实被调用**（探针收到 `{ dataIndex, text, rect, labelRect }`），所以"防重叠"的实现是 `labelLayout: () => ({ hideOverlap: true })`（ECharts `LabelManager` 做矩形互斥，被压住的标签 `ignore = true`、悬停仍显示）。**但只做这一层不够**：`hideOverlap` 只保证"不重叠"，不保证"有地方放字"——900 个矩形塞进 308px 画布时每块平均 ~10×5px，实测结果是"极少数块有标签、其余全空"。故**按画布宽度收矩形预算**：`rectBudgetForWidth(width) = clamp(width/1.8, ≥90, ≤MAX_TOTAL_RECTS)`（390 视口 → 172 块，1440 → 639 块 **低于** 900 ⇒ 宽屏行为不变）。这是**可读性**手段，性能上界仍是 `MAX_TOTAL_RECTS`。Top10 列表**未做**（理由见 `docs/design/landing-market-theme.md` §1.4 的"实现状态"）。
+
+**⑤ `PriceCostChart` 无窄屏截图 —— 环境缺凭据**：`/industry/:industryKey` 要 `research:read`；本环境匿名 401、`/auth/login` 无已知口令、`E2E_ADMIN_USER`/`E2E_ADMIN_PASSWORD` 未设置。它由 `responsive.spec.ts` 的 `/industry/pig@390`（实际测 `/login`）覆盖"不溢出"，但**组件本身**没有窄屏证据。其余 §4.5 组件齐全。
+
+**⑥ 窄屏断言的两个"永不执行"陷阱（本次踩到并改掉）**：
+- `window.echarts?.getInstanceByDom(...)` —— 应用包**不挂** `window.echarts`（实测 `undefined`），写成 `if (inst) { 断言 }` 会得到一条**永不执行的假断言**（比没有断言更坏）。改用 DOM/`getComputedStyle` 层可观测的后果（K 线用 MA 数值行的 `left: 46px` 证明 `narrow` 生效）。
+- zrender 在 **canvas 渲染器**下**没有** `zr-*` DOM（实测该卡片内 `zr-` 元素数 = 0），"找 slider 拖动点"这条路不存在。
+
+**⑦ 验收数（dev server，`E2E_BASE_URL=http://localhost:3000`）**：`responsive.spec.ts` **44 passed**（28 路由档 + 10 Tab 档 + 2 名称档 + `/login` 已并入路由集）；`responsive-b2.spec.ts` **5 passed / 1 skipped**（skip = `PriceCostChart`，理由见 ⑤）。全量 158 基线见 §8 回写。
 
 ---
 

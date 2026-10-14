@@ -96,6 +96,56 @@ Phase 2 全部收敛到 `.num`，并由 `npm run check:design` 的 §8.1-5 **机
   局部规则（如 `market.css` 的表格行）可继续覆盖，本规则只保证"任何可聚焦元素都有可见焦点"。
 - 两者都由 `npm run check:design` 的 §8.1-4 机械断言存在。
 
+### 1.4 响应式断点契约（Phase 3 W4 / 计划 §5.1，2026-10-15）
+
+> 本节是 [计划 §5.1](../../plans/2026-10-13-frontend-design-remediation.md) 的**常驻落点**：
+> 计划是过程文档（会被归档），断点契约必须留在本文档里，否则"四档断点"会随着计划归档而失去权威。
+> 计划 §0.1 的 **B2 全量响应式**裁定是本节的前提——**`<768` 不隐藏任何区块**。
+
+| 断点 | 布局 | 内容策略（**依 §0-B = B2 全量响应式修订**） |
+|---|---|---|
+| `≥1280` | 左栏 208 + 内容 1280 | 全功能 |
+| `1024–1279` | 图标栏 64（hover 展开） | 卡片 4→3 列 |
+| `768–1023` | 抽屉导航 | 卡片 2 列；表格包 `overflow-x:auto`；热力图标签收敛（见 §实现状态） |
+| `<768` | 抽屉导航（汉堡） | **单列全功能**：不隐藏任何区块；图表按容器宽度退化（见下） |
+
+> ⚠️ **原 `<768` 的「行情速览（隐藏 sparkline / 热力图 / K 线）」已作废** —— owner 裁定 **B2 全量响应式**，
+> 隐藏即违约。改为「**每个区块都要有可用的窄屏形态**」（计划 §0.1）：
+> - 热力图：treemap **保留**，加标签防重叠；Top10 列表从**替代**降级为**可切换视图**；
+> - K 线：窄屏改为 `dataZoom` 默认聚焦最近 N 根 + 手势缩放，**不隐藏**；
+> - sparkline：**保留**，按容器宽度决定画点数（不是按断点隐藏）。
+
+**实现锚点（改动时请同步这里，别只改代码）**：
+
+| 契约 | 落点 | 机械判据 |
+|---|---|---|
+| 四档视口不横向溢出 | `frontend/src/**` | `e2e/responsive.spec.ts`（7 路由 + `/login` × 4 档 + `/market` 5 Tab × 2 档） |
+| 窄屏图表仍在（B2） | 各图表组件 | `e2e/responsive-b2.spec.ts`（逐组件断言 canvas 存在且尺寸非零） |
+| 指数卡名称可辨识 | `GlobalIndexCardView.tsx/.css`（名称 `min-width: 104px`、`<768` 卡片独占整行） | `responsive.spec.ts`「首张指数卡名称完整」 |
+| 表格横向滚动容器 | `.market-global__table-scroll`（`market-global.css`）；AntD `scroll.x` 自带的内层容器在其余页面承担同一职责 | `responsive.spec.ts` 的"不横向溢出"一组 |
+| 窄屏 K 线初始视窗 | `klineOption.ts`（`narrow` → `NARROW_TAIL_BARS = 30`） | `responsive-b2.spec.ts` 的 `dataZoom` 断言 |
+| 热力图标签防重叠 | `HeatmapTreemap.tsx` 的 `labelLayout: () => ({ hideOverlap: true })` + `heatmapAggregate.ts` 的 `rectBudgetForWidth()` | `responsive-b2.spec.ts` 读 `getOption()` 确认 `labelLayout` 真的生效 |
+
+**实现状态（2026-10-15 Phase 3 收口，未做项如实列出）**：
+
+- ✅ `≥1280` / `1024–1279` / `<768` 三档：四档视口断言全绿（`responsive.spec.ts` 44 passed）。
+- ✅ `<768` 单列全功能：卡片阵列改 `Col xs={24}`、表格/分段控件横向滚动、sparkline 始终渲染、K 线 `dataZoom` 聚焦 30 根。
+- ⚠️ **`768–1023` 的「热力图默认 Top10 列表（可切 treemap）」未做**：实测在该档（以及 `<768`）
+  把 treemap 的标签收敛到 `hideOverlap` + 宽度感知矩形预算后，treemap 本身已可读
+  （证据：`phase3-heatmap-narrow-element.png` 显示聚合块与主要板块的名称/涨跌幅都能读出），
+  **没有"必须换成列表"的剩余理由**。按 B2「列表只能是**附加**视图」的裁定，
+  新增一个附加视图属于新能力（不是整改），故**不做**并在计划里如实记未做，
+  而不是把它写成"已完成"或偷偷降级成列表。
+
+**已知的"看起来像修好了、其实是假绿"的两条坑**（计划 §2.1，写在这里因为改断点时最容易再踩）：
+
+1. `page.evaluate(() => document.documentElement)` 返回的是 `ref: <Node>` 字符串，解构 `{ scrollWidth }` 恒 `undefined`
+   → 断言**全红但原因是错的**。`evaluate` 里只返回原始值。
+2. `toBeVisible()` **不计祖先 `overflow` 裁剪** → 折叠/裁掉的元素照样"可见"。
+   凡"是否真的看得见"的断言，用 `boundingBox()` 尺寸 + `elementFromPoint` 命中测试。
+
+---
+
 ## 2. 路由变更
 
 ```text

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EChart } from "@/shared/ui/EChart";
+import { useElementWidth } from "@/shared/ui";
 import { useTheme } from "@/app/theme-context";
 import { hexLerp } from "./components/DistributionChart";
 import {
@@ -12,6 +13,7 @@ import {
 import {
   aggregateGroups,
   isAggregateLeaf,
+  rectBudgetForWidth,
   type AggregateLeaf,
   type HeatmapGroupInput,
 } from "./heatmapAggregate";
@@ -61,14 +63,35 @@ interface Props {
   onAggregated?: (info: { rendered: number; aggregated: number; groups: number }) => void;
 }
 
-/** label 富文本：块够大显示 名称+涨跌幅，小只显示涨跌幅，再小不显示（密度优先）。 */
+/**
+ * label 防重叠策略（Phase 3 §4.3，B2：treemap 必须保留，只解决标签重叠）。
+ *
+ * ⚠️ **实测更正计划 §4.3 的措辞**：treemap 没有"面积阈值"式配置，但**它确实调用
+ * `labelLayout` 回调**（已用运行时探针核实：回调收到 `{ dataIndex, text, rect, labelRect }`，
+ * `rect` 就是该方块的**实测几何**）。防重叠因此有两层，缺一不可：
+ *
+ * 1. `labelLayout: () => ({ hideOverlap: true })` —— ECharts 的 `LabelManager` 对勾选了
+ *    该选项的标签做**全局矩形互斥**（`hideOverlap()` 把被压住的标签 `ignore = true`，
+ *    **悬停时仍会显示**，见 `labelLayoutHelper.js` 的 `hideEl`）。这是"文字不互相压住"。
+ * 2. **按画布宽度收矩形预算**（`rectBudgetForWidth`，见 `heatmapAggregate.ts`）——
+ *    `hideOverlap` 只保证"不重叠"，不保证"有地方放字"：900 个矩形塞进 308px 画布时
+ *    每块平均 ~10×5px，结果是"极少数块有标签、其余全空"，热力图整体不可读。
+ *    把预算收到 ~宽度/1.8（窄屏 ~170 块）后每块才有可读面积。
+ *    ⚠️ 这条**不是**性能优化，是**可读性**手段：性能上界仍是 `MAX_TOTAL_RECTS`。
+ *
+ * 标签文本本身**不再按字数/尺寸裁剪**：把名称写进标签，放不下时由 treemap 自己的
+ * `truncateMinChar = 2` + `lineOverflow = 'truncate'` 截断（这在窄块里就是"读不全"），
+ * 而"整块太小、放不下任何文字"的情形交给第 1 层的 `hideOverlap`。
+ * 早期版本按 `name.length > 6` 丢名称——它会把**占比最大的聚合块**（`其他 5389 只`）
+ * 的名字也一并丢掉，于是画面上最大的一块反而没有身份标识（实测截图）。
+ */
 function labelFormatter(params: unknown): string {
   const d = (params as { data?: HeatmapLeaf }).data;
   if (!d || d.pct_chg == null) return "";
   const sign = d.pct_chg > 0 ? "+" : "";
   const pctText = `${sign}${d.pct_chg.toFixed(1)}%`;
   const name = d.name ?? "";
-  return name.length > 4 ? `{p|${pctText}}` : `{n|${name}}\n{p|${pctText}}`;
+  return name.length > 0 ? `{n|${name}}\n{p|${pctText}}` : `{p|${pctText}}`;
 }
 
 /** 分组树 → 聚合输入（平铺视图包成一个 `aggKey: "all"` 的组）。 */
@@ -100,6 +123,15 @@ export function HeatmapTreemap({
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const onAggregatedRef = useRef(onAggregated);
   onAggregatedRef.current = onAggregated;
+  /**
+   * 画布**实测**宽度 → 矩形预算（Phase 3 §4.3，B2 的"按容器宽度"落点之一）。
+   *
+   * `width === 0` 是首帧（`ResizeObserver` 回调前）：此时**不覆盖**预算，
+   * 沿用 `MAX_TOTAL_RECTS` 的既有行为——回落成 900 是"宽屏假设"，
+   * 与整改前一致；一旦量到真实宽度（窄屏 308px）就收敛到约 170 个矩形。
+   * 这样"首帧先按大预算画、下一帧收敛"只在极窄屏出现一次重排，且不会画出假的密度。
+   */
+  const { ref: chartRef, width: chartWidth } = useElementWidth<HTMLDivElement>();
 
   // 树结构：组 + 面积维度变化才重算（着色不再驱动重算）
   const tree = useMemo(
@@ -116,8 +148,15 @@ export function HeatmapTreemap({
   }, [group]);
 
   const grouped = useMemo(
-    () => timeHeatmapPhase("aggregate", items.length, () => aggregateGroups(toGroupInputs(tree, group), expanded)),
-    [tree, group, expanded, items.length]
+    () =>
+      timeHeatmapPhase("aggregate", items.length, () =>
+        aggregateGroups(
+          toGroupInputs(tree, group),
+          expanded,
+          chartWidth > 0 ? rectBudgetForWidth(chartWidth) : undefined
+        )
+      ),
+    [tree, group, expanded, items.length, chartWidth]
   );
 
   const rendered = useMemo(() => grouped.reduce((n, g) => n + g.children.length, 0), [grouped]);
@@ -216,6 +255,16 @@ export function HeatmapTreemap({
               p: { fontSize: 10, lineHeight: 12, color: colors.textSecondary },
             },
           },
+          /**
+           * 标签防重叠（Phase 3 §4.3）。返回 `hideOverlap` 后由 ECharts 的
+           * `LabelManager` 做矩形互斥：被压住的标签 `ignore = true`（**悬停仍显示**），
+           * 于是窄屏 308px 画布里的 900 个矩形不再糊成一片。
+           *
+           * 保留 `rect` 的读取形式：回调参数里 `rect` 是该方块的实测几何——
+           * 将来若要按面积做更细的分级（例如"宽 < 30px 连涨跌幅也不画"），
+           * 应该在这里判，**不要**回到 `labelFormatter` 里找不存在的 `params.data.width`。
+           */
+          labelLayout: () => ({ hideOverlap: true }),
           data,
         },
       ],
@@ -223,25 +272,29 @@ export function HeatmapTreemap({
   }, [grouped, colors, area]);
 
   return (
-    <EChart
-      option={option}
-      height={height}
-      onEvents={{
-        click: (params: unknown) => {
-          const d = (params as { data?: HeatmapLeaf | AggregateLeaf }).data;
-          if (!d) return;
-          if (isAggregateLeaf(d)) {
-            // drill-down：丢弃该组的聚合缓存 → 全量渲染该组（UI 已提示可点击）
-            setExpanded((prev) => {
-              const next = new Set(prev);
-              next.add(d.aggKey);
-              return next;
-            });
-            return;
-          }
-          if (d.symbol) onSymbolClick?.(d.symbol);
-        },
-      }}
-    />
+    // 外层 div 只为量宽度（`useElementWidth`）：`EChart` 的根是 zrender 的 canvas 容器，
+    // 我们没有它的 ref。宽度本身**不改变图的内容语义**，只决定矩形预算（见上）。
+    <div ref={chartRef} style={{ width: "100%" }}>
+      <EChart
+        option={option}
+        height={height}
+        onEvents={{
+          click: (params: unknown) => {
+            const d = (params as { data?: HeatmapLeaf | AggregateLeaf }).data;
+            if (!d) return;
+            if (isAggregateLeaf(d)) {
+              // drill-down：丢弃该组的聚合缓存 → 全量渲染该组（UI 已提示可点击）
+              setExpanded((prev) => {
+                const next = new Set(prev);
+                next.add(d.aggKey);
+                return next;
+              });
+              return;
+            }
+            if (d.symbol) onSymbolClick?.(d.symbol);
+          },
+        }}
+      />
+    </div>
   );
 }

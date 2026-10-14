@@ -27,6 +27,16 @@ export type KlineFreq = "day" | "week" | "month";
 /** 默认初始视图显示的末尾K线根数（TradingView 式：数据全量、视图局部、slider 漫游） */
 export const DEFAULT_TAIL_BARS = 120;
 
+/**
+ * 窄屏（`<768`）默认聚焦的末尾根数（Phase 3 §4.4，B2）。
+ *
+ * **不是隐藏、也不是少画**：`<768` 下仍渲染全量序列与两条 `dataZoom`
+ * （`inside` 支持手势缩放/拖动 + `slider` 可漫游），只是**初始视窗**从 120 根收到 30 根——
+ * 308px 宽的画布里 120 根蜡烛每根 ~2.5px，红绿几乎连成色带；30 根每根 ~10px，
+ * 单根阴阳线可辨。用户捏合或拖 slider 即可看任意区间（数据一根都没少）。
+ */
+export const NARROW_TAIL_BARS = 30;
+
 function weekKey(date: string): string {
   const d = new Date(`${date}T00:00:00`);
   d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // 回到本周周一

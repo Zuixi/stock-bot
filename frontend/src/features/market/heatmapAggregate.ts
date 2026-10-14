@@ -150,12 +150,47 @@ function makeAggregate(
  */
 export function aggregateGroups(
   groups: HeatmapGroupInput[],
-  expandedKeys: ReadonlySet<string> = new Set()
+  expandedKeys: ReadonlySet<string> = new Set(),
+  /**
+   * 覆盖矩形预算（Phase 3 §4.3 / §0.1 B2）。
+   *
+   * 为什么需要按**画布宽度**覆盖：`MAX_TOTAL_RECTS = 900` 是按宽屏画布定的
+   * （`/market/heatmap` 在 1440 下画布 ~1150px）。同一份 900 个矩形塞进 390 视口的
+   * **308px** 画布时，平均每块只有 ~10×5px —— 此时 `labelLayout: { hideOverlap: true }`
+   * 只能保证"文字不互相压住"，保证不了"有地方放字"：实测窄屏下大部分块**一个标签都放不下**，
+   * 而少数放得下的块又散落在碎块海里，热力图整体不可读（截图见
+   * `evidence/phase3-heatmap-narrow-element.png`）。
+   *
+   * 传 `undefined` 时行为与整改前**完全一致**（仍用 `effectiveMaxTotalRects()`），
+   * 故 `scripts/check-heatmap-aggregate.mjs` 与任何既有调用点不受影响。
+   */
+  budgetOverride?: AggregateBudget
 ): HeatmapGroupOutput[] {
-  return aggregateWithBudget(groups, expandedKeys, {
+  return aggregateWithBudget(
+    groups,
+    expandedKeys,
+    budgetOverride ?? {
+      minShare: effectiveMinAreaShare(),
+      maxTotal: effectiveMaxTotalRects(),
+    }
+  );
+}
+
+/**
+ * 按画布**实测宽度**算矩形预算（Phase 3 §4.3，B2）。
+ *
+ * 口径：每约 1.8px 画布宽度允许一个矩形（宽屏 1150px ÷ 1.8 ≈ 639，仍低于既有
+ * `MAX_TOTAL_RECTS` 900 → 宽屏行为不变，只有窄屏收敛），下限 90（再少就只剩几十个块，
+ * 热力图失去"全市场概览"的意义）。
+ *
+ * ⚠️ 这是**可读性**参数，不是性能参数：性能上界仍是 `MAX_TOTAL_RECTS`
+ * （`heatmapAggregate` 的注释与 `scripts/measure-heatmap.mjs` 的证据都指向它）。
+ */
+export function rectBudgetForWidth(width: number): AggregateBudget {
+  return {
     minShare: effectiveMinAreaShare(),
-    maxTotal: effectiveMaxTotalRects(),
-  });
+    maxTotal: Math.max(90, Math.min(effectiveMaxTotalRects(), Math.round(width / 1.8))),
+  };
 }
 
 /** 聚合的可注入参数（测试直接传，避免依赖 window/URL）。 */

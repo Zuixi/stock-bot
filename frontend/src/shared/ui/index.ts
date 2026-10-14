@@ -13,3 +13,5 @@ export type { SectionCardProps } from "./SectionCard";
 export { DegradedNotice, DEGRADED_REASON_TEXT } from "./DegradedNotice";
 export { ErrorBoundary } from "./ErrorBoundary";
 export { formatCnDate, formatAsOf, formatAsOfDate, daysAgoOf } from "./date";
+export { useElementWidth } from "./useElementWidth";
+export { useMediaQuery, useIsNarrowViewport } from "./useMediaQuery";

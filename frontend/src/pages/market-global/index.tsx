@@ -20,6 +20,7 @@ import { DegradedNotice, SectionCard } from "@/shared/ui";
 import { fetchGlobalIndices, type GlobalIndexCard } from "@/shared/api/marketData";
 import { DataSourceBadge, PriceSourceBadge } from "@/features/market/components/DataSourceBadge";
 import { useMarketPolling } from "@/features/market/hooks/useMarketPolling";
+import "./market-global.css";
 
 /** 市场分组顺序：文档/导图口径（美 / 港 / 其他），CN 放最后（海外视图里它是参照系）。 */
 const MARKET_ORDER = ["US", "HK", "JP", "KR", "SG", "CN"] as const;
@@ -263,18 +264,26 @@ export default function MarketGlobalPage() {
         <Col span={24}>
           <Card size="small">
             <Space direction="vertical" size={4}>
-              <Segmented
-                data-testid="market-global-filter"
-                value={market}
-                onChange={(v) => setMarket(String(v))}
-                options={[
-                  { label: `全部（${indices.length}）`, value: "all" },
-                  ...groups.map((g) => ({
-                    label: `${marketLabel(g.market)}（${g.items.length}）`,
-                    value: g.market,
-                  })),
-                ]}
-              />
+              {/* ⚠️ 必须包在 `.market-global__filter` 里：AntD `Segmented` 的每一项都是
+                  `white-space: nowrap` 且**从不换行、从不收缩**——19 个标的分 7 段时整条控件
+                  宽 833px。它自身不是滚动容器，于是把父级 flex 项撑到 837px 并继续往外顶，
+                  实测 `documentElement.scrollWidth = 874`（视口 390/768 都一样红）。
+                  容器给 `overflow-x: auto` 后，超宽的那一层进入**容器内滚动**，不再计入页级宽度。
+                  这不是"把溢出藏起来"：控件仍完整可用，用户横向滑即可触达每一段。 */}
+              <div className="market-global__filter">
+                <Segmented
+                  data-testid="market-global-filter"
+                  value={market}
+                  onChange={(v) => setMarket(String(v))}
+                  options={[
+                    { label: `全部（${indices.length}）`, value: "all" },
+                    ...groups.map((g) => ({
+                      label: `${marketLabel(g.market)}（${g.items.length}）`,
+                      value: g.market,
+                    })),
+                  ]}
+                />
+              </div>
               <Typography.Text type="secondary" style={{ fontSize: 11.5 }}>
                 富时中国A50 指数期货（新加坡，T+1 夜盘）<strong>不在 A 股交易时段</strong>交易，已单独标注时段与币种，勿与 A 股混看。
               </Typography.Text>
@@ -304,15 +313,17 @@ export default function MarketGlobalPage() {
         <Row key={group.market} gutter={[16, 16]} style={{ marginBottom: 16 }}>
           <Col span={24}>
             <SectionCard title={marketLabel(group.market)}>
-              <Table<GlobalIndexCard>
-                rowKey="tsCode"
-                size="small"
-                loading={isLoading}
-                columns={columns}
-                dataSource={group.items}
-                pagination={false}
-                scroll={{ x: 1100 }}
-              />
+              <div className="market-global__table-scroll">
+                <Table<GlobalIndexCard>
+                  rowKey="tsCode"
+                  size="small"
+                  loading={isLoading}
+                  columns={columns}
+                  dataSource={group.items}
+                  pagination={false}
+                  scroll={{ x: 1100 }}
+                />
+              </div>
             </SectionCard>
           </Col>
         </Row>

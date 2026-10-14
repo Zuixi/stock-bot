@@ -3,6 +3,7 @@ import dayjs, { type Dayjs } from "dayjs";
 import { DeltaText } from "@/shared/ui/DeltaText";
 import { formatCnDate } from "@/shared/ui/date";
 import type { IndustryQuote, Scd2Coverage } from "@/shared/api/swDrilldown";
+import "./IndustryMetricStrip.css";
 
 /**
  * S1.4 · 一个申万行业节点的 7 项行情字段条。
@@ -105,10 +106,19 @@ export function IndustryMetricStrip({
   ];
 
   return (
-    <Space wrap size={compact ? 8 : 16} data-testid="industry-metric-strip">
+    // `wrap` 基类已有；Phase 3 §4.5 补的是**单个 cell 自身可收缩**
+    // （`.industry-strip__cell`，见同目录 IndustryMetricStrip.css）：
+    // 「成交额 1.23万亿」这类不可断行串在 390px 下能把卡片顶宽，而 `Space` 的
+    // `flex-wrap: wrap` 只管"整体换行"，管不了"单个 cell 比容器还宽"。
+    <Space
+      wrap
+      size={compact ? 8 : 16}
+      data-testid="industry-metric-strip"
+      className="industry-strip"
+    >
       {cells.map((c) => (
         <Tooltip key={c.key} title={c.tip}>
-          <Space direction="vertical" size={0}>
+          <Space direction="vertical" size={0} className="industry-strip__cell">
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {c.label}
             </Typography.Text>
