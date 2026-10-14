@@ -30,7 +30,7 @@
 | [2026-09-29-xuantian-capacity-ingest-gating.md](./2026-09-29-xuantian-capacity-ingest-gating.md) | 2026-09-29 | 玄田产能数据直连 + ingest 三层增量门控 | active | 7 Task 全部完成+final review 修正 |
 | [2026-10-12-market-hotspot-persistence-and-trends.md](./2026-10-12-market-hotspot-persistence-and-trends.md) | 2026-10-12 | 市场热点数据持久化与趋势追踪（个股级涨停事实 · 东财实时源日终捕获 · 覆盖率对账 · 趋势/分位端点） | completed | 8 Task 全部落地（T1–T8 提交见正文「实施结果」）；门禁 **811 passed / 67 deselected / 0 failed**；最终评审见 `docs/Changelog.md` |
 | [2026-10-12-investment-research-platform-ia.md](./2026-10-12-investment-research-platform-ia.md) | 2026-10-12 | 投研工作台信息架构与数据模型主线（10 导航 · 6 地基 · 原料视图分离 · 8 Wave 倒序路线图 · 57 spec 拆分） | active | 头部 `status: active`；契约在 [docs/specs/](../docs/specs/README.md)；进度见正文 §13（Wave 0 关门 + Wave 1 进行中） |
-| [2026-10-13-frontend-design-remediation.md](./2026-10-13-frontend-design-remediation.md) | 2026-10-13 | 前端设计整改（导航形态与三层布局 · 信息去重 · 字体与量级色阶 token · 对比度 AA · 四档响应式断点 · 文案与品牌） | draft | 头部 `status: draft`；阻塞于 §0 五项 owner 裁定，Phase 0（基线冻结 + 先红后绿门禁）可先行 |
+| [2026-10-13-frontend-design-remediation.md](./2026-10-13-frontend-design-remediation.md) | 2026-10-13 | 前端设计整改（导航形态与三层布局 · 信息去重 · 字体与量级色阶 token · 对比度 AA · 四档响应式断点 · 文案与品牌） | **completed** | §0 五项裁定已完成（A1 / B2 / C1→实际 C2 / D1 / market-data-sources）；Phase 0–4 全部完成，**Phase 0 冻结的五条红线（0.2–0.6）全部转绿**且无回归。B2 使 Phase 3 成本约 B1 的三倍（逐组件窄屏形态），D1 使 landing 只做压缩排序、不删不迁 |
 | [2026-10-14-invite-only-provisioning-and-admin-console.md](./2026-10-14-invite-only-provisioning-and-admin-console.md) | 2026-10-14 | 邀请制开户与管理员控制台（关闭自助注册 · 管理员预开户 + 临时密码强制改密 · `/auth/admin/*` 用户 CRUD 与角色分配 · 首个 admin 引导 CLI） | completed | 头部 `status: completed`；Phase 0–7 全部落地：auth 89 + forward-auth 14 测试绿，容器实测 bootstrap→开户→强制改密→/api 恢复全链路通过，Playwright 93 passed |
 
 ## 维护约定

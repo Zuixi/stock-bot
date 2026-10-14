@@ -1,9 +1,9 @@
 ---
-status: active
+status: completed
 scope: 前端设计整改——一级导航形态与三层布局表达、工作页信息密度（去重复）、设计系统（字体/数字/量级色阶/对比度/动效/焦点）、响应式四档断点、文案与品牌一致性；来源为 2026-10-13 全站设计评审（1440/1280/390 三档实测截图）
 touches: frontend/src/app/, frontend/src/pages/, frontend/src/features/nav/, frontend/src/features/market/, frontend/src/features/industry-research/, frontend/src/shared/ui/, frontend/src/shared/config/, frontend/src/app/router/, frontend/public/fonts/, frontend/scripts/, frontend/e2e/, docs/design/landing-market-theme.md, docs/Changelog.md, plans/index.md
 updated: 2026-10-15
-next-action: **Phase 0 / 1 / 2 / 3 / 4 全部已完成**。Phase 4（W5 文案与打磨，§6 的 5.1–5.8）的实测回写见 §6 末节：品牌字标统一为 `StockBot`（含 slop 硬探针）· landing `scrollHeight` 5935→5428 · `DataRow` 三列密排（`@container` 不生效、改媒体查询）· 删 Hero 静态药丸与 `01/02/03`（改四项在途流程）· 信号历史 diff 化（纯函数门禁 + 渲染层 e2e）· 左栏补剪刀差 · 占位页路线图骨架（8 路由 ≥3 项）· 北向「一处常量、两处表面」。**剩余可选项**：§10 的 `status → completed` 与 `plans/index.md` 同步（属控制器的收口动作）；§8.3 的 `landing-placeholder` / `WHITE_TEXT_THRESHOLD` 两条探针**未加**（前者仍是 `MarketPulse` 的失败态文案、不是空盒子；后者已随 §3.7 从代码消失，加一条恒不命中的探针无收益）——理由见 §8.3 的 Phase 4 状态。
+next-action: 已完成（Phase 0–4 全部落地；Phase 0 冻结的 0.2–0.6 五条红线全部转绿且无回归）。后续如需继续推进：① 6 个 `768–1023` 热力图可切 Top10 视图等「附加视图」类新能力；② 自托管字体（C1）若将来预算放宽可切回（抽象层已就位，只影响字体文件）；③ §8.3 剩余两条 slop 探针待其命中目标消失后接入
 ---
 
 # 前端设计整改 实施计划

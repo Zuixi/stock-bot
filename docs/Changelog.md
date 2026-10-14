@@ -1,3 +1,24 @@
+## 2026-10-15 - **前端设计整改 Phase 4：W5 文案与打磨** —— 计划收官（Phase 0–4 全部完成）
+
+依 `plans/2026-10-13-frontend-design-remediation.md` §6 执行（`9f52574` + `e5ef9bf`）。计划 `status: completed`，`plans/index.md` 已同步。
+
+| 条 | 内容 | 实测 |
+|---|---|---|
+| 5.1 | **品牌统一为 `StockBot`**（`MainLayout`×2 / `login` / `index.html` `<title>`，连带 `admin-users`、`change-password` 的 `document.title`）| `frontend` 全树 **0 处**「Stock Bot」；**slop 硬探针**已挂（双向实测：回退 → `EXIT=1`，还原 → `EXIT=0`）|
+| 5.2 | **landing 压缩排序**（依 D1：**不删不迁**）| `scrollHeight` **5935 → 5428**（1440×900 匿名，同口径）。唯一删除 = `日历` 的**空占位盒**（183px，§0.1 明文例外）。排名块 694 → 357px、hero 230 → 203px；产品块 +96px（四项在途流程，**故意**，已实测非疏漏）|
+| 5.3 | `DataRow` 支持多列（新增 `DataRowList`，`columns=1` 不多出 DOM）| `RankingMatrix` 三列：694 → 357px。**⚠️ `@container` 实测不生效**（390px 下 3 列各 89px、10/10 标题被截断）⇒ 改回**视口媒体查询**，现 390 下 1 列、**0 截断** |
+| 5.4 | 删装饰性装置 | hero 的「A股行情」药丸删除；`01/02/03` 改为**四项在途流程**（原料 → 研判 → 结论 → 执行）；视觉复核时又删掉自己引入的一个孤儿 `↓` |
+| 5.5 | **信号历史 diff 化** | 纯函数 `signalHistoryDiff.ts` + **机械化门禁** `scripts/check-signal-diff.mjs`（22 条断言，用库内**真实** `reason`，已挂进 `check:design`）；渲染层 `e2e/signalPanel.spec.ts` 5 passed。**判据是"变化"而非"存在"**：首条的完整 `触发依据` 不得出现在第 2 条起 |
+| 5.6 | 两栏均衡 | 新增 `CostScissorsChart.tsx`，消费**同一个** `price_vs_cost` payload；真实工作台实测：剪刀差图已在「猪周期阶段定位」下方，**原 ~400px 空洞被填**（截图 `phase4-workbench-real.png`）|
+| 5.7 | 占位页升级为路线图 | `shared/config/module-roadmap.ts`（**8 个键** = 8 条占位路由）+ `PlaceholderNotice` 骨架；`e2e/placeholder.spec.ts` 4 passed，逐路由实测：`/company 5 · /news 4 · /macro 5 · /valuegraph 3 · /strategy 5 · /risk 4 · /trade 4 · /search 4`（**全部 ≥3**，路由集合**从清单读**而非手抄）|
+| 5.8 | 北向口径一致（**重定向后**）| 计划原文要改的 `DataCoverageMatrix` **早已被 `1efe65a` 删除**（0 命中）⇒ 改为：唯一常量 `NORTHBOUND_SOURCE`（+ 共用 `NORTHBOUND_QUERY`）在 `shared/config/dataSourceCaliber.ts` **同时驱动** `NorthboundCard` 与 `/market/data-sources`。真实 payload（`source_status=live`）两处均显示「已接入 · 上游日更」；停更态（mock）两处均「已接入 · 上游停更」+ 卡片另加「数据源已停更（最新 10-12）」+ 灰化虚线曲线。数据来源页原本**没有**北向行（`coverage[]` 8 域不含）⇒ 新增**同源登记块**，未往后端驱动的表里塞本地行 |
+
+**真凭据复核（补 Phase 4 的一处缺口）**：Phase 4 报告称信号面板截图只能靠 mock payload（无 `E2E_RESEARCH_USER`）。用临时账号真登录后复跑受保护 spec，**顺带抓出一个只在有凭据时暴露的真缺陷**：`research.spec.ts:173` 仍断言点击成分股后 URL 匹配 `/stock/`，而应用内部导航早已统一到规范路由 `/company/:symbol` —— 这是 `7f7b953` 那批"遗留路由改规范路由"漏掉的一处，**漏的原因正是该用例平时会 skip**（`e5ef9bf`）。修后：`research + signalPanel + responsive-b2` 带真凭据 **201 passed / 2 skipped / 0 failed**。真实工作台截图 `phase4-workbench-real.png` / `phase4-signal-panel-real.png` 已存档。临时账号 `p4probe` 用完即删（残留 0）。
+
+**未达成（如实记录）**：① §8.3 只加了 `Stock Bot` 一条探针——`landing-placeholder` 仍是 `MarketPulse` **失败态**在用（扫它会误报**正确**代码），`WHITE_TEXT_THRESHOLD` 已从代码消失（探针恒不命中，加了也是空转），两条理由已写入计划 §8.3；② §5.6 的"~400px 空洞"**未取到整改前的像素值**（结构上已由剪刀差图占位，视觉复核确认填上）；③ §5.8 的"停更"分支目前靠 mock 驱动（真实 payload 为 `live`）。
+
+**Phase 4 报告指出的一条门禁缺陷（值得重视）**：`self_review.sh` 的「Changelog 已补记」检查是**范围敏感**的——它比对 `git diff origin/main..HEAD`，因此**前几个阶段的 Changelog 提交会让它变绿**，**它不是"本阶段已记录"的证据**。本次即由 controller 手工补记本阶段条目。
+
 ## 2026-10-15 - **前端设计整改 Phase 3：响应式四档断点（B2 全量响应式）** —— 0.2 红线转绿
 
 依 `plans/2026-10-13-frontend-design-remediation.md` §5 执行（`c9fb36c` + `7e28366`）。**Phase 0 最后一条红线（0.2 响应式）由此转绿**；至此 **0.2–0.6 全部绿**。
