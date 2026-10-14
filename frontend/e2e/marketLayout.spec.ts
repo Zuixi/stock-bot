@@ -88,17 +88,29 @@ test.describe("/market 工作台：去重复与口径同源", () => {
     }
   });
 
-  test("「申万行业网格」标题在页面内只出现 1 次（31 行业不得渲染两遍）", async ({ page }) => {
+  // ⚠️ 本用例此前是**空转的**：它数的是 `.ant-card-head-title` 里文案为「申万行业网格」的数量，
+  // 而冗余的第二份列表标题是「行业分类（申万）」——文案不同，所以永远数到 1、永远通过。
+  // 改为数「**渲染整份 31 行业列表的容器**」的数量（结构锚点，与标题文案无关）。
+  test("同屏只渲染一份 31 行业列表（§2.2 要求二选一）", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/market?tab=panorama", { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+    await expect(page.locator(".sw-grid").first()).toBeVisible(); // 先确认等到了目标区块
 
-    const gridTitle = page.locator(".ant-card-head-title", { hasText: "申万行业网格" });
-    await expect(gridTitle).toBeVisible(); // 结构性锚点：先确认等到了目标卡片
-    expect(
-      await gridTitle.count(),
-      "「申万行业网格」标题出现次数 ≠ 1 —— 31 个行业被等价渲染了两遍（§2.2 要求二选一）"
-    ).toBe(1);
+    // 一个"行业区块" = 渲染整份 31 行业列表的容器：瓦片网格（.sw-grid）
+    // 或列表卡（.industry-level1-link，§2.2 删除前的形态）。
+    const blocks = async () =>
+      (await page.locator(".sw-grid").count()) +
+      (await page.locator(".industry-level1-link").count());
+
+    expect(await blocks(), "31 行业被等价渲染了两遍（§2.2 要求二选一）").toBe(1);
+
+    // 正对照：注入第二份列表后，同一个 blocks() 必须读到 2。
+    // 没有这一步，上一条断言无法与"选择器写错了、永远数到 1"区分开（旧写法就是这么失灵的）。
+    await page.locator(".sw-grid").first().evaluate((node) => {
+      node.parentElement?.appendChild(node.cloneNode(true));
+    });
+    expect(await blocks(), "正对照失败：计数断言是空转的（计数没跟着 DOM 变）").toBe(2);
   });
 
   test("market-page-head 副标题 === Tab labels 以 ` · ` 拼接（同源）", async ({ page }) => {

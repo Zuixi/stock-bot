@@ -115,6 +115,7 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
   - ① **副标题 === Tab label 以 ` · ` 拼接** → **红**（真问题：副标题与 Tab 不同源）。这是本条唯一的红线工作项。
   - ② **页面文本不含「数据版图」** → 现在**绿**。降级为**回归闸**（防止它被搬回来），不再是红线。
   - ③ ~~「申万行业网格」标题出现 1 次~~ → **改为**：A股全景 Tab 下**同屏行业区块数 == 1**（申万行业网格 与 行业分类（申万）**都在列 31 个行业**，这才是「信息去重」要抓的冗余）→ **红**。原写法（按标题计数）抓不到这个冗余，因为第二份的标题不同。
+    - ⚠️ **修订计划的教训（Phase 1 实测）**：本条在**计划里**改成结构计数后，**已写好的 spec 并不会自动跟着变** —— `marketLayout.spec.ts` 里仍是旧写法（数 `.ant-card-head-title` 文案为「申万行业网格」的数量），因此 Phase 1 期间 ③ 一直**空转通过**（那一个标题本来就只有 1 个）。Phase 1 收尾时已把 spec 改为数「渲染整份 31 行业列表的容器」并**加正对照**（注入第二份后计数必须变 2，实测通过）⇒ 现在是**真断言**。**改判据时必须同时改实现该判据的 spec**，否则改的只是文档。
   - **两条负向断言必须先等到请求终态**（`waitForLoadState("networkidle")` + 显式等待该 Tab 的目标卡片出现）再断言，否则在 react-query 的 loading 窗口内恒真、假绿；锚点放在文案上而非 `data-testid`。
   - 计数用**结构选择器**（`page.locator(...)` 的 `toHaveCount`），不得用全局 `getByText`（strict-mode violation）。**并做正对照**（注入一段已知文本后计数应变化），证明计数断言不是空跑——Phase 0 已做。
 - [x] **0.5 扩展 `frontend/scripts/check-design-tokens.mjs`（先红）**：见 §8.1 的五组断言。Phase 0 实测 **28 项不达标**（`--mag-*` / `--font-ui` / `--font-num` / `reduced-motion` / `focus-visible` 全缺；等宽数字出现次数 **65**，见 §8.1-5 已据实修正）。
@@ -167,7 +168,26 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
     `goto("/market")` + `getByRole("tab", {name:"短线情绪"})`）；再加一条**新 UI 能力**（结论条）。
     超出本 Phase 收尾量级，故按本条自己的许可推迟（见 task-24 报告 §7）。
 
-**W2 验收**：0.4 转绿（三 Tab 下无「数据版图」、31 行业只出现一次、副标题与 Tab 同源）；`/market` 页面 `scrollHeight` 下降 ≥35%（整改前：指数总览 1439 / A股全景 3141 / 数据面 1361）；E2E 既有 `marketDataFace.spec.ts`、`limitUpSentiment.spec.ts` 回归不挂（后者若有 DOM 假设需同步更新 selector）。
+**W2 验收（Phase 1 实测后据实修正，controller 裁定 2026-10-15）**：
+
+1. **0.4 三条全绿** ✓ 达成（实测 `marketLayout.spec.ts` 3 passed + `nav.spec.ts` 5 passed）。
+2. **`scrollHeight` 门槛改为"按 Tab 分别设、且只对真正冗余的 Tab 设"** —— 原写的"**一律** ≥35%（1439/3141/1361）"**不可达且判据本身是错的**：
+   - 那三个数出自 §3，与 §7.1 的实测基线（956/3667/900）**互相矛盾**；且 §7.1 自己写明"不得当作 CI 断言阈值"。
+   - **数据面 900 就是 100vh 地板**（header 64 + 内容 + footer 65）⇒ 585 在物理上不可能，"−35%"无从谈起。
+   - **指数总览实测 +24.3%（956→1188）**：变大是**故意的**——为了让「上证指数」不再被截成「上…」而让指数卡改为纵向堆叠；实测名称所需宽度 52px、原先只有 36px，且它同时造成了 `/market@1280` 的 **16px 横向溢出**。
+     **裁定：可读名称 + 无横向溢出 > 这条高度指标**（依 §1 目标 5「名称不被截断到不可辨识」与 §0-B「全量响应式」）。
+   - **修正后的判据**：**A股全景**（唯一真正有冗余的 Tab）`scrollHeight` 下降 **≥50%**（实测 −57.9% @1440 / −55.2% @1280 ✓ PASS）；**指数总览 / 数据面不设高度门槛**，改设「**无横向溢出 + 名称可辨识**」（实测两者均无溢出 ✓）。
+3. **既有 E2E 回归不挂** ✓：`marketDataFace` + `limitUpSentiment` + `marketTrust` + `landing` + `darkmode` + `navigation` 全绿；`responsive` 的 2 条红与 Phase 0 **一字未变**（`/market/global@390`·`@768`，属 Phase 3 范围）。
+
+### 2.5 Phase 1 的三处"计划与现实不符"（controller 裁定：**均按实测为准**）
+
+| # | 计划原文 | 实测现实 | 裁定 |
+|---|---|---|---|
+| a | §2.1「复用既有 `DataCoverageMatrix withStats`」+「landing 的 `DataCoverage` 区块保留」 | **两条都为假**：`1efe65a`（HEAD 的祖先，不在 main）已把 `DataCoverageMatrix.tsx/.css` **与 landing 的该区块一并删除**；`git grep DataCoverage frontend/src` = **0 命中** | **批准偏离**。新页建在**真实的** `GET /api/v1/market/data-freshness` 的 `coverage[]` 上（8 个**实测**域，计划写的 12 是估算）。**不复活**那张已因口径漂移而被删的静态表——复活它等于把已修掉的缺陷搬回来 |
+| b | §2.1 补偿行写「… · TuShare/东财 · …」 | 会**违反既有的** `marketTrust` 门禁「公开页不披露数据来源」（断言 `/market` 整页不得出现供应商名称） | **批准省略供应商名**，改用实测的「数据覆盖 8 个域」。**既有门禁 > 计划措辞** |
+| c | §2.4 拆 `/market/sentiment` | 需新增真路由 + 5 处登记，并改 2 套既有门禁测试的路由契约，另加一条新 UI | **批准推迟**（该条自身写明"可单独排期"）；已记入 §2.4 |
+
+> **另一发现（环境类，值得机械化）**：前端镜像的 runtime `COPY` 层会被**陈旧缓存**命中——`docker compose build frontend` **报告成功但装的是旧 dist**，只有 `--no-cache` 才对。这正是本会话早先"页面看起来坏了"那类事故的另一种形态。**待办**：加一条构建后校验（比对容器所服 `index-*.js` 哈希与本地 `dist/` 的一致），或把 `--no-cache` 写进前端构建约定。
 
 > **Phase 1 实测回写（task-24，2026-10-15）**：`0.3` / `0.4①` / `0.4②` / `0.4③` **全部转绿**；
 > `marketDataFace` + `limitUpSentiment` + `marketTrust` + `landing` + `darkmode` + `navigation` **全绿**；
