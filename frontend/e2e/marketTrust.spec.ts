@@ -276,11 +276,16 @@ test.describe("可点击条目语义与键盘可达（Task 16）", () => {
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/market\/hot-sectors\/industry$/);
 
-    // 申万一级行业卡 → 二级页：整卡是链接，键盘 Enter 即进入
+    // 申万一级行业**瓦片**（`.sw-cell`）→ 二级页：整格是链接，键盘 Enter 即进入。
+    //
+    // Phase 1 §W2.2 更新：原先这里锚的是 `.ant-card` 里 hasText「行业分类（申万）」的那张卡
+    // （`<IndustryClassification />`），它已随 §W2.2 删除（与网格同屏渲染同一批 31 个行业，
+    // 属重复渲染，二选一留网格）。被断言的**能力没变**——整格是 `<a href>` + 键盘可达，
+    // 只是承载它的 DOM 从"卡内链接"换成"网格瓦片"。故这里改成按 `.sw-grid` 作用域定位瓦片，
+    // 比原来按卡标题过滤更稳（不再依赖任何一张卡的标题文案）。
     await page.goto("/market");
     await page.getByRole("tab", { name: "A股全景" }).click();
-    const industryCard = page.locator(".ant-card").filter({ hasText: "行业分类（申万）" });
-    const level1 = industryCard.getByRole("link", { name: /农林牧渔/ });
+    const level1 = page.locator(".sw-grid .sw-cell", { hasText: "农林牧渔" });
     await expect15s(level1).toHaveAttribute("href", "/market/industry/110000");
     await level1.focus();
     await expect(level1).toBeFocused();

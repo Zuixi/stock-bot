@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { EChart, sparkOption } from "@/shared/ui/EChart";
 import { useTheme } from "@/app/theme-context";
 import type { GlobalIndexCard } from "@/shared/api/marketData";
+import "./GlobalIndexCardView.css";
 
 /** 市场徽章底色为各地区品牌色（装饰性，不随涨跌主题切换） */
 const MARKET_BADGE: Record<string, { label: string; color: string }> = {
@@ -38,40 +39,32 @@ export function GlobalIndexCardView({ index }: { index: GlobalIndexCard }) {
       onClick={() => navigate(`/index/${index.tsCode}`)}
       styles={{ body: { padding: "12px 16px" } }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      {/* 布局全部走 `GlobalIndexCardView.css`（见该文件顶部：为什么必须有一份窄卡形态）。
+          这里只保留与主题色/数据相关的行内样式。 */}
+      <div className="global-index-card__row">
+        <div className="global-index-card__name-col">
+          <div className="global-index-card__name-row">
             <span style={{
               display: "inline-flex", alignItems: "center", justifyContent: "center",
               width: 22, height: 22, borderRadius: "50%", fontSize: 10, fontWeight: 600,
               color: "#fff", backgroundColor: badge.color, flexShrink: 0,
             }}>{badge.label}</span>
-            <span style={{
-              fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis",
-              whiteSpace: "nowrap", color: colors.textPrimary,
-            }}>{index.name}</span>
+            <span className="global-index-card__name" style={{ color: colors.textPrimary }}>
+              {index.name}
+            </span>
           </div>
           <Typography.Text type="secondary" style={{ fontSize: 10, fontFamily: "monospace" }}>
             {index.market} {index.tsCode.split(".")[0]}
           </Typography.Text>
         </div>
-        {/* 右列：价格 + 涨跌幅色块右对齐（+/- 号） */}
-        <div style={{ textAlign: "right", flexShrink: 0 }}>
-          <div style={{
-            fontSize: 20, fontWeight: 600, color: colors.textPrimary,
-            fontVariantNumeric: "tabular-nums", marginTop: 4,
-          }}>
+        {/* 右列：价格 + 涨跌幅色块（+/- 号） */}
+        <div className="global-index-card__num-col">
+          <div className="global-index-card__price" style={{ color: colors.textPrimary }}>
             {index.price == null
               ? "—"
               : index.price.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
-          <div style={{
-            display: "inline-block",
-            fontSize: 12, fontWeight: 600,
-            color, backgroundColor: `${color}1f`,
-            borderRadius: 4, padding: "0 6px", lineHeight: "20px",
-            fontVariantNumeric: "tabular-nums", marginTop: 4,
-          }}>
+          <div className="global-index-card__change" style={{ color, backgroundColor: `${color}1f` }}>
             {index.pctChange == null
               ? "—"
               : `${index.pctChange > 0 ? "+" : ""}${index.pctChange.toFixed(2)}%`}
@@ -82,7 +75,7 @@ export function GlobalIndexCardView({ index }: { index: GlobalIndexCard }) {
             )}
           </div>
           {index.spark.length > 2 && (
-            <div style={{ width: 88, marginLeft: "auto" }}>
+            <div className="global-index-card__spark">
               <EChart option={sparkOption(index.spark, sparkColor)} height={30} silent />
             </div>
           )}

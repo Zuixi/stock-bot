@@ -1,0 +1,94 @@
+/*
+ * 全球指数卡（TV ticker 风）—— Phase 1 §W1.3 之后的形态。
+ *
+ * 为什么形态要改（实测成因，别退回"全 inline + 固定宽度"的写法）：
+ * §W1.3 把内容区 `maxWidth` 从 1400 收到 1280 + 左栏 208px 之后，`GlobalMarketBoard` 的
+ * `xl={4}` 在 ≥1200px 视口生效 ⇒ 卡片**在 1280 / 1440 / 1600 都只有 156 / 183 / 191px**
+ * （实测，不是"越宽越宽"——内容区被 `maxWidth: 1280` 封顶，多余宽度全给了两侧留白）。
+ * 而卡内涨跌幅色块自身就有 ~97px（`+0.10% +3.62` 这类不可断行内容），价格 ~77px：
+ * 横排时它们占掉整卡的 65%，名称只剩 36px（只够 1 个汉字 + 省略号，实测「上证指数」
+ * 被截成「上…」——与 §Why-now 表里"移动端名称被截到不可辨识"是同一类缺陷）。
+ *
+ * 故**堆叠式是默认形态**：名称行独占整行（149px ⇒ 4 个汉字完整显示，不参与横向争宽），
+ * 价格/涨跌 + sparkline 移到第二行。只有到 `≥1600px`（卡片 ~222px 以上、名称有 ≥100px）
+ * 才切回 ticker 横排——横排是**收益**而不是前提，空间不够时不该硬撑。
+ *
+ * ⚠️ 用视口断点而不是"卡片自身宽度"：本卡由 antd `Col` 派生，没有容器查询的降级路径
+ * （`@container` 需要给卡片挂 `container-type` 并改 `Col` 结构）。视口断点与 §5.1 的
+ * 四档契约同源，改动面最小、可解释。
+ */
+.global-index-card__row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+/* 名称列：允许被压缩（`min-width: 0`），但**不设下限**——下限会与不可断行的数值列
+   争宽、把整卡顶出视口（实测 `/market@1280` 溢出 16px）。名称靠 `text-overflow`
+   优雅截断，而不是靠"占住一段宽度"。 */
+.global-index-card__name-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+}
+
+.global-index-card__name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.global-index-card__name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* 数值列（价格 + 涨跌幅 + sparkline） */
+.global-index-card__num-col {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 8px;
+  text-align: left;
+  flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
+}
+
+.global-index-card__price {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.global-index-card__change {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 0 6px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.global-index-card__spark {
+  width: 100%;
+  max-width: 88px;
+  min-width: 40px;
+  margin-left: auto;
+}
+
+/* 不设"宽屏切回横排"的分支：实测即使 1600px（卡片 191px）横排仍会把「上证指数」
+   截成「上…」（名称只剩 39px）——因为内容区被 `maxWidth: 1280` 封顶，卡片宽度并不随
+   视口继续变宽。留一个"空间不够也硬撑"的分支只会把同一个缺陷藏在更宽的视口上，
+   故**全档统一堆叠**：形态一致、名称永远完整。 */

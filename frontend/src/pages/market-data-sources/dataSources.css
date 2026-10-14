@@ -1,0 +1,59 @@
+/*
+ * `/market/data-sources` 数据版图页样式（Phase 1 §W2.1）。
+ * 颜色一律走 CSS 变量随明暗主题切换；.table-scroll 沿用 Phase 3 §4.2 的窄屏横向滚动约定。
+ */
+
+/* 顶部四格读数：窄屏两列、桌面四列（B2 全量响应式，不隐藏任何一格） */
+.ds-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.ds-stat {
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.ds-stat__num {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-stat__label {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 数值列一律等宽数字（本计划 §3.4 的 .num 口径的局部落地；Phase 2 统一到 .num） */
+.ds-num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 表格窄屏横向滚动容器（Phase 3 §4.2 约定）：不把表格挤出视口 */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ds-refreshable {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ds-failed-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+.ds-failed-error {
+  color: var(--text-secondary);
+  word-break: break-all;
+}

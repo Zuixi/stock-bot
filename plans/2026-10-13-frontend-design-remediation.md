@@ -140,28 +140,56 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
 
 ### W1 一级导航改左侧栏 + 补二级树
 
-- [ ] **1.1 布局重构**：`frontend/src/app/layouts/MainLayout.tsx` 把 `NavTree mode="horizontal"` 从 `Header` 移入 `Layout` 的 `Sider`（复用既有 `frontend/src/features/nav/ModuleSideNav.tsx` 与 `NavTree`，不新建组件）。
+- [x] **1.1 布局重构**：`frontend/src/app/layouts/MainLayout.tsx` 把 `NavTree mode="horizontal"` 从 `Header` 移入 `Layout` 的 `Sider`（复用既有 `frontend/src/features/nav/ModuleSideNav.tsx` 与 `NavTree`，不新建组件）。
   - 断点：`≥1280` 常驻 208px / `1024–1279` 折叠 64px 图标栏（hover 展开浮层）/ `<1024` 抽屉（`Drawer` + 汉堡按钮）。
   - `Header` 只保留：品牌 + 全局搜索 + 主题切换 + 用户菜单（IA §3.2 的"全局工具不进导航"）。
   - 命中依据：`NAV_PRESENTATION` 与 `NAV_ROOTS` 的合成逻辑**不动**，只换容器。
-- [ ] **1.2 补二级树**：`frontend/src/app/router/route-manifest.ts` 新增 `MODULE_TREES: Record<string, NavNode[]>`（**纯数据**，与 `NAV_ROOTS` 同文件，保持"路由契约唯一真相"），节点取自 IA 计划 §3.3 表（资讯 4 / 行业 3 / 公司 9 / 宏观 7 / 情绪 10 / 策略 5 / 风险 4 / 交易 3）。`MainLayout` 用当前 pathname 前缀选树下发给 `ModuleSideNav`。
+- [x] **1.2 补二级树**：`frontend/src/app/router/route-manifest.ts` 新增 `MODULE_TREES: Record<string, NavNode[]>`（**纯数据**，与 `NAV_ROOTS` 同文件，保持"路由契约唯一真相"），节点取自 IA 计划 §3.3 表（资讯 4 / 行业 3 / 公司 9 / 宏观 7 / 情绪 10 / 策略 5 / 风险 4 / 交易 3）。`MainLayout` 用当前 pathname 前缀选树下发给 `ModuleSideNav`。
   - 子节点**暂时指向父路由**（`/news?tab=announcement` 形态），不做假路由——保证 `check-routes.mjs` 的占位契约不被破坏。
-- [ ] **1.3 内容区适配**：`Content` 的 `maxWidth` 由 1400 改为 `1280`（表格式页面用 `maxWidth: "none"` 全宽），保证左栏 + 内容在 1440 下不挤压密集表格。
+- [x] **1.3 内容区适配**：`Content` 的 `maxWidth` 由 1400 改为 `1280`（表格式页面用 `maxWidth: "none"` 全宽），保证左栏 + 内容在 1440 下不挤压密集表格。
 
 **W1 验收**：0.3 转绿（1280/1440 下 10 项可见）；新增断言 `<1024` 时汉堡按钮可打开抽屉且抽屉内含 10 项；`/news` 左树渲染 4 个节点。
 
 ### W2 信息去重
 
-- [ ] **2.1 数据版图迁出工作台**：删 `frontend/src/pages/market/index.tsx:312` 的 `<DataCoverageMatrix withStats={false} />`；新建 `frontend/src/pages/market-data-sources/index.tsx`（复用既有 `DataCoverageMatrix withStats`），注册路由（依 §0-E 裁定）。
+- [x] **2.1 数据版图迁出工作台**：删 `frontend/src/pages/market/index.tsx:312` 的 `<DataCoverageMatrix withStats={false} />`；新建 `frontend/src/pages/market-data-sources/index.tsx`（复用既有 `DataCoverageMatrix withStats`），注册路由（依 §0-E 裁定）。
   - 工作台补偿：`market-page-head` 右侧加一行 `数据覆盖 12 个域 · TuShare/东财 · 查看来源 →`（链到新页），字号 12 / `--text-secondary`。
   - landing 的 `DataCoverage` 区块**保留**（那是它的正确位置）。
-- [ ] **2.2 删 31 行业重复渲染**：`market/index.tsx:251` 删除 `<IndustryClassification />`。把它的两个有效信息并进瓦片：`SwIndustryGrid.tsx` 每格第二行由 `{count} 只` 改为 `{count} 只 · {children.length} 个二级`，`title` 属性保留；瓦片整体改为可点击 → `navigate('/market/industry/' + code)`（现在是纯展示 `div`，需改为 `<Link>` 或 `role="button"` + `onKeyDown`，保证键盘可达）。
+- [x] **2.2 删 31 行业重复渲染**：`market/index.tsx:251` 删除 `<IndustryClassification />`。把它的两个有效信息并进瓦片：`SwIndustryGrid.tsx` 每格第二行由 `{count} 只` 改为 `{count} 只 · {children.length} 个二级`，`title` 属性保留；瓦片整体改为可点击 → `navigate('/market/industry/' + code)`（现在是纯展示 `div`，需改为 `<Link>` 或 `role="button"` + `onKeyDown`，保证键盘可达）。
   - 若 owner 认为 `IndustryClassification` 承载的"钻取入口"不可丢：改法二是保留列表、删除瓦片卡（二选一，**不得两个都在**）。
-- [ ] **2.3 副标题同源**：`market/index.tsx` 的 `全球指数 · A股全景 · …` 字面量（`:298`）改由 `items.map(i => i.label).join(" · ")` 生成；若 §W2 后 Tab 收敛为 4 个（见 2.4），副标题自动跟随。
-- [ ] **2.4 短线情绪拆页**：把 `SentimentTab`（现 `market/index.tsx` 内联）提升为 `frontend/src/pages/market-sentiment/index.tsx`（路由 `/market/sentiment`），`market` 的 Tab 回到契约 §4 的 4 个：指数总览 / A股全景 / 资金流向 / 数据面。市场页首屏给一条"结论条"（涨停 N / 炸板率 X% / 情绪档位），避免 6300px 的下滚。
+- [x] **2.3 副标题同源**：`market/index.tsx` 的 `全球指数 · A股全景 · …` 字面量（`:298`）改由 `items.map(i => i.label).join(" · ")` 生成；若 §W2 后 Tab 收敛为 4 个（见 2.4），副标题自动跟随。
+- [ ] **2.4 短线情绪拆页**（**Phase 1 未做，单独排期**：见下）：把 `SentimentTab`（现 `market/index.tsx` 内联）提升为 `frontend/src/pages/market-sentiment/index.tsx`（路由 `/market/sentiment`），`market` 的 Tab 回到契约 §4 的 4 个：指数总览 / A股全景 / 资金流向 / 数据面。市场页首屏给一条"结论条"（涨停 N / 炸板率 X% / 情绪档位），避免 6300px 的下滚。
   - 注：本条依赖 §0-A 裁定（A3 方案下 Tab 数量另议），**可在 W2 其余项之后单独排期**。
+  - **Phase 1 未做（单独排期）的实测理由**：它要新增**真功能路由** `/market/sentiment` ⇒ 连带 5 处登记
+    （`route-manifest` / `route-elements` 的 `PAGES` / `check-routes` 的 `NEW_S1_ROUTES` / IA §4「S1.x 新增路由」表
+    / `ARCHITECTURE §6`）；且 `/market` 的 Tab 从 5 收敛到 4 会**同时改两套既有 E2E 的路由契约**
+    （`marketDataFace.spec.ts` 的「短线情绪三卡」+ `limitUpSentiment.spec.ts` 的 8 个用例全部
+    `goto("/market")` + `getByRole("tab", {name:"短线情绪"})`）；再加一条**新 UI 能力**（结论条）。
+    超出本 Phase 收尾量级，故按本条自己的许可推迟（见 task-24 报告 §7）。
 
 **W2 验收**：0.4 转绿（三 Tab 下无「数据版图」、31 行业只出现一次、副标题与 Tab 同源）；`/market` 页面 `scrollHeight` 下降 ≥35%（整改前：指数总览 1439 / A股全景 3141 / 数据面 1361）；E2E 既有 `marketDataFace.spec.ts`、`limitUpSentiment.spec.ts` 回归不挂（后者若有 DOM 假设需同步更新 selector）。
+
+> **Phase 1 实测回写（task-24，2026-10-15）**：`0.3` / `0.4①` / `0.4②` / `0.4③` **全部转绿**；
+> `marketDataFace` + `limitUpSentiment` + `marketTrust` + `landing` + `darkmode` + `navigation` **全绿**；
+> `responsive` 的 2 条红与 Phase 0 一字未变（`/market/global@390/768`）。
+> **`scrollHeight ↓≥35%` 只在 A股全景成立，另两个 Tab 达不到**（同口径实测，`W×900` 匿名态）：
+>
+> | Tab | §7.1 基线 | 实测 | 相对 §7.1 | 相对本节括号里的旧值 | 结论 |
+> |---|---|---|---|---|---|
+> | A股全景 @1440 | 3667 | **1545** | **−57.9%** | −50.8% | ✅ 达标 |
+> | A股全景 @1280 | 3667 | **1642** | **−55.2%** | −47.7% | ✅ 达标 |
+> | 指数总览 @1280/1440 | 956 | **1188** | **+24.3%** | −17.4% | ❌ 增高（见下） |
+> | 数据面 @1280/1440 | 900 | **900** | **0.0%** | −33.9% | ❌（**物理不可达**，见下） |
+>
+> - **数据面**：900 是 `100vh` 地板（header 64 + content + footer 65），其内容本就短于视口。
+>   把 900 压到 `900×0.65 = 585` 在物理上不可能——这条目标在本节写的 1361 基线下也是
+>   `1361×0.65 = 885 ≤ 900`（只差 15px，同样接近不可达）。**该 Tab 不构成整改成效的度量**。
+> - **指数总览 +24.3% 是主动取舍**：内容区 `maxWidth: 1280` + 左栏 208px 使 `GlobalMarketBoard`
+>   的 `xl={4}` 在 ≥1200px 生效 ⇒ 单卡只有 156–191px，而卡内涨跌幅色块自身 97px（不可断行），
+>   横排时**名称只剩 36px**（「上证指数」被截成「上…」，与本文档 §Why-now 表里"名称被截到不可辨识"
+>   同类），并把 `/market@1280` 顶出 16px 横向溢出。改为**全档堆叠**后名称完整（`0/19` 截断）、
+>   无溢出，代价是每 Tab +232px。**「≥35% 高度」与「名称可辨识」在 156–191px 宽的卡片里不可兼得**，
+>   已按 §1 目标 5 + §0-B 选**名称可读**；owner 若认为高度优先，回退卡片堆叠即可（代价见上）。
 
 ---
 

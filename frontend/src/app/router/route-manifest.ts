@@ -32,6 +32,127 @@ export const NAV_ROOTS = [
   { path: "/trade", title: "交易执行" },
 ] as const;
 
+/**
+ * 各一级导航的**模块内子模块树**（Phase 1 §W1.2，逐条转录 IA 文档 §2 的 10 张表——那张表
+ * 又是 plan §3.3 的逐条转录，故本常量与 IA 文档同源、不增不减）。
+ *
+ * **为什么放在本文件**：它是**路由契约**的一部分（每个节点都要给出一个可去的 `path`），
+ * 而本文件是路由的唯一真相（Ruling 33）。放在组件里会让"某个模块少一个子模块"变成
+ * 只有肉眼能发现的漂移。
+ *
+ * ⚠️ **子节点一律指向父路由 + `?tab=`，不造假路由**：`check-routes.mjs` 的白名单只允许
+ * 已登记的路由出现，凭空写 `/news/announcement` 这类路径会当场转红（`表外路由`）。等各模块
+ * Wave 真正落地、契约里登记了真子路由，再把这里的 `path` 换成真路径——那时门禁会跟着要求
+ * 同步 IA §4 与 `ARCHITECTURE §6`，这正是我们想要的顺序。
+ *
+ * 计数（IA §2 逐节，供人对照）：资讯 4 / 行业 3 / 公司 9 / 宏观 7 / 情绪 10 /
+ * 策略 5 / 风险 4 / 交易 4（plan §3.4 把原图「标的分类」拆为「关注池」+「资产类型」）。
+ * `/market` 与 `/valuegraph` 的树见下方注释。
+ */
+export const MODULE_TREES: Record<string, NavNode[]> = {
+  // IA §2.2 资讯（4 类，按 publisher_tier 分）
+  "/news": [
+    { key: "news-announcement", title: "上市公司公告", path: "/news?tab=announcement" },
+    { key: "news-policy", title: "政府官媒政策", path: "/news?tab=policy" },
+    { key: "news-research", title: "研究资讯", path: "/news?tab=research" },
+    { key: "news-market", title: "市场资讯", path: "/news?tab=market" },
+  ],
+  // IA §2.3 行业分析（3）
+  "/industry": [
+    { key: "industry-board", title: "行业看板", path: "/industry?tab=board" },
+    { key: "industry-report", title: "行业报告", path: "/industry?tab=report" },
+    { key: "industry-compare", title: "行业比较", path: "/industry?tab=compare" },
+  ],
+  // IA §2.4 公司分析（9 卡；4 卡定量自给、5 卡依赖资讯）
+  "/company": [
+    { key: "company-basic", title: "基本信息", path: "/company?tab=basic" },
+    { key: "company-risk", title: "风险红线", path: "/company?tab=risk" },
+    { key: "company-financial", title: "财务数据", path: "/company?tab=financial" },
+    { key: "company-model", title: "商业模式", path: "/company?tab=model" },
+    { key: "company-moat", title: "竞争力", path: "/company?tab=moat" },
+    { key: "company-valuation", title: "估值", path: "/company?tab=valuation" },
+    { key: "company-management", title: "管理层", path: "/company?tab=management" },
+    { key: "company-shareholder", title: "股东股权", path: "/company?tab=shareholder" },
+    { key: "company-event", title: "事件驱动", path: "/company?tab=event" },
+  ],
+  // IA §2.5 宏观分析（7）
+  "/macro": [
+    { key: "macro-top-policy", title: "顶层政策", path: "/macro?tab=top-policy" },
+    { key: "macro-monetary", title: "货币政策", path: "/macro?tab=monetary" },
+    { key: "macro-fiscal", title: "财政政策", path: "/macro?tab=fiscal" },
+    { key: "macro-industry-policy", title: "产业政策", path: "/macro?tab=industry-policy" },
+    { key: "macro-regulatory", title: "监管政策", path: "/macro?tab=regulatory" },
+    { key: "macro-calendar", title: "政策日历", path: "/macro?tab=calendar" },
+    { key: "macro-impact", title: "政策影响追踪", path: "/macro?tab=impact" },
+  ],
+  // IA §2.6 情绪分析（10；纯数值，零资讯依赖）
+  "/sentiment": [
+    { key: "sentiment-activity", title: "交易活跃度", path: "/sentiment?tab=activity" },
+    { key: "sentiment-leverage", title: "杠杆资金", path: "/sentiment?tab=leverage" },
+    { key: "sentiment-investor", title: "投资者行为", path: "/sentiment?tab=investor" },
+    { key: "sentiment-breadth", title: "市场宽度与动量", path: "/sentiment?tab=breadth" },
+    { key: "sentiment-volatility", title: "波动率与衍生品", path: "/sentiment?tab=volatility" },
+    { key: "sentiment-moneyflow", title: "资金流向", path: "/sentiment?tab=moneyflow" },
+    { key: "sentiment-valuation", title: "估值与风险溢价", path: "/sentiment?tab=valuation" },
+    { key: "sentiment-retail", title: "散户舆情", path: "/sentiment?tab=retail" },
+    { key: "sentiment-composite", title: "综合情绪指数", path: "/sentiment?tab=composite" },
+    { key: "sentiment-alert", title: "情绪预警与预判", path: "/sentiment?tab=alert" },
+  ],
+  // IA §2.8 策略引擎（5）
+  "/strategy": [
+    { key: "strategy-pick", title: "选股", path: "/strategy?tab=pick" },
+    { key: "strategy-timing", title: "择时", path: "/strategy?tab=timing" },
+    { key: "strategy-signal", title: "信号系统", path: "/strategy?tab=signal" },
+    { key: "strategy-portfolio", title: "组合构建", path: "/strategy?tab=portfolio" },
+    { key: "strategy-backtest", title: "策略回测", path: "/strategy?tab=backtest" },
+  ],
+  // IA §2.9 风险管理（4）
+  "/risk": [
+    { key: "risk-stock", title: "个股风控", path: "/risk?tab=stock" },
+    { key: "risk-portfolio", title: "组合风控", path: "/risk?tab=portfolio" },
+    { key: "risk-systemic", title: "系统性风险", path: "/risk?tab=systemic" },
+    { key: "risk-rules", title: "风控规则引擎", path: "/risk?tab=rules" },
+  ],
+  // IA §2.10 交易执行（4：plan §3.4 把原图「标的分类」拆为「关注池」+「资产类型」）
+  "/trade": [
+    { key: "trade-watchpool", title: "关注池", path: "/trade?tab=watchpool" },
+    { key: "trade-asset", title: "资产类型", path: "/trade?tab=asset" },
+    { key: "trade-journal", title: "交易日志", path: "/trade?tab=journal" },
+    { key: "trade-position", title: "持仓管理", path: "/trade?tab=position" },
+  ],
+  // IA §2.1 市场（5 + 7 榜单）：**二级树全部是已经存在的真路由**，故直接指向真页面，
+  // 不用 `?tab=` 占位（这是本常量里唯一能给出真子路由的模块，其余模块的真子路由尚未登记）。
+  "/market": [
+    { key: "market-global-sub", title: "全球市场", path: "/market/global" },
+    { key: "market-industry-sub", title: "行业分类", path: "/market/industry" },
+    { key: "market-heatmap-sub", title: "板块热力图", path: "/market/heatmap" },
+    { key: "market-rankings-sub", title: "A股排行", path: "/market/rankings/market_cap" },
+    { key: "market-datasources-sub", title: "数据版图", path: "/market/data-sources" },
+  ],
+  // IA §2.7 价值网图谱（3）：三个子模块**今天都没有真路由**（真页面归 Wave 1+），
+  // 唯一的入口是父路由本身的占位页，故只给一个节点而不是编三个假 `?tab=`。
+  "/valuegraph": [
+    { key: "valuegraph-chain", title: "供应 / 产业链", path: "/valuegraph?tab=chain" },
+    { key: "valuegraph-holding", title: "上市公司控股关系", path: "/valuegraph?tab=holding" },
+    { key: "valuegraph-map", title: "产业链地图", path: "/valuegraph?tab=map" },
+  ],
+};
+
+/**
+ * 按当前 pathname 选模块树：**最长前缀**命中（`/market/industry/110000` → `/market`
+ * 那棵树，而不是"精确等于 /market 才有树"）。纯路径比较，不含任何业务映射——
+ * 与 `NavTree.matchActiveKey` 同一口径。
+ */
+export function pickModuleTree(pathname: string): NavNode[] {
+  let bestKey: string | undefined;
+  for (const key of Object.keys(MODULE_TREES)) {
+    if (pathname === key || pathname.startsWith(`${key}/`)) {
+      if (!bestKey || key.length > bestKey.length) bestKey = key;
+    }
+  }
+  return bestKey ? MODULE_TREES[bestKey] : [];
+}
+
 /** 权限可见性三态（口径见 IA 文档 §1 与 ADR 0008） */
 export type NavVisibility =
   /** 公开：未登录也可见 */
@@ -42,6 +163,19 @@ export type NavVisibility =
   | { kind: "permission"; permission: string };
 
 export type RouteKind = "page" | "redirect" | "layout";
+
+/**
+ * 模块树节点的形状 —— 与 `features/nav/types.ts::NavNode` 的 `key/title/path/children`
+ * 子集同形。这里**内联声明**（不 import 那个文件）是刻意的：本文件必须保持零依赖
+ * （`check-routes.mjs` 由 node 直接 import 它，见文件头），而 `features/nav/types.ts`
+ * 虽然也是纯类型，但跨目录耦合会让"路由契约"依赖"导航组件域"。
+ */
+export interface NavNode {
+  key: string;
+  title: string;
+  path?: string;
+  children?: NavNode[];
+}
 
 export interface AppRoute {
   /** 稳定标识（也是 React Router 的 key）；layout 路由用它做 `parent` 的引用目标 */
@@ -131,6 +265,20 @@ export const ROUTES: AppRoute[] = [
     path: "/market/heatmap",
     kind: "page",
     component: "MarketHeatmapPage",
+    parent: "main",
+  },
+  // Phase 1 §W2.1 / 前端设计整改 §0-E 裁定：数据版图（原先钉在 `/market` 每个 Tab 底部的
+  // 静态矩阵，已在 `1efe65a` 移出工作台）改为独立页 `/market/data-sources`。**owner 裁定
+  // 的位置就在市场域内**（对比候选 `/about/data`），故它 `/market/**` 公开免登录（ADR 0008）。
+  // 数据来自只读巡检端点 `/api/v1/market/data-freshness` 的 `coverage[]`——不是又一张手写
+  // 常量表（被移走的那版正是因此与库内实况漂移）。
+  // 登记契约（三处必须同时改，`check:routes` 双向比对）：本清单 + IA §4「S1.x 新增路由」表
+  // + `check-routes.mjs` 的 `NEW_S1_ROUTES`；`ARCHITECTURE §6` 路由一览也在比对之列。
+  {
+    key: "market-data-sources",
+    path: "/market/data-sources",
+    kind: "page",
+    component: "MarketDataSourcesPage",
     parent: "main",
   },
   // S1.6 新增：A股排行 7 榜（市值/股息率/月度涨幅/月度跌幅/半年利润/年利润/ROE）。

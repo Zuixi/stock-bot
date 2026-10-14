@@ -15,7 +15,11 @@ export { NorthboundCard } from "./NorthboundCard";
 export { HotSectors } from "./HotSectors";
 export { BoardDrilldownDrawer } from "./BoardDrilldownDrawer";
 export type { BoardDrilldownTarget } from "./BoardDrilldownDrawer";
-export { IndustryClassification } from "./IndustryClassification";
+// `IndustryClassification` 已按 Phase 1 §W2.2 删除（Ruling 33：无人渲染 = 死代码）：
+// 它与 `SwIndustryGrid` 同屏渲染同一批 31 个行业，重复的那份去掉后不再有渲染方。
+// 注意**不是**删能力：它承载的「N 只 / M 个二级」已并进 `SwIndustryGrid` 每格第二行，
+// 而 7 项行情聚合条 `IndustryMetricStrip` 仍由各下钻页渲染（本文件下方不导出它，
+// 下钻页直接从 `./IndustryMetricStrip` 取）。
 export { MarketDataBoard } from "./MarketDataBoard";
 export { SwIndustryGrid } from "./SwIndustryGrid";
 export { RankingMatrix } from "./RankingMatrix";

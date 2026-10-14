@@ -76,6 +76,7 @@ frontend/src/
 | `/market/industry/:level1Code/:level2Code/:level3Code` | page | `pages/market-industry-level4`（`IndustryLevel4Page`） | 公开 | 申万末级：某三级行业的成分股（**SCD2** 区间还原）+ 该节点 7 项行情聚合（S1.4） |
 | `/market/heatmap` | page | `pages/market-heatmap`（`MarketHeatmapPage`） | 公开 | 市场/个股热力图（S1.5）：treemap、四分组（全市场/申万一级/概念/自选）、面积=市值或成交额可切换、颜色=涨跌幅；批量读路 `/api/v1/market/heatmap/treemap`；**不是任何 redirect 的目标**（Ruling 30） |
 | `/market/rankings/:key` | page | `pages/market-rankings`（`MarketRankingsPage`） | 公开 | A股排行 7 榜（S1.6）：市值 / 股息率 / 月度涨幅 / 月度跌幅 / 半年利润 / 年利润 / ROE，各 100 强；口径三件事（交易日 / 财务期 / 样本范围）由后端 payload 下发；整行下钻 `/company/:symbol`。**不在 IA §4 表内**（S1.6 新增子路由，与 `/market/global`、`/market/heatmap` 同类） |
+| `/market/data-sources` | page | `pages/market-data-sources`（`MarketDataSourcesPage`） | 公开 | 数据版图 / 数据来源（Phase 1 §W2.1，已在 IA §4「S1.x 新增路由」登记）：逐域覆盖率表 + 可自愈对账域状态 + 最近失败调度任务，消费只读巡检端点 `GET /api/v1/market/data-freshness`（`apply=false`，绝不触发回补）。原先钉在 `/market` 每个 Tab 底部的静态矩阵已由 `1efe65a` 移出工作台，前端设计整改 §0-E 裁定新家在市场域内 |
 | `/market/index/:tsCode` | page | `pages/market-index`（`MarketIndexPage`） | 公开 | 指数详情（`/index/:tsCode` 的 redirect 目标） |
 | `/market/hot-sectors/:category` | page | `pages/market-hot-sectors`（`MarketHotSectorsPage`） | 公开 | 热门板块与情绪；保留（Ruling 30 从 redirect 退回） |
 | `/market/concept/:boardCode` | page | `pages/market-concept`（`ConceptBoardPage`） | 公开 | 概念板块；保留（Ruling 30 从 redirect 退回） |

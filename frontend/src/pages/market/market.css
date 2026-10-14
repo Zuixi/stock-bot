@@ -11,6 +11,21 @@
   flex-wrap: wrap;
 }
 
+/* 数据来源入口（Phase 1 §W2.1 的补偿行）：靠右、12px、--text-secondary。
+   `margin-left: auto` 把它推到副标题之后的行尾；窄屏 flex-wrap 后独占一行，
+   此时 auto 左边距无副作用（满宽）。 */
+.market-page-head__sources {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.market-page-head__sources:hover {
+  color: var(--accent);
+}
+
 /* 顶部分类 Tab（TV 风）：大字号 + 底部分隔线 */
 .market-page > .ant-tabs {
   margin-bottom: 4px;

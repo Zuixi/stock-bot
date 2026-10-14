@@ -27,6 +27,12 @@ export interface NavTreeProps {
   mode?: "horizontal" | "inline";
   /** 默认展开的节点 key（仅 `inline` 模式有意义） */
   defaultOpenKeys?: string[];
+  /**
+   * 折叠成图标栏（Phase 1 §W1.1 的 `1024–1279` 档）：`true` 时节点只剩图标，
+   * hover 展开浮层显示标题。**只在 `mode="inline"` 下有意义**（AntD 的
+   * `inlineCollapsed` 作用于 inline 菜单；`vertical`/`horizontal` 无此形态）。
+   */
+  inlineCollapsed?: boolean;
   /** 无子节点的节点被点击时是否跳转到 `path`（左树里分组节点也可能只想展开） */
   navigateOnLeafClick?: boolean;
   style?: React.CSSProperties;
@@ -88,6 +94,7 @@ export function NavTree({
   nodes,
   mode = "horizontal",
   defaultOpenKeys,
+  inlineCollapsed = false,
   navigateOnLeafClick = true,
   style,
   "data-testid": dataTestId,
@@ -107,6 +114,10 @@ export function NavTree({
       items={items}
       selectedKeys={selectedKey ? [selectedKey] : []}
       defaultOpenKeys={defaultOpenKeys}
+      // `inlineCollapsed` 只在 inline 模式生效；传 `false` 给其它模式是 no-op。
+      // ⚠️ AntD 要求 `inlineCollapsed` 与 `mode="inline"` 成对出现，否则折叠态不生效
+      //    （`vertical` 模式没有"只剩图标"这一形态）。
+      inlineCollapsed={mode === "inline" ? inlineCollapsed : undefined}
       style={style}
       data-testid={dataTestId}
     />

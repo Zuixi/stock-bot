@@ -28,10 +28,14 @@ function IndustryCell({ industry, alpha }: { industry: SwIndustryLevel1; alpha: 
     // 裸 `<div onClick>` 键盘不可达、读屏也不会报成链接（Task 16 / 与「行业分类」卡片同一写法）。
     // 此前这里就是个纯 `<div>`：`.sw-cell:hover` 已经有上浮反馈，于是**看起来能点、点了没反应**。
     // 跳到一级行业下钻页（`/market/industry/:level1Code`，公开路由）。
+    //
+    // 第二行同时给**官方成分数**与**二级行业个数**：这两个数据点原先是同屏另一张卡
+    // 「行业分类（申万）」的独有信息。Phase 1 §W2.2 把那份 31 行业的重复渲染删掉，
+    // 只有把这两个有效信息并进瓦片才不是功能回退（口径仍是 SCD2 官方数）。
     <Link
       to={`/market/industry/${industry.code}`}
       className="sw-cell"
-      title={`${industry.officialCount} 只个股 · ${industry.children.length} 个二级行业${
+      title={`${industry.officialCount ?? industry.stockCount} 只个股 · ${industry.children.length} 个二级行业${
         suffix ? ` · ${suffix}` : ""
       }`}
       style={{
@@ -43,7 +47,7 @@ function IndustryCell({ industry, alpha }: { industry: SwIndustryLevel1; alpha: 
     >
       <span className="sw-name">{industry.name}</span>
       <span className="sw-count">
-        {industry.officialCount} 只
+        {industry.officialCount ?? industry.stockCount} 只 · {industry.children.length} 个二级
         {suffix ? <span className="sw-count-extra"> {suffix}</span> : null}
       </span>
     </Link>

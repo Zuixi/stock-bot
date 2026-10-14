@@ -56,11 +56,35 @@ test.describe("/market 工作台：去重复与口径同源", () => {
 
     for (const { label, anchor } of TABS) {
       await settledOn(page, label, anchor);
-      // 等请求终态之后再断言「不含」——否则 react-query loading 窗口内恒真（假绿）
-      await expect(
-        page.getByText("数据版图", { exact: false }),
-        `Tab「${label}」下仍渲染「数据版图」——它应迁出工作台（§2.1）`
-      ).toHaveCount(0);
+      // ⚠️ **Phase 1 收窄作用域（断言没被放宽，只是变精确）**：原先这里是全局
+      // `page.getByText("数据版图")`。§W1.2 给一级导航补了模块内二级树之后，`/market`
+      // 的侧栏会出现一个**导航节点**叫「数据版图」（它就是新页的入口名），全局匹配会命中
+      // 侧栏标签 → ② 假红（实测：恰好 1 个命中，且 `closest('[data-testid=module-side-nav]')` 为真）。
+      // ② 要守的是「工作台**正文**不再渲染那张矩阵」，导航标签是另一回事（它由 `MODULE_TREES`
+      // 驱动，不是被搬回来的矩阵）。故**按容器身份**排除，而不是按文案排除——把矩阵搬回正文
+      // 仍然会被抓住。为什么不用 `locator.filter({ hasNot })`：实测它在 1.62.1 上**不过滤**
+      // （命中数仍为 1，假红照旧），故这里显式在浏览器里判容器身份，判据写死、可复核。
+      const bodyHits = await page.evaluate(() => {
+        const NAV = '[data-testid="primary-nav"],[data-testid="module-side-nav"],[data-testid="nav-drawer"]';
+        const walk = (root: Element): string[] => {
+          const out: string[] = [];
+          for (const el of Array.from(root.querySelectorAll("*"))) {
+            if (el.closest(NAV)) continue; // 导航容器内的文案不算工作台正文
+            const own = Array.from(el.childNodes)
+              .filter((n) => n.nodeType === Node.TEXT_NODE)
+              .map((n) => n.textContent ?? "")
+              .join("");
+            if (own.includes("数据版图")) out.push(el.tagName + "." + String(el.className));
+          }
+          return out;
+        };
+        return walk(document.body);
+      });
+      // 判据是"正文里 0 处"，且**打印命中元素**便于排障（不是恒真的空断言）
+      expect(
+        bodyHits,
+        `Tab「${label}」正文仍渲染「数据版图」（命中 ${bodyHits.join("、")}）——它应迁出工作台（§2.1）`
+      ).toEqual([]);
     }
   });
 

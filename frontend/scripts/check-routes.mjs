@@ -95,6 +95,7 @@ const NEW_S1_ROUTES = [
   "/market/global", // S1.3 全球市场
   "/market/industry/:level1Code/:level2Code/:level3Code", // S1.4 申万末级成分股
   "/market/heatmap", // S1.5 板块热力图（Ruling 30：不是任何 redirect 的目标）
+  "/market/data-sources", // Phase 1 §W2.1 数据版图独立页（前端设计整改 §0-E 裁定：市场域内）
   "/market/rankings/:key", // S1.6 A股排行 7 榜
   "/admin/users", // PR #15 管理员控制台（入口在账户菜单，不在顶栏 NAV_ROOTS）
   "/change-password", // PR #15 强制首登改密页（只要"已登录"、不加权限）

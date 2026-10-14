@@ -24,6 +24,8 @@ const PAGES: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
   MarketGlobalPage: lazy(() => import("@/pages/market-global")),
   CategoryPage: lazy(() => import("@/pages/market-category")),
   MarketHeatmapPage: lazy(() => import("@/pages/market-heatmap")),
+  // Phase 1 §W2.1（owner 裁定 E）：数据版图独立页，位置在市场域内（`/market/data-sources`）
+  MarketDataSourcesPage: lazy(() => import("@/pages/market-data-sources")),
   MarketIndexPage: lazy(() => import("@/pages/market-index")),
   // S1.6 A股排行 7 榜（公开，不套 RequireAuth）
   MarketRankingsPage: lazy(() => import("@/pages/market-rankings")),

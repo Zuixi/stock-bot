@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Alert, Button, Card, Col, Row, Segmented, Tabs, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { DegradedNotice, ErrorBoundary, SectionCard } from "@/shared/ui";
@@ -22,7 +22,6 @@ import {
   MarketMoneyflowCard,
   NorthboundCard,
   HotSectors,
-  IndustryClassification,
   MarketDataBoard,
   SwIndustryGrid,
   SentimentThermometer,
@@ -258,14 +257,18 @@ export default function MarketPage() {
           </Col>
           <Col span={24}>
             <Card title="申万行业网格" size="small">
+              {/* Phase 1 §W2.2：这里原先还有一份 `<IndustryClassification />`（31 个行业
+                  各一张卡 + 7 项行情聚合条），与上面的网格**同屏渲染同一批 31 个行业**。
+                  删的是「重复的行业清单」，不是「行业信息」——每格第二行已补上
+                  「N 只 · M 个二级」两个有效数据点。**代价（已知并接受）**：那份清单
+                  每卡还带 7 项行情聚合（`IndustryMetricStrip`），删后 `/market` 不再有
+                  行业级 7 项行情的 at-a-glance 视图——它仍在行业下钻页（一次点击之外），
+                  而 7 项行情条本身在二/三/末级下钻页照常渲染。 */}
               <SwIndustryGrid />
             </Card>
           </Col>
           <Col span={24}>
             <HotSectors />
-          </Col>
-          <Col span={24}>
-            <IndustryClassification />
           </Col>
         </Row>
       ),
@@ -311,9 +314,24 @@ export default function MarketPage() {
         <Typography.Title level={4} style={{ margin: 0 }}>
           行情中心
         </Typography.Title>
+        {/* Phase 1 §W2.3：副标题**由 Tab labels 推导**，不再手写字面量。
+            此前是「全球指数 · A股全景 · 资金流向 · 龙虎榜/大宗/解禁/回购」——与 Tab 各说各话
+            （第一项 Tab 叫「指数总览」不叫「全球指数」，末项把三个 Tab 塞成一句）。
+            同一个列表渲染两处时必须同源，否则加/删 Tab 后副标题必然漂移。 */}
         <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-          全球指数 · A股全景 · 资金流向 · 龙虎榜/大宗/解禁/回购
+          {items.map((i) => i.label).join(" · ")}
         </Typography.Text>
+        {/* Phase 1 §W2.1 的工作台补偿入口：数据版图整块迁出工作台后（它钉在每个 Tab 底部，
+            5 个 Tab 各看一遍），这里留一行入口链到独立页 `/market/data-sources`。
+            12 = 只读巡检域数（实测 8；取计划 §2.1 的 12 会让这行说谎，故按实测 8 写）。
+            ⚠️ **刻意不写供应商名**：计划 §2.1 原稿是「数据覆盖 12 个域 · TuShare/东财 · 查看来源 →」，
+            但 `e2e/marketTrust.spec.ts`「公开页不披露数据来源 › /market 整页不得出现供应商名称」
+            机械断言 `/market` 正文不得出现 TuShare/东财/巨潮/AKShare —— 那是**既有的、被测试守住的
+            产品口径**（数据源构成属竞争资产）。计划那句若照抄就会当场转红；两者冲突时以既有门禁为准，
+            故这行去掉供应商名。来源明细仍在独立页（那里也不再按厂商署名，只给表名/域名的实测读数）。 */}
+        <Link className="market-page-head__sources" to="/market/data-sources">
+          数据覆盖 8 个域 · 查看来源 →
+        </Link>
       </div>
 
       <Tabs
