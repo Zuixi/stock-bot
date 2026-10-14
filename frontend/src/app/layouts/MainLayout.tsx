@@ -138,8 +138,19 @@ export function MainLayout() {
   /**
    * 模块内二级树（Phase 1 §W1.2）：按当前 pathname 的最长前缀从 `MODULE_TREES` 选树。
    * 选树逻辑在清单侧（纯数据 + 纯路径比较），这里只管下发——组件仍不含业务知识。
+   *
+   * ⚠️ **必须同时受"该模块的一级导航可见"约束**（Phase 1 视觉复核实测补的修复）：
+   * 只按 pathname 选树时，匿名访问公开占位路由 `/news` 会渲染资讯的 4 个子节点，
+   * 而**资讯本身对匿名不可见** ⇒ 侧栏出现 4 个**没有父级的孤儿导航项**（普通交易员访问
+   * `/sentiment` 同理，因为情绪分析要 `research:read`）。判据：当前路径必须落在某个
+   * **可见**的一级导航之下，否则不渲染二级树。
    */
-  const moduleNodes = useMemo(() => pickModuleTree(location.pathname), [location.pathname]);
+  const moduleNodes = useMemo(() => {
+    const inVisibleModule = navNodes.some(
+      (n) => location.pathname === n.path || location.pathname.startsWith(`${n.path}/`)
+    );
+    return inVisibleModule ? pickModuleTree(location.pathname) : [];
+  }, [location.pathname, navNodes]);
 
   /** 侧栏一级导航：`inline` 模式（树/图标栏两用），外壳保留 `data-testid="primary-nav"`。
    *

@@ -115,3 +115,33 @@ test.describe("一级导航：1280 / 1440 下 10 项全部可见", () => {
     });
   }
 });
+
+// 回归守护（Phase 1 视觉复核实测补的修复）：模块二级树**只按 pathname 选树**时，
+// 匿名访问公开占位路由 `/news` 会渲染资讯的 4 个子节点，而「资讯」本身对匿名不可见
+// ⇒ 侧栏出现 4 个**没有父级的孤儿导航项**（普通交易员访问 /sentiment 同理，要 research:read）。
+// 不变量：二级树只在「该路径属于某个**可见**的一级导航」时才渲染。
+test.describe("模块二级树不得出现孤儿项", () => {
+  test("匿名 @1440：/news 不渲染资讯子树，/market 正常渲染（正对照）", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // ① 匿名 + /news：资讯不在匿名可见的一级导航里 ⇒ 它的 4 个子节点必须是 0
+    await page.goto("/news", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+    const sidebar = page.getByTestId("module-side-nav");
+    for (const label of ["上市公司公告", "政府官媒政策", "研究资讯", "市场资讯"]) {
+      await expect(
+        sidebar.locator(`[data-nav-label="${label}"]`),
+        `孤儿导航项「${label}」：父级「资讯」对匿名不可见，不该单独出现`
+      ).toHaveCount(0);
+    }
+
+    // ② 正对照：同一套选择器 + 同一条路径前缀判断，在 /market（市场可见）下必须找得到树节点。
+    //    没有这一步，① 无法与"选择器写错了、永远数到 0"区分开。
+    await page.goto("/market?tab=panorama", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+    await expect(
+      page.getByTestId("module-side-nav").locator('[data-nav-label="全球市场"]'),
+      "正对照失败：/market 的二级树没渲染出来，说明①是选择器写错而非真的没有孤儿项"
+    ).toHaveCount(1);
+  });
+});

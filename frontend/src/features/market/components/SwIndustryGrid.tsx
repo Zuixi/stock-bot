@@ -46,9 +46,11 @@ function IndustryCell({ industry, alpha }: { industry: SwIndustryLevel1; alpha: 
       }}
     >
       <span className="sw-name">{industry.name}</span>
+      {/* 只留两个数据点（官方成分数 · 二级行业数），**不放自定义标注**：瓦片宽度只有
+          128–190px，三样信息会把「自定义」挤到第二行，逐格换行、视觉参差（Phase 1 视觉
+          复核实测）。自定义标注仍在 `title`（悬停可见）与下钻页（完整口径），信息没丢。 */}
       <span className="sw-count">
         {industry.officialCount ?? industry.stockCount} 只 · {industry.children.length} 个二级
-        {suffix ? <span className="sw-count-extra"> {suffix}</span> : null}
       </span>
     </Link>
   );

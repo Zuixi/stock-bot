@@ -164,15 +164,20 @@ test.describe("宣传页数据区块", () => {
     await expect(tile).toContainText("农林牧渔");
   });
 
-  // 口径守护（本次裁决 A）：格子与卡片显示**官方成分数**（SCD2，与下钻页逐节点一致），
+  // 口径守护（裁决 A）：格子显示**官方成分数**（SCD2，与下钻页逐节点一致），
   // 用户自定义标签只作「+N 自定义」标注，**绝不相加后当官方口径**。
   // mock 特意给 95 官方 + 7 自定义 = stockCount 102 ⇒ 若哪天有人退回用 stockCount，本断言转红。
   test("申万行业网格显示官方成分数，自定义标签只作标注不相加", async ({ page }) => {
     await page.goto("/");
-    const count = page.getByTitle(/95 只个股 · 3 个二级行业/).locator(".sw-count");
+    const tile = page.getByTitle(/95 只个股 · 3 个二级行业/);
+    const count = tile.locator(".sw-count");
     await expect(count).toContainText("95 只");
     await expect(count).not.toContainText("102");
-    await expect(page.locator(".sw-count-extra").first()).toHaveText("+7 自定义");
+    // 自定义标注**只在 title（悬停）与下钻页**，不进可见行：瓦片宽仅 128–190px，
+    // 三样信息会把「自定义」挤到第二行 ⇒ 逐格换行、视觉参差（Phase 1 视觉复核实测）。
+    // 这里断言的是"标注仍在、且没被加进数字"，位置换了但意图不变。
+    await expect(tile).toHaveAttribute("title", /\+7 自定义/);
+    await expect(count).not.toContainText("自定义");
   });
 
   // 回归守护：格子此前是个纯 `<div>`，而 `.sw-cell:hover` 已有上浮反馈
