@@ -2,7 +2,7 @@ import { test, expect as baseExpect } from "@playwright/test";
 
 /**
  * 宣传页（Landing）E2E。
- * 路由策略契约：/ 为公开宣传页；已登录停留并换 CTA「进入工作台」，未登录显示「免费开始」。
+ * 路由策略契约：/ 为公开宣传页；已登录停留并换 CTA「进入工作台」，未登录显示「登录」（ADR 0010 邀请制）。
  * 数据区块（脉搏卡/行业网格）以 route mock 驱动，保证断言确定性；接口异常走降级路径单测覆盖。
  */
 
@@ -57,10 +57,10 @@ test.describe("宣传页路由与品牌", () => {
     await expect(page.getByText("5,500+ 只个股").first()).toBeVisible();
     await expect(page.getByText("多源交叉验证").first()).toBeVisible();
 
-    // 主 CTA：button 实现，文案「免费开始」，点击跳 /login
+    // 主 CTA：button 实现，文案「登录」（邀请制口径，ADR 0010），点击跳 /login
     const cta = page.getByTestId("landing-cta");
     await expect(cta).toBeVisible();
-    await expect(cta).toContainText("免费开始");
+    await expect(cta).toContainText("登录");
     await cta.click();
     await page.waitForURL(/\/login/);
   });

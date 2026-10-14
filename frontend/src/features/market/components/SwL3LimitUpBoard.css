@@ -76,6 +76,24 @@
   border-top: 1px solid var(--border);
 }
 
+/* 展开/收起：与连板梯队档内的 `.ladder-tier__toggle` 同一视觉语言 */
+.sw3-toggle {
+  display: block;
+  width: 100%;
+  margin: 4px 0;
+  padding: 5px 0;
+  font-size: 12px;
+  color: var(--accent);
+  background: none;
+  border: none;
+  border-top: 1px dashed var(--border);
+  cursor: pointer;
+}
+
+.sw3-toggle:hover {
+  color: var(--text-primary);
+}
+
 .sw3-row {
   padding: 7px 8px;
   cursor: pointer;

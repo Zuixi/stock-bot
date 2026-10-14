@@ -1,4 +1,4 @@
-import { apiGet, apiPost, fetchCsrfToken, type RequestOptions } from "./client";
+import { apiGet, apiPatch, apiPost, fetchCsrfToken, type RequestOptions } from "./client";
 
 export interface UserProfile {
   id: string;
@@ -7,22 +7,27 @@ export interface UserProfile {
   display_name?: string | null;
   status: string;
   is_superuser: boolean;
+  must_change_password: boolean;
   roles: string[];
   permissions: string[];
   last_login_at?: string | null;
   created_at: string;
 }
 
+export interface UpdateProfilePayload {
+  username?: string;
+  email?: string;
+  display_name?: string;
+}
+
+export interface ChangePasswordPayload {
+  current_password: string;
+  new_password: string;
+}
+
 export interface UserLoginPayload {
   username_or_email: string;
   password: string;
-}
-
-export interface UserRegisterPayload {
-  username: string;
-  email: string;
-  password: string;
-  display_name?: string;
 }
 
 export interface AuthResponseData {
@@ -59,19 +64,6 @@ export function login(
 }
 
 /**
- * Register a new user account.
- */
-export function register(
-  payload: UserRegisterPayload,
-  options?: RequestOptions
-): Promise<UserProfile> {
-  return apiPost<UserProfile>("/auth/register", payload, {
-    skipAuth: true,
-    ...options,
-  });
-}
-
-/**
  * Logout current session and clear server/client cookies.
  */
 export function logout(options?: RequestOptions): Promise<{ message: string }> {
@@ -90,6 +82,26 @@ export function getSession(options?: RequestOptions): Promise<UserProfile> {
  */
 export function getMe(options?: RequestOptions): Promise<UserProfile> {
   return apiGet<UserProfile>("/auth/me", undefined, options);
+}
+
+/**
+ * Update own profile (partial update: username / email / display name).
+ */
+export function updateProfile(
+  payload: UpdateProfilePayload,
+  options?: RequestOptions
+): Promise<UserProfile> {
+  return apiPatch<UserProfile>("/auth/profile", payload, options);
+}
+
+/**
+ * Change own password; clears the forced temp-password gate.
+ */
+export function changePassword(
+  payload: ChangePasswordPayload,
+  options?: RequestOptions
+): Promise<{ message: string }> {
+  return apiPost<{ message: string }>("/auth/change-password", payload, options);
 }
 
 /**

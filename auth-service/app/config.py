@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # Empty by default = not enforced (local dev / tests); REQUIRED in production.
     internal_api_token: str = ""
 
+    # Temp-password lifetime for admin-provisioned accounts (ADR 0010).
+    temp_password_ttl_hours: int = 72
+
     @field_validator("cookie_secure")
     @classmethod
     def require_secure_cookies_in_production(cls, v: bool, info: ValidationInfo) -> bool:

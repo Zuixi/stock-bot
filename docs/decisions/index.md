@@ -18,6 +18,7 @@
 | [0012](./0012-no-automated-order-placement.md) | 不做自动下单 | accepted | 2026-10-12 | 产品边界 |
 | [0013](./0013-reuse-existing-signal-infrastructure.md) | 复用既有信号基建，不自建引擎 | accepted | 2026-10-12 | 架构 |
 | [0014](./0014-market-derived-fact-persistence.md) | 市场派生事实的持久化边界：A/B/C 判据与"产地决定可信度" | accepted | 2026-10-12 | 数据口径 |
+| [0015](./0015-invite-only-provisioning-and-admin-console.md) | 邀请制开户与管理员控制台（关闭自助注册） | accepted | 2026-10-14 | 安全 / 产品 |
 
 状态取值：`accepted`（现行）· `superseded`（被新决策取代，须填 `superseded-by` 并双向引用）· `rejected`（评审未采纳，保留以阻止重复提议）
 

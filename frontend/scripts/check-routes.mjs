@@ -96,6 +96,8 @@ const NEW_S1_ROUTES = [
   "/market/industry/:level1Code/:level2Code/:level3Code", // S1.4 申万末级成分股
   "/market/heatmap", // S1.5 板块热力图（Ruling 30：不是任何 redirect 的目标）
   "/market/rankings/:key", // S1.6 A股排行 7 榜
+  "/admin/users", // PR #15 管理员控制台（入口在账户菜单，不在顶栏 NAV_ROOTS）
+  "/change-password", // PR #15 强制首登改密页（只要"已登录"、不加权限）
 ];
 
 /** 允许出现的额外路由（既有页面按新前缀搬迁 / 目标带参变体）：超出即报错，防私加路由 */

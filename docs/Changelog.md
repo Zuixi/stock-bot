@@ -1,3 +1,102 @@
+## 2026-10-14 - 公开页停止披露数据来源（竞争资产不外露）
+
+- **裁定**：数据源构成是核心竞争力，公开页不显示任何数据来源；owner 确认 Landing 页脚署名亦一并删除，且 `/market` 同口径处理
+- **前提更正**：本轮开工时「数据版图」矩阵已由 PR #13 从 main 移除（Landing 第 6 区块 + `/market` 页脚上方，组件本体一并删除）。因此**矩阵「来源」列的整改未随本 PR 落地**——那个组件已不存在；以下只记录实际落地的部分
+- **Landing 页脚**：删除「数据来源：TuShare · 东方财富 · 巨潮资讯网 · 上海证券交易所」及随之作废的 `.landing-footer__sources` 死 CSS。**注意**：本仓历史 Changelog 曾把它定位为「面向用户的合规署名」（Task 13/1.10），删除属 owner 明示的合规风险自担决定，非设计调整
+- **清除全部公开页面的供应商关键字**（口径语义类按 owner 裁定「删关键字」处理；个别处用中性词补足语法，否则纯删会剩下不成句的残片）：
+  - `market/index.tsx`：盘中板块（东财口径）→（涨停池口径）；盘中口径（今日东财涨停池 · 30 秒刷新）→ 今日涨停池
+  - `SwL3LimitUpBoard.tsx`：列头「东财板块」→「板块名」（"东财板块"整串即供应商名，纯删只剩"板块"）
+  - `NewStockBoard.tsx`：「东财概念板块 BK0501 成分」→「概念板块 BK0501 成分」；「非东财板块涨跌幅」→「非板块指数涨跌幅」；「成分截至 X（东财）」→「成分截至 X」
+  - `market-concept/index.tsx`：「成分截至 X（东财）」→「成分截至 X」；「东财快照」→「板块快照」
+  - `market-hot-sectors/index.tsx`：「（全库 · 东财）」→「（全库）」
+  - `marketEnvelope.ts`：降级文案「本地分组（东财板块不可用）」→「本地分组（上游板块不可用）」
+  - `RelatedEvents.tsx`：删除「数据源：TuShare / 巨潮资讯 · 」前缀（保留龙虎榜口径说明）
+  - `AnnouncementFeed.tsx`：移除公告行的来源 Tag「巨潮」（`extra={undefined}`，布局未受影响）
+  - `SectorMoneyflowCard.tsx`：提示去掉供应商名，改为「按净流入排序的 Top100 样本」
+- **文案去来源构成**：`ValueProps`「官方统计、行业协会、平台行情、期货现货四级来源交叉验证…带来源徽章」→「多源交叉验证且关键指标逐条可溯源」；`ProductShowcase` 示意徽章 `官方/协会/平台` → `已核验/已溯源/待复核`。保留可信度叙事，去掉来源分类披露
+- **机械锁**：`public-homepage.spec` 把「页脚含数据来源署名」**反转为**「首页不披露任何数据源名称」——遍历 `TuShare/东方财富/东财/巨潮/AKShare/统计局/生意社/上海证券交易所` 断言正文零出现；同步更新 3 处锁定旧文案的断言（`conceptBoard` 2 处、`limitUpSentiment` 2 处），并把「公告行显示巨潮」反转为「不得显示巨潮」
+- **未动（如实报告）**：①`/research` 类需登录 + `research:read` 的页面仍点名来源（`SourceBadge.tsx`「生意社/搜猪等」、`IndicatorStrip.tsx`「农业农村部/发改委/统计局口径」）——非公开页且属指标口径的必要说明，是否处理待 owner 定夺 ②代码注释与 API 契约字段仍是实名（如 `source === "eastmoney_intraday"`）：公开仓库/接口层同样会暴露来源，只清上屏文案覆盖不到这一层 ③`docs/Changelog.md` 历史条目按「只增不改」未回改
+- 涉及文件：frontend/src/{pages/{market,market-concept,market-hot-sectors}/index.tsx,features/{market/components/{SwL3LimitUpBoard,SectorMoneyflowCard,dataFace/AnnouncementFeed},concept/components/NewStockBoard,stock-detail/components/RelatedEvents}.tsx,pages/landing/sections/{LandingFooter,ValueProps,ProductShowcase}.tsx,shared/api/marketEnvelope.ts}、frontend/e2e/{public-homepage,conceptBoard,limitUpSentiment}.spec.ts、docs/{design/landing-market-theme.md,Changelog.md}
+
+## 2026-10-14 - 小功能：默认管理员账号 freedom + 账号设置（自助改资料）
+
+- **默认管理员身份**：`bootstrap-admin` 的 `--username/--email` 改为可选，默认 `freedom` / `zeebest@freedom.com`，常规引导无需带参。**只固定身份，不固定密码** —— 密码仍只来自 `ADMIN_BOOTSTRAP_PASSWORD` 或交互输入，无任何硬编码默认值（种默认密码就是留后门，这正是本 CLI 取代迁移种子的理由）
+- **自助改资料** `PATCH /auth/profile`（用户名 / 邮箱 / 显示名，部分更新）：唯一性校验复用共享助手并可**排除自己**（否则改自己资料会与自己 409）；写审计 `auth.user.profile.updated`（含前后对比）；改用户名后同步 Redis 会话快照的 `username`，避免断言 claims 里挂着旧名直到会话过期
+- **鉴权顺序**：认证先于 CSRF —— 路由级 `dependencies` 会跑在认证之前，匿名请求拿到的会是 CSRF 403 而非 401；改为在 handler 内（`get_session_user` 解析之后）显式校验，未登录 401、缺 CSRF 403 语义归位
+- **复用而非新增**：查重助手从 `admin_service` 私有函数搬为 `auth_service.ensure_unique_identity`（admin 开户与自助改资料共用一处实现，消掉一次跨模块私有 import）
+- **门控一致**：`/auth/profile` **不加**强制改密白名单 —— 临时密码会话必须先改密才能动资料，与「五段门控」口径一致（有测试锁定）
+- **前端**：用户菜单新增「账号设置」入口 + `ProfileModal`（409 时把错误定位到具体字段，不让用户猜是用户名还是邮箱冲突），保存后 `refetchUser` 使 Header 立即生效
+- **验证**：auth-service **105 passed**（+6：自助改资料成功/自己不算冲突/被占用 409/未登录 401 与缺 CSRF 403/强制改密门控/CLI 默认身份）；Playwright **96 passed**（新增 `account-settings.spec` 走真实登录表单 + UI 弹窗改显示名，断言 Header 立即更新且**改完还原**保持幂等）；`tsc`/`ruff`/`doc_gate`/`self_review` 全绿
+- 涉及文件：auth-service/{app/api/{auth,deps}.py,app/services/{auth_service,admin_service,session_service}.py,app/schemas/auth.py,app/cli.py,tests/{test_api_auth,test_cli}.py}、frontend/src/{features/auth,shared/api/auth.ts}、frontend/e2e/account-settings.spec.ts、docs/{deployment/index.md,features.md,Changelog.md}
+
+## 2026-10-14 - 修复会话探测的错误降级：暂时性故障不再被当成"未登录"
+
+- **问题**：`AuthProvider` 的 `queryFn` 对所有异常一律 `catch → return null`。这把**失败变成了一次成功的"未登录"结果**：①React Query 自带的"失败保留上次成功数据"保护被绕过；②store 被 `setUser(null)` 清空 → `RequireAuth` 把用户重定向到 `/login`。于是 429（本仓网关 `/auth/*` 的 `auth-ratelimit`）、5xx、网络抖动都会表现为"刷新一下就被踢下线"
+- **业内最佳实践：会话探测是三态，不是布尔** ——
+  - `authenticated`（探测成功）/ `unauthenticated`（**仅 401**）/ `unknown`（429/5xx/网络失败）
+  - `queryFn` 只把 401 降级为 `null`，其余**抛出**，让 React Query 保留上一次有效用户并暴露 `isError`
+  - 有界重试 + 指数退避（2 次，1s/2s），4xx（含 401/403）不重试——确定结论重试无意义
+  - store 只在拿到**确定结论**时更新；探测失败只标记"已探测过"，绝不清空登录态
+  - `refetchUser` 同样只在 `isSuccess` 时改状态（否则刚登录完就被一次抖动踢下线）
+  - 新增 `sessionError` + `retrySession`，把"未知"这一态暴露给 UI
+- **UI 层**：`RequireAuth` 在"未知且无已知用户"时渲染可重试提示（「无法确认登录状态」+ 重试/重新登录），**不再跳登录页**——跳过去同样连不上后端，且会让用户误以为被踢下线；区分确定 401（仍跳登录页并带 `returnTo`）、确定无权限（403 页）与未知（可重试）
+- **验证**：`e2e/auth.spec.ts` 新增两条用例并已实机跑通 —— ①首次 503 后续成功 → 重试自愈、停在被保护页而非 `/login`（并断言 `probeCalls > 1`，证明确实走了重试）②持续 503 → 出现可重试提示且**不跳登录页**，上游恢复后点「重试」即放行；原有 401 跳转用例保持绿，锁住"确定未登录"契约。Playwright 全量 **95 passed ×2 连跑**（较前 +2）
+- 涉及文件：frontend/src/features/auth/{context.tsx,components/RequireAuth.tsx}、frontend/e2e/auth.spec.ts、docs/Changelog.md
+
+## 2026-10-14 - ponytail 审计修复：改角色 UI 补齐 · 守卫测试补洞 · N+1 与死代码清理
+
+- **补真缺口（A1）**：`RoleAssignModal` 落地并接入用户详情抽屉 —— 此前 admin **只能开户时定角色、事后改角色仍需改 SQL**，与「角色分配不再改 SQL」的目标相悖；`replaceRoles` client 函数随之从死代码变活
+- **守卫测试补洞（A2/B1）**：`ADMIN_ROUTES` 原来是手写清单，测试遍历它 → 新增路由忘记登记即静默漏覆盖；加 1 行绊线断言「清单集合 == `router.routes` 集合」。另加「持且仅持 `roles:manage` 的探针用户」参数化用例，区分**挂了守卫**与**挂对了守卫**（原用例对权限写错的路由同样 403，抓不到）
+- **性能（A3）**：用户列表原先每行一次权限查询（N+1）；抽出 `get_role_permission_pairs` 单查询助手，整页一次查完，`deps`/`auth_service`/`admin` 三处复用同一实现
+- **去重复（B2/B3/B4）**：删掉三处重复实现 —— `admin._user_out` 的权限解析复用共享助手、`admin._load_user` 与 `auth_service.get_user_entity` 合并为模块级 `load_user`、`admin._client_meta` 跨模块 import 私有函数改为 `deps.extract_client_meta`
+- **修回归（由测试抓到）**：两个 loader 合一后，`replace_roles` 返回**变更前**的角色 —— 根因是 `expire_on_commit=False` 下身份映射保留旧的 `user_roles` 集合；在单一 loader 处加 `populate_existing=True` 根治该类问题（`test_replace_roles` 现锁死）
+- **清死代码**：`PageParamsDep` 别名、client 侧 `getUser`/`listAudit`/`AuditEvent`/`PagedAudit`、e2e 里建了从不使用的 `apiCtx` 与 `request` import、指向不存在审计页的注释、`admin_service` 方法内重复的 `sa_func` 导入；嵌套 Modal 改为兄弟节点
+- **低优先**：`_DUMMY_HASH` 改 `lru_cache` 惰性计算（原在导入期跑 argon2，每个进程付 64MB/30ms）；`revoke_all_user_sessions` 的 where 子句拆成显式分支；`PASSWORD_CHANGE_ALLOWLIST` 补注「当前仅防御性，未承重」
+- **修 flaky 门禁（审计中发现）**：`admin-users.spec` 在并发下间歇失败，根因是网关对 `/auth/*` 的 `auth-ratelimit`（20/s，burst 10，**防爆破的正确配置**）被高频轮询与并发 spec 打满，应用自身的水合请求吃 429 → 被既有 catch-all 当未登录。修法是测试侧诚实的 429 退避重试 + 轮询降频 + 导航有限重试，**不放宽生产限流**；spec 同时重写为单一带退避的 `api()` 助手（顺带删掉 5 处重复 fetch 块）。`--repeat-each=5` 由 0/5 转 5/5，全量连跑两遍 93 passed
+- **验证**：auth-service **99 passed**（+10 守卫用例）、forward-auth 14 passed、`tsc` 绿、`ruff` 绿、Playwright 93 passed ×2、`self_review` + `doc_gate` 绿；改角色已核实落库（UI 操作产出 `analyst,researcher`）
+- 涉及文件：auth-service/{app/api/{admin,deps,auth},app/services/{auth_service,admin_service,session_service},app/schemas/admin.py,tests/{conftest,test_api_admin}}.py、frontend/src/{features/admin,pages,shared/api}、frontend/e2e/admin-users.spec.ts、docs/Changelog.md
+
+## 2026-10-14 - 邀请制开户与管理员控制台落地（ADR 0015 · 关闭自助注册 · admin 用户 CRUD）
+
+- **后端（auth-service）**：迁移 0002 只加 3 列（`status_reason` / `must_change_password` / `temp_password_expires_at`）；`core/user_status.py` 登录拒绝码矩阵（纯函数，无迁移表——2 条边不值得）；登录改**先验密码后判状态** + dummy hash 抹时序（消账号枚举）；`POST /auth/register` 恒 403 `AUTH_REGISTRATION_DISABLED`；新增 `POST /auth/change-password`（清标记 + 吊销其余会话）；`/auth/admin/*` 9 端点（列表/详情/开户/停用/启用/换角色/重置密码/角色矩阵只读/审计检索），权限**实时读 DB**，写操作吊销全部会话；**参数化守卫测试**遍历路由表断言无权限 403、缺 CSRF 403；`bootstrap-admin` CLI 三态幂等（绝不重置密码）
+- **forward-auth**：上游 403（临时密码未换）**原样透传**为 `AUTH_PASSWORD_CHANGE_REQUIRED`（其余非 200 仍 fail-closed 503）——五段门控第四段
+- **前端**：`/admin/users` 管理台（UX 设计先行：状态即行情语义，绿=正常/红=停用/蓝点=待改密）、`/change-password` 强制改密页、登录页删注册 Tab、全局 `AUTH_PASSWORD_CHANGE_REQUIRED` 跳转、着陆页三处文案改邀请制口径；`tsc --noEmit` 绿
+- **测试**：auth-service 88 通过（新增 user_status 拒绝矩阵 / admin 守卫矩阵 / 改密门控 / CLI 三态）；forward-auth 14 通过（新增 403 透传两条）；e2e `auth.spec` 注册用例改写为「断言注册入口不存在」，`admin-users.spec` 新增全链路（开户→临时密码→强制改密→`/api` 恢复）
+- **文档**：ADR 0015 + 登记；架构 §6.1 路由矩阵补 9 条 admin 路由、register 标 Disabled；`auth-data-model.md` DDL 补 3 列；`features.md` 拆「登录/会话/改密」与「用户管理」两行；`deployment/index.md` 补 `bootstrap-admin` 首启步骤；`frontend-e2e.md` 删 `INSERT INTO auth_user_roles` 土办法改经 admin API 供号
+- **实测（容器 + Playwright，2026-10-14）**：迁移 a002 上库（3 列）；`bootstrap-admin` 建号 → 登录带 `users:manage` → 经网关开户拿一次性临时密码 → 新用户登录后 `/auth/*` 与 `/api/*` 双 403 门控 → `/auth/change-password` 后恢复 200；**修掉一个真缺陷**——`get_session()` 白名单重建字典时丢弃 `must_change_password`，导致 `/api` 门控在生产是空转（单测盲区，已补回归测试锁死）；Playwright 93 passed（含新增 `admin-users.spec` 全链路）
+- 涉及文件：auth-service/{app,migrations/versions/0002_*.py,tests}、forward-auth/{app,tests}、frontend/src/{features/admin,pages/{admin-users,change-password,login},shared/api,app,features/auth}、frontend/e2e/{auth,admin-users,landing,public-homepage}.spec.ts、docs/{decisions/0009,architecture,deployment,testing,features}.md、plans/
+
+## 2026-10-14 - 计划登记：邀请制开户与管理员控制台（关闭自助注册 · admin 用户 CRUD）
+
+- **背景**：角色分配目前只能改 SQL，而 RBAC 的 `users:manage` / `roles:manage` / `audit:read` 三个权限**已定义并已授予 admin 却零端点**，`RoleOut`/`PermissionOut`/`UserRoleUpdateRequest`/`AuditEventOut` 四个 Schema 也已写好但无人引用，架构文档 §6.1 更早已把 `/auth/admin/users|roles|audit` 写成契约——即"实现落后于契约"。[ADR 0008](../docs/decisions/0008-research-read-requires-permission.md) 的「已知遗留」正是此事
+- **实测硬事实（写入计划 Why now 表，逐条带落点与行号）**：`POST /auth/register` 建号即 `status="active"` 且默认角色硬编码 `trader`（`auth_service.py:117`/`:85`）；**全仓没有改密端点**，邀请制下管理员交付的初始密码永久有效；auth-service 自身**没有权限依赖**，而 `/auth/*` 在 Traefik 上不过 forward-auth（`docker-compose.yml:193`），admin 端点必须自判权限与 CSRF；**首个 admin 无引导方式**（迁移 0001 无种子、`grep bootstrap` 无命中）——这正是"只能改 SQL"的根因；登录**先判状态后验密码**（`auth_service.py:222` 早于 `:240`）导致账号状态可被枚举；变更角色后旧会话不失效而 forward-auth 断言缓存 TTL 仅 25s（`forward-auth/app/config.py:17`）；着陆页「注册只增加个性化能力」主叙事被 `public-homepage.spec.ts:314-333` 断言锁定；`test_api_auth.py`(5 处) 与 `test_api_internal.py`(1 处) 把注册当建号 fixture
+- **owner 六项裁定**：邀请制/管理员预开户 · 开户时必须指定角色 · `/auth/admin/roles` 只读 · 不硬删只软停用 · 本轮就关闭注册并改造着陆页 · 服务端临时密码 + 强制首登改密
+- **产出**：`plans/2026-10-14-invite-only-provisioning-and-admin-console.md` + `plans/index.md` 登记（`status: draft`）
+- **计划结构**：§0 六项裁定 → §1 数据契约（**迁移只加 4 列、0 新表、0 约束变更** + `core/user_status.py` 状态机纯函数 + 测试建号 helper 前置）→ §2 关闭注册 + 登录门控改为**先验密码后判状态**（消除账号枚举，含假 hash 时序对齐）→ §3 临时密码与强制改密的**五段门控**（redis 会话 → auth-service 白名单 → 断言签发拒绝 → forward-auth 403 透传 → 前端全局跳转）→ §4 十条 admin 端点 + 会话吊销 + 三条硬保护 → §5 `bootstrap-admin` CLI 消灭首个 admin 的 SQL 依赖 → §6 前端控制台与着陆页改造 → §7 文档收口
+- **可机械化的门禁（本计划新增）**：参数化遍历 admin 路由表，断言**每条路由无权限会话下 403、每条写路由缺 CSRF 时 403**（新增端点忘挂守卫立刻红）；断言 `POST /auth/register` 恒 403（防入口被悄悄打开）；forward-auth「上游 403 原样透传 / 上游 500 仍 503」；`bootstrap-admin` 三态幂等（空库建号 / 已存在只补角色 / 已是 admin 零变更）
+- **边界**：不改业务库与 backend 的读接口；`/auth/*` 不走 forward-auth 故鉴权自判；**不改断言 claims 契约**（改由 `POST /internal/principal/assertion` 拒绝签发实现）；不做邀请码、邮件、SSO、组织租户、角色-权限在线编辑、硬删除、审计导出
+- 涉及文件：plans/2026-10-14-invite-only-provisioning-and-admin-console.md、plans/index.md、docs/Changelog.md
+
+## 2026-10-13 - 计划登记：前端设计整改（导航形态 · 信息去重 · 设计 token · 响应式）
+
+- **背景**：对运行中的两套前端（`:3000` 的 `.worktrees/research-platform-ia` 10 导航新 IA、`:80` 的 docker 5 导航旧版）做全站设计评审，在 1440/1280/390 三档实测取证。结论不是"丑"，而是**默认值堆叠 + 同一信息出现多次 + 移动端硬伤**
+- **实测硬事实（写入计划 Why now 表，逐条带落点与行号）**：一级导航 1280 折叠 4 项 / **1440 折叠 3 项**（`MainLayout.tsx`）；`MODULE_TREE` 恒为空数组致"三层布局"只有两层（同文件 `:69`）；数据版图约 800px 被钉在 `/market` 全部 5 个 Tab 之下（`market/index.tsx:312`）；31 个申万行业用 `SwIndustryGrid`(:244) 与 `IndustryClassification`(:251) 同屏渲染两遍；瓦片白字对 accent 叠白实测 **2.10:1（alpha 0.5）～3.81:1（0.85）**，低于 AA 4.5:1 且 6/31 瓦片命中（`SwIndustryGrid.tsx:8-17`）；`/market/global` 390px 视口 `scrollWidth=749`；移动端指数卡名称截成 `上证…`、代码 `CN 000001` 逐字竖排；日期四种写法（含 `2026-10-12T15:00:00Z` 直出）；品牌字标 `Stock Bot` / `StockBot` 并存；全站 0 处 `prefers-reduced-motion`、`.css` 仅 1 处 `:focus-visible`。**除导航溢出与左树为空两项外，其余在 `main` 上同样成立**（已逐项核对 `market/index.tsx`、`SwIndustryGrid.tsx`、`landing/index.tsx`）
+- **产出**：`plans/2026-10-13-frontend-design-remediation.md` + `plans/index.md` 登记（`status: draft`）
+- **计划结构**：§0 五项 owner 待裁定（导航形态 A1/A2/A3 · 移动端承诺等级 · 字体自托管预算 · 首页定位是否推翻既有"免登录行情台"拍板 · 数据版图新页位置）→ Phase 0 基线冻结与**先红后绿门禁**（五条断言先全部失败，证明抓的是真问题）→ Phase 1 W1 导航与布局表达 + W2 信息去重 → Phase 2 W3 设计系统（`--font-ui`/`--font-num` 分离 · 中性量级色阶 `--mag-0..4` 取代 accent 编码数量 · 日期单一入口 · 动效降级 · 焦点环）→ Phase 3 W4 四档断点 → Phase 4 W5 文案与打磨（信号历史 diff 化 · landing 收敛 · DataRow 多列）
+- **可机械化的门禁（本计划新增）**：`check-design-tokens.mjs` 扩展为 5 组断言（`--mag-*` 三块一致性 + 逐级对比度 ≥4.5 + 字体 token 与 `theme.ts` 一致 + `reduced-motion`/`focus-visible` 存在 + `fontVariantNumeric` 出现次数 ≤1）；新增 `check-no-raw-iso.mjs`（禁止 ISO 日期直出）；新增 4 个 Playwright spec（尺寸/导航/工作页布局/占位页路线图）——**不采用像素快照**（实盘数据会漂，只锚结构、尺寸与文本存在性）
+- **边界**：不改后端、不改 K 线/ECharts 主题、不引入新依赖、不重画 10 个模块的真页面、不改 IA 的 10 导航构成与权限三态；与 `2026-10-12-investment-research-platform-ia.md` 的关系是本计划只做其**前端表达层**，W1 依赖 IA Wave 0「IA 与路由表冻结」先落
+- 涉及文件：plans/2026-10-13-frontend-design-remediation.md、plans/index.md、docs/Changelog.md
+## 2026-10-13 - 短线情绪页纵向预算回收：三个长区块限制默认行数（页高 −42%）
+
+- **背景（用户反馈「布局混乱」+ 实测）**：`/market?tab=sentiment` 页高 **5723px（≈5.7 屏）**，其中 **76% 的纵向预算**花在三个次级区块上——申万三级最高板铺全量 **2778px**、昨日涨停今日表现 `pagination={false}` 全量 45 行 **1956px**、次新股情绪 20 行/页 **1171px**；两个核心区块（情绪温度计 502px + 连板梯队 919px）被挤到首屏之外
+- **改动（纯限制 + 复用既有折叠模式，无新组件/无新数据）**：
+  - `SwL3LimitUpBoard`：默认只铺热门前 **10** 个行业（行已按 `板高 desc → 家数 desc` 排序，头部即结论），其余走新增的 `.sw3-toggle`「展开全部 N 个行业 / 收起」——与 `LimitUpLadder` 档内 `展开全部 N 家` 同一交互与视觉语言
+  - `YesterdayLimitUp`：`pagination={false}` → `pageSize: 10`（`hideOnSinglePage` 保留：样本 ≤10 时不出现分页器）
+  - `NewStockBoard`：`pageSize: 20` → `10`
+- **效果（Playwright 实测，同视口）**：页高 **5723 → 3344px（−42%）**；「展开全部 49 个行业」可点开（10 → 49 行）、可收起；阈值下不渲染折叠按钮
+- **回归证据**：全量 e2e **同一 dev server 前后对照 = 97 passed / 10 skipped / 0 failed**（10 skipped 全是 `marketDataFace.spec.ts` 按数据缺失优雅跳过的既有用例）；`tsc --noEmit` ✓、`npm run build` ✓、`check:design` ✓
+- 涉及文件：frontend/src/features/market/components/{SwL3LimitUpBoard.tsx,SwL3LimitUpBoard.css,YesterdayLimitUp.tsx}、frontend/src/features/concept/components/NewStockBoard.tsx、docs/Changelog.md
+- 未做（有意）：情绪温度计压缩、左右分栏重排、题材维度——按 ponytail 评审先只回收纵向预算，看到效果再决定
 ## 2026-10-13 - **`/sentiment` 情绪分析页落地**（S1.8–S1.13 的读出台）+ 综合指数 hero 端点 + 守卫与数据需求对齐
 
 ### 一、为什么做这一页（补一个真实缺口）

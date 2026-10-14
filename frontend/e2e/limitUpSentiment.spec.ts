@@ -258,8 +258,8 @@ test("盘中口径板块卡按东财口径渲染且不崩（SW 字段为 null �
   await expect(page.getByText(/页面渲染出错|渲染失败/)).toHaveCount(0);
   expect(pageErrors).toEqual([]);
   // (b) 标题与列名切成东财口径
-  await expect(page.getByText("盘中板块（东财口径）", { exact: true })).toBeVisible();
-  await expect(page.locator(".sw3-head")).toContainText("东财板块");
+  await expect(page.getByText("盘中板块（涨停池口径）", { exact: true })).toBeVisible();
+  await expect(page.locator(".sw3-head")).toContainText("板块名");
   // (c) 板块名来自 board_name（不是 "" 或 "--"）；两条并列项都必须渲染
   // 顺序不写死（浏览器本地化排序会变），但两条都必须在 —— 夹具并列就是为了强制走到名称比较子句
   expect(await page.locator(".sw3-row__l3").allInnerTexts()).toEqual(

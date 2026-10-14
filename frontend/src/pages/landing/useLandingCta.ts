@@ -1,7 +1,7 @@
 import { useAuthStore } from "@/features/auth/store";
 
 export interface LandingCta {
-  /** 已登录「进入工作台」→ /market；未登录「免费开始」→ /login（契约 §0） */
+  /** 已登录「进入工作台」→ /market；未登录「登录」→ /login（契约 §0） */
   to: string;
   label: string;
   /** 会话探测未完成时为 false——CTA 隐藏文字防错标签闪现，布局位保留 */
@@ -16,5 +16,5 @@ export function useLandingCta(): LandingCta {
   if (isAuthenticated) {
     return { to: "/market", label: "进入工作台", ready: isAuthReady };
   }
-  return { to: "/login", label: "免费开始", ready: isAuthReady };
+  return { to: "/login", label: "登录", ready: isAuthReady };
 }

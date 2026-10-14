@@ -226,7 +226,7 @@ test.describe("热门板块信任面（Task 15）", () => {
     await page.getByRole("tab", { name: "A股全景" }).click();
     const card = page.locator(".ant-card").filter({ hasText: "A股热门板块" });
     await expect15s(card.getByText(/本地分组/).first()).toBeVisible();
-    await expect15s(card.getByText(/东财板块不可用/).first()).toBeVisible();
+    await expect15s(card.getByText(/上游板块不可用/).first()).toBeVisible();
 
     // 列表页同样不得吞掉产地
     await page.goto("/market/hot-sectors/industry");
@@ -344,6 +344,19 @@ test.describe("可点击条目语义与键盘可达（Task 16）", () => {
  * 念数（「成交额」「累计成交额」、无正负号），**不得**再出现「净流入」文案。mock 里的
  * 值全部为正且带 `amount_kind="turnover"`——负值在成交额口径下是不可能出现的。
  */
+test.describe("公开页不披露数据来源", () => {
+  test("/market 整页不得出现供应商名称", async ({ page }) => {
+    await page.goto("/market");
+    await expect15s(page.getByRole("heading", { name: "行情中心" })).toBeVisible();
+
+    // 数据源构成属竞争资产：公开页不披露（含口径标签/降级文案/提示/Tag）
+    const body = await page.locator("body").innerText();
+    for (const vendor of ["TuShare", "tushare", "东方财富", "东财", "巨潮", "AKShare"]) {
+      expect(body, `/market 不应出现数据源「${vendor}」`).not.toContain(vendor);
+    }
+  });
+});
+
 test.describe("北向停更标注（Task 16）", () => {
   const NORTHBOUND_ITEMS = [
     { date: "2026-09-06", amount: 123456.7, amount_kind: "turnover" },

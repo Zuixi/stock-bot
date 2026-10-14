@@ -46,6 +46,18 @@ class UpstreamAuthError(Exception):
     """auth-service returned a non-200 response for an internal call."""
 
 
+class PasswordChangeRequiredError(Exception):
+    """auth-service refused to sign: temp password not yet replaced (403).
+
+    Kept distinct from UpstreamAuthError so /verify can pass the verdict
+    through as 403 instead of failing closed as 503.
+    """
+
+    def __init__(self, code: str = "AUTH_PASSWORD_CHANGE_REQUIRED") -> None:
+        super().__init__(code)
+        self.code = code
+
+
 class AssertionCache:
     """In-memory TTL cache for session assertions with single-flight locking.
 
@@ -106,6 +118,15 @@ async def _fetch_assertion(client: httpx.AsyncClient, session_id: str) -> str:
         json={"session_id": session_id},
         headers=_internal_headers(),
     )
+    if resp.status_code == 403:
+        # auth-service refuses to sign for sessions whose temp password is
+        # not yet replaced — pass the verdict through instead of masking it
+        # as a 503 outage (ADR 0010 gate, segment 4).
+        try:
+            code = resp.json().get("code", "AUTH_PASSWORD_CHANGE_REQUIRED")
+        except ValueError:
+            code = "AUTH_PASSWORD_CHANGE_REQUIRED"
+        raise PasswordChangeRequiredError(code)
     if resp.status_code != 200:
         raise UpstreamAuthError(f"assertion endpoint returned {resp.status_code}")
     token = resp.json().get("assertion_token")
@@ -201,6 +222,13 @@ def create_app(http_client: httpx.AsyncClient | None = None) -> FastAPI:
             assertion = await cache.get_or_fetch(
                 session_id,
                 lambda: _fetch_assertion(client, session_id),
+            )
+        except PasswordChangeRequiredError as exc:
+            return _error_response(
+                403,
+                exc.code,
+                "首次登录需修改临时密码后才能访问",
+                trace_id,
             )
         except (httpx.TransportError, UpstreamAuthError):
             # Fail closed: a session-bearing request must never proceed unsigned.

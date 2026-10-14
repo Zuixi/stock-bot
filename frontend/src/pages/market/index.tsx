@@ -138,7 +138,7 @@ function SentimentTab() {
           ]}
         />
         <span className="sentiment-mode-switch__hint">
-          {isIntraday ? "盘中口径（今日东财涨停池 · 30 秒刷新）" : "收盘口径（本地自算 · 可回放）"}
+          {isIntraday ? "盘中口径（今日涨停池 · 30 秒刷新）" : "收盘口径（本地自算 · 可回放）"}
         </span>
       </div>
       <Row gutter={[16, 16]}>
@@ -180,7 +180,7 @@ function SentimentTab() {
           {/* 口径互斥：close = 申万三级（l3Name 有值）；intraday = 东财板块（boardName 有值）。
               卡片自身按 data.source 判定列名，标题由这里按 mode 给出，两侧语义必须一致。 */}
           <SectionCard
-            title={isIntraday ? "盘中板块（东财口径）" : "申万三级最高板"}
+            title={isIntraday ? "盘中板块（涨停池口径）" : "申万三级最高板"}
             asof={sectors.data?.asOf}
             quality={sectors.data?.asOfQuality}
           >

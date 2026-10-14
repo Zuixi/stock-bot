@@ -69,7 +69,13 @@ async def create_principal_assertion(
     req: PrincipalAssertionRequest,
     redis: Redis = Depends(get_redis),
 ) -> PrincipalAssertionResponse:
-    """Sign an RS256 Principal Assertion token for an active session."""
+    """Sign an RS256 Principal Assertion token for an active session.
+
+    Refuses to mint an assertion while the session's temp password has not
+    been replaced (ADR 0010 gate, segment 3): forward-auth turns this 403
+    into AUTH_PASSWORD_CHANGE_REQUIRED for every /api/* request, without
+    touching the locked assertion claims contract.
+    """
     session_service = SessionService(redis)
     session_data = await session_service.get_session(req.session_id, extend_ttl=True)
 
@@ -77,6 +83,16 @@ async def create_principal_assertion(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "AUTH_UNAUTHORIZED", "message": "会话不存在或已过期"},
+        )
+
+    # str(bool) yields "True"/"False" (capitalized) — compare case-insensitively.
+    if str(session_data.get("must_change_password", "")).strip().lower() == "true":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "AUTH_PASSWORD_CHANGE_REQUIRED",
+                "message": "首次登录需修改临时密码",
+            },
         )
 
     assertion_ttl = req.ttl or 60

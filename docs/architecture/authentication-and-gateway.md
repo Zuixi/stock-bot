@@ -412,14 +412,19 @@ auth-service 的 `/internal/session/introspect` 与 `/internal/principal/asserti
 | **`/api/v1/health`** | GET | Public | Stock API | 无 | 否 | 服务存活健康检查 |
 | **`/auth/jwks.json`** | GET | Public | Auth Service | 无 | 否 | 公钥集分发（供 Gateway/API 验签） |
 | **`/auth/login`** | POST | Public | Auth Service | 无 | **是**(匿名 double-submit) | 用户名密码登录，签发会话 Cookie（响应体不含凭据） |
-| **`/auth/register`** | POST | Public | Auth Service | 无 | **是**(匿名 double-submit) | 新用户注册 |
+| **`/auth/register`** | POST | ~~Public~~ **Disabled** | Auth Service | — | **是**(匿名 double-submit) | **恒 403 `AUTH_REGISTRATION_DISABLED`**（邀请制，[ADR 0015](../decisions/0015-invite-only-provisioning-and-admin-console.md)） |
+| **`/auth/change-password`** | POST | Protected | Auth Service | 已登录 | **是** | 自助改密；清除强制改密标记并吊销其余会话 |
+| **`/auth/admin/users`** | GET/POST | Admin | Auth Service | `users:manage` | **是**(POST) | 用户列表（状态筛选/搜索/分页）与开户（roles 必填，临时密码仅返回一次） |
+| **`/auth/admin/users/{id}/suspend`** | POST | Admin | Auth Service | `users:manage` | **是** | 停用（吊销全部会话） |
+| **`/auth/admin/users/{id}/reactivate`** | POST | Admin | Auth Service | `users:manage` | **是** | 重新启用 |
+| **`/auth/admin/users/{id}/roles`** | PUT | Admin | Auth Service | `roles:manage` | **是** | 替换角色集（吊销全部会话，审计 before/after） |
+| **`/auth/admin/users/{id}/reset-password`** | POST | Admin | Auth Service | `users:manage` | **是** | 重签临时密码（吊销全部会话） |
+| **`/auth/admin/roles`** | GET | Admin | Auth Service | `users:manage` | 否 | **只读**角色→权限矩阵（挂 `users:manage`：开户下拉依赖） |
+| **`/auth/admin/audit`** | GET | Admin | Auth Service | `audit:read` | 否 | 审计事件检索 |
 | **`/auth/logout`** | POST | Protected | Auth Service | 已登录 | **是** | 销毁当前会话，清除 Cookie |
 | **`/auth/me`** | GET | Protected | Auth Service | 已登录 | 否 | 获取当前登录用户画像与权限清单 |
 | **`/auth/sessions`** | GET | Protected | Auth Service | 已登录 | 否 | 查看当前用户活跃设备与会话列表 |
 | **`/auth/sessions/{id}`**| DELETE | Protected | Auth Service | 已登录 | **是** | 强制踢出指定活跃会话 |
-| **`/auth/admin/users`** | GET/POST | Admin | Auth Service | `admin` / `users:manage` | **是**(POST) | 用户管理、创建账户、重置密码 |
-| **`/auth/admin/roles`** | GET/PUT | Admin | Auth Service | `admin` / `roles:manage` | **是**(PUT) | 角色与权限策略配置 |
-| **`/auth/admin/audit`** | GET | Admin | Auth Service | `admin` / `audit:read` | 否 | 安全审计日志检索 |
 | **`/api/v1/exchanges`** | GET | Public | Stock API | 无 | 否 | 交易所列表 |
 | **`/api/v1/stocks/**`** | GET | Public | Stock API | 无 | 否 | 股票列表、股票详情、K线行情、估值指标 |
 | **`/api/v1/market/**`** | GET | Public | Stock API | 无 | 否 | 申万行业树、行业行情、板块热力图 |

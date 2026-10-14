@@ -80,7 +80,7 @@ export function AnnouncementFeed({
             ? fmtRelativeTime(a.announceTime)
             : a.announceTime.slice(5, 16).replace("T", " ");
         return (
-          <List.Item style={{ padding: "6px 0" }} extra={<Tag style={{ marginRight: 0 }}>巨潮</Tag>}>
+          <List.Item style={{ padding: "6px 0" }} extra={undefined}>
             <div style={{ minWidth: 0, flex: 1 }}>
               <a
                 href={a.pdfUrl ?? undefined}

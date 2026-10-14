@@ -1,6 +1,6 @@
 import React from "react";
 import { Navigate, useLocation } from "react-router-dom";
-import { Spin, Result, Button } from "antd";
+import { Spin, Result, Button, Space } from "antd";
 import { useAuth } from "../context";
 import { useAuthStore } from "../store";
 
@@ -12,7 +12,7 @@ interface RequireAuthProps {
 
 export function RequireAuth({ children, roles, permissions }: RequireAuthProps) {
   const location = useLocation();
-  const { isAuthenticated, isAuthReady } = useAuth();
+  const { isAuthenticated, isAuthReady, sessionError, retrySession } = useAuth();
   const { hasRole, hasPermission } = useAuthStore();
 
   if (!isAuthReady) {
@@ -20,6 +20,27 @@ export function RequireAuth({ children, roles, permissions }: RequireAuthProps) 
       <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "50vh" }}>
         <Spin size="large" tip="正在验证身份..." />
       </div>
+    );
+  }
+
+  // 登录态未知（会话探测遇 429/5xx/网络故障）且无上一次已知用户。
+  // 绝不能按"未登录"跳登录页——那会把一次网络抖动画成"被踢下线"，
+  // 而且登录页同样依赖后端，跳过去也解决不了问题。给可重试的提示。
+  if (!isAuthenticated && sessionError) {
+    return (
+      <Result
+        status="warning"
+        title="无法确认登录状态"
+        subTitle="网络或服务暂时不可用，请稍后重试。"
+        extra={
+          <Space>
+            <Button type="primary" onClick={retrySession}>
+              重试
+            </Button>
+            <Button onClick={() => window.location.assign("/login")}>重新登录</Button>
+          </Space>
+        }
+      />
     );
   }
 

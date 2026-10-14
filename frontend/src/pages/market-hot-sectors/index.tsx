@@ -285,7 +285,7 @@ export default function MarketHotSectorsPage() {
               {conceptEnvelope.membership_as_of
                 ? formatCnDate(conceptEnvelope.membership_as_of)
                 : "--"}
-              （全库 · 东财）
+              （全库）
             </Typography.Text>
           ) : null}
 

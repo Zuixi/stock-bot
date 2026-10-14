@@ -31,9 +31,12 @@ const { Header, Content, Footer } = Layout;
  *
  * 权限可见性三态照抄 IA 文档 §1（口径来源 ADR 0008），**不新增任何 scope**：
  * - `public`        —— 市场 `/market`（含全部子路由）、公司分析 `/company`
- * - `permission`    —— 行业分析 `/industry`，沿用既有 `research:read`
- * - `authenticated` —— 其余 7 个（资讯/宏观/情绪/价值网/策略/风险/交易）：后端尚不存在，
+ * - `permission`    —— 行业分析 `/industry` 与情绪分析 `/sentiment`，沿用既有 `research:read`
+ * - `authenticated` —— 其余 6 个（资讯/宏观/价值网/策略/风险/交易）：后端尚不存在，
  *                      按裁定「对已登录用户可见 + 不加门禁」，写死权限名就是假契约
+ *
+ * ⚠️ `/sentiment` 曾经写成 `authenticated`，而它的路由守卫要 `research:read` —— 结果是
+ * **普通登录用户看得到入口、点进去撞 403**。可见性必须与清单里的 `permission` 一致。
  */
 const NAV_PRESENTATION: Record<string, { icon: ReactNode; visibility: NavVisibility }> = {
   "/market": { icon: <BarChartOutlined />, visibility: { kind: "public" } },
@@ -41,7 +44,7 @@ const NAV_PRESENTATION: Record<string, { icon: ReactNode; visibility: NavVisibil
   "/industry": { icon: <FundOutlined />, visibility: { kind: "permission", permission: "research:read" } },
   "/company": { icon: <BankOutlined />, visibility: { kind: "public" } },
   "/macro": { icon: <GlobalOutlined />, visibility: { kind: "authenticated" } },
-  "/sentiment": { icon: <DashboardOutlined />, visibility: { kind: "authenticated" } },
+  "/sentiment": { icon: <DashboardOutlined />, visibility: { kind: "permission", permission: "research:read" } },
   "/valuegraph": { icon: <DeploymentUnitOutlined />, visibility: { kind: "authenticated" } },
   "/strategy": { icon: <ExperimentOutlined />, visibility: { kind: "authenticated" } },
   "/risk": { icon: <SafetyCertificateOutlined />, visibility: { kind: "authenticated" } },

@@ -38,6 +38,7 @@ class SessionService:
         ip_address: str | None = None,
         user_agent: str | None = None,
         device_fingerprint: str | None = None,
+        must_change_password: bool = False,
     ) -> tuple[str, str, int]:
         """Create a new session in Redis and snapshot it into DB.
 
@@ -58,6 +59,7 @@ class SessionService:
             "user_agent": user_agent or "",
             "created_at": str(now),
             "last_seen_at": str(now),
+            "must_change_password": str(bool(must_change_password)),
         }
 
         session_key = self._session_key(session_id)
@@ -114,6 +116,8 @@ class SessionService:
             "user_agent": raw_data.get("user_agent"),
             "created_at": int(raw_data.get("created_at", 0)),
             "last_seen_at": int(raw_data.get("last_seen_at", 0)),
+            # ADR 0010 gate: must survive the rebuild for /internal/principal/assertion
+            "must_change_password": raw_data.get("must_change_password", "False"),
         }
 
         if extend_ttl:
@@ -197,28 +201,61 @@ class SessionService:
         self,
         db: AsyncSession,
         user_id: uuid.UUID,
+        keep_session_id: str | None = None,
     ) -> int:
-        """Revoke all sessions for a specific user across all devices."""
+        """Revoke all sessions for a user across all devices.
+
+        ``keep_session_id`` keeps the caller's own session alive (used by
+        change-password: the user stays logged in where they just proved
+        who they are, every other device is kicked).
+        """
         user_sessions_key = self._user_sessions_key(user_id)
         session_ids = await self.redis.smembers(user_sessions_key)
-        if not session_ids:
+        if keep_session_id:
+            targets = [s for s in session_ids if s != keep_session_id]
+        else:
+            targets = list(session_ids)
+        if not targets:
             return 0
 
         pipeline = self.redis.pipeline()
-        for s_id in session_ids:
+        for s_id in targets:
             pipeline.delete(self._session_key(s_id))
-        pipeline.delete(user_sessions_key)
+            pipeline.srem(user_sessions_key, s_id)
         await pipeline.execute()
 
-        # Update DB
+        # Update DB (mirror the Redis set: everything but the kept session)
+        conds = [AuthSession.user_id == user_id, AuthSession.is_revoked.is_(False)]
+        if keep_session_id:
+            conds.append(AuthSession.id != keep_session_id)
         stmt = (
             update(AuthSession)
-            .where(AuthSession.user_id == user_id)
+            .where(*conds)
             .values(is_revoked=True, last_active_at=datetime.now(UTC))
         )
         await db.execute(stmt)
         await db.commit()
-        return len(session_ids)
+        return len(targets)
+
+    async def flag_session_must_change_password(self, session_id: str, value: bool) -> None:
+        """Flip the must_change_password flag inside a live session hash.
+
+        Called after a successful self-service password change so the gate
+        lifts for the caller's own session immediately (no re-login needed).
+        """
+        await self.redis.hset(
+            self._session_key(session_id),
+            "must_change_password",
+            str(bool(value)),
+        )
+
+    async def update_session_username(self, session_id: str, username: str) -> None:
+        """Keep the session snapshot's username in step after a profile edit.
+
+        The assertion claims carry ``username``; leaving it stale would show the
+        old name downstream until the session expires.
+        """
+        await self.redis.hset(self._session_key(session_id), "username", username)
 
     async def list_user_sessions(
         self,

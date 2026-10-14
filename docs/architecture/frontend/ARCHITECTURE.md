@@ -66,6 +66,8 @@ frontend/src/
 | `/` | page | `pages/landing`（`LandingPage`） | 公开 | 宣传页，独立布局（不套 `MainLayout`） |
 | （无 path 的 `main` 外壳） | layout | `MainLayout` | — | 唯一 layout 路由；下表 `parent: "main"` 的行都嵌在它下面（顶栏/页脚由它渲染） |
 | `/login` | page | `pages/login`（`LoginPage`） | 公开 | 登录页 |
+| `/admin/users` | page | `pages/admin-users`（`AdminUsersPage`） | `users:manage` | 管理员控制台（PR #15）：开户（角色必选）· 停用/启用 · 角色替换 · 重置密码 · 审计检索。**入口在账户菜单 `UserMenu`，刻意不进顶栏 `NAV_ROOTS`**（IA §1 顶栏 = 10 个一级导航，`check-routes` 断言其条数） |
+| `/change-password` | page | `pages/change-password`（`ChangePasswordPage`） | 需登录 | 强制首登改密页（PR #15）：**只要求登录、不加权限**——首次登录的用户尚无任何业务权限，加权限门禁会把必须改密的人挡在门外 |
 | `/market` | page | `pages/market`（`MarketPage`） | 公开 | 行情台首页 |
 | `/market/global` | page | `pages/market-global`（`MarketGlobalPage`） | 公开 | 全球市场与跨市场标的（S1.3）：按市场分组、五要素齐备；大宗商品/外汇只放「数据源待接入」占位 |
 | `/market/industry` | page | `pages/market-category`（`CategoryPage`） | 公开 | 申万分类浏览（`/market/category` 的 redirect 目标） |

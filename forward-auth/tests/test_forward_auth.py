@@ -260,3 +260,49 @@ async def test_production_lifespan_without_injected_client() -> None:
     # 关闭后置空
     assert app.state.http is None
     await client_ref.aclose()  # lifespan 已负责 aclose，此处幂等兜底
+
+
+# ── ADR 0010: temp-password gate pass-through (segment 4) ────────────────────
+
+MUST_CHANGE_SESSION = "sess_must_change"
+
+
+def _must_change_handler(request: httpx.Request) -> httpx.Response:
+    if request.url.path == "/internal/principal/assertion":
+        body = _json_body(request)
+        if body.get("session_id") == MUST_CHANGE_SESSION:
+            return httpx.Response(
+                403,
+                json={"code": "AUTH_PASSWORD_CHANGE_REQUIRED", "message": "首次登录需修改临时密码"},
+            )
+        if body.get("session_id") == VALID_SESSION:
+            # upstream hard failure must NOT turn into a 403
+            return httpx.Response(500, json={"code": "INTERNAL_ERROR"})
+        return httpx.Response(401, json={"code": "AUTH_UNAUTHORIZED"})
+    return httpx.Response(404, json={})
+
+
+async def test_must_change_password_returns_403_not_503(
+    monkeypatch: pytest.MonkeyPatch, calls: list[httpx.Request]
+) -> None:
+    """Upstream 403 (temp password not replaced) passes through as 403."""
+    app = _build_app(monkeypatch, calls, handler=_must_change_handler)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://gateway") as ac:
+        resp = await ac.get(
+            "/verify", headers={"Cookie": f"stockbot_session={MUST_CHANGE_SESSION}"}
+        )
+    assert resp.status_code == 403
+    assert resp.json()["code"] == "AUTH_PASSWORD_CHANGE_REQUIRED"
+
+
+async def test_upstream_500_still_fails_closed_503(
+    monkeypatch: pytest.MonkeyPatch, calls: list[httpx.Request]
+) -> None:
+    """Only the explicit 403 verdict passes through; a 500 stays a 503."""
+    app = _build_app(monkeypatch, calls, handler=_must_change_handler)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://gateway") as ac:
+        resp = await ac.get("/verify", headers={"Cookie": f"stockbot_session={VALID_SESSION}"})
+    assert resp.status_code == 503
+    assert resp.json()["code"] == "UPSTREAM_UNAVAILABLE"

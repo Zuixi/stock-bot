@@ -17,6 +17,9 @@ import { type AppRoute } from "./route-manifest";
 const PAGES: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
   LandingPage: lazy(() => import("@/pages/landing")),
   LoginPage: lazy(() => import("@/pages/login")),
+  // PR #15 带入：强制首登改密页 + 管理员控制台（路由登记见 route-manifest.ts）
+  ChangePasswordPage: lazy(() => import("@/pages/change-password")),
+  AdminUsersPage: lazy(() => import("@/pages/admin-users")),
   MarketPage: lazy(() => import("@/pages/market")),
   MarketGlobalPage: lazy(() => import("@/pages/market-global")),
   CategoryPage: lazy(() => import("@/pages/market-category")),

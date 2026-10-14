@@ -199,6 +199,31 @@ export const ROUTES: AppRoute[] = [
     parent: "main",
   },
 
+  // —— PR #15（邀请制开户 + 管理员控制台）带入的两个页面 ——
+  // 本仓库的路由唯一真相是这份清单（主 checkout 那版是手写 `<Route>` JSX；合并时取清单驱动版），
+  // 所以这两个页面**必须在这里补登记**，否则路由解析不到、`check-routes` 也会报"清单缺路由"。
+  //
+  // `/admin/users` **刻意不进 `NAV_ROOTS`**：IA §1 的顶栏是 10 个一级导航，而 `check-routes`
+  // 机械断言 `NAV_ROOTS.length === 10`；管理台入口放账户菜单（`UserMenu`，仅 `users:manage` 可见）。
+  {
+    key: "admin-users",
+    path: "/admin/users",
+    kind: "page",
+    component: "AdminUsersPage",
+    permission: "users:manage",
+    parent: "main",
+  },
+  // 强制首登改密页：**只要"已登录"、不要额外权限**——首次登录的用户此时还没有任何业务权限，
+  // 给它加权限门禁会把必须改密的人挡在门外（这正是该页存在的意义）。
+  {
+    key: "change-password",
+    path: "/change-password",
+    kind: "page",
+    component: "ChangePasswordPage",
+    requiresAuth: true,
+    parent: "main",
+  },
+
   // 待定权限的一级导航（后端尚不存在 → 登录可见、无门禁）
   { key: "news", path: "/news", kind: "page", component: "NewsPage", isPlaceholder: true, parent: "main" },
   { key: "macro", path: "/macro", kind: "page", component: "MacroPage", isPlaceholder: true, parent: "main" },
