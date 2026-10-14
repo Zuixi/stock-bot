@@ -11,6 +11,8 @@ interface Props {
 }
 
 const ALL = "all";
+/** 默认只铺热门前 N 个行业：全量 249 行实测占 2778px（≈2.8 屏），把梯队挤到看不见。 */
+const COLLAPSE_LIMIT = 10;
 
 /** 板高热档：与连板梯队同一色阶语义（streak 1-4，≥4 归 h4）。 */
 function heatClass(streak: number): string {
@@ -35,6 +37,7 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
   const navigate = useNavigate();
   const [l1, setL1] = useState<string>(ALL);
   const [lianzOnly, setLianzOnly] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const items = data?.items ?? [];
   /** 盘中口径：东财涨停池不映射 SW，板块名看 boardName。 */
@@ -71,6 +74,8 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
   );
 
   const maxZt = Math.max(...rows.map((r) => r.ztCount), 1);
+  const collapsed = !expanded && rows.length > COLLAPSE_LIMIT;
+  const shown = collapsed ? rows.slice(0, COLLAPSE_LIMIT) : rows;
 
   if (degraded) {
     return (
@@ -129,7 +134,7 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
         </Typography.Text>
       ) : (
         <ul className="sw3-list">
-          {rows.map((r) => (
+          {shown.map((r) => (
             <li key={rowKey(r)}>
               <div
                 className={`sw3-row ${heatClass(r.maxStreak)}`}
@@ -160,6 +165,11 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
           ))}
         </ul>
       )}
+      {rows.length > COLLAPSE_LIMIT ? (
+        <button type="button" className="sw3-toggle" onClick={() => setExpanded(!expanded)}>
+          {collapsed ? `展开全部 ${rows.length} 个行业` : "收起"}
+        </button>
+      ) : null}
     </div>
   );
 }
