@@ -62,7 +62,7 @@ function StockItem({ s }: { s: LadderStock }) {
   }
   return (
     <li>
-      <Link className="ladder-stock" to={`/stock/${s.symbol}`}>
+      <Link className="ladder-stock" to={`/company/${s.symbol}`}>
         <span className="ladder-stock__row">
           <span className="ladder-stock__name">{s.name}</span>
           <span className="ladder-stock__seal num">封板 {s.sealTime ?? "--"}</span>

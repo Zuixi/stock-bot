@@ -138,7 +138,7 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
             <li key={rowKey(r)}>
               <div
                 className={`sw3-row ${heatClass(r.maxStreak)}`}
-                onClick={() => navigate(`/stock/${r.leaderSymbol}`)}
+                onClick={() => navigate(`/company/${r.leaderSymbol}`)}
                 title={`${rowLabel(r) ?? "--"} · 龙头 ${r.leaderName ?? "--"} → 个股页`}
               >
                 <span className="sw3-row__names">

@@ -6,7 +6,7 @@ import type { Page } from "@playwright/test";
  * - /industry：行业卡片（生猪养殖）+ 指标接入覆盖度（旧 /research 已 redirect 到此）
  * - /industry/pig：猪智投看板（周期标签 / 信号 / 指标带 / 相位条 / 仓位建议 / EChart / 核心速览）
  * - /industry/pig 行业知识库 Tab：机构图谱分组卡片 + 权威性原则 + 思维导图（P6）
- * - /industry/pig 行情调研追踪 Tab：标的分析成分股对比表（registry 列渲染 + 行点击跳 /stock/:symbol）
+ * - /industry/pig 行情调研追踪 Tab：标的分析成分股对比表（registry 列渲染 + 行点击跳 /company/:symbol）
  * - /industry/pig 行情调研追踪 Tab：行业 ETF 表（P5 行情面，TuShare fund_daily 实拉数据）
  * - /market/industry/110000/110700：生猪养殖三级行业页的"进入投研工作台"banner 导航
  * - 泛化验证（P6）：白羽肉鸡（broiler）第二行业卡片 → 同一工作台零新页面渲染
@@ -164,7 +164,7 @@ test("行情调研追踪：标的分析对比表渲染并跳转个股", async ({
     await expect(table.locator("thead th").filter({ hasText: header })).toBeVisible();
   }
 
-  // 行数 ≥1（成分股来自 SW 分类）且行点击跳转 /stock/:symbol
+  // 行数 ≥1（成分股来自 SW 分类）且行点击跳转 /company/:symbol
   // （.ant-table-row 跳过 antd 横向滚动的隐藏 measure 行）
   await expect
     .poll(async () => table.locator("tbody tr.ant-table-row").count())

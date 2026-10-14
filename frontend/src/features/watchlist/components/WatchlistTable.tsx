@@ -43,7 +43,7 @@ export function WatchlistTable() {
       title: "名称",
       dataIndex: "name",
       width: 100,
-      render: (v: string, r: StockRecord) => <a onClick={() => navigate(`/stock/${r.symbol}`)}>{v}</a>,
+      render: (v: string, r: StockRecord) => <a onClick={() => navigate(`/company/${r.symbol}`)}>{v}</a>,
     },
     {
       title: "交易所",
@@ -107,7 +107,7 @@ export function WatchlistTable() {
       pagination={false}
       onRow={(record) => ({
         style: { cursor: "pointer" },
-        onClick: () => navigate(`/stock/${record.symbol}`),
+        onClick: () => navigate(`/company/${record.symbol}`),
       })}
     />
   );

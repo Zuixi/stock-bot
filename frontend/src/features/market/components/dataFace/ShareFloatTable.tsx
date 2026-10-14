@@ -41,7 +41,7 @@ export function ShareFloatTable() {
       pagination={false}
       scroll={{ y: 320 }}
       locale={{ emptyText: "暂无限售解禁数据" }}
-      onRow={(r) => ({ onClick: () => navigate(`/stock/${r.symbol}`), style: { cursor: "pointer" } })}
+      onRow={(r) => ({ onClick: () => navigate(`/company/${r.symbol}`), style: { cursor: "pointer" } })}
     />
   );
 }

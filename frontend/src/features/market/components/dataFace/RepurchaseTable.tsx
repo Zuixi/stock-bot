@@ -49,7 +49,7 @@ export function RepurchaseTable() {
       pagination={false}
       scroll={{ y: 320 }}
       locale={{ emptyText: "暂无回购数据" }}
-      onRow={(r) => ({ onClick: () => navigate(`/stock/${r.symbol}`), style: { cursor: "pointer" } })}
+      onRow={(r) => ({ onClick: () => navigate(`/company/${r.symbol}`), style: { cursor: "pointer" } })}
     />
   );
 }

@@ -50,7 +50,7 @@ export function DragonTigerTable() {
       pagination={false}
       scroll={{ y: 320 }}
       locale={{ emptyText: "暂无龙虎榜数据（盘后自动更新）" }}
-      onRow={(r) => ({ onClick: () => navigate(`/stock/${r.symbol}`), style: { cursor: "pointer" } })}
+      onRow={(r) => ({ onClick: () => navigate(`/company/${r.symbol}`), style: { cursor: "pointer" } })}
     />
   );
 }

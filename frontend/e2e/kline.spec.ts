@@ -37,7 +37,15 @@ test("个股K线：tooltip 结构化展示（无可见日期轴）", async ({ pa
   await page.goto("/stock/600519");
   const card = page.locator(".ant-card").filter({ hasText: "历史行情" });
   await expect(card).toBeVisible();
+  // ⚠️ 等到**图表真的拿到数据**再悬停：卡片"可见"只说明容器挂上了，ECharts 的 canvas
+  // 可能还没有数据点 ⇒ 悬停不出 tooltip ⇒ 下面断言失败。全量跑（请求竞争激烈）时必现、
+  // 单跑常过，是典型时序 flake。MA 图例带数值 = 数据已渲染，是可判定的等待信号。
+  await expect(card.getByText(/MA5 \d/)).toBeVisible();
   const canvas = card.locator("canvas").first();
+  // ⚠️ 先把画布滚进视口再算坐标：1280x720 下画布顶边约在 y=585、高 400，
+  // `box.y + height*0.35 ≈ 725` **落在视口之外** ⇒ mouse.move 到不了画布 ⇒ 没有 tooltip。
+  // （1440x900 时不越界，所以这个 bug 只在特定视口/页面高度下出现，表现为"时好时坏"。）
+  await canvas.scrollIntoViewIfNeeded();
   const box = await canvas.boundingBox();
   if (!box) throw new Error("canvas not visible");
   await page.mouse.move(box.x + box.width * 0.75, box.y + box.height * 0.35);

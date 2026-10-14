@@ -94,7 +94,7 @@ export function RankingMatrix() {
               unit={unit}
               valuePlaceholder="--"
               delta={r.pct_chg}
-              href={`/stock/${r.symbol}`}
+              href={`/company/${r.symbol}`}
             />
           );
         })

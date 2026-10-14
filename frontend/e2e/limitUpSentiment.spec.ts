@@ -322,7 +322,7 @@ test("分时序列涨停家数恒定时不产生 NaN 路径", async ({ page }) =
 // ───────────────────────────────────────────────────────────────────────────
 // 返回键必须回到「原来的界面」：Market 的分类 Tab 是 URL 状态（`?tab=`），不是组件内存态。
 // 回归背景（用户反馈）：/market → 短线情绪 → 点个股 → 浏览器返回，永远落回默认「指数总览」
-// —— 因为 `/market` 与 `/stock/:symbol` 是兄弟路由，进个股页会卸载 MarketPage，
+// —— 因为 `/market` 与 `/company/:symbol` 是兄弟路由，进个股页会卸载 MarketPage，
 // 返回时组件以 `useState("overview")` 重新挂载。此用例把"返回后仍在原 Tab"钉死。
 // ───────────────────────────────────────────────────────────────────────────
 test("从短线情绪进个股，浏览器返回仍停在短线情绪 Tab", async ({ page }) => {
@@ -337,7 +337,7 @@ test("从短线情绪进个股，浏览器返回仍停在短线情绪 Tab", asyn
   await expect(firstStock).toBeVisible();
 
   await firstStock.click();
-  await expect(page).toHaveURL(/\/stock\//);
+  await expect(page).toHaveURL(/\/company\//);
 
   await page.goBack();
   await expect(page).toHaveURL(/[?&]tab=sentiment/);

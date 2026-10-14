@@ -37,7 +37,7 @@ function formatCell(value: number | string | null): string {
 /**
  * 标的分析 · 成分股对比表（P5）
  * 列由后端 registry 下发（固定行情/估值列 + company 分组指标列），
- * 新增公司指标零前端改动；行点击跳转个股详情 /stock/:symbol。
+ * 新增公司指标零前端改动；行点击跳转个股详情 /company/:symbol。
  */
 export function CompanyComparisonTable({ industryKey }: { industryKey: string }) {
   const navigate = useNavigate();
@@ -131,7 +131,7 @@ export function CompanyComparisonTable({ industryKey }: { industryKey: string })
       scroll={{ x: "max-content" }}
       locale={{ emptyText: "该行业暂无成分股数据" }}
       onRow={(record) => ({
-        onClick: () => navigate(`/stock/${record.symbol}`),
+        onClick: () => navigate(`/company/${record.symbol}`),
         style: { cursor: "pointer" },
       })}
     />

@@ -220,7 +220,7 @@ function SentimentTab() {
  */
 export default function MarketPage() {
   // Tab 是"视图状态"，必须进 URL：此前是 `useState("overview")`，而 `/market` 与
-  // `/stock/:symbol` 是兄弟路由，进个股页会把 MarketPage 整棵卸载 —— 按浏览器返回键
+  // `/company/:symbol` 是兄弟路由，进个股页会把 MarketPage 整棵卸载 —— 按浏览器返回键
   // 只还原 URL，组件重新挂载即落回默认「指数总览」，用户永远回不到离开时的那个 Tab
   // （连带丢失口径/展开态等页内状态）。默认 Tab 不写参数，保住既有 `navigate("/market")`
   // 与 `toHaveURL(/\/market$/)` 的语义；`replace` 避免每点一次 Tab 就往返回栈塞一条。

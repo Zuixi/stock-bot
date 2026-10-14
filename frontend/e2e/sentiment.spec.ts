@@ -21,7 +21,11 @@ const USER = {
   status: "active",
   is_superuser: false,
   roles: ["reader"],
-  permissions: ["stocks:read"],
+  // `research:read` **必需**：IA §1 把 `/sentiment` 与 `/industry` 定为同一权限档
+  // （页面消费 `/api/v1/metrics/*`，该读面要求 `research:read`；匿名 401、普通交易员 403）。
+  // 这里原先只有 `stocks:read`，是权限收口之前的写法 ⇒ 页面渲染 403 视图、hero 不存在，
+  // 导致本文件 11 条用例失败（症状看着像"页面坏了"，实为 mock 用户权限不足）。
+  permissions: ["stocks:read", "research:read"],
   created_at: "2026-10-01T00:00:00Z",
 };
 
@@ -458,7 +462,8 @@ test("匿名访问 /sentiment 走既有 RequireAuth 重定向（本页消费受�
   );
   await page.goto("/sentiment");
   await page.waitForURL(/\/login\?returnTo=%2Fsentiment/);
-  await expect(page.getByText("用户登录")).toBeVisible();
+  await expect(page.getByText("Stock Bot 投研工作台")).toBeVisible();
+  await expect(page.getByRole("button", { name: "登 录" })).toBeVisible();
   // 未登录不得渲染任何模块面板
   await expect(page.getByTestId("sentiment-module-index")).toHaveCount(0);
 });

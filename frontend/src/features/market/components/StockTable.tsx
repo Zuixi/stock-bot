@@ -93,7 +93,7 @@ export function StockTable({ data, total, current, pageSize, loading, onChange, 
       width: 100,
       fixed: "left" as const,
       render: (v: string, record: StockRecord) => (
-        <a onClick={() => navigate(`/stock/${record.symbol}`)}>{v}</a>
+        <a onClick={() => navigate(`/company/${record.symbol}`)}>{v}</a>
       ),
     },
     {
@@ -195,7 +195,7 @@ export function StockTable({ data, total, current, pageSize, loading, onChange, 
       onChange={handleTableChange}
       onRow={(record) => ({
         style: { cursor: "pointer" },
-        onClick: () => navigate(`/stock/${record.symbol}`),
+        onClick: () => navigate(`/company/${record.symbol}`),
       })}
     />
   );

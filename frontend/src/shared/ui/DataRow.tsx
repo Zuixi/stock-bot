@@ -9,7 +9,7 @@ export interface DataRowProps {
   ticker?: string;
   value?: string;
   unit?: string;
-  /** 应用内路由（如 `/stock/600519`）；用 router Link 导航，避免整页刷新 */
+  /** 应用内路由（如 `/company/600519`）；用 router Link 导航，避免整页刷新 */
   href?: string;
   delta?: number | null;
   /**
