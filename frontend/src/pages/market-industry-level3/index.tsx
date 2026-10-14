@@ -5,7 +5,14 @@ import type { TableProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { StockTable } from "@/features/market/components/StockTable";
 import type { StockRecord } from "@/shared/types";
-import { fetchSwIndustryTree, fetchSwLevel2Stocks, fetchSwLevel3Stocks, fetchSwLevel2StocksEnriched, fetchSwLevel3StocksEnriched } from "@/shared/api/swIndustry";
+import {
+  customTagSuffix,
+  fetchSwIndustryTree,
+  fetchSwLevel2Stocks,
+  fetchSwLevel3Stocks,
+  fetchSwLevel2StocksEnriched,
+  fetchSwLevel3StocksEnriched,
+} from "@/shared/api/swIndustry";
 import { fetchIndustryLevel } from "@/shared/api/swDrilldown";
 import {
   IndustryAsOfBar,
@@ -210,7 +217,9 @@ export default function IndustryLevel3Page() {
                   if (checked) setSelectedLevel3Code(level3.code);
                 }}
               >
-                {level3.name} ({level3.stockCount})
+                {/* 官方成分数（SCD2，与下钻页逐节点一致）；自定义标签只作标注，不相加 */}
+                {level3.name} ({level3.officialCount})
+                {customTagSuffix(level3) ? ` ${customTagSuffix(level3)}` : ""}
               </Tag.CheckableTag>
             ))}
           </Space>

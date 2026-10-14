@@ -1,6 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { fetchSwIndustryTree, type SwIndustryLevel1 } from "@/shared/api/swIndustry";
+import {
+  customTagSuffix,
+  fetchSwIndustryTree,
+  type SwIndustryLevel1,
+} from "@/shared/api/swIndustry";
 import { useTheme } from "@/app/theme-context";
 import { useMarketPolling } from "../hooks/useMarketPolling";
 import "./SwIndustryGrid.css";
@@ -16,6 +20,8 @@ const SKELETON_COUNT = 18;
 function IndustryCell({ industry, alpha }: { industry: SwIndustryLevel1; alpha: number }) {
   const { colors } = useTheme();
   const useWhite = alpha > WHITE_TEXT_THRESHOLD;
+  /** 用户自定义标签**带标注**呈现，绝不加进官方数（见 swIndustry.ts 的 customTagSuffix） */
+  const suffix = customTagSuffix(industry);
 
   return (
     // 整格是跳转入口 → 用真 `<Link>`：可 Tab 聚焦、Enter 触发、可新开标签；
@@ -25,7 +31,9 @@ function IndustryCell({ industry, alpha }: { industry: SwIndustryLevel1; alpha: 
     <Link
       to={`/market/industry/${industry.code}`}
       className="sw-cell"
-      title={`${industry.stockCount} 只个股 · ${industry.children.length} 个二级行业`}
+      title={`${industry.officialCount} 只个股 · ${industry.children.length} 个二级行业${
+        suffix ? ` · ${suffix}` : ""
+      }`}
       style={{
         background: `${colors.accent}${Math.round(alpha * 255)
           .toString(16)
@@ -34,7 +42,10 @@ function IndustryCell({ industry, alpha }: { industry: SwIndustryLevel1; alpha: 
       }}
     >
       <span className="sw-name">{industry.name}</span>
-      <span className="sw-count">{industry.stockCount} 只</span>
+      <span className="sw-count">
+        {industry.officialCount} 只
+        {suffix ? <span className="sw-count-extra"> {suffix}</span> : null}
+      </span>
     </Link>
   );
 }
@@ -67,7 +78,8 @@ export function SwIndustryGrid({ fallback = "暂无申万行业数据" }: Props)
   });
 
   const industries = data ?? [];
-  const maxCount = Math.max(0, ...industries.map((i) => i.stockCount));
+  // 着色阶梯按**官方成分数**（与显示的数字同一口径；若按 stockCount 着色，深浅会与格子上的数对不上）
+  const maxCount = Math.max(0, ...industries.map((i) => i.officialCount));
   const alphaOf = (count: number): number =>
     maxCount > 0 ? ALPHA_MIN + ((ALPHA_MAX - ALPHA_MIN) * count) / maxCount : ALPHA_MIN;
 
@@ -76,7 +88,7 @@ export function SwIndustryGrid({ fallback = "暂无申万行业数据" }: Props)
   return (
     <div className="sw-grid">
       {industries.map((ind) => (
-        <IndustryCell key={ind.code} industry={ind} alpha={alphaOf(ind.stockCount)} />
+        <IndustryCell key={ind.code} industry={ind} alpha={alphaOf(ind.officialCount)} />
       ))}
     </div>
   );

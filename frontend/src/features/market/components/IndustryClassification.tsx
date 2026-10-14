@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { Card, Col, Empty, Row, Skeleton, Space, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { fetchSwIndustryTree } from "@/shared/api/swIndustry";
+import { customTagSuffix, fetchSwIndustryTree } from "@/shared/api/swIndustry";
 import { fetchIndustryLevel } from "@/shared/api/swDrilldown";
 import { useMarketPolling } from "../hooks/useMarketPolling";
 import { IndustryAsOfBar, IndustryMetricStrip } from "./IndustryMetricStrip";
@@ -81,7 +81,13 @@ export function IndustryClassification() {
                     <Space direction="vertical" size={4} style={{ width: "100%" }}>
                       <Typography.Text strong>{level1.name}</Typography.Text>
                       <Space size={8}>
-                        <Tag color="blue">{level1.stockCount} 只个股</Tag>
+                        {/* 显示**官方成分数**（SCD2），与下钻页逐节点一致；自定义标签只作标注，不相加 */}
+                      <Tag color="blue">{level1.officialCount} 只个股</Tag>
+                      {customTagSuffix(level1) ? (
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {customTagSuffix(level1)}
+                        </Typography.Text>
+                      ) : null}
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                           {level1.children.length} 个二级行业
                         </Typography.Text>

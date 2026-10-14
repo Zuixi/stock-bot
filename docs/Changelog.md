@@ -1,3 +1,38 @@
+## 2026-10-14 - **裁决 A：申万成分计数统一到「官方（SCD2）」口径** —— 网格/卡片不再显示「官方 + 我的标签」
+
+**问题（用户实测）**：`/market?tab=panorama` 的「申万行业网格」写着「农林牧渔 **111** 只」，而同一行业的**下钻页显示 104**。查清后 111 ≠ 算错，而是**两个口径并排在同一屏**：
+
+```
+tree 的 stockCount = 111
+  = officialCount 104（SCD2 官方归属；与下钻页 member_count 逐节点一致）
+  + customCount     7（★ 用户自定义标签 stock_custom_sw_tags，挂在 L3/L2 上被上卷到 L1：
+                        种植业 2 · 饲料 3 · 农业综合Ⅱ 3）
+```
+（排查中先查了 `industry_code='110000'` 的标签得 0，一度以为假设错了——实为**查错了层级**：标签挂在子节点。）
+
+**裁决（owner 选 A）**：**显示一律用 `officialCount`**；自定义标签**只作带标注的次要信息**呈现，**绝不相加后当官方口径**。理由：官方成分**可复核**（能对上游、能对下钻），自定义标签是"我的偏好"，混进"这个行业有多少只股票"这个事实里会让数字既对不上上游、也对不上下钻页——这正是 owner 最初报的那个问题的同一类。
+
+**改动（4 处显示点 + 类型 + 1 个共享函数）**：
+| 位置 | 文件 |
+|---|---|
+| 网格瓦片（数 + `title` + **着色阶梯**） | `features/market/components/SwIndustryGrid.tsx` |
+| 行业分类卡片 | `features/market/components/IndustryClassification.tsx` |
+| L1 下钻页的 L2 卡片（`/market/industry/:l1`） | `pages/market-industry-level2/index.tsx` |
+| L2 下钻页的 L3 名（`/market/industry/:l1/:l2`） | `pages/market-industry-level3/index.tsx` |
+
+- 类型 `SwIndustryLevel{1,2,3}` 补 `officialCount` / `customCount`，并写明**显示口径**与"为什么不能相加"。
+- 新增共享函数 `customTagSuffix(node)`（`shared/api/swIndustry.ts`）→ `"+7 自定义"` 或空串。**为什么单列一个函数**：4 处都要"官方数 + 可选标注"，抄 4 遍条件必然漂移。
+- **着色阶梯也改用 `officialCount`**：否则格子深浅与格子上的数字对不上（同一屏两套量级）。
+- `stockCount` 保留在类型里（忠于线上响应形状）+ 注释；前端已无消费者。
+
+**验证**：
+- **活栈实测**：网格 `农林牧渔 104 只 +7 自定义` · title `104 只个股 · 8 个二级行业 · +7 自定义` · 行业分类卡片 `104 只个股 +7 自定义` · 下钻页 `104 只` ⇒ **三处首次一致**。
+- **先红后绿**：新 e2e 在旧构建上 3 条全红（旧代码显示相加后的 102），重建后 **14 passed**。
+- 新增口径守护：`e2e/landing.spec.ts`「显示官方成分数，自定义标签只作标注不相加」——mock 特意给 `95 官方 + 7 自定义 = stockCount 102`，断言格子显示 **95** 且**不含 102**；若有人退回 `stockCount`，本断言转红。
+- 门禁：`tsc` 0 · `build` 0 · `check:routes` 86 ✓ · `check:design` ✓ · `self_review` ✓ · e2e（landing+darkmode+navigation+marketTrust+marketPolling+sentiment）**40 passed**。
+
+> **顺带说明**：`SectorHeatmap` 的 `stockCount` 来自**另一个端点**（`/market/sectors` 的 `SectorSummary`），不在本次口径统一范围内——若那块也与上游对不上，需另立一次同类的口径裁决。
+
 ## 2026-10-14 - 修复「申万行业网格」格子点击不跳转（看起来能点、点了没反应）
 
 - **现象（用户实测反馈）**：`/market?tab=panorama` 的「申万行业网格」32 个格子点不动。
