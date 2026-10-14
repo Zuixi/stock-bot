@@ -99,20 +99,40 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
 - [x] **0.1 冻结路由与页面清单**：`frontend/scripts/check-routes.mjs` 现有输出存档为 `frontend/e2e/fixtures/route-baseline.json`（路由数量与 redirect 集合），整改期间任何路由增删都要在此 diff。新增 `/market/data-sources` 时同步更新 `route-manifest.ts` + `route-elements.tsx` + `PLACEHOLDER_CONTRACT`。
 - [x] **0.2 新增 `frontend/e2e/responsive.spec.ts`（先写、先红）**：四档视口 `390 / 768 / 1280 / 1440` × 路由 `[/, /market, /market/global, /market/heatmap, /company/600540, /industry/pig, /me]`，逐条断言
   ```ts
-  const { scrollWidth } = await page.evaluate(() => document.documentElement);
+  // ⚠️ 必须 `evaluate` 里就返回**原始值**：`page.evaluate(() => document.documentElement)`
+  // 返回的是 `ref: <Node>` 字符串，解构 `{ scrollWidth }` 得 undefined ⇒ 全部转红但**原因是错的**
+  // （Phase 0 实测踩到：28/28「错误原因的红」）。见 §2.1 假绿坑清单。
+  const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
   const inner = await page.evaluate(() => window.innerWidth);
   expect(scrollWidth, `${route}@${width} 横向溢出`).toBeLessThanOrEqual(inner + 1);
   ```
-  预期：`/market/global@390` **立即失败**（现测 749 > 390）。
-- [x] **0.3 新增 `frontend/e2e/nav.spec.ts` 断言（先红）**：`width ∈ {1280, 1440}` 下顶栏/侧栏的 10 个一级项 `toBeVisible()`。预期：`@1440` **立即失败**（3 项在 `...` 内）。
-- [x] **0.4 新增 `frontend/e2e/marketLayout.spec.ts`（先红）**：`/market` 的每个 Tab 下断言页面文本**不含**「数据版图」；断言「申万行业网格」标题在页面内出现 **1** 次；断言 `market-page-head` 的副标题文本 === Tab label 以 ` · ` 拼接。预期：三条**全部立即失败**。
+  预期：`/market/global@390` **立即失败**。**Phase 0 实测 `scrollWidth=877`（不是计划写的 749**——计划值取自更早的一次测量；同一个成因，数值更大），且 `@768` 也红（877 > 768）。
+- [x] **0.3 新增 `frontend/e2e/nav.spec.ts` 断言（先红）**：`width ∈ {1280, 1440}` 下 10 个一级项全部可见。
+  - **不得用 `toBeVisible()`**：它**不计祖先 `overflow` 裁剪**——AntD 折叠进 `...` 的项外层 `li` 高度为 0、内层 `span` 仍是 28×17，于是 10/10 **假绿**（Phase 0 实测踩到）。改用 `elementFromPoint` 命中测试。
+  - 作用域用 `[data-testid="primary-nav"]` + `[data-nav-label]`（**W1 改左侧栏时必须保留这两个锚点**，见 §3 W1）。
+  - Phase 0 实测：`@1440` 3 项不可见（策略引擎/风险管理/交易执行）· `@1280` 4 项（+价值网图谱）——与 §7 的 7/10、6/10 一致。
+- [x] **0.4 新增 `frontend/e2e/marketLayout.spec.ts`（先红）**：三条断言，其中**②③ 的预期已按实测修正**（原判据写在 `1efe65a` 之前，该提交早于本计划就把「数据版图」移出了市场页）：
+  - ① **副标题 === Tab label 以 ` · ` 拼接** → **红**（真问题：副标题与 Tab 不同源）。这是本条唯一的红线工作项。
+  - ② **页面文本不含「数据版图」** → 现在**绿**。降级为**回归闸**（防止它被搬回来），不再是红线。
+  - ③ ~~「申万行业网格」标题出现 1 次~~ → **改为**：A股全景 Tab 下**同屏行业区块数 == 1**（申万行业网格 与 行业分类（申万）**都在列 31 个行业**，这才是「信息去重」要抓的冗余）→ **红**。原写法（按标题计数）抓不到这个冗余，因为第二份的标题不同。
   - **两条负向断言必须先等到请求终态**（`waitForLoadState("networkidle")` + 显式等待该 Tab 的目标卡片出现）再断言，否则在 react-query 的 loading 窗口内恒真、假绿；锚点放在文案上而非 `data-testid`。
-  - 「出现 1 次」用结构选择器计数（如 `page.locator(".section-card__title", { hasText: "申万行业网格" })` 的 `toHaveCount(1)`），不得用全局 `getByText`。
-- [x] **0.5 扩展 `frontend/scripts/check-design-tokens.mjs`（先红）**：见 §5.1 的四组断言。预期：`--mag-*` / `--font-ui` / `--font-num` / `reduced-motion` / `focus-visible` 缺失 → 立即失败。
-- [x] **0.6 新增 `frontend/scripts/check-no-raw-iso.mjs`（先红）**：扫 `frontend/src/**/*.tsx` 的 JSX 文本节点与模板字符串，命中 `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}` 即失败。预期：`market-index` 立即失败。
-- [x] **0.7 基准记录（人工，非门禁）**：三档视口下各页 `scrollHeight` 快照写入本计划 §7 的"整改前"列，用于量化"去重复"收益。
+  - 计数用**结构选择器**（`page.locator(...)` 的 `toHaveCount`），不得用全局 `getByText`（strict-mode violation）。**并做正对照**（注入一段已知文本后计数应变化），证明计数断言不是空跑——Phase 0 已做。
+- [x] **0.5 扩展 `frontend/scripts/check-design-tokens.mjs`（先红）**：见 §8.1 的五组断言。Phase 0 实测 **28 项不达标**（`--mag-*` / `--font-ui` / `--font-num` / `reduced-motion` / `focus-visible` 全缺；等宽数字出现次数 **65**，见 §8.1-5 已据实修正）。
+- [x] **0.6 新增 `frontend/scripts/check-no-raw-iso.mjs`（先红）**：扫 `frontend/src/**/*.tsx` 的 JSX 文本节点与模板字符串，命中 `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}` 即失败。
+  - **⚠️ 原预期「`market-index` 立即失败」不可达**：该页渲染 `{index.asof}`（payload 直出），源码里**没有** ISO 字面量 ⇒ 静态层**结构上不可能红**（Phase 0 实测：扫 136 个 `.tsx` / 8130 段文本，绿）。
+  - **故本条改为两层判据**：① 静态源码字面量（现在绿，防**将来**写死）；② **运行时页面文本**（新增 `frontend/e2e/noRawIso.spec.ts`）—— 实测 `/market/index/000001.SH` 可见文本含 `2026-10-13T15:00` ⇒ **② 是真正的红线**，也正是 §Why now 要抓的那条。详见 §8.2。
+- [x] **0.7 基准记录（人工，非门禁）**：三档视口下各页 `scrollHeight` 快照写入本计划 **§7.1**（Phase 0 实际落点；§7 的指标表未动）。**并记录了 §7 旧值的漂移**：landing 7051→6066 · 指数总览 1439→956 · A股全景 3141→3667（计划写于 2026-10-13，此后有真实改动）。
 
-**Phase 0 完成判据**：0.2–0.6 五条断言**全部处于红色**，且每条的失败原因与 §Why now 表逐条对应（证明断言抓的是真问题，不是空跑）。
+### 2.1 Phase 0 实测发现的两个"假绿"坑（**已就地修掉，且可机械化**）
+
+| 坑 | 症状 | 处置 |
+|---|---|---|
+| `page.evaluate(() => document.documentElement)` | 返回 `ref: <Node>` 字符串；解构 `{ scrollWidth }` 得 `undefined` ⇒ **全部转红但原因是错的**（28/28） | evaluate 内只返回原始值；已写进 §2 的代码片段 |
+| `toBeVisible()` 与祖先 `overflow` | 折叠进 `…` 的项外层高 0、内层仍 28×17 ⇒ **10/10 假绿**，实际只 7 项可见 | 改 `elementFromPoint` 命中测试 |
+
+> 这两条**都不是本计划专有**：`toBeVisible` 那条会影响**任何**"折叠/溢出后是否可见"的断言。按 AGENTS.md 第 5 条，应升级为 `check-*` 或 best-practices 一行——**待办**（Phase 1 收尾时处理）。
+
+**Phase 0 完成判据（据实修正）**：0.2 / 0.3 / 0.5 各有红线；0.4 有 ①③ 两条红线（② 降级为回归闸）；0.6 的红线在**运行时层**。**每条的失败原因必须与 §Why now 表逐条对应**（证明断言抓的是真问题，不是空跑）；**预期为绿却变红的，与预期为红却变绿的一样，都算错**。
 
 ---
 
@@ -156,7 +176,7 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
   ```
 - [ ] **3.2 字体文件**（依 §0-C）：`frontend/public/fonts/` 放子集 `noto-sans-sc-{400,500,600}.subset.woff2`（常用 3500 字 + 标点）与 `ibm-plex-mono-{400,600}.subset.woff2`（仅 `0-9 + - % . , 亿 万`）；`@font-face` 加 `font-display: swap` + `unicode-range`。子集化脚本入库 `frontend/scripts/subset-fonts.sh`（依赖 `pyftsubset`，**仅构建期**，不进运行时）。
 - [ ] **3.3 AntD 接入**：`frontend/src/app/theme.ts` 的 `token` 增加 `fontFamily: 'var(--font-ui)'`。
-- [ ] **3.4 数字统一**：`theme.css` 增 `.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }`；替换现有 20+ 处手写的 `fontVariantNumeric`（`grep -rn "fontVariantNumeric\|font-variant-numeric" frontend/src`）。**保留至少一处内联**作为回归哨兵？不——全部替换，靠门禁（§5.1-4）防止新增。
+- [ ] **3.4 数字统一**：`theme.css` 增 `.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }`；替换现有 **65 处**手写的 `fontVariantNumeric`（**Phase 0 实测**；计划原写"20+"，取自更早的一次 grep。`grep -rn "fontVariantNumeric\|font-variant-numeric" frontend/src`）。**保留至少一处内联**作为回归哨兵？不——全部替换，靠门禁（**§8.1-5**）防止新增。
 - [ ] **3.5 字号刻度**：在工作区把卡片标题统一为 `14px/600/--text-primary`（现 `SectionCard.css` 是 16/600，契约 §4 写的是 13/secondary——**以本计划为准，同步改契约**），数据行 `14`（数字）/ `13`（名称）/ `11`（代码）/ `12`（口径与 as_of）。
 
 ### 4.2 量级色阶与对比度
@@ -208,7 +228,8 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
 > - sparkline：**保留**，按容器宽度决定画点数（不是按断点隐藏）。
 
 - [ ] **4.1 指数卡移动端**（`GlobalIndexCardView.tsx`）：`<768` 左列 `min-width: 104px`；名称 `white-space: normal` 允许 2 行（**名称优先级高于代码**，禁止把 `上证指数` 截成 `上证…`）；`CN 000001` 并入名称行做 10px 后缀；sparkline **始终渲染**，画点数按容器宽度自适应（**B2 修订**：原 `width ≥ 768` 才渲染的条件作废）。
-- [ ] **4.2 表格横向滚动容器**：`market-global/index.tsx` 与所有 AntD `Table` 外层统一包 `.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }`；`Table` 加 `scroll={{ x: 'max-content' }}`。修掉 `scrollWidth=749`。
+- [ ] **4.2 表格横向滚动容器**：`market-global/index.tsx` 与所有 AntD `Table` 外层统一包 `.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }`；`Table` 加 `scroll={{ x: 'max-content' }}`。修掉 `scrollWidth=877`（**Phase 0 实测**；计划原写 749，取自更早测量，同一成因）。
+- [ ] **4.2b Tab 级横向溢出扫描（Phase 0 发现的新增项）**：0.2 的路由集只覆盖**路由级**，漏掉 **Tab 级**布局。Phase 0 实测 **`/market?tab=moneyflow@390` `scrollWidth=420` > 390**（资金流向 Tab 的三个卡片）——它在 0.2 的断言集之外，**至今没有任何门禁守着**。做法：`responsive.spec.ts` 增加一遍 `/market` **五个 Tab** 逐一测横向溢出，并纳入 4.2 验收。
 - [ ] **4.3 热力图移动端**（**B2 修订**）：`market-heatmap` 在 `<768` **仍渲染 treemap**，但必须解决标签重叠（ECharts `labelLayout: { hideOverlap: true }` + 面积阈值下隐藏标签；实测若仍不可读，才允许"默认列表 + 可切 treemap"）。**不得**改成"小屏只给列表"。
 - [ ] **4.4 首页移动端**：`landing.css` 检查 `.landing-container` 的 `max-width` 与内边距；目标 `<768` 无横向溢出（当前 `scrollWidth=392` vs 390，1–2px 溢出同样判失败）。
 - [ ] **4.5 移动端形态清单（B2 新增）**：逐个点名需要窄屏形态的图表组件并各留一条 e2e/截图证据 —— K 线（`kline`）、treemap（`SectorHeatmap` / `market-heatmap`）、sparkline（`GlobalIndexCardView`）、`IndustryMetricStrip`（本计划第一个样本，见 §Phase 1 W2）、`PriceCostChart`（`/industry/pig`）。**B2 的成本主要在这里**（约 B1 的 3 倍工作量），§7 按此重估。
@@ -246,7 +267,7 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
 | 瓦片文字最小对比度 | 2.10:1 | ≥ 4.5:1 | `check:design` |
 | 首页 `scrollHeight` | 7051 | ≤ 4200（D2） | 0.7 基准 |
 | `.css` 中 `:focus-visible` 规则数 | 1 | ≥ 1 全局 + 局部 | 0.5 断言 |
-| 自绘 `fontVariantNumeric` 处数 | 22 | 1（`.num` 定义） | §5.1-4 |
+| 自绘 `fontVariantNumeric` 处数 | **65**（Phase 0 实测；原写 22 为更早的 grep） | 1（`.num` 定义） | §8.1-5 |
 
 ### 7.1 整改前 `scrollHeight` 基准快照（0.7，2026-10-14 实测）
 
@@ -287,11 +308,17 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
 2. 对每级算对比度：light 与 `--text-primary`、dark 与 `--text-primary`，全部 ≥4.5；不足即失败并打印实测值。
 3. `--font-ui` / `--font-num` 存在，且 `theme.ts` 的 `token.fontFamily` 引用 `--font-ui`。
 4. `theme.css` 含 `@media (prefers-reduced-motion: reduce)` 与 `:focus-visible` 两块。
-5. `frontend/src/**` 中 `fontVariantNumeric|font-variant-numeric` 的出现次数 ≤1（只允许 `.num` 定义处）。
+5. `frontend/src/**` 中 `fontVariantNumeric|font-variant-numeric` 的出现次数 ≤1（只允许 `.num` 定义处）。**Phase 0 实测实际是 65 处**（§7 原写 22，取自更早的一次 grep；门槛值 ≤1 不变，待 §3.4 统一到 `.num`）。
 
-### 8.2 新增 `frontend/scripts/check-no-raw-iso.mjs`
+### 8.2 日期口径门禁（**两层**，Phase 0 据实修正）
 
-扫 `frontend/src/**/*.tsx`，命中 `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}` 即失败（日期一律走 `shared/ui/date.ts`）。
+**Layer 1（静态，源码字面量）**：`frontend/scripts/check-no-raw-iso.mjs` 扫 `frontend/src/**/*.tsx`，命中 `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}` 即失败（日期一律走 `shared/ui/date.ts`）。
+
+> ⚠️ **只做 Layer 1 不够 —— 它在结构上抓不到本计划要抓的那个缺陷。** Phase 0 实测：`market-index` 渲染的是 `{index.asof}`（**payload 直出**），源码里没有 ISO 字面量 ⇒ Layer 1 **恒绿**（扫 136 个 `.tsx` / 8130 段文本）。而用户实际看到的就是 `2026-10-13T15:00` 这种未格式化的 ISO。
+
+**Layer 2（运行时，页面可见文本）**：`frontend/e2e/noRawIso.spec.ts` —— 打开目标页，对**可见文本**跑同一个正则。Phase 0 实测 **`/market/index/000001.SH` 可见文本含 `2026-10-13T15:00` ⇒ 红**，这才是本门禁的真正红线。
+
+**为什么两层都要**：Layer 1 防**将来**有人写死字面量（便宜、无浏览器）；Layer 2 抓**现在**payload 直出的那个缺陷（贵、但抓得到）。只留任一层都会漏一类。
 
 ### 8.3 slop 扫描追加（`scripts/slop_scan.sh` 或 best-practices 映射表）
 
