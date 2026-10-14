@@ -90,7 +90,7 @@ function PctText({ card }: { card: GlobalIndexCard }) {
         ? "var(--down)"
         : "var(--text-secondary)";
   return (
-    <span style={{ color, fontVariantNumeric: "tabular-nums" }}>
+    <span className="num" style={{ color }}>
       {card.pctChange > 0 ? "+" : ""}
       {card.pctChange.toFixed(2)}%
       {card.change != null && (
@@ -127,7 +127,7 @@ const columns: ColumnsType<GlobalIndexCard> = [
     width: 150,
     render: (_: unknown, row) => (
       <Space direction="vertical" size={0} style={{ alignItems: "flex-end" }}>
-        <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
+        <span className="num" style={{ fontWeight: 600 }}>
           {fmtPrice(row.price)}
         </span>
         <span style={{ fontSize: 10.5 }}>

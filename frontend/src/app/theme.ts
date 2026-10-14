@@ -36,6 +36,13 @@ export interface ThemePalette {
   "sent-extreme-cold": string;
   /** --sent-extreme-hot 情绪分位 > 90 的极热带（同上） */
   "sent-extreme-hot": string;
+  /**
+   * `--mag-0..4` 量级色阶（**数量**编码走中性灰阶，不用 accent 叠 alpha）。
+   * 顺序与 CSS 逐项对应：0 最浅（数量最少）→ 4 最深；每级对同级 `textPrimary` 的
+   * 对比度由 `check-design-tokens.mjs` §8.1-2 算死 ≥4.5。ECharts（canvas 不认 CSS var）
+   * 若需数量型配色从此处取。
+   */
+  mag: [string, string, string, string, string];
 }
 
 /**
@@ -59,6 +66,8 @@ export const THEME_COLORS: Record<ThemeMode, ThemePalette> = {
     hover: "rgba(41, 98, 255, 0.06)",
     "sent-extreme-cold": "#5b4bd6",
     "sent-extreme-hot": "#a35f00",
+    // 量级色阶（0 最浅 → 4 最深）：与 theme.css 的 light 块逐项一致，门禁 §8.1-1 比对
+    mag: ["#eef1f6", "#e2e7f0", "#cfd7e5", "#a9b5c9", "#75859f"],
   },
   dark: {
     bgPage: "#131722",
@@ -75,6 +84,8 @@ export const THEME_COLORS: Record<ThemeMode, ThemePalette> = {
     hover: "rgba(41, 98, 255, 0.12)",
     "sent-extreme-cold": "#8b7cff",
     "sent-extreme-hot": "#ffb020",
+    // 量级色阶（0 最浅 → 4 最深）：与 theme.css 的 dark 块逐项一致，门禁 §8.1-1 比对
+    mag: ["#1e222d", "#262c3a", "#313a4d", "#3f4a61", "#4c5872"],
   },
 };
 
@@ -87,6 +98,9 @@ export function buildAntdTheme(mode: ThemeMode): ThemeConfig {
       colorPrimary: t.accent,
       borderRadius: 6,
       fontSize: 14,
+      // 字体族走 CSS 变量（`app/styles/theme.css` 的 `--font-ui`）：UI 与数字分离的
+      // 抽象层只此一处，将来补自托管字体子集（§0-C 的 C1）不改本文件。
+      fontFamily: "var(--font-ui)",
       colorBgBase: t.bgPage,
       colorBgContainer: t.bgPanel,
       colorBgElevated: t.bgElevated,

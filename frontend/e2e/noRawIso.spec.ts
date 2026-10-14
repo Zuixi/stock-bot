@@ -48,4 +48,29 @@ test.describe("页面可见文本不得直出原始 ISO 时间戳", () => {
       ).toEqual([]);
     });
   }
+
+  /**
+   * 正对照（负向断言必须配一个"证明它抓得住"的对照）：
+   *
+   * 上一条只断言"没有 ISO"——若页面走未找到分支、或 `asof` 恰好为空，它同样会绿。
+   * 故这一条钉住**修复后的形态**：`数据截至` 行必须由 `formatAsOf` 渲染
+   * （`M月D日收盘`，§3.9 的契约），而不是别的什么把它藏起来的写法。
+   * 修复前本页渲染的是 `2026-10-13T15:00:00Z` ⇒ 这一条当时也必然是红的。
+   */
+  test("指数详情「数据截至」走 formatAsOf（收盘口径），不是机器串", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/market/index/000001.SH", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+    await page.waitForTimeout(1000);
+
+    const item = page.locator(".ant-descriptions-item").filter({ hasText: "数据截至" });
+    if ((await item.count()) === 0) {
+      // 不是"没找到就静默跳过"：没有口径行时页面必须**自证**它是"找不到该指数"，
+      // 而不是把日期藏起来（否则这条断言可以被"删掉渲染"轻松弄绿 —— 假绿）。
+      await expect(page.getByText("未找到该指数")).toBeVisible();
+      test.skip(true, "上证指数当前无行情（页面走「未找到该指数」分支），本页无从断言口径形态");
+    }
+    await expect(item.first()).toContainText(/\d+月\d+日收盘/);
+    await expect(item.first()).not.toContainText(/T\d{2}:\d{2}/);
+  });
 });

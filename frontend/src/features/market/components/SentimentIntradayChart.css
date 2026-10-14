@@ -30,7 +30,6 @@
   gap: 6px;
   color: var(--text-primary);
   font-weight: 600;
-  font-variant-numeric: tabular-nums;
 }
 
 .intraday__dot {
@@ -42,7 +41,6 @@
 
 .intraday__note {
   margin-left: auto;
-  font-variant-numeric: tabular-nums;
 }
 
 .intraday__svg {

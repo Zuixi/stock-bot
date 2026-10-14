@@ -35,6 +35,67 @@ CSS 变量挂在 `html[data-theme='light'|'dark']` 上，`src/app/theme.ts` 消�
 
 暗色判定优先级：localStorage `stockbot-theme` > `prefers-color-scheme`。切换按钮（太阳/月亮 icon）放 **MainLayout Header 右侧 + Landing 导航右侧**。ECharts 统一走 `shared/ui/EChart` 封装，从 ThemeContext 读 axis/text/splitLine 颜色。
 
+### 1.1 字体与数字 token（Phase 2 W3 / 计划 §4.1）
+
+三个块（`:root` 兜底 / `light` / `dark`）**都必须**声明（与上面颜色 token 同规则），`app/theme.ts` 的 `token.fontFamily` 引用 `var(--font-ui)`：
+
+| Token | 值 | 说明 |
+|---|---|---|
+| `--font-ui` | `"PingFang SC", "Microsoft YaHei", system-ui, sans-serif` | UI 字体族（C2 路径：中文沿用系统栈） |
+| `--font-num` | `ui-monospace, SFMono-Regular, Menlo, monospace` | 数字字体族（零字节，走系统等宽） |
+
+**字体自托管（C1）的实测结论：超预算，按 §0-C 降级 C2。** 2026-10-15 实测（`frontend/scripts/subset-fonts.sh` 可复现）：
+Noto Sans SC 子集（本仓库源码字符集，1164 个 CJK 字形）woff2 单字重 **194 KB**（400/500/600 = 194,292 / 197,088 / 197,328 B），
+对照预算「约 120KB × 2 字重 = 240 KB」**超预算 2.4×**；若按「常用 3500 字」规模（3500 字形代理集）单字重 **~493 KB**，超预算 6×。
+IBM Plex Mono 数字子集（`0-9 + - % . , 亿 万`）**3,300 / 4,096 B**，在 15 KB 预算内。
+故**不引入任何字体文件、不声明 `@font-face`**（不指向缺失文件）；`--font-ui`/`--font-num` 抽象层已落地，
+将来 owner 放宽预算后只需改这两行 + 加 `@font-face`，**调用点一处不动**（切换步骤见 `scripts/subset-fonts.sh` 文件尾）。
+
+**数字排版唯一入口是 `.num`**（`app/styles/theme.css`）：
+
+```css
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+```
+
+原先全站有 **67 处**手写的 `fontVariantNumeric` / `font-variant-numeric`（各处内联 style + 各 `.css` 规则各写一遍），
+Phase 2 全部收敛到 `.num`，并由 `npm run check:design` 的 §8.1-5 **机械断言该声明在 `src/**` 里 ≤1 次**（只有定义处）。
+
+**字号刻度**（同一份契约，工作区）：
+
+| 位置 | 字号 / 字重 / 颜色 |
+|---|---|
+| 卡片标题（`.section-card__title`） | **14px / 600 / `--text-primary`** |
+| 数据行数字（`.datarow__price`） | 14px（走 `.num`） |
+| 数据行名称（`.datarow__title`） | 13px |
+| 数据行代码（`.datarow__ticker`） | 11px / `--text-secondary` |
+| 口径与 `as_of`（`.section-card__asof`） | 12px / `--text-secondary` |
+
+### 1.2 量级色阶 `--mag-0..4`（数量编码，Phase 2 W3 / 计划 §4.2）
+
+**不用 accent 叠 alpha 编码"数量"**：原实现 `colors.accent` + 白 alpha 0.5→2.10:1、0.85→3.81:1（需 4.5），
+且有 6/31 格命中「白字分支」——颜色本身在编码数量，文字颜色还随数量跳变。改为中性灰阶 + 恒定文字色：
+
+| Token | Light | Dark | Light 对 `--text-primary`(#131722) | Dark 对 `--text-primary`(#d1d4dc) |
+|---|---|---|---|---|
+| `--mag-0`（最少） | #eef1f6 | #1e222d | 15.81:1 | 10.71:1 |
+| `--mag-1` | #e2e7f0 | #262c3a | 14.42:1 | 9.42:1 |
+| `--mag-2` | #cfd7e5 | #313a4d | 12.36:1 | 7.68:1 |
+| `--mag-3` | #a9b5c9 | #3f4a61 | 8.64:1 | 5.99:1 |
+| `--mag-4`（最多） | #75859f | #4c5872 | 4.78:1 | 4.81:1 |
+
+- 三块（`:root` / `light` / `dark`）齐全，且与 `app/theme.ts` 的 `THEME_COLORS[mode].mag` **逐项一致**（门禁 §8.1-1）。
+- 每级对同级 `--text-primary` 的对比度 **≥4.5**（门禁 §8.1-2，实测值即上表）；文字**一律 `--text-primary`，无白字分支**。
+- 消费方（本轮唯一）：`features/market/components/SwIndustryGrid`——按**官方成分数**的 20/40/60/80 分位阈值落 5 档
+  （阈值法：同一 count 必得同一档；分档口径见该组件文件头的 `QUANTILES`）。ECharts 若需数量型配色从 `useTheme().colors.mag` 取。
+
+### 1.3 动效与焦点（Phase 2 W3 / 计划 §4.4）
+
+- **全局降级动效**：`theme.css` 的 `@media (prefers-reduced-motion: reduce)` 把 `animation-duration` / `transition-duration`
+  压到 `0.01ms` 且 `animation-iteration-count: 1`（覆盖 `.sw-skeleton` 的 1.4s 无限 shimmer 与 `.sw-cell:hover` 的 `translateY(-2px)`）。
+- **全局焦点环**：`theme.css` 的 `:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }`；
+  局部规则（如 `market.css` 的表格行）可继续覆盖，本规则只保证"任何可聚焦元素都有可见焦点"。
+- 两者都由 `npm run check:design` 的 §8.1-4 机械断言存在。
+
 ## 2. 路由变更
 
 ```text
@@ -63,7 +124,10 @@ A股全景 : 涨跌分布卡 + 板块热力图卡 + 申万行业网格卡（TV t
 数据面 : 龙虎榜/大宗/解禁/回购 Tab 表（现状迁移）
 ```
 
-卡片规范：`--bg-panel` 底、1px `--border`、8px 圆角、标题 13px secondary、ticker 行 14px。
+卡片规范：`--bg-panel` 底、1px `--border`、8px 圆角、标题 **14px/600 `--text-primary`**、ticker 行 14px。
+（**2026-10-15 修正**：原文写「标题 13px secondary」，而实现是 16/600 —— 两处都过期。以计划
+[`2026-10-13-frontend-design-remediation.md`](../../plans/2026-10-13-frontend-design-remediation.md) §3.5 为准，
+字号刻度见本文档 §1.1。）
 涨跌幅渲染统一 `ChangeText`（红涨绿跌、右对齐、+/- 号）。现有组件保留逻辑、只换皮 + 重组布局。
 
 ## 5. 数据覆盖（data-coverage 风格）矩阵 —— 已下线

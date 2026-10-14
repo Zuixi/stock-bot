@@ -45,7 +45,7 @@ export function RankingBoardTable({ items, sortDirection, onRowClick }: Props) {
       dataIndex: "rank",
       width: 64,
       align: "right",
-      render: (rank: number) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{rank}</span>,
+      render: (rank: number) => <span className="num">{rank}</span>,
     },
     {
       title: "标的",
@@ -85,7 +85,7 @@ export function RankingBoardTable({ items, sortDirection, onRowClick }: Props) {
         if (row.n_income_attr_p !== null && row.n_income_attr_p !== undefined) {
           // 利润单位是元；亿元更好读，但单位标注必须跟着变（不能只改数字）
           return (
-            <span style={{ fontVariantNumeric: "tabular-nums" }}>
+            <span className="num">
               {fmtNumber(row.n_income_attr_p / 1e8)} <span style={{ color: "var(--text-secondary)" }}>亿元</span>
             </span>
           );
@@ -93,14 +93,14 @@ export function RankingBoardTable({ items, sortDirection, onRowClick }: Props) {
         if (row.roe !== null && row.roe !== undefined) {
           // ROE 是质量指标，**不套涨跌色**：红色在这里会被读成"高收益/涨"，语义错位。
           return (
-            <span style={{ fontVariantNumeric: "tabular-nums" }}>
+            <span className="num">
               {row.roe.toFixed(2)} <span style={{ color: "var(--text-secondary)" }}>%</span>
             </span>
           );
         }
         if (row.total_mv !== null && row.total_mv !== undefined) {
           return (
-            <span style={{ fontVariantNumeric: "tabular-nums" }}>
+            <span className="num">
               {fmtMarketCapYi(row.total_mv)}{" "}
               <span style={{ color: "var(--text-secondary)" }}>亿元</span>
             </span>
@@ -108,7 +108,7 @@ export function RankingBoardTable({ items, sortDirection, onRowClick }: Props) {
         }
         if (row.dv_ratio !== null && row.dv_ratio !== undefined) {
           return (
-            <span style={{ fontVariantNumeric: "tabular-nums" }}>
+            <span className="num">
               {row.dv_ratio.toFixed(2)} <span style={{ color: "var(--text-secondary)" }}>%</span>
             </span>
           );
@@ -124,7 +124,7 @@ export function RankingBoardTable({ items, sortDirection, onRowClick }: Props) {
     width: 100,
     align: "right",
     render: (value: number | null | undefined) => (
-      <span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtNumber(value)}</span>
+      <span className="num">{fmtNumber(value)}</span>
     ),
   });
   columns.push({

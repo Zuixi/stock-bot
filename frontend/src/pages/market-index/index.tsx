@@ -3,6 +3,7 @@ import { Typography, Result, Button, Divider, Descriptions, Space, Spin, Breadcr
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { ChangeText } from "@/shared/ui";
+import { formatAsOf } from "@/shared/ui/date";
 import { KlineChart } from "@/shared/ui/kline";
 import { fetchGlobalIndices } from "@/shared/api/marketData";
 import { fetchIndexKline, fetchMarketIndices } from "@/shared/api/market";
@@ -135,7 +136,10 @@ export default function IndexDetailPage() {
       </Space>
 
       <Descriptions size="small" column={3} style={{ marginBottom: 8 }}>
-        <Descriptions.Item label="数据截至">{index.asof}</Descriptions.Item>
+        {/* 日期口径唯一入口（§3.9）：`asof` 是 ISO 时间戳（`2026-10-13T15:00:00Z`），
+            **不得**原样上屏（Phase 0 实测本页就是 0.6 运行时门禁的红）。
+            `formatAsOf` → 「10月13日收盘 · 2天前」；静态与运行时两层门禁见 §8.2。 */}
+        <Descriptions.Item label="数据截至">{formatAsOf(index.asof)}</Descriptions.Item>
       </Descriptions>
 
       <Divider style={{ margin: "16px 0" }} />

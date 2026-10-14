@@ -48,7 +48,6 @@
   background: var(--bg-page);
   font-size: 11.5px;
   color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
 }
 
 .mf-continuity__name {

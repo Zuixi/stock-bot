@@ -59,12 +59,12 @@ export function GlobalIndexCardView({ index }: { index: GlobalIndexCard }) {
         </div>
         {/* 右列：价格 + 涨跌幅色块（+/- 号） */}
         <div className="global-index-card__num-col">
-          <div className="global-index-card__price" style={{ color: colors.textPrimary }}>
+          <div className="global-index-card__price num" style={{ color: colors.textPrimary }}>
             {index.price == null
               ? "—"
               : index.price.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
-          <div className="global-index-card__change" style={{ color, backgroundColor: `${color}1f` }}>
+          <div className="global-index-card__change num" style={{ color, backgroundColor: `${color}1f` }}>
             {index.pctChange == null
               ? "—"
               : `${index.pctChange > 0 ? "+" : ""}${index.pctChange.toFixed(2)}%`}

@@ -58,10 +58,10 @@ function PercentileBlock({ trends }: { trends: SentimentTrends }) {
     <div className="thermo-pct" data-testid="thermo-percentile">
       <div className="thermo-pct__head">
         <span className="thermo-pct__title">历史分位</span>
-        <span className="thermo-pct__range">
+        <span className="thermo-pct__range num">
           样本 {win.from ?? "--"} → {win.to ?? "--"}（{win.samples} 个交易日）
         </span>
-        <span className="thermo-pct__streak" data-testid="thermo-streak">
+        <span className="thermo-pct__streak num" data-testid="thermo-streak">
           涨停家数高于中位数 {streak} 天
         </span>
       </div>
@@ -74,7 +74,7 @@ function PercentileBlock({ trends }: { trends: SentimentTrends }) {
           {PERCENTILE_METRICS.map(({ field, label, ratio }) => {
             const p = percentile[field];
             return (
-              <span className="thermo-pct__chip" key={field} data-testid={`thermo-pct-${field}`}>
+              <span className="thermo-pct__chip num" key={field} data-testid={`thermo-pct-${field}`}>
                 <span className="thermo-pct__chip-label">{label}</span>
                 {p ? (
                   <>
@@ -109,7 +109,7 @@ function DeltaChip({ diff, unit = "" }: { diff: number | null; unit?: string }) 
   const cls = diff > 0 ? "thermo-chip--up" : diff < 0 ? "thermo-chip--down" : "thermo-chip--flat";
   const sign = diff > 0 ? "+" : diff < 0 ? "\u2212" : "";
   return (
-    <span className={`thermo-chip ${cls}`} title="较前一交易日">
+    <span className={`thermo-chip ${cls} num`} title="较前一交易日">
       {sign}
       {Math.abs(diff).toFixed(unit === "%" ? 2 : 0)}
       {unit}
@@ -132,7 +132,7 @@ function PrimaryTile({
     <div className={`thermo-tile thermo-tile--${tone}`}>
       <span className="thermo-tile__label">{label}</span>
       <span className="thermo-tile__row">
-        <span className="thermo-tile__num">{count}</span>
+        <span className="thermo-tile__num num">{count}</span>
         <span className="thermo-tile__unit">家</span>
         <DeltaChip diff={prev == null ? null : count - prev} />
       </span>
@@ -194,11 +194,11 @@ function TrendSpark({
   return (
     <div className="thermo-trend">
       <div className="thermo-trend__legend">
-        <span className="thermo-trend__key">
+        <span className="thermo-trend__key num">
           <i className="thermo-trend__dot thermo-trend__dot--up" />
           涨停 {last.ztCount}
         </span>
-        <span className="thermo-trend__key">
+        <span className="thermo-trend__key num">
           <i className="thermo-trend__dot thermo-trend__dot--down" />
           跌停 {last.dtCount}
         </span>
@@ -277,12 +277,12 @@ export function SentimentThermometer({ kpis, history, asOf, trends }: Props) {
 
       <div className="thermo-grid">
         <MetricTile label="炸板率">
-          <span className="thermo-metric__num">{pct(kpis.brokenRate)}</span>
+          <span className="thermo-metric__num num">{pct(kpis.brokenRate)}</span>
           <DeltaChip diff={ppDiff(kpis.brokenRate, prev?.brokenRate ?? null)} unit="%" />
         </MetricTile>
         <MetricTile label="昨日涨停均值" note={kpis.yztN > 0 ? `n=${kpis.yztN}` : undefined}>
           <span
-            className={`thermo-metric__num ${
+            className={`thermo-metric__num num ${
               kpis.yztAvgPct == null
                 ? "thermo-metric__num--muted"
                 : kpis.yztAvgPct > 0
@@ -297,7 +297,7 @@ export function SentimentThermometer({ kpis, history, asOf, trends }: Props) {
         </MetricTile>
         <MetricTile label="今开溢价均值">
           <span
-            className={`thermo-metric__num ${
+            className={`thermo-metric__num num ${
               kpis.yztAvgOpenPremium == null
                 ? "thermo-metric__num--muted"
                 : kpis.yztAvgOpenPremium > 0
@@ -314,7 +314,7 @@ export function SentimentThermometer({ kpis, history, asOf, trends }: Props) {
           label="1进2晋级率"
           note={kpis.promo1to2Noisy ? `n=${kpis.promo1to2N}，样本小` : `n=${kpis.promo1to2N}`}
         >
-          <span className={`thermo-metric__num${kpis.promo1to2Noisy ? " thermo-metric__num--muted" : ""}`}>
+          <span className={`thermo-metric__num num${kpis.promo1to2Noisy ? " thermo-metric__num--muted" : ""}`}>
             {pct(kpis.promo1to2)}
           </span>
           <DeltaChip diff={ppDiff(kpis.promo1to2, prev?.promo1to2 ?? null)} unit="%" />
@@ -323,13 +323,13 @@ export function SentimentThermometer({ kpis, history, asOf, trends }: Props) {
           label="2进3晋级率"
           note={kpis.promo2to3Noisy ? `n=${kpis.promo2to3N}，样本小` : `n=${kpis.promo2to3N}`}
         >
-          <span className={`thermo-metric__num${kpis.promo2to3Noisy ? " thermo-metric__num--muted" : ""}`}>
+          <span className={`thermo-metric__num num${kpis.promo2to3Noisy ? " thermo-metric__num--muted" : ""}`}>
             {pct(kpis.promo2to3)}
           </span>
           <DeltaChip diff={ppDiff(kpis.promo2to3, prev?.promo2to3 ?? null)} unit="%" />
         </MetricTile>
         <MetricTile label="最高板">
-          <span className="thermo-metric__num">{kpis.maxStreak}</span>
+          <span className="thermo-metric__num num">{kpis.maxStreak}</span>
           <span className="thermo-metric__unit">板</span>
           <DeltaChip
             diff={prev == null ? null : kpis.maxStreak - prev.maxStreak}

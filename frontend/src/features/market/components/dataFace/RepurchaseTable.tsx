@@ -6,8 +6,6 @@ import { fetchRepurchases, type RepurchaseItem } from "@/shared/api/marketData";
 import { useMarketPolling } from "../../hooks/useMarketPolling";
 import { fmtYi } from "../format";
 
-const NUM_FONT: React.CSSProperties = { fontVariantNumeric: "tabular-nums" };
-
 const PROC_COLOR: Record<string, string> = {
   实施: "blue",
   完成: "green",
@@ -24,8 +22,8 @@ export function RepurchaseTable() {
   });
 
   const columns: ColumnsType<RepurchaseItem> = [
-    { title: "公告日", dataIndex: "annDate", width: 100, render: (_, r) => <span style={NUM_FONT}>{r.annDate}</span> },
-    { title: "代码", dataIndex: "symbol", width: 80, render: (_, r) => <span style={NUM_FONT}>{r.symbol}</span> },
+    { title: "公告日", dataIndex: "annDate", width: 100, render: (_, r) => <span className="num">{r.annDate}</span> },
+    { title: "代码", dataIndex: "symbol", width: 80, render: (_, r) => <span className="num">{r.symbol}</span> },
     { title: "名称", dataIndex: "name", width: 100, render: (_, r) => r.name ?? "—" },
     {
       title: "进度", dataIndex: "proc", width: 110,
@@ -33,11 +31,11 @@ export function RepurchaseTable() {
     },
     {
       title: "回购金额", dataIndex: "amount", width: 100, align: "right",
-      render: (_, r) => <span style={{ ...NUM_FONT, fontWeight: 600 }}>{fmtYi(r.amount)}</span>,
+      render: (_, r) => <span className="num" style={{ fontWeight: 600 }}>{fmtYi(r.amount)}</span>,
     },
     {
       title: "回购数量", dataIndex: "vol", width: 100, align: "right",
-      render: (_, r) => <span style={NUM_FONT}>{r.vol == null ? "—" : `${(r.vol / 1e4).toFixed(0)}万股`}</span>,
+      render: (_, r) => <span className="num">{r.vol == null ? "—" : `${(r.vol / 1e4).toFixed(0)}万股`}</span>,
     },
   ];
 

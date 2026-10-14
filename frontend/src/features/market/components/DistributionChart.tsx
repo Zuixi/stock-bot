@@ -53,10 +53,10 @@ function BalanceBar({ up, flat, down }: { up: number; flat: number; down: number
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 4 }}>
         <Typography.Text type="secondary">
-          上涨 <b style={{ color: colors.up, fontVariantNumeric: "tabular-nums" }}>{up.toLocaleString()}</b> 只
+          上涨 <b className="num" style={{ color: colors.up }}>{up.toLocaleString()}</b> 只
         </Typography.Text>
         <Typography.Text type="secondary">
-          下跌 <b style={{ color: colors.down, fontVariantNumeric: "tabular-nums" }}>{down.toLocaleString()}</b> 只
+          下跌 <b className="num" style={{ color: colors.down }}>{down.toLocaleString()}</b> 只
         </Typography.Text>
       </div>
     </div>

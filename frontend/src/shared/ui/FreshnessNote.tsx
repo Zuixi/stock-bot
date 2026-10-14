@@ -1,4 +1,4 @@
-import { formatCnDate } from "./date";
+import { formatAsOfDate } from "./date";
 import "./SectionCard.css";
 
 /**
@@ -56,13 +56,20 @@ export function freshnessBadges({ quality, staleDays, sourceStatus }: FreshnessN
   return badges;
 }
 
-/** 「数据截至 …」行（复用既有 `.section-card__asof` 版式）。无 `asOf` 时渲染 `null`。 */
+/** 「数据截至 …」行（复用既有 `.section-card__asof` 版式）。无 `asOf` 时渲染 `null`。
+ *
+ * 日期走 `shared/ui/date.ts` 的**同一实现**（`formatAsOfDate`），但**不**直接用
+ * `formatAsOf` 的单串形态：本行的契约是把「口径」与「相对日」渲染成**两个 chip**
+ * （`收盘 / 未完整 / 按最近完整日` + `N 天前`），且**日期归本行独有、chip 不复述日期**
+ * —— 这两条被 `e2e/marketDataFace.spec.ts` 逐条钉住（含 `N 天前` 的空格写法与
+ * 「回落口径卡片…不重复判据日」）。故这里组合同样的两个事实，但不换成单串。
+ */
 export function FreshnessNote({ asOf, quality, staleDays, sourceStatus }: FreshnessNoteProps) {
   if (!asOf) return null;
   const badges = freshnessBadges({ asOf, quality, staleDays, sourceStatus });
   return (
     <div className="section-card__asof">
-      数据截至 {formatCnDate(asOf)}
+      数据截至 {formatAsOfDate(asOf)}
       {badges.map((text) => (
         <span className="section-card__quality" key={text}>
           {text}

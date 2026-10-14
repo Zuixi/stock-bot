@@ -21,7 +21,6 @@
   font-size: 22px;
   font-weight: 700;
   color: var(--accent);
-  font-variant-numeric: tabular-nums;
 }
 
 .ds-stat__label {
@@ -30,10 +29,6 @@
   color: var(--text-secondary);
 }
 
-/* 数值列一律等宽数字（本计划 §3.4 的 .num 口径的局部落地；Phase 2 统一到 .num） */
-.ds-num {
-  font-variant-numeric: tabular-nums;
-}
 
 /* 表格窄屏横向滚动容器（Phase 3 §4.2 约定）：不把表格挤出视口 */
 .table-scroll {

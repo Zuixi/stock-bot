@@ -48,10 +48,10 @@ export function CompositeHero({ data, isLoading, isError }: CompositeHeroProps) 
     <section className="sent-hero" id="sentiment-module-composite" data-testid="sentiment-hero">
       <header className="sent-hero__head">
         <h3 className="sent-hero__title">市场情绪综合指数</h3>
-        <span className="sent-hero__asof">
+        <span className="sent-hero__asof num">
           {data?.asOf ? `数据截至 ${formatCnDate(data.asOf)}` : "无口径日"}
         </span>
-        {data?.caliberVersion ? <span className="sent-hero__caliber">口径 {data.caliberVersion}</span> : null}
+        {data?.caliberVersion ? <span className="sent-hero__caliber num">口径 {data.caliberVersion}</span> : null}
       </header>
 
       {isLoading ? (
@@ -66,14 +66,14 @@ export function CompositeHero({ data, isLoading, isError }: CompositeHeroProps) 
       ) : (
         <>
           <div className="sent-hero__value-row">
-            <span className="sent-hero__value" data-testid="sentiment-composite-value">
+            <span className="sent-hero__value num" data-testid="sentiment-composite-value">
               {data.value == null ? "--" : data.value.toFixed(2)}
             </span>
             <span className="sent-hero__unit">分</span>
             {data.value == null ? (
               <span className="sent-missing">本期 value = NULL（算不出，不是 0 分）</span>
             ) : (
-              <span className="sent-hero__raw">原始值 {data.value}</span>
+              <span className="sent-hero__raw num">原始值 {data.value}</span>
             )}
           </div>
 
@@ -88,7 +88,7 @@ export function CompositeHero({ data, isLoading, isError }: CompositeHeroProps) 
               />
             ) : null}
           </div>
-          <div className="sent-rail__scale">
+          <div className="sent-rail__scale num">
             <span>0</span>
             <span className="sent-rail__legend sent-rail__legend--cold">低于 10 极冷</span>
             <span className="sent-rail__legend sent-rail__legend--hot">高于 90 极热</span>
@@ -96,11 +96,11 @@ export function CompositeHero({ data, isLoading, isError }: CompositeHeroProps) 
           </div>
 
           {hasPercentile ? (
-            <p className={`sent-hero__percentile sent-hero__percentile--${tone}`}>
+            <p className={`sent-hero__percentile sent-hero__percentile--${tone} num`}>
               <span data-testid="sentiment-composite-percentile">历史分位 {p.toFixed(1)}</span>
             </p>
           ) : (
-            <p className="sent-hero__percentile sent-hero__percentile--none">
+            <p className="sent-hero__percentile sent-hero__percentile--none num">
               <span
                 data-testid={
                   data.insufficientHistory
@@ -114,20 +114,20 @@ export function CompositeHero({ data, isLoading, isError }: CompositeHeroProps) 
           )}
 
           {legsRegistered ? (
-            <p className="sent-hero__legs" data-testid="sentiment-composite-legs-line">
+            <p className="sent-hero__legs num" data-testid="sentiment-composite-legs-line">
               本日由 {data.legCount ?? "--"}/{data.totalLegs ?? "--"} 条腿合成 · 生效权重{" "}
               {fmtWeight(data.effectiveWeight)}
               {data.minEffectiveWeight == null ? null : `（下限 ${fmtWeight(data.minEffectiveWeight)}）`}
             </p>
           ) : (
-            <p className="sent-hero__legs" data-testid="sentiment-composite-legs-unregistered">
+            <p className="sent-hero__legs num" data-testid="sentiment-composite-legs-unregistered">
               该行未登记参与腿与生效权重（extra 缺 participants / n_constituents），无法披露「N/11 条腿」。
             </p>
           )}
           {data.legs.length > 0 ? (
-            <p className="sent-hero__legs-list">参与腿：{data.legs.join("、")}</p>
+            <p className="sent-hero__legs-list num">参与腿：{data.legs.join("、")}</p>
           ) : null}
-          <p className="sent-hero__window">
+          <p className="sent-hero__window num">
             {data.window == null && data.sampleCount == null
               ? "窗口信息未下发"
               : `分位窗口 ${data.window ?? "--"} 个交易日 · 有效样本 ${data.sampleCount ?? "--"}`}
@@ -135,7 +135,7 @@ export function CompositeHero({ data, isLoading, isError }: CompositeHeroProps) 
         </>
       )}
 
-      <p className="sent-hero__caliber" data-testid={`sentiment-caliber-${NOTE_COMPOSITE.id}`}>
+      <p className="sent-hero__caliber num" data-testid={`sentiment-caliber-${NOTE_COMPOSITE.id}`}>
         <span className="sent-caliber__src">{NOTE_COMPOSITE.source}</span>
         <span className="sent-caliber__text">{NOTE_COMPOSITE.text}</span>
       </p>

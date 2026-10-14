@@ -41,12 +41,12 @@ export function IndicatorCard({ metric }: Props) {
 
       <div style={{ marginTop: 6, display: "flex", alignItems: "baseline", gap: 5 }}>
         <span
+          className="num"
           style={{
             fontFamily: '"Bahnschrift","DIN Alternate","Segoe UI",sans-serif',
             fontWeight: 700,
             fontSize: 25,
             lineHeight: 1.1,
-            fontVariantNumeric: "tabular-nums",
             color: hasValue ? "var(--text-primary)" : colors.flat,
           }}
         >

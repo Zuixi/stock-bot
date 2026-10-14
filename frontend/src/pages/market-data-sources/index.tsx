@@ -99,7 +99,7 @@ const COLUMNS: ColumnsType<CoverageDomain> = [
             : "窗口内无缺日。")
         }
       >
-        <span className="ds-num">
+        <span className="ds-num num">
           {row.complete_days} / {row.trading_days}
         </span>
       </Tooltip>
@@ -110,7 +110,7 @@ const COLUMNS: ColumnsType<CoverageDomain> = [
     key: "window",
     width: 200,
     render: (_, row) => (
-      <span className="ds-num">
+      <span className="ds-num num">
         {fmtDay(row.first_day)} ~ {fmtDay(row.last_day)}
       </span>
     ),
@@ -122,7 +122,7 @@ const COLUMNS: ColumnsType<CoverageDomain> = [
     width: 110,
     align: "right",
     sorter: (a, b) => a.row_count - b.row_count,
-    render: (v: number) => <span className="ds-num">{v.toLocaleString("zh-CN")}</span>,
+    render: (v: number) => <span className="ds-num num">{v.toLocaleString("zh-CN")}</span>,
   },
 ];
 
@@ -151,21 +151,21 @@ export default function MarketDataSourcesPage() {
         <Space direction="vertical" size={12} style={{ width: "100%" }}>
           <div className="ds-stats" data-testid="data-sources-stats">
             <div className="ds-stat">
-              <div className="ds-stat__num">{coverage.length}</div>
+              <div className="ds-stat__num num">{coverage.length}</div>
               <div className="ds-stat__label">只读巡检域</div>
             </div>
             <div className="ds-stat">
-              <div className="ds-stat__num">{refreshable.length}</div>
+              <div className="ds-stat__num num">{refreshable.length}</div>
               <div className="ds-stat__label">可自愈对账域</div>
             </div>
             <div className="ds-stat">
-              <div className="ds-stat__num">
+              <div className="ds-stat__num num">
                 {data ? data.universe.toLocaleString("zh-CN") : "--"}
               </div>
               <div className="ds-stat__label">股票名录（universe）</div>
             </div>
             <div className="ds-stat">
-              <div className="ds-stat__num">{failed.length}</div>
+              <div className="ds-stat__num num">{failed.length}</div>
               <div className="ds-stat__label">最近失败任务</div>
             </div>
           </div>
@@ -250,7 +250,7 @@ export default function MarketDataSourcesPage() {
                   {failed.map((f) => (
                     <li key={`${f.job_id}-${f.at}`}>
                       <b>{f.job_id}</b>{" "}
-                      <span className="ds-num">{f.at.slice(0, 19).replace("T", " ")}</span>{" "}
+                      <span className="ds-num num">{f.at.slice(0, 19).replace("T", " ")}</span>{" "}
                       <span className="ds-failed-error">{f.error}</span>
                     </li>
                   ))}

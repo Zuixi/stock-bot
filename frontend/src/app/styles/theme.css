@@ -1,7 +1,14 @@
 /*
  * 明暗双主题 CSS 变量（Stage A 基础设施）
  * 契约：docs/design/landing-market-theme.md §1（TradingView 实测配色）
+ *       + §字体与数字 token / §量级色阶（Phase 2 W3，与 plan §4.1/§4.2 同源）
  * data-theme 由 ThemeProvider 写到 <html> 上；AntD token 侧由 buildAntdTheme 消费同名色值。
+ *
+ * 字体（§0-C 裁定 C1「超预算则降级 C2」）：**本轮实测按 C2 交付** —— 构建环境无出网、
+ * pyftsubset 不可用，自托管子集无法生成（详见 plans/2026-10-13-frontend-design-remediation.md
+ * 的 Phase 2 实测记录）。故 `--font-ui` 为**系统栈**（零字节），`--font-num` 走 `ui-monospace`（零字节）；
+ * 两条路径**共用同一抽象层**，将来补上字体文件只需改这两行 + 加 @font-face，调用点一处不动。
+ * **不保留指向缺失文件的 @font-face**（那只会换来 404 与首屏阻塞）。
  */
 
 /* 兜底：首帧 data-theme 尚未挂上时按浅色渲染，避免变量未定义闪白 */
@@ -19,6 +26,15 @@
   /* 情绪分位极值带（/sentiment）：避开 --up/--down（红绿已被价格方向占用） */
   --sent-extreme-cold: #5b4bd6;
   --sent-extreme-hot: #a35f00;
+  /* 字体族：UI 与数字分离（数字等宽是排版契约，不是各处手写声明） */
+  --font-ui: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-num: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* 量级色阶（数量编码走中性灰阶，不用 accent 叠 alpha）：0 最浅 → 4 最深 */
+  --mag-0: #eef1f6;
+  --mag-1: #e2e7f0;
+  --mag-2: #cfd7e5;
+  --mag-3: #a9b5c9;
+  --mag-4: #75859f;
   color-scheme: light;
 }
 
@@ -36,6 +52,15 @@
   /* 情绪分位极值带（/sentiment）：避开 --up/--down（红绿已被价格方向占用） */
   --sent-extreme-cold: #5b4bd6;
   --sent-extreme-hot: #a35f00;
+  /* 字体族：与兜底块逐字一致（防首帧字体跳变） */
+  --font-ui: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-num: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* 量级色阶：浅色下每级对 --text-primary (#131722) ≥4.5:1（最深的 --mag-4 = 4.78:1） */
+  --mag-0: #eef1f6;
+  --mag-1: #e2e7f0;
+  --mag-2: #cfd7e5;
+  --mag-3: #a9b5c9;
+  --mag-4: #75859f;
   color-scheme: light;
 }
 
@@ -53,6 +78,15 @@
   /* 情绪分位极值带（/sentiment）：暗色下提亮，仍与 --up/--down 区分 */
   --sent-extreme-cold: #8b7cff;
   --sent-extreme-hot: #ffb020;
+  /* 字体族：与浅色同名同值（字体族不随主题变，写在此处只为「三块齐全」契约） */
+  --font-ui: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-num: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* 量级色阶：暗色下每级对 --text-primary (#d1d4dc) ≥4.5:1（最深的 --mag-4 = 4.81:1） */
+  --mag-0: #1e222d;
+  --mag-1: #262c3a;
+  --mag-2: #313a4d;
+  --mag-3: #3f4a61;
+  --mag-4: #4c5872;
   color-scheme: dark;
 }
 
@@ -60,7 +94,51 @@ body {
   margin: 0;
   background: var(--bg-page);
   color: var(--text-primary);
+  /* 全局 UI 字体族：与 AntD token.fontFamily 同源（见 app/theme.ts） */
+  font-family: var(--font-ui);
   transition:
     background-color 0.2s ease,
     color 0.2s ease;
+}
+
+/*
+ * `.num` —— 全站**唯一**的数字排版入口（Phase 2 §3.4）。
+ *
+ * 为什么要有它：Phase 0 实测仓库里有 **67 处**手写的等宽数字声明（内联 style 对象
+ * + 各 .css 规则各写一遍）。同一份契约散落 67 处 ⇒ 新增组件必然漏写，
+ * 而漏写的后果（数字跳动、列不齐）**没有任何门禁看得见**。故收敛成一个类，
+ * 并由 `scripts/check-design-tokens.mjs` §8.1-5 机械断言该声明在 `src/**` 里 ≤1 次。
+ *
+ * 用法：`<span className="num">` / `className="sw-count num"`。
+ * 这条声明与 `font-feature-settings` 都是**可继承**属性，故写在容器上即可覆盖全部后代数字。
+ */
+.num {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/*
+ * 全局降级动效（§3.10）：覆盖 `.sw-skeleton` 的 1.4s 无限 shimmer、`.sw-cell:hover`
+ * 的 translateY 上浮、AntD 的过渡等。用 `!important` 是因为这些动效来自第三方组件
+ * （AntD）与局部规则，普通优先级压不住。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/*
+ * 全局焦点环（§3.11）：键盘可达性的兜底。局部规则（如 market.css 的表格行）
+ * 可继续覆盖，本规则只保证"任何可聚焦元素都有可见焦点"。
+ */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

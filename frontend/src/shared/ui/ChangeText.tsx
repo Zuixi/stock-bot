@@ -16,7 +16,7 @@ export function ChangeText({ value, suffix = "%", prefix, style }: Props) {
   const sign = value > 0 ? "+" : "";
 
   return (
-    <span style={{ color, fontVariantNumeric: "tabular-nums", ...style }}>
+    <span className="num" style={{ color, ...style }}>
       {prefix}
       {sign}
       {value.toFixed(2)}

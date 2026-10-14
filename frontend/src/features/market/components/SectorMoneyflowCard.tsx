@@ -130,7 +130,7 @@ function ContinuityStrip({ trends }: { trends: SectorTrends }) {
             const luCount = luAvailable ? (last?.luCount ?? null) : null;
             return (
               <span
-                className="mf-continuity__chip"
+                className="mf-continuity__chip num"
                 key={b.boardCode}
                 data-testid={`sector-continuity-${b.boardCode}`}
               >

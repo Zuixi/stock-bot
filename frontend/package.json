@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test:e2e": "playwright test",
-    "check:design": "node scripts/check-design-tokens.mjs",
+    "check:design": "node scripts/check-design-tokens.mjs && node scripts/check-no-raw-iso.mjs",
     "check:routes": "node scripts/check-routes.mjs"
   },
   "dependencies": {

@@ -143,7 +143,7 @@ export function SectorFlow() {
                       style={{ width: `${(Math.abs(f.outflow) / maxAbs) * 50}%` }}
                     />
                   </span>
-                  <span className={`sector-flow__flow-net ${tone}`}>
+                  <span className={`sector-flow__flow-net ${tone} num`}>
                     {label} {net > 0 ? "+" : net < 0 ? "−" : ""}
                     {Math.abs(net).toFixed(2)}亿
                   </span>

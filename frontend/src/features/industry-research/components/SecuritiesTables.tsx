@@ -13,7 +13,6 @@ import { EChart, sparkOption } from "@/shared/ui/EChart";
 
 const NUM_FONT = {
   fontFamily: '"Bahnschrift","DIN Alternate","Segoe UI",sans-serif',
-  fontVariantNumeric: "tabular-nums" as const,
 };
 
 function formatNum(value: number | null, digits = 2): string {
@@ -23,11 +22,11 @@ function formatNum(value: number | null, digits = 2): string {
 
 function ChangeCell({ pct }: { pct: number | null }) {
   const { colors } = useTheme();
-  if (pct === null) return <span style={{ ...NUM_FONT, color: colors.flat }}>—</span>;
+  if (pct === null) return <span className="num" style={{ ...NUM_FONT, color: colors.flat }}>—</span>;
   const color = pct > 0 ? colors.up : pct < 0 ? colors.down : colors.flat;
   const arrow = pct > 0 ? "▲" : pct < 0 ? "▼" : "";
   return (
-    <span style={{ ...NUM_FONT, fontWeight: 600, color }}>
+    <span className="num" style={{ ...NUM_FONT, fontWeight: 600, color }}>
       {arrow} {Math.abs(pct).toFixed(2)}%
     </span>
   );
@@ -37,13 +36,13 @@ function useSecuritiesColumns(withSpark: boolean): ColumnsType<SecuritySeries> {
   const { colors } = useTheme();
   return useMemo(() => {
     const cols: ColumnsType<SecuritySeries> = [
-      { title: "代码", key: "ts_code", render: (_, r) => <span style={NUM_FONT}>{r.tsCode}</span> },
+      { title: "代码", key: "ts_code", render: (_, r) => <span className="num" style={NUM_FONT}>{r.tsCode}</span> },
       { title: "名称", key: "name", render: (_, r) => r.name ?? "—" },
       {
         title: "最新价",
         key: "close",
         align: "right",
-        render: (_, r) => <span style={NUM_FONT}>{formatNum(r.latest?.close ?? null)}</span>,
+        render: (_, r) => <span className="num" style={NUM_FONT}>{formatNum(r.latest?.close ?? null)}</span>,
       },
       {
         title: "涨跌幅",
@@ -55,7 +54,7 @@ function useSecuritiesColumns(withSpark: boolean): ColumnsType<SecuritySeries> {
         title: "成交量",
         key: "volume",
         align: "right",
-        render: (_, r) => <span style={NUM_FONT}>{formatNum(r.latest?.volume ?? null, 0)}</span>,
+        render: (_, r) => <span className="num" style={NUM_FONT}>{formatNum(r.latest?.volume ?? null, 0)}</span>,
       },
     ];
     if (withSpark) {

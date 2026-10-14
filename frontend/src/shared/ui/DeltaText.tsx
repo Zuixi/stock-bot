@@ -8,12 +8,12 @@ export interface DeltaTextProps {
 /** 涨跌数字：正 `+` / 负 `−` / 零无符号，缺失渲染 `--`（绝不渲染 0.00%）。 */
 export function DeltaText({ value, suffix = "%" }: DeltaTextProps) {
   if (value === null || value === undefined || Number.isNaN(value)) {
-    return <span className="delta delta--flat">--</span>;
+    return <span className="delta delta--flat num">--</span>;
   }
   const cls = value > 0 ? "delta--up" : value < 0 ? "delta--down" : "delta--flat";
   const sign = value > 0 ? "+" : value < 0 ? "\u2212" : "";
   return (
-    <span className={`delta ${cls}`}>
+    <span className={`delta ${cls} num`}>
       {sign}
       {Math.abs(value).toFixed(2)}
       {suffix}

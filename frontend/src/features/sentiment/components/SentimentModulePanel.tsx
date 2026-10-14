@@ -28,7 +28,7 @@ function PercentileChip({
 }) {
   if (!trends) {
     return (
-      <span className="sent-pct sent-pct--none" data-testid={`sentiment-pct-unavailable-${field}`}>
+      <span className="sent-pct sent-pct--none num" data-testid={`sentiment-pct-unavailable-${field}`}>
         历史分位未取到（/market/sentiment/trends 未就绪）
       </span>
     );
@@ -36,7 +36,7 @@ function PercentileChip({
   const window = trends.window;
   if (trends.insufficientHistory || !trends.percentile) {
     return (
-      <span className="sent-pct sent-pct--none" data-testid={`sentiment-pct-insufficient-${field}`}>
+      <span className="sent-pct sent-pct--none num" data-testid={`sentiment-pct-insufficient-${field}`}>
         样本不足（近 {window.samples} 个交易日 · 不足 60 个有效样本不给分位）
       </span>
     );
@@ -44,13 +44,13 @@ function PercentileChip({
   const p = trends.percentile[field];
   if (!p) {
     return (
-      <span className="sent-pct sent-pct--none" data-testid={`sentiment-pct-${field}`}>
+      <span className="sent-pct sent-pct--none num" data-testid={`sentiment-pct-${field}`}>
         无有效样本
       </span>
     );
   }
   return (
-    <span className="sent-pct" data-testid={`sentiment-pct-${field}`}>
+    <span className="sent-pct num" data-testid={`sentiment-pct-${field}`}>
       <span className="sent-pct__q">
         P25 {formatQuantile(p.p25, field)} / P50 {formatQuantile(p.p50, field)} / P75{" "}
         {formatQuantile(p.p75, field)}
@@ -100,8 +100,8 @@ function MetricRowView({
     <>
       <tr className="sent-row" data-testid={`sentiment-metric-${row.metricKey}`}>
         <td className="sent-cell-label">{metric?.name ?? row.label}</td>
-        <td className="sent-cell-value">
-          <span className="sent-value">{formatMetricValue(value, metric?.unit)}</span>
+        <td className="sent-cell-value num">
+          <span className="sent-value num">{formatMetricValue(value, metric?.unit)}</span>
           {value == null ? (
             <span className="sent-missing" data-testid={`sentiment-missing-${row.metricKey}`}>
               {metricsPending
@@ -115,7 +115,7 @@ function MetricRowView({
           ) : null}
           {row.percentileField ? <PercentileChip field={row.percentileField} trends={trends} /> : null}
         </td>
-        <td className="sent-cell-meta">
+        <td className="sent-cell-meta num">
           {/* 一行写完口径与 vintage（避免每个指标重复三行把读出台拉成电话簿） */}
           <span className="sent-meta__line">
             {[
@@ -145,12 +145,12 @@ function PercentileRowView({ row, trends }: { row: SentimentPercentileRow; trend
         {row.label}
         <span className="sent-tag">仅分位</span>
       </td>
-      <td className="sent-cell-value">
-        <span className="sent-value">{pointValue(last, row.field)}</span>
+      <td className="sent-cell-value num">
+        <span className="sent-value num">{pointValue(last, row.field)}</span>
         {last ? <span className="sent-missing">{last.tradeDate}</span> : null}
         <PercentileChip field={row.field} trends={trends} />
       </td>
-      <td className="sent-cell-meta">
+      <td className="sent-cell-meta num">
         <span>{row.note}</span>
       </td>
     </tr>

@@ -41,7 +41,7 @@ export function DataRow({
           {ticker ? <span className="datarow__ticker">{ticker}</span> : null}
         </span>
       </span>
-      <span className="datarow__val">
+      <span className="datarow__val num">
         {displayValue !== undefined && (
           <span className="datarow__price">
             {displayValue}

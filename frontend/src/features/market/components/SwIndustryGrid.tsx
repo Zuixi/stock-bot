@@ -5,21 +5,41 @@ import {
   fetchSwIndustryTree,
   type SwIndustryLevel1,
 } from "@/shared/api/swIndustry";
-import { useTheme } from "@/app/theme-context";
 import { useMarketPolling } from "../hooks/useMarketPolling";
 import "./SwIndustryGrid.css";
 
-/** accent 透明度阶梯区间：个股数最多的一级行业最深，最少的最浅 */
-const ALPHA_MIN = 0.08;
-const ALPHA_MAX = 0.85;
-/** 透明度高于该值时改用白色文字，保证对比度 */
-const WHITE_TEXT_THRESHOLD = 0.5;
+/**
+ * 数量 → 中性色阶的**五分位阈值**（§4.2 / §3.6）。
+ *
+ * 为什么不用 accent 叠 alpha（原实现）：`colors.accent` 叠白 alpha 后
+ * 0.5→2.10:1、0.85→3.81:1，都不过 AA（需 4.5）；且有 6/31 格命中「白字分支」——
+ * 于是**颜色本身在编码数量**，而文字颜色还随数量跳变。现在改成中性灰阶
+ * `--mag-0..4`（0 最浅 = 数量最少），文字**一律 `--text-primary`**，无白字分支；
+ * 每级对 `--text-primary` 的对比度由 `check-design-tokens.mjs` §8.1-2 逐级算死 ≥4.5。
+ *
+ * 阈值取**分位**（20/40/60/80 分位）而非等距：行业成分数分布长尾（银行/地产很小、
+ * 机械/电子很大），等距会让 90% 的格子挤在最浅那两档，色阶失去分辨力。
+ * 用**阈值法**（`count > 阈值`）而非排名法 ⇒ 同一个 count 必得同一档，
+ * 颜色是数量的函数，不是渲染顺序的函数。
+ */
+const QUANTILES = [0.2, 0.4, 0.6, 0.8] as const;
+
+function magThresholds(counts: number[]): number[] {
+  const sorted = [...counts].sort((a, b) => a - b);
+  if (sorted.length === 0) return [];
+  return QUANTILES.map((q) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]);
+}
+
+/** 0..4：越过几个分位阈值就是第几档（`--mag-0` 最浅 → `--mag-4` 最深）。 */
+function magLevelOf(count: number, thresholds: number[]): number {
+  let level = 0;
+  for (const t of thresholds) if (count > t) level += 1;
+  return level;
+}
 
 const SKELETON_COUNT = 18;
 
-function IndustryCell({ industry, alpha }: { industry: SwIndustryLevel1; alpha: number }) {
-  const { colors } = useTheme();
-  const useWhite = alpha > WHITE_TEXT_THRESHOLD;
+function IndustryCell({ industry, magLevel }: { industry: SwIndustryLevel1; magLevel: number }) {
   /** 用户自定义标签**带标注**呈现，绝不加进官方数（见 swIndustry.ts 的 customTagSuffix） */
   const suffix = customTagSuffix(industry);
 
@@ -34,22 +54,16 @@ function IndustryCell({ industry, alpha }: { industry: SwIndustryLevel1; alpha: 
     // 只有把这两个有效信息并进瓦片才不是功能回退（口径仍是 SCD2 官方数）。
     <Link
       to={`/market/industry/${industry.code}`}
-      className="sw-cell"
+      className={`sw-cell sw-cell--mag-${magLevel}`}
       title={`${industry.officialCount ?? industry.stockCount} 只个股 · ${industry.children.length} 个二级行业${
         suffix ? ` · ${suffix}` : ""
       }`}
-      style={{
-        background: `${colors.accent}${Math.round(alpha * 255)
-          .toString(16)
-          .padStart(2, "0")}`,
-        color: useWhite ? "#ffffff" : "var(--text-primary)",
-      }}
     >
       <span className="sw-name">{industry.name}</span>
       {/* 只留两个数据点（官方成分数 · 二级行业数），**不放自定义标注**：瓦片宽度只有
           128–190px，三样信息会把「自定义」挤到第二行，逐格换行、视觉参差（Phase 1 视觉
           复核实测）。自定义标注仍在 `title`（悬停可见）与下钻页（完整口径），信息没丢。 */}
-      <span className="sw-count">
+      <span className="sw-count num">
         {industry.officialCount ?? industry.stockCount} 只 · {industry.children.length} 个二级
       </span>
     </Link>
@@ -72,8 +86,9 @@ interface Props {
 }
 
 /**
- * 申万行业网格（TV tile 风）：31 个一级行业按个股数着色的 accent 阶梯瓦片。
+ * 申万行业网格（TV tile 风）：31 个一级行业按个股数落 `--mag-0..4` 中性色阶的瓦片。
  * Stage C 自 landing/sections/IndustryGrid 提取为共享组件，宣传页与市场页共用。
+ * 颜色编码数量的口径见文件头 `QUANTILES` 注释（Phase 2 §4.2/§3.6 起不再用 accent 叠 alpha）。
  */
 export function SwIndustryGrid({ fallback = "暂无申万行业数据" }: Props) {
   const { refetchInterval } = useMarketPolling();
@@ -84,17 +99,19 @@ export function SwIndustryGrid({ fallback = "暂无申万行业数据" }: Props)
   });
 
   const industries = data ?? [];
-  // 着色阶梯按**官方成分数**（与显示的数字同一口径；若按 stockCount 着色，深浅会与格子上的数对不上）
-  const maxCount = Math.max(0, ...industries.map((i) => i.officialCount));
-  const alphaOf = (count: number): number =>
-    maxCount > 0 ? ALPHA_MIN + ((ALPHA_MAX - ALPHA_MIN) * count) / maxCount : ALPHA_MIN;
+  // 分档按**官方成分数**（与格子上的数字同一口径；若按 stockCount 分档，深浅会与格子上的数对不上）
+  const thresholds = magThresholds(industries.map((i) => i.officialCount));
 
   if (isLoading) return <IndustrySkeletons />;
   if (industries.length === 0) return <div className="sw-fallback">{fallback}</div>;
   return (
     <div className="sw-grid">
       {industries.map((ind) => (
-        <IndustryCell key={ind.code} industry={ind} alpha={alphaOf(ind.officialCount)} />
+        <IndustryCell
+          key={ind.code}
+          industry={ind}
+          magLevel={magLevelOf(ind.officialCount, thresholds)}
+        />
       ))}
     </div>
   );

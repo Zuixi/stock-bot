@@ -6,8 +6,6 @@ import { fetchShareFloats, type ShareFloatItem } from "@/shared/api/marketData";
 import { useMarketPolling } from "../../hooks/useMarketPolling";
 import { fmtYiGu } from "../format";
 
-const NUM_FONT: React.CSSProperties = { fontVariantNumeric: "tabular-nums" };
-
 export function ShareFloatTable() {
   const navigate = useNavigate();
   const { refetchInterval } = useMarketPolling();
@@ -19,16 +17,16 @@ export function ShareFloatTable() {
   });
 
   const columns: ColumnsType<ShareFloatItem> = [
-    { title: "解禁日", dataIndex: "floatDate", width: 100, render: (_, r) => <span style={NUM_FONT}>{r.floatDate}</span> },
-    { title: "代码", dataIndex: "symbol", width: 80, render: (_, r) => <span style={NUM_FONT}>{r.symbol}</span> },
+    { title: "解禁日", dataIndex: "floatDate", width: 100, render: (_, r) => <span className="num">{r.floatDate}</span> },
+    { title: "代码", dataIndex: "symbol", width: 80, render: (_, r) => <span className="num">{r.symbol}</span> },
     { title: "名称", dataIndex: "name", width: 110, render: (_, r) => r.name ?? "—" },
     {
       title: "解禁数量", dataIndex: "floatShare", width: 100, align: "right",
-      render: (_, r) => <span style={NUM_FONT}>{fmtYiGu(r.floatShare)}</span>,
+      render: (_, r) => <span className="num">{fmtYiGu(r.floatShare)}</span>,
     },
     {
       title: "占总股本", dataIndex: "floatRatio", width: 90, align: "right",
-      render: (_, r) => <span style={NUM_FONT}>{r.floatRatio == null ? "—" : `${r.floatRatio.toFixed(2)}%`}</span>,
+      render: (_, r) => <span className="num">{r.floatRatio == null ? "—" : `${r.floatRatio.toFixed(2)}%`}</span>,
     },
     { title: "类型", dataIndex: "shareType", ellipsis: true, render: (_, r) => r.shareType ?? "—" },
   ];

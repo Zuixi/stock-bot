@@ -33,11 +33,11 @@ export function IndicatorGrid({ metrics }: Props) {
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginTop: 3 }}>
             <span
+              className="num"
               style={{
                 fontFamily: '"Bahnschrift","DIN Alternate","Segoe UI",sans-serif',
                 fontWeight: 700,
                 fontSize: 18,
-                fontVariantNumeric: "tabular-nums",
                 color: m.value !== null ? "var(--text-primary)" : colors.flat,
               }}
             >

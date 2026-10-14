@@ -71,11 +71,11 @@ export function SentimentIntradayChart({ points }: Props) {
   return (
     <div className="intraday" data-testid="sentiment-intraday-chart">
       <div className="intraday__legend">
-        <span className="intraday__key">
+        <span className="intraday__key num">
           <i className="intraday__dot" />
           涨停 {last.ztCount}
         </span>
-        <span className="intraday__note">
+        <span className="intraday__note num">
           {fmtTime(first.capturedAt)}–{fmtTime(last.capturedAt)} · {sorted.length} 点 · {range}
         </span>
       </div>

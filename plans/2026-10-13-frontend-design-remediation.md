@@ -2,8 +2,8 @@
 status: active
 scope: 前端设计整改——一级导航形态与三层布局表达、工作页信息密度（去重复）、设计系统（字体/数字/量级色阶/对比度/动效/焦点）、响应式四档断点、文案与品牌一致性；来源为 2026-10-13 全站设计评审（1440/1280/390 三档实测截图）
 touches: frontend/src/app/, frontend/src/pages/, frontend/src/features/nav/, frontend/src/features/market/, frontend/src/features/industry-research/, frontend/src/shared/ui/, frontend/src/shared/config/, frontend/src/app/router/, frontend/public/fonts/, frontend/scripts/, frontend/e2e/, docs/design/landing-market-theme.md, docs/Changelog.md, plans/index.md
-updated: 2026-10-14
-next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market/data-sources`；B2 与 D1 与建议相反，范围修订见 §0.1）。Phase 0（基线冻结 + 先红后绿门禁）已开工；Phase 0 的 5 条断言转红后，即可按 §3 起执行 Phase 1（首个样本 = `IndustryMetricStrip` 的信息去重与定宽网格）。
+updated: 2026-10-15
+next-action: Phase 0 / 1 / **2 已完成**（Phase 2 = W3 设计系统：0.5 与 0.6 双绿，`npm run check:design` 退出 0，六个 §8.1 组 + 日期双层门禁全过）。下一步 = Phase 3（W4 响应式，§5.1–5.1 / 4.1–4.5）；注意它要背着**两条已知红**（`responsive.spec.ts` 的 `/market/global@390`·`@768`，实测 `scrollWidth` 已漂到 874）。
 ---
 
 # 前端设计整改 实施计划
@@ -217,19 +217,19 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
 
 ### 4.1 字体与数字 token
 
-- [ ] **3.1 定义 token**（`frontend/src/app/styles/theme.css`，三块 `:root` / `[data-theme=light]` / `[data-theme=dark]` **都要有**，形状与颜色 token 一致）：
+- [x] **3.1 定义 token**（`frontend/src/app/styles/theme.css`，三块 `:root` / `[data-theme=light]` / `[data-theme=dark]` **都要有**，形状与颜色 token 一致）：
   ```css
   --font-ui:  "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   --font-num: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   ```
-- [ ] **3.2 字体文件**（依 §0-C）：`frontend/public/fonts/` 放子集 `noto-sans-sc-{400,500,600}.subset.woff2`（常用 3500 字 + 标点）与 `ibm-plex-mono-{400,600}.subset.woff2`（仅 `0-9 + - % . , 亿 万`）；`@font-face` 加 `font-display: swap` + `unicode-range`。子集化脚本入库 `frontend/scripts/subset-fonts.sh`（依赖 `pyftsubset`，**仅构建期**，不进运行时）。
-- [ ] **3.3 AntD 接入**：`frontend/src/app/theme.ts` 的 `token` 增加 `fontFamily: 'var(--font-ui)'`。
-- [ ] **3.4 数字统一**：`theme.css` 增 `.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }`；替换现有 **65 处**手写的 `fontVariantNumeric`（**Phase 0 实测**；计划原写"20+"，取自更早的一次 grep。`grep -rn "fontVariantNumeric\|font-variant-numeric" frontend/src`）。**保留至少一处内联**作为回归哨兵？不——全部替换，靠门禁（**§8.1-5**）防止新增。
-- [ ] **3.5 字号刻度**：在工作区把卡片标题统一为 `14px/600/--text-primary`（现 `SectionCard.css` 是 16/600，契约 §4 写的是 13/secondary——**以本计划为准，同步改契约**），数据行 `14`（数字）/ `13`（名称）/ `11`（代码）/ `12`（口径与 as_of）。
+- [x] **3.2 字体文件**（依 §0-C）：`frontend/public/fonts/` 放子集 `noto-sans-sc-{400,500,600}.subset.woff2`（常用 3500 字 + 标点）与 `ibm-plex-mono-{400,600}.subset.woff2`（仅 `0-9 + - % . , 亿 万`）；`@font-face` 加 `font-display: swap` + `unicode-range`。子集化脚本入库 `frontend/scripts/subset-fonts.sh`（依赖 `pyftsubset`，**仅构建期**，不进运行时）。
+- [x] **3.3 AntD 接入**：`frontend/src/app/theme.ts` 的 `token` 增加 `fontFamily: 'var(--font-ui)'`。
+- [x] **3.4 数字统一**：`theme.css` 增 `.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }`；替换现有 **65 处**手写的 `fontVariantNumeric`（**Phase 0 实测**；计划原写"20+"，取自更早的一次 grep。`grep -rn "fontVariantNumeric\|font-variant-numeric" frontend/src`）。**保留至少一处内联**作为回归哨兵？不——全部替换，靠门禁（**§8.1-5**）防止新增。
+- [x] **3.5 字号刻度**：在工作区把卡片标题统一为 `14px/600/--text-primary`（现 `SectionCard.css` 是 16/600，契约 §4 写的是 13/secondary——**以本计划为准，同步改契约**），数据行 `14`（数字）/ `13`（名称）/ `11`（代码）/ `12`（口径与 as_of）。
 
 ### 4.2 量级色阶与对比度
 
-- [ ] **3.6 新增中性量级色阶**（不用 accent 编码"数量"）：
+- [x] **3.6 新增中性量级色阶**（不用 accent 编码"数量"）：
   ```css
   /* light */
   --mag-0:#eef1f6; --mag-1:#e2e7f0; --mag-2:#cfd7e5; --mag-3:#a9b5c9; --mag-4:#75859f;
@@ -237,25 +237,99 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
   --mag-0:#1e222d; --mag-1:#262c3a; --mag-2:#313a4d; --mag-3:#3f4a61; --mag-4:#4c5872;
   ```
   约束（机器校验，见 §5.1-2）：light 每级 `--text-primary` 对比度 ≥4.5（实测上限 `#75859f` = **4.77:1**）；dark 每级 `--text-primary` ≥4.5（`#4c5872` = **4.80:1**）。文字**一律 `--text-primary`，不再有白字分支**。
-- [ ] **3.7 改造 `SwIndustryGrid`**：`SwIndustryGrid.tsx` 删 `ALPHA_MIN/ALPHA_MAX/WHITE_TEXT_THRESHOLD` 与 `colors.accent` 叠 alpha 的写法，改为按 `count` 分位取 `--mag-0..4`（阈值取五分位，稳定且可解释）；`SwIndustryGrid.css` 的 `.sw-count { opacity: .75 }` 改为显式 `color: var(--text-secondary)`（opacity 会让对比度不可预测）。
-- [ ] **3.8 同步 `theme.ts`**：`ThemePalette` 增 `mag: [string, string, string, string, string]`，ECharts 如需数量型配色从 `useTheme().colors.mag` 取（本轮无消费方则先不加，避免死代码——**按需**）。
+- [x] **3.7 改造 `SwIndustryGrid`**：`SwIndustryGrid.tsx` 删 `ALPHA_MIN/ALPHA_MAX/WHITE_TEXT_THRESHOLD` 与 `colors.accent` 叠 alpha 的写法，改为按 `count` 分位取 `--mag-0..4`（阈值取五分位，稳定且可解释）；`SwIndustryGrid.css` 的 `.sw-count { opacity: .75 }` 改为显式 `color: var(--text-secondary)`（opacity 会让对比度不可预测）。
+- [x] **3.8 同步 `theme.ts`**：`ThemePalette` 增 `mag: [string, string, string, string, string]`，ECharts 如需数量型配色从 `useTheme().colors.mag` 取（本轮无消费方则先不加，避免死代码——**按需**）。
 
 ### 4.3 日期口径
 
-- [ ] **3.9 单一格式化入口**：`frontend/src/shared/ui/date.ts` 增 `formatAsOf(iso, now) => "10月9日收盘 · 3天前"`，`FreshnessNote` 与各卡的 `asof` 一律走它；`market-index/index.tsx` 的 `数据截至：2026-10-12T15:00:00Z` 改走同一入口。禁止任何组件直接渲染 ISO 串（门禁 §5.1-3）。
+- [x] **3.9 单一格式化入口**：`frontend/src/shared/ui/date.ts` 增 `formatAsOf(iso, now) => "10月9日收盘 · 3天前"`，`FreshnessNote` 与各卡的 `asof` 一律走它；`market-index/index.tsx` 的 `数据截至：2026-10-12T15:00:00Z` 改走同一入口。禁止任何组件直接渲染 ISO 串（门禁 §5.1-3）。
 
 ### 4.4 动效与焦点
 
-- [ ] **3.10 全局降级动效**：`theme.css` 增
+- [x] **3.10 全局降级动效**：`theme.css` 增
   ```css
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   }
   ```
   （覆盖 1.4s 无限 shimmer 与 `.sw-cell:hover { translateY(-2px) }`）
-- [ ] **3.11 全局焦点环**：`theme.css` 增 `:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }`，保留 `market.css:79` 的既有局部规则（不冲突）。
+- [x] **3.11 全局焦点环**：`theme.css` 增 `:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }`，保留 `market.css:79` 的既有局部规则（不冲突）。
 
-**W3 验收**：0.5、0.6 转绿；`npm run check:design` 通过；`npx tsc --noEmit` 通过；暗色/浅色两套下瓦片文字对比度实测 ≥4.5（门禁自动算）；`grep -rn "fontVariantNumeric" frontend/src` 只余 `.num` 的定义处。
+**W3 验收（Phase 2 实测后据实修正，2026-10-15）**：
+
+| 判据 | 实测 |
+|---|---|
+| 0.5 `npm run check:design` | **转绿，退出 0**（整改前 **28 项不达标 / 退出 1**）；五个 §8.1 组 + 日期静态层全 PASS |
+| 0.6 运行时（`e2e/noRawIso.spec.ts`） | **转绿：5 passed**（整改前 3 passed / **2 failed**，红的正是 `/market/index/000001.SH`） |
+| `npx tsc --noEmit` | 0 |
+| `npm run build` | 0（`✓ built in 3.71s`） |
+| 瓦片文字对比度 | 门禁逐级算出并打印，**10/10 级 ≥4.5**（数值见下） |
+| `grep -rn "fontVariantNumeric\|font-variant-numeric" frontend/src` | **只余 1 处**（`theme.css` 的 `.num` 定义）；开工时 **67** |
+
+> **Phase 2 实测回写（task-25，2026-10-15）**
+>
+> **① 3.2 走的是 C2 —— 不是"下不下来"，是"下得下来但超预算"。** 环境**有出网**，
+> `pyftsubset`/`fonttools[woff]`+`brotli` 也装得上（临时 venv，**未入库为依赖**），字体源也下得下来
+> （Noto Sans SC VF 17.7 MB + IBM Plex Mono 2 字重）。卡住的是**体积**：子集到本仓库源码字符集
+> （1164 CJK 字形）后单字重 woff2 = **194,292 B**，而 §0-C 预算是 122,880 B/字重 ⇒ 超 1.58×；
+> 三字重合计 **588,708 B**，超「120KB × 2 字重」**2.4×**；按计划写的"常用 3500 字"规模
+> （3500 字形代理集）单字重 **~493 KB** ⇒ 超 6×。数字那一半（IBM Plex Mono 子集 = **3,300 / 4,096 B**）
+> 在 15 KB 预算内。**依 §0-C「超预算仍按原路降级 C2」执行**：不带字体文件、不声明 `@font-face`，
+> `--font-ui` = 系统栈、`--font-num` = `ui-monospace`（零字节）。子集脚本按本条要求入库
+> （`frontend/scripts/subset-fonts.sh`，**不被构建/npm script/CI 调用**），文件尾写明如何切回 C1。
+>
+> **② 3.4 的处数：Phase 0 记 65 是对的，本次开工实测是 67。** 差的 2 处来自 **Phase 1 新建的
+> `pages/market-data-sources/`** 自带的 `ds-num`（可核对：`git grep -c "fontVariantNumeric\|font-variant-numeric" 387c94d -- frontend/src` = **65**，
+> 到 `048f632` 变 67）。收敛后 `src/**` 只剩 `.num` 定义处的 **1 处**。
+>
+> **③ 3.6 候选色值由门禁复核（不是手算）：light `#75859f` = 4.78:1**（计划写 4.77）、
+> **dark `#4c5872` = 4.81:1**（计划写 4.80），其余 8 级 5.99–15.81 ⇒ **候选值无需调整**。
+>
+> **④ 3.9 的落法（与计划字面有一处差异，按"只留一个入口"的意图收口，并写明理由）**：新增
+> `formatAsOf(iso, now)`（= `"10月9日收盘 · 3天前"`，相对日只在**过去**时给出）+ 共用的日期片段
+> `formatAsOfDate`。`market-index` 的 `数据截至` 改走 `formatAsOf`；**`FreshnessNote` 不改成单串**——
+> 它那一行的契约是把口径与相对日渲染成**两个 chip**，且**日期归本行独有、chip 不复述日期**
+> （被 `marketDataFace.spec.ts` 的「回落口径卡片…不重复判据日」与 `N 天前` 徽标逐条钉住；
+> 改成单串会让「日期 + 按最近完整日 + N 天前」三处重复同一事实）。故二者**共用 `date.ts` 里同一个
+> 日期片段实现**，而不是共用同一个字符串模板。实测上屏文本：
+> **`数据截至：10月13日收盘 · 2天前`**（整改前 = `数据截至 2026-10-13T15:00:00Z`）。
+> 另：`FreshnessNote` 顺带修掉一个潜在坑 —— 旧实现走 `formatCnDate`（按 `-` 切三段），
+> 若被喂完整 ISO 会渲染 `NaN月NaN日`；`formatAsOfDate` 先取前 10 字符，不会。
+>
+> **⑤ §8.4 的门禁挂载已做**：`npm run check:design` 改为
+> `node scripts/check-design-tokens.mjs && node scripts/check-no-raw-iso.mjs` ⇒ CI 的 `frontend-lint`
+> 从此同时守住**日期静态层**（原先那条脚本进了仓库却没有任何地方跑它）；`docs/testing/index.md`
+> 门禁矩阵补「日期口径」一行。**未改任何 CI job id**，`doc_gate` 规则 4 不受影响。
+> 运行时层（`noRawIso.spec.ts`）**不在 CI**（前端 Playwright 全量都不在 CI），仍是手动门禁。
+>
+> **⑥ 既有 E2E 回归（与 Phase 1 同一命令、同一口径）**：
+> ```
+> $ E2E_BASE_URL=http://localhost npx playwright test nav marketLayout marketDataFace limitUpSentiment \
+>     marketTrust landing darkmode navigation responsive --reporter=line
+>   2 failed
+>     e2e/responsive.spec.ts:42:7 › 响应式：四档视口下不得横向溢出 › /market/global@390 无横向溢出
+>     e2e/responsive.spec.ts:42:7 › 响应式：四档视口下不得横向溢出 › /market/global@768 无横向溢出
+>   79 passed (25.4s)
+> ```
+> - 集合 **81 条**（9 个 spec 文件的 test 生成代码与 Phase 1 一字未变）。Phase 1 记 78 passed + 2 failed = 80
+>   ⇒ 当时有 **1 条运行时 `test.skip()`**（数据缺失分支，`marketDataFace`/`navigation` 的按需跳过）
+>   这次没跳过，**不是新增或丢失用例**。
+> - 2 条红 = **Phase 0 的既有红，route 集合一字未变**（`/market/global@390`·`@768`，属 Phase 3 §4.2）。
+>   数值漂移如实记录：`@768` 由 877 → **874**（`.num` 换了数字字体 ⇒ 度量微变），`@390` 仍红。**本 Phase 不动 W4。**
+> - 8 个非 responsive 的 spec 文件：**53 passed / 0 failed**。
+> - 一次全量运行中 `limitUpSentiment.spec.ts:328`（"从短线情绪进个股，浏览器返回仍停在短线情绪 Tab"）
+>   曾红 1 次，**单独复跑 3/3 绿**：它 `expect(page).toHaveURL(/\/stock\//)`，而 `/stock/:symbol` 在本分支
+>   是 **redirect**（→ `/company/:symbol`），断言实际赌"能抓到跳转中间态" ⇒ **既有 flake，与本次改动无关**
+>   （本次未触碰路由与 `.ladder-stock` 结构）。**未改该断言**（改它属于 Phase 3 之后的清理，且会动既有红线）。
+>
+> **⑦ 视觉复核（截图在 `.superpowers/sdd/2026-10-12-investment-research-platform-ia/evidence/phase2-*.png`）**：
+> **自检抓到 1 个真缺陷并已修** —— `.sw-count`（瓦片第二行）原先按 §3.7 用 `--text-secondary`，
+> 实测 `#6a6d78` 对 `--mag-3`/`--mag-4` = **2.49:1 / 1.38:1**、暗色 `#787b86` 对 `--mag-4` = **1.69:1**
+> —— 而那两级正是"成分数最多"的格子，**眼睛也确实看得出糊**（浅色下「电子 493 只 · 6 个二级」、
+> 深色下同理）。改为**与名称行同为 `--text-primary`**（§4.2 原文就是"文字一律 `--text-primary`"），
+> 层次改由字号承担（11px vs 13px/600）⇒ 10 级全部 ≥4.5。这是"门禁绿了但屏幕仍不好读"的典型：
+> §8.1-2 只断言 `--mag-*` 对 `--text-primary`，**覆盖不到第二行用的次级色**。
+
 
 ---
 
@@ -315,7 +389,21 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
 | 瓦片文字最小对比度 | 2.10:1 | ≥ 4.5:1 | `check:design` |
 | 首页 `scrollHeight` | 7051 | ≤ 4200（D2） | 0.7 基准 |
 | `.css` 中 `:focus-visible` 规则数 | 1 | ≥ 1 全局 + 局部 | 0.5 断言 |
-| 自绘 `fontVariantNumeric` 处数 | **65**（Phase 0 实测；原写 22 为更早的 grep） | 1（`.num` 定义） | §8.1-5 |
+| 自绘 `fontVariantNumeric` 处数 | **65**（Phase 0 实测；原写 22 为更早的 grep）→ **67**（Phase 1 新增的 `pages/market-data-sources/` 自带 2 处） | 1（`.num` 定义） | §8.1-5 |
+| `--mag-0..4` 各级对 `--text-primary` 对比度 | 2.10:1（accent 叠 alpha） | 10 级全部 ≥4.5 | §8.1-2 |
+
+**§7 的 Phase 2 实测值（2026-10-15，`npm run check:design` 直接打印，非手算）**：
+
+| 级别 | Light 色值 | Light 对 `#131722` | Dark 色值 | Dark 对 `#d1d4dc` |
+|---|---|---|---|---|
+| `--mag-0` | #eef1f6 | 15.81:1 | #1e222d | 10.71:1 |
+| `--mag-1` | #e2e7f0 | 14.42:1 | #262c3a | 9.42:1 |
+| `--mag-2` | #cfd7e5 | 12.36:1 | #313a4d | 7.68:1 |
+| `--mag-3` | #a9b5c9 | 8.64:1 | #3f4a61 | 5.99:1 |
+| `--mag-4` | #75859f | **4.78:1** | #4c5872 | **4.81:1** |
+
+> 计划 §4.2 里写的 4.77 / 4.80 与门禁的 4.78 / 4.81 是同一组候选值的四舍五入差；**以门禁为准**（它才是判据）。
+
 
 ### 7.1 整改前 `scrollHeight` 基准快照（0.7，2026-10-14 实测）
 
@@ -356,7 +444,7 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
 2. 对每级算对比度：light 与 `--text-primary`、dark 与 `--text-primary`，全部 ≥4.5；不足即失败并打印实测值。
 3. `--font-ui` / `--font-num` 存在，且 `theme.ts` 的 `token.fontFamily` 引用 `--font-ui`。
 4. `theme.css` 含 `@media (prefers-reduced-motion: reduce)` 与 `:focus-visible` 两块。
-5. `frontend/src/**` 中 `fontVariantNumeric|font-variant-numeric` 的出现次数 ≤1（只允许 `.num` 定义处）。**Phase 0 实测实际是 65 处**（§7 原写 22，取自更早的一次 grep；门槛值 ≤1 不变，待 §3.4 统一到 `.num`）。
+5. `frontend/src/**` 中 `fontVariantNumeric|font-variant-numeric` 的出现次数 ≤1（只允许 `.num` 定义处）。**Phase 0 实测实际是 65 处**（§7 原写 22，取自更早的一次 grep；门槛值 ≤1 不变，待 §3.4 统一到 `.num`）。**Phase 2 收口：开工时 67（Phase 1 新增页带来 2 处）→ 交付时 1。**
 
 ### 8.2 日期口径门禁（**两层**，Phase 0 据实修正）
 
@@ -372,9 +460,18 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
 
 `Stock Bot`（应为 `StockBot`）· `landing-placeholder`（空占位卡）· `WHITE_TEXT_THRESHOLD`（用 accent 编码数量）。
 
+> **Phase 2 状态**：**未做**（`WHITE_TEXT_THRESHOLD` 已随 §3.7 从代码里消失，但 `Stock Bot` 的改名是 **5.1** 的范围）。
+> 三条探针一起在 W5 落地更合适——否则 Phase 2 加的两条会在 Phase 5 之前**每天命中既有文案**（`Stock Bot` 现在仍有 4 处），
+> 把 slop_scan 变成噪声。**这是有意的跨 Phase 推迟，不是遗漏。**
+
 ### 8.4 CI 挂钩
 
 `frontend/scripts/check-design-tokens.mjs` 已在 `npm run check:design`；把 `check-no-raw-iso.mjs` 一并挂进同一 npm script，并确认 `.github/workflows/ci.yml` 的 job id 变更同步到 `docs/testing/index.md`（`doc_gate.sh` 规则 5）。
+
+> **Phase 2 已完成**：`frontend/package.json` 的 `check:design` = `node scripts/check-design-tokens.mjs && node scripts/check-no-raw-iso.mjs`
+> ⇒ CI 的 `frontend-lint` job（已跑 `npm run check:design`）现在同时守日期静态层。**未新增/改名任何 CI job**，
+> 故无需改 `ci.yml`，`doc_gate.sh` 规则 4 不受影响；`docs/testing/index.md` 门禁矩阵已补「日期口径」一行。
+> 运行时层（`noRawIso.spec.ts`）**不在 CI**——前端 Playwright 全量都不在 CI（见 `docs/testing/index.md`）。
 
 ---
 

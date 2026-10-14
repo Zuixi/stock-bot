@@ -80,11 +80,11 @@ export function CompanyComparisonTable({ industryKey }: { industryKey: string })
           const value = read(row);
           return (
             <span
+              className={col.numeric ? "num" : undefined}
               style={{
                 fontFamily: col.numeric
                   ? '"Bahnschrift","Segoe UI",sans-serif'
                   : undefined,
-                fontVariantNumeric: col.numeric ? "tabular-nums" : undefined,
                 color: value === null ? "#c9cdd4" : undefined,
               }}
             >

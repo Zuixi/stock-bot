@@ -95,7 +95,7 @@ export function MarketMoneyflowContent() {
         <div style={{ marginBottom: 8 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>今日主力净流入</Typography.Text>
-            <span style={{ fontSize: 22, fontWeight: 600, color: mainColor, fontVariantNumeric: "tabular-nums" }}>
+            <span className="num" style={{ fontSize: 22, fontWeight: 600, color: mainColor }}>
               {fmtSignedYi(total.mainNet)}
             </span>
           </div>
@@ -104,8 +104,8 @@ export function MarketMoneyflowContent() {
               <span key={key}>
                 {label}
                 <b
+                  className="num"
                   style={{
-                    fontVariantNumeric: "tabular-nums",
                     color: (total[key] ?? 0) > 0 ? colors.up : (total[key] ?? 0) < 0 ? colors.down : colors.flat,
                     marginLeft: 4,
                   }}

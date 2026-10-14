@@ -31,7 +31,7 @@ export function DistributionBars({
               style={{ width: `${Math.round((b.count / peak) * 100)}%` }}
             />
           </span>
-          <span className="distribution-bars__count">{b.count.toLocaleString()}</span>
+          <span className="distribution-bars__count num">{b.count.toLocaleString()}</span>
         </div>
       ))}
     </div>

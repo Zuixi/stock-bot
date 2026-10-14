@@ -53,6 +53,5 @@
 .distribution-bars__count {
   font-size: 11.5px;
   color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
   text-align: right;
 }

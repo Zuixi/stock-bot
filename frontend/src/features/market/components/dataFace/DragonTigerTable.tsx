@@ -7,8 +7,6 @@ import { useTheme } from "@/app/theme-context";
 import { useMarketPolling } from "../../hooks/useMarketPolling";
 import { fmtSignedYi } from "../format";
 
-const NUM_FONT: React.CSSProperties = { fontVariantNumeric: "tabular-nums" };
-
 export function DragonTigerTable() {
   const navigate = useNavigate();
   const { colors } = useTheme();
@@ -21,12 +19,12 @@ export function DragonTigerTable() {
   });
 
   const columns: ColumnsType<DragonTigerItem> = [
-    { title: "代码", dataIndex: "symbol", width: 80, render: (_, r) => <span style={NUM_FONT}>{r.symbol}</span> },
+    { title: "代码", dataIndex: "symbol", width: 80, render: (_, r) => <span className="num">{r.symbol}</span> },
     { title: "名称", dataIndex: "name", width: 90, render: (_, r) => r.name ?? "—" },
     {
       title: "涨跌幅", dataIndex: "pctChange", width: 80, align: "right",
       render: (_, r) => (
-        <span style={{ ...NUM_FONT, color: (r.pctChange ?? 0) > 0 ? colors.up : (r.pctChange ?? 0) < 0 ? colors.down : colors.flat }}>
+        <span className="num" style={{ color: (r.pctChange ?? 0) > 0 ? colors.up : (r.pctChange ?? 0) < 0 ? colors.down : colors.flat }}>
           {r.pctChange == null ? "—" : `${r.pctChange > 0 ? "+" : ""}${r.pctChange.toFixed(2)}%`}
         </span>
       ),
@@ -34,7 +32,7 @@ export function DragonTigerTable() {
     {
       title: "龙虎榜净买额", dataIndex: "netAmount", width: 110, align: "right",
       render: (_, r) => (
-        <span style={{ ...NUM_FONT, fontWeight: 600, color: (r.netAmount ?? 0) > 0 ? colors.up : (r.netAmount ?? 0) < 0 ? colors.down : colors.flat }}>
+        <span className="num" style={{ fontWeight: 600, color: (r.netAmount ?? 0) > 0 ? colors.up : (r.netAmount ?? 0) < 0 ? colors.down : colors.flat }}>
           {fmtSignedYi(r.netAmount)}
         </span>
       ),

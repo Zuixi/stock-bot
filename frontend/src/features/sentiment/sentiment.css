@@ -6,7 +6,7 @@
  *     任何 `box-shadow` 都是对批准稿的改写；
  *  2. **颜色只走 CSS 变量**（`--bg-*` / `--border` / `--text-*` / `--sent-extreme-*`），
  *     本文件不得出现任何 hex；
- *  3. **所有数字 `font-variant-numeric: tabular-nums` 且右对齐**（仓库既有约定），
+ *  3. **所有数字等宽（`.num`，见 theme.css 的唯一定义处）且右对齐**（仓库既有约定），
  *     标签不用全大写、不用 `A — B`、不加 eyebrow。
  */
 
@@ -124,7 +124,6 @@
 .sent-hero__caliber {
   font-size: 12px;
   color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
 }
 
 .sent-hero__asof {
@@ -150,7 +149,6 @@
   font-weight: 700;
   line-height: 1.05;
   color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
 }
 
 .sent-hero__unit {
@@ -161,7 +159,6 @@
 .sent-hero__raw {
   font-size: 12px;
   color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
 }
 
 /* ── 0–100 分位轨：只有极值带着色，中段是次级文本色 ─────── */
@@ -221,7 +218,6 @@
   gap: 12px;
   font-size: 12px;
   color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
 }
 
 .sent-rail__legend--cold {
@@ -237,7 +233,6 @@
   margin: 8px 0 0;
   font-size: 13px;
   color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
 }
 
 .sent-hero__percentile--cold {
@@ -258,7 +253,6 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
 }
 
 .sent-hero__legs-list,
@@ -266,7 +260,6 @@
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
 }
 
 .sent-hero__caliber {
@@ -351,7 +344,6 @@
 
 .sent-cell-value {
   text-align: right;
-  font-variant-numeric: tabular-nums;
 }
 
 .sent-value {
@@ -359,14 +351,12 @@
   font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
 }
 
 .sent-cell-meta {
   font-size: 12px;
   line-height: 1.6;
   color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
 }
 
 .sent-cell-meta > span {
@@ -400,7 +390,6 @@
   margin-top: 3px;
   font-size: 11.5px;
   color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
 }
 
 .sent-pct__q {

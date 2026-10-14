@@ -19,7 +19,7 @@ const signed = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
 const row = (label: string, value: string, flat: string, color?: string) =>
   `<div style="display:flex;justify-content:space-between;gap:16px">` +
   `<span style="color:${flat}">${label}</span>` +
-  `<span style="font-variant-numeric:tabular-nums${color ? `;color:${color};font-weight:600` : ""}">${value}</span>` +
+  `<span class="num"${color ? ` style="color:${color};font-weight:600"` : ""}>${value}</span>` +
   `</div>`;
 
 export function buildKlineOption({ points, maSeries, visibleMas, colors }: KlineOptionInput) {

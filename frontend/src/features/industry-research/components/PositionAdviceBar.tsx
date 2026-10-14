@@ -69,12 +69,12 @@ export function PositionAdviceBar({ positions }: Props) {
               <div style={{ fontSize: 12, color: "#86909c", marginTop: 1 }}>{p.desc}</div>
             </div>
             <span
+              className="num"
               style={{
                 fontFamily: '"Bahnschrift","Segoe UI",sans-serif',
                 fontWeight: 700,
                 fontSize: 20,
                 color: p.color,
-                fontVariantNumeric: "tabular-nums",
               }}
             >
               {p.pct}%
