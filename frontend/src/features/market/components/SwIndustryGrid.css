@@ -18,6 +18,10 @@
   justify-content: space-between;
   border: 1px solid var(--border);
   transition: transform 0.15s ease;
+  /* 整格是 <Link>（跳一级行业下钻页）：去掉下划线，颜色由行内 style 按热度给定 */
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
 }
 
 .sw-cell:hover {

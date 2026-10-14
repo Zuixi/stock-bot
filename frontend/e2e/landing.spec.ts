@@ -161,4 +161,15 @@ test.describe("宣传页数据区块", () => {
     await expect(tile).toBeVisible();
     await expect(tile).toContainText("农林牧渔");
   });
+
+  // 回归守护：格子此前是个纯 `<div>`，而 `.sw-cell:hover` 已有上浮反馈
+  // ⇒ **看起来能点、点了没反应**。原测试只验渲染不验交互，因此漏过。
+  // 现在断言它是真 `<Link>`（有 href ⇒ 可中键新开、可键盘触发）且点击真的换页。
+  test("申万行业网格的格子是链接且能跳到一级行业下钻页", async ({ page }) => {
+    await page.goto("/");
+    const tile = page.getByTitle(/95 只个股 · 3 个二级行业/);
+    await expect(tile).toHaveAttribute("href", "/market/industry/110000");
+    await tile.click();
+    await expect(page).toHaveURL(/\/market\/industry\/110000$/);
+  });
 });

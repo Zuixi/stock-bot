@@ -1,3 +1,15 @@
+## 2026-10-14 - 修复「申万行业网格」格子点击不跳转（看起来能点、点了没反应）
+
+- **现象（用户实测反馈）**：`/market?tab=panorama` 的「申万行业网格」32 个格子点不动。
+- **根因**：`SwIndustryGrid.tsx` 的 `IndustryCell` 是个**纯 `<div>`，没有任何 `onClick`/跳转**；而 `SwIndustryGrid.css` 里 **`.sw-cell:hover { transform: translateY(-2px) }` 本来就有上浮反馈** ⇒ 组合成"**看起来能点、点了没反应**"，比纯静态更误导。
+- **修法**：照抄同页「行业分类」卡片的既有写法——把整格改成真 **`<Link to={/market/industry/${code}}>`**（该文件第 74–75 行的注释已写明理由：可 Tab 聚焦、Enter 触发、可新开标签；裸 `<div onClick>` 键盘不可达、读屏也不会报成链接 —— Task 16）。
+  - `SwIndustryGrid.css` 的 `.sw-cell` 补 `text-decoration: none` / `color: inherit` / `cursor: pointer`（`<a>` 默认带下划线，会破坏 TV tile 观感；颜色仍由行内 style 按热度给定）。
+  - 该组件 **landing 与 `/market` 共用**，改前确认过 landing 是裸用 `<SwIndustryGrid/>`、没有外层 `<Link>`（否则会出现嵌套 `<a>`）。两边格子现在都可点（`/market/industry/:level1Code` 是公开路由）。
+- **为什么这条 bug 能溜过去**：`e2e/landing.spec.ts` 原有用例「申万行业网格渲染并带个股数提示」**只验渲染、不验交互**。
+- **补的回归守护**：新增 `e2e/landing.spec.ts`「申万行业网格的格子是链接且能跳到一级行业下钻页」——断言 `href === "/market/industry/110000"` **且**点击后 URL 真的变成该页。**先在旧构建上跑红**（`href` 断言失败），重建前端后转绿。
+- **验证**：`tsc` 0 · `check:routes` 86 ✓ · `self_review` ✓ · e2e `landing + darkmode + navigation` **13 passed**；另在**活栈 `/market?tab=panorama` 实测**：32 个格子、首个为 `<A href=/market/industry/110000>`、点击后 URL 变为 `/market/industry/110000` 且落地页有数据（行情口径日 10月13日 · 7 项行情字段有值）。
+- **顺带查清一个数字口径**（不是 bug，但会让人疑惑）：网格显示「农林牧渔 **111** 只」，而下钻页显示 **104**。前者是 tree 的 `stockCount` = `officialCount`（SCD2 官方 104）+ `customCount`（**用户自定义标签** 7，挂在 L3/L2 子节点上被上卷到 L1：种植业 2 · 饲料 3 · 农业综合Ⅱ 3）；后者是 SCD2 官方口径。**即"官方成分 + 我的标签"与"官方成分"两个口径并排出现在同一屏**——沿用本会话反复出现的「同一事实的多个来源必须一致」判据，这属于待决的口径问题（见下方遗留）。
+
 ## 2026-10-14 - **合并 main（PR #14 + #15）到研究平台分支**：两套并行开发首次并轨
 
 **背景**：`feat/research-platform-ia`（106 提交，研究平台全部页面）与主 checkout 上的**登录系统重构**（邀请制开户 + 管理员控制台，PR #15）**各自基于 `25a6371` 并行开发**，互不知情。结果是**混装部署**：`auth_service`/`frontend` 从主 checkout 构建（有重构、无研究页），`backend_api` 从本分支构建（有研究后端）——用户以 admin 登录后**看不到任何研究页面**，因为**那份 bundle 里根本没有这些页面**（实测：`admin/users` 命中 2 个分块，`SentimentModulePanel`/`sw-industry/drill`/`chunk-error-recovery`/`market_sentiment_composite` **全部 0 命中**，58 个分块 vs 本分支的 74）。
