@@ -54,8 +54,11 @@ function toMenuItems(
   navigateOnLeafClick: boolean
 ): NavTreeNode[] {
   return nodes.map((node) => {
+    // `data-nav-label` 是 **E2E 作用域锚点**（`e2e/nav.spec.ts`）：导航文案（如「市场」）
+    // 在面包屑/页脚/卡片里重复出现，全局 `getByText` 必然 strict-mode violation。
+    // 把标题同时写成属性 ⇒ 断言可以"按作用域 + 唯一锚点"计数与判可见性，且与布局形态解耦。
     const label = (
-      <span>
+      <span data-nav-label={node.title}>
         {node.title}
         {node.badge ? <CountBadge badge={node.badge} /> : null}
       </span>

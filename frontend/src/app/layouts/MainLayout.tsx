@@ -118,13 +118,18 @@ export function MainLayout() {
         >
           Stock Bot
         </Typography.Title>
-        {/* 10 个一级导航（IA §1 顺序）；节点数据来自上方 TOP_NAV，组件本身不含业务知识 */}
-        <NavTree
-          nodes={navNodes}
-          mode="horizontal"
-          style={{ flex: 1, border: "none", background: "transparent", minWidth: 0 }}
-          data-testid="top-nav"
-        />
+        {/* 10 个一级导航（IA §1 顺序）；节点数据来自上方 TOP_NAV，组件本身不含业务知识。
+            ⚠️ 外壳带 `data-testid="primary-nav"`：`e2e/nav.spec.ts` 以它为作用域断言
+            「10 个一级项全部可见」。W1（§0-A 裁定 A1）会把导航从 Header 移入左侧图标栏——
+            那个外壳**必须保留本 testid**，否则该 E2E 从"断言可见性"退化成"找不到锚点"。 */}
+        <div data-testid="primary-nav" style={{ flex: 1, minWidth: 0, display: "flex" }}>
+          <NavTree
+            nodes={navNodes}
+            mode="horizontal"
+            style={{ flex: 1, border: "none", background: "transparent", minWidth: 0 }}
+            data-testid="top-nav"
+          />
+        </div>
         {/* 右侧全局工具（IA §3）：搜索 / 主题 / 用户菜单——三者均为既有组件，本任务只保留位置 */}
         <SearchBar />
         <ThemeToggle />

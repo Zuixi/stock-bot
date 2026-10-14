@@ -96,21 +96,21 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
 
 > 原则：**每一条整改都必须先有一条会失败的断言**，否则改完没人知道有没有回退。
 
-- [ ] **0.1 冻结路由与页面清单**：`frontend/scripts/check-routes.mjs` 现有输出存档为 `frontend/e2e/fixtures/route-baseline.json`（路由数量与 redirect 集合），整改期间任何路由增删都要在此 diff。新增 `/market/data-sources` 时同步更新 `route-manifest.ts` + `route-elements.tsx` + `PLACEHOLDER_CONTRACT`。
-- [ ] **0.2 新增 `frontend/e2e/responsive.spec.ts`（先写、先红）**：四档视口 `390 / 768 / 1280 / 1440` × 路由 `[/, /market, /market/global, /market/heatmap, /company/600540, /industry/pig, /me]`，逐条断言
+- [x] **0.1 冻结路由与页面清单**：`frontend/scripts/check-routes.mjs` 现有输出存档为 `frontend/e2e/fixtures/route-baseline.json`（路由数量与 redirect 集合），整改期间任何路由增删都要在此 diff。新增 `/market/data-sources` 时同步更新 `route-manifest.ts` + `route-elements.tsx` + `PLACEHOLDER_CONTRACT`。
+- [x] **0.2 新增 `frontend/e2e/responsive.spec.ts`（先写、先红）**：四档视口 `390 / 768 / 1280 / 1440` × 路由 `[/, /market, /market/global, /market/heatmap, /company/600540, /industry/pig, /me]`，逐条断言
   ```ts
   const { scrollWidth } = await page.evaluate(() => document.documentElement);
   const inner = await page.evaluate(() => window.innerWidth);
   expect(scrollWidth, `${route}@${width} 横向溢出`).toBeLessThanOrEqual(inner + 1);
   ```
   预期：`/market/global@390` **立即失败**（现测 749 > 390）。
-- [ ] **0.3 新增 `frontend/e2e/nav.spec.ts` 断言（先红）**：`width ∈ {1280, 1440}` 下顶栏/侧栏的 10 个一级项 `toBeVisible()`。预期：`@1440` **立即失败**（3 项在 `...` 内）。
-- [ ] **0.4 新增 `frontend/e2e/marketLayout.spec.ts`（先红）**：`/market` 的每个 Tab 下断言页面文本**不含**「数据版图」；断言「申万行业网格」标题在页面内出现 **1** 次；断言 `market-page-head` 的副标题文本 === Tab label 以 ` · ` 拼接。预期：三条**全部立即失败**。
+- [x] **0.3 新增 `frontend/e2e/nav.spec.ts` 断言（先红）**：`width ∈ {1280, 1440}` 下顶栏/侧栏的 10 个一级项 `toBeVisible()`。预期：`@1440` **立即失败**（3 项在 `...` 内）。
+- [x] **0.4 新增 `frontend/e2e/marketLayout.spec.ts`（先红）**：`/market` 的每个 Tab 下断言页面文本**不含**「数据版图」；断言「申万行业网格」标题在页面内出现 **1** 次；断言 `market-page-head` 的副标题文本 === Tab label 以 ` · ` 拼接。预期：三条**全部立即失败**。
   - **两条负向断言必须先等到请求终态**（`waitForLoadState("networkidle")` + 显式等待该 Tab 的目标卡片出现）再断言，否则在 react-query 的 loading 窗口内恒真、假绿；锚点放在文案上而非 `data-testid`。
   - 「出现 1 次」用结构选择器计数（如 `page.locator(".section-card__title", { hasText: "申万行业网格" })` 的 `toHaveCount(1)`），不得用全局 `getByText`。
-- [ ] **0.5 扩展 `frontend/scripts/check-design-tokens.mjs`（先红）**：见 §5.1 的四组断言。预期：`--mag-*` / `--font-ui` / `--font-num` / `reduced-motion` / `focus-visible` 缺失 → 立即失败。
-- [ ] **0.6 新增 `frontend/scripts/check-no-raw-iso.mjs`（先红）**：扫 `frontend/src/**/*.tsx` 的 JSX 文本节点与模板字符串，命中 `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}` 即失败。预期：`market-index` 立即失败。
-- [ ] **0.7 基准记录（人工，非门禁）**：三档视口下各页 `scrollHeight` 快照写入本计划 §7 的"整改前"列，用于量化"去重复"收益。
+- [x] **0.5 扩展 `frontend/scripts/check-design-tokens.mjs`（先红）**：见 §5.1 的四组断言。预期：`--mag-*` / `--font-ui` / `--font-num` / `reduced-motion` / `focus-visible` 缺失 → 立即失败。
+- [x] **0.6 新增 `frontend/scripts/check-no-raw-iso.mjs`（先红）**：扫 `frontend/src/**/*.tsx` 的 JSX 文本节点与模板字符串，命中 `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}` 即失败。预期：`market-index` 立即失败。
+- [x] **0.7 基准记录（人工，非门禁）**：三档视口下各页 `scrollHeight` 快照写入本计划 §7 的"整改前"列，用于量化"去重复"收益。
 
 **Phase 0 完成判据**：0.2–0.6 五条断言**全部处于红色**，且每条的失败原因与 §Why now 表逐条对应（证明断言抓的是真问题，不是空跑）。
 
@@ -247,6 +247,33 @@ next-action: §0 五项裁定**已完成**（A1 / **B2** / C1 / **D1** / `market
 | 首页 `scrollHeight` | 7051 | ≤ 4200（D2） | 0.7 基准 |
 | `.css` 中 `:focus-visible` 规则数 | 1 | ≥ 1 全局 + 局部 | 0.5 断言 |
 | 自绘 `fontVariantNumeric` 处数 | 22 | 1（`.num` 定义） | §5.1-4 |
+
+### 7.1 整改前 `scrollHeight` 基准快照（0.7，2026-10-14 实测）
+
+**怎么测的**：Playwright（chromium）新上下文，视口 `390 / 1280 / 1440 × 高 900`，
+`page.goto` → `domcontentloaded` → `networkidle`（有界 8s）→ 停 800ms，读
+`document.documentElement.scrollHeight`。**未登录**（匿名）态；`/industry/pig` 与 `/me`
+在匿名下 redirect 到 `/login`，故它们的数是**登录页**高度（900 = 一屏），不是工作台页。
+
+| 页面 | 390 | 1280 | 1440 | 备注 |
+|---|---|---|---|---|
+| `/`（landing） | 9026 | 6065 | 6065 | 本表为**当前分支**实测（计划正文原记 7051 为旧版/旧口径） |
+| `/market` 指数总览 | 2590 | 956 | 956 | 计划正文原记 1439，同上 |
+| `/market` A股全景 | 9933 | 3667 | 3667 | 计划正文原记 3141，同上 |
+| `/market` 资金流向 | 1689 | 943 | 924 | 390 下 `scrollWidth = 420`（**已溢出**，0.2 的路由集合未覆盖本 Tab，见 task-23 报告 0.2） |
+| `/market` 数据面 | 900 | 900 | 900 | 实盘数据面为空态（非交易时段） |
+| `/market` 短线情绪 | 5763 | 3372 | 3344 | |
+| `/market/global` | 2845 | 2491 | 2469 | 390 / 768 下 `scrollWidth = 877`（0.2 的红） |
+| `/market/heatmap` | 1132 | 917 | 900 | |
+| `/company/600540` | 1943 | 1278 | 1278 | |
+| `/industry/pig` | 900 | 900 | 900 | 匿名 → `/login` |
+| `/me` | 900 | 900 | 900 | 匿名 → `/login` |
+| `/market/index/000001.SH` | 900 | 900 | 900 | 页面直出 ISO 串（0.6 运行时断言的红） |
+
+**读数纪律（后续复测必须同口径）**：上表是**实盘数据下的结构高度**，不是快照基线——
+行情条数变化会改变高度（尤其 A股全景 / 短线情绪）。"去重复收益"只看**同口径前后差**
+（同视口、同登录态、同一天）；不要把本表当 CI 断言阈值（§1 已明确禁用像素快照）。
+0.2 的 `scrollWidth` 是同步布局事实、不受数据条数影响，故它当门禁而本表不当。
 
 **Phase 依赖**：`0 → (1, 2, 3) → 4 → 5`；W1 需 IA 的 Wave 0「IA 冻结」先落；W2-2.4 需 §0-A 裁定。
 

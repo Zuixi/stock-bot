@@ -1,0 +1,99 @@
+import { test, expect as baseExpect } from "@playwright/test";
+
+/**
+ * `/market` 工作台信息密度 E2E（Phase 0.4，**先写先红**）。
+ *
+ * 依据：2026-10-13 全站设计评审实测三条——
+ * 1. 「数据版图」钉在每个 Tab 底部（约 800px × 11 行，5 个 Tab 各看一遍）→ 不得出现在工作台；
+ * 2. 「申万行业网格」与「行业分类（申万）」同屏渲染两遍 31 个行业（信息等价）→ 标题只许出现 1 次；
+ * 3. `market-page-head` 的副标题是**手写字面量**（`全球指数 · A股全景 · 资金流向 · 龙虎榜/大宗/解禁/回购`），
+ *    与 Tab labels 不同源 → 必须 === `items.map(i => i.label).join(" · ")`。
+ *
+ * 断言纪律（计划 §1 两个已知坑 + §2 0.4 的补充）：
+ * - **负向断言（"页面不含数据版图"）在 loading 窗口内恒真**：故先 `networkidle`，再显式等
+ *   该 Tab 的**锚点卡片**出现（文案锚点，非 `data-testid`），最后才断言"不含"。
+ * - **计数用结构选择器**：`locator(选择器, { hasText })` 的 `toHaveCount(1)`，
+ *   不用全局 `getByText`（中文文案在 SVG `<title>`、图例、嵌套容器里会重复）。
+ * - **锚点卡片按 Tab 分别指定**：等的是"这个 Tab 真的渲染出来了"的证据，
+ *   不是固定 sleep。
+ *
+ * 预期红（Phase 0 完成判据）：第 3 条**立即失败**（副标题字面量 ≠ Tab labels 拼接）。
+ * 第 1、2 条在**当前分支**上已经是绿的——「数据版图」卡片早于本计划落地前就被
+ * `1efe65a chore(market): 移除「数据版图」静态矩阵` 移出市场页（只保留在 landing）。
+ * 该事实写入 task-23 报告：0.4 的红是 1 条不是 3 条，原因是**计划撰写时间早于那次移除**，
+ * 不是断言写错。保留第 1 条断言，它的价值转为"回归闸"（不许把矩阵再加回工作台）。
+ */
+
+const expect = baseExpect.configure({ timeout: 15_000 });
+
+interface TabCase {
+  /** Tab label（与 `market/index.tsx` 的 items[].label 同源） */
+  label: string;
+  /** 该 Tab 渲染后必然出现的**文案锚点**（用来等请求终态，而非固定 sleep） */
+  anchor: string;
+}
+
+const TABS: TabCase[] = [
+  { label: "指数总览", anchor: "全球市场" },
+  { label: "A股全景", anchor: "申万行业网格" },
+  { label: "资金流向", anchor: "资金" },
+  { label: "数据面", anchor: "龙虎榜" },
+  { label: "短线情绪", anchor: "涨停" },
+];
+
+/** 等 Tab 真正渲染：networkidle（有界）+ 锚点文案出现。两者都有界，避免 flaky。 */
+async function settledOn(page: import("@playwright/test").Page, tab: string, anchor: string) {
+  await page.getByTestId("market-tabs").getByRole("tab", { name: tab, exact: true }).click();
+  await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+  await expect(page.getByText(anchor, { exact: false }).first()).toBeVisible();
+}
+
+test.describe("/market 工作台：去重复与口径同源", () => {
+  test("每个 Tab 下页面文本都不含「数据版图」", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/market", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+
+    for (const { label, anchor } of TABS) {
+      await settledOn(page, label, anchor);
+      // 等请求终态之后再断言「不含」——否则 react-query loading 窗口内恒真（假绿）
+      await expect(
+        page.getByText("数据版图", { exact: false }),
+        `Tab「${label}」下仍渲染「数据版图」——它应迁出工作台（§2.1）`
+      ).toHaveCount(0);
+    }
+  });
+
+  test("「申万行业网格」标题在页面内只出现 1 次（31 行业不得渲染两遍）", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/market?tab=panorama", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+
+    const gridTitle = page.locator(".ant-card-head-title", { hasText: "申万行业网格" });
+    await expect(gridTitle).toBeVisible(); // 结构性锚点：先确认等到了目标卡片
+    expect(
+      await gridTitle.count(),
+      "「申万行业网格」标题出现次数 ≠ 1 —— 31 个行业被等价渲染了两遍（§2.2 要求二选一）"
+    ).toBe(1);
+  });
+
+  test("market-page-head 副标题 === Tab labels 以 ` · ` 拼接（同源）", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/market", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+
+    // Tab labels 只取 `market-tabs` 自己的 nav（页面里还有「亚洲/美洲」等嵌套 Segmented，
+    // 全局 `.ant-tabs-tab` 会把它们一起抓进来）
+    const labels = (
+      await page.locator('[data-testid="market-tabs"] > .ant-tabs-nav .ant-tabs-tab').allInnerTexts()
+    ).map((t) => t.trim());
+    expect(labels.length, "未能读到 Tab labels（选择器失效）").toBeGreaterThan(0);
+
+    const subtitle = (await page.locator(".market-page-head .ant-typography-secondary").innerText()).trim();
+    expect(
+      subtitle,
+      `副标题与 Tab 不同源：副标题 =「${subtitle}」，Tab labels 拼接 =「${labels.join(" · ")}」` +
+        `（§2.3 要求 items.map(i => i.label).join(" · ")）`
+    ).toBe(labels.join(" · "));
+  });
+});

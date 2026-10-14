@@ -23,10 +23,35 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const css = readFileSync(join(root, "src/app/styles/theme.css"), "utf8");
 const themeTsSource = readFileSync(join(root, "src/app/theme.ts"), "utf8");
 
+let failed = 0;
+/** 统一失败记账（解析错误与"未定义变量"走同一条路径，避免两套计数各说各话）。 */
+const fail = (msg) => {
+  console.log(`FAIL ${msg}`);
+  failed += 1;
+};
+
 function blockOf(source, marker) {
   const start = source.indexOf(marker);
   if (start === -1) throw new Error(`marker not found: ${marker}`);
   return source.slice(start, source.indexOf("}", start));
+}
+/** 记账版取块：块不存在 → 记一次失败并返回 null，**不中断**后续断言（见 §8.1 的"每组各自报红"）。 */
+function blockOrFail(source, marker, label) {
+  try {
+    return blockOf(source, marker);
+  } catch {
+    fail(`${label}：theme.css 找不到 \`${marker}\` 块 —— 该块的全部断言本轮无法执行`);
+    return null;
+  }
+}
+/** 记账版取色：取不到 → 记一次失败并返回 null（对比度/一致性断言据此跳过，不抛异常）。 */
+function colorOrFail(text, name, label) {
+  try {
+    return varOf(text, name);
+  } catch {
+    fail(`${label}：theme.css 缺少 --${name}（未定义即无法算对比度，按失败记账）`);
+    return null;
+  }
 }
 function varOf(text, name) {
   const m = text.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`));
@@ -65,12 +90,6 @@ const MODES = [
   { label: "dark", marker: '[data-theme="dark"]', tsMode: "dark", surfaces: SURFACES },
 ];
 
-let failed = 0;
-/** 统一失败记账（解析错误与"未定义变量"走同一条路径，避免两套计数各说各话）。 */
-const fail = (msg) => {
-  console.log(`FAIL ${msg}`);
-  failed += 1;
-};
 for (const { label, marker, tsMode, surfaces } of MODES) {
   const b = blockOf(css, marker);
   // `up`/`down`（价格方向）+ `sent-extreme-cold`/`sent-extreme-hot`（/sentiment 情绪分位极值带）：
@@ -217,6 +236,112 @@ if (fallbackOnlyRefs.length > 0) {
     `  ⚠ ${fallbackOnlyRefs.length} 处引用的变量未在任何文件里声明，但**该处**提供了兜底值（不失败）：`
   );
   for (const r of fallbackOnlyRefs) console.log(`      var(${r.name}) @ ${r.rel}:${r.line}`);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// §8.1（Phase 0.5）设计系统门禁五组断言
+//
+// 为什么要有这一段：`--mag-*`（量级色阶）/ `--font-ui` / `--font-num` /
+// `prefers-reduced-motion` / `:focus-visible` 是本轮设计整改的**表达契约**。
+// 它们没有任何运行时消费方会在缺失时报错——漏掉一级 `--mag-*` 只是"某些格子成了
+// 继承色"，漏掉 reduced-motion 只是"动效还在转"——不测就等于没有契约。
+// 故按 §8.1 五条机械断言，全部落在本文件（已在 `npm run check:design`）。
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── §8.1-1/2：`--mag-0..4` 三块齐全 + 对比度 ≥4.5 + theme.ts 同名数组一致 ──
+//
+// 语义：`--mag-0..4` 是**数量型中性色阶**（不用 accent 编码"有多少"）。
+// 数量编码必须用中性灰阶的原因见计划 §Why now：accent 叠白 alpha 后
+// 0.5→2.10:1、0.85→3.81:1，都不过 AA；且 6/31 瓦片命中"白字分支"→ 颜色本身在表达数量。
+// 文字**一律 --text-primary**（不再有白字分支），故对比度逐级对 --text-primary 断言。
+const MAG_LEVELS = [0, 1, 2, 3, 4];
+/** theme.ts 的 `mag: [...]` 数组（light/dark 各一份）——与 CSS 逐项比对，防"两套色阶各说各话" */
+function tsMagArray(mode) {
+  const start = themeTsSource.indexOf(`${mode}: {`);
+  if (start === -1) return null;
+  const sec = themeTsSource.slice(start, themeTsSource.indexOf("},", start));
+  const m = sec.match(/mag:\s*\[([^\]]*)\]/);
+  if (!m) return null;
+  return [...m[1].matchAll(/"?(#[0-9a-fA-F]{6})"?/g)].map((x) => x[1].toLowerCase());
+}
+const MAG_MODES = [
+  { label: "fallback", marker: ":root {", tsMode: "light" },
+  { label: "light", marker: '[data-theme="light"]', tsMode: "light" },
+  { label: "dark", marker: '[data-theme="dark"]', tsMode: "dark" },
+];
+for (const { label, marker, tsMode } of MAG_MODES) {
+  const b = blockOrFail(css, marker, `§8.1-1 ${label}`);
+  if (b === null) continue;
+  const textPrimary = colorOrFail(b, "text-primary", `§8.1-2 ${label}`);
+  const tsMag = tsMagArray(tsMode);
+  if (tsMag === null) {
+    fail(`§8.1-1 theme.ts(${tsMode}) 缺少 \`mag: [\` 数组 —— 量级色阶必须是同一契约的两侧`);
+  } else if (tsMag.length !== MAG_LEVELS.length) {
+    fail(`§8.1-1 theme.ts(${tsMode}).mag 级数 = ${tsMag.length}，契约 5 级（--mag-0..4）`);
+  }
+  for (const level of MAG_LEVELS) {
+    const hex = colorOrFail(b, `mag-${level}`, `§8.1-1 ${label}`);
+    if (hex === null) continue;
+    if (tsMag && tsMag[level] !== undefined && tsMag[level] !== hex) {
+      fail(`§8.1-1 ${label} mag-${level}: theme.ts(${tsMode})(${tsMag[level]}) != theme.css(${hex})`);
+    }
+    if (textPrimary === null) continue;
+    const ratio = contrast(hex, textPrimary);
+    const ok = ratio >= 4.5;
+    console.log(
+      `${ok ? "PASS" : "FAIL"} §8.1-2 ${label} --mag-${level} ${hex} on ${textPrimary}(text-primary): ${ratio.toFixed(2)}:1`
+    );
+    if (!ok) failed += 1;
+  }
+  if (tsMag && tsMag.length === MAG_LEVELS.length) {
+    console.log(`PASS §8.1-1 ${label} --mag-0..4 齐全且与 theme.ts(${tsMode}).mag 逐项一致`);
+  }
+}
+
+// ── §8.1-3：`--font-ui` / `--font-num` 存在 + `theme.ts` 的 `token.fontFamily` 引用 --font-ui ──
+for (const { label, marker } of MAG_MODES) {
+  const b = blockOrFail(css, marker, `§8.1-3 ${label}`);
+  if (!b) continue;
+  for (const name of ["font-ui", "font-num"]) {
+    if (new RegExp(`--${name}\\s*:`).test(b)) console.log(`PASS §8.1-3 ${label} --${name} 已定义`);
+    else fail(`§8.1-3 ${label} 缺少 --${name}（字体族/数字族分离是本轮 token 契约）`);
+  }
+}
+if (/fontFamily:\s*[`"']?var\(--font-ui\)/.test(themeTsSource)) {
+  console.log("PASS §8.1-3 theme.ts 的 token.fontFamily 引用 var(--font-ui)");
+} else {
+  fail("§8.1-3 theme.ts 的 token.fontFamily 未引用 var(--font-ui)（AntD 会退回默认字体族）");
+}
+
+// ── §8.1-4：`theme.css` 含 reduced-motion 全局降级 + `:focus-visible` 全局焦点环 ──
+if (/@media\s*\(prefers-reduced-motion:\s*reduce\)/.test(css)) {
+  console.log("PASS §8.1-4 theme.css 定义 @media (prefers-reduced-motion: reduce) 全局降级");
+} else {
+  fail("§8.1-4 theme.css 缺少 @media (prefers-reduced-motion: reduce) —— 无限 shimmer / hover 上浮不降级");
+}
+if (/:focus-visible\s*\{/.test(stripCssComments(css))) {
+  console.log("PASS §8.1-4 theme.css 定义全局 :focus-visible 焦点环");
+} else {
+  fail("§8.1-4 theme.css 缺少全局 :focus-visible 焦点环（键盘可达性）");
+}
+
+// ── §8.1-5：自绘 `fontVariantNumeric` / `font-variant-numeric` ≤1（只允许 `.num` 定义处）──
+const NUM_DECL = /fontVariantNumeric|font-variant-numeric/;
+const numDecls = [];
+for (const file of sourceFiles) {
+  const rel = file.slice(root.length + 1);
+  const raw = readFileSync(file, "utf8");
+  for (const [idx, line] of raw.split("\n").entries()) {
+    if (NUM_DECL.test(line)) numDecls.push(`${rel}:${idx + 1}`);
+  }
+}
+if (numDecls.length <= 1) {
+  console.log(`PASS §8.1-5 自绘等宽数字声明 = ${numDecls.length} 处（契约 ≤1，只允许 .num 定义处）`);
+} else {
+  fail(
+    `§8.1-5 自绘 fontVariantNumeric/font-variant-numeric = ${numDecls.length} 处，契约 ≤1` +
+      `（应统一走 \`.num\`；违规处：${numDecls.slice(0, 8).join("、")}${numDecls.length > 8 ? " …" : ""}）`
+  );
 }
 
 if (failed) {
