@@ -10,11 +10,13 @@ import {
   ExperimentOutlined,
   SafetyCertificateOutlined,
   SwapOutlined,
+  ToolOutlined,
 } from "@ant-design/icons";
 import { Outlet, useNavigate } from "react-router-dom";
 import { SearchBar } from "@/features/search/components/SearchBar";
 import { UserMenu, useAuthStore } from "@/features/auth";
 import { ThemeToggle } from "@/shared/ui";
+import { useMediaQuery } from "@/shared/ui/useMediaQuery";
 import { ModuleSideNav, NavTree } from "@/features/nav";
 import type { NavItem, NavNode, NavVisibility } from "@/features/nav";
 import { useCallback, useMemo, type ReactNode } from "react";
@@ -51,7 +53,7 @@ const NAV_PRESENTATION: Record<string, { icon: ReactNode; visibility: NavVisibil
   "/trade": { icon: <SwapOutlined />, visibility: { kind: "authenticated" } },
 };
 
-/** 由清单的 `NAV_ROOTS`（path + 标题）+ 上表的图标/可见性合成顶栏数据 */
+/** 由清单的 `NAV_ROOTS`（path + 标题）+ 上表的图标/可见性合成**全部 10 个目的地** */
 const TOP_NAV: NavItem[] = NAV_ROOTS.map((nav) => {
   const presentation = NAV_PRESENTATION[nav.path];
   if (!presentation) {
@@ -64,6 +66,62 @@ const TOP_NAV: NavItem[] = NAV_ROOTS.map((nav) => {
   };
 });
 
+/** 每个目的地自己的图标与可见性（path → 展示层配置），供分组装配时逐项取用 */
+const PRESENTATION_BY_PATH = new Map(TOP_NAV.map((item) => [item.nav.path as string, item]));
+
+/**
+ * 顶栏的**展示形态**（只改呈现，不改路由契约）：4 个平铺项 + 2 个分组下拉。
+ *
+ * ```
+ * 市场 · 资讯 · 行业分析 · 公司分析 │ 研究▾(宏观分析 · 情绪分析 · 价值网图谱) │ 工具▾(策略引擎 · 风险管理 · 交易执行)
+ * ```
+ *
+ * **为什么分组**（owner 裁定，2026-10-15）：10 个平铺项在 1280/1440 下**物理上放不下**
+ * —— AntD 把放不下的项折进 `...` 溢出菜单，于是「策略引擎 / 风险管理 / 交易执行」这些
+ * 入口在一级导航里**根本看不见**（要先点 `...` 才知道存在）。owner 否决了「搬去左侧栏」
+ * 的方案（历史上试过并已回退，见 `28d4ed3`），改为**浅平铺 + 下拉**：保留顶栏形态，
+ * 同时让"没有 `...` 溢出"成为可机械断言的事实。
+ *
+ * **硬不变量**：`GROUPS` 里出现的目的地之和必须**恰好覆盖 `NAV_ROOTS` 的 10 条**
+ * （不多、不少、不重复）—— 由模块初始化时的 `assertNavShapeComplete()` 机械核对，
+ * 以后往 `NAV_ROOTS` 加导航却忘了登记分组会**在启动时显式抛错**，而不是静默丢项。
+ *
+ * **命名**：IA 文档 §3 的「全局工具」特指搜索 / 主题 / 用户菜单（**不进导航**，见下方
+ * `Header` 右侧那三个组件）。本文件的「工具」分组只装 策略引擎 / 风险管理 / 交易执行
+ * 这三个**导航目的地**，两者刻意用不同概念名 + 分组带图标加以区分。
+ */
+type NavGroupEntry = { kind: "item"; path: string } | { kind: "group"; key: string; title: string; paths: string[] };
+
+const NAV_GROUPS: NavGroupEntry[] = [
+  { kind: "item", path: "/market" },
+  { kind: "item", path: "/news" },
+  { kind: "item", path: "/industry" },
+  { kind: "item", path: "/company" },
+  { kind: "group", key: "nav-group-research", title: "研究", paths: ["/macro", "/sentiment", "/valuegraph"] },
+  { kind: "group", key: "nav-group-tools", title: "工具", paths: ["/strategy", "/risk", "/trade"] },
+];
+
+/**
+ * 分组形态的**完备性核对**：`NAV_GROUPS` 覆盖的目的地集合必须等于 `NAV_ROOTS` 的路径集合。
+ *
+ * 放在模块初始化（而不是只在 e2e 里）是刻意的——"新增导航忘了登记分组"这类漂移如果只在
+ * e2e 里被抓，`npm run build` 与开发态都会静默通过，用户先看到的是"少了一个入口"。
+ */
+function assertNavShapeComplete() {
+  const declared = NAV_GROUPS.flatMap((entry) => (entry.kind === "item" ? [entry.path] : entry.paths));
+  const expected = NAV_ROOTS.map((nav) => nav.path as string);
+  const missing = expected.filter((path) => !declared.includes(path));
+  const unknown = declared.filter((path) => !expected.includes(path));
+  const duplicated = declared.filter((path, index) => declared.indexOf(path) !== index);
+  if (missing.length || unknown.length || duplicated.length) {
+    throw new Error(
+      `顶栏分组形态与 NAV_ROOTS 不一致（丢失 ${missing.join("/") || "无"} · ` +
+        `多余 ${unknown.join("/") || "无"} · 重复 ${duplicated.join("/") || "无"}）`
+    );
+  }
+}
+assertNavShapeComplete();
+
 /**
  * 模块内二级/三级树的 payload。本任务**不下发任何模块树**（后续由各模块配置 / 后端下发），
  * 空数组 → 左侧树整块不渲染（`ModuleSideNav` 的契约）。提到模块级是为了避免每次渲染
@@ -75,6 +133,12 @@ export function MainLayout() {
   const navigate = useNavigate();
   const { hasPermission } = useAuthStore();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  /**
+   * ≥1024 时**关掉顶栏导航的自动折叠**（AntD Menu 的自测量塌陷循环，见 `NavTreeProps.disabledOverflow`
+   * 的说明：实测它会把自己收缩到 130px 且永不恢复）。窄视口保留折叠——否则会破坏 B2 的
+   * "窄屏不横向溢出"。1024 这个阈值沿用 IA §3 既有的导航形态断点。
+   */
+  const navMayNotFit = useMediaQuery("(max-width: 1023px)");
 
   const visible = useCallback(
     (visibility: NavVisibility) => {
@@ -91,10 +155,25 @@ export function MainLayout() {
     [hasPermission, isAuthenticated]
   );
 
-  const navNodes = useMemo(
-    () => TOP_NAV.filter((item) => visible(item.visibility)).map((item) => item.nav),
-    [visible]
-  );
+  const navNodes = useMemo(() => {
+    const itemNode = (path: string): NavNode | undefined => {
+      const item = PRESENTATION_BY_PATH.get(path);
+      if (!item) return undefined; // 由 assertNavShapeComplete 在模块初始化时挡掉，这里只为类型收敛
+      return visible(item.visibility) ? item.nav : undefined;
+    };
+    return NAV_GROUPS.map((entry): NavNode | undefined => {
+      if (entry.kind === "item") return itemNode(entry.path);
+      // 分组：只渲染可见的子项。**一个子项都不可见时整组不渲染**——
+      // 否则会留下一个"点开是空的"下拉，那是比"看不见入口"更糟的假入口。
+      const children = entry.paths.map(itemNode).filter((node): node is NavNode => !!node);
+      if (children.length === 0) return undefined;
+      // 分组节点自身**无 path**（不可跳转，只负责展开）；图标 + 原生 title 既让分组与
+      // 「全局工具」在视觉上区分开，也避免只有一个图标的分组悬停时无从判断其含义。
+      const groupNode: NavNode = { key: entry.key, title: entry.title, children };
+      if (entry.key === "nav-group-tools") groupNode.icon = <ToolOutlined />;
+      return groupNode;
+    }).filter((node): node is NavNode => !!node);
+  }, [visible]);
 
   return (
     <Layout style={{ minHeight: "100vh", background: "var(--bg-page)" }}>
@@ -102,6 +181,7 @@ export function MainLayout() {
         style={{
           display: "flex",
           alignItems: "center",
+          flexWrap: "nowrap",
           gap: 20,
           padding: "0 24px",
           borderBottom: "1px solid var(--border)",
@@ -113,27 +193,45 @@ export function MainLayout() {
       >
         <Typography.Title
           level={4}
-          style={{ margin: 0, whiteSpace: "nowrap", color: "var(--accent)", cursor: "pointer" }}
+          style={{ margin: 0, whiteSpace: "nowrap", color: "var(--accent)", cursor: "pointer", flex: "0 0 auto" }}
           onClick={() => navigate("/market")}
         >
           StockBot
         </Typography.Title>
-        {/* 10 个一级导航（IA §1 顺序）；节点数据来自上方 TOP_NAV，组件本身不含业务知识。
+        {/* 一级导航（IA §1 的 10 个目的地，形态见上方 `NAV_GROUPS`：4 平铺 + 2 分组）。
             ⚠️ 外壳带 `data-testid="primary-nav"`：`e2e/nav.spec.ts` 以它为作用域断言导航项。
             该 testid 与 `data-nav-label` 是 **E2E 契约锚点**，换布局形态时必须保留，
             否则断言会从"查可见性"退化成"找不到锚点"。
             历史：设计整改 Phase 1 曾按 §0-A 裁定 A1 把导航移入左侧图标栏，
-            owner 实测后**否决 A1、要求保持顶栏**，故此处已回退（Phase 3/4 的成果不受影响）。 */}
-        <div data-testid="primary-nav" style={{ flex: 1, minWidth: 0, display: "flex" }}>
+            owner 实测后**否决 A1、要求保持顶栏**，故此处已回退（Phase 3/4 的成果不受影响）。
+            宽度：**导航 `flexShrink: 0`**（内容多宽就多宽，不接受被压缩），
+            「可伸缩」的角色**只留给搜索框**（`flex: 1 1 240px`）。
+            ⚠️ **不要给导航 `minWidth: 0`，也不要让它当那个被压缩的项**：AntD 的 `horizontal`
+            Menu 用 `ResizeObserver` 观察**自身**并据此决定把项折进 `...`；只要祖先把它压到
+            ~0 宽（`min-width: 0`，或让它参与 flex 收缩），它就会在首次测量时读到「可用宽度≈0」，
+            于是把菜单**自身收缩到只剩 `...`**——实测 `导航宽=130px`、顶层 `...` 常驻，
+            正是本次要消除的缺陷。（此处踩过一次：原先写 `flex: "0 1 auto"`，
+            搜索框 `flex: 1 1 240px` 在 1280 下把导航压成 130px。） */}
+        <div
+          data-testid="primary-nav"
+          style={{ flex: "0 1 auto", minWidth: 0, display: "flex" }}
+        >
           <NavTree
             nodes={navNodes}
             mode="horizontal"
-            style={{ flex: 1, border: "none", background: "transparent", minWidth: 0 }}
+            style={{ flex: "0 0 auto", border: "none", background: "transparent" }}
+            disabledOverflow={!navMayNotFit}
             data-testid="top-nav"
           />
         </div>
-        {/* 右侧全局工具（IA §3）：搜索 / 主题 / 用户菜单——三者均为既有组件，本任务只保留位置 */}
-        <SearchBar />
+        {/* 右侧全局工具（IA §3）：搜索 / 主题 / 用户菜单——三者均为既有组件，本任务只保留位置。
+            搜索是产品的**主入口**，故给它 `flex: 1 1 240px`（顶栏里唯一可伸缩的控件）
+            + `maxWidth: 560`（宽屏下不至于宽到失衡），其余控件保持固定宽度。
+            ⚠️ 不能把 `工具▾` 分组与这里的「全局工具」混为一谈：前者是导航目的地
+            （策略 / 风险 / 交易），后者是搜索 / 主题 / 用户菜单，IA §3 明确两者分属不同概念。 */}
+        <div style={{ flex: "1 1 240px", minWidth: 0, maxWidth: 560, display: "flex" }}>
+          <SearchBar />
+        </div>
         <ThemeToggle />
         <UserMenu />
       </Header>

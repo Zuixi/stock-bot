@@ -25,6 +25,16 @@ export interface NavTreeProps {
   nodes: NavNode[];
   /** `horizontal` = 顶栏一级导航；`inline` = 左侧折叠树（可折展，切换一级导航时整棵树替换） */
   mode?: "horizontal" | "inline";
+  /**
+   * 关掉 AntD `horizontal` Menu 的**自动折叠**（`...` 溢出菜单）。
+   *
+   * 为什么需要它（实测，2026-10-15）：AntD 的横向 Menu 用 `ResizeObserver` 观察**自身**，
+   * 首次测量若读到 ~0 就把自己收缩到只剩 `...`（实测 130px），而收缩后宽度变成 130 ⇒
+   * **再也不会重测回去**（自反馈循环）。顶栏一级导航从 10 项平铺收敛为「4 平铺 + 2 分组」后
+   * 恒定触发该循环，表现为"导航整条消失"。顶上「不再溢出」是本次目标，故在**足够宽的视口**
+   * 直接禁用自动折叠，宽度交给 CSS 掌控；窄视口仍保留折叠（否则会破坏 B2 的"窄屏不横向溢出"）。
+   */
+  disabledOverflow?: boolean;
   /** 默认展开的节点 key（仅 `inline` 模式有意义） */
   defaultOpenKeys?: string[];
   /**
@@ -64,7 +74,10 @@ function toMenuItems(
     // 在面包屑/页脚/卡片里重复出现，全局 `getByText` 必然 strict-mode violation。
     // 把标题同时写成属性 ⇒ 断言可以"按作用域 + 唯一锚点"计数与判可见性，且与布局形态解耦。
     const label = (
-      <span data-nav-label={node.title}>
+      // `title` 是**原生**悬停提示（不是 antd 的 `Tooltip`）：分组节点可以只靠图标区分
+      // （见 `MainLayout` 的「工具」分组），悬停时必须还能读出分组名。原生属性不引入
+      // 额外的浮层 DOM，也不会与 antd Menu 自带的 title 行为叠加。
+      <span data-nav-label={node.title} title={node.title}>
         {node.title}
         {node.badge ? <CountBadge badge={node.badge} /> : null}
       </span>
@@ -96,6 +109,7 @@ export function NavTree({
   defaultOpenKeys,
   inlineCollapsed = false,
   navigateOnLeafClick = true,
+  disabledOverflow = false,
   style,
   "data-testid": dataTestId,
 }: NavTreeProps) {
@@ -118,6 +132,8 @@ export function NavTree({
       // ⚠️ AntD 要求 `inlineCollapsed` 与 `mode="inline"` 成对出现，否则折叠态不生效
       //    （`vertical` 模式没有"只剩图标"这一形态）。
       inlineCollapsed={mode === "inline" ? inlineCollapsed : undefined}
+      // `disabledOverflow` 只在 horizontal 有意义（inline/vertical 本就没有 `...` 折叠）
+      disabledOverflow={mode === "horizontal" ? disabledOverflow : undefined}
       style={style}
       data-testid={dataTestId}
     />
