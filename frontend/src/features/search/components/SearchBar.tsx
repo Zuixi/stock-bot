@@ -53,7 +53,10 @@ export function SearchBar() {
       }}
       onSearch={setKeyword}
       value={keyword}
-      style={{ width: "100%" }}
+      // 固定 220px：顶栏的剩余空间由**导航外壳**吃掉（导航靠右），搜索框不再弹性伸缩。
+      // （P0 一度改成 `width: "100%"` 让它成为"最宽控件"，但那一版把导航收敛进了下拉；
+      //   owner 要求 10 项平铺 + 导航靠右后，两者冲突，故恢复固定宽度。）
+      style={{ width: 220 }}
     >
       <Input
         prefix={<SearchOutlined />}
