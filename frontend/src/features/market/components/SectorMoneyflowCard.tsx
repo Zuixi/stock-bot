@@ -175,9 +175,23 @@ function ContinuityStrip({ trends }: { trends: SectorTrends }) {
   );
 }
 
-export function SectorMoneyflowCard() {
+export interface SectorMoneyflowCardProps {
+  /**
+   * `compact`（P1-1 第二轮）：把「板块连续性」区收进一个**默认收起**的折叠开关。
+   *
+   * 为什么需要它（实测，不是审美）：1440 下本卡高 **656px**，同排的涨跌分布 / 热力图只有
+   * **352 / 382px**（差 304px），多出来的**全部**是连续性区（`sector-continuity` 的高度）。
+   * 三块并排时这一块像"多长了一条腿"。`compact` 下连续性区**一字不删**：展开后与 `full`
+   * 变体逐字相同（同一 `ContinuityStrip`、同一口径标注），只是默认不占版面。
+   * `/market` 的 A股全景分区用 `compact`；其它调用方（若将来有）默认仍是 `full`。
+   */
+  variant?: "full" | "compact";
+}
+
+export function SectorMoneyflowCard({ variant = "full" }: SectorMoneyflowCardProps) {
   const { colors } = useTheme();
   const [dimension, setDimension] = useState<SectorDimension>("industry");
+  const [showContinuity, setShowContinuity] = useState(false);
   const { refetchInterval } = useMarketPolling();
   const { data: moneyflow, isLoading } = useQuery({
     queryKey: ["market", "sector-moneyflow", dimension],
@@ -229,7 +243,28 @@ export function SectorMoneyflowCard() {
             暂无资金流数据（交易日盘中自动更新）
           </div>
         )}
-        {trends ? <ContinuityStrip trends={trends} /> : null}
+        {/* compact：连续性区收进一行折叠开关（默认收起）。开关本身不念数，
+            只说明"这里有什么 + 窗口多大"，读数一律留在展开后的 ContinuityStrip 里
+            （同一事实不写两处，避免折叠态与展开态数字打架）。 */}
+        {variant === "compact" && trends ? (
+          <button
+            type="button"
+            className="mf-continuity-toggle"
+            data-testid="sector-continuity-toggle"
+            aria-expanded={showContinuity}
+            onClick={() => setShowContinuity((open) => !open)}
+          >
+            <span className="mf-continuity-toggle__caret" aria-hidden="true">
+              {showContinuity ? "▾" : "▸"}
+            </span>
+            <span className="mf-continuity-toggle__title">板块连续性</span>
+            <span className="mf-continuity-toggle__hint">
+              近 {trends.window.samples} 个完整日 · 上榜口径 Top {trends.topN}
+            </span>
+            <span className="mf-continuity-toggle__action">{showContinuity ? "收起" : "展开"}</span>
+          </button>
+        ) : null}
+        {trends && (variant === "full" || showContinuity) ? <ContinuityStrip trends={trends} /> : null}
       </Spin>
     </Card>
   );

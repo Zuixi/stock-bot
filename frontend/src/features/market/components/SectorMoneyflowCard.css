@@ -80,3 +80,52 @@
   font-size: 11.5px;
   color: var(--text-secondary);
 }
+
+/* ---- compact 变体的折叠开关（P1-1 第二轮）----
+ * 行文本全是静态说明 + 窗口读数，**不带任何数字读数**（读数只在展开后的 ContinuityStrip 里）。
+ * `flex-wrap: wrap` + 提示串 `max-width:100%` + 省略号：同 `.mf-continuity__tag` 的教训
+ * ——不可压缩的 `nowrap` 子项会把卡片/Col 一路顶宽成整页横向溢出。 */
+.mf-continuity-toggle {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 0 0;
+  border: 0;
+  border-top: 1px dashed var(--border);
+  background: none;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mf-continuity-toggle:hover {
+  color: var(--text-primary);
+}
+
+/* 键盘聚焦必须可见（WCAG 2.4.7；同 `.hot-board-row__button` 的处置） */
+.mf-continuity-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mf-continuity-toggle__title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mf-continuity-toggle__hint {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mf-continuity-toggle__action {
+  margin-left: auto;
+  color: var(--accent);
+}

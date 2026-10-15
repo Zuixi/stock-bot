@@ -112,7 +112,17 @@ test("限价缺失时显示原因而非空态", async ({ page }) => {
   await page.goto("/market");
   await page.getByRole("tab", { name: "短线情绪" }).click();
   await expect(page.getByText(/涨跌停价尚未回补/)).toBeVisible();
-  await expect(page.getByText("暂无数据")).toHaveCount(0);
+  // P1-1 第二轮：本行**收进短线情绪分区**再数（断言没收窄语义，只是变精确）。
+  // 页级 Tab 时代这里是全页 `getByText("暂无数据")` —— 当时除"指数总览"外只有本 Tab 的
+  // 面板挂载在 DOM 里，全页 ≈ 本 Tab。第二轮改成**五个分区堆叠同屏**后，另外四个分区的
+  // 空态（它们各自的端点在本用例里**没有** mock，打的是活栈）也会落进全页计数：
+  // 实测在全量并发下命中过一次「别的分区空态」→ 假红（单跑 912ms 绿、全量红）。
+  // 本用例要守的是「**本分区**用降级原因代替空态」，故作用域必须落在本分区；
+  // 负向断言仍锚在上面那条正向断言（降级文案可见）之后，不是恒真。
+  await expect(
+    page.locator('[data-testid="market-section-sentiment"]').getByText("暂无数据"),
+    "短线情绪分区在限价缺失时渲染了通用空态（应为降级原因）"
+  ).toHaveCount(0);
 });
 
 test("单端点失败不牵连邻区", async ({ page }) => {

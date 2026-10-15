@@ -58,14 +58,19 @@ function trackMarketRequests(page: Page): Map<string, number> {
 
 /** 进 /market 并让两组卡都挂载、首批请求都落地（避免把首次请求算进轮询增量）。 */
 async function mountBothCardGroups(page: Page) {
+  // P1-1 第二轮：分区**堆叠** ⇒「A股涨跌分布」的 `distribution` 请求在首屏（`goto` 阶段）
+  // 就发起，不再等用户点「A股全景」。故**先注册等待、再导航**——反过来注册会去等一次
+  // 永远不会再来的请求（本页 A 股卡休市不轮询）→ 假红超时。等待的对象没变，只是时机变了。
+  const distributionLanded = page.waitForResponse((r) => r.url().includes("/api/v1/market/distribution"));
   await page.goto("/market");
   await expect15s(page.getByRole("tab", { name: "指数总览" })).toBeVisible();
   // 用卡头标题定位，避免撞上卡体内同名的文本节点（strict mode 会双命中）
   await expect15s(page.locator(".ant-card-head-title").filter({ hasText: "全球指数" }).first()).toBeVisible();
-
-  const distributionLanded = page.waitForResponse((r) => r.url().includes("/api/v1/market/distribution"));
-  await page.getByRole("tab", { name: "A股全景" }).click();
   await distributionLanded;
+
+  // 仍然点一次「A股全景」：它是用户路径的一部分（堆叠后点击 = 滚到该分区），
+  // 顺带证明 `role=tab` 的分区导航在这条路径上没坏
+  await page.getByRole("tab", { name: "A股全景" }).click();
   await expect15s(page.locator(".ant-card").filter({ hasText: "A股涨跌分布" })).toBeVisible();
 }
 

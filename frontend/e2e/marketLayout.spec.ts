@@ -137,11 +137,15 @@ test.describe("/market 工作台：去重复与口径同源", () => {
 /**
  * P1-1 第一刀：A股全景第一行的三面板并排（对标产品行情中心的「三面板一行」形态）。
  *
- * **作用域纪律**（计划 §1 的已知坑）：`板块主力资金流` 在 `资金流向` Tab 里**也有一张**
- * （本轮刻意保留页级 Tab，属已知重复，报告里明写）。因此这里的定位器一律先收进
- * `[data-testid="market-section-panorama"]` 再数卡 —— 全局 `getByText` /
- * `.ant-card:has-text("板块主力资金流")` 会同时命中另一个 Tab 的同名卡（AntD 把非激活
- * Tab 的 children 渲染在 `display:none` 容器里，仍留在 DOM 中），计数与几何都会失真。
+ * **作用域纪律**（计划 §1 的已知坑）：`板块主力资金流` 这个名字在本页会出现**多次**
+ * —— 分区维度条里写着「③ 板块主力资金流 · 末完整日净流入 Top10」，卡片卡头也写着它。
+ * 因此这里的定位器一律先收进 `[data-testid="market-section-panorama"]` 再数卡 ——
+ * 全局 `getByText` 会同时命中维度条文案与卡头（中文文案在 SVG `<title>`、图例、嵌套容器里
+ * 也会重复），计数与几何都会失真。
+ *
+ * P1-1 第二轮更新：本文件原先还记着「资金流向 Tab 里也有一张同名牌，属已知重复」——
+ * 那条**已经作废**（`SectorMoneyflowCard` 现在全页**恰好一张**，见下方「第二轮」用例）。
+ * 作用域仍必须保留，理由换成上面那条（同名的维度条文案），与"两个 Tab 各一张"无关了。
  */
 const PANORAMA_SECTION = '[data-testid="market-section-panorama"]';
 
@@ -260,5 +264,201 @@ test.describe("P1-1：A股全景第一行三面板（并排 / 堆叠 / 各自口
         `面板「${PANORAMA_PANEL_TITLES[i]}」超出 390 视口（x+w = ${Math.round(box.x + box.width)}）`
       ).toBeLessThanOrEqual(391);
     }
+  });
+});
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * P1-1 第二轮：页级 Tab 的**内容**改为五个分区**堆叠**，Tab 条降级为分区导航。
+ *
+ * 本组守住三件本轮新增/修复的事（都不许靠"看截图"验收）：
+ * 1. 五个分区**同屏**（各自的 `data-testid` 同时在 DOM **且可见**、纵向顺序 = 导航顺序）——
+ *    这正是"一屏读到多个视角"与"页级 Tab 一次只挂一个面板"的分野；
+ * 2. `SectorMoneyflowCard` **全页恰好一张**：第一刀遗留在「A股全景」与「资金流向」各渲染
+ *    一张的重复，本轮去重（留在它作为 ③ 号面板的那个分区）；
+ * 3. 1440 下 A股全景第一行三块面板**底边齐平**（`getBoundingClientRect().bottom` 极差 ≤ 80px）。
+ *    第一刀实测 **656 / 352 / 382**（极差 **304px**，多出来的全是「板块连续性」区）；
+ *    现在该区收进 `variant="compact"` 的**默认收起**折叠开关（内容一字未删，展开即回）。
+ *
+ * 断言纪律：每条计数/阈值断言都配**正对照**——计数类靠"克隆一个 → 必须 +1"，
+ * 几何类靠"临时加高一块 → 同一把尺子必须超阈值"。没有正对照的计数/阈值断言
+ * 无法与"选择器写错、尺子恒真"区分开（本文件此前有过 `.sw-grid` 假绿前科）。
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+const SECTION_IDS = ["overview", "panorama", "moneyflow", "dataface", "sentiment"] as const;
+const SECTION_LABELS: Record<(typeof SECTION_IDS)[number], string> = {
+  overview: "指数总览",
+  panorama: "A股全景",
+  moneyflow: "资金流向",
+  dataface: "数据面",
+  sentiment: "短线情绪",
+};
+const MONEYFLOW_SECTION = '[data-testid="market-section-moneyflow"]';
+/** 板块主力资金流卡（按**卡头标题**收窄；`filter({ has })` 里用 `:scope >` 限定直属卡头，
+ *  否则会命中"内部某处提到这个名字"的卡）。 */
+function sectorMoneyflowCard(page: import("@playwright/test").Page): import("@playwright/test").Locator {
+  return page
+    .locator(".ant-card")
+    .filter({ has: page.locator(":scope > .ant-card-head", { hasText: "板块主力资金流" }) });
+}
+
+/** 第一行三块面板的 `getBoundingClientRect().bottom`（视口坐标即可：三块在同一行，同一坐标系）。 */
+async function rowBottoms(page: import("@playwright/test").Page): Promise<number[]> {
+  return page.evaluate(
+    (titles: string[]) => {
+      const scope = document.querySelector('[data-testid="market-section-panorama"]');
+      if (!scope) return titles.map(() => -1);
+      return titles.map((title) => {
+        const card = Array.from(scope.querySelectorAll(".ant-card")).find((el) =>
+          (el.querySelector(".ant-card-head-title")?.textContent ?? "").includes(title)
+        );
+        return card ? Math.round(card.getBoundingClientRect().bottom) : -1;
+      });
+    },
+    [...PANORAMA_PANEL_TITLES]
+  );
+}
+
+test.describe("P1-1 第二轮：分区堆叠 / 去重 / 高度平衡", () => {
+  test("五个分区同屏堆叠（都在 DOM 且可见，纵向顺序 = 导航顺序）", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/market?tab=panorama", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+    await expect(page.locator(".sw-grid").first()).toBeVisible(); // 等到分区真的把数据渲染完
+
+    const sections = page.locator("section.market-section");
+    await expect(sections, "分区数量 ≠ 5（内容被藏回页级 Tab 的面板里了？）").toHaveCount(
+      SECTION_IDS.length
+    );
+
+    const ys: number[] = [];
+    for (const key of SECTION_IDS) {
+      const section = page.locator(`[data-testid="market-section-${key}"]`);
+      // 必须 `toBeVisible` 而不是"在 DOM 里"：页级 Tab 的老形态正是"在 DOM 但 display:none"
+      await expect(section, `分区「${SECTION_LABELS[key]}」不可见（堆叠布局没生效）`).toBeVisible();
+      const box = await section.boundingBox();
+      expect(box, `分区「${SECTION_LABELS[key]}」没有 boundingBox`).not.toBeNull();
+      ys.push(Math.round(box!.y));
+    }
+    for (let i = 1; i < ys.length; i += 1) {
+      expect(
+        ys[i],
+        `分区纵向顺序不对（应 指数总览→A股全景→资金流向→数据面→短线情绪）：y=[${ys.join(", ")}]`
+      ).toBeGreaterThan(ys[i - 1]);
+    }
+
+    // 正对照：克隆一个分区塞回页面 → 同一个 locator 必须读到 6（证明计数不是写死的 5）
+    await sections.first().evaluate((node) => node.parentElement?.appendChild(node.cloneNode(true)));
+    await expect(
+      sections,
+      "正对照失败：克隆分区后计数没变 —— 计数断言是空转的"
+    ).toHaveCount(SECTION_IDS.length + 1);
+  });
+
+  test("板块主力资金流全页恰好 1 张，且落在 A股全景分区（去重）", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/market?tab=moneyflow", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+    await expect(page.locator(`${PANORAMA_SECTION} .sw-grid`).first()).toBeVisible();
+
+    // 计数一律**收进分区容器**（不是全局 getByText：分区维度条里也写着「③ 板块主力资金流…」）
+    const inPage = page.locator(".market-section .ant-card").filter({
+      has: page.locator(":scope > .ant-card-head", { hasText: "板块主力资金流" }),
+    });
+    await expect(
+      inPage,
+      "「板块主力资金流」在全页出现多于 1 张 —— 两个分区各渲染一张的重复又回来了"
+    ).toHaveCount(1);
+    await expect(
+      page.locator(`${PANORAMA_SECTION} .ant-card`).filter({
+        has: page.locator(":scope > .ant-card-head", { hasText: "板块主力资金流" }),
+      }),
+      "该卡不在 A股全景分区（它的题目是「广度 · 结构 · 资金」的 ③ 号面板）"
+    ).toHaveCount(1);
+    await expect(
+      page.locator(`${MONEYFLOW_SECTION} .ant-card`).filter({
+        has: page.locator(":scope > .ant-card-head", { hasText: "板块主力资金流" }),
+      }),
+      "资金流向分区里又出现了板块主力资金流（该分区只留大盘资金流 + 北向资金）"
+    ).toHaveCount(0);
+
+    // 正对照：把一个克隆体塞回全页作用域 → 同一个 locator 必须读到 2 张
+    await sectorMoneyflowCard(page)
+      .first()
+      .evaluate((node) => node.parentElement?.appendChild(node.cloneNode(true)));
+    await expect(
+      inPage,
+      "正对照失败：克隆一块后计数没变 —— 计数断言是空转的"
+    ).toHaveCount(2);
+  });
+
+  test("1440 下第一行三块面板底边齐平（bottom 极差 ≤ 80px）", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/market?tab=panorama", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+    await expect(panoramaRow(page)).toHaveCount(PANORAMA_PANEL_TITLES.length);
+
+    const bottoms = await rowBottoms(page);
+    expect(bottoms.every((b) => b > 0), `三块面板没量全：bottom=[${bottoms.join(", ")}]`).toBe(true);
+    const spread = Math.max(...bottoms) - Math.min(...bottoms);
+    // 第一刀基线（同机实测）：656 / 352 / 382 → 极差 304px
+    expect(
+      spread,
+      `A股全景第一行三块底边极差 ${spread}px > 80px（bottom=[${bottoms.join(", ")}]）` +
+        `—— 资金流卡的「板块连续性」区又占版面了（应为 compact 默认收起）`
+    ).toBeLessThanOrEqual(80);
+
+    // 正对照：把资金流卡临时加高到 760px（等价于"连续性区没收起"），同一把尺子必须超过阈值
+    await sectorMoneyflowCard(page)
+      .first()
+      .evaluate((node) => {
+        (node as HTMLElement).style.minHeight = "760px";
+      });
+    const stretched = await rowBottoms(page);
+    const stretchedSpread = Math.max(...stretched) - Math.min(...stretched);
+    expect(
+      stretchedSpread,
+      `正对照失败：加高到 760px 后极差仍只有 ${stretchedSpread}px —— 这把尺子量不出高度差`
+    ).toBeGreaterThan(80);
+  });
+
+  test("平衡来自「连续性区默认收起」这个折叠，不是删内容（展开必须真的变高）", async ({ page }) => {
+    // 连续性区只在 `sector-trends` 有响应时渲染（组件里是 `trends ? … : null`）。
+    // 用**实抓的活响应**回放（同 marketDataFace 的做法：手写 mock 只锁得住前端自己的假设），
+    // 保证折叠开关一定在场；端点不可用/无样本则按仓库惯例优雅跳过。
+    const live = await page.request.get("/api/v1/market/sector-trends");
+    test.skip(!live.ok(), "sector-trends 端点不可用，跳过");
+    const payload = await live.json();
+    test.skip(
+      !Array.isArray(payload?.boards) || payload.boards.length === 0,
+      "连续性子序列无样本（组件此时不渲染折叠开关），跳过"
+    );
+    await page.route("**/api/v1/market/sector-trends*", (r) => r.fulfill({ json: payload }));
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/market?tab=panorama", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+    await expect(panoramaRow(page)).toHaveCount(PANORAMA_PANEL_TITLES.length);
+
+    const toggle = page.locator(`${PANORAMA_SECTION} [data-testid="sector-continuity-toggle"]`);
+    await expect(toggle, "A股全景的资金流卡不是 compact 变体（没有折叠开关）").toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(
+      page.locator(`${PANORAMA_SECTION} [data-testid="sector-continuity"]`),
+      "默认收起时连续性区不该占版面"
+    ).toHaveCount(0);
+
+    const collapsed = await rowBottoms(page);
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator(`${PANORAMA_SECTION} [data-testid="sector-continuity"]`)).toBeVisible();
+    const expanded = await rowBottoms(page);
+
+    const moneyflowIdx = PANORAMA_PANEL_TITLES.length - 1; // 三块里的第三块 = 板块主力资金流
+    expect(
+      expanded[moneyflowIdx],
+      `展开连续性区后资金流卡没有变高（bottom ${collapsed[moneyflowIdx]} → ${expanded[moneyflowIdx]}）` +
+        `—— "默认收起"若拿不到高度差，这个折叠就是假动作`
+    ).toBeGreaterThan(collapsed[moneyflowIdx]);
   });
 });

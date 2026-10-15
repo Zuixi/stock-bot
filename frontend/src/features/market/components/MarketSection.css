@@ -8,6 +8,11 @@
 
 .market-section {
   margin-bottom: 16px;
+  /* P1-1 第二轮：分区是页级 `?tab=` 的滚动目标，而 `/market` 的分区导航是 sticky 的
+     ——不留出吸附高度，`scrollIntoView` 会把分区标题推到吸附层底下（被盖住）。
+     实测吸附层总高 **116px** = 顶栏 64px（全站 Header 也是 sticky top:0）+
+     分区导航 52px（44 + 8 padding）；取 120px 留 4px 余量。 */
+  scroll-margin-top: 120px;
 }
 
 .market-section__head {
