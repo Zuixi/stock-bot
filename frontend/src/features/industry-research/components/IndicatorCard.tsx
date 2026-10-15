@@ -1,6 +1,7 @@
 import { EChart, sparkOption } from "@/shared/ui/EChart";
 import { useTheme } from "@/app/theme-context";
 import type { MetricLatest } from "@/shared/api/industryResearch";
+import { MetricBadge } from "./MetricBadge";
 import { SourceBadge } from "./SourceBadge";
 
 interface Props {
@@ -40,12 +41,12 @@ export function IndicatorCard({ metric }: Props) {
 
       <div style={{ marginTop: 6, display: "flex", alignItems: "baseline", gap: 5 }}>
         <span
+          className="num"
           style={{
             fontFamily: '"Bahnschrift","DIN Alternate","Segoe UI",sans-serif',
             fontWeight: 700,
             fontSize: 25,
             lineHeight: 1.1,
-            fontVariantNumeric: "tabular-nums",
             color: hasValue ? "var(--text-primary)" : colors.flat,
           }}
         >
@@ -90,6 +91,19 @@ export function IndicatorCard({ metric }: Props) {
           <EChart option={sparkOption(spark, colors.primary)} height={36} silent />
         </div>
       )}
+
+      {/* 四徽章（spec §S1.2）：数据源 / 实际可得日(PIT) / 频率 / 口径版本 */}
+      <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid var(--border)" }}>
+        <MetricBadge
+          source={metric.source}
+          asOf={metric.asOf}
+          asOfSource={metric.asOfSource}
+          freq={metric.freq}
+          caliberVersion={metric.caliberVersion}
+          caliberVersionRegistered={metric.caliberVersionRegistered}
+          showCaliber
+        />
+      </div>
     </div>
   );
 }

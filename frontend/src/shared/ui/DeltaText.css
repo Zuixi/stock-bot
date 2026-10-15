@@ -1,5 +1,9 @@
 .delta {
-  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* 涨跌额（三元组中间成员，见 DeltaText.tsx 的 DeltaAbsText）：符号/配色与 .delta 同源，
+ * 只多一条 nowrap —— 它**刻意不带 `.delta` 类**（locator 契约见组件注释）。 */
+.delta-abs {
   white-space: nowrap;
 }
 .delta--up {

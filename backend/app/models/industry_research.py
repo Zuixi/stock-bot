@@ -28,12 +28,26 @@ from app.core.database import Base
 
 
 class IndustryMetric(Base):
-    """One observation of one metric for an industry (or a company within it).
+    """One observation of one metric in one **scope** (industry, or a company within it).
 
     ``stock_id = 0`` 表示行业级指标；公司级指标（标的分析，P5）携带 stocks.id（>0）。
     ``period`` 为该值所属周期的截止日（月度即月末、日度即当日）。
     ``source`` + 唯一约束保证重跑幂等；派生指标（猪粮比等）以 source='derived' 统一落表。
+
+    **``industry_key`` 的语义已泛化为通用 scope 键**（2026-10-12 spec §S1.2）：
+    不再只装行业 —— 'pig' / 'broiler' 是行业 scope，情绪与宏观指标将以 'market'
+    等非行业 scope 落进同一张表（统一指标表 = 一个 scope 字符串 + metric_key + 四徽章），
+    读面走 ``/api/v1/metrics/*``。字段名保留 ``industry_key`` 只因改名会波及
+    repo/service/api/tests 一大片。
+
+    ``published_at`` = PIT 实际可得时点（ADR 0011），不是 ``period``（报告期）；
+    NULL 表示尚未登记 —— 规则/回测路径由 S2.2 在读取时护栏报错，**不得静默回退到
+    ``period``**。``caliber_version`` = 口径版本，上游口径修订（样本轮换/口径调整）
+    时填写以留断点；列与 registry 登记位在本任务（S1.2）就位，具体口径回填随各源接入。
     """
+
+    # ponytail: industry_key 现被当作通用 scope 键（'pig' / 'market' / 'broiler'），语义已泛化。
+    # 第二次接入非行业 scope 时改名为 scope_key（一次改名 + 一次迁移，别在第一次就改）。
 
     __tablename__ = "industry_metrics"
     __table_args__ = (
@@ -59,6 +73,10 @@ class IndustryMetric(Base):
     source_tier: Mapped[str] = mapped_column(String(16), nullable=False, default="manual")
     freq: Mapped[str] = mapped_column(String(16), nullable=False, default="monthly")
     period: Mapped[date] = mapped_column(Date, nullable=False)
+    # PIT 实际可得时点（ADR 0011）；NULL = 未登记，规则/回测由 S2.2 护栏拒绝
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 口径版本；上游口径修订时填写（只要求能力存在，不预填口径）
+    caliber_version: Mapped[str | None] = mapped_column(String(32))
     value: Mapped[float | None] = mapped_column(Numeric(18, 4))
     unit: Mapped[str | None] = mapped_column(String(16))
     extra: Mapped[dict | None] = mapped_column(JSONB)

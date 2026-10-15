@@ -9,6 +9,8 @@ Create Date: 2026-09-03
 - 东财资金流、top_list、repurchase.amount：元
 - block_trade：price 元 / volume 万股 / amount 万元
 - share_float.float_share：万股；northbound.net_amount：万元
+  （该列名已由 b6a1f0c2d7e4 改为 `amount`，并加行级口径列 `amount_kind`：
+  `net_buy` = 断点 2024-08-19 前的**净买入**，`turnover` = 断点起的**成交额**）
 """
 
 import sqlalchemy as sa

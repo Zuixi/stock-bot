@@ -93,8 +93,37 @@ export function EChart({ option, height = 300, silent = false, onEvents }: Props
   );
 }
 
-/** 指标迷你走势的公共 option 片段 */
-export function sparkOption(data: number[], color: string): Record<string, unknown> {
+/**
+ * 按容器宽度下采样序列（Phase 3 §4.1 / §0.1 B2）。
+ *
+ * **为什么必须有**：sparkline 的旧规则是"`width ≥ 768` 才渲染"——它直接把图在窄屏上
+ * **隐藏**，与 owner 的 B2 全量响应式裁定冲突（§0.1）。改为"**始终渲染**，点数按容器宽度定"：
+ * 88px 的槽位里画 250 个点，每点 0.35px，画出来是一团墨而不是走势；降到 ~40 点后
+ * 形状仍可辨认（迷你图的判据是"趋势可读"，不是"每个数据点都在"）。
+ *
+ * 取点规则（**首末必留**）：先保留最后一点（"当前值"是迷你图唯一有绝对含义的点），
+ * 再按均匀步长回取，最后把首点补上（"起点"定义整段走势的基准）。顺序按原序列返回。
+ * 三点以下是退化情形，原样返回——采样器不该改变"数据本来就少"这个事实。
+ */
+function downsample<T>(data: T[], maxPoints: number): T[] {
+  if (maxPoints <= 0 || data.length <= maxPoints) return data;
+  const n = data.length;
+  const step = (n - 1) / (maxPoints - 1);
+  const picked = new Set<number>([n - 1]);
+  for (let i = 0; i < maxPoints - 1; i += 1) picked.add(Math.round(i * step));
+  return [...picked].sort((a, b) => a - b).map((i) => data[i]);
+}
+
+/** 指标迷你走势的公共 option 片段。
+ *
+ * `maxPoints`：容器宽度决定的最大画点数（不传 = 不采样，保持既有行为）。
+ * 由调用方按**容器**宽度算，不按视口断点——同一视口下不同槽位宽度可以差 3 倍。 */
+export function sparkOption(
+  data: number[],
+  color: string,
+  maxPoints?: number
+): Record<string, unknown> {
+  const series = maxPoints == null ? data : downsample(data, maxPoints);
   return {
     animation: false,
     grid: { left: 0, right: 0, top: 2, bottom: 0 },
@@ -103,7 +132,7 @@ export function sparkOption(data: number[], color: string): Record<string, unkno
     series: [
       {
         type: "line",
-        data,
+        data: series,
         symbol: "none",
         smooth: 0.35,
         lineStyle: { width: 1.5, color },

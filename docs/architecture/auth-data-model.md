@@ -48,7 +48,7 @@ CREATE TABLE auth_users (
     email           VARCHAR(255) NOT NULL,
     display_name    VARCHAR(64),
     status          VARCHAR(32) NOT NULL DEFAULT 'active', -- active, suspended, locked, pending_verification(死枚举，不产生不接受)
-    status_reason   VARCHAR(255),           -- 停用原因；登录被拒时展示给本人 (ADR 0010)
+    status_reason   VARCHAR(255),           -- 停用原因；登录被拒时展示给本人 (ADR 0015)
     is_superuser    BOOLEAN NOT NULL DEFAULT FALSE,
     failed_attempts INT NOT NULL DEFAULT 0,
     locked_until    TIMESTAMPTZ,
@@ -72,7 +72,7 @@ CREATE TABLE auth_credentials (
     auth_type       VARCHAR(32) NOT NULL DEFAULT 'password', -- password, totp, oauth_github (为 SSO 预留多值)
     password_hash   TEXT,                                    -- Argon2id 格式编码串
     salt            VARCHAR(64),                             -- 额外安全盐 (可选)
-    must_change_password      BOOLEAN NOT NULL DEFAULT FALSE, -- 临时密码未更换 (ADR 0010)
+    must_change_password      BOOLEAN NOT NULL DEFAULT FALSE, -- 临时密码未更换 (ADR 0015)
     temp_password_expires_at  TIMESTAMPTZ,                    -- 独立列：argon2 rehash 会重置 password_updated_at，推算会续期
     password_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),

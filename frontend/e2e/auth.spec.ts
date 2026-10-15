@@ -38,19 +38,24 @@ test.describe("认证微服务与前端会话状态机", () => {
       })
     );
 
+    // ⚠️ 断言的是**迁移后**的 URL：`/watchlist`、`/tags`、`/research` 已是 IA 迁移的
+    // redirect（见 route-manifest），`returnTo` 记录的是**redirect 兑现后的目标**，不是原路径。
+    // 下面三个值都是实测所得（不是推的），此前写的是迁移前的 `/watchlist` / `/tags` / `/research`
+    // ⇒ 断言永远等不到、超时（该文件此前未与其他 spec 一起跑，所以一直没暴露）。
+
     // 1. 尝试访问自选股页面
     await page.goto("/watchlist");
-    await page.waitForURL(/\/login\?returnTo=%2Fwatchlist/);
+    await page.waitForURL(/\/login\?returnTo=%2Fme%3Ftab%3Dwatchlist/);
     await expect(page.getByRole("button", { name: "登 录" })).toBeVisible();
 
     // 2. 尝试访问自定义标签页
     await page.goto("/tags");
-    await page.waitForURL(/\/login\?returnTo=%2Ftags/);
+    await page.waitForURL(/\/login\?returnTo=%2Fme%3Ftab%3Dtags/);
     await expect(page.getByRole("button", { name: "登 录" })).toBeVisible();
 
     // 3. 尝试访问投研板块（已需登录才可阅读，见 docs/decisions/0008）
     await page.goto("/research");
-    await page.waitForURL(/\/login\?returnTo=%2Fresearch/);
+    await page.waitForURL(/\/login\?returnTo=%2Findustry/);
     await expect(page.getByRole("button", { name: "登 录" })).toBeVisible();
   });
 
@@ -196,7 +201,8 @@ test.describe("认证微服务与前端会话状态机", () => {
 
     // 关键：以已登录身份停在被保护的页面上，而不是被重定向到 /login
     await expect(page.getByText("爱丽丝")).toBeVisible();
-    await expect(page).toHaveURL(/\/watchlist/);
+    // `/watchlist` 是 IA 迁移的 redirect ⇒ 实际落在 `/me?tab=watchlist`（实测值，非推导）
+    await expect(page).toHaveURL(/\/me\?tab=watchlist/);
     expect(probeCalls).toBeGreaterThan(1); // 确实走了重试，不是碰巧第一次就成功
   });
 

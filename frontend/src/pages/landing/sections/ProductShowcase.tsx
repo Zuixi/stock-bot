@@ -1,4 +1,5 @@
-import { BulbFilled } from "@ant-design/icons";
+import { AimOutlined, BulbFilled, FundOutlined, FundProjectionScreenOutlined } from "@ant-design/icons";
+import type { ReactNode } from "react";
 
 const MOCK_PHASES = [
   { name: "繁荣", desc: "价格高位 · 产能扩张" },
@@ -9,18 +10,42 @@ const MOCK_PHASES = [
 
 const MOCK_BADGES = ["已核验", "已溯源", "待复核"];
 
-const FEATURES = [
+/**
+ * **在途流程**（Phase 4 §5.4）。
+ *
+ * 原实现给三条特性挂了 `01 / 02 / 03` 编号 —— 但那三条（指标带 / 周期相位条 / 信号面板）
+ * 是**并列的能力**，不是序列；用编号把并列读成有序，是在制造一条不存在的信息。
+ *
+ * 判决书给了二选一（"改为在途流程 **或** 去编号"）。这里选**改为在途流程**，因为本产品
+ * 确实有一条真实链路：**原料 → 研判 → 信号 → 仓位**（见 `industry/workbench.tsx` 的
+ * 左栏自上而下：指标带 → 猪周期定位 → 信号面板 → 仓位建议，`data-source.md` 的
+ * 「周期阶段 / 交易信号 / 仓位建议是规则计算」）。于是第四项不是新编的营销文案，
+ * 而是把链路补完整；每一项的状态文字（原料/研判/结论/执行）也都对应真实组件。
+ */
+const FLOW: Array<{ step: string; title: string; desc: string; icon: ReactNode }> = [
   {
+    step: "原料",
     title: "指标带",
     desc: "生猪价格、能繁母猪存栏、猪粮比等关键指标横向排布，溯源徽章一眼可辨。",
+    icon: <FundProjectionScreenOutlined />,
   },
   {
+    step: "研判",
     title: "周期相位条",
     desc: "繁荣 → 衰退 → 萧条 → 复苏四阶段实时定位，当前相位高亮并给出判定依据。",
+    icon: <FundOutlined />,
   },
   {
+    step: "结论",
     title: "信号面板",
     desc: "买卖信号与仓位建议联动展示，历史信号可回溯——每个结论都能拆开看触发条件。",
+    icon: <BulbFilled />,
+  },
+  {
+    step: "执行",
+    title: "仓位建议",
+    desc: "信号落到可执行的分批仓位，规则计算而非主观判断，并随信号自动更新。",
+    icon: <AimOutlined />,
   },
 ];
 
@@ -74,18 +99,25 @@ export function ProductShowcase() {
             </div>
           </div>
 
-          {/* 右：三条特性列表 */}
-          <div>
-            {FEATURES.map((f, i) => (
-              <div key={f.title} className="landing-feature">
-                <span className="landing-feature-num">{i + 1}</span>
-                <div>
-                  <h3 className="landing-feature-title">{f.title}</h3>
-                  <p className="landing-feature-desc">{f.desc}</p>
+          {/* 右：在途流程（原料 → 研判 → 结论 → 执行），编号已删（见上方 FLOW 注释）。
+              流程方向由**纵向排列 + 每项的链路位置文字**承担；不在"原料"行尾挂一个
+              `↓`（视觉复核实测那是个孤儿字形：它落在行尾，读起来像"原料 ↓"这个整体）。 */}
+          <ol className="landing-flow">
+            {FLOW.map((f) => (
+              <li key={f.step} className="landing-flow__item" data-flow-step={f.step}>
+                <span className="landing-flow__marker" aria-hidden="true">
+                  {f.icon}
+                </span>
+                <div className="landing-flow__body">
+                  <div className="landing-flow__meta">
+                    <span className="landing-flow__step">{f.step}</span>
+                  </div>
+                  <h3 className="landing-flow__title">{f.title}</h3>
+                  <p className="landing-flow__desc">{f.desc}</p>
                 </div>
-              </div>
+              </li>
             ))}
-          </div>
+          </ol>
         </div>
       </div>
     </section>

@@ -27,7 +27,7 @@ export function YesterdayLimitUp({ data, degraded = false }: Props) {
       title: "代码",
       dataIndex: "symbol",
       width: 84,
-      render: (_, r) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{r.symbol}</span>,
+      render: (_, r) => <span className="num">{r.symbol}</span>,
     },
     { title: "名称", dataIndex: "name", width: 90 },
     {

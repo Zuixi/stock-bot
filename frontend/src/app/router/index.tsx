@@ -1,192 +1,39 @@
 import { Routes, Route } from "react-router-dom";
-import { lazy, Suspense } from "react";
-import { MainLayout } from "@/app/layouts/MainLayout";
-import { RequireAuth } from "@/features/auth";
-import { Spin } from "antd";
+import { ROUTES, type AppRoute } from "./route-manifest";
+import { renderRoute } from "./route-elements";
 
-const LandingPage = lazy(() => import("@/pages/landing"));
-const MarketPage = lazy(() => import("@/pages/market"));
-const CategoryPage = lazy(() => import("@/pages/market-category"));
-const IndustryLevel2Page = lazy(() => import("@/pages/market-industry-level2"));
-const IndustryLevel3Page = lazy(() => import("@/pages/market-industry-level3"));
-const MarketHotSectorsPage = lazy(() => import("@/pages/market-hot-sectors"));
-const ConceptBoardPage = lazy(() => import("@/pages/market-concept"));
-const IndexDetailPage = lazy(() => import("@/pages/index-detail"));
-const StockDetailPage = lazy(() => import("@/pages/stock-detail"));
-const WatchlistPage = lazy(() => import("@/pages/watchlist"));
-const TagsPage = lazy(() => import("@/pages/tags"));
-const TagsDetailPage = lazy(() => import("@/pages/tags-detail"));
-const ResearchPage = lazy(() => import("@/pages/research"));
-const ResearchWorkbenchPage = lazy(() => import("@/pages/research-workbench"));
-const LoginPage = lazy(() => import("@/pages/login"));
-const ChangePasswordPage = lazy(() => import("@/pages/change-password"));
-const AdminUsersPage = lazy(() => import("@/pages/admin-users"));
-
-function PageLoading() {
-  return (
-    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: 400 }}>
-      <Spin size="large" />
-    </div>
-  );
+/**
+ * 应用路由表。
+ *
+ * **本文件不再手写任何 `<Route>`**：逐条路由由 `./route-manifest.ts`（纯数据清单）生成，
+ * 元素由 `./route-elements.tsx`（懒加载 + `RequireAuth` + 占位壳）渲染。
+ * `parent: "main"` 的条目嵌进 MainLayout 那条 layout 路由下，与改造前的嵌套结构逐条等价。
+ *
+ * 为什么（Ruling 33）：`frontend/scripts/check-routes.mjs` 此前靠**解析本文件的 JSX 源码**做门禁，
+ * 两轮里连续假绿（占位判定失效、`/` 与 `/login` 被扫描器吞掉）。现在门禁直接 import 那份清单，
+ * 断言的是数据而不是源码——`/`、`/login` 与 layout 路由不可能再被"吞掉"。
+ *
+ * 权限三态（IA §1 / ADR 0008，**不新增 scope**）写在清单的 `requiresAuth` / `permission` 字段里；
+ * 逐条对照的机械校验见 `npm run check:routes`。
+ */
+function renderRouteElement(route: AppRoute, key: string) {
+  return <Route key={key} path={route.path || undefined} element={renderRoute(route)} />;
 }
 
 export function AppRouter() {
   return (
     <Routes>
-      {/* Landing 宣传页：公开路由，独立布局不套 MainLayout（契约 §2）；
-          已登录停留此页，由页内 CTA「进入工作台」跳 /market */}
-      <Route
-        path="/"
-        element={
-          <Suspense fallback={<PageLoading />}>
-            <LandingPage />
-          </Suspense>
-        }
-      />
-      <Route element={<MainLayout />}>
-        <Route
-          path="/login"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <LoginPage />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/change-password"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <ChangePasswordPage />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/admin/users"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <RequireAuth permissions={["users:manage"]}>
-                <AdminUsersPage />
-              </RequireAuth>
-            </Suspense>
-          }
-        />
-        <Route
-          path="/market"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <MarketPage />
-            </Suspense>
-          }
-        />
-        {/* 投研板块需 research:read 权限（docs/decisions/0008）：守卫只做体验（重定向/403 页），
-            真实门禁在后端 /api/v1/industries 的 router 级权限依赖 */}
-        <Route
-          path="/research"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <RequireAuth permissions={["research:read"]}>
-                <ResearchPage />
-              </RequireAuth>
-            </Suspense>
-          }
-        />
-        <Route
-          path="/research/:industryKey"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <RequireAuth permissions={["research:read"]}>
-                <ResearchWorkbenchPage />
-              </RequireAuth>
-            </Suspense>
-          }
-        />
-        <Route
-          path="/market/category"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <CategoryPage />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/market/industry/:level1Code"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <IndustryLevel2Page />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/market/industry/:level1Code/:level2Code"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <IndustryLevel3Page />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/market/hot-sectors/:category"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <MarketHotSectorsPage />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/market/concept/:boardCode"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <ConceptBoardPage />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/index/:tsCode"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <IndexDetailPage />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/stock/:symbol"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <StockDetailPage />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/watchlist"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <RequireAuth>
-                <WatchlistPage />
-              </RequireAuth>
-            </Suspense>
-          }
-        />
-        <Route
-          path="/tags"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <RequireAuth>
-                <TagsPage />
-              </RequireAuth>
-            </Suspense>
-          }
-        />
-        <Route
-          path="/tags/:tagName"
-          element={
-            <Suspense fallback={<PageLoading />}>
-              <RequireAuth>
-                <TagsDetailPage />
-              </RequireAuth>
-            </Suspense>
-          }
-        />
-      </Route>
+      {ROUTES.filter((route) => !route.parent).map((route) =>
+        route.kind === "layout" ? (
+          <Route key={route.key} element={renderRoute(route)}>
+            {ROUTES.filter((child) => child.parent === route.key).map((child) =>
+              renderRouteElement(child, child.key)
+            )}
+          </Route>
+        ) : (
+          renderRouteElement(route, route.key)
+        )
+      )}
     </Routes>
   );
 }

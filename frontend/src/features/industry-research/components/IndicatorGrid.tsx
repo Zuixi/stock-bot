@@ -33,11 +33,11 @@ export function IndicatorGrid({ metrics }: Props) {
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginTop: 3 }}>
             <span
+              className="num"
               style={{
                 fontFamily: '"Bahnschrift","DIN Alternate","Segoe UI",sans-serif',
                 fontWeight: 700,
                 fontSize: 18,
-                fontVariantNumeric: "tabular-nums",
                 color: m.value !== null ? "var(--text-primary)" : colors.flat,
               }}
             >
@@ -60,7 +60,12 @@ export function IndicatorGrid({ metrics }: Props) {
                   {m.warn}
                 </span>
               )}
-              {m.delta?.pct !== null && m.delta && m.delta.direction !== "flat" && (
+              {/* 缺值不得渲染成 0：先看方向（"flat" 与缺方向都不展示），再要求 `pct` 非 null。
+                  原先写成 `m.delta?.pct !== null && m.delta && …` + `Math.abs(m.delta.pct ?? 0)`：
+                  两个 `?? null` 分支其实永远走不到（到达这里时 pct 已非 null），
+                  `?? 0` 是死代码——但一旦哪天守卫被改坏，它会**静默显示 0.00%**（把"没有"
+                  说成"平盘"）。改成 `Number.isFinite` 收口，既消死代码也保住不变量。 */}
+              {m.delta && m.delta.direction !== "flat" && Number.isFinite(m.delta.pct) && (
                 <span
                   style={{
                     fontFamily: '"Bahnschrift","DIN Alternate","Segoe UI",sans-serif',
@@ -70,7 +75,7 @@ export function IndicatorGrid({ metrics }: Props) {
                   }}
                 >
                   {m.delta.direction === "up" ? "▲" : "▼"}
-                  {Math.abs(m.delta.pct ?? 0).toFixed(2)}%
+                  {Math.abs(Number(m.delta.pct)).toFixed(2)}%
                 </span>
               )}
             </span>

@@ -4,6 +4,13 @@
 1. registry 注册双行业且 sw_l3_codes 不相交（列表/companies 隔离的前提）；
 2. broiler 演示行业全部指标 mock-only 且带 mock_base 基准值；
 3. 通用 mock builder 的输出形状：无重复冲突键、确定性、末点等于基准值。
+
+**2026-10-12 更新（spec §S1.8 落地）**：`INDUSTRIES` 不再只装行业 scope ——
+`industry_key` 已泛化为通用 scope 键，`market`（全市场情绪）作为**第一个非行业
+scope** 进了同一张字典。故第 1 条从"INDUSTRIES 恰好两个 key"改成
+"**行业** scope 恰好两个 key + `market` 是登记在册的非行业 scope"，
+并新增一条"非行业 scope 必须 abstain 行业专属字段"的不变量（避免以后有人给
+`market` 填 `sw_l3_codes`/`phases`，让"按 scope 取行业信息"的消费方悄悄读错）。
 """
 
 from __future__ import annotations
@@ -17,12 +24,37 @@ from app.services.industry_mock_data import (
     build_industry_mock_points,
 )
 
+#: 真正的**行业** scope（挂申万分类、有周期相位与仓位模板）。
+INDUSTRY_SCOPES = {"pig", "broiler"}
+#: 非行业 scope（全市场/宏观类，只借表与读面，不借行业语义）。
+NON_INDUSTRY_SCOPES = {"market"}
+
 
 class TestRegistryGeneralization:
     def test_registry_has_two_industries_with_disjoint_sw_codes(self):
-        assert set(reg.INDUSTRIES) == {"pig", "broiler"}
+        # 行业 scope 仍是恰好两个，且申万Ⅲ级码不相交
+        assert INDUSTRY_SCOPES <= set(reg.INDUSTRIES)
+        assert NON_INDUSTRY_SCOPES <= set(reg.INDUSTRIES)
         pig, broiler = reg.INDUSTRIES["pig"], reg.INDUSTRIES["broiler"]
         assert set(pig.sw_l3_codes).isdisjoint(broiler.sw_l3_codes)
+
+    def test_non_industry_scopes_abstain_from_industry_only_fields(self):
+        """非行业 scope 不得携带行业专属字段（申万码 / 周期相位 / 仓位模板）。
+
+        `IndustryConfig` 是行业与非行业共用的容器（见 registry 模块注释）；这条
+        不变量把"market 只有 metrics / reference_points 有意义"钉住，防止以后
+        有人顺手给它填一套相位，让 `sw_l3_codes` / 相位的消费方读到一个假行业。
+        """
+        for key in NON_INDUSTRY_SCOPES:
+            cfg = reg.INDUSTRIES[key]
+            assert cfg.sw_l3_codes == [], key
+            assert cfg.phases == [], key
+            assert cfg.position_templates == {}, key
+            assert cfg.metrics, f"{key} 必须有自己的指标定义"
+        for key in INDUSTRY_SCOPES:
+            cfg = reg.INDUSTRIES[key]
+            assert cfg.sw_l3_codes, key  # 行业 scope 必须有申万码
+            assert cfg.phases, key
 
     def test_broiler_metrics_are_mock_only_with_base(self):
         broiler = reg.INDUSTRIES["broiler"]

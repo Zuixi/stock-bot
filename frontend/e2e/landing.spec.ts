@@ -125,15 +125,17 @@ test.describe("宣传页数据区块", () => {
         contentType: "application/json",
         body: JSON.stringify([
           {
-            code: "110000", name: "农林牧渔", stockCount: 95,
+            // officialCount 才是显示口径（与下钻页一致）；customCount 只作「+N 自定义」标注。
+            // 农林牧渔特意给 95 + 7：断言格子显示的是 **95**（官方），不是相加后的 102。
+            code: "110000", name: "农林牧渔", stockCount: 102, officialCount: 95, customCount: 7,
             children: [
-              { code: "1101", name: "种植业", stockCount: 30, children: [] },
-              { code: "1103", name: "养殖业", stockCount: 40, children: [] },
-              { code: "1104", name: "饲料", stockCount: 25, children: [] },
+              { code: "1101", name: "种植业", stockCount: 30, officialCount: 30, customCount: 0, children: [] },
+              { code: "1103", name: "养殖业", stockCount: 40, officialCount: 40, customCount: 0, children: [] },
+              { code: "1104", name: "饲料", stockCount: 25, officialCount: 25, customCount: 0, children: [] },
             ],
           },
-          { code: "220000", name: "基础化工", stockCount: 322, children: [{ code: "2201", name: "化学制品", stockCount: 100, children: [] }] },
-          { code: "610000", name: "家用电器", stockCount: 78, children: [] },
+          { code: "220000", name: "基础化工", stockCount: 322, officialCount: 322, customCount: 0, children: [{ code: "2201", name: "化学制品", stockCount: 100, officialCount: 100, customCount: 0, children: [] }] },
+          { code: "610000", name: "家用电器", stockCount: 78, officialCount: 78, customCount: 0, children: [] },
         ]),
       })
     );
@@ -160,5 +162,32 @@ test.describe("宣传页数据区块", () => {
     const tile = page.getByTitle(/95 只个股 · 3 个二级行业/);
     await expect(tile).toBeVisible();
     await expect(tile).toContainText("农林牧渔");
+  });
+
+  // 口径守护（裁决 A）：格子显示**官方成分数**（SCD2，与下钻页逐节点一致），
+  // 用户自定义标签只作「+N 自定义」标注，**绝不相加后当官方口径**。
+  // mock 特意给 95 官方 + 7 自定义 = stockCount 102 ⇒ 若哪天有人退回用 stockCount，本断言转红。
+  test("申万行业网格显示官方成分数，自定义标签只作标注不相加", async ({ page }) => {
+    await page.goto("/");
+    const tile = page.getByTitle(/95 只个股 · 3 个二级行业/);
+    const count = tile.locator(".sw-count");
+    await expect(count).toContainText("95 只");
+    await expect(count).not.toContainText("102");
+    // 自定义标注**只在 title（悬停）与下钻页**，不进可见行：瓦片宽仅 128–190px，
+    // 三样信息会把「自定义」挤到第二行 ⇒ 逐格换行、视觉参差（Phase 1 视觉复核实测）。
+    // 这里断言的是"标注仍在、且没被加进数字"，位置换了但意图不变。
+    await expect(tile).toHaveAttribute("title", /\+7 自定义/);
+    await expect(count).not.toContainText("自定义");
+  });
+
+  // 回归守护：格子此前是个纯 `<div>`，而 `.sw-cell:hover` 已有上浮反馈
+  // ⇒ **看起来能点、点了没反应**。原测试只验渲染不验交互，因此漏过。
+  // 现在断言它是真 `<Link>`（有 href ⇒ 可中键新开、可键盘触发）且点击真的换页。
+  test("申万行业网格的格子是链接且能跳到一级行业下钻页", async ({ page }) => {
+    await page.goto("/");
+    const tile = page.getByTitle(/95 只个股 · 3 个二级行业/);
+    await expect(tile).toHaveAttribute("href", "/market/industry/110000");
+    await tile.click();
+    await expect(page).toHaveURL(/\/market\/industry\/110000$/);
   });
 });

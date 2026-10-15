@@ -22,7 +22,7 @@ export function NumberText({ value, unit, precision = 2, style }: Props) {
 
   return (
     <Tooltip title={raw}>
-      <span style={{ fontVariantNumeric: "tabular-nums", ...style }}>{display}</span>
+      <span className="num" style={{ ...style }}>{display}</span>
     </Tooltip>
   );
 }

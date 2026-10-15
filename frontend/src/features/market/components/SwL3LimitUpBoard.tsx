@@ -95,7 +95,7 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
       <div className="sw3-filter">
         <div className="sw3-filter__tags">
           <Tag.CheckableTag className="sw3-tag" checked={l1 === ALL} onChange={() => setL1(ALL)}>
-            全部 <span className="sw3-tag__count">{items.length}</span>
+            全部 <span className="sw3-tag__count num">{items.length}</span>
           </Tag.CheckableTag>
           {l1Options.map(([code, { name, count }]) => (
             <Tag.CheckableTag
@@ -104,7 +104,7 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
               checked={l1 === code}
               onChange={() => setL1(l1 === code ? ALL : code)}
             >
-              {name} <span className="sw3-tag__count">{count}</span>
+              {name} <span className="sw3-tag__count num">{count}</span>
             </Tag.CheckableTag>
           ))}
         </div>
@@ -138,14 +138,14 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
             <li key={rowKey(r)}>
               <div
                 className={`sw3-row ${heatClass(r.maxStreak)}`}
-                onClick={() => navigate(`/stock/${r.leaderSymbol}`)}
+                onClick={() => navigate(`/company/${r.leaderSymbol}`)}
                 title={`${rowLabel(r) ?? "--"} · 龙头 ${r.leaderName ?? "--"} → 个股页`}
               >
                 <span className="sw3-row__names">
                   <span className="sw3-row__l3">{rowLabel(r) ?? "--"}</span>
                   {r.l1Name && l1 === ALL ? <span className="sw3-row__l1">{r.l1Name}</span> : null}
                 </span>
-                <span className="sw3-row__streak">
+                <span className="sw3-row__streak num">
                   <span className="sw3-cells" aria-hidden>
                     {[1, 2, 3, 4].map((n) => (
                       <i key={n} className={n <= r.maxStreak ? "sw3-cells__on" : undefined} />
@@ -154,7 +154,7 @@ export function SwL3LimitUpBoard({ data, degraded = false }: Props) {
                   {r.maxStreak}板
                 </span>
                 <span className="sw3-row__leader">{r.leaderName ?? "--"}</span>
-                <span className="sw3-row__zt">
+                <span className="sw3-row__zt num">
                   <span className="sw3-row__zt-bar" aria-hidden>
                     <span style={{ width: `${(r.ztCount / maxZt) * 100}%` }} />
                   </span>

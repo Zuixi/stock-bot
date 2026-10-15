@@ -1,0 +1,478 @@
+/*
+ * `/sentiment` 情绪分析页版式（批准稿 §Layout / §Hero / §Typography）。
+ *
+ * 三条硬约束，改动前先读：
+ *  1. **只有 hero 是卡片**（`border-radius: 6px`，无阴影）；模块面板一律"平面 + 发丝分隔"，
+ *     任何 `box-shadow` 都是对批准稿的改写；
+ *  2. **颜色只走 CSS 变量**（`--bg-*` / `--border` / `--text-*` / `--sent-extreme-*`），
+ *     本文件不得出现任何 hex；
+ *  3. **所有数字等宽（`.num`，见 theme.css 的唯一定义处）且右对齐**（仓库既有约定），
+ *     标签不用全大写、不用 `A — B`、不加 eyebrow。
+ */
+
+.sent-page {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+  padding: 16px;
+}
+
+/* ── 左侧粘性模块索引 ───────────────────────────────────── */
+.sent-index {
+  position: sticky;
+  /* 顶栏是 sticky 的，索引必须让开它，否则第一组会被压在顶栏下 */
+  top: 88px;
+  max-height: calc(100vh - 104px);
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  padding-right: 16px;
+}
+
+.sent-index__group + .sent-index__group {
+  margin-top: 14px;
+}
+
+.sent-index__label {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.sent-index__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sent-index__link {
+  display: block;
+  padding: 3px 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.sent-index__link:hover {
+  color: var(--accent);
+}
+
+/* ── 页头：一句话状态 ───────────────────────────────────── */
+.sent-column {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sent-head {
+  margin-bottom: 16px;
+}
+
+.sent-head__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sent-head__state {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.sent-group {
+  scroll-margin-top: 88px;
+}
+
+.sent-group__label {
+  margin: 20px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
+/* ── hero（唯一卡片，无阴影）───────────────────────────── */
+.sent-hero {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 18px;
+  scroll-margin-top: 88px;
+}
+
+.sent-hero__head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.sent-hero__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sent-hero__asof,
+.sent-hero__caliber {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.sent-hero__asof {
+  margin-left: auto;
+}
+
+.sent-hero__state {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.sent-hero__value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sent-hero__value {
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1.05;
+  color: var(--text-primary);
+}
+
+.sent-hero__unit {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.sent-hero__raw {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ── 0–100 分位轨：只有极值带着色，中段是次级文本色 ─────── */
+.sent-rail {
+  position: relative;
+  height: 10px;
+  margin: 16px 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--hover);
+  overflow: hidden;
+}
+
+.sent-rail__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.sent-rail__band--cold {
+  left: 0;
+  width: 10%;
+  background: var(--sent-extreme-cold);
+  opacity: 0.3;
+}
+
+.sent-rail__band--hot {
+  right: 0;
+  width: 10%;
+  background: var(--sent-extreme-hot);
+  opacity: 0.3;
+}
+
+.sent-rail__marker {
+  position: absolute;
+  top: -1px;
+  width: 2px;
+  height: 12px;
+  background: var(--text-secondary);
+}
+
+.sent-rail__marker--cold {
+  background: var(--sent-extreme-cold);
+}
+
+.sent-rail__marker--hot {
+  background: var(--sent-extreme-hot);
+}
+
+.sent-rail__marker--mid {
+  background: var(--text-secondary);
+}
+
+.sent-rail__scale {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.sent-rail__legend--cold {
+  color: var(--sent-extreme-cold);
+}
+
+.sent-rail__legend--hot {
+  margin-left: auto;
+  color: var(--sent-extreme-hot);
+}
+
+.sent-hero__percentile {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.sent-hero__percentile--cold {
+  color: var(--sent-extreme-cold);
+}
+
+.sent-hero__percentile--hot {
+  color: var(--sent-extreme-hot);
+}
+
+.sent-hero__percentile--mid,
+.sent-hero__percentile--none {
+  color: var(--text-secondary);
+}
+
+.sent-hero__legs {
+  margin: 12px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sent-hero__legs-list,
+.sent-hero__window {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.sent-hero__caliber {
+  margin: 14px 0 0;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+/* ── 模块面板：平面 + 发丝分隔，无阴影 ─────────────────── */
+.sent-module {
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+  scroll-margin-top: 88px;
+}
+
+.sent-module__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sent-module__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sent-module__question {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.sent-module__note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* ── 唯一一张表 ─────────────────────────────────────────── */
+.sent-table {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.sent-table th {
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.sent-table th:first-child {
+  width: 34%;
+}
+
+.sent-th--num {
+  width: 22%;
+  text-align: right;
+}
+
+.sent-row > td {
+  padding: 6px 8px;
+  vertical-align: top;
+  border-bottom: 1px dashed var(--border);
+}
+
+.sent-cell-label {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.sent-cell-value {
+  text-align: right;
+}
+
+.sent-value {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sent-cell-meta {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.sent-cell-meta > span {
+  display: block;
+}
+
+.sent-missing {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+/* PIT 回落提示：用 accent（信息性），**不**借用极值带的两个颜色 ——
+ * 那两个色专供分位极值，挪作它用会让"红/紫=极端"的读法失效。 */
+.sent-flag {
+  color: var(--accent);
+}
+
+.sent-tag {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* 分位 chip：自带样本窗口；样本不足时只给文案，绝不给数字 */
+.sent-pct {
+  display: block;
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.sent-pct__q {
+  color: var(--text-primary);
+}
+
+.sent-pct__window {
+  display: block;
+}
+
+.sent-pct--none {
+  color: var(--text-secondary);
+}
+
+.sent-caliber-row > td {
+  padding: 4px 8px 8px;
+  border-bottom: 1px dashed var(--border);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.sent-caliber__src {
+  margin-right: 8px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+/* ── 未落地模块：只给结论 + 出处，不留空图 ─────────────── */
+.sent-unbuilt {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+}
+
+.sent-unbuilt__head {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sent-unbuilt__tag {
+  margin-right: 8px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.sent-unbuilt__detail {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+/* ── 响应式：窄屏把索引折到顶部 ─────────────────────────── */
+@media (max-width: 992px) {
+  .sent-page {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .sent-index {
+    position: static;
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 0 0 12px;
+  }
+
+  .sent-index__list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+  }
+
+  .sent-table {
+    table-layout: auto;
+  }
+}

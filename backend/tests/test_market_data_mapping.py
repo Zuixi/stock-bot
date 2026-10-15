@@ -1,6 +1,7 @@
 """market_data_service 纯映射/组装单测（monkeypatch，不触 DB/网络）。"""
 
 from datetime import date, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -8,7 +9,7 @@ from app.services import market_data_service as mds
 
 
 def test_global_indices_registry_shape():
-    assert len(mds.GLOBAL_INDICES) == 14
+    assert len(mds.GLOBAL_INDICES) == 19
     asia = [g for g in mds.GLOBAL_INDICES if g["region"] == "asia"]
     americas = [g for g in mds.GLOBAL_INDICES if g["region"] == "americas"]
     assert [g["ts_code"] for g in asia] == [
@@ -21,11 +22,24 @@ def test_global_indices_registry_shape():
         "000016.SH",
         "899050.BJ",
         "HSI",
+        "HKTECH",  # 恒生科技指数（TuShare index_global 的代码是 HKTECH，不是 HSTECH）
         "N225",
         "KS11",
+        "XIN9",  # 富时中国A50 指数期货（新加坡）
     ]
-    assert [g["ts_code"] for g in americas] == ["DJI", "SPX", "IXIC"]
-    assert {g["em_secid"] for g in americas} == {"100.DJIA", "100.SPX", "100.NDX"}
+    assert [g["ts_code"] for g in americas] == ["DJI", "SPX", "IXIC", "NDX", "SOX", "HXC"]
+    # 东财延迟行情只覆盖部分标的：无 secid 的（NDX/SOX/HXC）**不得**出现在这里——
+    # 否则读路径会把它们拼进 secids，取回空值或错值。
+    assert {g["em_secid"] for g in americas if g.get("em_secid")} == {
+        "100.DJIA",
+        "100.SPX",
+        "100.IXIC",  # IXIC（纳斯达克综合）的东财 secid；100.NDX 归 NDX（纳斯达克100）
+    }
+    assert {g["sina_code"] for g in americas if g.get("sina_code")} == {
+        "gb_$ndx",
+        "gb_$sox",
+        "gb_$hxc",
+    }
     # A 股宽基全部走 TuShare 日线回补 + 东财实时 secid
     cn = [g for g in asia if g["market"] == "CN"]
     assert {g["source"] for g in cn} == {"index_daily"}
@@ -39,6 +53,118 @@ def test_global_indices_registry_shape():
         "1.000016",
         "0.899050",
     }
+
+
+def test_global_indices_metadata_five_fields_all_non_empty():
+    """S1.3 验收判据：**全部**标的「名称 / 数据源代码 / 交易时段 / 时区 / 币种」非空率 100%。
+
+    逐条断言而不是 `len(set(...)) == len(...)`：后者在"全都漏填"时也会通过（同一个空串）。
+    """
+    assert mds.GLOBAL_INDICES, "登记表不得为空（空表会让下面的循环零次通过）"
+    for g in mds.GLOBAL_INDICES:
+        for field in ("name", "ts_code", "session", "timezone", "currency"):
+            value = g.get(field)
+            assert isinstance(value, str) and value.strip(), (
+                f"{g.get('ts_code') or '<无代码>'} 的 {field} 为空：{value!r}"
+            )
+        # 数据源代码 = 登记表的 source（另加行情源分流用的 quote_provider）
+        assert g["source"] in {"index_daily", "index_global", "sina_index"}
+        assert g["quote_provider"] in {"eastmoney", "sina"}
+        # 时区必须是可解析的 IANA 名（拼错时这里就炸，而不是等到某天换算交易时段时才发现）
+        ZoneInfo(g["timezone"])
+
+
+def test_a50_declares_singapore_cny_night_session():
+    """导图点名要求：A50 必须显式标「市场=新加坡 / 时段=CNY 夜盘」，不得与 A 股时段混淆。"""
+    a50 = next(g for g in mds.GLOBAL_INDICES if g["ts_code"] == "XIN9")
+    assert a50["market"] == "SG"
+    assert a50["timezone"] == "Asia/Singapore"
+    assert a50["currency"] == "CNY"
+    assert "夜盘" in a50["session"] and "T+1" in a50["session"]
+    # 与 A 股时段的**逐字不同**——这是"不得混淆"的可机械检测形式
+    cn_sessions = {g["session"] for g in mds.GLOBAL_INDICES if g["market"] == "CN"}
+    assert a50["session"] not in cn_sessions
+    assert a50["timezone"] not in {g["timezone"] for g in mds.GLOBAL_INDICES if g["market"] == "CN"}
+
+
+def test_ixic_and_ndx_are_distinct_instruments():
+    """S1.3 串号回归的**登记表侧**判据：IXIC（纳斯达克综合）与 NDX（纳斯达克100）
+    必须是两条不同标的，且各自绑定**不同**的行情代码。
+
+    最新值不等的运行时判据见 `test_ixic_and_ndx_latest_values_differ`（同文件），
+    本用例只锁"配置层面没有把它们串成同一个东西"。
+    """
+    by_code = {g["ts_code"]: g for g in mds.GLOBAL_INDICES}
+    ixic, ndx = by_code["IXIC"], by_code["NDX"]
+    assert ixic["name"] != ndx["name"]
+    assert "综合" in ixic["name"] and "100" in ndx["name"]
+    # 两套行情查找键都不得相同（相同 = 两个标的会拿到同一格价 → 就是串号本身）
+    assert ixic["sina_code" if ixic.get("sina_code") else "em_secid"] != ndx["sina_code"]
+    assert ixic.get("sina_code") != ndx.get("sina_code")
+    assert ixic.get("em_secid") != ndx.get("em_secid")
+
+
+@pytest.mark.asyncio
+async def test_ixic_and_ndx_latest_values_differ(monkeypatch):
+    """S1.3 行为判据：两个标的的**最新值不得相等**（相等即串号；上游真相等则该样本无效）。
+
+    这里喂的是 2026-10-09 收盘的**真实值**（IXIC 27366.1698 / NDX 30883.1478，同源于
+    新浪美股指数行情，见 `docs/design/data-source.md` 附.5 实机记录），走完整读路径
+    的组装逻辑；断言落在"两格价不相等"上，而不是"等于某个魔法数"。
+    """
+
+    class _NoCache:
+        async def get(self, key):
+            return None
+
+        async def set(self, key, value, ttl=None):
+            # 有价 → 会写缓存；本用例走"不读缓存"的路径，写入直接吞掉
+            return None
+
+    async def fake_snapshot(secids):
+        return [
+            {
+                "code": "IXIC",
+                "secid": "100.IXIC",
+                "name": "纳斯达克",
+                "price": 27366.1698,
+                "pct_change": 0.64,
+                "change": 172.8295,
+            }
+        ]
+
+    async def fake_sina_quotes(codes):
+        assert codes == ["gb_$ndx", "gb_$sox", "gb_$hxc"]
+        return {
+            "gb_$ndx": {
+                "code": "gb_$ndx",
+                "name": "纳斯达克100",
+                "price": 30883.1478,
+                "pct_change": 0.51,
+                "change": 157.3384,
+                "quote_time": "2026-10-10 05:30:00",
+            }
+        }
+
+    async def fake_kline(db, ts_code):
+        return []
+
+    monkeypatch.setattr(
+        mds,
+        "_get_eastmoney",
+        lambda: type("C", (), {"fetch_index_snapshot": staticmethod(fake_snapshot)})(),
+    )
+    monkeypatch.setattr(mds, "_get_sina_quotes", lambda: fake_sina_quotes)
+    monkeypatch.setattr(mds.index_repo, "get_kline", fake_kline)
+
+    cards = await mds.get_global_index_cards(cache=_NoCache())
+    by_code = {c["ts_code"]: c for c in cards}
+    ixic, ndx = by_code["IXIC"], by_code["NDX"]
+    assert ixic["price"] == 27366.1698
+    assert ndx["price"] == 30883.1478
+    assert ixic["price"] != ndx["price"]
+    assert ixic["price_source"] == "realtime"
+    assert ndx["price_source"] == "realtime_sina"
 
 
 def test_map_index_global_row_nan_vol_to_none():
@@ -111,7 +237,8 @@ async def test_ingest_global_index_daily_filters_and_upserts(monkeypatch):
     result = await mds.ingest_global_index_daily(db=None, lookback_days=14)
     assert result == {"upserted": 1}
     assert upserted[0].ts_code == "N225" and upserted[0].volume == 1724660.8
-    assert set(calls) == {"HSI", "N225", "KS11", "DJI", "SPX", "IXIC"}  # 只拉 index_global 源
+    # 只拉 index_global 源（sina_index 的 NDX/SOX/HXC 本轮无日线适配器 → 显式跳过）
+    assert set(calls) == {"HSI", "HKTECH", "N225", "KS11", "DJI", "SPX", "IXIC", "XIN9"}
 
 
 @pytest.mark.asyncio
@@ -227,19 +354,33 @@ async def test_get_global_index_cards_merges_realtime_and_spark(monkeypatch):
             },
         ),
     )
+
+    # 新浪一路必须被短路：本用例只关心东财 + EOD 兜底，不得真发网络请求
+    async def fake_sina_quotes(codes):
+        return {}
+
+    monkeypatch.setattr(mds, "_get_sina_quotes", lambda: fake_sina_quotes)
     monkeypatch.setattr(mds.index_repo, "get_kline", fake_kline)
 
     cards = await mds.get_global_index_cards(cache=_FakeCache())
     by_code = {c["ts_code"]: c for c in cards}
-    assert len(cards) == 14
-    assert by_code["N225"]["price"] == 64214.48 and by_code["N225"]["source"] == "realtime"
+    assert len(cards) == 19
+    assert by_code["N225"]["price"] == 64214.48 and by_code["N225"]["price_source"] == "realtime"
     assert len(by_code["N225"]["spark"]) == 30  # 35 行裁到 30
     # KS11 实时缺失 → 用日线最后一根 close 兜底（pre_close 为 NULL，逐 close 差值算涨跌）
-    assert by_code["KS11"]["price"] == 60034.0 and by_code["KS11"]["source"] == "eod"
+    assert by_code["KS11"]["price"] == 60034.0 and by_code["KS11"]["price_source"] == "eod"
     assert by_code["KS11"]["change"] == 1.0 and by_code["KS11"]["pct_change"] == 0.0  # 60033→60034
     # N225 实时透传
     assert by_code["N225"]["change"] == -111.16 and by_code["N225"]["pct_change"] == -0.17
     assert set(kline_calls) == {g["ts_code"] for g in mds.GLOBAL_INDICES}
+    # 新浪未返回且本用例的 fake_kline 对所有代码都给了日线 → NDX 走 EOD 兜底。
+    # 重点在"**有价时绝不落到 none**，无价时绝不落到 0"。
+    assert by_code["NDX"]["price_source"] == "eod"
+    assert by_code["NDX"]["price"] == 60034.0
+    assert by_code["NDX"]["data_source"] == "sina_index"
+    # 每条卡片都带齐五要素与数据源代码（S1.3 判据在端点层的体现）
+    for c in cards:
+        assert c["session"] and c["timezone"] and c["currency"] and c["data_source"]
 
 
 @pytest.mark.asyncio
@@ -292,6 +433,7 @@ async def test_ingest_sector_moneyflow_uses_today_and_both_dims(monkeypatch):
 
 
 def test_map_hsgt_rows_string_to_float():
+    """``north_money`` → ``amount``（万元），并按交易日打上行级口径（Ruling 62/63）。"""
     df = mds.pd.DataFrame(
         [
             {"trade_date": "20260902", "north_money": "244809.28"},
@@ -300,8 +442,26 @@ def test_map_hsgt_rows_string_to_float():
     )
     rows = mds._map_hsgt_rows(df)
     assert rows == [
-        {"trade_date": date(2026, 9, 2), "net_amount": 244809.28},
-        {"trade_date": date(2026, 9, 1), "net_amount": 273259.26},
+        {"trade_date": date(2026, 9, 2), "amount": 244809.28, "amount_kind": "turnover"},
+        {"trade_date": date(2026, 9, 1), "amount": 273259.26, "amount_kind": "turnover"},
+    ]
+
+
+def test_map_hsgt_rows_labels_pre_breakpoint_as_net_buy():
+    """断点（2024-08-19）之前的上游值必须是 ``net_buy``，**不是**成交额。
+
+    这正是本次要修的错标：同一列两种口径，行级标记必须跟着交易日走，不能整表一个假设。
+    """
+    df = mds.pd.DataFrame(
+        [
+            {"trade_date": "20240816", "north_money": "-3209.23"},
+            {"trade_date": "20240819", "north_money": "77584.24"},
+        ]
+    )
+    rows = mds._map_hsgt_rows(df)
+    assert rows == [
+        {"trade_date": date(2024, 8, 16), "amount": -3209.23, "amount_kind": "net_buy"},
+        {"trade_date": date(2024, 8, 19), "amount": 77584.24, "amount_kind": "turnover"},
     ]
 
 
@@ -566,23 +726,24 @@ async def test_global_index_cards_distinguish_markets_with_same_code_digits(monk
         async def set(self, key, value, ttl=None):
             self.store[key] = value
 
+    # 用登记表的构造函数造条目（而不是手写 dict）：这样"新增的必填字段"不会只在这里漏掉。
     entries = [
-        {
-            "ts_code": "T1.SH",
-            "name": "沪测试",
-            "market": "CN",
-            "region": "asia",
-            "em_secid": "1.000001",
-            "source": "index_daily",
-        },
-        {
-            "ts_code": "T2.SZ",
-            "name": "深测试",
-            "market": "CN",
-            "region": "asia",
-            "em_secid": "0.000001",
-            "source": "index_daily",
-        },
+        mds._instrument(
+            ts_code="T1.SH",
+            name="沪测试",
+            market="CN",
+            region="asia",
+            em_secid="1.000001",
+            source="index_daily",
+        ),
+        mds._instrument(
+            ts_code="T2.SZ",
+            name="深测试",
+            market="CN",
+            region="asia",
+            em_secid="0.000001",
+            source="index_daily",
+        ),
     ]
     monkeypatch.setattr(mds, "GLOBAL_INDICES", entries)
 
@@ -614,9 +775,184 @@ async def test_global_index_cards_distinguish_markets_with_same_code_digits(monk
         "_get_eastmoney",
         lambda: type("C", (), {"fetch_index_snapshot": staticmethod(fake_snapshot)}),
     )
+
+    async def fake_sina_quotes(codes):
+        return {}  # 本用例只覆盖东财一路；短路新浪避免真网络
+
+    monkeypatch.setattr(mds, "_get_sina_quotes", lambda: fake_sina_quotes)
     monkeypatch.setattr(mds.index_repo, "get_kline", fake_kline)
 
     cards = await mds.get_global_index_cards(cache=_FakeCache())
     by_code = {c["ts_code"]: c for c in cards}
     assert by_code["T1.SH"]["price"] == 111.0
     assert by_code["T2.SZ"]["price"] == 222.0
+
+
+@pytest.mark.asyncio
+async def test_global_indices_endpoint_carries_five_fields(monkeypatch):
+    """端点层契约（S1.3 交付物「全球标的元数据表」的可读形态）。
+
+    直测 handler（仓库惯例，不引入 TestClient）：断言 `GlobalIndexCardOut` 真的把
+    五要素与 `data_source`/`price_source` 透出去——服务层有字段但 schema 漏字段
+    （或反之）都会在这里转红。
+    """
+    from app.api.v1 import market_data as api
+
+    async def fake_cards(cache=None):
+        return [
+            {
+                "ts_code": "IXIC",
+                "name": "纳斯达克综合指数",
+                "market": "US",
+                "region": "americas",
+                "session": "09:30-16:00",
+                "timezone": "America/New_York",
+                "currency": "USD",
+                "price": 27366.1698,
+                "change": 172.8295,
+                "pct_change": 0.64,
+                "spark": [1.0, 2.0],
+                "updated_at": "2026-10-16T10:00:00+08:00",
+                "data_source": "index_global",
+                "price_source": "realtime",
+            },
+            {
+                "ts_code": "NDX",
+                "name": "纳斯达克100指数",
+                "market": "US",
+                "region": "americas",
+                "session": "09:30-16:00",
+                "timezone": "America/New_York",
+                "currency": "USD",
+                "price": 30883.1478,
+                "change": 157.3384,
+                "pct_change": 0.51,
+                "spark": [],
+                "updated_at": "2026-10-16T10:00:00+08:00",
+                "data_source": "sina_index",
+                "price_source": "realtime_sina",
+            },
+        ]
+
+    monkeypatch.setattr(mds, "get_global_index_cards", fake_cards)
+
+    out = await api.get_global_indices(cache=None)
+    by_code = {c.ts_code: c for c in out}
+    assert set(by_code) == {"IXIC", "NDX"}
+    for card in out:
+        assert card.name and card.session and card.timezone and card.currency and card.data_source
+    assert by_code["IXIC"].price != by_code["NDX"].price  # 串号回归在端点层同样成立
+
+
+@pytest.mark.asyncio
+async def test_card_name_comes_from_registry_not_upstream(monkeypatch):
+    """卡片名一律取登记表 —— 上游名字与登记名不一致时**不得**反过来覆盖登记名。
+
+    回归背景：东财把"纳斯达克"的 secid（`100.NDX`）与"纳斯达克100"混用，新浪对
+    `gb_$ndx` 又回「纳斯达克100」；若卡片名取上游，`IXIC`（纳斯达克**综合**）会显示成
+    「纳斯达克」、与 `NDX`（纳斯达克100）在页面上串号 —— 正是 S1.3 要消灭的那处错误。
+    """
+
+    class _Cache:
+        async def get(self, key):
+            return None
+
+        async def set(self, key, value, ttl=None):
+            return None
+
+    async def fake_snapshot(secids):
+        return [
+            {
+                "code": "IXIC",
+                "secid": "100.IXIC",
+                "name": "纳斯达克",  # ← 上游名字（与登记名不同）
+                "price": 27366.17,
+                "pct_change": 0.64,
+                "change": 172.83,
+            }
+        ]
+
+    async def fake_sina_quotes(codes):
+        return {
+            "gb_$ndx": {
+                "code": "gb_$ndx",
+                "name": "纳斯达克100",
+                "price": 30883.15,
+                "pct_change": 0.51,
+                "change": 157.34,
+            }
+        }
+
+    async def fake_kline(db, ts_code):
+        return []
+
+    monkeypatch.setattr(
+        mds,
+        "_get_eastmoney",
+        lambda: type("C", (), {"fetch_index_snapshot": staticmethod(fake_snapshot)})(),
+    )
+    monkeypatch.setattr(mds, "_get_sina_quotes", lambda: fake_sina_quotes)
+    monkeypatch.setattr(mds.index_repo, "get_kline", fake_kline)
+
+    cards = {c["ts_code"]: c for c in await mds.get_global_index_cards(cache=_Cache())}
+    assert cards["IXIC"]["name"] == "纳斯达克综合指数"  # 登记名，不是上游的「纳斯达克」
+    assert cards["NDX"]["name"] == "纳斯达克100指数"
+    assert cards["IXIC"]["name"] != cards["NDX"]["name"]
+    # IXIC 与 NDX 的行情查找键必须不同（否则两格价来自同一行情 → 最新值必然相等）
+    ixic = next(g for g in mds.GLOBAL_INDICES if g["ts_code"] == "IXIC")
+    ndx = next(g for g in mds.GLOBAL_INDICES if g["ts_code"] == "NDX")
+    assert ixic["em_secid"] != ndx.get("em_secid")
+
+
+@pytest.mark.asyncio
+async def test_price_source_none_when_no_quote_and_no_history(monkeypatch):
+    """**"没有价"必须是 `None` + `price_source="none"`，绝不落成 0。**
+
+    这是 S1.3 brief 最在意的那条不变量（"不得显示假数据"）：`0` 会被读成"平盘"、
+    在页面上是一个合法点位，而 `None` + `none` 会被前端渲染成 `—` 与「数据源待接入」。
+
+    什么情况下红：有人把缺价分支写成 `last_close or 0`、把 `_PRICE_NONE` 误标成 `_PRICE_EOD`，
+    或让 `any(price is not None)` 的缓存判据在全空时也写缓存（那样一次上游抖动会冻结 60s）。
+    """
+
+    class _Cache:
+        def __init__(self) -> None:
+            self.store: dict = {}
+            self.writes = 0
+
+        async def get(self, key):
+            return self.store.get(key)
+
+        async def set(self, key, value, ttl=None):
+            self.writes += 1
+            self.store[key] = value
+
+    cache = _Cache()
+
+    async def empty_snapshot(secids):
+        return []  # 东财一路空
+
+    async def empty_sina(codes):
+        return {}  # 新浪一路空
+
+    async def empty_kline(db, ts_code):
+        return []  # 库内无日线
+
+    monkeypatch.setattr(
+        mds,
+        "_get_eastmoney",
+        lambda: type("C", (), {"fetch_index_snapshot": staticmethod(empty_snapshot)})(),
+    )
+    monkeypatch.setattr(mds, "_get_sina_quotes", lambda: empty_sina)
+    monkeypatch.setattr(mds.index_repo, "get_kline", empty_kline)
+
+    cards = await mds.get_global_index_cards(cache=cache)
+    for c in cards:
+        assert c["price"] is None, f"{c['ts_code']} 无行情时 price 应为 None，实得 {c['price']!r}"
+        assert c["price_source"] == "none", f"{c['ts_code']} 应标 none，实得 {c['price_source']}"
+        assert c["change"] is None and c["pct_change"] is None
+        assert c["spark"] == []
+        # 五要素不因"没价"而丢——元数据与行情是两件事
+        assert c["session"] and c["timezone"] and c["currency"]
+    # 全空 payload **不写缓存**：否则一次上游抖动会把"全无价"冻结整个 TTL
+    assert cache.writes == 0

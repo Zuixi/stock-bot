@@ -17,11 +17,52 @@ export interface BackendMetricLatest {
   source: string | null;
   freq: string | null;
   period: string | null;
+  // 四徽章（spec §S1.2）：as_of 是 PIT 实际可得日，as_of_source 标注它来自
+  // published_at（真 PIT）还是回退的 period（"发布即连续可得"的行情序列）
+  as_of: string | null;
+  as_of_source: "published_at" | "period" | null;
+  published_at: string | null;
+  caliber_version: string | null;
+  caliber_version_registered: string | null;
+  scope_key: string | null;
   delta: BackendMetricDelta | null;
   warn: string | null;
   warn_severity: string | null;
   spark: number[] | null;
   description: string;
+  // 缺数语义（Ruling 61）：取值来自该行 `extra.missing_reason`；`coverage` 是覆盖率徽章。
+  // 后端 `MetricLatestOut` 一直有这两个字段，此前前端类型未声明 ⇒ 被静默丢弃，
+  // 消费端只能看到 `value=null`，分不清"源侧滞后"与"真缺数"。
+  missing_reason: string | null;
+  coverage: number | null;
+}
+
+/** 通用读面 `GET /api/v1/metrics/series`（spec §S1.2）：窗口内升序序列 + 四徽章 */
+export interface BackendMetricSeries {
+  scope_key: string;
+  metric_key: string;
+  name: string;
+  unit: string | null;
+  tier: string;
+  freq: string;
+  source: string | null;
+  source_mismatch: boolean;
+  caliber_version: string | null;
+  caliber_version_registered: string | null;
+  range: string;
+  period_from: string | null;
+  limit: number;
+  truncated: boolean;
+  points: {
+    period: string;
+    value: number | null;
+    source: string;
+    freq: string;
+    as_of: string | null;
+    as_of_source: "published_at" | "period" | null;
+    published_at: string | null;
+    caliber_version: string | null;
+  }[];
 }
 
 export interface BackendReference {
@@ -187,6 +228,8 @@ export interface MetricDelta {
   label: string;
 }
 
+export type AsOfSource = "published_at" | "period";
+
 export interface MetricLatest {
   metricKey: string;
   name: string;
@@ -196,11 +239,51 @@ export interface MetricLatest {
   source: string | null;
   freq: string | null;
   period: string | null;
+  /** PIT 实际可得日（Asia/Shanghai 日历日）；period 回退时 asOfSource === "period" */
+  asOf: string | null;
+  asOfSource: AsOfSource | null;
+  publishedAt: string | null;
+  caliberVersion: string | null;
+  caliberVersionRegistered: string | null;
+  scopeKey: string | null;
   delta: MetricDelta | null;
   warn: string | null;
   warnSeverity: string | null;
   spark: number[] | null;
   description: string;
+  /** `extra.missing_reason` 缺数原因码；无缺口/未登记时为 `null`（见 Ruling 61）。 */
+  missingReason: string | null;
+  /** 覆盖率徽章（`coverage` → `weight_coverage` → `member_coverage` 取首个数值）。 */
+  coverage: number | null;
+}
+
+export interface MetricSeriesPoint {
+  period: string;
+  value: number | null;
+  source: string;
+  freq: string;
+  asOf: string | null;
+  asOfSource: AsOfSource | null;
+  publishedAt: string | null;
+  caliberVersion: string | null;
+}
+
+export interface MetricSeries {
+  scopeKey: string;
+  metricKey: string;
+  name: string;
+  unit: string | null;
+  tier: string;
+  freq: string;
+  source: string | null;
+  sourceMismatch: boolean;
+  caliberVersion: string | null;
+  caliberVersionRegistered: string | null;
+  range: string;
+  periodFrom: string | null;
+  limit: number;
+  truncated: boolean;
+  points: MetricSeriesPoint[];
 }
 
 export interface Reference {
@@ -333,11 +416,48 @@ function mapMetricLatest(m: BackendMetricLatest): MetricLatest {
     source: m.source,
     freq: m.freq,
     period: m.period,
+    asOf: m.as_of,
+    asOfSource: m.as_of_source,
+    publishedAt: m.published_at,
+    caliberVersion: m.caliber_version,
+    caliberVersionRegistered: m.caliber_version_registered,
+    scopeKey: m.scope_key,
     delta: m.delta ? { pct: m.delta.pct, direction: m.delta.direction, label: m.delta.label } : null,
     warn: m.warn,
     warnSeverity: m.warn_severity,
     spark: m.spark,
     description: m.description,
+    missingReason: m.missing_reason ?? null,
+    coverage: m.coverage ?? null,
+  };
+}
+
+function mapMetricSeries(s: BackendMetricSeries): MetricSeries {
+  return {
+    scopeKey: s.scope_key,
+    metricKey: s.metric_key,
+    name: s.name,
+    unit: s.unit,
+    tier: s.tier,
+    freq: s.freq,
+    source: s.source,
+    sourceMismatch: s.source_mismatch,
+    caliberVersion: s.caliber_version,
+    caliberVersionRegistered: s.caliber_version_registered,
+    range: s.range,
+    periodFrom: s.period_from,
+    limit: s.limit,
+    truncated: s.truncated,
+    points: s.points.map((p) => ({
+      period: p.period,
+      value: p.value,
+      source: p.source,
+      freq: p.freq,
+      asOf: p.as_of,
+      asOfSource: p.as_of_source,
+      publishedAt: p.published_at,
+      caliberVersion: p.caliber_version,
+    })),
   };
 }
 
@@ -452,6 +572,31 @@ function mapIndustrySecurities(s: BackendIndustrySecurities): IndustrySecurities
 }
 
 // ── Fetchers ──────────────────────────────────────────────────────────
+
+/** 通用读面：跨 scope 每指标最新值 + 四徽章（spec §S1.2，registry 即白名单） */
+export function fetchMetricLatest(
+  scopeKeys: string[],
+  metricKeys?: string[]
+): Promise<MetricLatest[]> {
+  const params = new URLSearchParams();
+  scopeKeys.forEach((k) => params.append("scope_keys", k));
+  metricKeys?.forEach((k) => params.append("metric_keys", k));
+  return apiGet<BackendMetricLatest[]>(`/api/v1/metrics/latest?${params.toString()}`).then((rows) =>
+    rows.map(mapMetricLatest)
+  );
+}
+
+/** 通用读面：一个 scope+metric 的窗口内升序序列（range 如 30d / 3m / 1y / all） */
+export function fetchMetricSeries(
+  scopeKey: string,
+  metricKey: string,
+  range = "1y"
+): Promise<MetricSeries> {
+  const params = new URLSearchParams({ scope_key: scopeKey, metric_key: metricKey, range });
+  return apiGet<BackendMetricSeries>(`/api/v1/metrics/series?${params.toString()}`).then(
+    mapMetricSeries
+  );
+}
 
 export function fetchIndustries(): Promise<IndustrySummary[]> {
   return apiGet<BackendIndustrySummary[]>("/api/v1/industries").then((rows) =>

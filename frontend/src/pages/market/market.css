@@ -11,13 +11,53 @@
   flex-wrap: wrap;
 }
 
-/* 顶部分类 Tab（TV 风）：大字号 + 底部分隔线 */
+/* 数据来源入口（Phase 1 §W2.1 的补偿行）：靠右、12px、--text-secondary。
+   `margin-left: auto` 把它推到副标题之后的行尾；窄屏 flex-wrap 后独占一行，
+   此时 auto 左边距无副作用（满宽）。 */
+.market-page-head__sources {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.market-page-head__sources:hover {
+  color: var(--accent);
+}
+
+/* 顶部分类 Tab（TV 风）：大字号 + 底部分隔线。
+   P1-1 第二轮后它不再是"面板开关"，而是**分区导航**（内容已全部堆叠在下方）：标签条吸附在
+   顶部，长页里随时可切分区。三条硬约束（实测得来，不是审美）：
+   ① `top` 必须是**顶栏高度** `64px`，不是 0 —— 全站 `Header` 也是 `position: sticky; top: 0`
+      （z-index 100 > 本条的 20），写 0 会让导航**滑到顶栏底下**（等于吸附后消失）；
+   ② 吸附态**必须不透明**（--bg-page），否则下层卡片会从标签缝隙里透出来；
+   ③ `ant-tabs-nav` 的 16px 下边距收成 0，改由本容器 padding 负责与分区标题的间距。
+   实测（1440/390 两档）：Header 64px、导航条 52px（44 + 8 padding）。 */
+.market-page > .ant-tabs.market-page__nav {
+  position: sticky;
+  top: 64px;
+  z-index: 20;
+  background: var(--bg-page);
+  padding-bottom: 8px;
+}
+
 .market-page > .ant-tabs {
   margin-bottom: 4px;
 }
 
 .market-page > .ant-tabs .ant-tabs-nav {
   margin-bottom: 16px;
+}
+
+.market-page > .ant-tabs.market-page__nav .ant-tabs-nav {
+  margin-bottom: 0;
+}
+
+/* 导航只负责"去哪一块"：五个 item 没有 children，AntD 仍会渲染一个空的 content-holder，
+   给它留白会读成"下面还有一块没加载"。 */
+.market-page > .ant-tabs.market-page__nav .ant-tabs-content-holder {
+  display: none;
 }
 
 .market-page > .ant-tabs .ant-tabs-tab {
@@ -31,12 +71,13 @@
   border-radius: 8px;
 }
 
-/* 情绪 Tab 的盘中/收盘口径切换（Task 13）：控件与提示同一行，窄屏换行 */
+/* 情绪分区的盘中/收盘口径切换（Task 13）：**P1-1 第二轮起它是短线情绪分区的维度条内容**
+   （唯一真可切换的维度），故不再自带 `margin-bottom` —— 间距归分区维度条所有，
+   两处都写会得到 12+12 的空档。控件与提示仍同一行，窄屏换行。 */
 .sentiment-mode-switch {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 12px;
   flex-wrap: wrap;
 }
 

@@ -3,15 +3,18 @@ import type { Page } from "@playwright/test";
 
 /**
  * 投研工作台浏览器级 E2E（依赖运行中的 docker 栈，数据为实盘/混合源，故断言只锚定结构与中文标签，不锚定具体数值）。
- * - /research：行业卡片（生猪养殖）+ 指标接入覆盖度
- * - /research/pig：猪智投看板（周期标签 / 信号 / 指标带 / 相位条 / 仓位建议 / EChart / 核心速览）
- * - /research/pig 行业知识库 Tab：机构图谱分组卡片 + 权威性原则 + 思维导图（P6）
- * - /research/pig 行情调研追踪 Tab：标的分析成分股对比表（registry 列渲染 + 行点击跳 /stock/:symbol）
- * - /research/pig 行情调研追踪 Tab：行业 ETF 表（P5 行情面，TuShare fund_daily 实拉数据）
+ * - /industry：行业卡片（生猪养殖）+ 指标接入覆盖度（旧 /research 已 redirect 到此）
+ * - /industry/pig：猪智投看板（周期标签 / 信号 / 指标带 / 相位条 / 仓位建议 / EChart / 核心速览）
+ * - /industry/pig 行业知识库 Tab：机构图谱分组卡片 + 权威性原则 + 思维导图（P6）
+ * - /industry/pig 行情调研追踪 Tab：标的分析成分股对比表（registry 列渲染 + 行点击跳 /company/:symbol）
+ * - /industry/pig 行情调研追踪 Tab：行业 ETF 表（P5 行情面，TuShare fund_daily 实拉数据）
  * - /market/industry/110000/110700：生猪养殖三级行业页的"进入投研工作台"banner 导航
  * - 泛化验证（P6）：白羽肉鸡（broiler）第二行业卡片 → 同一工作台零新页面渲染
- * - /research：行业卡片等高（描述单行省略号 + Col flex 拉伸兜底）
- * - /research/pig：面包屑"投研"可点击返回行业列表
+ * - /industry：行业卡片等高（描述单行省略号 + Col flex 拉伸兜底）
+ * - /industry/pig：面包屑「行业分析」可点击返回行业列表
+ *
+ * 路由迁移见 docs/design/ia-investment-research-platform.md §4（Task 5 / S1.1）：
+ * 断言新 URL 时按 `/industry*` 写——`/research*` 只是 redirect，不承载最终 URL。
  */
 
 // 数据由 react-query 异步加载、图表异步渲染，统一放宽断言轮询窗口
@@ -71,7 +74,7 @@ test("猪智投工作台：从行业卡片进入，看板核心区块完整渲�
   // 通过点击行业卡片导航（而非直接 goto），覆盖列表 → 工作台的真实路径
   const card = page.locator(".ant-card").filter({ hasText: "生猪养殖" });
   await card.click();
-  await page.waitForURL("**/research/pig");
+  await page.waitForURL("**/industry/pig");
 
   // 先等 Tab 栏挂载：/research 列表卡片也带 周期阶段/当前信号 Tag（P6），
   // SPA 路由切换瞬间旧列表仍在 DOM，直接断言会撞严格模式多元素
@@ -161,13 +164,16 @@ test("行情调研追踪：标的分析对比表渲染并跳转个股", async ({
     await expect(table.locator("thead th").filter({ hasText: header })).toBeVisible();
   }
 
-  // 行数 ≥1（成分股来自 SW 分类）且行点击跳转 /stock/:symbol
+  // 行数 ≥1（成分股来自 SW 分类）且行点击跳转 /company/:symbol
   // （.ant-table-row 跳过 antd 横向滚动的隐藏 measure 行）
   await expect
     .poll(async () => table.locator("tbody tr.ant-table-row").count())
     .toBeGreaterThanOrEqual(1);
   await table.locator("tbody tr.ant-table-row").first().click();
-  await page.waitForURL(/\/stock\/\d{6}$/);
+  // 规范路由是 `/company/:symbol`（`/stock/:symbol` 只是留给外部旧链接的 redirect）。
+  // 应用内部链接已统一到规范路由，故断言规范路由。**本用例平时会 skip**（缺 E2E_RESEARCH_USER），
+  // 所以"改导航目标时漏了它"直到带真凭据跑才暴露——这正是 skip 型用例长期潜伏的代价。
+  await page.waitForURL(/\/company\/\d{6}$/);
 });
 
 test("行情调研追踪：行业 ETF 表展示畜牧 ETF 日线", async ({ page }) => {
@@ -197,7 +203,7 @@ test("生猪养殖三级行业页：投研工作台导航 banner", async ({ page
   await expect(banner).toContainText(/已产品化/);
 
   await banner.getByRole("button", { name: "进入投研工作台" }).click();
-  await page.waitForURL("**/research/pig");
+  await page.waitForURL("**/industry/pig");
   await expect(page.getByRole("heading", { name: "投研工作台" })).toBeVisible();
 });
 
@@ -231,7 +237,7 @@ test("泛化验证：白羽肉鸡第二行业卡片零新页面进入工作台",
 
   // 点击 broiler 卡片 → 复用同一工作台路由与组件，指标带渲染 registry 下发的肉鸡指标
   await broilerCard.click();
-  await page.waitForURL("**/research/broiler");
+  await page.waitForURL("**/industry/broiler");
 
   const strip = page.locator("section").filter({ hasText: "综合指标" });
   await expect(strip).toBeVisible();
@@ -266,11 +272,11 @@ test("工作台面包屑：投研项可点击返回行业列表", async ({ page 
   await page.goto("/research/pig");
 
   // 面包屑首项为 react-router Link，末项"工作台"为当前页（无链接）
-  const crumbLink = page.getByRole("link", { name: "投研" });
+  const crumbLink = page.getByRole("link", { name: "行业分析" });
   await expect(crumbLink).toBeVisible();
   await crumbLink.click();
 
-  await page.waitForURL("**/research");
+  await page.waitForURL("**/industry");
   await expect(page.locator(".ant-card").filter({ hasText: "生猪养殖" })).toBeVisible();
 });
 

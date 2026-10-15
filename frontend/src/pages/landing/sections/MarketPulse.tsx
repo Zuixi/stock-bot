@@ -42,10 +42,10 @@ function Ticker({ index }: { index: GlobalIndexCard }) {
       <div className="landing-ticker-name" title={index.name}>
         {index.name}
       </div>
-      <div className="landing-ticker-price">
+      <div className="landing-ticker-price num">
         {index.price != null ? formatPrice(index.price) : "--"}
       </div>
-      <span className="landing-ticker-chip" style={{ background: color }}>
+      <span className="landing-ticker-chip num" style={{ background: color }}>
         {pct != null ? `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%` : "--"}
       </span>
     </div>
@@ -140,11 +140,11 @@ export function MarketPulse() {
           {up != null && down != null ? (
             <>
               当日 A 股（T+1）：上涨{" "}
-              <b style={{ color: colors.up, fontVariantNumeric: "tabular-nums" }}>
+              <b className="num" style={{ color: colors.up }}>
                 {up.toLocaleString()}
               </b>{" "}
               · 下跌{" "}
-              <b style={{ color: colors.down, fontVariantNumeric: "tabular-nums" }}>
+              <b className="num" style={{ color: colors.down }}>
                 {down.toLocaleString()}
               </b>
             </>

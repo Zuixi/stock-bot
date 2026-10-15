@@ -202,8 +202,11 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "22", cache: "npm", cache-dependency-path: frontend/package-lock.json }
       - run: npm ci
-      # 设计令牌硬门禁：涨跌色对比度（bg-page + bg-panel）≥ 4.5 且 theme.ts↔theme.css 一致
+      # 设计令牌硬门禁：涨跌色对比度（bg-page + bg-panel）≥ 4.5 + theme.ts↔theme.css 一致
+      #                    + 组件引用的每个 var(--x) 必须真的被定义（Ruling 43）
       - run: npm run check:design
+      # 路由迁移硬门禁：旧 15 条路由/redirect 目标逐字/保留非 redirect/目标非占位页/IA 文档↔代码一致
+      - run: npm run check:routes
       - run: npx tsc --noEmit
 
   frontend-build:

@@ -40,15 +40,20 @@ export function SearchBar() {
   }, [debouncedKeyword, candidates]);
 
   return (
+    // `data-testid="global-search"` 是 E2E 锚点：顶栏里"单个控件谁最宽"（P1-3 的判据）
+    // 需要一个稳定的选择器。注意 `.ant-input-affix-wrapper` 是**内层输入框**，
+    // 外层 `.ant-select` 才是控件本体——两者宽度现在都由调用方（`MainLayout` 的
+    // 弹性容器）决定，这里不再写死像素值。
     <AutoComplete
+      data-testid="global-search"
       options={options}
       onSelect={(val) => {
-        navigate(`/stock/${val}`);
+        navigate(`/company/${val}`);
         setKeyword("");
       }}
       onSearch={setKeyword}
       value={keyword}
-      style={{ width: 220 }}
+      style={{ width: "100%" }}
     >
       <Input
         prefix={<SearchOutlined />}

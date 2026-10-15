@@ -30,7 +30,6 @@
 
 .ladder-pill {
   font-size: 12px;
-  font-variant-numeric: tabular-nums;
   color: var(--text-secondary);
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -102,7 +101,6 @@
 
 .ladder-tier__count {
   font-size: 11.5px;
-  font-variant-numeric: tabular-nums;
   color: var(--text-secondary);
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -168,7 +166,6 @@
 .ladder-stock__seal {
   font-size: 11.5px;
   color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 

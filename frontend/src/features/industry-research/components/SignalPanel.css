@@ -1,0 +1,71 @@
+/*
+ * 信号面板 · 历史 diff 化（Phase 4 §5.5）的样式。
+ *
+ * 主题口径：一律走 theme.css 的 CSS 变量（明暗两套自动跟随），
+ * 字号按 §3.5 刻度：变化项 12px / 值 12px 等宽数字。
+ */
+
+.signal-history__full {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  line-height: 1.55;
+}
+
+.signal-history__changes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 3px;
+}
+
+.signal-change {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* 旧值：次级色 + 删除线由 `→` 承担，不再叠额外装饰 */
+.signal-change__from {
+  color: var(--text-secondary);
+}
+
+.signal-change__arrow {
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: 11px;
+}
+
+/* 新值：主色 + 等宽数字（`.num` 由 JSX 挂，这里只负责强调） */
+.signal-change[data-change-kind="value"] .signal-change__to {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.signal-change[data-change-kind="changed"] {
+  color: var(--text-primary);
+}
+
+.signal-change__new {
+  color: var(--up);
+  font-weight: 700;
+}
+
+.signal-history__nochange,
+.signal-history__collapsed {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  line-height: 1.5;
+}
+
+.signal-history__collapsed {
+  font-style: italic;
+}
+
+.signal-history__range {
+  font-style: normal;
+  font-size: 11px;
+}

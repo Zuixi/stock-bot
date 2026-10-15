@@ -1,4 +1,9 @@
 import { expect, test } from "@playwright/test";
+import {
+  TRIPLET_LABEL,
+  TRIPLET_ORDER,
+  TRIPLET_WIDTH,
+} from "../src/shared/ui/instrumentTriplet";
 
 /**
  * 市场数据面 E2E（依赖运行中的 docker 栈，数据为实盘源）。
@@ -58,6 +63,43 @@ test.describe("市场数据面", () => {
     await page.getByRole("tab", { name: "龙虎榜", exact: true }).click();
     const board = page.locator(".ant-card").filter({ hasText: "数据面" });
     await expect15s(board.locator("thead th").filter({ hasText: "上榜原因" })).toBeVisible();
+
+    /**
+     * P1-2：**指标三元组契约**（最新价 → 涨跌额 → 涨跌幅，右对齐 + 固定列宽）。
+     *
+     * 为什么断言在 `thead` 且先收进 `board`（这张卡）：三元组现在出现在多张清单
+     * （榜单/自选/龙虎榜/…），全局 `getByText("涨跌幅")` 会撞 strict mode。
+     *
+     * 断言的是**列位与列宽**这两条契约本身，不是数值——数值来自实盘（会变），
+     * 而"哪一列在哪、有多宽、往哪对齐"是结构与设计契约，与数据无关，故这条用例
+     * 保持"断 UI 结构不断数值"的既有纪律。
+     *
+     * 列宽取自 `src/shared/ui/instrumentTriplet.ts`（**import 常量的用意**：断言的是
+     * "渲染出来的几何 == 声明的契约"，而不是把数字在 spec 里再抄一遍——抄一遍的话
+     * 实现漂移时 spec 会跟着漂）。1440 视口给容器留出余量，余量由"余量列"吸收，
+     * 三元组三列按声明值逐列精确（见 `WatchlistTable` 的 MIN_TABLE_WIDTH 注释）。
+     */
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const heads = board.locator(".ant-table-thead th");
+    const labels = (await heads.allInnerTexts()).map((t) => t.trim());
+    const first = labels.indexOf(TRIPLET_LABEL[TRIPLET_ORDER[0]]);
+    expect(first, `龙虎榜表头里找不到「${TRIPLET_LABEL[TRIPLET_ORDER[0]]}」：实际 ${JSON.stringify(labels)}`)
+      .toBeGreaterThanOrEqual(0);
+    expect(
+      labels.slice(first, first + TRIPLET_ORDER.length),
+      `三元组不齐/乱序：实际 ${JSON.stringify(labels)}`
+    ).toEqual(TRIPLET_ORDER.map((m) => TRIPLET_LABEL[m]));
+    for (let i = 0; i < TRIPLET_ORDER.length; i += 1) {
+      const th = heads.nth(first + i);
+      const member = TRIPLET_ORDER[i];
+      await expect(th, `${TRIPLET_LABEL[member]} 列没有右对齐`).toHaveCSS("text-align", "right");
+      const box = await th.boundingBox();
+      expect(
+        Math.round(box?.width ?? -1),
+        `${TRIPLET_LABEL[member]} 列宽 ${box?.width} ≠ 三元组契约 ${TRIPLET_WIDTH[member]}px`
+      ).toBe(TRIPLET_WIDTH[member]);
+    }
+
     await page.getByRole("tab", { name: "公告快讯" }).click();
     await expect15s(board.locator(".ant-list")).toBeVisible();
   });
@@ -104,6 +146,26 @@ async function mockFallbackDistribution(page: import("@playwright/test").Page) {
   );
 }
 
+/**
+ * 未解析出判据日：后端 `get_distribution` 的 docstring 明确「an unresolved day must not
+ * render as eleven zero-count buckets」，即此时 `items: []`（**而不是** 11 个 0 桶）。
+ * 本 mock 覆写为那个真实形态，用来钉住「空 items **不得**渲染成 上涨 0 只 / 下跌 0 只」。
+ */
+async function mockUnresolvedDistribution(page: import("@playwright/test").Page) {
+  await page.route("**/api/v1/market/distribution", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        as_of: null,
+        as_of_quality: "unavailable",
+        as_of_reason: "no_latest_complete_day",
+        items: [],
+      }),
+    })
+  );
+}
+
 /** 同上：北向信封同样实抓后只覆写停更标注，避免手写形状与后端漂移。 */
 async function mockDiscontinuedNorthbound(page: import("@playwright/test").Page) {
   const resp = await page.request.get("/api/v1/market/northbound?days=30");
@@ -126,14 +188,23 @@ test.describe("市场卡片口径标注", () => {
 
     await page.goto("/market");
     await page.getByRole("tab", { name: "A股全景" }).click();
-    // 四张按日聚合卡（A股全景三张 + 资金流向的板块主力资金流）
+    // 四张按日聚合卡（A股全景三张 + 板块主力资金流那张）
+    //
+    // ⚠️ `:visible` 的来历（P1-1 第二轮后**语义已变，但过滤器仍然保留**）：
+    // 第一刀时「板块主力资金流」在 A股全景与资金流向两个 Tab 各有一张（刻意重复），
+    // AntD 把非激活 Tab 的 children 留在 DOM 里（`display: none`），故裸选择器会命中两张、
+    // `.first()` 落到隐藏的那张。第二轮改为**分区堆叠**并把该卡**去重**（全页恰好一张，
+    // 落在 A股全景分区，见 `marketLayout.spec.ts` 的「第二轮」用例），于是这里已不存在
+    // 双命中问题。`:visible` **不是**放宽断言、也不删：它把断言钉在"用户真能看到的那张"上
+    // （比 `.first()` 更贴近本用例的原意），且仍然能抓住"卡在别处、当前屏根本没有"。
+    // 末尾那次「切到资金流向」保留：它是用户路径的一部分，且验证了堆叠后该卡**依然可见**。
     for (const title of ["A股涨跌分布", "板块热力图", "A股热门板块"]) {
-      const card = page.locator(".ant-card").filter({ hasText: title });
+      const card = page.locator(".ant-card:visible").filter({ hasText: title });
       await expect15s(card.getByText(/数据截至/).first()).toBeVisible();
       await expect15s(card.getByText(/收盘|未完整|按最近完整日/).first()).toBeVisible();
     }
     await page.getByRole("tab", { name: "资金流向" }).click();
-    const moneyflow = page.locator(".ant-card").filter({ hasText: "板块主力资金流" });
+    const moneyflow = page.locator(".ant-card:visible").filter({ hasText: "板块主力资金流" });
     await expect15s(moneyflow.getByText(/数据截至/).first()).toBeVisible();
     // 快照陈旧度：`stale_days > 0` 才显示「N 天前」徽标，`= 0`（当日快照已写入）**按设计不加**
     // （见 FreshnessNote 契约）。两个分支都要断言——只断 >0 分支会在盘后采集落当日数据后假红。
@@ -189,5 +260,17 @@ test.describe("市场卡片口径标注", () => {
       await expect15s(card.getByText(/数据截至/).first()).toBeVisible();
       await expect15s(card.getByText(/收盘|未完整|按最近完整日/).first()).toBeVisible();
     }
+  });
+
+  test("未解析出判据日不渲染 0 只（items:[] 走空态而非全 0 桶）", async ({ page }) => {
+    await mockUnresolvedDistribution(page);
+    await page.goto("/market");
+    await page.getByRole("tab", { name: "A股全景" }).click();
+    const card = page.locator(".ant-card").filter({ hasText: "A股涨跌分布" });
+    await expect15s(card.getByTestId("distribution-empty")).toBeVisible();
+    // 核心断言：不得出现"上涨 0 只 / 下跌 0 只"，也不得出现空图
+    await expect(card.getByText(/上涨\s*0\s*只/)).toHaveCount(0);
+    await expect(card.getByText(/下跌\s*0\s*只/)).toHaveCount(0);
+    await expect(card.locator("canvas")).toHaveCount(0);
   });
 });

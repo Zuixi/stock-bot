@@ -7,13 +7,16 @@ import {
   CrownOutlined,
   LoginOutlined,
   SettingOutlined,
+  TeamOutlined,
 } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context";
+import { useAuthStore } from "../store";
 import { ProfileModal } from "./ProfileModal";
 
 export function UserMenu() {
   const { user, isAuthenticated, logout } = useAuth();
+  const hasPermission = useAuthStore((s) => s.hasPermission);
   const [loggingOut, setLoggingOut] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const navigate = useNavigate();
@@ -93,6 +96,18 @@ export function UserMenu() {
       label: "账号设置",
       onClick: () => setProfileOpen(true),
     },
+    // 管理台入口按权限出现（口径见 ADR 0008/0015）。**刻意不放进顶栏一级导航**：
+    // IA §1 的顶栏是 10 个一级导航，且 `check-routes` 机械断言 `NAV_ROOTS.length === 10`。
+    ...(hasPermission("users:manage")
+      ? [
+          {
+            key: "admin-users",
+            icon: <TeamOutlined />,
+            label: "用户管理",
+            onClick: () => navigate("/admin/users"),
+          } satisfies NonNullable<MenuProps["items"]>[number],
+        ]
+      : []),
     {
       type: "divider",
     },

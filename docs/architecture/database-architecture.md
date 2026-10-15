@@ -128,7 +128,7 @@ COMMENT ON TABLE daily_quotes IS '日频行情，按交易日期分区';
 
 #### 2.1.2.1 市场热点派生事实层（backend）
 
-backend（`backend/app/models/market_data.py`）在行情底表之上新增/扩展了两张"市场热点"表，口径与取舍见 [ADR 0009](../../decisions/0009-market-derived-fact-persistence.md)：
+backend（`backend/app/models/market_data.py`）在行情底表之上新增/扩展了两张"市场热点"表，口径与取舍见 [ADR 0014](../../decisions/0014-market-derived-fact-persistence.md)：
 
 | 表 | 用途 | 主键/唯一键 | 产地字段 |
 |---|---|---|---|

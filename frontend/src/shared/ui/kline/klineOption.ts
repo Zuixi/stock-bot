@@ -1,6 +1,13 @@
 import { THEME_COLORS, type ThemePalette } from "@/app/theme";
 import type { KLinePoint } from "@/shared/types";
-import { DEFAULT_TAIL_BARS, MA_DEFS, fmtAmount, fmtVolume, type MaKey } from "./klineMath";
+import {
+  DEFAULT_TAIL_BARS,
+  MA_DEFS,
+  NARROW_TAIL_BARS,
+  fmtAmount,
+  fmtVolume,
+  type MaKey,
+} from "./klineMath";
 
 export interface KlineOptionInput {
   points: KLinePoint[]; // 聚合后的全量序列
@@ -8,6 +15,15 @@ export interface KlineOptionInput {
   visibleMas: MaKey[];
   /** 当前主题色板（KlineChart 绕过 EChart 封装直连 ReactECharts，需自带主题色） */
   colors?: ThemePalette;
+  /**
+   * 窄屏形态（Phase 3 §4.4，`<768` 由调用方按视口断点判定）。
+   *
+   * 影响三项，**都不改变"画什么"**（全量序列、双 `dataZoom`、MA、成交量一个不少）：
+   * - 初始视窗：`NARROW_TAIL_BARS`(30) 而不是 `DEFAULT_TAIL_BARS`(120)，单根蜡烛可辨；
+   * - 左轴留白：60 → 46px（308px 画布里 60px 是 1/5 宽度）；
+   * - 网格底部：`slider` 占 22px，底部留白随之收窄，避免滑块压住成交量柱。
+   */
+  narrow?: boolean;
 }
 
 const pct = (cur: number, prev: number | undefined) =>
@@ -19,15 +35,19 @@ const signed = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
 const row = (label: string, value: string, flat: string, color?: string) =>
   `<div style="display:flex;justify-content:space-between;gap:16px">` +
   `<span style="color:${flat}">${label}</span>` +
-  `<span style="font-variant-numeric:tabular-nums${color ? `;color:${color};font-weight:600` : ""}">${value}</span>` +
+  `<span class="num"${color ? ` style="color:${color};font-weight:600"` : ""}>${value}</span>` +
   `</div>`;
 
-export function buildKlineOption({ points, maSeries, visibleMas, colors }: KlineOptionInput) {
+export function buildKlineOption({ points, maSeries, visibleMas, colors, narrow = false }: KlineOptionInput) {
   const c = colors ?? THEME_COLORS.light;
   const dates = points.map((p) => p.date); // 原始 ISO 日期串（tooltip 直接消费）
   const ohlc = points.map((p) => [p.open, p.close, p.low, p.high]);
   const lastClose = points.length ? points[points.length - 1].close : 0;
-  const tailStart = Math.max(0, points.length - DEFAULT_TAIL_BARS);
+  // 窄屏只收**初始视窗**根数（§4.4）：数据仍是全量，dataZoom 可漫游/手势缩放
+  const tailBars = narrow ? NARROW_TAIL_BARS : DEFAULT_TAIL_BARS;
+  const tailStart = Math.max(0, points.length - tailBars);
+  // 窄屏左轴留白收窄：308px 画布下 60px 是 1/5 宽度，K 线区被压得太窄
+  const axisLeft = narrow ? 46 : 60;
 
   const tooltipFormatter = (params: unknown): string => {
     const list = params as Array<{ dataIndex: number; seriesType: string; seriesName?: string; value?: unknown }>;
@@ -65,8 +85,8 @@ export function buildKlineOption({ points, maSeries, visibleMas, colors }: Kline
     tooltip: { trigger: "axis", axisPointer: { type: "cross" }, formatter: tooltipFormatter },
     legend: { show: false },
     grid: [
-      { left: 60, right: 20, top: 28, height: "50%" },
-      { left: 60, right: 20, top: "68%", height: "16%" },
+      { left: axisLeft, right: narrow ? 12 : 20, top: 28, height: "50%" },
+      { left: axisLeft, right: narrow ? 12 : 20, top: "68%", height: "16%" },
     ],
     xAxis: [
       {

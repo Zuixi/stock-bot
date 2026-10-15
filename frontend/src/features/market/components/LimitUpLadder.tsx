@@ -62,10 +62,10 @@ function StockItem({ s }: { s: LadderStock }) {
   }
   return (
     <li>
-      <Link className="ladder-stock" to={`/stock/${s.symbol}`}>
+      <Link className="ladder-stock" to={`/company/${s.symbol}`}>
         <span className="ladder-stock__row">
           <span className="ladder-stock__name">{s.name}</span>
-          <span className="ladder-stock__seal">封板 {s.sealTime ?? "--"}</span>
+          <span className="ladder-stock__seal num">封板 {s.sealTime ?? "--"}</span>
         </span>
         {badges.length > 0 ? <span className="ladder-stock__badges">{badges}</span> : null}
       </Link>
@@ -95,7 +95,7 @@ function Tier({
     <article className={`ladder-tier ${heatClass(streak)}`}>
       <header className="ladder-tier__head">
         <span className="ladder-tier__name">{label}</span>
-        <span className="ladder-tier__count">{sorted.length} 家</span>
+        <span className="ladder-tier__count num">{sorted.length} 家</span>
       </header>
       {/* 档内家数占比条：各档并排即梯队金字塔 */}
       <div className="ladder-tier__bar" aria-hidden>
@@ -168,9 +168,9 @@ export function LimitUpLadder({ echelons, degraded = false }: Props) {
   return (
     <div className="sentiment-ladder">
       <div className="ladder-summary">
-        <span className="ladder-pill ladder-pill--accent">空间板 {topStreak} 板</span>
-        <span className="ladder-pill">连板 {lianbanCount} 家</span>
-        <span className="ladder-pill">首板 {shoubanCount} 家</span>
+        <span className="ladder-pill ladder-pill--accent num">空间板 {topStreak} 板</span>
+        <span className="ladder-pill num">连板 {lianbanCount} 家</span>
+        <span className="ladder-pill num">首板 {shoubanCount} 家</span>
       </div>
       <div className="ladder">
         {tiers.map((e) => (

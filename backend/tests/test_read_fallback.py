@@ -120,7 +120,10 @@ def _snapshot(**overrides: Any) -> Any:
 def _bound_rows(**overrides: Any) -> Any:
     fields: dict[str, Any] = {
         "trade_date": date(2026, 9, 7),
-        "net_amount": -12.5,
+        # 默认日 2026-09-07 在断点（2024-08-19）之后 → 口径是**成交额**（Ruling 62/63），
+        # 故默认值取一个正的成交量。读路径必须把行口径原样透出，fake row 也要带 amount_kind。
+        "amount": 244809.28,
+        "amount_kind": "turnover",
     }
     fields.update(overrides)
     return SimpleNamespace(**fields)
@@ -395,8 +398,8 @@ async def test_northbound_discontinued_when_stale(monkeypatch: pytest.MonkeyPatc
 
     async def _repo(db, days):  # noqa: ANN001
         return [
-            _bound_rows(trade_date=date(2026, 8, 20), net_amount=5.0),
-            _bound_rows(trade_date=date(2026, 9, 7), net_amount=-12.5),
+            _bound_rows(trade_date=date(2026, 8, 20), amount=244809.28),
+            _bound_rows(trade_date=date(2026, 9, 7), amount=273259.26),
         ]
 
     monkeypatch.setattr(mds.market_data_repo, "list_northbound", _repo)
@@ -407,9 +410,10 @@ async def test_northbound_discontinued_when_stale(monkeypatch: pytest.MonkeyPatc
     assert out["stale_days"] == 10
     assert out["source_status"] == "discontinued"
     assert out["items"] == [
-        {"date": "2026-08-20", "net_amount": 5.0},
-        {"date": "2026-09-07", "net_amount": -12.5},
-    ], "升序不变"
+        {"date": "2026-08-20", "amount": 244809.28, "amount_kind": "turnover"},
+        {"date": "2026-09-07", "amount": 273259.26, "amount_kind": "turnover"},
+    ], "升序不变，且行级口径原样透出"
+    assert out["amount_kind"] == "turnover", "窗口口径与行口径一致"
 
 
 @pytest.mark.parametrize(
@@ -454,6 +458,7 @@ async def test_northbound_empty_table_is_discontinued_none_as_of(
         "as_of": None,
         "stale_days": None,
         "source_status": "discontinued",
+        "amount_kind": None,
         "items": [],
     }
     assert cache.set_calls == []
@@ -607,7 +612,8 @@ async def test_northbound_stale_days_and_status_recomputed_on_cache_hit(
         "as_of": "2026-09-17",
         "stale_days": 1,  # frozen: 09-18 应为 1 天... 用 12 天前的一天才能看出差别
         "source_status": "live",
-        "items": [{"date": "2026-09-06", "net_amount": -12.5}],
+        "amount_kind": "turnover",
+        "items": [{"date": "2026-09-06", "amount": 273259.26, "amount_kind": "turnover"}],
     }
 
     async def _repo(*args: Any, **kwargs: Any) -> list[Any]:
@@ -620,7 +626,8 @@ async def test_northbound_stale_days_and_status_recomputed_on_cache_hit(
     assert out["as_of"] == "2026-09-06", "as_of 必须来自返回的 items"
     assert out["stale_days"] == 12, "09-18 - 09-06"
     assert out["source_status"] == "discontinued", ">5 天必须翻成停更"
-    assert out["items"][0]["net_amount"] == -12.5
+    assert out["items"][0]["amount"] == 273259.26
+    assert out["amount_kind"] == "turnover"
 
 
 async def test_market_moneyflow_history_stale_recomputed_on_cache_hit(
@@ -667,6 +674,7 @@ async def test_northbound_window_without_rows_drops_metadata(
         "as_of": None,
         "stale_days": None,
         "source_status": "discontinued",
+        "amount_kind": None,
         "items": [],
     }
     assert cache.set_calls == [], "无行的 payload 不入缓存"

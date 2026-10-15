@@ -1,0 +1,158 @@
+/*
+ * 全球指数卡（TV ticker 风）—— Phase 1 §W1.3 之后的形态。
+ *
+ * 为什么形态要改（实测成因，别退回"全 inline + 固定宽度"的写法）：
+ * §W1.3 把内容区 `maxWidth` 从 1400 收到 1280 + 左栏 208px 之后，`GlobalMarketBoard` 的
+ * `xl={4}` 在 ≥1200px 视口生效 ⇒ 卡片**在 1280 / 1440 / 1600 都只有 156 / 183 / 191px**
+ * （实测，不是"越宽越宽"——内容区被 `maxWidth: 1280` 封顶，多余宽度全给了两侧留白）。
+ * 而卡内涨跌幅色块自身就有 ~97px（`+0.10% +3.62` 这类不可断行内容），价格 ~77px：
+ * 横排时它们占掉整卡的 65%，名称只剩 36px（只够 1 个汉字 + 省略号，实测「上证指数」
+ * 被截成「上…」——与 §Why-now 表里"移动端名称被截到不可辨识"是同一类缺陷）。
+ *
+ * 故**堆叠式是默认形态**：名称行独占整行（149px ⇒ 4 个汉字完整显示，不参与横向争宽），
+ * 价格/涨跌 + sparkline 移到第二行。只有到 `≥1600px`（卡片 ~222px 以上、名称有 ≥100px）
+ * 才切回 ticker 横排——横排是**收益**而不是前提，空间不够时不该硬撑。
+ *
+ * ⚠️ 用视口断点而不是"卡片自身宽度"：本卡由 antd `Col` 派生，没有容器查询的降级路径
+ * （`@container` 需要给卡片挂 `container-type` 并改 `Col` 结构）。视口断点与 §5.1 的
+ * 四档契约同源，改动面最小、可解释。
+ */
+.global-index-card__row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+/* 名称列：允许被压缩（`min-width: 0`），但**不设下限**——下限会与不可断行的数值列
+   争宽、把整卡顶出视口（实测 `/market@1280` 溢出 16px）。名称靠 `text-overflow`
+   优雅截断，而不是靠"占住一段宽度"。 */
+.global-index-card__name-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+}
+
+/* 名称行：徽章 + 名称 + 代码后缀。
+   `flex-wrap: wrap` 是 Phase 3 §4.1 的关键（不是装饰）：窄卡里「22px 徽章 + 名称 + 代码」
+   一旦超过一行，代码后缀换行而不是把名称挤掉——**名称优先级高于代码**。 */
+.global-index-card__name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+/* 名称：**窄屏允许 2 行**（§4.1）。
+   `min-width: 104px` 是"名称可辨识"的下限——实测「上证指数」（4 字 / 13px）需 52px，
+   `min-width: 104px` 给出 2 字余量（6 字名「恒生中国企业指数」这类长名才有意义）。
+   ⚠️ 它**不是**无条件安全：`min-width` 与不可断行的兄弟节点争宽时会把卡片顶宽
+   （同文件顶部记的 `/market@1280` 16px 溢出就是这一类）。故配套两条约束：
+   ① 见下方 `@media (max-width: 767px)` —— <768 卡片独占整行（`Col xs={24}`），104px 装得下；
+   ② `≥1600px`（卡片回到 ticker 横排、仅 ~191px）把下限收回 0，届时靠 `text-overflow` 截断。 */
+.global-index-card__name {
+  font-size: 13px;
+  font-weight: 500;
+  min-width: 104px;
+  /* 2 行上限：`-webkit-line-clamp` 需要 `display: -webkit-box`；不支持时回落
+     `overflow: hidden` + 单行省略号（仍是"名称优先"，只是只给 1 行）。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+/* 代码后缀（如 `CN 000001`）：10px 等宽、次级色。
+   `flex-shrink: 1` + `min-width: 0` 是**有意为之的优先级声明**：空间不足时先压代码，
+   不压名称（§4.1「名称优先级高于代码」）。 */
+.global-index-card__code {
+  font-size: 10px;
+  font-family: var(--font-num);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/* 数值列（价格 + 涨跌幅 + sparkline） */
+.global-index-card__num-col {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 8px;
+  text-align: left;
+  flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
+}
+
+.global-index-card__price {
+  font-size: 20px;
+  font-weight: 600;
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.global-index-card__change {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 0 6px;
+  line-height: 20px;
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.global-index-card__spark {
+  width: 100%;
+  max-width: 88px;
+  min-width: 40px;
+  margin-left: auto;
+}
+
+/* 不设"宽屏切回横排"的分支：实测即使 1600px（卡片 191px）横排仍会把「上证指数」
+   截成「上…」（名称只剩 39px）——因为内容区被 `maxWidth: 1280` 封顶，卡片宽度并不随
+   视口继续变宽。留一个"空间不够也硬撑"的分支只会把同一个缺陷藏在更宽的视口上，
+   故**全档统一堆叠**：形态一致、名称永远完整。 */
+
+/*
+ * 卡片级窄屏形态（Phase 3 §4.1）。
+ *
+ * `xs={24}` 由调用方（`CoreIndexCards` / `GlobalMarketBoard`）给出，即 <576px 一张卡独占
+ * 整行（实测内容区 342px）。**这不是"变大"而是"名称可辨识"的必要条件**：
+ * 152px 半宽卡片里名称列只有 118px，减去 22px 徽章 + 6px 间距只剩 90px，
+ * 而 §4.1 要求名称列下限 104px —— 两者不可兼得，唯一出路是让卡片更宽。
+ *
+ * 为什么断点写 767px 而不是 576px：§5.1 的四档契约以 **768** 为界（`<768` = 单列）。
+ * 用 576 会让 576–767 这一档落回 `xs={12}` 的 152px 卡片、名称重新变紧，
+ * 与契约的"`<768` 单列全功能"不一致。故在契约断点上把 `min-width` 的**前提**补齐。
+ */
+@media (max-width: 767px) {
+  /* 卡片在这种宽度下由 `Col xs={24}` 撑满，104px 下限有富余（实测名称列 ~308px） */
+  .global-index-card__name-col {
+    width: 100%;
+  }
+  /* ⚠️ 这里**故意没有** sparkline 的规则。
+     一个看起来顺手、实际会破坏 §0.1 B2 的写法是"窄屏让 sparkline 占满整行"
+     （`.global-index-card__spark { max-width: none; width: 100% }`）——我最初就是这么写的，
+     它把 308px 的容器塞给一个 30 点的迷你图（每点 10px，画出来几乎是一条直线），
+     而且让**点数由视口断点决定**（窄屏必然 ≥8 点，因为容器宽），正是 B2 明确否掉的那件事。
+     B2 要的是"**始终渲染**，点数按**容器宽度**定"：`.global-index-card__spark` 的
+     `max-width: 88px` 全档一致，`sparkPointsForWidth(containerWidth)` 才有意义。 */
+}
+
+/* `≥1600px`：卡片宽度被内容区 `maxWidth: 1280` 封顶在 ~191px —— 104px 的名称下限
+   在这里会把代码后缀挤出卡片（甚至顶宽整卡）。此档名称回到"可压缩 + 省略号"，
+   与文件顶部记录的取舍一致：名称仍优先（代码是 flex-shrink 的那个）。 */
+@media (min-width: 1600px) {
+  .global-index-card__name {
+    min-width: 0;
+    white-space: nowrap;
+    display: block;
+  }
+}

@@ -24,6 +24,7 @@ from app.api.v1 import (
     industries,
     market,
     market_data,
+    metrics,
     new_stocks,
     stocks,
     tags,
@@ -73,6 +74,9 @@ router.include_router(industries.router, prefix="/industries", tags=["industry-r
 
 # Concept boards: /api/v1/concepts/...（T6 列表 / T8 详情 / T9 成分·反查）
 router.include_router(concepts.router, prefix="/concepts", tags=["concepts"])
+
+# Unified metric read surface: /api/v1/metrics/...（spec §S1.2，复用 industry_metrics 单表）
+router.include_router(metrics.router, prefix="/metrics", tags=["metrics"])
 
 # New-stock board: /api/v1/new-stocks（T10，东财 BK0501 成分 × 本地行情）
 router.include_router(new_stocks.router, prefix="/new-stocks", tags=["new-stocks"])

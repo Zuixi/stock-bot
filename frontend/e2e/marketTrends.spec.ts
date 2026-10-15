@@ -185,6 +185,28 @@ async function openTab(page: Page, name: string) {
   await page.getByRole("tab", { name }).click();
 }
 
+/**
+ * 打开「板块连续性」区（P1-1 第二轮起必须先展开）。
+ *
+ * 两处版面事实变了，都不是放宽断言：
+ * 1. 「板块主力资金流」卡**唯一**落在 **A股全景**分区（此前它同时在 A股全景与资金流向
+ *    两个 Tab 各渲染一张 —— 重复，已在 P1-1 第二轮去重；分区是**堆叠**的，故点哪个导航项
+ *    都看得见它）；
+ * 2. 该卡在 `/market` 用 `variant="compact"`：连续性区收进**默认收起**的折叠开关
+ *    （1440 下这块比同排两块高 304px，收起后三块 bottom 极差 ≤ 30px）。
+ *    **内容一字未删** —— 展开后与 `full` 变体逐字相同，下面三条用例守的口径
+ *    （attribution / available_from / 缺完整日 / 末日 `--`）全部原样保留。
+ * 展开后显式断 `aria-expanded=true`：否则"点了个没反应的开关 + 断言恰好没找到元素"
+ * 会被读成用例通过。
+ */
+async function openContinuity(page: Page) {
+  await page.goto("/market");
+  await page.getByRole("tab", { name: "A股全景" }).click();
+  const toggle = page.getByTestId("sector-continuity-toggle");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+}
+
 // ── 分位 chip ────────────────────────────────────────────────────────────
 
 test("情绪分位 chip 带该指标的样本窗口与分位梯", async ({ page }) => {
@@ -245,7 +267,7 @@ test("趋势线复用既有 TrendSpark（分母来自 trends 序列时仍为 svg
 
 test("板块连续性 chip 带 attribution 标注与 available_from", async ({ page }) => {
   await routeMoneyflowTab(page);
-  await openTab(page, "资金流向");
+  await openContinuity(page);
 
   const block = page.locator('[data-testid="sector-continuity"]');
   await expect(block).toBeVisible();
@@ -273,7 +295,7 @@ test("板块连续性 chip 带 attribution 标注与 available_from", async ({ p
 
 test("缺完整日的日子按缺日披露，末日缺值渲染 --（绝不 0 流入）", async ({ page }) => {
   await routeMoneyflowTab(page);
-  await openTab(page, "资金流向");
+  await openContinuity(page);
 
   const missing = page.locator('[data-testid="sector-continuity-missing"]');
   await expect(missing).toBeVisible();
@@ -291,7 +313,7 @@ test("缺完整日的日子按缺日披露，末日缺值渲染 --（绝不 0 �
 
 test("切概念维度：连续性重新取数并换成时点成分口径（含 lu_count）", async ({ page }) => {
   await routeMoneyflowTab(page);
-  await openTab(page, "资金流向");
+  await openContinuity(page);
   await expect(page.locator('[data-testid="sector-continuity-attribution"]'))
     .toHaveText("按当前分类回溯，非当时成分");
 

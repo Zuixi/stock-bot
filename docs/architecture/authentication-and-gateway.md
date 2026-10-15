@@ -412,7 +412,7 @@ auth-service 的 `/internal/session/introspect` 与 `/internal/principal/asserti
 | **`/api/v1/health`** | GET | Public | Stock API | 无 | 否 | 服务存活健康检查 |
 | **`/auth/jwks.json`** | GET | Public | Auth Service | 无 | 否 | 公钥集分发（供 Gateway/API 验签） |
 | **`/auth/login`** | POST | Public | Auth Service | 无 | **是**(匿名 double-submit) | 用户名密码登录，签发会话 Cookie（响应体不含凭据） |
-| **`/auth/register`** | POST | ~~Public~~ **Disabled** | Auth Service | — | **是**(匿名 double-submit) | **恒 403 `AUTH_REGISTRATION_DISABLED`**（邀请制，[ADR 0010](../decisions/0010-invite-only-provisioning-and-admin-console.md)） |
+| **`/auth/register`** | POST | ~~Public~~ **Disabled** | Auth Service | — | **是**(匿名 double-submit) | **恒 403 `AUTH_REGISTRATION_DISABLED`**（邀请制，[ADR 0015](../decisions/0015-invite-only-provisioning-and-admin-console.md)） |
 | **`/auth/change-password`** | POST | Protected | Auth Service | 已登录 | **是** | 自助改密；清除强制改密标记并吊销其余会话 |
 | **`/auth/admin/users`** | GET/POST | Admin | Auth Service | `users:manage` | **是**(POST) | 用户列表（状态筛选/搜索/分页）与开户（roles 必填，临时密码仅返回一次） |
 | **`/auth/admin/users/{id}/suspend`** | POST | Admin | Auth Service | `users:manage` | **是** | 停用（吊销全部会话） |

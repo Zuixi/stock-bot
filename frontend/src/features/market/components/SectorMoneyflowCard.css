@@ -28,6 +28,16 @@
   border-radius: 999px;
   background: var(--hover);
   font-size: 11px;
+  /* `nowrap` 是**版式主张**（口径 badge 不该折成两行），保留；
+     但必须同时给出"放不下时怎么办"：`max-width: 100%` + 省略号。
+     为什么必须有（Phase 3 §4.2b 实测）：`.mf-continuity__head` 是弹性行，而 `nowrap`
+     子项**不可压缩**——`请求近 60 交易日 · 实际观察 22 个交易日（2026-10-13 → …）`
+     实测宽 388px，把头部、卡片、`Col`(`min-width:auto`) 一路顶宽到整页
+     `scrollWidth = 425`（视口 390）。省略号是**如实降级**：完整口径仍在
+     `title`/tooltip 与下方「缺完整日」逐日列表里，不是把事实删掉。 */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -48,7 +58,6 @@
   background: var(--bg-page);
   font-size: 11.5px;
   color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
 }
 
 .mf-continuity__name {
@@ -70,4 +79,53 @@
   margin-top: 8px;
   font-size: 11.5px;
   color: var(--text-secondary);
+}
+
+/* ---- compact 变体的折叠开关（P1-1 第二轮）----
+ * 行文本全是静态说明 + 窗口读数，**不带任何数字读数**（读数只在展开后的 ContinuityStrip 里）。
+ * `flex-wrap: wrap` + 提示串 `max-width:100%` + 省略号：同 `.mf-continuity__tag` 的教训
+ * ——不可压缩的 `nowrap` 子项会把卡片/Col 一路顶宽成整页横向溢出。 */
+.mf-continuity-toggle {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 0 0;
+  border: 0;
+  border-top: 1px dashed var(--border);
+  background: none;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mf-continuity-toggle:hover {
+  color: var(--text-primary);
+}
+
+/* 键盘聚焦必须可见（WCAG 2.4.7；同 `.hot-board-row__button` 的处置） */
+.mf-continuity-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mf-continuity-toggle__title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mf-continuity-toggle__hint {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mf-continuity-toggle__action {
+  margin-left: auto;
+  color: var(--accent);
 }

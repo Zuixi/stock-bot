@@ -82,7 +82,6 @@
   font-size: 30px;
   line-height: 1.1;
   font-weight: 800;
-  font-variant-numeric: tabular-nums;
   color: var(--text-primary);
 }
 
@@ -107,7 +106,6 @@
 .thermo-chip {
   font-size: 11.5px;
   font-weight: 600;
-  font-variant-numeric: tabular-nums;
   padding: 1px 8px;
   border-radius: 999px;
   white-space: nowrap;
@@ -180,7 +178,6 @@
 .thermo-metric__num {
   font-size: 19px;
   font-weight: 700;
-  font-variant-numeric: tabular-nums;
   color: var(--text-primary);
 }
 
@@ -234,12 +231,10 @@
 }
 
 .thermo-pct__range {
-  font-variant-numeric: tabular-nums;
 }
 
 .thermo-pct__streak {
   margin-left: auto;
-  font-variant-numeric: tabular-nums;
 }
 
 .thermo-pct__chips {
@@ -259,7 +254,6 @@
   background: var(--bg-page);
   font-size: 11.5px;
   color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
 }
 
 .thermo-pct__chip-label {
@@ -306,7 +300,6 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-variant-numeric: tabular-nums;
 }
 
 .thermo-trend__dot {

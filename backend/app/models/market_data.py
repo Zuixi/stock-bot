@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -133,14 +134,30 @@ class DragonTigerEntry(Base):
 
 
 class NorthboundDaily(Base):
-    """北向资金每日净流入（TuShare moneyflow_hsgt，盘后）。单位：万元。"""
+    """北向 ``moneyflow_hsgt.north_money`` 日序列（TuShare，盘后）。单位：万元。
+
+    ⚠️ **同一列两种口径**（Ruling 62/63，实证见 ``docs/design/data-source.md`` 附.9）：
+
+    - ``trade_date < 2024-08-19`` → ``amount_kind='net_buy'``，``amount`` 是**净买入**
+      （可正可负；断点前 148 日有 83 个负值）；
+    - ``trade_date >= 2024-08-19`` → ``amount_kind='turnover'``，``amount`` 是**成交额**
+      （断点后 502 日零负值、零零值）。
+
+    ``amount`` 的含义**由 ``amount_kind`` 决定**，读取方必须先看口径再解释数值——
+    把成交额当净流入（或把两者相加）都是错的。断点前的净买入历史**保留**但必须显式标注。
+    """
 
     __tablename__ = "northbound_daily"
-    __table_args__ = (UniqueConstraint("trade_date", name="uq_northbound_date"),)
+    __table_args__ = (
+        UniqueConstraint("trade_date", name="uq_northbound_date"),
+        # 口径只允许两档：库层就把"未标注口径"钉死，杜绝第三类。
+        CheckConstraint("amount_kind IN ('net_buy', 'turnover')", name="ck_northbound_amount_kind"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     trade_date: Mapped[date] = mapped_column(Date, nullable=False)
-    net_amount: Mapped[float | None] = mapped_column(Float)  # 万元
+    amount: Mapped[float | None] = mapped_column(Float)  # 万元；口径见 amount_kind
+    amount_kind: Mapped[str] = mapped_column(String(16), nullable=False)  # 'net_buy' | 'turnover'
     source: Mapped[str] = mapped_column(
         String(32), nullable=False, default="tushare:moneyflow_hsgt"
     )

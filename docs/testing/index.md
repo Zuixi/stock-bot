@@ -15,7 +15,11 @@
 | 后端类型 | `self_review.sh --full` · CI `backend-typecheck` | 手动全量 / PR | 是（CI） | 修类型；别用 `# type: ignore` 掩盖契约错误 |
 | 后端单测（排除 e2e/bench） | `self_review.sh --full` · CI `backend-test` · pre-commit `backend-test` | commit / PR | 是 | 见 [`backend.md`](./backend.md) |
 | 前端类型 `tsc --noEmit` | `self_review.sh --full` · CI `frontend-lint` · pre-commit | commit / PR | 是 | 修类型；见 [ADR 0006](../decisions/0006-no-eslint-tsc-as-static-check.md) |
-| 前端设计令牌 | CI `frontend-lint`（`npm run check:design`） | PR | 是 | 涨跌色对比度 ≥ 4.5 且 `theme.ts` ↔ `theme.css` 必须一致 |
+| 前端设计令牌 | CI `frontend-lint`（`npm run check:design`） | PR | 是 | 涨跌色对比度 ≥ 4.5 且 `theme.ts` ↔ `theme.css` 必须一致；**且组件里引用的每个 `var(--x)` 必须真的被定义**（`--flat` 这类死变量会让声明在 computed-value time 静默失效并继承父级色）；另含 `--mag-*` 五级色阶对比度、`--font-ui`/`--font-num`、`prefers-reduced-motion`、`:focus-visible`、等宽数字声明 ≤1 处（`.num`） |
+| 日期口径（原始 ISO 不得上屏） | 静态层 `frontend/scripts/check-no-raw-iso.mjs`（已挂进 `npm run check:design` → CI `frontend-lint`）· 运行时层 `frontend/e2e/noRawIso.spec.ts`（手动，不在 CI） | PR / 手动 | 是 | 静态层抓源码字面量，运行时层抓"后端给 ISO、前端原样上屏"（`{index.asof}` 这类 payload 直出）。修法：日期一律走 `frontend/src/shared/ui/date.ts` 的格式化入口（`formatAsOf` / `formatAsOfDate`）；**只留任一层都会漏一类** |
+| 前端路由迁移（旧路由/redirect 目标/保留非 redirect/占位页不可为 redirect 目标/IA 文档↔路由清单一致） | `npm run check:routes` · CI `frontend-lint` · `self_review.sh`（**快检也跑**） | commit / PR | 是 | 改 `frontend/src/app/router/route-manifest.ts` 或 `frontend/scripts/check-routes.mjs`；新 redirect 必须同步改 `docs/design/ia-investment-research-platform.md` §4 |
+| 信号历史 diff（首条全文、后续只给变化项、连续无变化折叠） | 纯函数层 `frontend/scripts/check-signal-diff.mjs`（已挂进 `npm run check:design` → CI `frontend-lint`）· 渲染层 `frontend/e2e/signalPanel.spec.ts`（手动，不在 CI） | PR / 手动 | 是 | 纯函数层不需要凭据与浏览器，用**库内真实 `reason`** 断言"未变化的段不进 diff"；渲染层 mock session+dashboard（`/industry` 要 `research:read`，本环境无凭据）逐条钉住分段/`老 → 新`/折叠。改 `signalHistoryDiff.ts` 的切分口径（后端契约是**全角分号 `；`**）或对齐规则时必须同时改这两个文件 |
+| 占位路由的路线图骨架（每条 ≥3 项 + 状态 + 所需数据） | `frontend/e2e/placeholder.spec.ts`（手动，不在 CI） | 手动 | 是 | 路由集合**从清单读**（`getPlaceholderRoutes()`），不在测试里手抄，避免出现第三份清单；新增/移除占位路由时 `check:routes` 与它同时生效 |
 | 前端构建 | CI `frontend-build` | PR | 是 | `npm run build`（含 `tsc -b`） |
 | auth-service lint / 类型 / 测试 | CI `auth-service-lint` · `auth-service-typecheck` · `auth-service-test` | PR | 是 | 与后端同口径，但**独立库与版本线** |
 | CPU 基准 Tier 1 | `scripts/bench.sh` · CI `bench-cpu` | 手动 / PR | 是 | 见 [`benchmarks.md`](./benchmarks.md) |

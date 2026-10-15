@@ -128,7 +128,7 @@ cd frontend && npm ci && npm run build && cd ..
 # 启动所有服务
 docker compose up --build -d
 
-# 首次部署后：引导第一个管理员（ADR 0010 邀请制，注册已关闭）
+# 首次部署后：引导第一个管理员（ADR 0015 邀请制，注册已关闭）
 #   默认账号即平台标准管理员身份：freedom / zeebest@freedom.com
 #   （--username / --email 可覆盖；不传即为默认值）
 #   幂等：用户已存在时只补挂 admin 角色，绝不重置密码。
@@ -187,3 +187,46 @@ docker compose build worker
   ```
 
 `docker-compose.yml` 中 `target: runtime` 使 Docker 跳过 Node.js 构建阶段，直接使用 `dist/` 目录。
+
+## S1.4 申万成分 SCD2 的运维顺序（**测试与回填不能反**）
+
+`sw_industry_member_periods`（SCD2 分类归属）与 `sw_member_ingest_runs`（覆盖记录）
+是**数据表，不是迁移种子**：迁移只建表，数据靠回填脚本。而仓库里有两个测试文件会
+真跑 `alembic downgrade`，降到的 revision 在 S1.4 迁移之前 —— **会把这两张表连带
+DROP 掉、内容清空**。
+
+```bash
+# 1) 先在 backend/ 下跑测试（默认不再破坏 S1.4 两张表，见下）
+cd backend
+.venv/bin/python -m pytest -q
+
+# 2) 测试跑完再回填（511 个指数，约 5 分钟；幂等，可重复跑）
+.venv/bin/python scripts/ingest_sw_member_periods.py
+```
+
+**为什么默认 pytest 是安全的**：
+
+| 文件 | 行为 | 现状 |
+|---|---|---|
+| `tests/test_industry_metric_pit_roundtrip.py` | `downgrade` 到 `f1a2b3c4d5e6` 之前 | **opt-in**：默认跳过；要跑迁移往返需 `SC_DESTRUCTIVE_MIGRATION_TESTS=1` |
+| `tests/test_intraday_snapshot_table.py` | `downgrade` 到 `d7c8b9a0e1f2`（硬编码 dev 库） | 恢复 HEAD 的 `finally` 已包住前置 downgrade（原先前置在 try 之外，前置一失败就**没人恢复**，库被留在丢表的中间版本） |
+| `tests/conftest.py` | session 级 `_schema_at_head` | 会话开始前 `alembic upgrade head`（**只建表、不动数据**），保证任何用例不会因为"上一个文件把库降级了"而失败 |
+
+**回填后的自检**（三条都应成立）：
+
+```bash
+# 表在 heads、有数据、且最近一次运行是"完整成功"
+docker exec postgres psql -U stock_user -d stock_bot_test -c \
+  "SELECT status, index_codes, fully_ingested, left(detail, 80) FROM sw_member_ingest_runs ORDER BY id DESC LIMIT 1;"
+```
+
+`fully_ingested=false`（例如用 `--limit 20` 冒烟）**不会**抬高读面的
+`scd2_as_of` —— 前端 `分类归属口径日` 仍显示上一次完整运行的日期，
+故"只灌了 20 个指数"不会被冒充成"口径日已到最新"。
+
+**读取面**：`/api/v1/market/sw-industry/drill/{levels,metrics,members}`（公开免登录）。
+每次 ingest 会往 `sw_member_ingest_runs` 追一行，响应里的 `scd2_coverage` 字段即该行摘要
+（`status` / `fully_ingested` / 逐层指数与行数 / 0 行指数个数），是**缺数对账**的读面入口。
+
+> **周期调度尚未注册**（本任务只交付 CLI 与读面）：要把回填接进 scheduler /
+> RabbitMQ `QUEUES`，需同步 `app/core/mq.py` 与本文档的队列口径表，属跨面改动、另立任务。

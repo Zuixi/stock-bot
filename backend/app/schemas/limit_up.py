@@ -251,3 +251,38 @@ class SentimentTrendsOut(BaseModel):
     percentile: dict[str, SentimentPercentileOut] | None = None
     streak: SentimentStreakOut = SentimentStreakOut()
     insufficient_history: bool = True
+
+
+# ── S1.13 hero：综合指数的"今天 + 历史分位"（GET /market/sentiment/composite）───────
+#
+# 分位**必须由后端算**（Ruling 4 / `MIN_PERCENTILE_SAMPLES`）：前端只渲染，不做统计。
+
+
+class SentimentCompositeOut(BaseModel):
+    """``GET /market/sentiment/composite`` 响应（S1.13 市场情绪综合指数的读面 hero）。
+
+    - `as_of`/`value`/`caliber_version` = 序列**最新一行**（`value` 可为 ``None``：当日参与
+      腿不足 / 生效权重不足时 S1.13 落 NULL，**不落 0**）；
+    - `window` = 分位窗口（交易日，冻结 1260）；`sample_count` = 窗口内**有效样本**数
+      （值为 NULL 的行**不进**样本，也不计 0）；
+    - `percentile` = 今天的值在窗口样本里的 nearest-rank 分位（0–100，**无插值**，
+      四舍五入 2 位）；`insufficient_history=true` ⇒ ``percentile=null``
+      （有效样本 < 60 —— 与 `/sentiment/trends` 同一条纪律，**不给假分位**）；
+    - `legs`/`leg_count`/`total_legs`/`effective_weight`/`min_effective_weight` 直读最新
+      一行 `extra`（S1.13 写入的 `participants` / `effective_weight_sum` /
+      `min_effective_weight` / `n_constituents`）；老行缺键 ⇒ ``legs=null``、计数 0、
+      权重 ``null``（**不发明**旧口径）。
+    """
+
+    as_of: date | None = None
+    value: float | None = None
+    window: int
+    sample_count: int = 0
+    percentile: float | None = None
+    insufficient_history: bool = True
+    legs: list[str] | None = None
+    leg_count: int = 0
+    total_legs: int = 0
+    effective_weight: float | None = None
+    min_effective_weight: float | None = None
+    caliber_version: str | None = None

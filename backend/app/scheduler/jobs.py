@@ -343,7 +343,11 @@ async def market_moneyflow_daily_job() -> None:
 
 
 async def northbound_daily_job() -> None:
-    """北向资金每日净流入（交易日 16:10 盘后，幂等 upsert 近 30 日窗口）。"""
+    """北向 ``moneyflow_hsgt.north_money`` 日序列（交易日 16:10 盘后，幂等 upsert 近 30 日窗口）。
+
+    ⚠️ 该列在 ``2024-08-19`` 换过语义：之前是**净买入**，之后是**成交额**（Ruling 62/63）。
+    ingest 按交易日逐行打 ``amount_kind``，读面据此念数——本任务**不删**这条活任务。
+    """
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.services import market_data_service  # noqa: PLC0415
 

@@ -1,6 +1,11 @@
 /*
  * 申万行业网格（Stage C 自 landing 提取的共享版）
  * landing 宣传页与 /market 工作台共用；颜色一律走 CSS 变量随明暗主题切换。
+ *
+ * 数量编码（Phase 2 §4.2/§3.6）：`--mag-0` 最浅（成分数最少）→ `--mag-4` 最深。
+ * 文字**一律 `--text-primary`，没有白字分支** —— 每级对 `--text-primary` 的对比度
+ * 由 `scripts/check-design-tokens.mjs` §8.1-2 算死 ≥4.5（浅色最深的 --mag-4 = 4.78:1）。
+ * 分档口径（五分位阈值）见 SwIndustryGrid.tsx 的 `QUANTILES`。
  */
 
 .sw-grid {
@@ -18,6 +23,28 @@
   justify-content: space-between;
   border: 1px solid var(--border);
   transition: transform 0.15s ease;
+  /* 整格是 <Link>（跳一级行业下钻页）：去掉下划线；背景由 --mag-N 档位给定，
+     文字恒为 --text-primary（不再按数量切白字） */
+  text-decoration: none;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+/* 五档量级色阶：与 theme.css 的 --mag-0..4 一一对应 */
+.sw-cell--mag-0 {
+  background: var(--mag-0);
+}
+.sw-cell--mag-1 {
+  background: var(--mag-1);
+}
+.sw-cell--mag-2 {
+  background: var(--mag-2);
+}
+.sw-cell--mag-3 {
+  background: var(--mag-3);
+}
+.sw-cell--mag-4 {
+  background: var(--mag-4);
 }
 
 .sw-cell:hover {
@@ -32,8 +59,17 @@
 
 .sw-count {
   font-size: 11px;
-  opacity: 0.75;
-  font-variant-numeric: tabular-nums;
+  /*
+   * 与名称行**同为 `--text-primary`**（§4.2「文字一律 --text-primary」）。
+   *
+   * 为什么不用 `--text-secondary`（本文件原先写 `opacity: .75`，§3.7 一度改成显式次级色）：
+   * **实测次级色在这套灰阶上不过 AA** —— `#6a6d78` 对 `--mag-3`/`--mag-4` = 2.49:1 / **1.38:1**，
+   * 暗色 `#787b86` 对 `--mag-4` = **1.69:1**；而那两级正是"成分数最多"的格子，
+   * 也就是**最需要被读到的那些**。改成 primary 后 10 级全部 ≥4.5（门禁 §8.1-2 逐级算死）。
+   * 层次改由**字号**承担（11px vs 名称行 13px/600），不再靠降低对比度。
+   * 视觉复核证据见 `.superpowers/.../evidence/phase2-panorama-{light,dark}.png`。
+   */
+  color: var(--text-primary);
   margin-top: 4px;
 }
 

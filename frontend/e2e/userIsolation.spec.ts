@@ -1,4 +1,9 @@
 import { test, expect as baseExpect } from "@playwright/test";
+import {
+  TRIPLET_LABEL,
+  TRIPLET_ORDER,
+  TRIPLET_WIDTH,
+} from "../src/shared/ui/instrumentTriplet";
 
 /**
  * 多用户数据归属与隔离前端 E2E 测试套件。
@@ -160,6 +165,50 @@ test.describe("多用户数据归属与隔离验证", () => {
     await expect(page.getByText("贵州茅台")).toBeVisible();
     await expect(page.getByText("600519")).toBeVisible();
     await expect(page.getByText("平安银行")).toHaveCount(0);
+
+    /**
+     * P1-2：**自选清单的指标三元组**（最新价 → 涨跌额 → 涨跌幅）。
+     *
+     * 选在这里做行级断言的原因：本用例的 watchlist 与 enriched 都是**受控 mock**
+     * （`change: 28.0` / `change_percent: 1.79`），于是三个成员都是**真值**——
+     * 自选是仓库里唯一载荷齐了三元组的清单（`StockEnrichedOut` 同时回
+     * `latest_price`/`change`/`change_percent`），其余清单至少缺一个成员。
+     * 列宽直接与 `instrumentTriplet.ts` 的契约常量对账（import 常量而不是抄数字：
+     * 抄一遍的话实现漂移 spec 会跟着漂），行内数值一律 `.num`（tabular figures）+ 右对齐。
+     */
+    const watchTable = page.locator(".ant-table").filter({ hasText: "贵州茅台" });
+    const watchHeads = watchTable.locator(".ant-table-thead th");
+    const watchLabels = (await watchHeads.allInnerTexts()).map((t) => t.trim());
+    const tripletStart = watchLabels.indexOf(TRIPLET_LABEL[TRIPLET_ORDER[0]]);
+    expect(
+      tripletStart,
+      `自选表头里找不到「${TRIPLET_LABEL[TRIPLET_ORDER[0]]}」：实际 ${JSON.stringify(watchLabels)}`
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      watchLabels.slice(tripletStart, tripletStart + TRIPLET_ORDER.length),
+      `自选表三元组不齐/乱序：实际 ${JSON.stringify(watchLabels)}`
+    ).toEqual(TRIPLET_ORDER.map((m) => TRIPLET_LABEL[m]));
+    const watchRow = watchTable.locator(".ant-table-tbody tr.ant-table-row").first();
+    const expectValues: Record<(typeof TRIPLET_ORDER)[number], string> = {
+      price: "1588.00",
+      change: "+28.00",
+      pct: "+1.79%",
+    };
+    for (let i = 0; i < TRIPLET_ORDER.length; i += 1) {
+      const member = TRIPLET_ORDER[i];
+      const cell = watchRow.locator("td").nth(tripletStart + i);
+      const num = cell.locator(".num");
+      await expect(
+        num,
+        `${TRIPLET_LABEL[member]} 格没有 .num（等宽数字/tabular figures）`
+      ).toHaveText(expectValues[member]);
+      await expect(cell, `${TRIPLET_LABEL[member]} 列没有右对齐`).toHaveCSS("text-align", "right");
+      const box = await cell.boundingBox();
+      expect(
+        Math.round(box?.width ?? -1),
+        `${TRIPLET_LABEL[member]} 列宽 ${box?.width} ≠ 三元组契约 ${TRIPLET_WIDTH[member]}px`
+      ).toBe(TRIPLET_WIDTH[member]);
+    }
 
     // 2. 切换为用户 B 视域：重新加载页面验证隔离
     currentUser = userB;

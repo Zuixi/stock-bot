@@ -1,0 +1,53 @@
+/*
+ * `/market/global` 页样式（Phase 3 §4.1 / §4.2）。
+ *
+ * 本文件只解决**实测存在**的窄屏横向溢出，不为"好看"新增装饰。
+ * 溢出探测方法见计划 §4.2：`documentElement.scrollWidth` + 逐元素 `getBoundingClientRect()`
+ * 取"边界溢出者"（自身越界、且祖先里没有 `overflow` 裁剪——后者只说明它在容器内部滚动）。
+ */
+
+/*
+ * 市场分段控件（`全部 / 美国市场 / 香港市场 / …`）。
+ *
+ * 实测（390 与 768 两档同因）：AntD `Segmented` 的每一项都是 `white-space: nowrap`
+ * 且**既不换行也不收缩**——19 个标的分 7 段时整条控件宽 **833px**，它自己不是滚动容器，
+ * 于是把父级 flex 项撑到 **837px**、`Col` 的 `min-width: auto` 再原样上传，
+ * 最终 `documentElement.scrollWidth = 874`（视口 390/768）。**它不是把溢出"藏"起来**，
+ * 而是把那一层放进容器内滚动（用户横向滑动即可触达每一段）；
+ * 触屏的惯性滚动靠 `-webkit-overflow-scrolling: touch`。
+ */
+.market-global__filter {
+  /* ⚠️ 这一行是**唯一**让容器真正生效的声明，不是可选优化（Phase 3 实测，见下方 §为什么）。
+     `max-width: 100%` / `width: 100%` / `padding-inline` 都**无效**：
+     在 `min-width: auto` 的弹性祖先链（`ant-col-24` → 卡片体 → `ant-space` → `ant-space-item`）里，
+     百分数与"包含块 − padding"都会回指一个**由内容撑出来的**宽度 ⇒ 容器自己被撑到 853px。
+     实测（`evaluate` 逐变体对比，同一页面同一布局）：
+       baseline                                   docSW 890 / filter 853
+       `max-width:100%` + `width:auto`            docSW 874 / filter 837
+       `padding-inline:8px`（本次）                docSW 890 / filter 853
+       **`contain: inline-size`**                  docSW **390** / filter **256**
+     `contain: inline-size` 的语义正是"本元素的**行内尺寸与内容无关**"，于是 833px 的
+     `Segmented` 只能撑出**内部滚动**，不再向上传播。
+     `size` 会给元素零尺寸、`layout`/`paint` 语义过强（还会改变 `position` 的包含块），
+     这里都不需要——只断宽度依赖。 */
+  contain: inline-size;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* AntD 默认在 Segmented 上给 `display: inline-block`；容器化后收敛为 `max-content`，
+   让"内容多宽就多宽"，而不是被父级宽度压缩后再自己去挤别人。 */
+.market-global__filter .ant-segmented {
+  max-width: none;
+  width: max-content;
+}
+
+/* 表格横向滚动容器（计划 §4.1 的 `.table-scroll`）。
+   全局 `.ant-table-content` 在 `scroll.x` 下已有 `overflow-x: auto`，这里补的是**外层**：
+   数据源代码/时区这类**不可断行**的单元格一旦超过列宽，`min-width: auto` 的祖先链
+   仍会把宽度传上去。两层容器都给出 `auto` 后，整页宽度与表宽解耦。 */
+.market-global__table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}

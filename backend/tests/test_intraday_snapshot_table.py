@@ -3,8 +3,10 @@
 覆盖点（按 brief 6）：
 
 1. **migration up/down 可跑** — ``upgrade()`` 之后表存在，``downgrade()`` 之后表
-   消失。直接调迁移模块函数 + 走真 PG（dev 库 ``stock_bot`` 5433；与硬门禁
-   ``uv run alembic upgrade head`` 同一份 DDL 路径）。
+   消失。直接调迁移模块函数 + 走真 PG（**测试库** ``TEST_DATABASE_URL``，默认
+   5433/``stock_bot_test``；与硬门禁 ``uv run alembic upgrade head`` 同一份 DDL 路径）。
+   ⚠️ 本文件的 downgrade 会连带回滚 ``f1a2b3c4d5e6``（PIT/口径两列），故**绝不能**
+   指向 dev 库 ``stock_bot`` —— 理由见 :data:`DB_ASYNC_URL` 的注释（Ruling 59）。
 2. **upsert 幂等** — 同一 ``(trade_date, captured_at)`` 连调两次**生产** repo
    函数不产生重复行（``ON CONFLICT (trade_date, captured_at) DO NOTHING``）。
 3. **upsert 保留行内容** — ``zt_count=42 / max_streak=7`` 写入后回读全等
@@ -55,8 +57,24 @@ from app.services import intraday_sentiment_service
 
 REVISION = "e1f2a3b4c5d6"
 PREV_REVISION = "d7c8b9a0e1f2"
-DB_ASYNC_URL = "postgresql+asyncpg://stock_user:stock_pass@localhost:5433/stock_bot"
-DB_SYNC_URL = "postgresql://stock_user:stock_pass@localhost:5433/stock_bot"
+#: 迁移往返用例必须跑在**测试库**上（``TEST_DATABASE_URL``，默认 5433/`stock_bot_test`）。
+#:
+#: ⚠️ 这里曾经**硬编码 dev 库** ``stock_bot``（"与硬门禁同一份 DDL 路径"），后果是：
+#: ``ensure_migration_state`` 会对 dev 库真跑 ``alembic downgrade d7c8b9a0e1f2``，
+#: 而该版本在 ``f1a2b3c4d5e6_add_metric_pit_and_caliber`` **之下** → 迁移链上的
+#: ``f1a2b3c4d5e6.downgrade()`` 会 **DROP `industry_metrics.published_at` /
+#: `caliber_version`**，随后 ``upgrade head`` 再把两列加回来（值全 NULL）。
+#: 于是**每跑一次全量 ``pytest``，dev 库里所有指标的 PIT/口径就被整列清成 NULL**：
+#: 行数、`created_at`、`xmin` 全不变（DROP/ADD COLUMN 不重写行），只有两列的值没了
+#: —— 这正是 Ruling 59 里"回补后 PIT 100%，交付时却 0%"以及"S1.8 的 PIT 在别人写入
+#: 之后被抹掉"的真因（**不是**任何服务的写路径）。
+#: 修法：与 `test_industry_metric_pit_roundtrip.py` 同规矩 —— 只碰 ``TEST_DATABASE_URL``。
+#: **刻意不回退 `DATABASE_URL`**：那会在"只设了 DATABASE_URL 且指向 dev 库"的运行方式下
+#: 把本文件的破坏性 downgrade 又指回 dev 库（opt-in 的 pit_roundtrip 有环境变量闸门，
+#: 本文件默认就跑，不能有这个回退口子）。
+_DEFAULT_ASYNC = "postgresql+asyncpg://stock_user:stock_pass@localhost:5433/stock_bot_test"
+DB_ASYNC_URL = os.environ.get("TEST_DATABASE_URL") or _DEFAULT_ASYNC
+DB_SYNC_URL = DB_ASYNC_URL.replace("+asyncpg", "")
 ALEMBIC_BIN = str(Path(__file__).resolve().parents[1] / ".venv" / "bin" / "alembic")
 BACKEND_DIR = str(Path(__file__).resolve().parents[1])
 
@@ -85,7 +103,7 @@ _PG_OK = _pg_self_check()
 
 requires_pg = pytest.mark.skipif(
     not _PG_OK,
-    reason="PostgreSQL at localhost:5433 stock_bot unavailable",
+    reason=f"PostgreSQL unavailable at {DB_SYNC_URL} (set TEST_DATABASE_URL)",
 )
 
 
@@ -150,16 +168,22 @@ def ensure_migration_state() -> Any:
 
     前置用绝对定位（先 ``upgrade head`` 再 ``downgrade PREV_REVISION``）——相对
     ``downgrade -1`` 在库已处于 PREV 时会多降一版、把下层的表也拆掉（旧实现的
-    坑）。后置 ``upgrade head`` 是硬不变量：``pytest`` 跑完 dev 库必须仍在
+    坑）。后置 ``upgrade head`` 是硬不变量：``pytest`` 跑完库必须仍在
     ``alembic heads``（否则后续 e2e/手工验证拿到的是缺表的库）。
+
+    **Fix round 1（评审 I2 的连带面）**：后置恢复原先只包住 ``yield``，而**前置的
+    downgrade 在 try 之外** —— 库若不可达/停在别的 revision，前置就抛错，后置永远
+    不执行，库被留在**丢表的中间版本**上（实测：本文件 ERROR 之后
+    ``sw_industry_member_periods`` 被拆掉且没人恢复）。现在前置也进 try，恢复一定执行。
+    该环境级兜底另见 ``conftest.py`` 的 session fixture。
     """
-    # Pre: 任意起点 → HEAD → PREV（表确定不存在）
-    _alembic_upgrade_to("head")
-    _alembic_downgrade_to(PREV_REVISION)
     try:
+        # Pre: 任意起点 → HEAD → PREV（表确定不存在）
+        _alembic_upgrade_to("head")
+        _alembic_downgrade_to(PREV_REVISION)
         yield
     finally:
-        # Post: 恢复 HEAD —— 即使测试失败/异常也不把库留在中间版本
+        # Post: 恢复 HEAD —— 即使测试失败/异常/前置失败也不把库留在中间版本
         _alembic_upgrade_to("head")
 
 

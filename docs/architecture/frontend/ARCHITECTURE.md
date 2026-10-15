@@ -11,7 +11,7 @@
 | 图表 | ECharts（`echarts-for-react`，统一封装在 `shared/ui/EChart.tsx`） |
 | 数据获取 | TanStack React Query |
 | 本地状态 | Zustand（持久化） |
-| 路由 | react-router-dom（`app/router/index.tsx`，页面全部 `lazy` + `Suspense`） |
+| 路由 | react-router-dom（清单 `app/router/route-manifest.ts` 是唯一真相，`app/router/index.tsx` 由它生成 `<Route>`，页面全部 `lazy` + `Suspense`；见 §6） |
 | 静态校验 | `tsc --noEmit` + `npm run check:design`（**不引入 eslint**，见 [ADR 0006](../../decisions/0006-no-eslint-tsc-as-static-check.md)） |
 | 生产托管 | nginx（`frontend/Dockerfile` 的 runtime 阶段只打包 `dist/`） |
 
@@ -21,13 +21,13 @@
 frontend/src/
 ├── app/            # 应用装配：router / layouts / theme（theme.ts + theme-context.tsx）
 ├── pages/<路由>/    # 路由级页面，只做编排（组合 features + shared），不含业务逻辑
-├── features/<域>/   # 业务域：auth · concept · industry-research · market · search · stock-detail · watchlist
+├── features/<域>/   # 业务域：auth · concept · industry-research · market · nav · search · stock-detail · watchlist
 ├── shared/
 │   ├── api/        # 每个域一个 api 模块（market.ts / marketData.ts / limitUp.ts / industryResearch.ts …）
 │   ├── ui/         # UI 原语：EChart · StateWrapper · DegradedNotice · FreshnessNote · NumberText · ChangeText · DataRow · SectionCard
 │   ├── types/      # 共享类型
 │   └── config/
-└── scripts/check-design-tokens.mjs   # 设计令牌门禁（涨跌色对比度 + theme.ts ↔ theme.css 一致）
+└── ../scripts/      # 门禁脚本（在 frontend/scripts/，不在 src/ 下）：check-design-tokens.mjs 设计令牌（涨跌色对比度 + theme.ts ↔ theme.css 一致）· check-routes.mjs 路由清单 ↔ IA 文档 + 本文件 §6
 ```
 
 边界约定：
@@ -59,22 +59,50 @@ frontend/src/
 
 ## 6. 路由一览
 
-| 路径 | 页面 | 说明 |
-|---|---|---|
-| `/` | `pages/landing` | 宣传页，公开、独立布局（不套 `MainLayout`） |
-| `/login` | `pages/login` | 登录 |
-| `/market` | `pages/market` | 行情台首页 |
-| `/market/category` | `pages/market-category` | 申万分类浏览 |
-| `/market/industry/:level1Code` · `/market/industry/:level1Code/:level2Code` | `pages/market-industry-level2` · `market-industry-level3` | 申万一级/二级下钻 |
-| `/market/hot-sectors/:category` | `pages/market-hot-sectors` | 热门板块与情绪 |
-| `/market/concept/:boardCode` | `pages/market-concept` | 概念板块 |
-| `/index/:tsCode` | `pages/index-detail` | 指数详情 |
-| `/stock/:symbol` | `pages/stock-detail` | 个股详情 |
-| `/watchlist` | `pages/watchlist` | 自选股（需登录） |
-| `/tags` · `/tags/:tagName` | `pages/tags` · `tags-detail` | 自定义标签 |
-| `/research` · `/research/:industryKey` | `pages/research` · `research-workbench` | 行业投研工作台 |
+**权威来源**：[`frontend/src/app/router/route-manifest.ts`](../../../frontend/src/app/router/route-manifest.ts)（纯数据清单，**唯一真相**）。`app/router/index.tsx` 由清单**生成** `<Route>`，`app/router/route-elements.tsx` 承载懒加载注册表 / `RequireAuth` / 占位通告注入。下表与清单的一致性由 `npm run check:routes` 机械核对（路径集合双向 + `kind` + 组件与页面目录 + redirect 去向 + 权限口径），CI `frontend-lint` 与 `scripts/self_review.sh` 快检都会跑它。
 
-以 `app/router/index.tsx` 为准；上表与它不一致时以代码为准并修正本表。
+| 路径 | kind | 组件 / 页面目录 / 去向 | 鉴权 | 说明 |
+|---|---|---|---|---|
+| `/` | page | `pages/landing`（`LandingPage`） | 公开 | 宣传页，独立布局（不套 `MainLayout`） |
+| （无 path 的 `main` 外壳） | layout | `MainLayout` | — | 唯一 layout 路由；下表 `parent: "main"` 的行都嵌在它下面（顶栏/页脚由它渲染） |
+| `/login` | page | `pages/login`（`LoginPage`） | 公开 | 登录页 |
+| `/admin/users` | page | `pages/admin-users`（`AdminUsersPage`） | `users:manage` | 管理员控制台（PR #15）：开户（角色必选）· 停用/启用 · 角色替换 · 重置密码 · 审计检索。**入口在账户菜单 `UserMenu`，刻意不进顶栏 `NAV_ROOTS`**（IA §1 顶栏 = 10 个一级导航，`check-routes` 断言其条数） |
+| `/change-password` | page | `pages/change-password`（`ChangePasswordPage`） | 需登录 | 强制首登改密页（PR #15）：**只要求登录、不加权限**——首次登录的用户尚无任何业务权限，加权限门禁会把必须改密的人挡在门外 |
+| `/market` | page | `pages/market`（`MarketPage`） | 公开 | 行情台首页 |
+| `/market/global` | page | `pages/market-global`（`MarketGlobalPage`） | 公开 | 全球市场与跨市场标的（S1.3）：按市场分组、五要素齐备；大宗商品/外汇只放「数据源待接入」占位 |
+| `/market/industry` | page | `pages/market-category`（`CategoryPage`） | 公开 | 申万分类浏览（`/market/category` 的 redirect 目标） |
+| `/market/industry/:level1Code` | page | `pages/market-industry-level2`（`IndustryLevel2Page`） | 公开 | 申万一级下钻 |
+| `/market/industry/:level1Code/:level2Code` | page | `pages/market-industry-level3`（`IndustryLevel3Page`） | 公开 | 申万二级下钻 |
+| `/market/industry/:level1Code/:level2Code/:level3Code` | page | `pages/market-industry-level4`（`IndustryLevel4Page`） | 公开 | 申万末级：某三级行业的成分股（**SCD2** 区间还原）+ 该节点 7 项行情聚合（S1.4） |
+| `/market/heatmap` | page | `pages/market-heatmap`（`MarketHeatmapPage`） | 公开 | 市场/个股热力图（S1.5）：treemap、四分组（全市场/申万一级/概念/自选）、面积=市值或成交额可切换、颜色=涨跌幅；批量读路 `/api/v1/market/heatmap/treemap`；**不是任何 redirect 的目标**（Ruling 30） |
+| `/market/rankings/:key` | page | `pages/market-rankings`（`MarketRankingsPage`） | 公开 | A股排行 7 榜（S1.6）：市值 / 股息率 / 月度涨幅 / 月度跌幅 / 半年利润 / 年利润 / ROE，各 100 强；口径三件事（交易日 / 财务期 / 样本范围）由后端 payload 下发；整行下钻 `/company/:symbol`。**不在 IA §4 表内**（S1.6 新增子路由，与 `/market/global`、`/market/heatmap` 同类） |
+| `/market/data-sources` | page | `pages/market-data-sources`（`MarketDataSourcesPage`） | 公开 | 数据版图 / 数据来源（Phase 1 §W2.1，已在 IA §4「S1.x 新增路由」登记）：逐域覆盖率表 + 可自愈对账域状态 + 最近失败调度任务，消费只读巡检端点 `GET /api/v1/market/data-freshness`（`apply=false`，绝不触发回补）。原先钉在 `/market` 每个 Tab 底部的静态矩阵已由 `1efe65a` 移出工作台，前端设计整改 §0-E 裁定新家在市场域内 |
+| `/market/index/:tsCode` | page | `pages/market-index`（`MarketIndexPage`） | 公开 | 指数详情（`/index/:tsCode` 的 redirect 目标） |
+| `/market/hot-sectors/:category` | page | `pages/market-hot-sectors`（`MarketHotSectorsPage`） | 公开 | 热门板块与情绪；保留（Ruling 30 从 redirect 退回） |
+| `/market/concept/:boardCode` | page | `pages/market-concept`（`ConceptBoardPage`） | 公开 | 概念板块；保留（Ruling 30 从 redirect 退回） |
+| `/company` | page（占位） | `pages/company`（`CompanyPage`） | 公开 | 公司分析总览；占位（9 张公司卡片未落地） |
+| `/company/:symbol` | page | `pages/stock-detail`（`StockDetailPage`） | 公开 | 个股详情（`/stock/:symbol` 的 redirect 目标） |
+| `/industry` | page | `pages/industry`（`IndustryPage`） | `research:read` | 行业分析看板（`/research` 的 redirect 目标） |
+| `/industry/:industryKey` | page | `pages/industry/workbench`（`IndustryWorkbenchPage`） | `research:read` | 行业投研工作台（`/research/:industryKey` 的 redirect 目标） |
+| `/news` | page（占位） | `pages/news`（`NewsPage`） | 待定（当前无门禁） | 资讯；占位，权限口径待模块落地 |
+| `/macro` | page（占位） | `pages/macro`（`MacroPage`） | 待定（当前无门禁） | 宏观分析；占位 |
+| `/sentiment` | page | `pages/sentiment`（`SentimentPage`） | `research:read` | 情绪分析的深度读出台（S1.8–S1.13）：综合指数 hero（读新端点 `/api/v1/market/sentiment/composite`，明示「N/11 条腿 + 生效权重」）+ 9 个模块面板（唯一模块表 `features/sentiment/moduleTable.ts` + 唯一渲染器 `SentimentModulePanel`）；⑧ 散户舆情与 ⑩ 情绪预警与预判按 spec 就地说明未落地。**权限**：IA §1 原列「待定」，该表「分区」列本就写「研究（只读）」，且本页消费受保护的 `/api/v1/metrics/*`（**实测匿名 401、普通交易员 403**）⇒ 取与同为研究层的 `/industry` **同一** `research:read`。曾试过只标 `requiresAuth`，结果是普通登录用户能进页面却读不到任何模块数据（只剩一张"读面未取到"的空表），故改为此值 |
+| `/valuegraph` | page（占位） | `pages/valuegraph`（`ValueGraphPage`） | 待定（当前无门禁） | 价值网图谱；占位 |
+| `/strategy` | page（占位） | `pages/strategy`（`StrategyPage`） | 待定（当前无门禁） | 策略引擎；占位 |
+| `/risk` | page（占位） | `pages/risk`（`RiskPage`） | 待定（当前无门禁） | 风险管理；占位 |
+| `/trade` | page（占位） | `pages/trade`（`TradePage`） | 待定（当前无门禁） | 交易执行；占位 |
+| `/search` | page（占位） | `pages/search`（`SearchPage`） | 待定（当前无门禁） | 顶栏全局搜索目标页（`?q=`）；占位，非 redirect |
+| `/me` | page | `pages/me`（`MePage`） | 需登录 | 我的：`?tab=watchlist`（自选）/ `?tab=tags&name=`（标签） |
+| `/market/category` | redirect | → `/market/industry` | 公开 | 旧路由（`<Navigate replace>`），下同 |
+| `/index/:tsCode` | redirect | → `/market/index/:tsCode` | 公开 | 旧路由 |
+| `/stock/:symbol` | redirect | → `/company/:symbol` | 公开 | 旧路由 |
+| `/research` | redirect | → `/industry` | 公开 | 旧路由；目标路由自身兑现 `research:read` |
+| `/research/:industryKey` | redirect | → `/industry/:industryKey` | 公开 | 旧路由；目标路由自身兑现 `research:read` |
+| `/watchlist` | redirect | → `/me?tab=watchlist` | 公开 | 旧路由；目标路由自身兑现「需登录」 |
+| `/tags` | redirect | → `/me?tab=tags` | 公开 | 旧路由；目标路由自身兑现「需登录」 |
+| `/tags/:tagName` | redirect | → `/me?tab=tags&name=:tagName` | 公开 | 旧路由；`tagName` 由 `RedirectTo` 转义后拼进 query |
+
+以 [`route-manifest.ts`](../../../frontend/src/app/router/route-manifest.ts) 为准；上表与它不一致时以代码为准并修正本表。十条一级导航的可见性三态（口径见 [ADR 0008](../../decisions/0008-research-read-requires-permission.md) 与 [`design/ia-investment-research-platform.md`](../../design/ia-investment-research-platform.md) §1）由清单的 `requiresAuth` / `permission` 字段承载，本表不新增任何 scope。
 
 ## 7. 与网关的关系
 

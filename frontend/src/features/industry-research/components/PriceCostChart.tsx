@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { EChart } from "@/shared/ui/EChart";
+import { useIsNarrowViewport } from "@/shared/ui";
 import { useTheme } from "@/app/theme-context";
 import type { TrendSeries } from "@/shared/api/industryResearch";
 
@@ -11,6 +12,14 @@ interface Props {
 /** 生猪价格 vs 行业成本（月度），tooltip 折算头均盈亏 */
 export function PriceCostChart({ trend, height = 296 }: Props) {
   const { colors } = useTheme();
+  /**
+   * 窄屏形态（Phase 3 §4.5）：**不隐藏、不换图**，只收版式——
+   * - 左轴 44 → 34px（308px 画布里 44px 是 1/7）；
+   * - 图例从右上角移到顶部左起（窄屏右上角只有 ~120px，两项图例名会互相压住）；
+   * - 图表高度 296 → 240px（月度序列 60+ 点，矮一点反而更易看趋势，
+   *   且让首屏在 390px 下能同时看到图与下方的阶段条）。
+   */
+  const narrow = useIsNarrowViewport();
   const option = useMemo(() => {
     if (!trend) return null;
     const labels = Object.keys(trend.series);
@@ -21,15 +30,29 @@ export function PriceCostChart({ trend, height = 296 }: Props) {
 
     return {
       animationDuration: 700,
-      grid: { left: 44, right: 16, top: 36, bottom: 26 },
-      legend: {
-        top: 2,
-        right: 8,
-        itemWidth: 14,
-        itemHeight: 2.5,
-        icon: "rect",
-        textStyle: { color: colors.textSecondary, fontSize: 12 },
+      grid: {
+        left: narrow ? 34 : 44,
+        right: narrow ? 8 : 16,
+        top: narrow ? 44 : 36,
+        bottom: narrow ? 22 : 26,
       },
+      legend: narrow
+        ? {
+            top: 2,
+            left: 0,
+            itemWidth: 12,
+            itemHeight: 2.5,
+            icon: "rect",
+            textStyle: { color: colors.textSecondary, fontSize: 11 },
+          }
+        : {
+            top: 2,
+            right: 8,
+            itemWidth: 14,
+            itemHeight: 2.5,
+            icon: "rect",
+            textStyle: { color: colors.textSecondary, fontSize: 12 },
+          },
       tooltip: {
         trigger: "axis",
         backgroundColor: colors.bgElevated,
@@ -112,8 +135,9 @@ export function PriceCostChart({ trend, height = 296 }: Props) {
         },
       ],
     };
-  }, [trend, colors]);
+  }, [trend, colors, narrow]);
 
   if (!option) return null;
-  return <EChart option={option} height={height} />;
+  // 窄屏高度收窄（§4.5）：默认 296 → 240；调用方显式传 `height` 时以调用方为准
+  return <EChart option={option} height={narrow && height === 296 ? 240 : height} />;
 }

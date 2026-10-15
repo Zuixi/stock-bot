@@ -37,6 +37,7 @@
 | 写测试 / 加门禁 | `testing/index.md` | 改 CI job 必须同步矩阵（doc_gate #4） |
 | 上线 / 数据迁移 | `deployment/production.md` · `deployment/data-migration.md` | 先数据后应用；勿复制 override 到服务器 |
 | 加文档 / 新计划 | 本文件 · `plans/README.md` | 新计划登记 `plans/index.md`；决策写新 ADR |
+| 查某模块的契约与验收判据 | [`specs/README.md`](./specs/README.md) | 契约在 `specs/`，排期在 `plans/`，别混写 |
 
 ## 文档系统自身的规则
 
@@ -46,6 +47,7 @@
 |---|---|---|
 | 入口 | `AGENTS.md` · 本文件 · `plans/index.md` · `authority.md` | 必须最新，被机械校验，不写细节 |
 | 说明 | `overview.md` · `features.md` · `ARCHITECTURE.md` · `architecture/` | 只写**当前态**；禁止写历史与观点 |
+| 规格 | `specs/` | 只写**目标契约与验收判据**；禁止写排期、历史、进度 |
 | 历史 | `evolution.md` · `decisions/` · `plans/` · `Changelog.md` | **只增不改**（ADR 正文落地后禁编辑） |
 | 操作 | `deployment/` · `testing/` | 怎么做与排障；**不复制命令，指向脚本** |
 | 参考 | `references/` · `design/` | 外部资料；不参与交叉引用校验 |
@@ -56,6 +58,7 @@
 |---|---|---|
 | 合并的功能/修复（一句话） | `Changelog.md` | — |
 | 架构取舍、否掉方案 X | **新 ADR** + `decisions/index.md` | 不改旧 ADR 正文 |
+| 某模块的契约 / 表结构 / 端点 / 验收判据 | `specs/<Sx-...>.md` | 不写进 `architecture/`（那是当前态）|
 | 里程碑级阶段变化 | `evolution.md` 一段 | `architecture/` 正文 |
 | 端口/路由/队列/功能清单 | `deployment/index` · `features.md` · 架构文档 | 多处重复描述 |
 | 可被 lint/doc_gate/测试强制的行为 | **升级门禁并删** best-practices 条 | 不要只追加长文 |

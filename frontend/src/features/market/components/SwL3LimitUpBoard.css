@@ -28,7 +28,6 @@
 
 .sw3-tag__count {
   font-size: 10.5px;
-  font-variant-numeric: tabular-nums;
   opacity: 0.65;
   margin-left: 2px;
 }
@@ -132,7 +131,6 @@
   gap: 8px;
   font-size: 12.5px;
   font-weight: 700;
-  font-variant-numeric: tabular-nums;
   color: var(--text-primary);
   white-space: nowrap;
 }
@@ -189,7 +187,6 @@
   gap: 8px;
   justify-content: flex-end;
   font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
   color: var(--text-secondary);
 }
 

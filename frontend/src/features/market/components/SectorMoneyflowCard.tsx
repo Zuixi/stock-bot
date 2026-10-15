@@ -27,12 +27,21 @@ function buildOption(items: SectorMoneyflowItem[], c: ThemePalette) {
   const names = top.map((i) => i.boardName ?? i.boardCode).reverse();
   const bars = top
     .map((i) => ({
-      value: (i.mainNetInflow ?? 0) / 1e8,
+      // 同 MarketMoneyflowCard：`mainNetInflow` 可空，折成 0 会画出一根与"真实 0 亿"
+      // 无法区分的零高度柱。透传 null → 该板块**不画柱**，tooltip 的
+      // `if (!d || d.value == null) return ""` 分支也才真正生效。
+      value: i.mainNetInflow == null ? null : i.mainNetInflow / 1e8,
       pct: i.pctChange,
       ratio: i.mainNetRatio,
       leadName: i.leadStockName,
       leadPct: i.leadStockPct,
-      itemStyle: { color: (i.mainNetInflow ?? 0) >= 0 ? c.up : c.down, borderRadius: 2 },
+      // 颜色与 value 同口径（与 MarketMoneyflowCard 逐字一致）：null 时柱子本来就不画，
+      // 但 `(x ?? 0) >= 0` 会把"缺值"折成 0 再判成 `c.up` —— 留一个"不可见但语义错误"的
+      // 分支；一旦哪天改成透明占位柱，它会立刻以"阳线色"露出来。故显式判 null → `c.flat`。
+      itemStyle: {
+        color: i.mainNetInflow == null ? c.flat : i.mainNetInflow >= 0 ? c.up : c.down,
+        borderRadius: 2,
+      },
     }))
     .reverse();
   return {
@@ -45,7 +54,7 @@ function buildOption(items: SectorMoneyflowItem[], c: ThemePalette) {
           params as Array<{
             name: string;
             data: {
-              value: number;
+              value: number | null;
               pct: number | null;
               ratio: number | null;
               leadName: string | null;
@@ -121,7 +130,7 @@ function ContinuityStrip({ trends }: { trends: SectorTrends }) {
             const luCount = luAvailable ? (last?.luCount ?? null) : null;
             return (
               <span
-                className="mf-continuity__chip"
+                className="mf-continuity__chip num"
                 key={b.boardCode}
                 data-testid={`sector-continuity-${b.boardCode}`}
               >
@@ -166,9 +175,23 @@ function ContinuityStrip({ trends }: { trends: SectorTrends }) {
   );
 }
 
-export function SectorMoneyflowCard() {
+export interface SectorMoneyflowCardProps {
+  /**
+   * `compact`（P1-1 第二轮）：把「板块连续性」区收进一个**默认收起**的折叠开关。
+   *
+   * 为什么需要它（实测，不是审美）：1440 下本卡高 **656px**，同排的涨跌分布 / 热力图只有
+   * **352 / 382px**（差 304px），多出来的**全部**是连续性区（`sector-continuity` 的高度）。
+   * 三块并排时这一块像"多长了一条腿"。`compact` 下连续性区**一字不删**：展开后与 `full`
+   * 变体逐字相同（同一 `ContinuityStrip`、同一口径标注），只是默认不占版面。
+   * `/market` 的 A股全景分区用 `compact`；其它调用方（若将来有）默认仍是 `full`。
+   */
+  variant?: "full" | "compact";
+}
+
+export function SectorMoneyflowCard({ variant = "full" }: SectorMoneyflowCardProps) {
   const { colors } = useTheme();
   const [dimension, setDimension] = useState<SectorDimension>("industry");
+  const [showContinuity, setShowContinuity] = useState(false);
   const { refetchInterval } = useMarketPolling();
   const { data: moneyflow, isLoading } = useQuery({
     queryKey: ["market", "sector-moneyflow", dimension],
@@ -220,7 +243,28 @@ export function SectorMoneyflowCard() {
             暂无资金流数据（交易日盘中自动更新）
           </div>
         )}
-        {trends ? <ContinuityStrip trends={trends} /> : null}
+        {/* compact：连续性区收进一行折叠开关（默认收起）。开关本身不念数，
+            只说明"这里有什么 + 窗口多大"，读数一律留在展开后的 ContinuityStrip 里
+            （同一事实不写两处，避免折叠态与展开态数字打架）。 */}
+        {variant === "compact" && trends ? (
+          <button
+            type="button"
+            className="mf-continuity-toggle"
+            data-testid="sector-continuity-toggle"
+            aria-expanded={showContinuity}
+            onClick={() => setShowContinuity((open) => !open)}
+          >
+            <span className="mf-continuity-toggle__caret" aria-hidden="true">
+              {showContinuity ? "▾" : "▸"}
+            </span>
+            <span className="mf-continuity-toggle__title">板块连续性</span>
+            <span className="mf-continuity-toggle__hint">
+              近 {trends.window.samples} 个完整日 · 上榜口径 Top {trends.topN}
+            </span>
+            <span className="mf-continuity-toggle__action">{showContinuity ? "收起" : "展开"}</span>
+          </button>
+        ) : null}
+        {trends && (variant === "full" || showContinuity) ? <ContinuityStrip trends={trends} /> : null}
       </Spin>
     </Card>
   );

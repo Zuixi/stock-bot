@@ -41,7 +41,7 @@ next-action: -
 
 **Tech Stack:** 不新增任何运行时依赖。后端 FastAPI + SQLAlchemy 2.0 async + Alembic + Argon2id（既有）；测试 `uv run pytest`（SQLite in-memory + FakeRedis，见 [conftest.py](auth-service/tests/conftest.py)）；前端 React 18 + AntD 5 + TanStack Query（既有）+ Playwright。
 
-**与既有计划的关系:** 关闭 [ADR 0008](docs/decisions/0008-research-read-requires-permission.md) 的「已知遗留」（无授角色接口 → 新增投研用户需改库）。ADR 正文冻结不可改，改由新 ADR 0010 承接并双向引用。与 `2026-10-12-investment-research-platform-ia.md`（投研 IA 主线）无耦合——本计划只动身份层与 landing 表达层，不新增业务页面。
+**与既有计划的关系:** 关闭 [ADR 0008](docs/decisions/0008-research-read-requires-permission.md) 的「已知遗留」（无授角色接口 → 新增投研用户需改库）。ADR 正文冻结不可改，改由新 ADR 0015 承接并双向引用。与 `2026-10-12-investment-research-platform-ia.md`（投研 IA 主线）无耦合——本计划只动身份层与 landing 表达层，不新增业务页面。
 
 ---
 
@@ -237,7 +237,7 @@ python -m app.cli bootstrap-admin --username <name> --email <mail>
 
 | 文档 | 改什么 |
 |---|---|
-| `docs/decisions/0010-invite-only-provisioning-and-admin-console.md`（新） | 六项裁定的为什么；引用 ADR 0008 声明其「已知遗留」关闭；写明"不硬删除"与"角色矩阵只读"的拒绝理由 |
+| `docs/decisions/0015-invite-only-provisioning-and-admin-console.md`（新） | 六项裁定的为什么；引用 ADR 0008 声明其「已知遗留」关闭；写明"不硬删除"与"角色矩阵只读"的拒绝理由 |
 | `docs/decisions/index.md` | 登记 0010（`doc_gate` 校验） |
 | `docs/architecture/authentication-and-gateway.md` | §3 补邀请制开户与强制改密链路；§6.1 路由矩阵补 9 条 admin 路由、`/auth/register` 标为 Disabled、`/auth/admin/roles` 由 GET/PUT 改为 **GET** |
 | `docs/architecture/auth-data-model.md` | DDL 补 3 列；状态注释标 `pending_verification` 为死枚举 |

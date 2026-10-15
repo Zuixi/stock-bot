@@ -1,0 +1,27 @@
+/*
+ * 申万行业 7 项行情聚合条（Phase 3 §4.5 的窄屏形态）。
+ *
+ * 实测成因：`.ant-space` 是 `inline-flex`，其子项 `.ant-space-item` 的 `min-width: auto`
+ * 会让**不可断行**的内容（「成交额 1.23万亿」这类）决定整个条的最小宽度。
+ * `flex-wrap: wrap` 只有在**单个 cell 不超过容器**时才起作用——否则第一个 cell
+ * 就把容器顶宽，wrap 无从发生。故这里给 cell 加上限与可收缩性。
+ */
+
+/* 条本身占满父容器（否则 `inline-flex` 会 shrink-to-fit 到内容宽度） */
+.industry-strip {
+  max-width: 100%;
+}
+
+/* 单个 cell：允许收缩到容器宽度以内；数字本身不折断（可读性优先），
+   超出时由数值行自己省略号降级——完整值仍在 Tooltip 与下钻页里。 */
+.industry-strip__cell {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.industry-strip__cell .ant-typography {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

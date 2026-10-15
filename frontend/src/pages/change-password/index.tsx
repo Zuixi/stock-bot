@@ -14,7 +14,7 @@ export default function ChangePasswordPage() {
   const { refetchUser } = useAuth();
 
   useEffect(() => {
-    document.title = "设置新密码 · Stock Bot";
+    document.title = "设置新密码 · StockBot";
   }, []);
 
   const onFinish = async (values: {

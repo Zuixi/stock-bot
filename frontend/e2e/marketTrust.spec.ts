@@ -276,11 +276,16 @@ test.describe("可点击条目语义与键盘可达（Task 16）", () => {
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/market\/hot-sectors\/industry$/);
 
-    // 申万一级行业卡 → 二级页：整卡是链接，键盘 Enter 即进入
+    // 申万一级行业**瓦片**（`.sw-cell`）→ 二级页：整格是链接，键盘 Enter 即进入。
+    //
+    // Phase 1 §W2.2 更新：原先这里锚的是 `.ant-card` 里 hasText「行业分类（申万）」的那张卡
+    // （`<IndustryClassification />`），它已随 §W2.2 删除（与网格同屏渲染同一批 31 个行业，
+    // 属重复渲染，二选一留网格）。被断言的**能力没变**——整格是 `<a href>` + 键盘可达，
+    // 只是承载它的 DOM 从"卡内链接"换成"网格瓦片"。故这里改成按 `.sw-grid` 作用域定位瓦片，
+    // 比原来按卡标题过滤更稳（不再依赖任何一张卡的标题文案）。
     await page.goto("/market");
     await page.getByRole("tab", { name: "A股全景" }).click();
-    const industryCard = page.locator(".ant-card").filter({ hasText: "行业分类（申万）" });
-    const level1 = industryCard.getByRole("link", { name: /农林牧渔/ });
+    const level1 = page.locator(".sw-grid .sw-cell", { hasText: "农林牧渔" });
     await expect15s(level1).toHaveAttribute("href", "/market/industry/110000");
     await level1.focus();
     await expect(level1).toBeFocused();
@@ -339,6 +344,10 @@ test.describe("可点击条目语义与键盘可达（Task 16）", () => {
  * Task 16：北向停更标注。
  * 北向（`moneyflow_hsgt`）上游已停更：卡片要能说「数据源已停更」**并给出最新数据日**，
  * 日期必须取自 payload（`as_of`），换一天文案跟着变——写死日期就是假标注。
+ *
+ * Task 16（口径重标）追加：2024-08-19 之后 `north_money` 是**成交额**口径，卡片必须据此
+ * 念数（「成交额」「累计成交额」、无正负号），**不得**再出现「净流入」文案。mock 里的
+ * 值全部为正且带 `amount_kind="turnover"`——负值在成交额口径下是不可能出现的。
  */
 test.describe("公开页不披露数据来源", () => {
   test("/market 整页不得出现供应商名称", async ({ page }) => {
@@ -355,8 +364,8 @@ test.describe("公开页不披露数据来源", () => {
 
 test.describe("北向停更标注（Task 16）", () => {
   const NORTHBOUND_ITEMS = [
-    { date: "2026-09-06", net_amount: 12345.6 },
-    { date: "2026-09-07", net_amount: -7890.1 },
+    { date: "2026-09-06", amount: 123456.7, amount_kind: "turnover" },
+    { date: "2026-09-07", amount: 78901.2, amount_kind: "turnover" },
   ];
 
   async function mockNorthbound(page: Page, asOf: string, staleDays: number) {
@@ -368,6 +377,7 @@ test.describe("北向停更标注（Task 16）", () => {
           as_of: asOf,
           stale_days: staleDays,
           source_status: "discontinued",
+          amount_kind: "turnover",
           items: NORTHBOUND_ITEMS,
         }),
       })
@@ -390,4 +400,20 @@ test.describe("北向停更标注（Task 16）", () => {
     await expect15s(card2.getByText("数据源已停更（最新 08-21）")).toBeVisible();
     await expect(card2.getByText("（最新 09-07）")).toHaveCount(0);
   });
+
+
+  test("北向卡按成交额口径念数，不出现「净流入」", async ({ page }) => {
+    await mockNorthbound(page, "2026-09-07", 11);
+    await page.goto("/market");
+    await page.getByRole("tab", { name: "资金流向" }).click();
+    const card = page.locator(".ant-card").filter({ hasText: "北向资金" });
+    await expect15s(card.getByText("盘后成交额 · 亿元")).toBeVisible();
+    await expect15s(card.getByText("当日成交额")).toBeVisible();
+    await expect15s(card.getByText("近30日累计成交额")).toBeVisible();
+    // 成交额无方向：不带正负号（净买入才带）。末项 78901.2 万元 → 恰好 "7.89亿"（精确匹配，
+    // 若被写成 "+7.89亿" 这条会红）
+    await expect15s(card.getByText("7.89亿", { exact: true })).toBeVisible();
+    await expect(card.getByText(/净流入|净买入/)).toHaveCount(0);
+  });
+
 });

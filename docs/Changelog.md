@@ -1,3 +1,300 @@
+## 2026-10-15 - **对标竞品 P1-2：标的清单统一为指标三元组（最新价 · 涨跌额 · 涨跌幅）+ P2 评估**
+
+**P1-2（`c1a1364`）**。竞品清单"密但可扫"的来源是：**固定列位 + 右对齐 + 等宽数字**，读多张表时不用重新找列。我们改造前是各清单自定列位——同一批标的的数字**无法跨表竖读**（在一张表记住"最新价"的位置，换一张表同位置却是"成交额"）。
+
+- 新增**全站唯一真相** `shared/ui/instrumentTriplet.ts`：顺序（`TRIPLET_ORDER`）、列宽（`TRIPLET_WIDTH` = 72/62/66）、右对齐 + `.num` 三条契约集中在一处；`DataRow` 的栅格模板与 antd 表格的 `column.width` **都从它取**。**3 个 e2e 直接 import 同一常量**去量 DOM（不是抄数字）⇒ 实现漂移会被当场抓住。
+- 逐清单落实：**榜单** `close + pct_chg` 有值、中槽 `--` 占位；**自选**是唯一载荷齐全的清单（`latest_price / change / change_percent` **三成员全真值** ✓）；**龙虎榜** `close + pct_change` 有值、中槽 `--`；**大宗/解禁/回购** 载荷**没有任何涨跌口径** ⇒ 只做几何统一；**`SectorFlow` 判定为板块清单（非标的清单）**，按授权保留、零改动。
+- ⚠️ **不编造载荷里没有的数字**：某成员在某端点不存在时，槽位**照样占位**并渲染 `--`（仓库铁律）。**留空槽是有意的**——槽位塌陷会让右边的成员左右跳，恰恰破坏"竖读"。
+- 实施中自查修掉**两个自己引入的回归**：cell padding 把 66px 列压成 50px 内容盒 ⇒ `+19.93%` 折行、行高 39→61px（+56%）；110px 标识列装不下"4 字名 + 6 位代码" ⇒ 名称被 ellipsis 掉 4px。修后行高回到 39px，1440/390 列宽均 72/62/66，整页无横向溢出。
+- 顺手把 `fmtAmountParts` 的单位从「亿元/万亿」改为**最简写法**「亿/万亿」：实测「1000.00 亿元」需要 ~85px、会溢出 72px 硬预算（390 下必须给标识列让路），「1000.00 亿」只需 ~65px。**口径不变**（仍是人民币亿元），两个消费方同时生效。
+- **反回归断言 3 处**（都加在既有用例内 ⇒ 用例数不变），并做**非空转证明**：临时各删一个成员 ⇒ 三处各红一条（`自选表三元组不齐/乱序：实际 [名称,最新价,涨跌幅,…]`、`三元组槽位数不等于契约 Expected: 3 / Received: 2`），还原后 36 passed。
+
+**P2 评估（据实：大部分不可做，不是"忘了"）**
+| P2 条目 | 结论 | 依据 |
+|---|---|---|
+| 标的图标 / 代码徽章 | **部分已存在**：代码徽章已有（`datarow__ticker` / `InstrumentIdentity` ✓）；**图标不可做**——A 股标的没有 logo 数据源 | 竞品那些图形我们拿不到 |
+| 板块卡统一 sparkline | **被数据挡住** | P1-2 逐端点实测载荷：`rankings` keys = `symbol,name,exchange,close,pct_chg,amount,volume,turnover_rate,total_mv`；`dragon-tiger` keys 同样全为标量；`enriched` 唯一的数组是 `sw_chain`（行业链，非价格序列）。**全仓唯一带序列的是 `/market/global-indices` 的 `spark`**（指数卡已自画）⇒ 行级/板块级火花线需后端逐行给序列，**不画假趋势线** |
+| 分区间距收紧 | **推迟** | 仓库**没有 `--space-*` 间距刻度 token** ⇒ 收紧要么发明一套刻度（属设计系统变更，不在 P2 范围）、要么硬编码（与"间距走刻度"的既定方向相反） |
+
+**需后端/owner 决策（已记入报告，本轮不动后端）**：① `/market/rankings` 的 `RankingItemOut` 缺 `change`/`pre_close`（SQL 已 join `daily_quotes`，该表有 `pre_close`）；② `/market/dragon-tiger` 同理（表本身只有 `close`/`pct_change`）；③ 逐行序列（行级火花线）。**前端不反算、不加请求**，故这两处的涨跌额现为 `--`。
+
+**验证**：`tsc` 0 · `build` 0 · `self_review` ✓ · `check:routes` 87 ✓ · `check:design` exit 0 ✓ · 目标 6 组 spec **90 passed / 1 skipped / 0 failed** · **全套 e2e 196 passed / 13 skipped / 0 failed**（与基线一致）。构建新鲜度用**所服分块**证明（`index-CC9d7mG4.js` → `index-BSl5-CVD.js`，与构建日志一致）。
+
+## 2026-10-15 - **对标竞品 P1-1 铺开：`/market` 五分区同屏堆叠 + 去重 + 高度平衡**
+
+按 owner 批准的方向把"分区式"铺开（`0b17d8c` + `2798b9f`）。
+
+**契约风险是本条的核心，先处理它**：`/market` 原用页级 AntD `Tabs`，而 **4 个既有 spec 依赖该契约**（`marketLayout` 遍历 `TABS` 走 `?tab=`、`marketDataFace` 短线情绪三卡、`limitUpSentiment` 8 个用例查 `role="tab"`+`aria-selected`、以及我加的五 Tab 溢出扫描）。做法：**保留 `Tabs` 作为"导航条"**（items 不挂 `children` ⇒ 不渲染面板），内容改为**五分区同屏堆叠**；`?tab=<key>` 仍是选中项的唯一真相，激活 = 高亮 + `scrollIntoView`。结果：`role="tab"` / `aria-selected` / `data-testid="market-tabs"` / `.ant-tabs-nav .ant-tabs-tab` 的 DOM **一字未变** ⇒ **那 4 个 spec 零断言改动**（实测定向 96 passed / 1 skipped）。分区导航 sticky 于 `top:64px`（站点 Header 自身是 sticky top:0 / z-index 100，用 top:0 会被压在下面），分区 `scroll-margin-top:120px`（实测点击后标题顶 = 120）。
+
+**五分区**（各为 `MarketSection`，各自保留**逐面板**的 `数据截至`）与它们的维度条：
+- **指数总览 / A股全景 / 资金流向**：只读口径行（A股全景给 ①–⑤ 说明"这块看的是什么"）。
+- **短线情绪**：把原本的 收盘/盘中 `Segmented` **提升**进维度条（同一个 state、同一个 testid、单一控件）。
+- **数据面**：**刻意不给**维度条——它唯一的维度就是那张卡自己的 `role=tab` 组，加条会出现"一个状态两个控件"。
+- **不发明维度**：panorama 的热力图确实只有一个视图（成交额切换在 `/market/heatmap`），故不给。
+
+**(a) 去重**：`SectorMoneyflowCard` 现**只出现在 A股全景**（③ 面板）；资金流向分区保留 大盘资金流 + 北向资金。断言**限定分区作用域**（全局 `getByText` 会同时命中两处）+ 非空转正对照（克隆 ⇒ 数到 2）。
+
+**(b) 高度平衡**：给它加 `variant="compact"`——「板块连续性」移入**默认折叠**的披露区（`aria-expanded`，展开后内容逐字节相同；`full` 仍是其它调用方的默认）。1440 实测 `getBoundingClientRect().bottom`：**595/625/899（Δ304）→ 1578/1608/1601（Δ30）**；断言 Δ≤80px 并带**变异对照**（强制 `minHeight:760` ⇒ Δ>80 必红）+ 另一条断言证明"展开确实会变高"。**这里存在一个不可兼得的取舍**：`板块连续性` 常驻展开 与 三块齐平 **不能同时成立**（那 304px 就是连续性条本身）——本轮选"齐平 + 按需展开"。
+
+**同时根治两条 flaky（都只在全套负载下暴露，单跑必绿）**：
+1. `marketPolling` 休市用例：期望 ≥2 次轮询只观测到 1 次 ✗ —— 它用假时钟推进 930s、数**真实**网络请求，而断言前只固定 `realSleep(400)`；分区堆叠后首屏并发请求变多 ⇒ 请求尚未落地就断言。改**等计数稳定**（连续 600ms 无变化，最多 6s）。**不放宽 `>=2`**——那是"300s 量级而非 30s/60s"的证据。
+2. `nav.spec` 第④步（**我自己写错的**）：点开分组后**同步**断言子项可点 ✗ 而下拉弹层的开启动画与定位是异步的 ⇒ 负载下读到中间态。改用 `expect.poll` 轮询同一 `isHitTestable` 判据（判据未改，只允许"稍后成立"）。
+
+**验证**：`tsc` 0 · `build` 0 · `check:design` 0 ✓ · `check:routes` 87 ✓ · `self_review` ✓ · **全套连跑 3 遍 196 passed / 13 skipped / 0 failed**（修复前 3/3 各 1 failed）。构建新鲜度用**所服分块哈希**证明（`assets/index-CC9d7mG4.js` 的 sha256 == 本地 dist ✓），未在任何发布文件里写标记。
+
+## 2026-10-15 - **对标竞品 P1-1 第一刀：A股全景首个「分区」+ 三面板并排**（先做一个给 owner 看）
+
+按 owner 批准的方案（"先做一个分区给你看效果，满意再铺开"）实施（`7fb73e2`）。竞品的「行情中心」是**一行三面板**（涨跌分布 ‖ 热力图 ‖ 主力净流入），我们把 A股全景 Tab 的首行从 2 栏改为同样的三面板。
+
+**做了什么**
+- 新增可复用的**分区壳** `features/market/components/MarketSection.tsx`（props：`title` / `extra?` / `dimensionStrip?` / `children` / `id?` / `testId?`）。两个**刻意的设计约束**：① 不套内层 `antd Card`（避免卡片套卡片）② **不接管 `as_of`**——实测三块的口径日**真的不同**（涨跌分布与热力图取"按最近完整日"回落到 10月13日，而板块主力资金流是 10月15日）。**分区壳若统一接管口径日就会撒谎**，这是本设计里最容易犯的错。
+- `pages/market/index.tsx` 的 A股全景首行：`DistributionChart` ‖ `SectorHeatmap` ‖ **`SectorMoneyflowCard`**（`xs=24 md=12 xl=8` ⇒ ≥1200 三栏 / ≥768 两栏 / <768 单栏）。**零新 API、零后端改动**、页级 5 个 Tab 全部保留（将来可整块"抬出"Tab 而不返工）。
+- 分区头带一条**维度说明**（① 涨跌分布·全市场 11 桶 ② 板块热力图·申万一级（市值加权）③ 板块主力资金流·未完整日净流入 Top10）——比竞品光秃秃的维度条多一层"这块看的是什么"。
+- **实测几何**（`getBoundingClientRect`，且 `docScrollWidth == innerWidth` 三档均真）：**1440** 三块 `y` 全为 244、`x` = 44/500/956、`w` 全 440、标题均未被裁；**768** 前两块 `y=244`、第三块 `y=641` 换行（2-up）；**390** `x` 全 24、`w` 342、`x+w=366 ≤ 390`。证据 `p11-section-{1440,768,390}.png`。
+- **防回归断言**（`marketLayout.spec.ts`，作用域限 `[data-testid="market-section-panorama"]`）：恰好 3 块面板 + 同 `y` + `x` 递增 + 宽度相等（±4px）+ **各自保留自己的数据截至** + 390 下堆叠。**并做了非空转证明**：删掉第三块 → `count 3→2`、`y` 出现 `null` ⇒ 断言①③ 转红 ✓，另有测试内正对照（克隆 → 必须数到 4）。
+
+**两个如实上报的问题（待 owner 裁定，均未擅自实施）**
+1. **重复**：`SectorMoneyflowCard` 现在同时出现在 A股全景与资金流向两个 Tab。共用同一 `queryKey` ⇒ **不产生额外请求**，只是视觉重复。建议：若 5 个 Tab 保留，撤掉资金流向里那张；若将来改成"长页分区堆叠"，则天然只出现一次。
+2. **高度不齐**（可见的真问题）：板块主力资金流面板 1440 下高 **656px**，另两块 352/382px——差在它带的「板块连续性」区。建议加 `variant="compact"` 或把连续性区移入抽屉。
+
+**同时纠正了 controller 自己写错的一条断言**（记它一功）：`nav.spec.ts` 里"无 `research:read` ⇒ 「研究」分组整组消失"的**前提是假的**——`/macro` 与 `/valuegraph` 是 `authenticated`，只有 `/sentiment` 要 `research:read`。该断言此前**靠"mock 会话尚未解析"的竞态假绿**（单跑必绿、全量必红）。已改为不依赖时序的真断言：**加前置条件**（「资讯」必须渲染 = 会话已解析）+ 组仍存在 + authenticated 子项在 + 权限子项不在 + 工具分组正对照。
+
+**验证**：`tsc` 0 · `build` 0 · `check:design` 0 ✓ · `check:routes` 87 ✓ · `self_review` ✓ · 定向 e2e 88 passed · **全套 e2e 192 passed / 13 skipped / 0 failed**（= 基线 190 + 本刀新增 2 条）。构建新鲜度用**所服分块**证明（`assets/index-BamX_rLu.js` 含新锚点），不靠任何写进发布文件的标记。
+
+## 2026-10-15 - **对标竞品优化 P0：顶栏收敛为「4 平铺 + 2 分组」+ P1-3 搜索成为最宽控件**
+
+owner 批准了对标竞品（FinScope）的优化方案（`85e443a`）。竞品顶栏只有 **3 项 + 2 下拉**——它是靠**收敛**解决"放不下"，而不是换布局（这正是当初 A1 走偏的地方）。
+
+**P0：顶栏 10 项平铺 → 4 平铺 + 2 分组**
+```
+市场 · 资讯 · 行业分析 · 公司分析 │ 研究▾(宏观分析·情绪分析·价值网图谱) │ 工具▾(策略引擎·风险管理·交易执行)   [宽搜索框] 🌙 头像
+```
+- `MainLayout` 引入 `NAV_GROUPS`（4 `item` + 2 `group`）+ **完备性核对**：分组覆盖的目的地集合必须**恰好等于** `NAV_ROOTS` 的 10 条，否则**模块初始化即 `throw`**——把"新增导航忘了登记分组"这类漂移挡在构建期，而不是等 e2e 发现（那时用户已经看到"少了一个入口"）。
+- 分组自身**无 `path`**（只负责展开）；**组内一个子项都不可见时整组不渲染**，避免留下"点开是空的"假入口（比"看不见入口"更糟）。实测：mock 一个无 `research:read` 的用户，「研究」分组整组消失 ✓
+- `NavTree` 的 `data-nav-label` 覆盖**分组子项**，`primary-nav` 锚点保留 ⇒ E2E 仍能按标题定位。
+- **P1-3**：搜索框 `flex: 1 1 240px` / `maxWidth: 560`，成为顶栏最宽的**单个**控件（实测 @1440 搜索 502px > 品牌 88 / 主题 32 / 用户 68）。
+
+**⚠️ 本次最费时的一处，值得单独记：AntD 横向 Menu 的"自测量塌陷循环"**
+- 现象：收敛成 4+2 后，**导航整条消失**（实测导航宽恒 **130px** = 只剩 `...`），三档视口都一样。
+- 根因：AntD 横向 `Menu` 用 `ResizeObserver` 观察**自身**决定折叠；首次测量读到 ~0 就收缩到只剩 `...`，而收缩后自身宽度变成 130 ⇒ **再也不会重测回去**（自反馈循环）。
+- 我先后试过 `flexShrink: 0` ✗、`flex: "0 1 auto"` ✗ —— **都不解决**（三种视口恒 130px，说明与可用空间无关）。
+- **实测数据推翻了"空间不够"的猜测**：6 个顶层项自然宽度合计约 **496px**，1280 下完全放得下且**余约 270px**未用。
+- **正解**：≥1024 传 **`disabledOverflow`**（关掉自动折叠，宽度交给 CSS）；`<1024` **保留**折叠——否则会破坏 B2 的"窄屏不横向溢出"。实测：@1280/@1440 顶层 `...` **消失**、@390 仍折叠、三档均无横向溢出。
+
+**`nav.spec.ts` 断言第三次演进**（判据随 owner 裁定走，三次历史都写在文件里）：① 导航必须在 `header.ant-layout-header` 内（把 owner 要求机械化）② **@1280/@1440 顶层不得出现 `...`**（收敛的目的，用结构选择器判定）③ 4 个平铺项直出且**命中测试可点** ④ 2 个分组展开后 6 项**逐项可点**（"一个不丢"的判据）⑤ 权限边界 + 正对照。
+
+**顺带清掉一个"差点上线的调试残留"**：被中断的 agent 在 `index.html` 留了 `<title>StockBot-diagmarker</title>`（用来探测构建是否更新），**会当成页面标题发出去**。已撤销并要求重建（实测容器内 `<title>StockBot</title>`）。**教训**：探测构建新鲜度的标记**不能落在任何会被发布的文件里**——应写在临时文件，或比对容器所服 `/assets/index-*.js` 的哈希。
+
+**验证**：`tsc` 0 · `build` 0 · `check:routes` 87 ✓ · `check:design` 0 ✓ · `self_review` ✓ · `nav.spec` **6 passed** · 全套 e2e **190 passed / 13 skipped / 0 failed** · 证据 `p0-header-{1280,1440}.png`。
+
+## 2026-10-15 - **按 owner 实测反馈回退 A1：一级导航从左侧栏搬回顶栏**（推翻 §0-A 裁定 A1）
+
+owner 实测后表示不喜欢左侧栏、要求保持 headbar 设计。这是对设计整改 §0-A 裁定 **A1 的推翻**，按 owner 意愿回退（`28d4ed3`）。
+
+**做法（不是整体 revert）**：W1（导航入侧栏）与 W2（信息去重）在**同一个提交**（`7413c40`）里，故改为把 `MainLayout` 恢复到 Phase 1 之前，**再保留后续阶段的成果**——实测确认保留：Phase 2 的 `--mag-*` 中性色阶（申万网格已是灰阶、无 accent 蓝块）、瓦片单行、等宽数字、日期口径；Phase 3 的响应式；Phase 1 的 W2 去重与 `/market/data-sources`；Phase 4 的品牌 `StockBot`。
+
+**连带清理（随用途消失的死代码，Ruling 33）**：删除 `route-manifest.ts` 的 `MODULE_TREES` + `pickModuleTree`（**103 行**）——它们本就是 Phase 1 为侧栏新增的，回退后无任何消费者（已核：门禁亦不依赖）；并修正 `ModuleSideNav` 与 `module-roadmap` 里两处仍在引用 `MODULE_TREES` 的注释。
+
+**`nav.spec.ts` 的断言按 owner 裁定重设**（原断言的前提随 A1 一起失效）：
+- 原「@1280/@1440 下 **10 项全部可见**」——顶栏放 10 项**物理上不可能**（实测 @1440 折 3 项、@1280 折 4 项），该断言的前提不成立；
+- 新：① 导航**必须在 `header.ant-layout-header` 内**（把 owner 的要求机械化，防再被搬去侧栏）② 10 项全部渲染（**不丢项**）③ 被折叠的项**必须能通过 AntD 的 `...` 溢出菜单到达**（区分"折进 `...`"与"整项丢失"，后者才是真缺陷）；
+- 同时删除「模块二级树不得出现孤儿项」那条守护：侧栏回退后模块树不再渲染（`ModuleSideNav` 现由调用方传空数组 ⇒ 整块不渲染），**被测对象消失**，已在文件内写明历史与"将来若重启三级布局应恢复哪条不变量"。
+
+**验证**：`tsc` 0 · `build` 0 · `check:routes` 87 ✓ · `check:design` 0 ✓ · `self_review` ✓ · `nav.spec` **5 passed**（含"导航在 `header` 内"与"溢出项可到达"）· **全套 e2e 189 passed / 13 skipped / 0 failed** · 实测顶栏导航高 63px、DOM 中已无 `aside/Sider`、10 项齐。
+
+## 2026-10-15 - **前端设计整改 Phase 4：W5 文案与打磨** —— 计划收官（Phase 0–4 全部完成）
+
+依 `plans/2026-10-13-frontend-design-remediation.md` §6 执行（`9f52574` + `e5ef9bf`）。计划 `status: completed`，`plans/index.md` 已同步。
+
+| 条 | 内容 | 实测 |
+|---|---|---|
+| 5.1 | **品牌统一为 `StockBot`**（`MainLayout`×2 / `login` / `index.html` `<title>`，连带 `admin-users`、`change-password` 的 `document.title`）| `frontend` 全树 **0 处**「Stock Bot」；**slop 硬探针**已挂（双向实测：回退 → `EXIT=1`，还原 → `EXIT=0`）|
+| 5.2 | **landing 压缩排序**（依 D1：**不删不迁**）| `scrollHeight` **5935 → 5428**（1440×900 匿名，同口径）。唯一删除 = `日历` 的**空占位盒**（183px，§0.1 明文例外）。排名块 694 → 357px、hero 230 → 203px；产品块 +96px（四项在途流程，**故意**，已实测非疏漏）|
+| 5.3 | `DataRow` 支持多列（新增 `DataRowList`，`columns=1` 不多出 DOM）| `RankingMatrix` 三列：694 → 357px。**⚠️ `@container` 实测不生效**（390px 下 3 列各 89px、10/10 标题被截断）⇒ 改回**视口媒体查询**，现 390 下 1 列、**0 截断** |
+| 5.4 | 删装饰性装置 | hero 的「A股行情」药丸删除；`01/02/03` 改为**四项在途流程**（原料 → 研判 → 结论 → 执行）；视觉复核时又删掉自己引入的一个孤儿 `↓` |
+| 5.5 | **信号历史 diff 化** | 纯函数 `signalHistoryDiff.ts` + **机械化门禁** `scripts/check-signal-diff.mjs`（22 条断言，用库内**真实** `reason`，已挂进 `check:design`）；渲染层 `e2e/signalPanel.spec.ts` 5 passed。**判据是"变化"而非"存在"**：首条的完整 `触发依据` 不得出现在第 2 条起 |
+| 5.6 | 两栏均衡 | 新增 `CostScissorsChart.tsx`，消费**同一个** `price_vs_cost` payload；真实工作台实测：剪刀差图已在「猪周期阶段定位」下方，**原 ~400px 空洞被填**（截图 `phase4-workbench-real.png`）|
+| 5.7 | 占位页升级为路线图 | `shared/config/module-roadmap.ts`（**8 个键** = 8 条占位路由）+ `PlaceholderNotice` 骨架；`e2e/placeholder.spec.ts` 4 passed，逐路由实测：`/company 5 · /news 4 · /macro 5 · /valuegraph 3 · /strategy 5 · /risk 4 · /trade 4 · /search 4`（**全部 ≥3**，路由集合**从清单读**而非手抄）|
+| 5.8 | 北向口径一致（**重定向后**）| 计划原文要改的 `DataCoverageMatrix` **早已被 `1efe65a` 删除**（0 命中）⇒ 改为：唯一常量 `NORTHBOUND_SOURCE`（+ 共用 `NORTHBOUND_QUERY`）在 `shared/config/dataSourceCaliber.ts` **同时驱动** `NorthboundCard` 与 `/market/data-sources`。真实 payload（`source_status=live`）两处均显示「已接入 · 上游日更」；停更态（mock）两处均「已接入 · 上游停更」+ 卡片另加「数据源已停更（最新 10-12）」+ 灰化虚线曲线。数据来源页原本**没有**北向行（`coverage[]` 8 域不含）⇒ 新增**同源登记块**，未往后端驱动的表里塞本地行 |
+
+**真凭据复核（补 Phase 4 的一处缺口）**：Phase 4 报告称信号面板截图只能靠 mock payload（无 `E2E_RESEARCH_USER`）。用临时账号真登录后复跑受保护 spec，**顺带抓出一个只在有凭据时暴露的真缺陷**：`research.spec.ts:173` 仍断言点击成分股后 URL 匹配 `/stock/`，而应用内部导航早已统一到规范路由 `/company/:symbol` —— 这是 `7f7b953` 那批"遗留路由改规范路由"漏掉的一处，**漏的原因正是该用例平时会 skip**（`e5ef9bf`）。修后：`research + signalPanel + responsive-b2` 带真凭据 **201 passed / 2 skipped / 0 failed**。真实工作台截图 `phase4-workbench-real.png` / `phase4-signal-panel-real.png` 已存档。临时账号 `p4probe` 用完即删（残留 0）。
+
+**未达成（如实记录）**：① §8.3 只加了 `Stock Bot` 一条探针——`landing-placeholder` 仍是 `MarketPulse` **失败态**在用（扫它会误报**正确**代码），`WHITE_TEXT_THRESHOLD` 已从代码消失（探针恒不命中，加了也是空转），两条理由已写入计划 §8.3；② §5.6 的"~400px 空洞"**未取到整改前的像素值**（结构上已由剪刀差图占位，视觉复核确认填上）；③ §5.8 的"停更"分支目前靠 mock 驱动（真实 payload 为 `live`）。
+
+**Phase 4 报告指出的一条门禁缺陷（值得重视）**：`self_review.sh` 的「Changelog 已补记」检查是**范围敏感**的——它比对 `git diff origin/main..HEAD`，因此**前几个阶段的 Changelog 提交会让它变绿**，**它不是"本阶段已记录"的证据**。本次即由 controller 手工补记本阶段条目。
+
+## 2026-10-15 - **前端设计整改 Phase 3：响应式四档断点（B2 全量响应式）** —— 0.2 红线转绿
+
+依 `plans/2026-10-13-frontend-design-remediation.md` §5 执行（`c9fb36c` + `7e28366`）。**Phase 0 最后一条红线（0.2 响应式）由此转绿**；至此 **0.2–0.6 全部绿**。
+
+**修掉两个横向溢出（并纠正了"真凶是谁"）**
+
+| 路由 | 改前 → 改后 `scrollWidth` | **实际溢出的元素** |
+|---|---|---|
+| `/market/global@390` | 874 → **390** | **AntD `Segmented`**（7 段共 833px，每项 `nowrap` 不收缩）撑宽 `Space.Item`→卡片体→`Col(min-width:auto)` 到 837px |
+| `/market/global@768` | 874 → **768** | 同上 |
+| `/market?tab=moneyflow@390` | 425 → **390** | `.mf-continuity__tag`（口径 badge，388px `nowrap` 不可压缩）|
+
+- **不是表格**：`.ant-table-content` 本来就 `overflow-x:auto`（390 下宽 308 / scrollWidth 900，表在容器内滚动）——按计划字面"给表格加滚动容器"**修不掉**这个溢出。真正的修法是 `contain: inline-size`；实测 `max-width:100%` / `width:100%` / `padding-inline` **三种写法全部无效**（百分数会回指"被内容撑出来的那个宽度"）。
+- **新增 Tab 级扫描**（计划 §4.2b）：0.2 的路由集只覆盖**路由级**，`/market?tab=moneyflow` 这类 **Tab 级**布局此前**没有任何门禁守着**。现已把 `/market` 五个 Tab × 390/768 纳入断言，并加"**Tab 确实切过去了**"的正对照；另把 `/login` 点名进路由集（原先 `/industry/pig`、`/me` 匿名会重定向到 `/login`，"登录页自己溢出"会表现为**别的**路由红）。
+- **`responsive.spec.ts`：14 → 44 条**，现 **49 passed / 1 skipped**。
+
+**B2 逐组件窄屏形态（§4.5）——不让任何图表在窄屏消失**（这是 B2 与计划原稿的关键差别：原稿说 `<768` 做"行情速览"，**隐藏** sparkline/热力图/K 线；裁定 B2 后"隐藏即违约"）
+
+| 组件 | 窄屏形态 | 证据 |
+|---|---|---|
+| 指数卡 sparkline | **始终渲染**，点数按 `ResizeObserver` 实测容器宽度定（原 `width ≥ 768` 才渲染的条件作废） | `phase3-sparkline-{narrow,wide}*.png` |
+| K 线 | **不隐藏**：`dataZoom` 初始视窗 30 根（宽屏 120），数据全量在手、手势缩放保留 | `phase3-kline-*` |
+| `market-heatmap` treemap | **保留 treemap**：`labelLayout.hideOverlap` + 按画布宽度收矩形预算（900 → 172 块） | `phase3-heatmap-*` |
+| `SectorHeatmap` treemap | 同上 | `phase3-sector-heatmap-*` |
+| `IndustryMetricStrip` | 窄屏改为定宽网格（不再内联换行） | `phase3-industry-metric-strip-*` |
+| `PriceCostChart` | **窄屏仍在且画出来了**（实测 @390 `342×304`、@1440 `684×359`，标题/图例/双序列/数据标签齐备） | `phase3-price-cost-chart-*` |
+
+- 逐组件证据做成了**可运行的 spec**（`e2e/responsive-b2.spec.ts`，6 条）而不只是截图 ⇒ 可机械回归。
+- **四档断点契约写进 `docs/design/landing-market-theme.md` §1.4**（含 B2 作废说明、实现锚点表、实现状态、两个假绿坑），契约不再只活在计划里。
+
+**`PriceCostChart` 那条 skip 的收尾（`7e28366`）**：Phase 3 留了一条显式 `test.skip`，理由是"该路由要 `research:read`，环境没有凭据"。**方向是对的**——`research.spec.ts:24` 早已写明「只 mock `/auth/session` 是**假登录态**：没真 cookie 时接口 401 → 全局 `auth:unauthorized` 清态 → 布局反复重挂、卡片永不出现」（controller 试图用 mock 绕过，**实测完全复现该描述**，故 controller 的批评是错的、agent 是对的）。但该条漏了仓库**已有的**约定：环境变量应为 `E2E_RESEARCH_USER` / `E2E_RESEARCH_PASSWORD`（不是 admin 那两个），且要真登录（`GET /auth/csrf` → `POST /auth/login` 带 `X-CSRF-Token` 双提交 → 收尾登出）。现已按 `research.spec.ts` 同一写法落地：有凭据则真断言、无凭据则显式 skip（实测 1 skipped / 5 passed；带凭据 6 passed）。临时探测账号用完即删（4 会话 + 1 凭据 + 1 用户，残留 0）。
+
+**未达成（如实记录，非"忘了"）**：① `768–1023` 热力图「默认 Top10 列表（可切 treemap）」未做——标签收敛后 treemap 已可读，而 B2 只把列表定为**附加视图**（属新能力而非整改），已写进设计文档 §1.4「实现状态」；② `sparkPointsForWidth` 在当前数据量下几乎不触发（数据源只给 30 点、88px 槽位算出 29 点）——机制已实现且可机械回归（`data-spark-points` vs `data-spark-total`），要看到真下采样需后端给更多点。
+
+**两个新发现的假绿坑（值得机械化）**：① `window.echarts` 在应用包里**不挂**（实测 `undefined`）⇒ 写成 `if (inst) { 断言 }` 会得到**永不执行的假断言**；② canvas 渲染器下**没有 `zr-*` DOM**，故"读 slider 拖动点 / 标签矩形"那两条路根本不存在。
+
+## 2026-10-15 - **前端设计整改 Phase 2：设计系统（字体/数字 token · 量级色阶 · 日期口径 · 动效焦点）**
+
+依 `plans/2026-10-13-frontend-design-remediation.md` §4 执行（`a36a58f`）。**Phase 0 的 0.5 与 0.6 由此转绿**。
+
+- **`npm run check:design` 28 项不达标 → 退出 0 / PASS 54 · FAIL 0**。实测对比度（门禁计算并打印，非手算）：light `--mag-0..4` = 15.81 / 14.42 / 12.36 / 8.64 / **4.78**:1；dark = 10.71 / 9.42 / 7.68 / 5.99 / **4.81**:1 ⇒ 10/10 级 ≥4.5。
+- **量级色阶替代 accent 叠 alpha**：`SwIndustryGrid` 删掉 `ALPHA_MIN/ALPHA_MAX/WHITE_TEXT_THRESHOLD` 与 `colors.accent` 透明度写法，改按成分数分位取 `--mag-0..4`；文字**一律 `--text-primary`**，不再有白字分支（原写法用 accent 编码"数量"，语义错位且对比度不可预测）。
+- **等宽数字统一到 `.num`**：`fontVariantNumeric|font-variant-numeric` 出现次数 **67 → 1**（仅 `theme.css` 的 `.num` 定义处），由 §8.1-5 门禁（≤1）守着。
+- **日期口径（0.6 的红线在此）**：`/market/index/000001.SH` 原先直出 payload 的 ISO 串（`数据截至 2026-10-13T15:00:00Z`），改走 `shared/ui/date.ts` 的 `formatAsOf` ⇒ 现渲染 `数据截至：10月13日收盘 · 2天前`。**关键**：静态扫描**结构上抓不到**这类缺陷（源码里没有 ISO 字面量），故本门禁做成**两层**——静态字面量扫（防将来写死）+ **运行时页面文本扫**（抓现在直出），后者才是真红线。
+- **动效与焦点**：`theme.css` 增 `@media (prefers-reduced-motion: reduce)` 全局降级与全局 `:focus-visible` 焦点环（覆盖 1.4s 无限 shimmer 与 `.sw-cell:hover` 位移）。
+- **字体：裁定的 C1 实测超预算，按原定降级路径走 C2**。子集脚本 `frontend/scripts/subset-fonts.sh` 入库（依赖 pyftsubset，仅构建期）：`noto-sans-sc-{400,500,600}.subset.woff2` = 194744 / 197300 / 197764 B vs 预算 122880 B/字重（超 1.58×，三字重超 2.4×）；`ibm-plex-mono` 3300 / 4096 B 在 15KB 内。⇒ **零字体文件、无 `@font-face`**（不指向缺失文件），`--font-ui` 用系统栈、`--font-num` 用 `ui-monospace`；抽象层两条路都落地，故将来切回 C1 只影响字体文件、不改调用点。
+- **实施中自查抓到 1 个真缺陷（门禁看不见的）**：按计划字面把 `.sw-count` 改 `--text-secondary` 后，实测它在 `--mag-3/--mag-4` 上只有 **2.49:1 / 1.38:1**（暗色 1.69:1）——而**最深的格子正是成分数最多的行业**，截图确实糊。改为与名称行同为 `--text-primary`，层次交给字号。**根因是门禁 §8.1-2 只断言 `--mag-*` 对 `--text-primary`，覆盖不到"第二行用次级色"**（"门禁绿了但屏幕仍不好读"）。
+
+## 2026-10-15 - 修 4 类**既有**缺陷：它们都把症状伪装成"设计改动弄坏了页面"
+
+跑全套 e2e 时出现 **16 failed**（而预期只有 2 条响应式红）。逐条诊断后确认**全部与设计整改无关**，均已修到只剩 Phase 3 的 2 条预期红（`7f7b953`）。**这 4 条的共同教训：只跑"自己改过的 spec"会让既有缺陷长期潜伏，因为它们平时被 skip 或从未与其他 spec 同跑。**
+
+| # | 缺陷 | 症状 | 根因 |
+|---|---|---|---|
+| 1 | 应用内仍导航**遗留路由** `/stock/:symbol`（**12 处 / 10 文件**）| 一条"点击后 URL"断言偶发失败 | 该路径在 `route-manifest` 里是 **redirect** → `/company/:symbol`；应用内部却仍在走"需要重定向的旧路径"。改到规范路由（redirect 保留给外部旧链接）。**注**：6 个 spec 里的 `goto("/stock/...")` **故意不动**——那是在测 redirect 契约 |
+| 2 | `/sentiment` 的 e2e mock 用户**缺 `research:read`** | `sentiment.spec.ts` **11 条失败**，看着像"页面坏了" | IA §1 把 `/sentiment` 与 `/industry` 定为同一权限档；该 mock 还是权限收口之前的 `stocks:read` ⇒ 页面渲染 403 视图、hero 不存在。**controller 早先改了权限却漏了这个 spec**（"改了 A 漏了 B"）。修后 11 failed → 1 failed |
+| 3 | 一条断言写死**已删文案**「用户登录」 | 登录页断言失败 | 该文案被 `319dd8f`（邀请制开户，来自 main）删除 ⇒ 断言自合并起即陈旧，**因当时该文件被 skip 而未暴露**。改为钉住登录表单本身 |
+| 4 | `auth.spec.ts` 断言**迁移前**的 URL | `waitForURL` 超时 | `/watchlist`、`/tags`、`/research` 都已是 IA 迁移的 redirect，`returnTo` 记录的是**兑现后的目标**。三个期望值均**实测**所得（`%2Fme%3Ftab%3Dwatchlist` / `%2Fme%3Ftab%3Dtags` / `%2Findustry`） |
+| 5 | `kline.spec.ts` 悬停点**落在视口之外** | tooltip 断言失败，"时好时坏" | 1280×720 下画布顶边约 y=585、高 400 ⇒ `box.y + height*0.35 ≈ 725` **越出视口** ⇒ `mouse.move` 到不了画布；1440×900 时不越界，故只在特定视口/页面高度下复现。改为先 `scrollIntoViewIfNeeded()` 再算坐标 |
+
+**结果**：全套 e2e **16 failed → 2 failed**（158 passed / 12 skipped，仅剩 Phase 3 预期的响应式红）。
+
+## 2026-10-15 - **前端设计整改 Phase 1：一级导航改左侧栏（A1）+ 工作台信息去重**
+
+依 `plans/2026-10-13-frontend-design-remediation.md`（owner 裁定 A1/B2/C1/D1/`market/data-sources`）执行 Phase 1（`7413c40` + `423388f` + `048f632`）。
+
+**W1 导航入左侧栏（依 §0-A 裁定 A1）**
+- `NavTree` 从 `Header` 移入 `Sider`：`≥1280` 常驻 208px / `1024–1279` 折叠 64px 图标栏（hover 展开浮层）/ `<1024` 抽屉 + 汉堡。
+- `Header` 只留品牌 + 全局搜索 + 主题切换 + 用户菜单（IA §3.2「全局工具不进导航」）。
+- 新增 `MODULE_TREES`（纯数据，与 `NAV_ROOTS` 同文件，保持"路由契约唯一真相"）+ `pickModuleTree`；`Content` 内容宽度 1400 → 1280。
+- **实测结果**：`/market@1280` 与 `@1440` 下 **10 项一级导航全部可见**（整改前 `@1440` 有 3 项被折进 `...`、`@1280` 有 4 项）⇒ Phase 0 的 0.3 转绿。
+
+**W2 信息去重**
+- **31 行业不再同屏渲染两遍**：删除「行业分类（申万）」卡片（连带删除已无引用的 `IndustryClassification.tsx`，Ruling 33），把它的两个有效数据点并进瓦片——`{官方成分数} 只 · {二级行业数} 个二级`。7 项行情字段未丢：仍由 L1/L2/L3 下钻页的 `IndustryMetricStrip` 渲染，只是从"工作台一览"变成"一次点击"。
+- **「数据版图」迁出工作台** → 新建 `/market/data-sources`（依 §0-E 裁定）。**建在真实的** `GET /api/v1/market/data-freshness` 的 `coverage[]` 上（8 个实测域），**不是**复活那张已因口径漂移被删的静态表。
+- **副标题与 Tab 同源**：改为由 Tab labels 拼接，不再写字面量。
+- **实测**：A股全景 Tab `scrollHeight` 3667 → **1545（−57.9%）**；`/market` 三个 Tab 在 1280/1440 下均**无横向溢出**。
+
+**Phase 1 视觉复核（Playwright 截图 + DOM 实测）发现的 2 处问题，已修并补回归守护**
+1. **瓦片文字换行**：三样信息塞进 128–190px 宽的瓦片 ⇒「自定义」被挤到第二行、32 格逐格换行。改为可见行只留两个数据点，自定义标注移到 `title`（悬停）+ 下钻页。**实测换行格数 32 → 0**；死代码 `.sw-count-extra` 一并删除。
+2. **孤儿导航项**：模块二级树原先只按 pathname 选树 ⇒ 匿名访问公开占位路由 `/news` 时渲染「资讯」的 4 个子节点，而**资讯本身对匿名不可见**（普通交易员访问 `/sentiment` 同理）。改为**二级树必须落在某个可见的一级导航之下**才渲染，并补 `e2e/nav.spec.ts` 回归守护（带正对照，防"选择器写错、永远数到 0"）。
+
+**Phase 1 实测暴露的 3 处"计划与现实不符"（controller 裁定：以实测为准，已回写计划 §2.5）**：① 计划要复用的 `DataCoverageMatrix` 与 landing 的 `DataCoverage` 区块**早已被 `1efe65a` 整个删除**（0 命中）⇒ 批准新页建在真实读数上、不复活静态表；② 计划补偿行里的供应商名会**违反既有的 `marketTrust` 门禁**（公开页不披露数据来源）⇒ 批准省略，既有门禁优先；③ W2 验收写的 `scrollHeight` 一律 ≥35% **不可达且判据自相矛盾**（数据面 900 是 100vh 地板；指数总览 +24.3% 是为让「上证指数」不被截成「上…」并修掉 16px 溢出）⇒ 改为只对 A股全景设 ≥50%，余者设「无横向溢出 + 名称可辨识」，并裁定**可读名称 > 该高度指标**。
+
+**另记一条环境坑（待机械化）**：前端镜像的 runtime `COPY` 层会命中**陈旧缓存**——`docker compose build frontend` **报告成功却装旧 dist**，只有 `--no-cache` 才对（Phase 1 实测）。这是本会话早先"页面看起来坏了"那类事故的另一种形态。
+
+**W2.4（短线情绪拆页 `/market/sentiment`）按该条自身许可推迟**，理由已记入计划（需新增真路由 + 5 处登记，并改 2 套既有门禁测试的路由契约）。
+
+## 2026-10-14 - **裁决 A：申万成分计数统一到「官方（SCD2）」口径** —— 网格/卡片不再显示「官方 + 我的标签」
+
+**问题（用户实测）**：`/market?tab=panorama` 的「申万行业网格」写着「农林牧渔 **111** 只」，而同一行业的**下钻页显示 104**。查清后 111 ≠ 算错，而是**两个口径并排在同一屏**：
+
+```
+tree 的 stockCount = 111
+  = officialCount 104（SCD2 官方归属；与下钻页 member_count 逐节点一致）
+  + customCount     7（★ 用户自定义标签 stock_custom_sw_tags，挂在 L3/L2 上被上卷到 L1：
+                        种植业 2 · 饲料 3 · 农业综合Ⅱ 3）
+```
+（排查中先查了 `industry_code='110000'` 的标签得 0，一度以为假设错了——实为**查错了层级**：标签挂在子节点。）
+
+**裁决（owner 选 A）**：**显示一律用 `officialCount`**；自定义标签**只作带标注的次要信息**呈现，**绝不相加后当官方口径**。理由：官方成分**可复核**（能对上游、能对下钻），自定义标签是"我的偏好"，混进"这个行业有多少只股票"这个事实里会让数字既对不上上游、也对不上下钻页——这正是 owner 最初报的那个问题的同一类。
+
+**改动（4 处显示点 + 类型 + 1 个共享函数）**：
+| 位置 | 文件 |
+|---|---|
+| 网格瓦片（数 + `title` + **着色阶梯**） | `features/market/components/SwIndustryGrid.tsx` |
+| 行业分类卡片 | `features/market/components/IndustryClassification.tsx` |
+| L1 下钻页的 L2 卡片（`/market/industry/:l1`） | `pages/market-industry-level2/index.tsx` |
+| L2 下钻页的 L3 名（`/market/industry/:l1/:l2`） | `pages/market-industry-level3/index.tsx` |
+
+- 类型 `SwIndustryLevel{1,2,3}` 补 `officialCount` / `customCount`，并写明**显示口径**与"为什么不能相加"。
+- 新增共享函数 `customTagSuffix(node)`（`shared/api/swIndustry.ts`）→ `"+7 自定义"` 或空串。**为什么单列一个函数**：4 处都要"官方数 + 可选标注"，抄 4 遍条件必然漂移。
+- **着色阶梯也改用 `officialCount`**：否则格子深浅与格子上的数字对不上（同一屏两套量级）。
+- `stockCount` 保留在类型里（忠于线上响应形状）+ 注释；前端已无消费者。
+
+**验证**：
+- **活栈实测**：网格 `农林牧渔 104 只 +7 自定义` · title `104 只个股 · 8 个二级行业 · +7 自定义` · 行业分类卡片 `104 只个股 +7 自定义` · 下钻页 `104 只` ⇒ **三处首次一致**。
+- **先红后绿**：新 e2e 在旧构建上 3 条全红（旧代码显示相加后的 102），重建后 **14 passed**。
+- 新增口径守护：`e2e/landing.spec.ts`「显示官方成分数，自定义标签只作标注不相加」——mock 特意给 `95 官方 + 7 自定义 = stockCount 102`，断言格子显示 **95** 且**不含 102**；若有人退回 `stockCount`，本断言转红。
+- 门禁：`tsc` 0 · `build` 0 · `check:routes` 86 ✓ · `check:design` ✓ · `self_review` ✓ · e2e（landing+darkmode+navigation+marketTrust+marketPolling+sentiment）**40 passed**。
+
+> **顺带说明**：`SectorHeatmap` 的 `stockCount` 来自**另一个端点**（`/market/sectors` 的 `SectorSummary`），不在本次口径统一范围内——若那块也与上游对不上，需另立一次同类的口径裁决。
+
+## 2026-10-14 - 修复「申万行业网格」格子点击不跳转（看起来能点、点了没反应）
+
+- **现象（用户实测反馈）**：`/market?tab=panorama` 的「申万行业网格」32 个格子点不动。
+- **根因**：`SwIndustryGrid.tsx` 的 `IndustryCell` 是个**纯 `<div>`，没有任何 `onClick`/跳转**；而 `SwIndustryGrid.css` 里 **`.sw-cell:hover { transform: translateY(-2px) }` 本来就有上浮反馈** ⇒ 组合成"**看起来能点、点了没反应**"，比纯静态更误导。
+- **修法**：照抄同页「行业分类」卡片的既有写法——把整格改成真 **`<Link to={/market/industry/${code}}>`**（该文件第 74–75 行的注释已写明理由：可 Tab 聚焦、Enter 触发、可新开标签；裸 `<div onClick>` 键盘不可达、读屏也不会报成链接 —— Task 16）。
+  - `SwIndustryGrid.css` 的 `.sw-cell` 补 `text-decoration: none` / `color: inherit` / `cursor: pointer`（`<a>` 默认带下划线，会破坏 TV tile 观感；颜色仍由行内 style 按热度给定）。
+  - 该组件 **landing 与 `/market` 共用**，改前确认过 landing 是裸用 `<SwIndustryGrid/>`、没有外层 `<Link>`（否则会出现嵌套 `<a>`）。两边格子现在都可点（`/market/industry/:level1Code` 是公开路由）。
+- **为什么这条 bug 能溜过去**：`e2e/landing.spec.ts` 原有用例「申万行业网格渲染并带个股数提示」**只验渲染、不验交互**。
+- **补的回归守护**：新增 `e2e/landing.spec.ts`「申万行业网格的格子是链接且能跳到一级行业下钻页」——断言 `href === "/market/industry/110000"` **且**点击后 URL 真的变成该页。**先在旧构建上跑红**（`href` 断言失败），重建前端后转绿。
+- **验证**：`tsc` 0 · `check:routes` 86 ✓ · `self_review` ✓ · e2e `landing + darkmode + navigation` **13 passed**；另在**活栈 `/market?tab=panorama` 实测**：32 个格子、首个为 `<A href=/market/industry/110000>`、点击后 URL 变为 `/market/industry/110000` 且落地页有数据（行情口径日 10月13日 · 7 项行情字段有值）。
+- **顺带查清一个数字口径**（不是 bug，但会让人疑惑）：网格显示「农林牧渔 **111** 只」，而下钻页显示 **104**。前者是 tree 的 `stockCount` = `officialCount`（SCD2 官方 104）+ `customCount`（**用户自定义标签** 7，挂在 L3/L2 子节点上被上卷到 L1：种植业 2 · 饲料 3 · 农业综合Ⅱ 3）；后者是 SCD2 官方口径。**即"官方成分 + 我的标签"与"官方成分"两个口径并排出现在同一屏**——沿用本会话反复出现的「同一事实的多个来源必须一致」判据，这属于待决的口径问题（见下方遗留）。
+
+## 2026-10-14 - **合并 main（PR #14 + #15）到研究平台分支**：两套并行开发首次并轨
+
+**背景**：`feat/research-platform-ia`（106 提交，研究平台全部页面）与主 checkout 上的**登录系统重构**（邀请制开户 + 管理员控制台，PR #15）**各自基于 `25a6371` 并行开发**，互不知情。结果是**混装部署**：`auth_service`/`frontend` 从主 checkout 构建（有重构、无研究页），`backend_api` 从本分支构建（有研究后端）——用户以 admin 登录后**看不到任何研究页面**，因为**那份 bundle 里根本没有这些页面**（实测：`admin/users` 命中 2 个分块，`SentimentModulePanel`/`sw-industry/drill`/`chunk-error-recovery`/`market_sentiment_composite` **全部 0 命中**，58 个分块 vs 本分支的 74）。
+
+**不是权限问题**：查的是**实际数据库**，`admin` 确实持有 `research:read`。（中途曾据 `git diff` 怀疑"新种子里 admin 漏了 research:read"，**那是 diff 假象**——未改动的旧行不出现在 diff 里。）
+
+### 合并结果（`8a42743`）
+- **冲突 7 个，逐个按语义解决**，不是照抄一侧：`Changelog`（main 新条目在前 + 去重同一「覆盖率只读巡检」条目）· `plans/index.md`（保留 completed 行 + 追加双方新计划）· `features.md`（保留我的 `/me` 收敛行 + main 新增三行，丢掉两边过期行）· `auth.spec.ts`（取 main，注册已关闭）· `router/index.tsx`（取我的清单驱动版）· `MainLayout.tsx`（取我的 `NAV_ROOTS` 派生版）。
+- **ADR 编号冲突的裁决（判据翻转，值得记）**：PR #15 的 invite-only ADR 占了 main 的 `0010`，与本分支的 `0010-polymorphic-watch-and-tags` 相撞。
+  - 初判"未发布的让号"（我分支 5 篇 +2 位移）→ **实测后撤回**：该方向要约 **55–70 处**引用修改（含 `docs/specs/**` 绑定契约），且 `0011→0013→0015` 是**链式替换**、有双重应用风险；
+  - 实际改走**反向**（main 的 invite-only `0010→0015`）：仅约 **15 处**，且本分支早已把 market-derived 统一为 `0014`（39 处已是正确状态，一动不用动）。
+  - 依据：`doc_gate` 的「只增不改」实现**对改名直接 `continue`**（基准里不存在的新路径跳过），编号最终仍连续；且该篇是**几小时前**才落 main 的。结果 `0001–0015` 连续无重复，`doc_gate` 实测通过。
+  - **教训**：**"谁让号"要看两边的引用面，不要凭规则默认**。规则只给方向，代价要给数据。
+- **PR #15 的路由补登记**：本仓库以 `route-manifest.ts` 为唯一真相（main 那版是手写 `<Route>` JSX），故 `/admin/users`（`users:manage`）与 `/change-password`（只要登录）必须登记进清单 + `route-elements` 懒加载 + **IA §4「新增路由」表（4 → 6 条）** + `check-routes.mjs` 的 `NEW_S1_ROUTES` + `ARCHITECTURE §6`。`check-routes` 对 IA §4 那张表做**双向比对**，漏一处即红——本次正是它先报「表外路由（未经 IA 冻结，需先改契约）」。
+- **`/admin/users` 刻意不进顶栏**：IA §1 的顶栏是 **10 个一级导航**，且 `check-routes` **机械断言 `NAV_ROOTS.length === 10`**（main 那版把它放进顶栏是因为 main 上没有这份清单门禁）。入口改放**账户菜单 `UserMenu`**，仅 `users:manage` 可见。
+
+### 顺带修掉一个本分支自身的 bug
+`/sentiment` 的**导航可见性**原写 `authenticated`，而它的**路由守卫**要 `research:read` ⇒ **普通登录用户看得到入口、点进去撞 403**。已统一为 `permission: research:read`（`MainLayout.tsx` 的 `NAV_PRESENTATION`），并在注释里写明"可见性必须与清单里的 `permission` 一致"。
+（这是本会话第 **4** 次同类错误——**改了 A 处漏了 B 处**。已记入遗留：应把"清单 `permission` ↔ 导航 `visibility` 一致性"也做成门禁，`check:routes` 目前只核对清单↔文档。）
+
+### 验证（全部在同一份合并后代码上）
+| 项 | 结果 |
+|---|---|
+| 前端门禁 | `tsc` 0 · `build` 0 · `check:routes` **86 项** ✓（§6 36 行一致）· `check:design` ✓ |
+| 文档门禁 | `doc_gate` **16 项 ✓**（含 ADR 只增不改 + 编号连续）· `self_review` ✓ |
+| 后端 | pytest **1392 passed / 17 skipped / 0 failed**（与合并前一致，无回归） |
+| auth-service | **105 passed** |
+| **Playwright 实测（同一份代码起栈）** | 匿名 `/sentiment` → 跳登录 ✓ · 登录页已**无「新用户注册」**页签 ✓ · **首登强制改密链路可用** ✓ · admin 看 `/sentiment` **7 张表有数据 + hero 含「N/11 条腿」** ✓ · 顶栏显示「情绪分析」✓ · 账户菜单有「用户管理」✓ · `/admin/users` 可访问 ✓ |
+| **trader 路径**（真实会话，非匿名） | 顶栏 = 市场/资讯/公司分析/宏观分析/价值网图谱/策略引擎/风险管理/交易执行 —— **「情绪分析」与「行业分析」都不在** ✓；`metrics` → **403** ✓；直访 `/sentiment` → **显式 403 权限页** ✓（不是空表） |
+
+> ⚠️ **一次自我纠错**：上述 trader 导航断言**第一次是假绿**——那次 `login` 其实返回 401，页面处于**匿名态**（只显示 市场/公司分析 两个公开项），所以"不显示情绪分析"**空洞地成立**。重做时接住了开户响应里的 `initial_password` 字段、确认 `login → 200`、`metrics → 403` 后才算数。**教训：断言"某东西不存在"之前，必须先证明自己处在能看见它的状态里。**
+
+### 收尾
+- 测试账号（`sentiment_verify` / `sentiment_trader` / `sentiment_trader2`）**全部删除**（auth 库剩余 `sentiment_*` = 0）；测试全走你的**正道**（`app.cli bootstrap-admin` + `/auth/admin/users`），没有手写库。
+- 三个镜像 `backend_api`/`frontend`/`auth_service` **同一批次构建（13:50:43–54）= 同一份代码**，混装消除。
+- 分支 `8a42743`：**落后 main 0 · 领先 107**，工作树干净。
+
 ## 2026-10-14 - 公开页停止披露数据来源（竞争资产不外露）
 
 - **裁定**：数据源构成是核心竞争力，公开页不显示任何数据来源；owner 确认 Landing 页脚署名亦一并删除，且 `/market` 同口径处理
@@ -56,13 +353,13 @@
 - **验证**：auth-service **99 passed**（+10 守卫用例）、forward-auth 14 passed、`tsc` 绿、`ruff` 绿、Playwright 93 passed ×2、`self_review` + `doc_gate` 绿；改角色已核实落库（UI 操作产出 `analyst,researcher`）
 - 涉及文件：auth-service/{app/api/{admin,deps,auth},app/services/{auth_service,admin_service,session_service},app/schemas/admin.py,tests/{conftest,test_api_admin}}.py、frontend/src/{features/admin,pages,shared/api}、frontend/e2e/admin-users.spec.ts、docs/Changelog.md
 
-## 2026-10-14 - 邀请制开户与管理员控制台落地（ADR 0010 · 关闭自助注册 · admin 用户 CRUD）
+## 2026-10-14 - 邀请制开户与管理员控制台落地（ADR 0015 · 关闭自助注册 · admin 用户 CRUD）
 
 - **后端（auth-service）**：迁移 0002 只加 3 列（`status_reason` / `must_change_password` / `temp_password_expires_at`）；`core/user_status.py` 登录拒绝码矩阵（纯函数，无迁移表——2 条边不值得）；登录改**先验密码后判状态** + dummy hash 抹时序（消账号枚举）；`POST /auth/register` 恒 403 `AUTH_REGISTRATION_DISABLED`；新增 `POST /auth/change-password`（清标记 + 吊销其余会话）；`/auth/admin/*` 9 端点（列表/详情/开户/停用/启用/换角色/重置密码/角色矩阵只读/审计检索），权限**实时读 DB**，写操作吊销全部会话；**参数化守卫测试**遍历路由表断言无权限 403、缺 CSRF 403；`bootstrap-admin` CLI 三态幂等（绝不重置密码）
 - **forward-auth**：上游 403（临时密码未换）**原样透传**为 `AUTH_PASSWORD_CHANGE_REQUIRED`（其余非 200 仍 fail-closed 503）——五段门控第四段
 - **前端**：`/admin/users` 管理台（UX 设计先行：状态即行情语义，绿=正常/红=停用/蓝点=待改密）、`/change-password` 强制改密页、登录页删注册 Tab、全局 `AUTH_PASSWORD_CHANGE_REQUIRED` 跳转、着陆页三处文案改邀请制口径；`tsc --noEmit` 绿
 - **测试**：auth-service 88 通过（新增 user_status 拒绝矩阵 / admin 守卫矩阵 / 改密门控 / CLI 三态）；forward-auth 14 通过（新增 403 透传两条）；e2e `auth.spec` 注册用例改写为「断言注册入口不存在」，`admin-users.spec` 新增全链路（开户→临时密码→强制改密→`/api` 恢复）
-- **文档**：ADR 0010 + 登记；架构 §6.1 路由矩阵补 9 条 admin 路由、register 标 Disabled；`auth-data-model.md` DDL 补 3 列；`features.md` 拆「登录/会话/改密」与「用户管理」两行；`deployment/index.md` 补 `bootstrap-admin` 首启步骤；`frontend-e2e.md` 删 `INSERT INTO auth_user_roles` 土办法改经 admin API 供号
+- **文档**：ADR 0015 + 登记；架构 §6.1 路由矩阵补 9 条 admin 路由、register 标 Disabled；`auth-data-model.md` DDL 补 3 列；`features.md` 拆「登录/会话/改密」与「用户管理」两行；`deployment/index.md` 补 `bootstrap-admin` 首启步骤；`frontend-e2e.md` 删 `INSERT INTO auth_user_roles` 土办法改经 admin API 供号
 - **实测（容器 + Playwright，2026-10-14）**：迁移 a002 上库（3 列）；`bootstrap-admin` 建号 → 登录带 `users:manage` → 经网关开户拿一次性临时密码 → 新用户登录后 `/auth/*` 与 `/api/*` 双 403 门控 → `/auth/change-password` 后恢复 200；**修掉一个真缺陷**——`get_session()` 白名单重建字典时丢弃 `must_change_password`，导致 `/api` 门控在生产是空转（单测盲区，已补回归测试锁死）；Playwright 93 passed（含新增 `admin-users.spec` 全链路）
 - 涉及文件：auth-service/{app,migrations/versions/0002_*.py,tests}、forward-auth/{app,tests}、frontend/src/{features/admin,pages/{admin-users,change-password,login},shared/api,app,features/auth}、frontend/e2e/{auth,admin-users,landing,public-homepage}.spec.ts、docs/{decisions/0009,architecture,deployment,testing,features}.md、plans/
 
@@ -97,6 +394,73 @@
 - **回归证据**：全量 e2e **同一 dev server 前后对照 = 97 passed / 10 skipped / 0 failed**（10 skipped 全是 `marketDataFace.spec.ts` 按数据缺失优雅跳过的既有用例）；`tsc --noEmit` ✓、`npm run build` ✓、`check:design` ✓
 - 涉及文件：frontend/src/features/market/components/{SwL3LimitUpBoard.tsx,SwL3LimitUpBoard.css,YesterdayLimitUp.tsx}、frontend/src/features/concept/components/NewStockBoard.tsx、docs/Changelog.md
 - 未做（有意）：情绪温度计压缩、左右分栏重排、题材维度——按 ponytail 评审先只回收纵向预算，看到效果再决定
+## 2026-10-13 - **`/sentiment` 情绪分析页落地**（S1.8–S1.13 的读出台）+ 综合指数 hero 端点 + 守卫与数据需求对齐
+
+### 一、为什么做这一页（补一个真实缺口）
+IA 文档把「情绪分析」列为 **Wave 1**，而 Wave 1 只交付了**数据层**（S1.8–S1.13 落库 + 端点），**页面始终是 5 行 `return null` 占位**。更关键的是：**spec 的验收判据明确要求 UI**，而我此前把它们按"文档可查"自证合格了（等于自己把判据改宽）：
+`S1.8`「定义在 UI 可查」· `S1.9`「换手率口径在 UI 可查」· `S1.10`「升贴水负值时 **UI 明示**」· `S1.11`「PE 口径在 UI 可查」· `S1.12`「频率与滞后在 UI 明示」「下界标注对使用者可见」· `S1.13`「**UI 必须明示** 当日由 N/11 条腿合成 + 生效权重」。本页把这些**逐条**兑现。
+
+### 二、新增公开端点 `GET /api/v1/market/sentiment/composite`（`6d96f76`）
+- 返回 `{as_of, value, window, sample_count, percentile, insufficient_history, legs, leg_count, total_legs, effective_weight, min_effective_weight, caliber_version}`；放在 `market_data.py` 的 `/sentiment/*` 家族（与 `calendar`/`trends`/`intraday` 同为**匿名可读**），**不**改受保护的 `/api/v1/metrics/*`。
+- **分位由后端算**（沿用仓库纪律：分位一律来自后端、必须带样本窗口、样本不足**只显示「样本不足」绝不给数字**）。定义：尾窗 1260 个非 NULL 样本含当日，`round(100 × count(v ≤ today) / n, 2)`，nearest-rank 无插值。控制器**独立复核**（SQL 重算）：`today=32.8157 n=1260 count_le=134 pct=10.63` —— 与端点**完全一致**。
+- **刻意不改** `percentile_from_series` / `PERCENTILE_FIELDS`（`limit_up_service.py:779`）：它是**拍板过**的机制（Ruling 4 / 拍板 R6，只 3 个涨停字段），且按 `_PERCENTILE_VALIDITY` 硬编码字段名、返回的是**分位表**而非"今天处于第几分位"。无需求支撑地改它 = 纯风险；在情绪侧写同定义的极小函数并留 `ponytail:` 注明 **S2.2 该统一**。
+
+### 三、`/sentiment` 真页面（`f8a7ecd`）
+- **不是好看仪表盘，是可复核读数台**：每格数字都能追到**口径**与**新鲜度**。
+- **常驻左索引 + 单滚动列**（10 个模块是同一件事的 10 个侧面，**需要同时比较**，故不用 Tabs）；按读者提问顺序分组：结果 / 市场内部 / 价格之外 / 参与者。
+- **Hero（全页唯一卡片）**：综合指数值 + **0–100 分位轨道**（标出 10/90 极值带）+ **「本日由 3/11 条腿合成 · 生效权重 0.23（下限 0.20）」**（Ruling 66 对"最新值很薄"的可见性要求）+ 参与腿与分位窗口/样本数。
+- **1 张模块表 + 1 个渲染器**（`moduleTable.ts` + `SentimentModulePanel`），不是 10 个手写组件；无图默认（数字不需要图）。
+- **8 条口径内联注**（换手率自由流通口径 / 基差符号=期货−现货即贴水 / QVIX 滞后 / PE 为 CSI300 / 公募基金仓位是第三方**周度估算且口径不可复算** / `new_fund_share` 部分为**下界** / 综合指数权重与方法 / 缺失一律 `None` + `missing_reason`），原文取自 `metric-dictionary` 与 `data-source`，**未自造口径文案**。
+- **2 个未建模块就地说明**（⑧ 散户舆情 = `S1.14` 标 superseded；⑩ 情绪预警与预判 = 依赖未建的 S2.2），**不留空图**。
+- **分位只在后端提供处显示**：实测页面上分位带自己的窗口「P25 23.81% / P50 29.21% / P75 35.16% · 近 240 交易日分位（2025-10-15 至 2026-10-12）」。
+- **新增 2 个情绪极值 token**（`--sent-extreme-cold` `#8b7cff`/`#5b4bd6`、`--sent-extreme-hot` `#ffb020`/`#a35f00`）。选紫/琥珀而非红/绿，是因为 `--up`/`--down` **已表示涨跌方向**，情绪"热"若也用红会与"股价上涨"混淆（读数台上是危险歧义）；且这两个色**恰好对应 S1.13 参数化规则的 `pct>0.90` / `pct<0.10` 两条阈值**。**已把这两个名字加进 `check-design-tokens.mjs` 的对比度名单**（原为死数组 `["up","down"]`），实测全过：cold 6.14:1/5.83:1、hot 5.01:1/4.76:1。
+
+### 四、⚠️ 落地时实测抓到并修掉的一个真实缺陷：**守卫与数据需求不一致**
+- **现象**：`/sentiment` 初版只标 `requiresAuth`（任何登录用户可进），但页面消费的 `/api/v1/metrics/*` **要求 `research:read`**——实测匿名 **401**、**普通交易员 403**。结果是：**普通登录用户能进页面，却读不到任何模块数据**（只剩一张诚实的"读面未取到…不显示 0"空表）。
+- **修法**：把守卫改成与同为研究层的 `/industry` **同一个** `permission: "research:read"`（1 行，沿用既有机制，不新增 scope）。依据是 **IA 文档 §1 的「分区」列本就写着情绪分析 = 研究（只读）**。
+- **实测确认修好**：研究者（`research:read`）→ `/api/v1/metrics/latest` **200**，页面 **7 张表 · 真实数值 · 空表告警消失 · console errors 0**（上涨家数 3414家 / 下跌家数 2145家 / 站上20日均线 38.72% / 炸板率 21.74%，均带「数据截至 10月9日 · 日频 · 口径 s1.8-v2」）；退回纯 trader → 呈现 **403「抱歉，您缺少必要的操作权限。」**（而**不是**一张看起来坏掉的空表）。
+- **文档同步**：IA §1 权限列「待定」→ `research:read`；`ARCHITECTURE.md §6` 鉴权列同步（`check:routes` 会**双向**核对这两处，改漏即红——本次就是它先报的 `✘ /sentiment：鉴权列缺 research:read`）。
+
+### 五、验证
+- 前端：`tsc` 0 · `build` 0 · `check:routes` ✓（§6 34 行一致 · 84 项）· `check:design` ✓（含新 token 对比度）· `e2e/sentiment.spec.ts` **11 passed**。
+- 后端：pytest **1380 → 1392 passed / 17 skipped / 0 failed**（+12）· ruff / `ruff format --check`（198 文件）/ `mypy app`（197 文件）绿 · `self_review.sh` ✓。
+- **真实登录态端到端实测**（此前从未跑过，是本页最大的验证缺口）：用临时账号走真实注册/登录（CSRF 取自 `/auth/csrf`）、按 `docs/testing/frontend-e2e.md` 的既有做法挂 `专业投研员` 角色验证有数据路径、再撤角色验证 403 路径，**验证后已把临时账号与角色全部删除**（auth 库回到原 3 个账号）。
+- **运维提醒**：若你的账号是「普通交易员」，则 `/industry`（早已上线）与本页会同样返回 403 —— 研究层模块需要 `专业投研员`/`分析师`/`系统管理员` 角色（现有 `stocks@example.com` 是系统管理员）。
+
+### 六、流程教训（第三次同类，已记）
+我在写 brief 时**凭记忆**写了「S1.13 写 `extra.legs`」，实际写的是 **`extra.participants`** —— 实现 agent **没盲从 brief，而是去读了真实数据**并纠正。这是本会话**第三次**"凭记忆写 brief / 凭记忆列清单"出错（前两次：并行协议里凭记忆列禁用文件、对 `head -12` 截断下结论）。**规则：brief 里任何事实性断言（字段名、文件路径、常量值）必须当场查证，不得凭记忆写出。**
+
+## 2026-10-13 - **申万行业判据统一到 SCD2** + 前端旧分块 404 恢复通道 + SCD2 数据回填 + 数据卷锚点地雷拆除
+
+### 一、申万行业树与下钻端点**逐节点对齐**（`5de5101`）
+- **缺陷**：同一张卡片渲染的两个接口对同一事实给出不同答案——
+  `GET /market/sw-industry/tree` 走**旧扁平表** `sw_industry_members`（陈旧快照），而 `GET /market/sw-industry/drill/levels/*` 走 SCD2。实测 **29/31 个一级行业数字不一致（94%）**，合计 **旧树 5587 vs SCD2 5211（多算 376 只）**：农林牧渔 107 vs 104、基础化工 **450 vs 410**、钢铁 53 vs 43、电子 524 vs 493。用户在「申万行业网格」「行业分类」卡片上看到的是**偏多的错数**，而同一屏下钻给的才是对的。
+- **根因**：S1.4 已确立「**SCD2 归属是唯一真相：所有成分解析都走它**」（`sw_drilldown_service.py:8`），但 `get_sw_industry_tree` **没有跟着迁过来**。
+- **修复**：官方成员源切到 `sw_industry_member_periods` 且 `is_current`，**按节点自身层级聚合（不做 L3 上卷）**、**不 join `Stock`**（与下钻 `_EXACT_MEMBERS_SQL` 同语义）；层级仍来自 `SwIndustryClass`，**用户自定义标签 `StockCustomSwTag` 行为保持不变**。每个节点新增 `officialCount` + `customCount`，`stockCount = officialCount + customCount`。
+- **顺带修掉两个隐藏问题**：① 缓存 key **硬编码** `market:sw-tree` 导致 `set_sw_tags` 的失效逻辑会在改 key 后**静默失效** → 改为常量 `SW_TREE_CACHE_KEY = "market:sw-tree:v2"`（读写与失效共用），并有测试在 v1 key 放哨兵值断言其**不会被返回** ② 「其他 OTHER」桶原先带 `level == 3` 过滤，使 **261 个直挂 L1/L2 的符号被重复计数**（74 → 63）。
+- **验收**：**511/511 个真实节点（L1 31 + L2 134 + L3 346）差异 = 0**，`sum|diff|` L1/L2/L3 全 0，节点集双向一致；`OTHER`（63）无下钻对应物，`officialCount = 0`，如实标注而非隐藏。控制器**独立复跑对账脚本**并额外抽查活栈 L2/L3（51 节点）确认 0 差异。
+- 门禁：pytest **1373 → 1380 passed / 17 skipped / 0 failed**；mypy app ✓；ruff/format ✓；`self_review.sh` ✓。**无现有测试断言过旧数字**（即没有测试在守护这个 bug）。
+
+### 二、前端「重新部署后旧分块 404」恢复通道（`004aa90`）
+- **缺陷**：Vite 哈希分块在**每次前端重新部署**后改名。**部署前就开着的标签页**内存里是旧 bundle，导航到尚未加载的路由时按**旧哈希**请求分块 → **404** → 懒加载组件不挂载 → **面板静默空白 / "Failed to fetch"**，用户无从得知也无人自愈。本会话实测到 `404 /assets/index-iB5Al3gl.js`（时间戳在重建之后），而当前 `index.html` 引用的是 `index-DKExqQSR.js`；**旧哈希在当前镜像里 0 命中**。同时确认 nginx 缓存头本身**正确**（`index.html` → `no-cache`；`/assets/*` → `public, immutable`）、**无 Service Worker**、后端与数据库全程健康——**纯粹是缺客户端恢复通道**。
+- **修复**：`frontend/src/app/chunk-error-recovery.ts`（新）监听 `vite:preloadError`（并 `preventDefault`）+ `unhandledrejection` 兜底（该路径**必须先过动态 import 报错文案匹配**，以免把后端 5xx 误判成版本更新）；在 `main.tsx` **首行 import**，模块求值期即注册，**早于 React 挂载与任何懒加载分块请求**。决策逻辑是**纯函数** `shouldReload`/`markReloaded`（`sessionStorage['stockbot:chunk-reloaded']` 守卫，**不可能成环**）：首次失败 → 「页面版本已更新，正在刷新…」+ **本会话刷新一次**；同会话再次失败 → 常驻「页面版本仍是旧版，请手动刷新（Ctrl+F5 / Cmd+Shift+R）」**不再刷新**；另有 `handling` 防重入。零硬编码颜色。
+- **验证**：`tsc` exit 0 · `build` exit 0 · `check:design` ✓ · `check:routes` ✓ · **新增 `frontend/e2e/chunkRecovery.spec.ts` 6 passed**（自动刷新 / 提示文案 / 防重入 / 二次失败转常驻 / `unhandledrejection` 兜底 / **噪声不误伤**）+ `navigation` 3 passed。控制器在**容器产物**上复跑：**9 passed**。
+- 注：本仓库**无前端单测运行器**（无 vitest/jest），故守卫由 Playwright 真浏览器驱动验证。
+
+### 三、SCD2 成分归属回填（环境修复，非代码）
+- `sw_industry_member_periods` 在此环境**从未被灌过数据**（0 行，`sw_member_ingest_runs` = 0 行 = 无任何运行记录），而 S1.4 规定所有成分解析都走它 → 下钻页显示「分类归属口径日 无数据」「成分覆盖 0 指数」、7 项行情字段全 `--`、并**显式弹出**「分类归属尚无 SCD2 数据…请先运行 `backend/scripts/ingest_sw_member_periods.py`」（这个**显式失败是好设计**：它明说"成分一律为空，不代表当日无成分"，没有拿 0 冒充真相）。
+- **已执行**：`511/511 指数成功 · 新增 23,534 行 · as_of=2026-10-13 · fully_ingested=True · failed=0`；覆盖 L1 31/L2 134/L3 346；**431/511 个行业**拿到成员，**80 个上游 0 行**（UI 显示为「0 行 80」）。
+- **遗留（部署项）**：该 ingest **未注册进调度**，不会自愈——新环境部署必须跑一次（或登记周期任务）。另 `stock_features` 为空（`features.compute` 队列从未被触发过），属同类"代码在、数据未灌"缺口。
+
+### 四、数据卷锚点地雷拆除（环境修复）
+- **事故复盘**：`docker-compose.yml` 的 `volumes.postgres_data.name: stock_bot_wt_p7_postgres_data` 与**本机真实数据卷** `stock-bot_postgres_data`（5.0G，created 2026-05-09）**不一致** → 控制器跑 `docker compose up` 时 postgres 被重建到**此前不存在的空卷**，表现为"数据全丢"（数据其实一直在旧卷，只是没挂上）。
+- **修复**：把数据**迁进锚定卷**（tar 跨卷拷贝，源卷 `:ro` 只读、目标卷先清空、owner/权限/mtime 保留），随后改用**标准 compose（不带任何 override）** 启动。校验：`postgres` 挂载 **`stock_bot_wt_p7_postgres_data`**、`alembic = b6a1f0c2d7e4`、`industry_metrics = 44,812`、`daily_quotes = 4,433,523`、`scd2_periods = 23,534`。**此后标准 `docker compose up` 即正确**。
+- **旧卷 `stock-bot_postgres_data` 保留未删**（回滚保险）。
+
+### 五、控制器流程教训（该记）
+1. **"代码验证通过" ≠ "环境可用"**：S1.4 当时有 10 条机器记录与真实对拍，却**没把 SCD2 灌进环境**，页面全空。验收标准必须包含"**跑完之后这个页面能看**"。
+2. **验收必须验"同一事实的所有来源是否一致"**，不能只验"每个接口各自对不对"——本次 tree/drill 打架就是漏了这一条。
+3. **跑会重建基础设施的 compose 命令前，必须先核对"配置声明的卷名"与"实际有数据的卷名"是否一致**（`docker volume ls` + `inspect` 看 created/labels）。
 
 ## 2026-10-12 - 移除「数据版图」静态矩阵（市场页底部 + landing 第 6 区块）
 
@@ -104,6 +468,278 @@
 - **改动**：删除组件本体 `features/market/components/DataCoverageMatrix.{tsx,css}` 与 barrel 导出、`/market` 页脚上方那份（`withStats={false}`）、landing 第 6 区块（`landing/sections/DataCoverage.tsx` 及其 import/挂载）；同步删除两处断言它的 e2e（`marketTrust.spec.ts` 的「数据版图把北向一行标为规划中…」、`landing.spec.ts` 的「数据覆盖矩阵含核心数据域与免费徽章」），修正 `marketPolling.spec.ts` 与 `landing.css` 里的过时注释，设计文档 `docs/design/landing-market-theme.md` §5 改为「已下线」并保留表格作历史存档（去掉对已删 `COVERAGE_ROWS` 的同源引用）
 - **替代入口**：数据新鲜度的真实来源是**后端** `GET /market/data-freshness` 的 `coverage`（逐域 `have_days`/`complete_days`/`cover_pct`，由库内实况算出）；前端不再用手写常量对外宣称"已上线/免费"
 - 涉及文件：frontend/src/features/market/components/{DataCoverageMatrix.tsx,DataCoverageMatrix.css,index.ts}、frontend/src/pages/market/index.tsx、frontend/src/pages/landing/{index.tsx,landing.css,sections/DataCoverage.tsx}、frontend/e2e/{marketTrust,landing,marketPolling}.spec.ts、docs/design/landing-market-theme.md、docs/Changelog.md
+
+## 2026-10-12 - S1.13 市场情绪综合指数（11 条日频腿滚动分位加权合成；**S2.2 的前置**）
+
+- **交付**（`697a138`，6 文件）：**`market_sentiment_composite`**（S2.2 期望的确切键名）落 `industry_metrics(industry_key='market')`，口径 `s1.13-v1`；**无新表、无新迁移**（单头 `b6a1f0c2d7e4`）
+- **控制器查库实测**：**4002 行 / 2708 有值**（**≥1260** ✓）；行跨度 `2010-04-16..2026-10-12`（**= 最长成分 `if_basis`**）、有值跨度 `2015-08-13..2026-10-12`；缺失 **1294 行全为 `insufficient_participants`**；PIT `count(*) = published_at = caliber_version = 4002`
+- **PIT 的深度验证（做得深）**：`published_at::date = period` 为 4002/4002——因成分**都是当日观测**，PIT 由**时点**而非日偏移保证；并实测 **`published_at < 当日最晚成分` 的行数 = 0 ⇒ 无前视**
+- **可复算性（判据 2）**：以**独立** nearest-rank 实现**从成分行**重算（**不重读 `extra`**），4 个日期逐位一致（`2019-10-27` 51.1338 · `2026-09-10` 40.3612（10/11 腿、按 /0.88 归一化）· `2015-08-13` 36.9615 · `2026-10-12` 32.8157）；容差 = `Numeric(18,4)` 量化（≤5e-5）+ 4 位取整后严格相等；**破坏验证：跳过归一化 或 分位四舍五入到 6 位 → 4 个测试转红** ⇒ 断言非空转
+- **命名**：只叫「市场情绪综合指数」；产品面（`frontend/src/`）**0 命中**；判据最终形式为 `grep -rn "恐贪\|fear.*greed" frontend/src/ docs/ --exclude-dir=specs --exclude=Changelog.md` 无命中（**Ruling 65/66**：契约层**陈述**禁令、历史层**记录**禁令都必然命中，排除二者；否则"记录禁令"本身即违规，逻辑自相矛盾）
+- **spec 依实测修正（Ruling 66）**：① 判据 1「与成分**等长**」对窗口极不齐的成分**不可能同时成立** → 落地口径为**行日历 = 各成分交易日并集**（行跨度等于最长成分、不短于任何成分），**有值跨度另行如实报告**，且**每个有值行的 `extra` 记录当日实际参与成分**（可复算前提）② **S2.2 必须用 `range>=6y`（或 `all`）**——`range=5y` 只回 **1214** 个有值日（<1260），会把 `window=1260` 的分位算在不完整窗口上 ③ **最新值的"薄"必须对使用者可见**：实测 `2026-10-12` **仅 3/11 条腿**（生效权重 0.23，下限 0.20），而 `2026-10-09` 有 10 条——因不同腿最新日不同（`daily_quotes` 锚定的腿止于 10-09、QVIX 止于 09-30）。**保留下限 0.20**（提高会把最近若干日整片判 NULL，恰在用户最关注时），**但 UI 须明示"当日由 N/11 条腿合成 + 生效权重"**，且下限取值理由须在字典写明
+- 门禁：pytest **1347 → 1373 passed / 17 skipped / 0 failed**（+26 = 19 纯 + 7 DB）；ruff/format/mypy/self_review/doc_gate/`check_metric_dictionary`(48 行 MISMATCH 0) 全绿；测试零库名字面量
+
+## 2026-10-12 - Ruling 64/65 收尾：`freq` 改实测周度 + 下界可见 + **「registry 元数据 vs 落库元数据不一致 ⇒ 序列静默 0 点」升级为机械检查** + S1.13 判据修正
+
+- **`freq` 改实测值**（`53bfe07`）：`public_fund_equity_position` `quarterly` → **`weekly`**，共改 **19 处**（registry `MetricDef.freq`、服务 `FREQS`、registry 描述（删「季报口径」，改为「低频参考值」+「频率：`weekly`（周度）——按产地实测登记」）、`extra.frequency_note`/`publish_lag_note`、字典 §4.2、`data-source.md` 附.10 四处、provider/探针注释、4 处测试断言）；前端 `FREQ_LABELS` 本就有 `weekly→周度`，无需改
+  - **导入期断言未放宽**（只加注释），并**新增单测 `test_service_freq_matches_registry_freq`** 防"服务 ↔ registry freq 漂移"
+  - 控制器核验：表内 `freq=weekly`（455 行，pit/cal 各 455）、`new_fund_share` `monthly`（45/45/45）；`alembic heads` 单头 `b6a1f0c2d7e4`
+- **下界可见（Ruling 64）**：registry 描述新增面向使用者的逐字警示（「⚠️ **下界口径（使用者必读）**：…本值 = **「有值成员之和」即该月真实规模的下界**…**读的人不得把部分成员的和当成全月完整总额**」），字典 §4.2 新增 🔴 条目；**并修掉一处与实现相反的旧文案**（原写"有任一基金为空→整月 NULL"，与实际实现不符）。控制器核验：`extra.is_lower_bound` 行数 **42/45** ✓；`source_tier='calc'`、口径不可复算、背景-only/不进信号链路、`published_at` 为推算值（列为未验证余项）**均保留未动**
+- **★ 一类新缺陷被识别并机械覆盖（Ruling 64 收尾）**：`freq` 是**落库列**且**序列读面按 registry 的 `freq` 过滤** → 改 registry 后，dev 库 455 行旧标签会使 `get_series` **静默返回 0 点**。这与 S1.10 发现的「registry `sources` 与落库 `source` 不一致 ⇒ 序列静默 0 点」**是同一类**：**registry 元数据与落库元数据不一致时，读面静默返空**。
+  - 处置：实现方对 dev 库做了一次**幂等定向元数据重标**（`UPDATE … SET freq='weekly' … AND freq='quarterly'` → 455 行，复测 `get_series` = **455 点**）；控制器实测确认（`public_fund_equity_position` 455 点、`new_fund_share` 45 点）
+  - **⚠️ 其它环境（含生产）若已按 `quarterly` 落过行，需要同一次重标**——首选**重跑幂等回补脚本**（`scripts/backfill_investor_behavior.py`），上游不可达时用等价的定向重标。**必须在部署文档留痕**（归入终审 triage 的部署项）
+  - **裁定**：该类"**元数据漂移 ⇒ 静默返空**"**必须机械化**（AGENTS.md 第 5 条：能机械检测的不得只写文档）——要求**新增检查：对所有已落库的 `metric_key`，断言其落库 `freq`/`source` 与 registry 声明一致**（S1.10 已为 `source` 加过单测，本项把它扩到 `freq` 并覆盖全量 key）。排入下一批
+- **S1.13 判据修正（Ruling 65）**：原判据 `grep -rn "恐贪\|fear.*greed" frontend/src/ docs/` **无命中**按字面**不可满足**——实测 3 处命中**全在 `docs/specs/`**，即**契约层自己陈述该禁令**（`S1-market-sentiment.md:305` 禁令本身、`:313` 原判据本身、`README.md:197` 不作项清单）。**判据意图是禁止产品命名，不是禁止契约陈述禁令** → 改为 `--exclude-dir=specs`，且 `docs/specs/` 内的命中**只允许是禁令陈述本身**；并补明「**自建 composite 允许进信号链路**（S2.2 的示例规则正是消费它），被禁的是**第三方机构编制**的情绪指数」
+- 门禁：pytest **1345 → 1347 passed / 17 skipped / 0 failed**（+2）；ruff/format/mypy/`check_metric_dictionary`/`test_db_isolation_guard`/self_review/doc_gate/tsc 全绿；测试**零库名字面量**
+
+## 2026-10-12 - S1.12 投资者行为（新成立基金份额 + 公募基金仓位；**开户数判不可得并从产品中移除**）
+
+- **交付**（`076d3dd`，9 文件）：
+  - **`new_fund_share`** 45 行/45 有值（月频，2023-01…2026-09）
+  - **`public_fund_equity_position`** 455 行/455 有值（2017-12-04…2026-09-30）
+  - 两者口径 `s1.12-v1`；**无新表、零新迁移**（单头 `b6a1f0c2d7e4`）
+- **★ 开户数裁决 = `不可得`，按 spec 从产品中移除**（不是占位空图、不是估算值）：东财 `stock_account_statistics_em` 可调但**最新月停在 2023-08**（101 行；**直连东财 API 实测 `count=101/pages=1` ⇒ 101 即全量，非分页截断**）；中国结算月报是唯一权威产地而 AKShare 未封装 ⇒ **无第二源**。处置：**连 `metric_key` 都不注册**（market scope 39 个 key 里没有它；读面对该键 404，有真库用例）+ 结论落 `INVESTOR_BEHAVIOR_DROPPED_ITEMS` + 字典专段 + 对 4 个占位键名写死**导入期断言**防将来误加
+- **PIT**：两 key 均 `count(*) == count(published_at) == count(caliber_version)`（45/45/45、455/455/455）；**并额外验证了否定性质——`published_at::date = period` 的行数 = 0/0 ⇒ 确认未静默回退 `period`**
+- **spec 判据机械化**：频率与滞后已落 registry `MetricDef.freq` + 前端 `FREQ_LABELS` 徽章 + 字典 4 列表，并**用导入期断言强制描述里同时含「频率」「滞后」**（把文档纪律升级为门禁，符合 AGENTS.md 第 5 条）；公募基金仓位**不进信号链路**由 `grep` 可验
+- **spec 依实测修正（Ruling 64）**：spec 原写公募基金仓位为「**季报**、滞后 ~15 工作日」，但**实测产地并非官方季报**——乐咕乐股 `fund_stock_position_lg` 是第三方**周度观测/估算**（相邻观测间隔 6–8 天占 **90.3%**），且上游 JSON **只有 `date/close/position`**（无报告期/发布日期/编制方法）⇒「股票投资占基金总资产比」**无法从产地复算**。spec 已改为描述真实来源；`source_tier='calc'`（第三方编制，**非官方**）、`freq` 按实测、`published_at` 为**推算值并列为未验证余项**；「仅背景展示、不进信号链路」的硬约束保留
+  - 本条与上文「成交额冒充净买入」是**同一类错误**（**机器可读的标签说了假话**）——不能只靠散文披露兜底，故 `freq` 必须等于实测频率
+- **下界口径须对使用者可见（Ruling 64）**：`new_fund_share` 的 42/45 月是**下界**（字段级缺值 ≈4.8%，均匀散布），实现方选「有值成员之和 + `extra.is_lower_bound=true`」而非「整月判 NULL」（后者实测只剩 3 个月，差 15 倍）——控制器**接受该口径判断**，但补明：机读标记是**必要非充分**条件，registry 描述与字典须以**面向使用者**的措辞写明"下界（有值成员之和）"。**A/C 双计不除以 2 是对的**（同一基金的独立份额类别，各自募集份额相加即总募集）；2019–2022 该产地无数据已登记
+- 门禁：pytest **1306 → 1345 passed / 14 → 17 skipped**（+42 = 39 pass + 3 条件 skip，逐项对账吻合）；ruff/format/mypy/`check_metric_dictionary`(47 行 MISMATCH 0)/self_review/doc_gate 全绿；测试**零库名字面量**，`test_db_isolation_guard` 通过
+
+## 2026-10-12 - **北向成交额口径重标**（关闭上文那处静默数据缺陷）+ 覆盖矩阵口径更正
+
+- **交付**（`b32e778`，23 文件 +1108/−83）：`northbound_daily` 增加**行级 `amount_kind`**（`net_buy` | `turnover`，**NOT NULL + CHECK**，按 2024-08-19 断点回填）+ `net_amount` **改名** `amount`（**数值一个不改**）；断点常量的**唯一活来源** = `app/services/northbound_caliber.py`；**每个 DTO 点带 `amount_kind`**，信封给窗口口径（`net_buy` / `turnover` / 跨断点 `mixed` / 无行 `None`）
+  - **为什么落列而不只在读面派生**：口径是**行的属性**——落列后**任何直接读表者**（SQL 查询、报表、后续新服务）也**无法再把成交额当净买入**；只改 DTO 会让那些读者继续错标
+  - **单头**：`alembic heads` → `b6a1f0c2d7e4`（唯一）；up/down + 跨断点回填在**测试库真跑过**（原始输出在报告）
+  - **控制器已在 dev 库执行 `alembic upgrade head`**（`84476cb7b838 → b6a1f0c2d7e4`）：列由 `['id','net_amount','source','trade_date']` 变为 `['amount','amount_kind'(NOT NULL),…]`；**42 行全部正确回填为 `amount_kind='turnover'`**，范围 `[207941.62, 351740.65]`——与控制器先前独立测得的"42 行全是断点后成交量口径值"**完全一致**
+- **UI 真实性（dev 库真数据，days=30 窗口 14 行）**：
+  - **改前**：`盘后净流入 · 亿元` / `当日 +29.67亿` / `近30日累计 362.55亿` ← **把 14 天的成交额加起来冒充净流入**
+  - **改后**：`盘后成交额 · 亿元` / `当日成交额 29.67亿`（**无 + 号**）/ `近30日累计成交额 362.55亿`；跨断点 `mixed` → `—` + 「不与净买入相加」；**成交额不着涨跌色**、零轴只在净买入口径画
+  - **既有能力一行未删**（表 / ingest / `northbound_daily_job` / 读端点 / 前端卡片全保留）——符合 Ruling 30
+- **spec 判据的机械验证**：`grep -rn "北向\|northbound" backend/app/ frontend/src/` 共 **120 处**，**由脚本机械校验"全覆盖 + 无重复归类"**：
+  - A 断点前净买入历史（显式标注）= **13**
+  - B 成交额口径（命名已体现）= **107**（B1 明写成交额/口径 30；B2 口径中立管道、值由行级 `amount_kind` 标注 77）
+  - **第三类（把成交额冒充净买入）= 0** ✓（控制器独立抽查确认：唯一邻近「净流入」的行是 `market_data_service.py:1659` 的**纠正性文档**"⚠️ 这不是'北向净流入'序列"）
+  - 本轮还抓出并修掉**最后一处活代码错标**：`scheduler/jobs.py` 的 `northbound_daily_job` docstring 原写「北向资金每日净流入」
+- **过程诚实（值得记）**：该 agent 的前一个提交 `9267185` **误把并行 S1.12 agent 追加的「附.10」带进自己的提交**——它**主动发现、amend 掉、把他人字节原样写回工作区（未暂存）留给对方自行提交**，并机械核对"本提交里对方文件数 = 0"。这是**跨 agent 污染的正确处理方式**
+- 门禁：pytest **1291 → 1306 passed / 14 skipped / 0 failed**（+15）；ruff/format/mypy/tsc/build/check:design/check:routes/doc_gate 全绿；新 DB 用例**只取 `TEST_DATABASE_URL`**（未设即 skip、全程 rollback），`test_db_isolation_guard.py` 通过
+- **覆盖矩阵（遗留，控制器裁定为延后）**：该行的原判据"全表 0 行"已不成立（现 42 行），但**转「已上线」是公开覆盖口径**且被两条 e2e（`landing.spec.ts` / `marketTrust.spec.ts`）与落地文档统计带 10→11 钉着 → 本轮**只把内容列由「净流入」改为「成交额（2024-08-19 起）」并把过期判据显式标出**，`planned` 状态未动。**控制器裁定：转「已上线」需同步 e2e 与文档计数，归入终审 triage**（内容已诚实，非数据正确性问题）
+
+## 2026-10-12 - S1.7 资金流四件套（ETF 份额变化 + 南向净买入）+ 一处**同列换口径**的静默数据缺陷被查明
+
+- **交付**（`9cbf416` Step-0 · `84a32e3` 四件套 + 陆股通持仓口径 + Ruling 61 读面 · `04ad704` 单测）：
+  - **`etf_share_change`** 916 行（2023-01-03..2026-10-12 = **3.77 年**，远超 spec 的 ≥1 年，915 有值/1 NULL）
+  - **`southbound_net_buy`** 674 行日频（673 有值/1 NULL）
+  - **两融不重做**：`margin_financing_balance`/`margin_short_balance` 由 S1.9 已落，本批**只引用**（spec 契约表自己写着"已有（S1.9）"）
+  - **`industrial_capital_net_change` 维持"待接"**（依赖未完成的 S3.2 公告采集），**0 行、无假数据** ✓（spec 原话即"不得用假数据填充"）
+  - **陆股通持仓（季度）**：只落口径与滞后说明（`hk_hold` 覆盖不规则：`20240329` 0 行、`20260930` 只回港股通行）；**`market/foreign` 经核实"从未建过"**，页面待后续批次
+- **PIT**：逐 key `count(*) == count(published_at) == count(caliber_version)`（916/916/916、674/674/674），`published_at` 为当日北京 21:00 带时区，`as_of_source` 恒 `published_at`（不回退 `period`）
+- **★ 查明一处静默数据缺陷：同一列中途换口径**
+  - **北向**：`moneyflow_hsgt.north_money` 在 **2024-08-19** 换义——断点前 148 日含 **83 个负值**（`[-13056.64, 22448.99]`，百万元）＝**净买入**；断点后 502 日**零负值零零值**（`[77584.24, 510101.29]`）＝**成交额**。**独立产地东财「当日成交净买额」断点后 502/502 全空** → **净买入口径确实已取消**。故 `northbound_daily` 现存 42 行（全在断点后、负值 0）**不是死数据，而是"成交量被错标成净流入"**；读面与前端卡片正把它当「北向净流入」、甚至**求和成「近30日累计」**——那个累计值**没有意义**
+  - **南向**：`south_money` 是**历史累计净买额（亿元）**而非日频净买入，且**该列在 2023-11-24 也换过口径**（此前 114 日为"日频/百万元"且 37 日为负；此后为"累计/亿元"且无一日 ≤0）。实现方以**一阶差分**得日频，并与东财独立源对拍：累计 **650/650**、差分 vs 东财当日净买额 **649/649 逐值相等**；只落断点后 + **口径回退守卫**（断点后若出现 ≤0 或不合理小值 → **响亮失败**，即"上游把口径改回去"的信号）+ 丢弃断点前旧口径行（注释指出**混算会得到二阶差分**）
+- **spec 依实机证据修正**（`259d406`，控制器行使裁定权）：背景改为「**每日净买入确实取消，但每日成交额仍披露、同列不同义**」；验收判据由「grep 不得出现每日净买入口径字段名」改为**语义判据**——凡承载断点后 `north_money` 的字段名/DTO/文案**必须体现「成交额」口径**，每处 grep 命中须归类为「断点前净买入历史（显式标注）」或「成交额口径（命名已体现）」，**不得有第三类**
+- **上游陷阱（三条同族）**：`fund_share` **单次 2000 行且截"最近"** → 必须逐 `ts_code` 取（宽窗会静默缺头）；`hk_hold` **4200 行上限**；`stk_holdertrade` **3000 行上限**
+- **ETF 篮子口径**：6 只按**规模（份额 × 收盘价）**选族内代表（只比份额会选中低净值行业主题 ETF；benchmark 文本匹配会漏 `510050`/`510500`，已打印原文举证）；上游脏行 `159915.SZ` 有 **2026-01-17 周六行** → 落 `NULL + partial_basket_coverage`，**不拿 1/6 成员冒充全篮**
+- 门禁：pytest **1260 → 1291 passed / 14 skipped / 0 failed**（+31 = 27 纯 + 4 PG）；ruff/format/mypy/self_review/doc_gate/`check_metric_dictionary`（45 行 MISMATCH 0）全绿；**无新表**（alembic 单头）；新测试只用 `TEST_DATABASE_URL`（无硬编码库名）
+- **Ruling 61 已落地**：`MetricLatestOut` + `MetricHistoryPointOut` 增加 `missing_reason` + `coverage`；样例 `qvix_50etf` → `source_not_updated`、`etf_share_change` 2026-01-17 → `partial_basket_coverage`(0.166667) —— **"源侧滞后"与"真缺数"从此可区分**
+- **遗留**：北向的**跨面改名/重标**（字段名/DTO/前端文案体现成交额 + 去掉无意义的"近30日累计"）由 `f29980a9` 处理；`stk_holdertrade` **不采用**（spec 要求原料来自公告，公告面才提供 `publisher_tier` 与正文可回溯）；待接 key 骨架的 `missing_reason` 仍为 null（需 registry 级 `pending_reason`，跨批次）
+
+## 2026-10-12 - S1.10 波动率与衍生品（QVIX 期权隐含波动率 + 股指期货升贴水 + IC/IM 贴水率）
+
+- **交付**（`1b64ec7` Step-0 · `bc390bf` 指标落库 · `1875e3a` 修读面）：**5 条 QVIX 中国波指**（50ETF 2833 天 / 300ETF 1646 / 500ETF 981 / 创业板ETF 981 / 科创50ETF 811）· **4 个品种基差**（IF 4002 天自 2010-04-16、IC/IH 2791、IM 1021）· **IC/IM 贴水率**（`基差/现货×100`，与基差**同号不翻转**、不年化，年化值落 `extra.annualized_pct`）→ 全部落 `industry_metrics(industry_key='market')`，**无新表无迁移无平行读路**
+- **复用优先的关键一步**：spec 要的"期权隐含波动率"**AKShare 已自带 5 条 QVIX 序列**（本机 1.18.94 实测），故**直接取序列，未自己实现 Black-Scholes 反解**；股指期货走 TuShare `fut_basic`/`fut_daily`/`fut_mapping`（S0.3 附.5 已证明可用，本任务补进 client）
+- **Step-0 实测**（追加为 `docs/design/data-source.md` **附.8**）：两源**全部 verified、无 blocked**；`fut_daily` **单次 2000 行上限实测复现 → 必须分片**；`fut_mapping` **逐日对拍 0 不一致**（无前视、未复权）
+- **符号约定写死并可机读**：**基差 = 期货 − 现货**（正=升水、负=贴水），`extra.sign_convention=futures_minus_spot` + registry 描述 + 字典三处一致；主值取**期货结算价**（`published_at` 16:00），收盘口径另落 `extra.basis_close` 供对拍（IF 2026-10-12：结算 −62.1798 vs 收盘 −54.3798，后者与 Step-0 探针 −54.38 逐位一致）——正是 spec「升贴水负值时 UI 明示贴水语义、避免正负号误读」的落地
+- **PIT**：逐 key `count(*) == count(published_at) == count(caliber_version)`（控制器亲查确认），两档时点 15:00/16:00 Asia/Shanghai，口径 `s1.10-v1`；落库 21669 行（有值 21603 / NULL 66，**全部 `missing_reason=source_not_updated`，非 0**）
+- **实现方发现并修掉一个真缺陷（惠及后续所有指标）**：registry 的 `sources` 登记与落库 `source` 不一致 → `get_series` 源白名单取不到源 → **`GET /metrics/series?metric_key=if_basis` 静默返回 0 点**（`latest` 读面正常故此前不可见）→ 已修 + 新增**机械守卫单测**（逐个 key 断言服务写入的 source 必在 registry sources 内）；控制器复现：`if_basis`/`ic_basis`/`qvix_50etf` 各 **242 点**、`source_mismatch=False`
+- **口径诚实性**：QVIX 是**第三方（optbbs）编制**，官方 iVIX 自 **2018-02-22 由中证指数公司停发** → `source_tier` 记 **`highfreq` 而非 `official`**（未冒充官方）；且该静态 CSV **发布滞后 1–3 个交易日** → 相关日期落 NULL + `source_not_updated`（**不是 0**）；另有 3 行落在非交易日的上游行不落库但**计数告警**
+- **未验证余项（记入附.8.4，不估算）**：中金所结算价的精确发布时刻（16:00 为保守取值）· QVIX 第三方口径未与官方/第二源对拍
+- 门禁：pytest **1213 → 1260 passed**（12→14 skipped，+49 用例）；ruff/format/mypy/self_review/doc_gate/`check_metric_dictionary` 全绿；`alembic heads` 单头
+- **遗留（Ruling 61）**：`missing_reason` 已落库但**读面不回传**（`MetricLatestOut`/`MetricHistoryPointOut` 无该字段）→ 前端分不清"源侧滞后"与"真缺数"；实现方**正确地未擅自改**（属 S1.2 读面变更）→ 已裁定要求扩展读面，排入下一批
+
+## 2026-10-12 - **修复测试隔离缺陷（PIT 列每次 pytest 被 DROP）** + S1.9 交易活跃度与杠杆资金 + S1.11 估值与风险溢价
+
+### 先记最重要的：一个会**破坏 dev 库数据**的测试隔离缺陷
+- **症状**：`industry_metrics` 的 `published_at`/`caliber_version` 会在**每次完整 `pytest` 之后**变成 NULL，且 `count`/`created_at`/`xmin` **全不变**——看起来像"某次服务写入把它们抹了"，导致控制器一度误判实现方"谎报验证"（**Ruling 60 已撤回该指控**）
+- **真因**：`backend/tests/test_intraday_snapshot_table.py` **硬编码 dev 库**（`localhost:5433/stock_bot`）并执行 `alembic downgrade d7c8b9a0e1f2`——**该版本低于 `f1a2b3c4d5e6_add_metric_pit_and_caliber`** → **DROP 掉这两列**，随后 `upgrade head` 把它们加回来（值 NULL）。`DROP/ADD COLUMN` **不重写行**，故所有行级指纹不变
+- **修复**（`89c1fa0`）：该测试改用 `TEST_DATABASE_URL`（**刻意不回退 `DATABASE_URL`**——注释写明"那会在只设了 `DATABASE_URL` 且指向 dev 库时打到 dev 库"）+ 新增 **`backend/tests/test_db_isolation_guard.py`**（静态扫描"测试不得硬编码 dev 库" + 对两个跑 downgrade 的模块断言**解析后的 URL 不得是 dev 库**）
+- **控制器决定性反证**：`pytest` 前 `market: n=15071 pit=15071 cal=15071` → 跑完 1213 passed → **仍为 15071/15071/15071**（不变）
+- **教训**：① **在把 DB 状态当证据前，必须先确认测试套件不改写该库**——"状态稳定性"要先于"状态正确性"，这正是"亲自查库"这条缓解措施失效的原因（抹除发生在两次查询之间）② "测试硬编码共享 dev 库"应从"基线噪声"升级为"**可能造成数据破坏**"③ Task 8 已对 `test_industry_metric_pit_roundtrip.py` 做了破坏性迁移的 opt-in，但**同类的另一个文件被漏掉**——"修一个实例"不等于"修这一类"，现由隔离守卫机械覆盖全类
+
+### S1.9 交易活跃度与杠杆资金 + S1.11 估值与风险溢价（`1a5feba` + 修复轮 `d0c5a4d`/`80ab747`）
+- **Step-0 实机验证**（追加为 `docs/design/data-source.md` **附.7**，探针 `backend/scripts/spike_s19_s111_sources.py` 入库、空结果响亮失败）：
+  - **融资融券** = `可得`（TuShare `margin`，日频，一行 = 一交易日 × 一交易所，实测 `SSE 1557/SZSE 1557/BSE 886`）；**单次 4000 行上限 → 不分片会把"≥3 年"做成"只有最近 8 年"且头部静默缺失**；金额单位实测为**元**、`rqyl` 为**股**
+  - **指数换手率** = `受限`：7 个里 **5 个可直取**；**北证50(899050.BJ) 与科创综指(000680.SH) 返回 0 行且不报错** → 判 `需自建`（`index_weight` 月快照 × `daily_basic.turnover_rate_f`）；`turnover_rate_f`（自由流通）与 `turnover_rate`（总股本）同日不同值，**已在 registry 写明口径**
+  - **10Y 国债** = TuShare `yc_cb` **blocked**（逐字：`抱歉，您没有接口(yc_cb)访问权限`）→ 改**中债官方** + 备源东财 `bond_zh_us_rate`（2002 起），**两源同日逐值相同（差 0.0000）**
+- **落库**：13 个 spec 指标 + `pe_csi300` 落 `industry_metrics(industry_key='market')`，**不新建表、不新增迁移、无平行读路**；`erp_10y` 经修复轮**改锚到自身两个输入（CSI300 PE ∩ 10Y 国债）的可用性交集**，由 829 天（3.4 年）→ **1298 行 / 1260 有值 / 2021-07-26 起（5.2 年）**，满足 spec 的 ≥5 年；`idx_turnover_ratio_star` 仅 **244 天有值**（限制来自**上游 `index_weight` 快照起点 2025-09-30**，非指数成立日——`index_basic` 显示 base_date 2019-12-31、`index_daily` 1639 行；**保留科创综指不替换为科创50**），585 天标 `no_weight_snapshot`
+- **修掉两个真 bug**：① 自建换手率的守卫把**空的成分集合**当成 0.000（并非键空间不匹配——实测交集 50/50 与 579/579），改为**先判定快照期**再取数 ② **缓存命中的 (key,day) 被回写成 `source_empty` NULL** → 重跑会摧毁全部自建值
+- **PIT**：`published_at` 按产地分档（行情/IV 15:00 · 两融 18:00 · 国债 19:00 Asia/Shanghai），`caliber_version='s1.9s1.11-v2'`；控制器查库确认**每个 key 的 `n == published_at == caliber_version`**
+- 门禁：pytest **1200 → 1213 passed / 12 skipped / 0 failed**；ruff/format/mypy/doc_gate/self_review 全绿；`check_metric_dictionary.py` 30 行 MISMATCH 0；alembic 单头
+- **另补 S1.6 欠账**：`docs/design/metric-dictionary.md` 新增 **`## §4.7`** 榜级口径（`monthly_pct_chg`/`total_mv`/`dv_ratio`/`n_income_attr_p`/`roe`，含窗口、复权、样本谓词、期别语义、PIT 与"分母 == 排序谓词"）
+
+## 2026-10-12 - S2.1 因子层（纯函数库 + registry 元数据，**不建表**）
+
+- **交付**（`c2015e8`、`f5c8411`）：`backend/app/services/indicators.py`（新，463 行）——可复用**纯函数**因子库；`industry_registry.py` 扩展因子元数据（`factor_key → {名称, 单位, 输入指标, 窗口, 展示分组}`）；`docs/design/metric-dictionary.md` 登记
+- **因子清单 14 个**：**10 个读时算**（纯函数、无 IO，Redis 缓存留在读面）+ **4 个物化**——后者**复用 `stock_features` 既有列**（`return_percentile`/`max_drawdown`/`trend_slope`/`annual_volatility`）→ **新增列 0、新增迁移 0**（`alembic heads` 仍单头 `84476cb7b838`）。长窗口因子落在既有 `stock_features.extra` JSONB
+- **验收判据「不新增任何表」已核实**：迁移目录零改动、无 `factor_defs`/`create_table`（`grep` 计数 0）；spec 明令不建的 `factor_defs` 与因子库 UI **均未出现**（后者 Wave 5 才有消费方）
+- **复用**：`cycle_engine.count_consecutive_negative` 以**再导出**方式复用（**恒等性由测试断言**，不是抄一份）；`percentile` 口径与既有两处 nearest-rank 实现（`limit_up_service.percentile_from_series`、`financial_service._percentile_rank`）对齐——那两处是 dict/shape-bound 且非滚动，故不可直接 import
+- **纯函数纪律已验证**：138 个新测试在**数据库不可达**（端口 59999）时全绿 → 证明"无 DB、无 marker"；`indicators.py` 只 import `math`/`typing`
+- **可复算性**：同一输入跑两次**误差恰为 0.0**；另有"用旧定义重算历史仍得原值"与"历史前缀不看未来"两条测试
+- **物化写入路径**：新增纯函数 `stock_feature_row()` + 复用既有 `feature_repo.upsert_features()`（`uq_stock_features_key` 幂等）。**尚无写路径调用方**——spec 把消费方推迟到 Wave 5，故未自造 scheduler/worker 范围
+- 门禁：pytest **980 → 1118 passed / 4 skipped / 0 failed**（+138 = **恰好等于新增测试数**，零回归）· ruff/format/mypy（190 files）✓ · `check_metric_dictionary.py` 16 行 **MISMATCH 0** · `bash scripts/bench.sh` **全部基准在 12% 阈值内**
+- **并行开发的两个新坑（记入流程）**：① **pytest 必须显式导出 `DATABASE_URL`/`TEST_DATABASE_URL`（端口 5433）**——否则 `test_auth_guard.py` 会去连 5432 而失败，基线被误读为 979/1-failed ② **`scripts/self_review.sh` 在并行期间无法变绿**：它按分支改动集收集文件，会把**另一个 agent 的未提交 WIP** 拉进 ruff 面 → 并行期只能做**逐文件归因**（本任务已如此处理：唯一失败文件是对方的未跟踪测试，自己 5 个文件全过）
+
+## 2026-10-12 - S1.8 市场宽度与动量（6 指标落 industry_metrics scope=market）+ 并行开发流程启用
+
+- **并行开发流程（Ruling 53，用户批准 A+B）**：同一 worktree 内**两个 agent 并行**，靠"文件集不重叠 + 提交只用显式路径"保证安全；**分级评审**——碰数据正确性的走完整闭环，纯展示类只跑门禁即收口（**但每条新断言仍须配注入反例**，不降级）。首批并行（S1.5 前端 / S1.8 后端）**零冲突落地**，合并态 `pytest` 一次通过
+- **S1.8 交付**（`643ec73`）：`backend/app/services/market_sentiment_service.py` 计算并落库 **8 个** `metric_key`（spec 的 6 个 + `market_advance_count`/`market_decline_count`，后者让"同源同值"可直接核验）到 **`industry_metrics` + `industry_key='market'`**——这正是 S1.2 当初泛化该键的用途（Ruling 16）。**不新建表、不新增迁移、不造平行读路**，经既有 `GET /api/v1/metrics/{latest,series}` 读取
+- **复用**：4 个涨停类指标**只读 `market_sentiment_daily`**（零重算涨停事实）；`advance_decline_ratio` 复用市场模块**同一 loader**（`load_day_rows`）与**同一分桶谓词**（`_distribution_bucket`），并有标签集自检；唯一新算法是 `above_ma20_ratio`（单条窗口函数 SQL + `win=20` 完备性守卫，不足 20 交易日的股票从分子分母同时剔除）
+- **回填实测**：**262 交易日 / 401 日历日**（2025-09-04→2026-10-09）· **2096 行** · missing=0 · 幂等（重跑仍 2096）。覆盖率：`above_ma20_ratio` 262/262；`advance_decline_ratio` **241/262**（21 天为 `partial_pct_chg`——`pct_chg` 覆盖不足 95% 门槛时不落数值）；涨停类 236–239/262（缺数标 `no_sentiment_day`/`source_null`，**NULL 而非 0**）。PIT：`published_at`=15:00 Asia/Shanghai、`as_of_source='published_at'`（无静默回退）、`caliber_version='s1.8-v2'`
+- **口径冲突处置（Ruling 54）**：市场模块 `0~1%` 桶是 `0 <= pct_chg < 1`，**把平盘算进上涨**；而 `summarize_group.up_count` 是 `pct_chg > 0`。实测 2026-10-09 正桶合计 3414 vs 正号 3297，**差 117 只平盘**（负侧完全一致）。裁定：主口径**对齐市场模块已发布的 11 桶**（两模块对用户展示一致、可逐桶核验），**同时用 `extra.flat_in_positive_bucket`/`extra.sign_basis` 保留双口径**（不丢数据）；**缺陷在源侧**（桶边界把平盘当上涨，与"上涨"标准语义不符）→ 转后续任务在拥有 market 文件的批次修正
+- **后续项**：`curated_count` 徽章分母现包含非行业的 `market` scope，而徽章标签是「行业分类（申万）」→ **须只数行业 scope**（Ruling 54 第 4 条）；`_distribution_bucket`/`_DISTRIBUTION_RANGES` 私有符号的公开化清理
+
+## 2026-10-12 - S1.5 个股与板块热力图（treemap 首屏不再阻塞主线程）
+
+- **交付**（`56b5ba8`）：`/market/heatmap` 占位页顶成真实现（占位路由 10→9）；`frontend/src/features/market/HeatmapTreemap.tsx` + `heatmapTree.ts`；后端**新建批量读路** `GET /api/v1/market/heatmap/treemap` —— 既有行情端点上限全是 `≤100/≤200/≤31`，**"≥3000 标的"没有现成读路**，这是本任务的技术核心
+- **实测容量**：**5559 标的** · 载荷 **796,666 B**（≈778 KB）· 响应 **205 ms**；字段覆盖"面积=成交额或市值 / 颜色=涨跌幅 / 分组=申万或概念"，并**声明单位** `amount_unit`/`mv_unit`（避开单位陷阱）+ `as_of`/`as_of_quality`
+- **性能（spec 硬判据：≥3000 标的首屏不得阻塞主线程）**：修复前实测 **最长 long task 189 ms、6–7 个 >100ms**（60fps 下一帧 16.7ms，189ms ≈ 掉 11 帧）→ 修复后 **最长 63 ms、零个 >100ms、`goto→canvas` 1139→389 ms**
+- **根因是测量出来的，不是猜的**：旧的 800 叶"渐进着色"每帧重跑完整 `setOption`（`notMerge`），**把 1 次 190ms 重排复制了 7 次**（5559/800 ≈ 6.9，与实测 7 个 long task 精确吻合）；对照实验 `?paint=all` 仍 191ms、关动画仍 194ms → 代价 ∝ 叶节点数（CDP 剖析 `Model.getShallow` 148ms、`measureText` 39ms）。**分片与 Web Worker 都用数据分别否决**
+- **解法：聚合替代分片**——渲染 **901 块**，其余 **4659 只聚合成带标签的「其他 N 只」块**（点击展开）；分组视图首帧 63/77/76 ms 全部 ≤100ms。既满足判据，也比"画出亚像素矩形"更符合 spec 的「高信息密度」
+- **性能基线可复跑**：`frontend/scripts/measure-heatmap.mjs`（Playwright + `PerformanceObserver` 的 `longtask` 条目，这是「不得阻塞主线程」的正确测法），三次取中位
+- **残留（已披露）**：严格「无 >50ms 任务」未达（残余 2 个 ~55/63ms，来自 React commit + ECharts 首帧；要压到 <50ms 需把可见块砍到 ~400，与「高信息密度」冲突，控制器判定不值得）；测量夹具**无法自动点击聚合块**（ECharts `getLayout()` 坐标与命中测试不重合），下钻改由确定性不变量覆盖
+
+## 2026-10-12 - S1.4 行业分类钻取（申万）：SCD2 成分历史 + 三级下钻 7 项字段
+
+- **第 0 步实机验证**（`docs/design/data-source.md` 附.6，10 条实机记录）：TuShare `index_member` **带 `in_date`/`out_date`**，31/31 一级行业可得、`in_date` 最早 `19901210`（可回溯到 1990 年）→ spec「任取历史交易日还原当时成分」的判据**原样成立，无需收窄**。并记录一个真陷阱：`index_classify` 的 `src='SW'` **静默返回 0 行**（正确值 `src='SW2021'` = 511 节点）
+- **SCD2 建表**（迁移 `b4c5d6e7f8a9`）：**新建** `sw_industry_member_periods`（`effective_from` 必填 / `effective_to` 可空 / `is_current`）+ `sw_member_ingest_runs`，**既有 `sw_industry_members` 一列未改**——其唯一键 `(industry_code, stock_code)` 装不下多段区间，且整表 DELETE 会清空历史。回填实测：346 指数 / **7,624 行** / 0 失败，重跑新增 0（幂等）
+- **三级下钻读面** `/api/v1/market/sw-industry/drill/*`：31 个一级 → 二级 → 三级 → 成分股，**7 项字段**（K线开/收/高/低 · 涨跌幅 · 换手率 · 成交量 · 量比 · 振幅 · **成交额**）全部**复用既有列**（`daily_quotes` + `daily_basic`），缺失一律 `None` 不填 0；**公开免登录**；前端末级成分股页（路由走 `route-manifest.ts` + `ARCHITECTURE.md` §6 各加一行）
+- **纠正一处既有单位注释错误**：`daily_quotes.amount` 是 TuShare 原生**千元**（×1000 才是元），原注释写成"源为亿元，×1e8"
+- **评审抓到并修复 1 处 Critical**：L1/L2 成分原先**靠"L3 上卷"**，而「祖级指数返回其下全部成分的并集」这一前提**经真实上游实测为假**（24/31 一级偏少，最多 −35%；`union(L2) ≠ L1`）→ 农林牧渔一级**成交额被低估 25.7%**（`23,743,561,160` 元 → 真值 **`29,851,841,770` 元**）。修法：读路**优先取节点自身层级**的成员、L3 上卷仅为兜底，响应以 `member_source` / `member_source_note` **显式标注来源而不声称等价**；回填改为三级全灌。**31 条 L1 逐条对账 `0/31 不一致；合计 5,211 = 5,211`**
+- **配套的护栏**（同一评审驱动）：ingest 的 0 行响应 / `--limit` 截断 / 下界断言未过的运行一律 `fully_ingested=False` / `status='partial'`，**不再抬高分类归属口径日**；三条下界断言（逐层零行 / 环比跌幅 ≤20% / 零行比例 ≤30%）+ 读面 `scd2_coverage` + 前端徽章；破坏性迁移 round-trip 改为 **`SC_DESTRUCTIVE_MIGRATION_TESTS=1` 显式 opt-in**（默认 `pytest` 不再清空数据），运维顺序写入 `docs/deployment/index.md`
+- **可复现性**：`backend/scripts/spike_sw_member_history.py` 补 `src` 枚举与 31 个 L1 全扫（空列表响亮失败）；`backend/scripts/reconcile_sw_member_counts.py` 入库（逐 L1 比对本地 own-level 当前成分 vs 上游，不一致非零退出）——`docs/design/data-source.md` 附.6.2 #11/#13 的证据**可由入库脚本复现**
+- **测试**：+30（SCD2 契约、下钻读面、成员来源回归锁 `member_count==2` 旧实现返回 1、31/31 自建树断言不再依赖 CI 库恰好有 seed、detail 写入→解析 round-trip）；后端 **698 → 728 passed**
+- 涉及文件：`backend/app/models/sw_industry.py`、`backend/app/migrations/versions/{b4c5d6e7f8a9,c5d6e7f8a9b0}_*.py`、`backend/app/{services,schemas,api/v1}`、`backend/scripts/{spike_sw_member_history,reconcile_sw_member_counts,ingest_sw_member_periods,gen_sw_index_mapping}.py`、`backend/tests/test_sw_*.py`、`backend/tests/test_industry_metric_pit_roundtrip.py`、`frontend/src/pages/market-industry-*`、`frontend/src/app/router/route-manifest.ts`、`frontend/scripts/check-routes.mjs`、`docs/design/data-source.md`、`docs/deployment/index.md`、`docs/architecture/frontend/ARCHITECTURE.md`
+
+## 2026-10-12 - S1.3 全球市场与跨市场标的（含一次门禁撤回裁定）
+
+- **段 A · 全球标的与 `/market/global`**（`99e6326`）：既有 **14 条 `ts_code` 一条未改**，新增 `NDX`（纳斯达克100）/`SOX`（费半）/`HXC`（金龙中国）/`HKTECH`（恒生科技）/`XIN9`（富时中国A50 期货）；**每条标的补齐五要素**（名称 / 数据源代码 / 交易时段 / 时区 / 币种），19 条**非空率 100%**，覆盖 CN8·HK2·JP1·KR1·US6·SG1；`/market/global` 按市场分组、**公开免登录**；A50 显式标注「新加坡 · CNY 夜盘」（与 A 股时段区分）
+- **消歧修正**：`IXIC`（纳斯达克**综合**）与 `NDX`（纳斯达克**100**）是两个标的。原先二者共用同一东财 `em_secid` → 最新值必然相等 → `IXIC ≠ NDX` 验收判据会**假通过**；改为 `IXIC → 100.IXIC`，并加四层断言（登记表 / 读路径 / 端点 / 名称权威）。`100.IXIC` 的一手验证作为 open item 记入 `docs/design/data-source.md` 附.5.5 #6
+- **段 B · 数据源可行性复核**（`3b7df9e`）：大宗商品 / 外汇 **20 条实机记录**，4 项三态结论（国内商品期货 可得 / 国际商品 受限 / 外汇 可得 / 落库形态 可得）+ 5 项 `blocked-on-verification`；页面只放「数据源待接入」占位，**不发明名录、不填假数据**。修正了两处控制器预判：TuShare **上游**有 `fx_daily`（4000 行）与 `fut_basic`/`fut_daily`（仅本仓 client 未实现）；恒生科技代码是 `HKTECH` 而非 `HSTECH`，且 `index_global` 经全量枚举确认**不含** NDX/SOX/HXC
+- **四处展示面假 0 修正**：`IndicatorGrid`（涨跌幅）、`MarketMoneyflowCard` / `SectorMoneyflowCard`（资金流柱值与颜色）、`NorthboundCard`（近 30 日累计）——缺值不再折成 `0`，改为显式缺失表达；`DistributionChart` 的桶级 `?? 0` **经核实保留**（后端全量 11 桶起底，改 `—` 会把"0 家股票"说成"数据缺失"）
+- **`DistributionChart` 卡片级空态**（`6053186`）：`items: []`（未解析判据日）或抓取失败时，原先仍打印「上涨 0 只 / 下跌 0 只」且无缺失提示；现分离**空态 / 错误态**（`DegradedNotice` 可与空数据区分）、`data-testid="distribution-empty"`，真实平盘日（11 桶全 0）仍正常渲染；tooltip 的 `total || 1` 兜底一并改为显式 `—`。**新增 Playwright 用例**（mock 空态 → 断言空态可见且 0 只文案 0 条、无 canvas），破坏验证 `✘ 1 failed`、整 spec **11 passed**
+- **门禁改动（含一次撤回）**：`check-design-tokens.mjs` 扩展为解析 `src/` 下**每个** `var(--x)` 引用并对照定义（`.ts/.tsx` 走 **TypeScript 编译器 API**，`.css` 走文本），抓到真实死变量 `var(--flat)`；新增 `frontend/scripts/lib/{ast-scan,source-scan}.mjs` 共享扫描层。**撤回**本轮新建的 `check-no-fake-zero`（Ruling 47）：四轮后证明它在**当前仓库已有 ≥5 处真实漏判**（绿灯而漏判，属"假绿当常态"）、6 处结构性逃逸（"值会不会被渲染"是**数据流**问题，靠节点形状猜不出）、且会误红合法的空安全写法 `x.f && x.f.toFixed()`；其要防的具体缺陷已由 `?? null` + `—` 渲染直接修掉，真保证落在**数据层**（`price_source == "none"`，pytest 机械覆盖）。撤除后该类改为**直接修站点 + 沉入 `docs/references/best-practices/frontend.md`**（含"能否机械检测：不能"的答复）
+- **影响文件**：`backend/app/services/market_data_service.py`、`backend/scripts/check_global_instruments.py`、`backend/tests/test_market_data_mapping.py`、`frontend/src/pages/{market-global,market-index}`、`frontend/src/features/market/components/*`、`frontend/src/app/router/{route-manifest.ts}`、`frontend/scripts/{check-design-tokens.mjs,lib/*}`、`docs/{design/data-source.md,architecture/frontend/ARCHITECTURE.md,references/best-practices/frontend.md,testing/index.md}`、`frontend/e2e/marketDataFace.spec.ts`
+- **删除**：`frontend/scripts/check-no-fake-zero.mjs`（及其在 `package.json` / `ci.yml` / `self_review.sh` / 门禁矩阵的全部接线）
+
+## 2026-10-12 - Wave 1 前两项（S1.1 导航骨架与路由迁移 · S1.2 指标表加 PIT 两列与统一读面）+ 前端当前态文档同步与路由门禁补洞
+
+- **Task 5 · S1.1 导航骨架与路由迁移**（`1fb5fb4`→`3311bd0`，8 提交 / 3 轮修复）：顶栏 **10 个一级导航**（市场·资讯·行业分析·公司分析·宏观分析·情绪分析·价值网图谱·策略引擎·风险管理·交易执行）+ 数据驱动导航树原语 `frontend/src/features/nav/`（零业务常量，徽标语义不在代码里）+ 既有 **15 条路由全量迁移（8 redirect + 7 保留）** + 10 个「规划中」占位页 + `/me` 工作台（复用既有 `WatchlistTable` / 新抽 `TagsPanel` / `WatchlistPanel` / `TagsOverview`，**不重写自选与标签能力**）
+- **路由清单化（Ruling 33）**：`frontend/src/app/router/route-manifest.ts` 成为路由唯一真相（纯数据：`kind` / `redirectTo` / `isPlaceholder` / `requiresAuth` / `permission` / `parent`），`index.tsx` 只**生成** `<Route>`；`route-elements.tsx` 承载懒加载注册表与鉴权包裹。**门禁不再解析 JSX 源码**
+- **新增路由迁移门禁** `frontend/scripts/check-routes.mjs`（`npm run check:routes`）：旧路由声明 / redirect 去向逐字 / **保留不得被改成 redirect** / **占位集合契约（双向成员+基数）** / **无 redirect 指向占位页** / 权限口径 / IA §4 ↔ 清单双向比对 / **ARCHITECTURE §6 ↔ 清单双向比对**；已接入 CI `frontend-lint` 与 `self_review` **默认快检**
+- **Task 5.5 · 前端当前态文档同步与门禁补洞**（`0b20ee3`→`b5133e2`）：`docs/architecture/frontend/ARCHITECTURE.md` §6 路由一览**按清单重写**（32 行一一对应，redirect 去向逐字），陈旧的「以 `app/router/index.tsx` 为准」指针改为 `route-manifest.ts`；§2 目录树修正门禁脚本挂层并补列 `check-routes.mjs`；`docs/design/ia-investment-research-platform.md` 两处同类陈旧指针一并改指。门禁补洞：计数改由断言集合派生、**占位集合契约化**、§6 重复行检测、§6 指针断言落到「为准」句（消除恒真假绿）
+- **Task 6 · S1.2 指标表加 2 列 + 统一读面**（`f16163e`→`1b4c070`，5 提交 / 2 轮修复）：`industry_metrics` **只加 2 列**（`published_at timestamptz NULL` / `caliber_version text NULL`，迁移 `f1a2b3c4d5e6`，无 `create_table`，downgrade 对称）；模型 docstring 写明 `industry_key` 语义已泛化为通用 scope 键 + `ponytail:` 改名升级路径；registry 增口径版本登记位；新增 `GET /api/v1/metrics/latest` 与 `/series`（**复用**既有 service/repo 层与源优先级，未平行造栈；`metrics:batch` 刻意未新增——既有端点已覆盖）
+- **PIT 正确性（本轮评审抓到的实质缺陷）**：① `as_of` 曾**静默回退** `period` ≡ 伪造 PIT 时点（违 ADR 0011「绝不静默回退」）→ 新增显式判别式 **`as_of_source: published_at|period`**（Ruling 34）② `ON CONFLICT DO UPDATE` 曾用 `excluded.*`，**重导入会抹掉已记录的 PIT/口径** → 改 `coalesce(...)` 并加靶向测试 ③ PIT 日期曾按 **UTC** 取整日 → 北京时间凌晨发布的数据出现**一天前视** → 改 `Asia/Shanghai`（Ruling 35）④ `range` 曾是**行数**而文档声称时间窗（`30d` 对月度指标返回 30 个月）→ 改真实时间窗（新 `repo.get_metric_window`，既有 `get_metric_history` 与猪智投调用方逐字节未动）
+- **前端 `<MetricBadge>`**：四徽章组件（source / as_of / freq / 口径版本），chip 样式与配色**逐字复用** `SourceBadge`；`period` 回退用中性色 + 「口径」前缀 + 「规则/回测不得引用」提示，口径断点高亮；已接进既有 `IndicatorCard`
+- **门禁修复（Task 4.5，计划外，依 AGENTS.md 自检第 5 条）**：`scripts/self_review.sh` 两个真实缺陷——路径采集取 porcelain 第 2 列导致**纯 `git mv` 的 `.py` 被静默跳过 lint**；format 失败分支的裸反引号被 shell 当重定向致脚本**以语法错崩掉并截断提示**
+- **测试**：`industry_metrics` 相关新增 55 个用例（含真库 alembic up/down/up、生产 `batch_upsert` + 生产 reader 的 PIT 往返、重导入保留 PIT、真时间窗、真 HTTP 栈的 422 边界）；后端 **630 → 685 passed**，失败/错误始终仅在 `tests/test_intraday_snapshot_table.py`（该文件硬编码 dev 库 `stock_bot`，属已知环境项、非回归判据）
+- 涉及文件：frontend/src/app/{router,layouts}、frontend/src/features/{nav,watchlist}、frontend/src/pages/**、frontend/scripts/check-routes.mjs、frontend/src/shared/{api,ui}、backend/app/{models,migrations/versions,services,repositories,schemas,api/v1}、backend/tests、backend/scripts/check_metric_dictionary.py、scripts/{self_review.sh,doc_gate.sh}、docs/architecture/frontend/ARCHITECTURE.md、docs/design/{ia-investment-research-platform,data-source,metric-dictionary}.md、docs/testing/index.md、docs/features.md、docs/authority.md、docs/index.md、docs/Changelog.md、plans/**
+
+## 2026-10-12 - Wave 0 平台契约完成（S0.1–S0.4 + 门禁修复），投研工作台主线进入 Wave 1
+
+- **执行方式**：worktree `.worktrees/research-platform-ia`（分支 `feat/research-platform-ia`，基线 `25a6371`）+ subagent-driven-development —— 每任务 = 派实现 subagent → review package → 任务评审 → 修复循环 → ledger 记账。**16 提交 / 4 修复轮 / 6 次评审**，无一条 finding 被静默丢弃
+- **Task 1 · S0.1**（`dfedcc8`）：5 篇 ADR `0009-content-view-separation` / `0010-polymorphic-watch-and-tags` / `0011-point-in-time-data-contract`（含两条机械保证）/ `0012-no-automated-order-placement` / `0013-reuse-existing-signal-infrastructure`（含"加 2 列复用、不建 `metric_series`"附带裁定）+ `decisions/index.md` 登记
+- **Task 2 · S0.2**（`1e29c6d`→`a687ffc`，5 提交 2 修复轮）：新建 `docs/design/ia-investment-research-platform.md` —— 10 导航总表（权限三态：公开 2 / `research:read` 1 / 待定 7）、子模块树逐条转录、顶栏工具（不含 `/calendar`）、**15 条既有路由全量迁移表（10 redirect + 5 保留）**、三层布局 + 左侧树数据驱动约束
+- **Task 3 · S0.3**（`38aaf46`→`8928dbe`，1 修复轮）：`docs/design/data-source.md` 追加 7 项数据源 × 四栏三态结论（**5 核实 + 2 `blocked-on-verification`** 且各附「去哪查/查什么字段/判断标准」）+ 19 条实机调用记录 + 与计划 §8 的逐项一致性对照
+- **Task 4 · S0.4**（`428eeb2`→`76f4053`，3 修复轮）：新建 `docs/design/metric-dictionary.md`（§4.1 两种徽标语义并**删除 `A股市场 18`** / §4.2 `metric_key` 命名 / §4.3 `publisher_tier` 与既有 `source_tier` 的区别 / §4.4 口径版本 / §4.5 五处模块边界 / §4.6 条件式兜底）+ 登记 `docs/authority.md`
+- **Task 4.5 · 门禁修复（计划外，依 AGENTS.md 自检第 5 条）**（`8ca6e6f`）：`scripts/self_review.sh` 两个真实缺陷 —— ① 路径采集用 `git status --porcelain | awk '{print $2}'`，重命名的第 2 列是**旧路径**，导致**纯 `git mv` 的 `backend/**.py` 被静默跳过 lint**（Task 4 实测发生）；② `:67` 失败提示的裸反引号被 shell 当命令替换、`<files>` 被当重定向，**ruff 真失败时脚本以语法错崩掉并截断提示**。修法：采集改为 `git diff --name-only HEAD` + `git ls-files --others --exclude-standard` + 原 merge-base..HEAD（两条文档化不变量实测保留，b/c/d 场景新旧集合经 `comm` 双向比对逐字节相同）；提示改为 `\`` 转义（同 `doc_gate.sh` 房内写法）
+- **事实更正（Ruling 19，由 Task 3 复核发现）**：此前主张的「陆股通持仓**绝大部分是内地资金借道香港**」**缺乏权威证据且可核量级相反**（兴业证券 2021-12 按港交所托管机构口径：中资托管 3.54% / 外资银行 78.8% / 外资券商 17.66%；证监会令第 200 号第十三条明文「沪股通和深股通投资者不包括内地投资者」）。已从 `docs/specs/S0-platform-contracts.md`、`docs/specs/S1-market-sentiment.md`、计划 §8.2 与 §11-B2 **共 4 处删除**，替换为三条均有官方出处的降级理由（名义持有人汇总账户 / 持仓主体不可拆分 / 季度低频率）；**结论与替代口径不变**（`可得但降级`、具名「陆股通持仓（季度）」、移入公司·股东股权）。Changelog 追加更正条目，既有条目未改
+- **口径一致性收尾（Ruling 22 / 28）**：计划 §11-B1 去掉与 spec「不建通用裁定队列」冲突的旧措辞；§11-C 的 `source_tier=official` → `publisher_tier=official`；spec §S0.4 的 `已策展数` 改引字典唯一定义、§4.2 命名示例换成已注册的 `sow_inventory`
+- **新增机械检查**：`backend/scripts/check_metric_dictionary.py` —— 比对字典 §4.2 样例表与 `industry_registry` 的 name/unit/freq，并对"已注册键误入提案表"做反查；已落入 `self_review`/pre-commit 的 `^backend/` ruff 面（**未接入执行面**，接入方案见 plans 遗留）
+- **遗留**：13 条 minor/deferred（记于 `plans/2026-10-12-investment-research-platform-ia.md` §13 与 SDD ledger）。**含一条合并期待办**：本分支取 ADR 0009–0013，与 `feat/market-hotspot-persistence`（active、其 Task 3 声明要建 `0014-market-derived-fact-persistence.md`）在**合并时**编号碰撞，需人类定夺由谁改号（**已于合并时解决**：对方 0009 改号为 **0014**，本分支 0009–0013 不动，`doc_gate [2/13]` 回绿）
+- 涉及文件：docs/decisions/0009–0013 与 index、docs/design/{ia-investment-research-platform,data-source,metric-dictionary}.md、docs/specs/{S0-platform-contracts,S1-market-sentiment}.md、docs/authority.md、docs/Changelog.md、plans/2026-10-12-investment-research-platform-ia.md、scripts/self_review.sh、backend/scripts/check_metric_dictionary.py
+
+## 2026-10-12 - 核对脚本移入 backend/scripts 并补 name/反查检查（Ruling 27）+ spec §4.1/§4.2 口径对齐（Ruling 28）
+
+- **背景**：Fix round 2 新增的核对脚本放在根 `scripts/` 下，**三层 lint 覆盖全无**（`scripts/self_review.sh` 的 `py_files()` 只认 `^backend/.*\.py$`；pre-commit 的 ruff hook 是 `files: ^backend/`；CI backend job 只跑 `ruff check app/ tests/`，唯一跑全目录的 job 是 auth-service），且 `ruff format --check` 未过
+- **Ruling 27（脚本）**：
+  - `git mv` 到 **`backend/scripts/check_metric_dictionary.py`**——**零新增门禁基建**即落入 `self_review` 与 pre-commit 的 ruff 面（实测 `self_review` 已打印 `✔ ruff check 通过 (scripts/check_metric_dictionary.py)`，`✔ ruff format --check 通过`）
+  - 跑 `ruff format`，`check` / `format --check` 均通过
+  - **补 name 列比对**（此前完全不查，故 Fix round 2 的 `hog_price` 名称那半无脚本保护）；**补反查断言**（已注册 key 若被错移进 5 列"新增提案"表 → 报出该 key 并非 0 退出）；补**覆盖面**报告（样例表 8 / registry 共 21，只报告不失败）
+  - docstring 修正：原写"必须在 backend/ 下跑"**不成立**（脚本自己 `sys.path.insert`，cwd 无关）；用法改为 `uv run --project backend python backend/scripts/check_metric_dictionary.py`
+  - **文档措辞降级**：`metric-dictionary.md` 的"可直接当门禁"→「**手动检查脚本（未接入门禁；接入方案见 deferred）**」，并写明它**不在** `self_review` / pre-commit / CI 的执行面内
+  - **未改** CI / `self_review.sh` / `.pre-commit-config.yaml`：把 ruff 执行面扩到 `backend/scripts/` 是**独立变更**（该目录既有 **4 个未格式化文件**，扩面会让 CI 因无关原因变红）→ **deferred**
+- **Ruling 28（spec 残留，因 §authority 新优先级"spec 优先于字典"而已升级为真冲突）**：
+  - `docs/specs/S0-platform-contracts.md:144` 的 `已策展数` 定义由「已人工策展/**建成完整体验**的条目数」改为引用字典 §4.1 的**唯一定义**（已有策展产物：registry 指标定义 / 行业页 / 榜单配置），并注明 `16` 的**数值**仍是 owner 标注、待数据侧核对
+  - 同文件 `:150` 把 `margin_financing_balance` 列为命名**示例** → 换成 registry 中真实存在的 `sow_inventory`，并明标 `margin_financing_balance` **属提案、尚未注册**（勿当既有 key 引用）
+- **deferred（本轮发现，未修，已留证据）**：
+  - ① CI 的 ruff 面从 `app/ tests/` 扩到含 `backend/scripts/`（扩面会暴露该目录 4 个既有未格式化文件）
+  - ② `scripts/self_review.sh` 的 `py_files()` 只取 `git status --porcelain` 的**第 2 列**（`awk '{print $2}'`），而 rename 条目的第 2 列是**旧路径** → **纯 `git mv` 一个 .py 时该文件会被静默跳过 lint**（本轮实测："无 backend Python 改动，跳过"，提交后才恢复命中）；修法是取最后一个字段或 `--porcelain -z` 解析
+  - ③ 同一脚本 `:58` 的 `fail "...（跑 \`uv run ruff format <files>\`）"` 里 `<files>` 被当作重定向 → 触发 `syntax error near unexpected token 'newline'`（仅在真失败时才现形；**未改**，属门禁脚本自身缺陷）
+- 涉及文件：backend/scripts/check_metric_dictionary.py（移动+增强）、scripts/check_metric_dictionary.py（删除）、docs/design/metric-dictionary.md、docs/specs/S0-platform-contracts.md、docs/Changelog.md
+
+## 2026-10-12 - 口径字典复核修正（Fix round 2）：样例表单位/频率对齐 registry、`caliber_version` 改回"待加"、`curated_count` 唯一定义 + 新增机械核对脚本
+
+- **背景**：`docs/design/metric-dictionary.md` 已被登记为口径权威，实现者会照它执行；复核逐条对代码后发现 **3 处 Important + 4 处 Minor**（无 Critical），全部为**可对代码证伪**的硬伤，属"抄错/写超"而非设计问题
+- **Important 1（样例表抄错 registry）**：§4.2「真实命名样例」表的 unit/freq 与 `industry_registry.py` 不符——`corn_price` 写 元/吨（实为 **元/kg**）、`piglet_price_15kg` 写 元/头（实为 **元/kg**，且与本文档规则 3 的示例自相矛盾）、`hog_corn_ratio` 写 比值/周（实为 `unit=""` / **daily**）。→ 该表**逐字重抄 registry**，并新增**可复跑核对脚本** [`scripts/check_metric_dictionary.py`](scripts/check_metric_dictionary.py)（逐行打印 文档 vs registry 的 unit/freq，不一致即非 0 退出；实测 `核对 8 行，MISMATCH 0 行`）。同时把 **未注册**的提案键（`margin_financing_balance` 等）从"已存在"表移入提案表——**把提案写成既有 key 会让实现者去找不存在的 `MetricDef`**
+- **Important 2（`caliber_version` 写成既成事实）**：§4.4 原写"列已按 ADR-E 附带裁定新增"，但 `grep -rn "caliber_version" backend/app/` **无命中**、`industry_metrics` 无该列、`T1.2` 仍是未勾选。→ 改为「**该列当前不存在、待加**（Wave 1 / T1.2，依据 ADR 0013 附带裁定与 spec §S0.1，以"待应用"呈现）」
+- **Important 3（Ruling 24：`curated_count` 两个定义 + 依据 3 被代码反驳）**：`:25` 定义"registry 注册数"、`:37` 又定义"已建成完整体验"，同名两度量；且"依据 3"称 registry 行业数 = `curated_count`，代码实为 **2**（`INDUSTRIES` = `pig` / `broiler`）。→ ① **唯一定义**收敛到 §4.1 一处（"已有**策展产物**：registry 指标定义 / overlay 种子 / 策展摘要 / 行业页 / 榜单配置"），删除"完整体验"这类不可判定表述 ② 新增**「语义归类已定 vs 数值待核」**小节：`16` / `3` 的**语义**归 `curated_count`（本次裁定），但**数值是 owner 图上标注、尚未与数据侧核对**（今日实测 **2**，与 16/3 均不符），并给出可复跑核对命令 ③ 明文禁止把未核对数字写成已核实事实
+- **Minor 4**：上一条 Changelog 的"仅剩 3 处被更正对象的引用"实测为 **4 行**（该 bullet 自身内嵌了 grep 表达式）→ 更正为 4 行并注明构成
+- **Minor 5**：§4.6 表头原标"既有实现（`ConceptMember`）"，但 `unresolved_count` **不是** `ConceptMember` 的列 → 改归属为 **API/schema 聚合**（`schemas/concept.py` 响应字段 + `repositories/concept_repo.py` 的 `count(*) FILTER (WHERE cm.stock_id IS NULL)`），并标出 `concept.py:64/66` 的列定义出处
+- **Minor 6（Ruling 26）**：spec §S0.4 与 plan §11-A 仍把 `A股市场 18` 列为**未决复核项**，与已按 Ruling 4 判为删除冲突 → 两处补「**已按 Ruling 4 裁定删除**」并指向 `metric-dictionary.md` §4.1（plan 只改这一句）
+- **Minor 7（Ruling 25）**：`docs/authority.md` 该行把字典标成唯一权威、却把 `plans/` 列入"勿用"，与字典自己"冲突以 spec 为准"矛盾 → 权威列改为「`specs/S0-platform-contracts.md` §S0.4（契约）+ `design/metric-dictionary.md`（落地细则，**冲突以 spec 为准**）」
+- **边界**：§4.3 / §4.5 / §4.6 的实质裁定与 Ruling 19 四处更正**未动**（复核已确认正确）
+- 涉及文件：docs/design/metric-dictionary.md、scripts/check_metric_dictionary.py（新建）、docs/specs/S0-platform-contracts.md、plans/2026-10-12-investment-research-platform-ia.md、docs/authority.md、docs/Changelog.md
+
+## 2026-10-12 - 事实更正（陆股通持仓降级理由）+ S0.4 命名与口径字典落册（Wave 0 收尾）
+
+- **事实更正（Ruling 19，仅更正理由，结论与替代口径不变）**：原主张「陆股通持仓（香港中央结算）**绝大部分是内地资金借道香港**」**缺乏权威证据**，且 Task 3 可核到的量级指向相反（兴业证券 2021-12 按港交所「托管机构」口径拆分北向持股：中资机构托管 **3.54%** / 外资银行 78.8% / 外资券商 17.66%，并引证监会口径"假外资"成交占比约 **1%**；**证据层级 = 卖方研报/媒体转引、2021-12 单源、非官方统计**，时点亦早于 2024-08-19 机制）
+- **现理由（三条，均有官方出处，与 [`docs/design/data-source.md`](design/data-source.md) 附.1② 一致）**：① 香港中央结算是**名义持有人汇总账户**（[HKEX Stock Connect FAQ](https://www.hkex.com.hk/-/media/HKEX-Market/Mutual-Market/Stock-Connect/Getting-Started/Information-Booklet-and-FAQ/FAQ/FAQ_Cn.pdf) Q2.38–Q2.41），单一股东名册条目 = 全部沪深股通投资者合计；② **持仓主体不可拆分**——既不是单一外资机构，也无法从中拆出任何借道部分；③ **季度低频率**（每季度第 5 个沪深股通交易日披露上季末单只证券合计持有数量）。旁证：[证监会令第 200 号](https://www.gov.cn/gongbao/content/2022/content_5705841.htm) 第十三条第一款「沪股通和深股通投资者**不包括内地投资者**」（2022-07-25 施行，存量 2023-07-24 后只能卖出）
+- **结论不变**：仍为 `可得但降级`，仍具名「陆股通持仓（季度）」，仍移出「外资画像」、降级进公司/股东股权视图
+- **更正落点（4 处）**：`docs/specs/S0-platform-contracts.md` §S0.3 表第 2 行 · `docs/specs/S1-market-sentiment.md` §S1.7「不做什么」 · `plans/2026-10-12-investment-research-platform-ia.md` §8.1 表 + §11-B2 定案列。全文 `grep -rn "内地资金借道\|借道香港" docs/ plans/` 再无**作为理由使用**该表述的位置；命中 **4 行，全部为被更正对象的引用**：`docs/design/data-source.md` 2 行（附.1② ⚠ 更正注 + 附.3 一致性对照表，Task 3 的一手依据，按设计保留不动）+ 本条 Changelog 2 行（含本行内嵌的检查表达式）
+- **S0.4 交付物落地**：新建 [`docs/design/metric-dictionary.md`](design/metric-dictionary.md)（六节 §4.1–§4.6）——① **两种徽标语义** `已接入数 ingested_count`（29/5/9/31）vs `已策展数 curated_count`（行业看板 3）；按 **Ruling 4 删除 `A股市场 18` 徽标**（与展开后 5 子节点、`主要指数 9`、`行业分类（申万）16` 均对不上，owner 未给语义，不允许以"大概是个数"存在）；`行业分类（申万）16` 定为 **`curated_count`**（数的是"申万一级中已策展的行业数"，不是分类总数 31；与同钻取路径的 `行业看板 3` 同语义，且与 spec §4.1 落位一致）② `metric_key` 命名 5 条规则 + 真实 registry 样例（`hog_price` / `sow_inventory` / `piglet_price_15kg`…）+ 落册提案（`idx_turnover_ratio_sse` / `erp_10y` / `reverse_repo_7d_rate` / `fr007` / `fdr007` / `northbound_holdings_quarterly`），并明说既有 `company.*` 带点键属兼容遗留、新键一律只用下划线 ③ `publisher_tier`（`legal`/`official`/`sellside`/`media`，回答"**谁发布的**"）与既有 `industry_metrics.source_tier`（`official`/`highfreq`/`calc`/`manual`/`derived`，回答"**指标怎么来的**"）的逐项区别 + 5 条判例（含"两层恰好同值但问题不同"与"派生项 `publisher_tier` 不适用"）④ 口径版本：`caliber_version` + 断点标记 + 4 条硬性约束，已知案例 M1（2024-12 修订、2025-01 起纳入个人活期存款 + 非银支付机构客户备付金）⑤ 模块边界 5 处裁定（涨跌分布归情绪 / 资金流计算归一处按维度取数 / 龙虎榜大宗为资讯原料 / 价值分配与利润流向合并 / `标的分类` 拆为关注池 + 资产类型）+ 共性判据"口径与计算各只有一个所有者，视图可任意多" ⑥ 兜底规则写成**条件表达式**（`该实体在目标分类体系中无有效归类`，**无日期常量**），引用 `backend/app/models/concept.py:3-5` 的既有代码事实（稳定业务键 + 外键可空 + `unresolved_count` 外露 + overlay 人工覆盖优先，ADR 0005），并明确**不建**"服务 4 个消费方的通用人工裁定队列"（Wave 3+ 之事）
+- **口径一致性收尾（3 处）**：① 计划 §11-B1 原措辞把兜底模式推广为服务多消费方的通用队列，与 spec §4.6 / 本字典 §4.6 **直接冲突** → 改为「**不建**通用裁定队列；各分类场景**复用既有模式**（稳定业务键 + 可空外键 + 缺失量外露）」，三个落点链接（S0.4 §4.6 / S3.5 / S4.12）保留 ② 计划 §11-C 的列名**误用 `source_tier` 承载 official**（该列描述"指标怎么来的"）按本字典 §4.3 更正为 **`publisher_tier`**（描述"谁发布的"），与 §4.5 ③ 的表述对齐 ③ 本字典登记进 [`docs/authority.md`](authority.md) 新增「命名与口径」权威行（权威文件 = 本字典；勿用列 = 勿在 `architecture/` 或 `plans/` 重复定义口径）
+- 涉及文件：docs/design/metric-dictionary.md、docs/specs/S0-platform-contracts.md、docs/specs/S1-market-sentiment.md、plans/2026-10-12-investment-research-platform-ia.md、docs/Changelog.md
+
+## 2026-10-12 - 计划评审修正（ponytail）：新增表 16→8，删规则 DSL / 删 action 层 / 缩 Wave 1.5
+
+- **背景**：对同日登记的投研工作台主线计划做「先爬梯子」评审，发现**初版是它自己批判的对象**——主张复用却复制了 4 张既有表，还引入一个解析器去解决 0 个当下问题
+- **四处复制品（全部改为加列复用）**：
+  - `app/models/industry_research.py:30` 的 `industry_metrics` **已经是**统一指标表（`industry_key/stock_id + metric_key + source + source_tier + freq + period + value + unit + extra` + 6 列唯一键 + 2 索引）；原方案要新建 `metric_series`（只多 2 个字段）→ 改为**加 `published_at` / `caliber_version` 两列**，读 API 与徽章复用既有
+  - 同文件 `:102` 的 `industry_signals` 注释即 *"rules engine output history"*，`basis` JSONB 就是证据链；原方案要新建 `signals` → 改为**加 4 列**（`rule_key/rule_version/confidence/severity`）+ 唯一键扩为 `(industry_key, rule_key, effective_date)`
+  - `app/services/cycle_engine.py` 已跑通「纯函数规则 + 阈值进 registry」并明写 *"阈值调整应改 registry 而非本文件逻辑"*；原方案要引入**文本 DSL + 解析器** → **删 DSL**，规则=纯函数、阈值=registry
+  - `app/models/feature.py` 的 `stock_features` 已物化 `return_percentile/max_drawdown/trend_slope` 等（按 `asof_date` 分区）；原方案要建通用 transform 引擎 `factor_defs` → **删表**，复用物化模式
+- **其他删减**：删 `action` 层（ADR-D 已裁定不下单 → "动作"= 通知 + 待办，与 `alerts` 同路径，不建只有一个实现的接口）；删 `backtest_events`（逐笔明细读时 join 即得）；删 `graph_nodes`（节点已是 `stocks`/`sw_industry`/`industry_knowledge` 的行）；删 `content_metrics` 与 `extracted JSONB` 的双写（JSONB 只留 LLM 原始输出）；**事件日历从"地基"降级推迟到 Wave 3**（Wave 1 零消费方）；不预先发明 `strategy:write`/`risk:write`/`trade:write` 权限 scope
+- **命名冲突修正**：新增的发布主体分层原用 `source_tier`，但 `industry_metrics.source_tier` 已被占用（`official|highfreq|calc|manual|derived`，描述**指标怎么来的**）→ 改名 **`publisher_tier`**（描述**谁发布的**），避免同名不同义让 `grep` 与 review 双双失效
+- **事实纠正（B1 的依据）**：原计划以为 owner 图上"2026年5月以后上市的公司"是硬编码业务规则；实际 `app/models/concept.py:3` 写着 *"`stocks` 名录会滞后（**实测冻结在 2026-05-08**，66 只新上市股票缺行）"* ——**同一个日期**，owner 描述的是真实数据陈旧度。而仓库已有更省的解法（`symbol` 业务键 + 可空 `stock_id` + `unresolved_count` 外露）→ S3.5 收缩为**只服务资讯模块**，不做"服务 4 个消费方的通用裁定队列"
+- **量化结果**：新增表 **16 → 8**；Wave 1.5 由 **6 spec → 4 spec**（S2.1 因子不建表 / S2.2 复用 `industry_signals` / S2.3 最小回测 / S2.4 提醒）；spec 总数 **59 → 57**；地基 **6 → 5 真 + 1 推迟**
+- **保留不动**：10 导航 IA · 依赖倒序 · F1 原料视图分离 · F3 PIT 及**两条机械保证**（信号 `published_at ≤ as_of` 护栏 + 回测「披露日 vs 报告期」对照实验）· F4 多态关注池 · 13 条旧路由 redirect · `source_span` 溯源与抽取一致率 ≥95% 门槛
+- **新增防复发机制**：`docs/specs/README.md` 通用约束新增第 0 条「**先爬梯子**」+ 7 行"已有资产 → 不要重复造"清单（`industry_metrics`/`industry_signals`/`cycle_engine`/`industry_registry`/`stock_features`/`concept.py`/前端原语）；主线计划 §1.1 同表补录；§2 非目标新增 6 条"不做"
+- 涉及文件：plans/2026-10-12-investment-research-platform-ia.md、docs/specs/README.md、docs/specs/S0-platform-contracts.md、docs/specs/S1-market-sentiment.md、docs/specs/S2-signal-engine.md、docs/specs/S3-content.md、docs/Changelog.md
+
+## 2026-10-12 - 规格拆分：新建 docs/specs/ 规格层（59 spec）+ 主线计划四项阻塞定案
+
+- **背景**：`plans/2026-10-12-investment-research-platform-ia.md` 只回答"做什么、按什么顺序"，缺每个模块的契约与验收判据；且其 §11 的 4 项待拍板阻塞 Wave 0
+- **新建规格层** `docs/specs/`（与 `plans/` 排期、`architecture/` 当前态、`decisions/` 为什么 分工）：
+  - `README.md` — 编号规则（文件 `S<交付序>-<主题>`、条目 `S<序>.<n>`，**交付序 ≠ Wave 号**：Wave 1.5 在交付序里是 S2）· spec 模板 · **验收判据三类**（数据契约 / 行为 / 门禁，每类必须可机械核对，禁止"体验流畅"式描述）· **跨 spec 通用约束 8 条**（原料视图分离 / 禁止平行实现 / 数据徽章 / 可溯源 / PIT / 口径变更标注 / QUEUES 注册 / 不做项）· **全量 59 spec 目录表**
+  - `S0-platform-contracts.md` — Wave 0 无业务代码：**5 篇 ADR 的完整内容**（原料视图分离 · 多态关注与标签 · PIT 时点数据 · 不做自动下单 · 信号引擎为跨模块基础设施，含 `metric_series` 与 `industry_metrics` 收敛方案二选一）+ **10 导航路由表与 13 条旧路由 redirect 契约**（一条都不能删）+ 7 项数据源三态复核 + 命名与口径字典
+  - `S1-market-sentiment.md` — Wave 1（14 spec）：`metric_series` 统一时序表（含 `published_at` PIT 列与硬性约束）· 全球标的代码映射（**修正纳斯达克综合指数 NDX 串号**）· 行业分类钻取（SCD2 + 补成交额）· 热力图（对标 iFinD）· A 股排行 · **资金流四件套替代北向** · 情绪 7 组指标
+  - `S2-signal-engine.md` — Wave 1.5 拱心石（6 spec）：`factor_defs`（纯函数）· **规则 DSL**（阈值/分位/拐点/交叉/事件/表达式，**时点由引擎注入，表达式无法指定 → 结构性防未来函数**）· `signals` 证据链 · **事件研究回测（PIT 强制 + 样本切分强制 + 退市股不剔除）** · 提醒订阅 · `action` 层接口（append-only 审计，含"应触发未触发"留痕）
+  - `S3-content.md` — Wave 2 资讯地基（7 spec）：内容事实层四表（**用户状态必须归用户维度，不得写在事实行**）· 公告/快讯采集 · **LLM 抽取管线（`source_span` 原文定位必填，一致率 ≥95%）** · 人工裁定队列（人工终态优先于自动）· 资讯视图层 · 「有效研报」三条判据
+- **四项阻塞定案**（owner 采纳建议，落点见 S0.4）：**A** 徽标区分 `已接入数`/`已策展数`（`A股市场 18` 列复核项）· **B1** 「其他分类」兜底**改为动态规则不硬编码日期**并推广为通用人工裁定队列 · **B2** 外资画像**换口径**为资金流四件套（ETF 份额+两融+产业资本+南向），「外资画像」改名「陆股通持仓（季度）」并降级 · **C** 模块边界五处裁定（涨跌分布归情绪 / 资金流计算归一处 / 龙虎榜为资讯原料 / 价值分配与利润流向合并 / `标的分类` 拆为关注池+资产类型）
+- **渐进明细**：S0–S3（Wave 0/1/1.5/2）写详细契约，S4–S7（Wave 3–6）为 `catalog-only`，**启动前一周才细化**——Wave 1 的数据事实底座未落地前，Wave 5 的因子契约必然返工
+- **识别出两个 PIT 的机械保证**（本计划可信度的基石）：`signals.evidence` 中每个引用的 `published_at` 必须非空且 ≤ `as_of`（违反则信号不生成并告警）；回测须构造「用披露日 vs 用报告期」的**对照实验**并产生显著差异（差异为 0 即证明 PIT 未生效）
+- **文档系统扩展**：`docs/index.md` 分层表新增「规格」层 + 变更写哪里新增规格行；`docs/authority.md` 新增"投研平台模块契约与验收判据"权威行
+- 涉及文件：docs/specs/README.md、docs/specs/S0-platform-contracts.md、docs/specs/S1-market-sentiment.md、docs/specs/S2-signal-engine.md、docs/specs/S3-content.md、plans/2026-10-12-investment-research-platform-ia.md、plans/index.md、docs/index.md、docs/authority.md、docs/Changelog.md
+
+## 2026-10-12 - 计划登记：投研工作台信息架构与数据模型主线（10 导航 · 6 地基 · 8 Wave）
+
+- **背景**：owner 给出 10 张手绘思维导图（市场 / 资讯 / 行业分析 / 公司分析 / 宏观分析 / 情绪分析 / 价值网图谱 / 策略引擎 / 风险管理 / 交易执行）+ 6 轮对齐讨论，指出当前产品"还不是一个优秀的投研产品"。代码实测基线：一级导航只有 5 个 tab（`frontend/src/app/layouts/MainLayout.tsx:18-22`），10 个模块里只有"市场 + 半个行业"；关注模型是两套硬绑 `symbol` 的表（`app/models/stock.py:16` 的 `stock_user_tags` + `app/models/watchlist.py` 的 `user_watchlists`/`user_watchlist_items`）；数据形态以数值型为主，缺**文本事件 / 多态关注 / 时点数据**三类新形态与**信号引擎**一类新计算基建
+- **产出**：`plans/2026-10-12-investment-research-platform-ia.md`（10 张图结构逐条转录 → 10 导航 × 子模块 × 依赖表；提炼 **6 个横切地基**：F1 原料/视图分离 · F2 指标→因子→信号→回测→触达(action) 引擎 · F3 PIT 时点数据 · F4 多态关注池与标签 · F5 事件日历 · F6 传导图；**原料→视图映射表**（10 张图自证 6 处同源）；**8 个 Wave 的依赖倒序路线图**；明确不做清单与数据源风险替代口径），并登记 `plans/index.md`
+- **已拍板决策（记入计划 §12）**：① 自选/标签采用**方案 A**——合并为多态 `tag` + `user_target_tag`，一级导航保持 10 个纯净，落为顶栏全局工具 + `/me` 工作台；② 实施顺序**依赖倒序**——市场/情绪 → 资讯 → 行业/公司/宏观 → 价值网 → 策略 → 风险/交易；③ 原料/视图分离确立；④ 图上 4 条蓝色批注升格为全局产品原则（时序性 · 摘要性 · 可对比性 · 可溯源性）
+- **实测纠错（写入计划 §3.4 / §8）**：图1 `纳斯达克综合指数` 与 `纳斯达克100` 都标 NDX（综合应为 IXIC）；**北向资金被 2 处依赖而每日数据已取消**——2024-05-13 取消盘中实时、2024-08-19 取消每日净买入并改按季度披露持股，替代口径为 ETF 份额变化 + 两融 + 产业资本增减持 + 南向；图上 `资金利率` 缺 **7 天 OMO**（2024-07 后 MLF 地位弱化，OMO 成为主要政策利率）；M1 口径 2024-12 修订（2025-01 起纳入个人活期存款 + 非银备付金）造成历史断点，须标 `口径版本`
+- **阻塞**：计划 `status: draft`，阻塞于 §11 的 4 项待拍板（7 个徽标数字口径 / `2026年5月` 时点语义 / 外资画像替代口径 / 模块边界三处），拍板后启动 Wave 0（5 篇 ADR + IA 与路由表冻结）
+- 涉及文件：plans/2026-10-12-investment-research-platform-ia.md、plans/index.md、docs/Changelog.md
+
 
 ## 2026-10-12 - 修复「点个股后按返回键回不到原界面」：Market 分类 Tab 改为 URL 状态 + 错误边界随路由重置
 
@@ -135,7 +771,7 @@
 - **T4 遗留**：`backfill_market_history.py` 的逐日 `db.commit()` 移入当日 `try`（两个域）——提交失败此前会冒泡出 `run_backfill` 让整段回补崩掉，与脚本承诺的 per-day 隔离矛盾；新增 `test_backfill_survives_a_failing_commit` / `test_backfill_stock_survives_a_failing_commit`（假 session 第 2 天 commit 抛错 → 该日 `error` + rollback，后一天照跑）
 - **活链路验证（闭环 Task 7 声明的缺口）**：不重建共享 Docker 栈，用本 worktree 的临时 `uvicorn`（127.0.0.1:8099，连本地 PG 5433 / Redis 6380）：`GET /api/v1/market/sentiment/trends?days=250` → **200**（`samples=239`，`zt_count` p50 76 / `broken_rate` p50 0.2921 / `promo_1to2` p50 0.1591，`zt_above_median_days=119`）；`GET /api/v1/market/sector-trends?dimension=industry&days=60&top_n=20` → **200**（`available_from=null`、`attribution=current_sw_snapshot`、`window={days:60,observed_days:20,samples:0}`、`missing_days` 20 天）；`GET /api/v1/market/hot-boards?category=industry` → **200**（`source=eastmoney_boards`、items 10）；`GET /api/v1/market/data-freshness` → **200**（`coverage` 8 域，`sector_moneyflow complete_days=0` 如实）。**环境注意**：该端点经 `apply=False` 仍会构造 TuShare client，故 `TUSHARE_TOKEN` 为空时 **500**（`ValueError: TuShare token is required`）—— 这是环境依赖不是回归，验证时用 `backend/.env` 的 token。进程已杀并证明端口空闲（`netstat … | grep "\.8099 "` 无输出、`lsof` 无监听、curl 连接被拒）
 - **门禁**：全量 **811 passed / 67 deselected / 0 failed**（基线 806 + 5 条新用例）；`ruff check` + `ruff format --check` + `mypy app` + `npx tsc --noEmit` + `npm run build` + `bash scripts/self_review.sh --full`（**免手工 export `UV_CACHE_DIR`**）绿；新 e2e 6 passed、既有五个 market spec **38 passed 零回归**
-- 涉及文件：docs/architecture/database-architecture.md、docs/decisions/0009-market-derived-fact-persistence.md、docs/Changelog.md、plans/2026-10-12-market-hotspot-persistence-and-trends.md、plans/index.md、scripts/self_review.sh、backend/app/schemas/market_data.py、backend/app/services/reconciliation_service.py、backend/app/services/market_data_service.py、backend/app/services/limit_up_service.py、backend/app/repositories/market_data_repo.py、backend/scripts/backfill_market_history.py、backend/tests/test_market_coverage.py、backend/tests/test_sector_trends.py、backend/tests/test_limit_up_stock_daily.py、backend/tests/test_backfill_market_history.py、frontend/src/shared/api/limitUp.ts、frontend/src/shared/api/marketData.ts、frontend/src/features/market/components/SentimentThermometer.tsx、frontend/src/features/market/components/SectorMoneyflowCard.tsx、frontend/e2e/marketTrends.spec.ts
+- 涉及文件：docs/architecture/database-architecture.md、docs/decisions/0014-market-derived-fact-persistence.md、docs/Changelog.md、plans/2026-10-12-market-hotspot-persistence-and-trends.md、plans/index.md、scripts/self_review.sh、backend/app/schemas/market_data.py、backend/app/services/reconciliation_service.py、backend/app/services/market_data_service.py、backend/app/services/limit_up_service.py、backend/app/repositories/market_data_repo.py、backend/scripts/backfill_market_history.py、backend/tests/test_market_coverage.py、backend/tests/test_sector_trends.py、backend/tests/test_limit_up_stock_daily.py、backend/tests/test_backfill_market_history.py、frontend/src/shared/api/limitUp.ts、frontend/src/shared/api/marketData.ts、frontend/src/features/market/components/SentimentThermometer.tsx、frontend/src/features/market/components/SectorMoneyflowCard.tsx、frontend/e2e/marketTrends.spec.ts
 
 ## 2026-10-12 - 前端消费两个统计端点：情绪历史分位 chip + 板块连续性 chip（计划 Task 7）
 
@@ -189,7 +825,7 @@
 - **修复轮 2（评审 Important #2）**：E2 窗口守卫的单测替身改为**真的读它收到的参数**（`fake_missing` 按收到的 `dates` 求交并记录 spy；true/false 两例都断言收到**整段窗口**）。**变异验证**：把实现回退成 `missing_price_limit_dates(db, [as_of])`（E2 要防的那个 bug）→ `test_window_limits_complete_true_*`（spy 只见 `[as_of]`）与 `..._false_when_any_window_day_lacks_limits`（返回 True）双双变红；还原后逐字复现、4 例转绿
 - 涉及文件：backend/scripts/backfill_market_history.py、backend/app/services/limit_up_service.py、backend/app/repositories/limit_up_repo.py、backend/tests/test_backfill_market_history.py、backend/tests/test_persist_snapshot_cache.py、plans/2026-10-12-market-hotspot-persistence-and-trends.md、docs/Changelog.md
 
-## 2026-10-12 - 覆盖率只读巡检 + ADR 0010（计划 Task 3）
+## 2026-10-12 - 覆盖率只读巡检 + ADR 0014（计划 Task 3；合并时由 0009 改号）
 
 - **修复轮 1（评审 Important #1/#2）**：① `degraded_trading_calendar` 语义改为 **「并集提供了主源缺失的交易日」**（`union_days != primary_days`，并保留主源表不可用时的 true）——只判「表是否存在」会漏掉真实状态：主源在库但缺日、由 `stock_price_limits` 补上时分母口径已经变了却标 ok；② **测量窗口末端统一锚定交易日历末日**（不再是各域自己的 `last_day`）：旧口径下 `dragon_tiger`/`block_trade` 分母被夹成 16、`cover_pct` 虚高 100.0 且把 2026-10-09 的洞夹掉，整域停更的域更会退化成「单日 100%」；新口径下两者为 `17` / **94.12** / 缺 `2026-10-09`（`repurchase` 报出 `09-09`）。同时把 `extra_days` 的文档与判定改准（**窗口外 ≠ 脏行**：当日盘前/盘中写下的 `poll`/盘中行只要落在窗口外就会出现在这里），补「整域停更」构造证据用例（同一桩数据并排断言旧口径 100% vs 新口径 33.33%）与真库 `@e2e` 反例；计划/`docs/features.md` 的分母口径文字同步改为「并集 + 窗口末端锚定日历末日」
 
@@ -197,8 +833,8 @@
 - **`compute_coverage(trading_days, have_days, complete_days=None, *, window=None)`**（纯函数）：分母恒为 `daily_quotes` **交易日**、逐域收窄到该域自身 `[first_day, last_day]`；`have_days`（有任何行）与 `complete_days`（完整日）**并排返回**，`cover_pct` 基于 `complete_days`，分母为 0 → `None`（绝不 0/0）；窗口外/非交易日的未来脏行进 `extra_days` 而非被静默丢弃
 - **`coverage_report(db, *, window_days=30)`（只读聚合）**：逐域查询包在 SAVEPOINT 里，缺表/缺列（`42P01`/`42703`，迁移未应用）→ 该域标 `missing_table`/`missing_column` 并继续渲染其余域（**不 500**）；域 → (表, 业务日期列) 唯一真源 `_COVERAGE_SOURCES`（`share_floats.float_date` / `stock_repurchases.ann_date` 逐域实测确定）；`sector_moneyflow` 单独查 `capture_kind='eod_full'` 得"完整日"（Ruling 13）。**不登记 `job:failures`**：本函数由只读端点每次请求调用，登记表 1 job 1 条，会被巡检刷成假告警
 - **`DataFreshnessOut` +`coverage: list[CoverageOut]`（加字段，缺省空列表）**：响应模型随覆盖率行模型迁到 `app/schemas/market_data.py`（避免 market_data ↔ reconciliation 循环导入），`app/schemas/reconciliation.py` 保留同名 re-export（旧导入路径不断，`is` 恒等有测试守卫）；`/market/data-freshness` 仍 `apply=False`，覆盖率整体失败只回空列表（加法，不反噬新鲜度巡检）
-- **ADR 0010**（`docs/decisions/0009-market-derived-fact-persistence.md` + index 登记）：① A/B/C 三条判据（A 不可回补必当天落 / B 可回算可回补需窗口守卫 / C 快照型分类不得回算、只能聚合 + 显式标注）；② 与 ADR 0004 的边界（0004 管"快照型分类数据本身"，**不禁止**用行情事实聚合 + 按当前分类归属 + 标注 `current_sw_snapshot`）；③ 被否决方案（全读时计算 / 全落库含榜单 / 5 分钟全池明细 / 巡检域塞进补漏循环）；④ **产地决定可信度**：`eod_full` 才算完整日，`poll` 只是盘中子集
-- 涉及文件：backend/app/services/reconciliation_service.py、backend/app/schemas/market_data.py、backend/app/schemas/reconciliation.py、backend/app/api/v1/market_data.py、backend/tests/test_market_coverage.py、backend/tests/test_data_freshness_api.py、docs/decisions/0009-market-derived-fact-persistence.md、docs/decisions/index.md、docs/features.md、docs/Changelog.md
+- **ADR 0014**（`docs/decisions/0014-market-derived-fact-persistence.md` + index 登记；合并时由 0009 改号，见 Ruling 52 记录）：① A/B/C 三条判据（A 不可回补必当天落 / B 可回算可回补需窗口守卫 / C 快照型分类不得回算、只能聚合 + 显式标注）；② 与 ADR 0004 的边界（0004 管"快照型分类数据本身"，**不禁止**用行情事实聚合 + 按当前分类归属 + 标注 `current_sw_snapshot`）；③ 被否决方案（全读时计算 / 全落库含榜单 / 5 分钟全池明细 / 巡检域塞进补漏循环）；④ **产地决定可信度**：`eod_full` 才算完整日，`poll` 只是盘中子集
+- 涉及文件：backend/app/services/reconciliation_service.py、backend/app/schemas/market_data.py、backend/app/schemas/reconciliation.py、backend/app/api/v1/market_data.py、backend/tests/test_market_coverage.py、backend/tests/test_data_freshness_api.py、docs/decisions/0014-market-derived-fact-persistence.md、docs/decisions/index.md、docs/features.md、docs/Changelog.md
 
 ## 2026-10-12 - 板块快照：`/market/hot-boards` 改读当日表 + 补 2 列 + 当日 EOD/补写（计划 Task 2）
 

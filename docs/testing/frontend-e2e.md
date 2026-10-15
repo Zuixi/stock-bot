@@ -29,7 +29,7 @@ E2E_BASE_URL=http://localhost npx playwright test
 **投研用例（`research`）必须用具 `research:read` 的账号真登录**：`/api/v1/industries*` 需该权限（[ADR 0008](../decisions/0008-research-read-requires-permission.md)），而**自注册账号拿不到它**（注册固定给 `trader`，仓里也没有分配角色的接口），所以只 mock `/auth/session` 或临时注册都行不通——没真 cookie/真权限时接口 401/403 会触发全局清态，用例必然失败。凭据由环境变量注入，缺失则该 spec 整体跳过：
 
 ```bash
-# 一次性准备（ADR 0010 邀请制：注册已关闭，账号经 admin API/控制台开户）
+# 一次性准备（ADR 0015 邀请制：注册已关闭，账号经 admin API/控制台开户）
 #   1) 引导首个 admin（幂等，不重置密码）：
 #      docker compose run --rm -e ADMIN_BOOTSTRAP_PASSWORD=... auth-service \
 #        python -m app.cli bootstrap-admin --username e2e_admin --email e2e_admin@example.com

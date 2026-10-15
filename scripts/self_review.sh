@@ -4,7 +4,8 @@
 # 被 AGENTS.md「完成前自检门禁」引用，并挂进 .pre-commit 兜底。
 #
 # 用法（在仓库根目录执行）：
-#   bash scripts/self_review.sh            # 快检：空白/冲突 + 改动文件 ruff(check+format) + 文档同步告警 + doc_gate
+#   bash scripts/self_review.sh            # 快检：空白/冲突 + 改动文件 ruff(check+format) + 文档同步告警
+#                                          #       + doc_gate + **check:routes（路由迁移门禁，前端脚本，读清单与 IA 文档）**
 #   bash scripts/self_review.sh --full     # 全量：快检 + 后端 mypy/pytest + 前端 tsc
 #
 # 退出码：0 = 通过；1 = 有硬性未过项（空白/ruff/mypy/test/tsc）。
@@ -37,12 +38,18 @@ warn() { echo "  ⚠ $*"; }
 fail() { echo "  ✘ $*"; fails=$((fails + 1)); }
 
 # 采集本次改动文件（含未跟踪新文件；路径含空格的项目不适用，本项目路径无空格）
-# 两个来源合并：① 工作区（含暂存/未跟踪）；② 已提交但未进 origin/main 的提交。
-# ② 不可省：只跑工作区时，「先 commit 再跑 self_review」会得到空改动集而整段跳过 lint，
+# 三个来源合并：① 工作区（暂存+未暂存）；② 未跟踪新文件；③ 已提交但未进 origin/main 的提交。
+# ① 必须用 `git diff --name-only HEAD`，**不要**退回 `git status --porcelain | awk '{print $2}'`：
+# 重命名在 porcelain 里是 `R  旧路径 -> 新路径`，$2 取到的是**旧路径** → 新路径进不了改动集，
+# 纯 `git mv` 一个 .py 就被静默跳过 lint（实测漏过 scripts/check_metric_dictionary.py →
+# backend/scripts/ 那次搬迁）；旧路径若仍匹配 ^backend/ 更糟 —— 会去 lint 一个已不存在的文件（E902）。
+# ② `--exclude-standard` 与 porcelain 默认一致（未跟踪且未被 .gitignore 忽略）。
+# ③ 不可省：只跑工作区时，「先 commit 再跑 self_review」会得到空改动集而整段跳过 lint，
 # 实测就这么漏掉了 app/services/concept_service.py 的 ruff format 违规 → 本地全绿、CI 必红。
 CHANGED=$(
-  { git status --porcelain --untracked-files=all 2>/dev/null | awk '{print $2}'
-    git diff --name-only "$(git merge-base origin/main HEAD 2>/dev/null)"..HEAD 2>/dev/null
+  { git diff --name-only HEAD 2>/dev/null                                   # ① 暂存+未暂存（重命名报新路径）
+    git ls-files --others --exclude-standard 2>/dev/null                    # ② 未跟踪新文件
+    git diff --name-only "$(git merge-base origin/main HEAD 2>/dev/null)"..HEAD 2>/dev/null  # ③ 已提交未推
   } | grep -v '^$' | sort -u
 )
 py_files() { printf '%s\n' "$CHANGED" | grep -E '^backend/.*\.py$'  | sed 's#^backend/##'; }
@@ -68,7 +75,10 @@ if [ -n "$PY" ]; then
   if (cd backend && uv run ruff check $PY); then ok "ruff check 通过 (${PY//$'\n'/ })"; else fail "ruff check 未通过"; fi
   # CI 同时跑 `ruff format --check app/ tests/`（见 .github/workflows/ci.yml）；只跑 check 会让
   # 未格式化的改动本地全绿、CI 必红，故这里一并按同一口径校验改动文件。
-  if (cd backend && uv run ruff format --check $PY); then ok "ruff format --check 通过"; else fail "ruff format --check 未通过（跑 `uv run ruff format <files>`）"; fi
+  # 下面这条提示里的反引号必须转义：写进双引号串的裸 `...` 会被当命令替换、<files> 会被当重定向
+  # → ruff format 真失败时反而以 syntax error 崩掉、提示被截断成「（跑 ）」（实测），与这行的
+  # 目的（给出该跑的修命令）完全相反。同 doc_gate.sh 的写法，反引号一律用反斜杠转义。
+  if (cd backend && uv run ruff format --check $PY); then ok "ruff format --check 通过"; else fail "ruff format --check 未通过（跑 \`uv run ruff format <files>\`）"; fi
 else
   echo "  （无 backend Python 改动，跳过）"
 fi
@@ -105,6 +115,22 @@ if bash scripts/doc_gate.sh > /tmp/doc_gate.out 2>&1; then
   ok "doc_gate 通过（$(grep -c '✔' /tmp/doc_gate.out) 项）"
 else
   fail "doc_gate 未通过"; grep '✘' /tmp/doc_gate.out | head -20
+fi
+
+# 路由迁移硬门禁（Task 5 起）：读 `frontend/src/app/router/route-manifest.ts` + IA 文档，
+# 毫秒级、无需前端依赖，故**放在快检里**（不受"是否有前端改动"限制——它同样会被 IA 文档改动打破）。
+# node 缺失时**告警而非静默通过**（评审 Defect 5）。
+echo "  check:routes（路由迁移门禁）..."
+if ! command -v node >/dev/null 2>&1; then
+  warn "未找到 node，路由迁移门禁被跳过（npm run check:routes）——请在有 node 的环境复跑"
+elif [ ! -f frontend/scripts/check-routes.mjs ]; then
+  fail "frontend/scripts/check-routes.mjs 不存在（路由迁移门禁无法执行）"
+else
+  if (cd frontend && npm run --silent check:routes > /tmp/check_routes.out 2>&1); then
+    ok "check:routes 通过（$(grep -c '^PASS' /tmp/check_routes.out) 项）"
+  else
+    fail "路由迁移门禁未通过（npm run check:routes）"; grep '^FAIL' /tmp/check_routes.out | head -20
+  fi
 fi
 
 if [ "$FULL" = 1 ]; then

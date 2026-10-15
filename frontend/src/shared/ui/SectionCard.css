@@ -12,8 +12,12 @@
 }
 .section-card__title {
   margin: 0;
-  font-size: 16px;
+  /* 字号刻度（计划 §3.5 / 契约 §1.1）：卡片标题 14/600/--text-primary。
+     原为 16/600（契约 §4 旧文写「标题 13px secondary」，两处都不对）——以计划为准，
+     契约已同步。 */
+  font-size: 14px;
   font-weight: 600;
+  color: var(--text-primary);
 }
 .section-card__more {
   font-size: 13px;

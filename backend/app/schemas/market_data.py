@@ -9,16 +9,29 @@ from pydantic import BaseModel, Field
 
 
 class GlobalIndexCardOut(BaseModel):
+    """全球指数卡片（S1.3）。
+
+    **五要素必填**（名称 / 数据源代码 / 交易时段 / 时区 / 币种）——`session` / `timezone` /
+    `currency` 不给默认值：登记表漏填时读端点必须**炸**（422），不允许静默给出空串让
+    前端显示一片空白（那正是 S1.3「非空率 100%」要防的假绿）。
+    """
+
     ts_code: str
     name: str
     market: str
     region: str
+    session: str  # 交易时段（A50 = 新加坡 T+1 夜盘，不得与 A 股时段混淆）
+    timezone: str  # IANA 时区名，如 America/New_York
+    currency: str  # 计价币种
     price: float | None = None
     change: float | None = None
     pct_change: float | None = None
     spark: list[float] = Field(default_factory=list)
     updated_at: datetime
-    source: str
+    #: 数据源代码/来源（登记表的 `source`：index_global / index_daily / sina_index）
+    data_source: str
+    #: 这一格价来自哪一路：realtime / realtime_sina / eod / none
+    price_source: Literal["realtime", "realtime_sina", "eod", "none"]
 
 
 class SectorMoneyflowOut(BaseModel):
@@ -212,16 +225,34 @@ class MarketMoneyflowOut(BaseModel):
 
 
 class NorthboundPointOut(BaseModel):
+    """北向单日点：``amount`` 的含义**由 ``amount_kind`` 决定**（Ruling 62/63）。
+
+    口径**必填**（无默认值）：漏标口径时读端点必须 422，而不是静默让前端把成交额
+    当成净流入。
+    """
+
     date: str
-    net_amount: float | None = None  # 万元
+    amount: float | None = None  # 万元；口径见 amount_kind
+    amount_kind: Literal["net_buy", "turnover"]
 
 
 class NorthboundSeriesOut(BaseModel):
-    """北向净流入序列 envelope；上游停更时由 `source_status` 显式标注。"""
+    """北向 ``moneyflow_hsgt.north_money`` 日序列 envelope（Ruling 62/63）。
+
+    ⚠️ **该列在 2024-08-19 换过语义**：``amount_kind="net_buy"``（断点前）的 ``amount``
+    是**净买入**（可正可负）；``amount_kind="turnover"``（断点起）的 ``amount`` 是
+    **成交额**（恒正）。故信封的 ``amount_kind`` 是**本窗口**的口径：同一口径 → 该值，
+    跨断点混装 → ``"mixed"``，无 items → ``None``。
+
+    **读方不得把 ``amount`` 当净流入**：求和只在同一口径内成立；``"mixed"`` 必须拒绝
+    求和（把净买入与成交额相加是纯粹的错数）。上游停更由 ``source_status`` 显式标注。
+    """
 
     as_of: str | None = None  # ISO 日期（返回 items 末项的日）；无 items 时 None
     stale_days: int | None = None  # 自然日差（今天 - as_of）；无 items 时 None
     source_status: Literal["live", "discontinued"] = "discontinued"
+    # 本窗口口径（net_buy / turnover / 跨断点 mixed）；无 items → None
+    amount_kind: Literal["net_buy", "turnover", "mixed"] | None = None
     items: list[NorthboundPointOut] = Field(default_factory=list)
 
 

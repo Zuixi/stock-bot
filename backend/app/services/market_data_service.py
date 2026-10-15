@@ -19,6 +19,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories import index_repo, market_data_repo
+from app.services.northbound_caliber import (
+    NORTHBOUND_AMOUNT_KINDS,
+    northbound_amount_kind,
+)
 
 if TYPE_CHECKING:
     from app.core.redis import CacheClient
@@ -28,119 +32,279 @@ logger = logging.getLogger(__name__)
 
 _SH = ZoneInfo("Asia/Shanghai")
 
+#: 交易时段 / 时区 / 币种 三要素的**市场级默认值**。
+#: 依据是 S1.3 契约「名称 + 数据源代码 + 交易时段 + 时区 + 币种」五者必填。
+#:
+#: 做成"按市场取默认"而不是每条手抄：同一市场的时段/时区/币种天然相同，逐条复制只会
+#: 在下一轮加标的时漏改一条。**A50 是唯一的例外**——它不在 A 股时段交易，故在条目上
+#: **显式覆盖**（见下方 `session`），这正是导图点名要防的混淆。
+_MARKET_DEFAULTS: dict[str, dict[str, str]] = {
+    "CN": {"session": "09:30-11:30 / 13:00-15:00", "timezone": "Asia/Shanghai", "currency": "CNY"},
+    "HK": {"session": "09:30-12:00 / 13:00-16:00", "timezone": "Asia/Hong_Kong", "currency": "HKD"},
+    "JP": {"session": "09:00-11:30 / 12:30-15:00", "timezone": "Asia/Tokyo", "currency": "JPY"},
+    "KR": {"session": "09:00-15:30", "timezone": "Asia/Seoul", "currency": "KRW"},
+    "US": {"session": "09:30-16:00", "timezone": "America/New_York", "currency": "USD"},
+    "SG": {
+        "session": "T 09:00-16:30 / T+1 17:00-05:15",
+        "timezone": "Asia/Singapore",
+        "currency": "CNY",
+    },
+}
+
+#: A50（富时中国A50 指数期货）的**显式**时段/时区/币种——不得落回 `_MARKET_DEFAULTS["SG"]` 之外
+#: 的任何隐式默认，也不得与 A 股时段混淆（S1.3 逐字要求「UI 明示」）。币种取 **CNY**：
+#: 该指数成分是 A 股、报价与保证金按人民币口径理解（导图亦标注「CNY 夜盘」）。
+#: 时段依据：新交所 T+1 时段（夜盘）覆盖新加坡时间 17:00–次日 05:15（[新交所 T+1 开盘时间
+#: 调整通知](https://henghua.hk/cmsbigfile/2025/04/f05d5388-013d-4b0f-9444-3e33f1810940/SGSHIJIAN.pdf)、
+#: [SGX 指数商品交易时间异动通知](https://www.ibff.com.tw/Support/Bulletin/75ad66b9-7818-439d-9687-6b736fa4f4a1/2025SGX%E4%BA%A4%E6%98%93%E6%99%82%E9%96%93%E7%95%B0%E5%8B%95%E9%80%9A%E7%9F%A5.pdf)；
+#: 本仓库侧佐证：东财延迟行情对 XIN9 的行情时间戳落在新加坡 17 时后，见
+#: `docs/design/data-source.md` 附.5）。
+_A50_SESSION = "T 09:00-16:30 / T+1 17:00-05:15（新加坡夜盘，非 A 股时段）"
+
+
+def _defaults_for(market: str) -> dict[str, str]:
+    """市场级默认三要素；未登记的市场 → **空串**（由测试断言非空，不许静默兜底成假值）。"""
+    return _MARKET_DEFAULTS.get(market, {"session": "", "timezone": "", "currency": ""})
+
+
+def _instrument(
+    *,
+    ts_code: str,
+    name: str,
+    market: str,
+    region: str,
+    source: str,
+    em_secid: str | None = None,
+    sina_code: str | None = None,
+    session: str | None = None,
+    timezone: str | None = None,
+    currency: str | None = None,
+    quote_provider: str = "eastmoney",
+) -> dict[str, str]:
+    """登记一条全球标的：五要素（名称 / 数据源代码 / 交易时段 / 时区 / 币种）一律非空。
+
+    `session`/`timezone`/`currency` 缺省取 `_defaults_for(market)`；只有确实不落市场默认
+    的标的（当前仅 A50）才显式覆盖——**A50 不得与 A 股时段混淆**是本条的用途。
+
+    `em_secid` / `sina_code` 均可选：缺省表示该标的**没有**对应行情源覆盖，读路径
+    不会把它拼进该源的请求串（避免"取到别人的行情"或静默失败）。
+    """
+    defaults = _defaults_for(market)
+    row = {
+        "ts_code": ts_code,
+        "name": name,
+        "market": market,
+        "region": region,
+        "session": session or defaults["session"],
+        "timezone": timezone or defaults["timezone"],
+        "currency": currency or defaults["currency"],
+        "source": source,
+        "quote_provider": quote_provider,
+    }
+    if em_secid:
+        row["em_secid"] = em_secid
+    if sina_code:
+        row["sina_code"] = sina_code
+    return row
+
+
+#: 标的元数据登记表（S1.3 交付物「全球标的元数据表」）。
+#:
+#: 与改造前的差异（**既有 ts_code 一条未改**，只补字段 + 追加条目）：
+#: - 每条补齐 `session` / `timezone` / `currency`（五要素非空，S1.3 验收判据）；
+#: - 追加 NDX / SOX / HXC / HKTECH / XIN9；
+#: - `em_secid` 改为**可选**：东财延迟行情只覆盖部分标的，无 secid 的标的
+#:   不会进 `fetch_index_snapshot` 的 secids 列表（见 `get_global_index_cards`），
+#:   因而不会静默取到别人的行情。
 GLOBAL_INDICES: list[dict[str, str]] = [
-    {
-        "ts_code": "000001.SH",
-        "name": "上证指数",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "1.000001",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "399001.SZ",
-        "name": "深证成指",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "0.399001",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "399006.SZ",
-        "name": "创业板指",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "0.399006",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "000300.SH",
-        "name": "沪深300",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "1.000300",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "000905.SH",
-        "name": "中证500",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "1.000905",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "000688.SH",
-        "name": "科创50",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "1.000688",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "000016.SH",
-        "name": "上证50",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "1.000016",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "899050.BJ",
-        "name": "北证50",
-        "market": "CN",
-        "region": "asia",
-        "em_secid": "0.899050",
-        "source": "index_daily",
-    },
-    {
-        "ts_code": "HSI",
-        "name": "恒生指数",
-        "market": "HK",
-        "region": "asia",
-        "em_secid": "100.HSI",
-        "source": "index_global",
-    },
-    {
-        "ts_code": "N225",
-        "name": "日经225",
-        "market": "JP",
-        "region": "asia",
-        "em_secid": "100.N225",
-        "source": "index_global",
-    },
-    {
-        "ts_code": "KS11",
-        "name": "韩国KOSPI",
-        "market": "KR",
-        "region": "asia",
-        "em_secid": "100.KS11",
-        "source": "index_global",
-    },
-    {
-        "ts_code": "DJI",
-        "name": "道琼斯",
-        "market": "US",
-        "region": "americas",
-        "em_secid": "100.DJIA",
-        "source": "index_global",
-    },
-    {
-        "ts_code": "SPX",
-        "name": "标普500",
-        "market": "US",
-        "region": "americas",
-        "em_secid": "100.SPX",
-        "source": "index_global",
-    },
-    {
-        "ts_code": "IXIC",
-        "name": "纳斯达克",
-        "market": "US",
-        "region": "americas",
-        "em_secid": "100.NDX",
-        "source": "index_global",
-    },
+    # ── A 股（8 条，`ts_code` 与改造前逐字一致；时段/时区/币种来自 CN 默认）──────────
+    _instrument(
+        ts_code="000001.SH",
+        name="上证指数",
+        market="CN",
+        region="asia",
+        em_secid="1.000001",
+        source="index_daily",
+    ),
+    _instrument(
+        ts_code="399001.SZ",
+        name="深证成指",
+        market="CN",
+        region="asia",
+        em_secid="0.399001",
+        source="index_daily",
+    ),
+    _instrument(
+        ts_code="399006.SZ",
+        name="创业板指",
+        market="CN",
+        region="asia",
+        em_secid="0.399006",
+        source="index_daily",
+    ),
+    _instrument(
+        ts_code="000300.SH",
+        name="沪深300",
+        market="CN",
+        region="asia",
+        em_secid="1.000300",
+        source="index_daily",
+    ),
+    _instrument(
+        ts_code="000905.SH",
+        name="中证500",
+        market="CN",
+        region="asia",
+        em_secid="1.000905",
+        source="index_daily",
+    ),
+    _instrument(
+        ts_code="000688.SH",
+        name="科创50",
+        market="CN",
+        region="asia",
+        em_secid="1.000688",
+        source="index_daily",
+    ),
+    _instrument(
+        ts_code="000016.SH",
+        name="上证50",
+        market="CN",
+        region="asia",
+        em_secid="1.000016",
+        source="index_daily",
+    ),
+    _instrument(
+        ts_code="899050.BJ",
+        name="北证50",
+        market="CN",
+        region="asia",
+        em_secid="0.899050",
+        source="index_daily",
+    ),
+    # ── 香港（2 条）───────────────────────────────────────────────────────────
+    _instrument(
+        ts_code="HSI",
+        name="恒生指数",
+        market="HK",
+        region="asia",
+        em_secid="100.HSI",
+        source="index_global",
+    ),
+    # 恒生科技指数：TuShare `index_global` 的代码是 **HKTECH**（不是 HSTECH）——
+    # 2026-10-16 实机枚举该接口 22 个 ts_code 得到，HKTECH 2026 年内 190 个交易日可取；
+    # 裸 HSTECH 实测 0 行（见 docs/design/data-source.md 附.5 实机记录）。
+    _instrument(
+        ts_code="HKTECH",
+        name="恒生科技指数",
+        market="HK",
+        region="asia",
+        source="index_global",
+    ),
+    # ── 日本 / 韩国（各 1 条）────────────────────────────────────────────────
+    _instrument(
+        ts_code="N225",
+        name="日经225",
+        market="JP",
+        region="asia",
+        em_secid="100.N225",
+        source="index_global",
+    ),
+    _instrument(
+        ts_code="KS11",
+        name="韩国KOSPI",
+        market="KR",
+        region="asia",
+        em_secid="100.KS11",
+        source="index_global",
+    ),
+    # ── 美国（6 条：既有 3 + 新增 3）─────────────────────────────────────────
+    _instrument(
+        ts_code="DJI",
+        name="道琼斯",
+        market="US",
+        region="americas",
+        em_secid="100.DJIA",
+        source="index_global",
+    ),
+    _instrument(
+        ts_code="SPX",
+        name="标普500",
+        market="US",
+        region="americas",
+        em_secid="100.SPX",
+        source="index_global",
+    ),
+    # ⚠️ **IXIC = 纳斯达克综合指数**（既有约定正确，本任务只补元数据、**不改 `ts_code`**）。
+    # 名称按 spec §S1.3 的"逐条核对代码"要求写全为「纳斯达克综合指数」——**不再依赖上游名字**：
+    # 东财对 `100.NDX` 返回的名字是「纳斯达克」，卡片上会与 NDX「纳斯达克100」在视觉上串号
+    # （那正是导图那处错误的表现）。故读路径以**登记表名字为准**（见 `get_global_index_cards`）。
+    #
+    # `em_secid` 由改造前的 `100.NDX` 改为 `100.IXIC`：**这是本任务必须做的修正，不是"顺手改"**——
+    # 改造前只有 IXIC 一条用 `100.NDX`（东财对"纳斯达克"的 secid），本任务新增的 NDX 条目
+    # 若也写 `100.NDX`，两条标的会**从同一格行情取数**，即"最新值必然相等"；而 S1.3 的行为判据
+    # 恰恰是"两者最新值不得相等"。故：NDX 拿 `100.NDX`（东财给"纳斯达克100"的 secid，
+    # 见 `docs/design/data-source.md` §七 的东财 ulist 参数串）、IXIC 拿 `100.IXIC`。
+    # ⚠️ `100.IXIC` **未取得一手验证**（本沙箱东财 push2 域拒连，见附.5.2 #12）：两种失败形态——
+    # (a) **良性**：上游不认它 → IXIC 回落库内日线（`price_source=eod`），**不会取到 NDX 的价**；
+    # (b) **有害**：上游认它却指向别的标的 → 综合指数卡片显示另一个指数的价。必须排除 (b)。
+    # 补验方式已登记为 **docs/design/data-source.md 附.5.5 的 open item #6**（含"去哪跑 /
+    # 跑什么 / 看什么字段 / 判定标准"）：在 push2 可达主机跑
+    # `backend/.venv/bin/python scripts/check_global_instruments.py --live`，
+    # 确认 IXIC 的 `price_source=realtime` 且值跟踪 TuShare `index_global(IXIC)`；
+    # 任一条不满足 → 回退为"无 `em_secid`"（明确降级），**不得**留一个可能取错的 secid 在线上。
+    _instrument(
+        ts_code="IXIC",
+        name="纳斯达克综合指数",
+        market="US",
+        region="americas",
+        em_secid="100.IXIC",
+        source="index_global",
+    ),
+    # 纳斯达克100：TuShare `index_global` **无**此标的（裸 NDX / NDX.GI 实测 0 行），
+    # 故走新浪美股指数行情（`gb_$ndx`，2026-10-16 实机取到真实值）；历史回补适配器
+    # 见 docs/design/data-source.md 附.5，本任务只登记元数据、不编造数值。
+    _instrument(
+        ts_code="NDX",
+        name="纳斯达克100指数",
+        market="US",
+        region="americas",
+        source="sina_index",
+        quote_provider="sina",
+        sina_code="gb_$ndx",
+    ),
+    # 费城半导体指数：TuShare 同样无此标的，走新浪 `gb_$sox`（实机取到真实值）。
+    _instrument(
+        ts_code="SOX",
+        name="费城半导体指数",
+        market="US",
+        region="americas",
+        source="sina_index",
+        quote_provider="sina",
+        sina_code="gb_$sox",
+    ),
+    # 纳斯达克中国金龙指数：新浪 `gb_$hxc`（实机取到真实值）。
+    # ⚠️ 注意 `gb_hxc`（无 `$`）是**另一只**标的（实测价 26.275，非指数点位），不得混用。
+    _instrument(
+        ts_code="HXC",
+        name="纳斯达克中国金龙指数",
+        market="US",
+        region="americas",
+        source="sina_index",
+        quote_provider="sina",
+        sina_code="gb_$hxc",
+    ),
+    # ── 新加坡（1 条）：富时中国A50 指数期货 ─────────────────────────────────
+    # TuShare `index_global` 的 XIN9 实测可取（2026-10-09 close=13909.62，年内 4000 行上限）。
+    # **时段显式覆盖**为新加坡 T+1 夜盘，绝不落回 A 股时段（S1.3 点名要求）。
+    _instrument(
+        ts_code="XIN9",
+        name="富时中国A50指数期货",
+        market="SG",
+        region="asia",
+        source="index_global",
+        session=_A50_SESSION,
+    ),
 ]
 
 
@@ -237,15 +401,33 @@ async def _upsert_rows(db: AsyncSession, rows: list[IndexDaily]) -> int:
     return upserted
 
 
+#: 日线回补源 → "怎么拉"。**显式登记**而不是 `if/else` 兜底：新增一个源却忘了登记时，
+#: 行为是"该标的**没有**日线"，不是"拿 index_daily 去试一下"（后者会对非 A 股代码静默
+#: 返回空表，看起来像"上游没数据"，排障时最贵）。
+_DAILY_FETCHERS = ("index_global", "index_daily")
+
+
 async def _collect_index_rows(client: Any, start: str, end: str) -> list[IndexDaily]:
     """按注册表逐指数拉取并映射为 IndexDaily 行。
 
     单指数失败只告警并跳过（部分成功仍入库），避免一次抖动作废整个调度批次。
+
+    `source not in _DAILY_FETCHERS` 的标的（当前 = `sina_index` 的 NDX/SOX/HXC）
+    **本轮不拉日线**：TuShare 无这三个标的，新浪日线回补适配器尚未写（见
+    `docs/design/data-source.md` 附.5 的待办）。这里显式跳过并记一条 INFO，
+    免得读者以为"注册了就该有日线"。
     """
     from app.models.index_daily import IndexDaily  # noqa: PLC0415
 
     rows: list[IndexDaily] = []
     for g in GLOBAL_INDICES:
+        if g["source"] not in _DAILY_FETCHERS:
+            logger.info(
+                "global index %s source=%s has no daily backfill adapter yet; skipped",
+                g["ts_code"],
+                g["source"],
+            )
+            continue
         try:
             if g["source"] == "index_global":
                 df: pd.DataFrame = await client.fetch_index_global(g["ts_code"], start, end)
@@ -284,26 +466,69 @@ async def backfill_global_index_history(db: AsyncSession, years: int = 2) -> dic
     return {"upserted": upserted}
 
 
-GLOBAL_INDICES_CACHE_KEY = "market:global-indices"
+GLOBAL_INDICES_CACHE_KEY = "market:global-indices:v2"
 GLOBAL_INDICES_TTL = 60
+
+#: 卡片契约版本：v2 起每条卡片带齐五要素（`session`/`timezone`/`currency`）与
+#: `price_source`/`data_source`。缓存键同步升到 `:v2`——TTL 只有 60s，但**键不变会让
+#: 正在过期的 v1 payload 被当成合法响应**，而 v1 没有这三个字段（S1.3 的验收判据
+#: 会因此假绿）。旧键无人读取，自然过期。
+
+#: `price_source` 取值（前端按它决定是否显示「数据源待接入」）：
+#:   realtime        —— 东财延迟行情（实时快照）
+#:   realtime_sina   —— 新浪美股指数行情（NDX/SOX/HXC）
+#:   eod             —— 库内最近一根日线兜底
+#:   none            —— 既无实时也无日线（**不得显示 0**，前端显示"待接入/暂无数据"）
+_PRICE_REALTIME = "realtime"
+_PRICE_REALTIME_SINA = "realtime_sina"
+_PRICE_EOD = "eod"
+_PRICE_NONE = "none"
+
+
+def _get_sina_quotes() -> Any:
+    from app.core.providers.sina_index_client import fetch_index_quotes  # noqa: PLC0415
+
+    return fetch_index_quotes
+
+
+async def _fetch_provider_quotes(tushare_codes: list[str], sina_codes: list[str]) -> dict[str, Any]:
+    """两路行情各取一次（**单路失败不拖垮另一路**）；返回按"我们自己的查找键"索引的行情表。
+
+    - 东财：按**完整 secid**（`100.DJIA`）索引——不可用短码，沪/深同号段会互相覆盖；
+    - 新浪：按**新浪原始代码**（`gb_$ndx`）索引。
+    """
+    quotes: dict[str, Any] = {}
+    if tushare_codes:
+        try:
+            em = _get_eastmoney()
+            snap = await em.fetch_index_snapshot(tushare_codes)
+            quotes.update({q["secid"]: q for q in snap if q.get("secid")})
+        except Exception:
+            logger.warning("global index snapshot fetch failed, falling back to EOD", exc_info=True)
+    if sina_codes:
+        try:
+            quotes.update(await _get_sina_quotes()(sina_codes))
+        except Exception:
+            logger.warning("sina index quote fetch failed, falling back to EOD", exc_info=True)
+    return quotes
 
 
 async def get_global_index_cards(cache: CacheClient | None = None) -> list[dict[str, Any]]:
-    """全球市场卡片：东财实时快照（60s 共享缓存）+ 近 30 日 spark + EOD 兜底。"""
+    """全球市场卡片：实时快照（东财 + 新浪，60s 共享缓存）+ 近 30 日 spark + EOD 兜底。
+
+    **每条卡片都带齐五要素**（`name`/`ts_code` + `session`/`timezone`/`currency`，S1.3 硬要求）
+    与 `data_source`（数据源代码/来源徽章用）。`em_secid` 缺省的标的不进东财 secids 请求串，
+    `sina_code` 缺省的标的不进新浪请求串——宁可不取，也不取错。
+    """
     if cache is not None:
         cached = await cache.get(GLOBAL_INDICES_CACHE_KEY)
         if cached:
             cards_cached: list[dict[str, Any]] = cached
             return cards_cached
 
-    quotes: dict[str, dict[str, Any]] = {}
-    try:
-        em = _get_eastmoney()
-        snap = await em.fetch_index_snapshot([g["em_secid"] for g in GLOBAL_INDICES])
-        # 按完整 secid 索引（不可用短码：沪/深同号段会互相覆盖）
-        quotes = {q["secid"]: q for q in snap if q.get("secid")}
-    except Exception:
-        logger.warning("global index snapshot fetch failed, falling back to EOD", exc_info=True)
+    em_secids = [g["em_secid"] for g in GLOBAL_INDICES if g.get("em_secid")]
+    sina_codes = [g["sina_code"] for g in GLOBAL_INDICES if g.get("sina_code")]
+    quotes = await _fetch_provider_quotes(em_secids, sina_codes)
 
     cards: list[dict[str, Any]] = []
     from app.core.database import async_session_factory  # noqa: PLC0415
@@ -319,21 +544,37 @@ async def get_global_index_cards(cache: CacheClient | None = None) -> list[dict[
             except Exception:
                 logger.warning("spark fetch failed for %s", g["ts_code"], exc_info=True)
 
-            q = quotes.get(g["em_secid"])
+            lookup = g.get("em_secid") or g.get("sina_code") or ""
+            q = quotes.get(lookup)
             now = datetime.now(_SH).isoformat(timespec="seconds")
+            # 显式标 `dict[str, Any]`：不标的话 mypy 会按 `"spark": spark`（list[float]）把整个
+            # dict 推成 `dict[str, Sequence[object]]`，下面 update 里的 float 就全是类型错误。
+            base: dict[str, Any] = {
+                "ts_code": g["ts_code"],
+                "market": g["market"],
+                "region": g["region"],
+                "session": g["session"],
+                "timezone": g["timezone"],
+                "currency": g["currency"],
+                "data_source": g["source"],
+                "spark": spark,
+                "updated_at": now,
+            }
             if q and q.get("price") is not None:
-                cards.append(
+                base.update(
                     {
-                        "ts_code": g["ts_code"],
-                        "name": q.get("name") or g["name"],
-                        "market": g["market"],
-                        "region": g["region"],
+                        # 名字一律取**登记表**（`g["name"]`），不用上游名字：
+                        # 东财对 `100.NDX` 回的名字是「纳斯达克」、对 `gb_$ndx` 回的是
+                        # 「纳斯达克100」，两者在卡片上会与 `NDX`/`IXIC` 的登记名互相串号
+                        # ——那正是 S1.3 要消灭的那处导图错误。**价**仍取上游，**名**由我们定。
+                        "name": g["name"],
                         "price": q["price"],
                         "change": q.get("change"),
                         "pct_change": q.get("pct_change"),
-                        "spark": spark,
-                        "updated_at": now,
-                        "source": "realtime",
+                        # `price_source` 标明这一格价来自哪一路，便于前端与排障区分。
+                        "price_source": (
+                            _PRICE_REALTIME_SINA if g.get("sina_code") else _PRICE_REALTIME
+                        ),
                     }
                 )
             else:
@@ -345,21 +586,19 @@ async def get_global_index_cards(cache: CacheClient | None = None) -> list[dict[
                     else None
                 )
                 pct = round(change / prev * 100, 2) if (change is not None and prev) else None
-                cards.append(
+                base.update(
                     {
-                        "ts_code": g["ts_code"],
                         "name": g["name"],
-                        "market": g["market"],
-                        "region": g["region"],
                         "price": last_close,
                         "change": change,
                         "pct_change": pct,
-                        "spark": spark,
-                        "updated_at": now,
-                        "source": "eod",
+                        "price_source": _PRICE_EOD if last_close is not None else _PRICE_NONE,
                     }
                 )
+            cards.append(base)
 
+    # 全部卡片都无价 → **不写缓存**：缓存一份全 `none` 的 payload 会让端点在整个 TTL 内
+    # 无法通过下一次请求自愈（改造前的判据是 any(price is not None)，保持不变）。
     if cache is not None and any(c["price"] is not None for c in cards):
         await cache.set(GLOBAL_INDICES_CACHE_KEY, cards, ttl=GLOBAL_INDICES_TTL)
     return cards
@@ -1367,23 +1606,39 @@ def _dedupe_block_trade_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 def _map_hsgt_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """moneyflow_hsgt 全列字符串 → northbound rows（north_money 万元，缺失/NaN 置 None）。"""
+    """moneyflow_hsgt → northbound rows（``amount`` 万元，缺失/NaN 置 None；带行级口径）。
+
+    ``north_money`` **同一列两种口径**（Ruling 62/63）：断点前是净买入、断点起是成交额。
+    口径在这里按交易日打成行级标记（``amount_kind``），**不留给读面靠日期或正负去猜**——
+    ingest 是唯一知道"这个数是从哪一版上游语义拿来的"的地方。
+    """
     rows: list[dict[str, Any]] = []
     for rec in df.to_dict("records"):
         raw = rec.get("north_money")
-        net: float | None = None
+        amount: float | None = None
         if raw is not None:
             try:
                 f = float(raw)
             except (TypeError, ValueError):
                 f = float("nan")
-            net = None if math.isnan(f) else f
-        rows.append({"trade_date": _d(rec["trade_date"]), "net_amount": net})
+            amount = None if math.isnan(f) else f
+        trade_date = _d(rec["trade_date"])
+        rows.append(
+            {
+                "trade_date": trade_date,
+                "amount": amount,
+                "amount_kind": northbound_amount_kind(trade_date),
+            }
+        )
     return rows
 
 
 async def ingest_northbound(db: AsyncSession, days: int = 30) -> dict[str, int]:
-    """盘后采集：近 N 日沪深港通北向净流入（moneyflow_hsgt，幂等 upsert）。"""
+    """盘后采集：近 N 日沪深港通北向序列（moneyflow_hsgt，幂等 upsert）。
+
+    该列断点前是**净买入**、断点后是**成交额**，逐行由 ``amount_kind`` 标注；
+    采集本身上下不变（能力保留，Ruling 30）。
+    """
     client = _get_tushare()
     start = (_today_sh() - timedelta(days=days)).strftime("%Y%m%d")
     end = _today_sh().strftime("%Y%m%d")
@@ -1399,23 +1654,28 @@ NORTHBOUND_DISCONTINUED_AFTER_DAYS = 5
 
 
 async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> dict[str, Any]:
-    """北向净流入日序列（升序）+ 数据源状态（Redis 300s 共享缓存，键含最近日）。
+    """北向日序列（升序）+ **行级口径** + 数据源状态（Redis 300s 共享缓存，键含最近日）。
+
+    ⚠️ **这不是"北向净流入"序列**（Ruling 62/63）：上游 ``moneyflow_hsgt.north_money``
+    在 ``2024-08-19`` 换过语义 —— 之前是**净买入**（可负），之后是**成交额**（恒正）。
+    故每个 item 带 ``amount_kind``（``"net_buy"`` | ``"turnover"``），信封再给本窗口的
+    统一口径 ``amount_kind``（同一口径 → 该值；跨断点混装 → ``"mixed"``；无 items →
+    ``None``）。**读方不得把 ``amount`` 当净流入**：求和只在同一口径内有意义，
+    ``"mixed"`` 必须拒绝求和。能力保留、数值一个不改（Ruling 30），只是不再错标。
 
     ``source_status``：``stale_days <= 5`` → ``"live"``，否则 ``"discontinued"``
     （``stale_days`` 为自然日差 ``_today_sh() - as_of``）。负的 ``stale_days`` 意味着
     表内存在未来日期的脏行（``trade_date`` 无上界）：此时 ``<= 5`` 会把它算成
-    ``"live"``，前端适配层必须把负值识别为异常而不是"新鲜"，人工核查脏行。上游 TuShare
-    ``moneyflow_hsgt`` 已停更（实测 30 天窗口最新只到 2026-08-21，表内最近日
-    2026-09-07），卡片必须能说"该源已停更"而不是画一条不带截止标注的线。
+    ``"live"``，前端适配层必须把负值识别为异常而不是"新鲜"，人工核查脏行。
 
     **元数据只描述实际返回的 ``items``（Task 8 修正）**：``items`` 由
     ``trade_date >= 今天-days`` 的窗口过滤，而表内最大日可能早于该窗口——
     旧实现用"表级 max"当 ``as_of``，于是 ``days=5`` 可以返回"非空 as_of + 空
-    items"。现在 ``as_of``/``stale_days``/``source_status`` 全部由 ``items`` 自己
-    的末行日期推导，无行即 ``as_of=None`` / ``stale_days=None`` /
-    ``source_status="discontinued"``（拿不到任何数据就谈不上 live）。缓存命中时
-    ``stale_days`` 与 ``source_status`` 按当下重算（``as_of`` 是 items 的属性、
-    不是 payload 的冻结字段）。
+    items"。现在 ``as_of``/``stale_days``/``source_status``/``amount_kind`` 全部由
+    ``items`` 自己的内容推导，无行即 ``as_of=None`` / ``stale_days=None`` /
+    ``source_status="discontinued"`` / ``amount_kind=None``（拿不到任何数据就谈不上
+    live）。缓存命中时 ``stale_days`` 与 ``source_status`` 按当下重算（``as_of`` 是
+    items 的属性、不是 payload 的冻结字段），口径缺失的旧缓存条目按断点补正。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.models.market_data import NorthboundDaily  # noqa: PLC0415
@@ -1436,7 +1696,13 @@ async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> di
         items: list[dict[str, Any]] = []
         if as_of is not None:  # 表空（as_of=None）时明细必然为空，不查
             for n in await market_data_repo.list_northbound(db, days):
-                items.append({"date": n.trade_date.isoformat(), "net_amount": n.net_amount})
+                items.append(
+                    {
+                        "date": n.trade_date.isoformat(),
+                        "amount": n.amount,
+                        "amount_kind": n.amount_kind,
+                    }
+                )
 
     # ``as_of`` 由 items 的末行（升序）推导，而不是回看表级 max：窗口过滤后可能
     # 一行都不剩，此时元数据必须一起归零（见 docstring）。
@@ -1446,9 +1712,52 @@ async def get_northbound_series(cache: CacheClient | None, days: int = 30) -> di
     return payload
 
 
+def _normalize_northbound_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把 items 归一到"**口径必填**"的形状（缺字段的历史缓存条目也要补上）。
+
+    只对两件历史遗留做兼容，两件都不改变语义：
+
+    - ``amount_kind`` 缺失（本改动上线前写进 Redis 的条目）→ 按断点由交易日重算。
+      口径是 ``trade_date`` 的纯函数，故可无损补正；**绝不**回落到 ``net_buy``——
+      那正是本次要修的错标（把成交额说成净买入）。
+    - 值仍挂在旧字段名 ``net_amount`` 上 → 平移到 ``amount``（同一列的改名）。
+
+    两件都补不上（条目没有可解析日期）时不猜口径，直接**响亮失败**：宁可 500 也不能
+    再产出一行"口径未知的北向数值"。取值恒为 :data:`NORTHBOUND_AMOUNT_KINDS` 之一。
+    """
+    normalized: list[dict[str, Any]] = []
+    for item in items:
+        raw_kind = item.get("amount_kind")
+        trade_date = _iso_date(item.get("date"))
+        if raw_kind in NORTHBOUND_AMOUNT_KINDS:
+            kind = str(raw_kind)
+        elif trade_date is not None:
+            kind = northbound_amount_kind(trade_date)
+        else:
+            raise ValueError(f"northbound item has no parseable date: {item!r}")
+        amount = item["amount"] if "amount" in item else item.get("net_amount")
+        normalized.append({"date": item.get("date"), "amount": amount, "amount_kind": kind})
+    return normalized
+
+
+def _northbound_window_kind(items: list[dict[str, Any]]) -> str | None:
+    """本窗口的统一口径：同一口径 → 该值；跨断点混装 → ``"mixed"``；无行 → ``None``。
+
+    ``"mixed"`` 是**必须存在的第三态**（不是"未标注"）：断点前净买入与断点后成交额
+    一旦同窗出现，任何"累计"都必须被拒绝——否则就是把两种量相加。
+    """
+    kinds = {str(item["amount_kind"]) for item in items}
+    if not kinds:
+        return None
+    if len(kinds) == 1:
+        return next(iter(kinds))
+    return "mixed"
+
+
 def _northbound_payload(as_of: date | None, items: list[dict[str, Any]]) -> dict[str, Any]:
-    """北向信封：``as_of``/``stale_days``/``source_status`` 全由返回的 items 推导。"""
+    """北向信封：``as_of``/``stale_days``/``source_status``/``amount_kind`` 全由 items 推导。"""
     stale_days = _stale_days(as_of)
+    normalized = _normalize_northbound_items(items)
     return {
         "as_of": as_of.isoformat() if as_of is not None else None,
         "stale_days": stale_days,
@@ -1457,7 +1766,8 @@ def _northbound_payload(as_of: date | None, items: list[dict[str, Any]]) -> dict
             if stale_days is not None and stale_days <= NORTHBOUND_DISCONTINUED_AFTER_DAYS
             else "discontinued"
         ),
-        "items": items,
+        "amount_kind": _northbound_window_kind(normalized),
+        "items": normalized,
     }
 
 

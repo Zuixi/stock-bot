@@ -48,7 +48,7 @@ export function CoreIndexCards() {
       {isLoading ? (
         <Row gutter={[12, 12]}>
           {Array.from({ length: 6 }, (_, i) => (
-            <Col key={i} xs={12} sm={8} xl={4}>
+            <Col key={i} xs={24} sm={8} xl={4}>
               <Skeleton active paragraph={{ rows: 2 }} />
             </Col>
           ))}
@@ -60,7 +60,10 @@ export function CoreIndexCards() {
       ) : (
         <Row gutter={[12, 12]}>
           {core.map((i) => (
-            <Col key={i.tsCode} xs={12} sm={8} xl={4}>
+            // `<768`（契约 §5.1 的"单列全功能"）一张卡独占整行：实测内容区 342px，
+            // 名称列拿到 ~308px ⇒ §4.1 的 `min-width: 104px` 与 2 行名称都装得下。
+            // `xs={12}`（半宽 152px）时长名会被压到不可辨识，且与 104px 下限互斥。
+            <Col key={i.tsCode} xs={24} sm={8} xl={4}>
               <GlobalIndexCardView index={i} />
             </Col>
           ))}

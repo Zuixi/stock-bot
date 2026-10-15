@@ -19,17 +19,25 @@ const FLOW_ROWS: Array<{ key: "superLargeNet" | "largeNet" | "midNet" | "smallNe
 
 function buildHistoryOption(history: MarketMoneyflowDay[], c: ThemePalette) {
   const dates = history.map((h) => h.date.slice(5));
+  // 缺值不得渲染成 0：`mainNet` 是可空（`MarketMoneyflowDay.mainNet: number | null`），
+  // 折成 0 会画出一根"零高度柱"，与真实的 0 亿**无法区分**（用户读成"净流入为零"）。
+  // 这里改为透传 `null` —— ECharts 对 null 的分类数据**不画柱**（空档），
+  // 且本卡的 tooltip 早就有 `if (!p || p.data?.value == null) return ""` 分支，
+  // 原先因 `?? 0` 而永远走不到；改成 null 后该分支才真正生效（"没有"与"零"分开）。
   const bars = history.map((h) => ({
-    value: (h.mainNet ?? 0) / 1e8,
+    value: h.mainNet == null ? null : h.mainNet / 1e8,
     pct: h.pctChange,
-    itemStyle: { color: (h.mainNet ?? 0) >= 0 ? c.up : c.down, borderRadius: 1 },
+    itemStyle: {
+      color: h.mainNet == null ? c.flat : h.mainNet >= 0 ? c.up : c.down,
+      borderRadius: 1,
+    },
   }));
   return {
     grid: { left: 8, right: 8, top: 14, bottom: 8, containLabel: true },
     tooltip: {
       trigger: "axis",
       formatter: (params: unknown) => {
-        const arr = params as Array<{ name: string; data: { value: number; pct: number | null } }>;
+        const arr = params as Array<{ name: string; data: { value: number | null; pct: number | null } }>;
         const p = arr?.[0];
         if (!p || p.data?.value == null) return "";
         const color = p.data.value >= 0 ? c.up : c.down;
@@ -87,7 +95,7 @@ export function MarketMoneyflowContent() {
         <div style={{ marginBottom: 8 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>今日主力净流入</Typography.Text>
-            <span style={{ fontSize: 22, fontWeight: 600, color: mainColor, fontVariantNumeric: "tabular-nums" }}>
+            <span className="num" style={{ fontSize: 22, fontWeight: 600, color: mainColor }}>
               {fmtSignedYi(total.mainNet)}
             </span>
           </div>
@@ -96,8 +104,8 @@ export function MarketMoneyflowContent() {
               <span key={key}>
                 {label}
                 <b
+                  className="num"
                   style={{
-                    fontVariantNumeric: "tabular-nums",
                     color: (total[key] ?? 0) > 0 ? colors.up : (total[key] ?? 0) < 0 ? colors.down : colors.flat,
                     marginLeft: 4,
                   }}
