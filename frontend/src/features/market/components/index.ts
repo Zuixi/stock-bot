@@ -3,6 +3,8 @@ export { GlobalIndexCardView } from "./GlobalIndexCardView";
 export { DataSourceBadge, PriceSourceBadge } from "./DataSourceBadge";
 export { CoreIndexCards } from "./CoreIndexCards";
 export { CORE_TS_CODES, pickCoreIndices } from "./coreIndices";
+export { MarketSection } from "./MarketSection";
+export type { MarketSectionProps } from "./MarketSection";
 export { DistributionChart } from "./DistributionChart";
 export { DistributionBars } from "./DistributionBars";
 export type { DistributionBucket } from "./DistributionBars";

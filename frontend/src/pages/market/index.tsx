@@ -23,6 +23,7 @@ import {
   NorthboundCard,
   HotSectors,
   MarketDataBoard,
+  MarketSection,
   SwIndustryGrid,
   SentimentThermometer,
   SentimentIntradayChart,
@@ -247,30 +248,56 @@ export default function MarketPage() {
     {
       key: "panorama",
       label: "A股全景",
+      /* P1-1 第一刀（对标 FinScope 行情中心的三面板并排）：本 Tab 的**第一行**从一个分区壳
+         「A股全景（广度 · 结构 · 资金）」承载三块面板 —— 涨跌分布 ‖ 板块热力图 ‖ 板块主力资金流。
+         三块各自带自己的卡头与「数据截至」行（分区壳**不**再印一个 as_of，避免两个来源的判据日）；
+         分区壳 `MarketSection` 只提供「分区标题 + 本地维度条 + 内容槽」，故这一行后续可整块
+         抬出 Tab（页级 Tab 本轮**不动**，见 owner 裁定：先做第一段、满意再铺开）。
+
+         维度条是**只读口径行**（不假装可交互）：三块本身各自可读，没有"切换维度"这件事，
+         写成分段控件会是假承诺。文案与各卡头标题逐字一致，读者能对上号。 */
       children: (
-        <Row gutter={[16, 16]}>
-          <Col xs={24} lg={12}>
-            <DistributionChart />
-          </Col>
-          <Col xs={24} lg={12}>
-            <SectorHeatmap />
-          </Col>
-          <Col span={24}>
-            <Card title="申万行业网格" size="small">
-              {/* Phase 1 §W2.2：这里原先还有一份 `<IndustryClassification />`（31 个行业
-                  各一张卡 + 7 项行情聚合条），与上面的网格**同屏渲染同一批 31 个行业**。
-                  删的是「重复的行业清单」，不是「行业信息」——每格第二行已补上
-                  「N 只 · M 个二级」两个有效数据点。**代价（已知并接受）**：那份清单
-                  每卡还带 7 项行情聚合（`IndustryMetricStrip`），删后 `/market` 不再有
-                  行业级 7 项行情的 at-a-glance 视图——它仍在行业下钻页（一次点击之外），
-                  而 7 项行情条本身在二/三/末级下钻页照常渲染。 */}
-              <SwIndustryGrid />
-            </Card>
-          </Col>
-          <Col span={24}>
-            <HotSectors />
-          </Col>
-        </Row>
+        <MarketSection
+          title="A股全景（广度 · 结构 · 资金）"
+          testId="market-section-panorama"
+          dimensionStrip={
+            <>
+              <span>① 涨跌分布 · 全市场 11 桶</span>
+              <span>② 板块热力图 · 申万一级（市值加权）</span>
+              <span>③ 板块主力资金流 · 末完整日净流入 Top10</span>
+            </>
+          }
+        >
+          <Row gutter={[16, 16]}>
+            {/* 三面板并排：宽屏 3-up（xl≥1200 → 8/24）、中屏 2-up（md≥768 → 12/24）、窄屏 1-up。
+                每块自带 as_of（DistributionChart / SectorHeatmap / SectorMoneyflowCard 各自
+                渲染 `FreshnessNote`），分区层不再重复口径。 */}
+            <Col xs={24} md={12} xl={8}>
+              <DistributionChart />
+            </Col>
+            <Col xs={24} md={12} xl={8}>
+              <SectorHeatmap />
+            </Col>
+            <Col xs={24} md={12} xl={8}>
+              <SectorMoneyflowCard />
+            </Col>
+            <Col span={24}>
+              <Card title="申万行业网格" size="small">
+                {/* Phase 1 §W2.2：这里原先还有一份 `<IndustryClassification />`（31 个行业
+                    各一张卡 + 7 项行情聚合条），与上面的网格**同屏渲染同一批 31 个行业**。
+                    删的是「重复的行业清单」，不是「行业信息」——每格第二行已补上
+                    「N 只 · M 个二级」两个有效数据点。**代价（已知并接受）**：那份清单
+                    每卡还带 7 项行情聚合（`IndustryMetricStrip`），删后 `/market` 不再有
+                    行业级 7 项行情的 at-a-glance 视图——它仍在行业下钻页（一次点击之外），
+                    而 7 项行情条本身在二/三/末级下钻页照常渲染。 */}
+                <SwIndustryGrid />
+              </Card>
+            </Col>
+            <Col span={24}>
+              <HotSectors />
+            </Col>
+          </Row>
+        </MarketSection>
       ),
     },
     {

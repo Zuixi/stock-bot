@@ -147,13 +147,22 @@ test.describe("市场卡片口径标注", () => {
     await page.goto("/market");
     await page.getByRole("tab", { name: "A股全景" }).click();
     // 四张按日聚合卡（A股全景三张 + 资金流向的板块主力资金流）
+    //
+    // ⚠️ 定位器必须加 `:visible`（P1-1 第一刀后**必需**，不是放宽断言）：
+    // 「板块主力资金流」现在在 **A股全景** 与 **资金流向** 两个 Tab 里各有一张卡
+    // （P1-1 的刻意重复，页级 Tab 本轮不动）。AntD 把非激活 Tab 的 children 留在 DOM 里
+    // （`display: none` 容器），所以裸写 `.ant-card:has-text(板块主力资金流)` 会命中**两张**，
+    // `.first()` 落到 A股全景 里那张**隐藏**的卡上 → `toBeVisible()` 恒红。
+    // 用 `:visible` 把断言钉在"当前 Tab 里用户真能看到的那张"上：这才是本用例的原意
+    // （当时只有一处，选择器不需要它）。**不许**改成 `.first()` + 不看可见性 —— 那会让
+    // "卡在别的 Tab 里、当前 Tab 根本没渲染"也判绿。
     for (const title of ["A股涨跌分布", "板块热力图", "A股热门板块"]) {
-      const card = page.locator(".ant-card").filter({ hasText: title });
+      const card = page.locator(".ant-card:visible").filter({ hasText: title });
       await expect15s(card.getByText(/数据截至/).first()).toBeVisible();
       await expect15s(card.getByText(/收盘|未完整|按最近完整日/).first()).toBeVisible();
     }
     await page.getByRole("tab", { name: "资金流向" }).click();
-    const moneyflow = page.locator(".ant-card").filter({ hasText: "板块主力资金流" });
+    const moneyflow = page.locator(".ant-card:visible").filter({ hasText: "板块主力资金流" });
     await expect15s(moneyflow.getByText(/数据截至/).first()).toBeVisible();
     // 快照陈旧度：`stale_days > 0` 才显示「N 天前」徽标，`= 0`（当日快照已写入）**按设计不加**
     // （见 FreshnessNote 契约）。两个分支都要断言——只断 >0 分支会在盘后采集落当日数据后假红。

@@ -133,3 +133,132 @@ test.describe("/market 工作台：去重复与口径同源", () => {
     ).toBe(labels.join(" · "));
   });
 });
+
+/**
+ * P1-1 第一刀：A股全景第一行的三面板并排（对标产品行情中心的「三面板一行」形态）。
+ *
+ * **作用域纪律**（计划 §1 的已知坑）：`板块主力资金流` 在 `资金流向` Tab 里**也有一张**
+ * （本轮刻意保留页级 Tab，属已知重复，报告里明写）。因此这里的定位器一律先收进
+ * `[data-testid="market-section-panorama"]` 再数卡 —— 全局 `getByText` /
+ * `.ant-card:has-text("板块主力资金流")` 会同时命中另一个 Tab 的同名卡（AntD 把非激活
+ * Tab 的 children 渲染在 `display:none` 容器里，仍留在 DOM 中），计数与几何都会失真。
+ */
+const PANORAMA_SECTION = '[data-testid="market-section-panorama"]';
+
+/** 三块面板的卡头标题（与各组件里的 `Card title` 逐字一致；作用域限定后才唯一）。 */
+const PANORAMA_PANEL_TITLES = ["A股涨跌分布", "板块热力图", "板块主力资金流"] as const;
+
+/** 第一行三块面板的卡（按标题顺序返回，作用域限定在分区壳内）。 */
+function panoramaRow(page: import("@playwright/test").Page): import("@playwright/test").Locator {
+  return page
+    .locator(`${PANORAMA_SECTION} .ant-card`)
+    .filter({ has: page.locator(":scope > .ant-card-head") })
+    .filter({ hasText: /A股涨跌分布|板块热力图|板块主力资金流/ });
+}
+
+test.describe("P1-1：A股全景第一行三面板（并排 / 堆叠 / 各自口径）", () => {
+  test("1440 下三块面板并排（同一 y、x 递增），且各带自己的「数据截至」", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/market?tab=panorama", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+    await expect(page.locator(".sw-grid").first()).toBeVisible(); // 等到目标 Tab 真的渲染完
+
+    // ① 作用域内**恰好 3 张**第一行面板卡（不是 2 张，也不是把别的卡算进来）
+    await expect(
+      panoramaRow(page),
+      "A股全景第一行不是三块面板（少一块 = 回退成两栏；多一块 = 选择器把下面的卡也算进来了）"
+    ).toHaveCount(PANORAMA_PANEL_TITLES.length);
+
+    // ② 每块都还在，且各带自己的「数据截至」（口径纪律：不得靠分区层一个 as_of 顶替三块的口径）
+    for (const title of PANORAMA_PANEL_TITLES) {
+      const card = page.locator(`${PANORAMA_SECTION} .ant-card`).filter({ hasText: title });
+      await expect(card, `面板「${title}」不在分区壳内`).toHaveCount(1);
+      await expect(
+        card.getByText(/数据截至/).first(),
+        `面板「${title}」缺自己的「数据截至」`
+      ).toBeVisible();
+    }
+
+    // ②b 口径徽标（收盘/未完整/按最近完整日）：**只有信封带 `as_of_quality` 的两块**能印。
+    // `GET /market/sector-moneyflow` 的载荷实测只有 `{as_of, stale_days, items}`（无 `as_of_quality`），
+    // 所以「板块主力资金流」卡**按既有契约不印徽标** —— 这不是本刀的缺失，且补它需要改后端
+    // （本刀明令不动后端）。故这里对两块点名要求徽标（防"顺手把徽标删了"回归），对第三块
+    // 只要求它不谎报：**不得**出现任何口径徽标文案（印了才是错——那会是无来源的口径声明）。
+    for (const title of ["A股涨跌分布", "板块热力图"]) {
+      await expect(
+        page.locator(`${PANORAMA_SECTION} .ant-card`).filter({ hasText: title })
+          .getByText(/收盘|未完整|按最近完整日/).first(),
+        `面板「${title}」缺口径徽标`
+      ).toBeVisible();
+    }
+    await expect(
+      page.locator(`${PANORAMA_SECTION} .ant-card`).filter({ hasText: "板块主力资金流" })
+        .locator(".section-card__quality"),
+      "板块主力资金流卡印了口径徽标 —— 该端点不返回 as_of_quality，印出来就是无来源的口径声明"
+    ).toHaveCount(0);
+
+    // ③ 几何：三块同一 y（并排）、x 严格递增（顺序 = 涨跌分布 → 热力图 → 资金流）、宽度相近
+    const boxes = await Promise.all(
+      PANORAMA_PANEL_TITLES.map(async (title) => {
+        const box = await page.locator(`${PANORAMA_SECTION} .ant-card`).filter({ hasText: title }).boundingBox();
+        expect(box, `面板「${title}」没有 boundingBox`).not.toBeNull();
+        return box!;
+      })
+    );
+    const xOf = boxes.map((b) => Math.round(b.x));
+    const yOf = boxes.map((b) => Math.round(b.y));
+    const wOf = boxes.map((b) => Math.round(b.width));
+    // 诊断串：断言红时不必回看代码就知道实际排成了几行
+    const diag = `x=[${xOf.join(", ")}] y=[${yOf.join(", ")}] w=[${wOf.join(", ")}]`;
+    expect(yOf[0], `三块面板不并排（第 2 块换行了）：${diag}`).toBe(yOf[1]);
+    expect(yOf[0], `三块面板不并排（第 3 块换行了）：${diag}`).toBe(yOf[2]);
+    expect(xOf[0], `面板顺序不是 涨跌分布 → 热力图 → 资金流：${diag}`).toBeLessThan(xOf[1]);
+    expect(xOf[1], `面板顺序不是 涨跌分布 → 热力图 → 资金流：${diag}`).toBeLessThan(xOf[2]);
+    expect(Math.min(...wOf), `三栏宽度不等（xl=8 应等宽）：${diag}`).toBeGreaterThan(300);
+    expect(Math.max(...wOf) - Math.min(...wOf), `三栏宽度不等（xl=8 应等宽）：${diag}`).toBeLessThan(4);
+
+    // ④ 正对照（证明上面的计数/几何断言不是空转）：
+    //    在**同一个作用域**里克隆一块面板卡塞回行内 → 同一个 locator 必须读到 4 张。
+    //    没有这一步，"toHaveCount(3) 通过"无法与"选择器永远匹配到 3 个东西"区分开
+    //    （本文件第二条用例的 `.sw-grid` 断言就有过这种假绿前科）。
+    await page
+      .locator(`${PANORAMA_SECTION} .ant-card`)
+      .filter({ hasText: "A股涨跌分布" })
+      .evaluate((node) => node.parentElement?.appendChild(node.cloneNode(true)));
+    expect(
+      await panoramaRow(page).count(),
+      "正对照失败：克隆一块面板后计数没变 —— 计数断言是空转的"
+    ).toBe(PANORAMA_PANEL_TITLES.length + 1);
+  });
+
+  test("390 下三块面板各自独占一行（1-up 堆叠），且页面不横向溢出", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto("/market?tab=panorama", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+    await expect(page.locator(".sw-grid").first()).toBeVisible();
+
+    await expect(panoramaRow(page)).toHaveCount(PANORAMA_PANEL_TITLES.length);
+    const boxes = await Promise.all(
+      PANORAMA_PANEL_TITLES.map(async (title) => {
+        const box = await page
+          .locator(`${PANORAMA_SECTION} .ant-card`)
+          .filter({ hasText: title })
+          .boundingBox();
+        expect(box, `面板「${title}」没有 boundingBox`).not.toBeNull();
+        return box!;
+      })
+    );
+    // 堆叠判据：三块 x 相同、y 严格递增（并排的话 y 会相等）
+    expect(boxes[0].x, "390 下第一块起点不一致").toBeCloseTo(boxes[1].x, 0);
+    expect(boxes[1].x, "390 下第二块起点不一致").toBeCloseTo(boxes[2].x, 0);
+    expect(boxes[0].y, "390 下未堆叠（1-up 失效）").toBeLessThan(boxes[1].y);
+    expect(boxes[1].y, "390 下未堆叠（1-up 失效）").toBeLessThan(boxes[2].y);
+    // 各块不得超出视口（溢出就是被推出屏外，点不到）
+    for (const [i, box] of boxes.entries()) {
+      expect(
+        Math.round(box.x + box.width),
+        `面板「${PANORAMA_PANEL_TITLES[i]}」超出 390 视口（x+w = ${Math.round(box.x + box.width)}）`
+      ).toBeLessThanOrEqual(391);
+    }
+  });
+});

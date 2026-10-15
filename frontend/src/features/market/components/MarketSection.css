@@ -1,0 +1,46 @@
+/*
+ * 行情中心「独立分区」壳体（P1-1 第一刀）。
+ *
+ * 版式主张：分区标题比面板卡头标题**大半级**（16/600 vs 14/600，契约 §3.5 的卡片标题刻度），
+ * 让"分区 > 面板"的层级一眼可读；维度条弱化为 12px secondary。
+ * 颜色一律走 CSS 变量，明暗双主题同一份样式（不引入新色值）。
+ */
+
+.market-section {
+  margin-bottom: 16px;
+}
+
+.market-section__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  /* 窄屏允许换行：extra 里的口径短句不该把标题挤到截断 */
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.market-section__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.market-section__extra {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 本地维度条：只做一行 12px secondary 的口径/维度说明，不抢面板卡头的注意力。
+   窄屏自动换行，且**不做 nowrap**（nowrap 的不可压缩子项会把 Col 顶宽成横向溢出，
+   见 SectorMoneyflowCard.css 里 `.mf-continuity__tag` 的同族实测）。 */
+.market-section__dimensions {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}

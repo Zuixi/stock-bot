@@ -53,6 +53,10 @@ const MOCK_USER = {
   status: "active",
   roles: ["trader"],
   permissions: ["stocks:read", "research:read"],
+  // 与其余 e2e mock（auth/sentiment/signalPanel/userIsolation）同址：缺这个字段会让
+  // `hasPermission` 的 `user.is_superuser` 分支读到 `undefined`（今天恰好等价 false，
+  // 但那是"靠 undefined 恰好为假"的运气，不是契约）。
+  is_superuser: false,
 };
 
 /** 元素是否**真的显示给用户**：命中测试（`elementFromPoint`）。
@@ -150,7 +154,25 @@ test.describe("一级导航：在顶栏 · 4 平铺 + 2 分组 · 顶层不溢�
 
   // 权限边界：**分组里若一个子项都不可见，整个分组不得渲染**——
   // 否则会留下一个"点开是空的"下拉，那是比"看不见入口"更糟的假入口。
-  test("@1280 无 research:read 时「研究」分组不得渲染为空下拉", async ({ page }) => {
+  //
+  // ⚠️ **本条断言修正于 2026-10-15（P1-1 任务实测）**，原文是
+  // `无 research:read ⇒ 「研究」分组 toHaveCount(0)`，前提写的是
+  // 「研究分组三个子项全部不可见」。该前提与 `MainLayout.tsx` 的 `NAV_PRESENTATION`
+  // **不符**：`/macro`（宏观分析）与 `/valuegraph`（价值网图谱）是 `authenticated`，
+  // 只有 `/sentiment`（情绪分析）要 `research:read`。于是"去掉 research:read"**永远不会**
+  // 让整组消失 —— 组里还有两个已登录可见的子项。
+  //
+  // 原文之所以平时是绿的，是因为它在**会话未解析**的窗口里跑（`user === null` ⇒ `visible()`
+  // 全假 ⇒ 整组不渲染 ⇒ 空断言恰好为真）。这一步是**竞态**：全量套件里实测**必红**
+  // （连续 3 次全量运行都红在这一条），单跑这 1 条必绿（412ms）。红的原因与页面/市场页无关，
+  // 是断言自己站不住。
+  //
+  // 改为直接断言**真实不变量**（不依赖会话何时落地）：无权时
+  //   ① 「研究」分组仍在，但**组内恰好只剩两个 `authenticated` 子项**、权限子项「情绪分析」消失
+  //      —— 这正是"不得渲染空下拉"要守的事实（组非空），且把"哪个子项该消失"钉死；
+  //   ② 「工具」分组同样在（正对照：选择器没写错）。
+  // 为消除竞态，断言前显式等"导航已按会话终态渲染"（出现 `authenticated` 子项「资讯」）。
+  test("@1280 无 research:read 时「研究」分组只漏掉权限子项、不渲染为空下拉", async ({ page }) => {
     await page.route("**/auth/**", (route) =>
       route.fulfill({
         status: 200,
@@ -166,16 +188,39 @@ test.describe("一级导航：在顶栏 · 4 平铺 + 2 分组 · 顶层不溢�
     await page.goto("/market", { waitUntil: "domcontentloaded" });
 
     const nav = page.getByTestId("primary-nav");
-    // 情绪分析/行业分析等需要 research:read ⇒ 研究分组三个子项全部不可见 ⇒ 整组消失
+    // 先等"导航确实按会话终态渲染过了"：`资讯` 是 `authenticated` 门禁的平铺项，
+    // 它在未登录态**不渲染**。等它出现 = 会话已解析完，后续断言不再与加载赛跑。
     await expect(
-      nav.locator(".ant-menu-submenu-title", { hasText: "研究" }),
-      "无权时「研究」分组仍渲染（会出现点开是空的假入口）"
-    ).toHaveCount(0);
+      nav.locator('[data-nav-label="资讯"]'),
+      "导航未按已登录态渲染（会话未解析）—— 断言会退化成空转"
+    ).toHaveCount(1);
+
+    const research = nav.locator(".ant-menu-submenu-title", { hasText: "研究" });
+    await expect(research, "「研究」分组整个不见了（组内仍有 authenticated 子项，不该消失）").toHaveCount(1);
     // 正对照：同一套选择器必须能找到仍然可见的「工具」分组，证明上一条不是"选择器写错"
     await expect(
       nav.locator(".ant-menu-submenu-title", { hasText: "工具" }),
       "正对照失败：连「工具」分组都找不到，说明上一条是选择器问题而非真的没有空下拉"
     ).toHaveCount(1);
+
+    // 展开分组：子项**用 `page` 作用域**（与本文件上面 GROUPS 循环里的写法逐字一致）——
+    // 横向 Menu 的子菜单挂在 portal（`.ant-menu-submenu-popup`）里，**不在** `primary-nav` 内，
+    // 故 `nav.locator("...")` 恒为 0（那会写出一条永远红的假断言）。
+    // 判据是**按名字点名**：两个 `authenticated` 子项必须在、权限子项必须不在 ——
+    // 两条合起来正是"组非空且过滤正确"。
+    await research.click();
+    await expect(
+      page.locator('[data-nav-label="宏观分析"]').last(),
+      "无 research:read 不应影响 authenticated 子项「宏观分析」（组被展开成空下拉 = 假入口）"
+    ).toHaveCount(1);
+    await expect(
+      page.locator('[data-nav-label="价值网图谱"]').last(),
+      "无 research:read 不应影响 authenticated 子项「价值网图谱」"
+    ).toHaveCount(1);
+    await expect(
+      page.locator('[data-nav-label="情绪分析"]'),
+      "无 research:read 时「情绪分析」仍渲染（点进去只会撞 403）"
+    ).toHaveCount(0);
   });
 });
 
