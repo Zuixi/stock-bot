@@ -80,10 +80,17 @@ async function isHitTestable(locator: Locator) {
   });
 }
 
-test.describe("一级导航：1280 / 1440 下 10 项全部可见", () => {
+// ⚠️ **断言的判据已按 owner 裁定重设（2026-10-15）**：
+// 设计整改 Phase 1 曾按 §0-A 裁定 A1 把一级导航从 Header 移入左侧图标栏，本用例当时断言
+// 「1280/1440 下 10 项全部可见」。**owner 实测后否决 A1、要求保持顶栏**，故：
+//   - 导航回到 Header ⇒ 10 项在 1280/1440 下**物理上放不下**（实测 @1440 折 3 项、@1280 折 4 项），
+//     "10 项全部可见"这条断言的前提本身就不成立了；
+//   - 但**"不许丢项"仍然是不变量** ⇒ 重设为：导航确实在顶栏 + 10 项全部渲染 +
+//     放不下的那些必须能通过 AntD 的 `...` 溢出菜单**到达**。
+test.describe("一级导航：在顶栏，且 10 项一个都不能丢", () => {
   for (const width of VIEWPORTS) {
-    test(`@${width} 一级导航 10 项全部可见`, async ({ page }) => {
-      // 未登录时 6 个 authenticated 项被隐藏（可见性三态），"10 项可见"就失去意义，
+    test(`@${width} 导航在 Header 内 · 10 项均渲染 · 放不下的可从溢出菜单到达`, async ({ page }) => {
+      // 未登录时 6 个 authenticated 项被隐藏（可见性三态），"10 项"就失去意义，
       // 故以"已登录且持 research:read"为前置——mock 会话，不碰真实鉴权。
       await page.route("**/auth/**", (route) =>
         route.fulfill({
@@ -98,7 +105,13 @@ test.describe("一级导航：1280 / 1440 下 10 项全部可见", () => {
       const nav = page.getByTestId("primary-nav");
       await expect(nav).toBeVisible();
 
-      // ① 10 个标签必须都渲染（防"清单改了、导航漏项"后断言静默变少）
+      // ① 导航必须在 **Header（顶栏）内** —— 把 owner 的要求机械化，防再次被搬去侧栏
+      expect(
+        await nav.evaluate((el) => !!el.closest("header.ant-layout-header")),
+        "@" + width + " 一级导航不在顶栏内（owner 要求保持 headbar 设计）"
+      ).toBe(true);
+
+      // ② 10 个标签必须都渲染（防"清单改了、导航漏项"后断言静默变少）
       const hidden = [];
       for (const label of NAV_LABELS) {
         const item = nav.locator(`[data-nav-label="${label}"]`);
@@ -106,42 +119,24 @@ test.describe("一级导航：1280 / 1440 下 10 项全部可见", () => {
         if (!(await isHitTestable(item))) hidden.push(label);
       }
 
-      // ② 一次性报出全部不可见项（逐条 expect 会在第一项就中断，看不到"折叠了哪几项"）
-      expect(
-        hidden,
-        `@${width} 一级导航有 ${hidden.length} 项对用户不可见（被折进 "..." 或推出容器）：` +
-          `${hidden.join("、")} —— 契约是 10 项全部可见（§0-A 裁定 A1 落地后转绿）`
-      ).toEqual([]);
+      // ③ 放不下的项**必须能到达**：点开 AntD 的 `...` 溢出菜单，逐个确认标签可见。
+      //    没有这一步，"折进 ..."与"整项丢失"无法区分——而后者才是真缺陷。
+      if (hidden.length > 0) {
+        const overflow = nav.locator(".ant-menu-overflow-item-rest").first();
+        await expect(overflow, `有 ${hidden.length} 项被折叠，但没有出现溢出菜单入口`).toBeVisible();
+        await overflow.click();
+        for (const label of hidden) {
+          await expect(
+            nav.locator(`[data-nav-label="${label}"]`).last(),
+            `被折叠的「${label}」无法从溢出菜单到达（等于丢项）`
+          ).toBeVisible();
+        }
+      }
     });
   }
 });
 
-// 回归守护（Phase 1 视觉复核实测补的修复）：模块二级树**只按 pathname 选树**时，
-// 匿名访问公开占位路由 `/news` 会渲染资讯的 4 个子节点，而「资讯」本身对匿名不可见
-// ⇒ 侧栏出现 4 个**没有父级的孤儿导航项**（普通交易员访问 /sentiment 同理，要 research:read）。
-// 不变量：二级树只在「该路径属于某个**可见**的一级导航」时才渲染。
-test.describe("模块二级树不得出现孤儿项", () => {
-  test("匿名 @1440：/news 不渲染资讯子树，/market 正常渲染（正对照）", async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
-
-    // ① 匿名 + /news：资讯不在匿名可见的一级导航里 ⇒ 它的 4 个子节点必须是 0
-    await page.goto("/news", { waitUntil: "domcontentloaded" });
-    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
-    const sidebar = page.getByTestId("module-side-nav");
-    for (const label of ["上市公司公告", "政府官媒政策", "研究资讯", "市场资讯"]) {
-      await expect(
-        sidebar.locator(`[data-nav-label="${label}"]`),
-        `孤儿导航项「${label}」：父级「资讯」对匿名不可见，不该单独出现`
-      ).toHaveCount(0);
-    }
-
-    // ② 正对照：同一套选择器 + 同一条路径前缀判断，在 /market（市场可见）下必须找得到树节点。
-    //    没有这一步，① 无法与"选择器写错了、永远数到 0"区分开。
-    await page.goto("/market?tab=panorama", { waitUntil: "domcontentloaded" });
-    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
-    await expect(
-      page.getByTestId("module-side-nav").locator('[data-nav-label="全球市场"]'),
-      "正对照失败：/market 的二级树没渲染出来，说明①是选择器写错而非真的没有孤儿项"
-    ).toHaveCount(1);
-  });
-});
+// 说明：Phase 1 曾有一条「模块二级树不得出现孤儿项」的守护，用于锁住侧栏二级树的
+// "只在所属一级导航可见时才渲染"这条不变量。owner 否决左侧栏后，二级树的用途已随
+// `MODULE_TREES` 一起删除（`ModuleSideNav` 现由调用方传空数组 ⇒ 整块不渲染），
+// 该守护失去被测对象，故删除；将来若重启三级布局，应把那条不变量一并恢复。

@@ -1,4 +1,4 @@
-import { Button, Drawer, Layout, Typography } from "antd";
+import { Layout, Typography } from "antd";
 import {
   BarChartOutlined,
   FundOutlined,
@@ -10,16 +10,15 @@ import {
   ExperimentOutlined,
   SafetyCertificateOutlined,
   SwapOutlined,
-  MenuOutlined,
 } from "@ant-design/icons";
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Outlet, useNavigate } from "react-router-dom";
 import { SearchBar } from "@/features/search/components/SearchBar";
 import { UserMenu, useAuthStore } from "@/features/auth";
 import { ThemeToggle } from "@/shared/ui";
 import { ModuleSideNav, NavTree } from "@/features/nav";
-import type { NavItem, NavVisibility } from "@/features/nav";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { NAV_ROOTS, pickModuleTree } from "@/app/router/route-manifest";
+import type { NavItem, NavNode, NavVisibility } from "@/features/nav";
+import { useCallback, useMemo, type ReactNode } from "react";
+import { NAV_ROOTS } from "@/app/router/route-manifest";
 
 const { Header, Content, Footer } = Layout;
 
@@ -52,7 +51,7 @@ const NAV_PRESENTATION: Record<string, { icon: ReactNode; visibility: NavVisibil
   "/trade": { icon: <SwapOutlined />, visibility: { kind: "authenticated" } },
 };
 
-/** 由清单的 `NAV_ROOTS`（path + 标题）+ 上表的图标/可见性合成侧栏数据 */
+/** 由清单的 `NAV_ROOTS`（path + 标题）+ 上表的图标/可见性合成顶栏数据 */
 const TOP_NAV: NavItem[] = NAV_ROOTS.map((nav) => {
   const presentation = NAV_PRESENTATION[nav.path];
   if (!presentation) {
@@ -66,54 +65,16 @@ const TOP_NAV: NavItem[] = NAV_ROOTS.map((nav) => {
 });
 
 /**
- * 四档断点（Phase 1 §W1.1，契约 docs/design/landing-market-theme.md 的断点节）：
- *
- * | 断点 | 一级导航形态 |
- * |---|---|
- * | `≥1280` | 左侧**常驻 208px** 完整栏（10 项全可见，这就是 §0.3 要的形态） |
- * | `1024–1279` | 左侧**折叠 64px 图标栏**，hover 展开浮层 |
- * | `<1024` | **抽屉**（`Drawer` + 汉堡按钮），不进内容流 |
- *
- * 为什么 `≥1280` 才常驻：1280 下"208px 侧栏 + 内容"仍能放下密集表格（§W1.3 把内容
- * `maxWidth` 收到 1280）；再窄就该让位给内容而不是继续挤。
- *
- * ⚠️ **AntD 的 `Grid.useBreakpoint()` 在 SSR/首帧返回空对象**，直接用会把首帧判成 `<1024`
- * 而闪一下抽屉。故用 `window.matchMedia` 真媒体查询（本页只在浏览器里跑），并给
- * `change` 事件挂监听——断点变化时重渲染，而不是只读一次。
+ * 模块内二级/三级树的 payload。本任务**不下发任何模块树**（后续由各模块配置 / 后端下发），
+ * 空数组 → 左侧树整块不渲染（`ModuleSideNav` 的契约）。提到模块级是为了避免每次渲染
+ * 新建数组字面量（无意义的 re-render 依赖）。
  */
-function useViewportTier(): "wide" | "mid" | "narrow" {
-  const [tier, setTier] = useState<"wide" | "mid" | "narrow">(() => {
-    if (typeof window === "undefined") return "wide";
-    return window.matchMedia("(min-width: 1280px)").matches
-      ? "wide"
-      : window.matchMedia("(min-width: 1024px)").matches
-        ? "mid"
-        : "narrow";
-  });
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const wide = window.matchMedia("(min-width: 1280px)");
-    const mid = window.matchMedia("(min-width: 1024px)");
-    const sync = () => setTier(wide.matches ? "wide" : mid.matches ? "mid" : "narrow");
-    wide.addEventListener("change", sync);
-    mid.addEventListener("change", sync);
-    sync();
-    return () => {
-      wide.removeEventListener("change", sync);
-      mid.removeEventListener("change", sync);
-    };
-    // 只挂一次：两个 query 对象在组件生命周期内不变
-  }, []);
-  return tier;
-}
+const MODULE_TREE: NavNode[] = [];
 
 export function MainLayout() {
   const navigate = useNavigate();
-  const location = useLocation();
   const { hasPermission } = useAuthStore();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  const tier = useViewportTier();
-  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const visible = useCallback(
     (visibility: NavVisibility) => {
@@ -135,52 +96,14 @@ export function MainLayout() {
     [visible]
   );
 
-  /**
-   * 模块内二级树（Phase 1 §W1.2）：按当前 pathname 的最长前缀从 `MODULE_TREES` 选树。
-   * 选树逻辑在清单侧（纯数据 + 纯路径比较），这里只管下发——组件仍不含业务知识。
-   *
-   * ⚠️ **必须同时受"该模块的一级导航可见"约束**（Phase 1 视觉复核实测补的修复）：
-   * 只按 pathname 选树时，匿名访问公开占位路由 `/news` 会渲染资讯的 4 个子节点，
-   * 而**资讯本身对匿名不可见** ⇒ 侧栏出现 4 个**没有父级的孤儿导航项**（普通交易员访问
-   * `/sentiment` 同理，因为情绪分析要 `research:read`）。判据：当前路径必须落在某个
-   * **可见**的一级导航之下，否则不渲染二级树。
-   */
-  const moduleNodes = useMemo(() => {
-    const inVisibleModule = navNodes.some(
-      (n) => location.pathname === n.path || location.pathname.startsWith(`${n.path}/`)
-    );
-    return inVisibleModule ? pickModuleTree(location.pathname) : [];
-  }, [location.pathname, navNodes]);
-
-  /** 侧栏一级导航：`inline` 模式（树/图标栏两用），外壳保留 `data-testid="primary-nav"`。
-   *
-   *  ⚠️ **`data-testid="primary-nav"` 与 `data-nav-label` 是 E2E 契约锚点**
-   *  （`e2e/nav.spec.ts` 用 `elementFromPoint` 命中测试断言"10 项对用户可见"）。
-   *  形态从顶栏换成侧栏，这两个锚点**一字不动**——否则那条断言会从"断言可见性"
-   *  退化成"找不到锚点"（Phase 0 的假绿坑之一）。
-   */
-  const primaryNav = (
-    <div data-testid="primary-nav">
-      <NavTree
-        nodes={navNodes}
-        mode="inline"
-        inlineCollapsed={tier === "mid"}
-        style={{ border: "none", background: "transparent" }}
-        data-testid="primary-nav-tree"
-      />
-    </div>
-  );
-
   return (
     <Layout style={{ minHeight: "100vh", background: "var(--bg-page)" }}>
-      {/* Header 只留全局工具（IA §3）：搜索 / 主题 / 用户菜单。
-          一级导航**不在**这里了——它是 §Why-now 表第一行的病灶（1440 下折叠 3 项）。 */}
       <Header
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 16,
-          padding: "0 16px 0 24px",
+          gap: 20,
+          padding: "0 24px",
           borderBottom: "1px solid var(--border)",
           position: "sticky",
           top: 0,
@@ -188,15 +111,6 @@ export function MainLayout() {
           background: "var(--bg-panel)",
         }}
       >
-        {tier === "narrow" ? (
-          <Button
-            type="text"
-            aria-label="打开导航"
-            data-testid="nav-hamburger"
-            icon={<MenuOutlined />}
-            onClick={() => setDrawerOpen(true)}
-          />
-        ) : null}
         <Typography.Title
           level={4}
           style={{ margin: 0, whiteSpace: "nowrap", color: "var(--accent)", cursor: "pointer" }}
@@ -204,54 +118,32 @@ export function MainLayout() {
         >
           StockBot
         </Typography.Title>
-        <div style={{ flex: 1 }} />
+        {/* 10 个一级导航（IA §1 顺序）；节点数据来自上方 TOP_NAV，组件本身不含业务知识。
+            ⚠️ 外壳带 `data-testid="primary-nav"`：`e2e/nav.spec.ts` 以它为作用域断言导航项。
+            该 testid 与 `data-nav-label` 是 **E2E 契约锚点**，换布局形态时必须保留，
+            否则断言会从"查可见性"退化成"找不到锚点"。
+            历史：设计整改 Phase 1 曾按 §0-A 裁定 A1 把导航移入左侧图标栏，
+            owner 实测后**否决 A1、要求保持顶栏**，故此处已回退（Phase 3/4 的成果不受影响）。 */}
+        <div data-testid="primary-nav" style={{ flex: 1, minWidth: 0, display: "flex" }}>
+          <NavTree
+            nodes={navNodes}
+            mode="horizontal"
+            style={{ flex: 1, border: "none", background: "transparent", minWidth: 0 }}
+            data-testid="top-nav"
+          />
+        </div>
+        {/* 右侧全局工具（IA §3）：搜索 / 主题 / 用户菜单——三者均为既有组件，本任务只保留位置 */}
         <SearchBar />
         <ThemeToggle />
         <UserMenu />
       </Header>
 
-      {/* `alignItems: "flex-start"` 是必须的：AntD 的 `Layout` 默认让子项沿交叉轴**拉伸**
-          等高，左栏一旦比正文高（或反过来）就会把对方拉到同一高度，页脚被顶出视口。
-          实测坑：加了 `position: sticky + height` 的 Sider 曾让内容不足一屏的 Tab 也长出
-          ~106px 的空白（`数据面` 从 900 → 973）。让两项各按自身内容高度布局即可消除。 */}
-      <Layout style={{ alignItems: "flex-start" }}>
-        {tier === "wide" ? (
-          <ModuleSideNav nodes={moduleNodes} primary={primaryNav} width={208} />
-        ) : tier === "mid" ? (
-          <ModuleSideNav nodes={moduleNodes} primary={primaryNav} collapsed />
-        ) : null}
-        <Content
-          style={{
-            padding: "16px 24px",
-            maxWidth: 1280,
-            width: "100%",
-            margin: "0 auto",
-            minWidth: 0,
-          }}
-        >
+      <Layout>
+        <ModuleSideNav nodes={MODULE_TREE} />
+        <Content style={{ padding: "16px 24px", maxWidth: 1400, width: "100%", margin: "0 auto" }}>
           <Outlet />
         </Content>
       </Layout>
-
-      {/* `<1024`：抽屉导航。**`primaryNav` 只在 `narrow` 时渲染在这里**——
-          宽屏下由上面的 `ModuleSideNav` 承载，两处互斥，故 DOM 里 `primary-nav` 恒只有一个
-          （若两处同时渲染，`nav.spec.ts` 的 `nav.locator('[data-nav-label="市场"]')`
-          会撞上两个元素，断言从"可见性"变成 strict-mode 报错）。 */}
-      {tier === "narrow" ? (
-        <Drawer
-          placement="left"
-          width={260}
-          open={drawerOpen}
-          onClose={() => setDrawerOpen(false)}
-          title="导航"
-          styles={{ body: { padding: 0 } }}
-          data-testid="nav-drawer"
-        >
-          {/* 点任意项即关抽屉：`NavTree` 的叶子 onClick 自己会 navigate，
-              这里只负责收起抽屉（在冒泡阶段收，不拦导航）。 */}
-          <div onClick={() => setDrawerOpen(false)}>{primaryNav}</div>
-        </Drawer>
-      ) : null}
 
       <Footer style={{ textAlign: "center", color: "var(--text-secondary)", fontSize: 12 }}>
         本站数据仅供参考，不构成投资建议。StockBot ©{new Date().getFullYear()}
