@@ -1,4 +1,9 @@
 import { expect, test } from "@playwright/test";
+import {
+  TRIPLET_LABEL,
+  TRIPLET_ORDER,
+  TRIPLET_WIDTH,
+} from "../src/shared/ui/instrumentTriplet";
 
 /**
  * 市场数据面 E2E（依赖运行中的 docker 栈，数据为实盘源）。
@@ -58,6 +63,43 @@ test.describe("市场数据面", () => {
     await page.getByRole("tab", { name: "龙虎榜", exact: true }).click();
     const board = page.locator(".ant-card").filter({ hasText: "数据面" });
     await expect15s(board.locator("thead th").filter({ hasText: "上榜原因" })).toBeVisible();
+
+    /**
+     * P1-2：**指标三元组契约**（最新价 → 涨跌额 → 涨跌幅，右对齐 + 固定列宽）。
+     *
+     * 为什么断言在 `thead` 且先收进 `board`（这张卡）：三元组现在出现在多张清单
+     * （榜单/自选/龙虎榜/…），全局 `getByText("涨跌幅")` 会撞 strict mode。
+     *
+     * 断言的是**列位与列宽**这两条契约本身，不是数值——数值来自实盘（会变），
+     * 而"哪一列在哪、有多宽、往哪对齐"是结构与设计契约，与数据无关，故这条用例
+     * 保持"断 UI 结构不断数值"的既有纪律。
+     *
+     * 列宽取自 `src/shared/ui/instrumentTriplet.ts`（**import 常量的用意**：断言的是
+     * "渲染出来的几何 == 声明的契约"，而不是把数字在 spec 里再抄一遍——抄一遍的话
+     * 实现漂移时 spec 会跟着漂）。1440 视口给容器留出余量，余量由"余量列"吸收，
+     * 三元组三列按声明值逐列精确（见 `WatchlistTable` 的 MIN_TABLE_WIDTH 注释）。
+     */
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const heads = board.locator(".ant-table-thead th");
+    const labels = (await heads.allInnerTexts()).map((t) => t.trim());
+    const first = labels.indexOf(TRIPLET_LABEL[TRIPLET_ORDER[0]]);
+    expect(first, `龙虎榜表头里找不到「${TRIPLET_LABEL[TRIPLET_ORDER[0]]}」：实际 ${JSON.stringify(labels)}`)
+      .toBeGreaterThanOrEqual(0);
+    expect(
+      labels.slice(first, first + TRIPLET_ORDER.length),
+      `三元组不齐/乱序：实际 ${JSON.stringify(labels)}`
+    ).toEqual(TRIPLET_ORDER.map((m) => TRIPLET_LABEL[m]));
+    for (let i = 0; i < TRIPLET_ORDER.length; i += 1) {
+      const th = heads.nth(first + i);
+      const member = TRIPLET_ORDER[i];
+      await expect(th, `${TRIPLET_LABEL[member]} 列没有右对齐`).toHaveCSS("text-align", "right");
+      const box = await th.boundingBox();
+      expect(
+        Math.round(box?.width ?? -1),
+        `${TRIPLET_LABEL[member]} 列宽 ${box?.width} ≠ 三元组契约 ${TRIPLET_WIDTH[member]}px`
+      ).toBe(TRIPLET_WIDTH[member]);
+    }
+
     await page.getByRole("tab", { name: "公告快讯" }).click();
     await expect15s(board.locator(".ant-list")).toBeVisible();
   });

@@ -1,0 +1,47 @@
+/* ── 标的清单的标识格 + 三元组格子（P1-2，见 InstrumentList.tsx）────────────── */
+
+/* 标识格：名称 + 小号代码**单行**。
+ * 名称可省略（长名字不许顶宽卡片），代码不换行（它是 6 位数字，换行等于不可读）。 */
+.inst-identity {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.inst-identity__name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.inst-identity__code {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* 三元组列的格子（`最新价` / `涨跌额` / `涨跌幅`，由各表用 `className` 挂在列上，
+ * th 与 td 都会带上）：
+ * ① **左右内边距归零** —— 表格列的 `width` 是 border-box，antd small 尺寸左右各 8px
+ *    内边距会把 66px 的列压成 50px 的内容盒。零内边距后**列宽 == 三元组槽宽**
+ *    （`TRIPLET_WIDTH`），与 `DataRow` 栅格的槽位逐像素相同，"跨表竖读"才成立；
+ * ② `white-space: nowrap` —— 否则 `+19.93%` 这类宽数字会在 66px 列里**折成两行**，
+ *    实测行高 39 → 61px（+56%）：密排当场变成松散，而"折行"正是本轮要消灭的东西。
+ * 垂直内边距保持 antd 默认（行高口径不变）。
+ */
+.inst-cell--triplet {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  white-space: nowrap;
+}
+
+/* 标识格是清单的**首列**：左内边距归零。
+ * 表格列的 `width` 是 border-box，antd small 的 8px 左内边距会把 110px 的标识列压成
+ * 94px 内容盒 —— 实测「莱美药业」+「300006」需要 98px，于是名称被 ellipsis 掉 4px
+ * （"莱美药…"）。标识列宽在 390 下必须给三元组让路（110 + 200 = 310 ≤ 316 实测内容宽），
+ * 不能靠加宽解决，故把首列的左内边距归零；右侧 8px 保留，行与行之间的节奏不变。
+ * 六张清单的首列都是标识格，处理一致。 */
+.inst-cell--identity {
+  padding-left: 0 !important;
+}

@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Children } from "react";
 import { Link } from "react-router-dom";
-import { DeltaText } from "./DeltaText";
+import { DeltaAbsText, DeltaText } from "./DeltaText";
+import { TRIPLET_GRID_TEMPLATE, TRIPLET_ORDER } from "./instrumentTriplet";
 import "./DataRow.css";
 
 export interface DataRowProps {
@@ -18,6 +19,21 @@ export interface DataRowProps {
    * 保持原样；需要「缺失显示 `--`」的数值消费方显式传入。
    */
   valuePlaceholder?: string;
+  /** 涨跌额（绝对变动，单位由清单口径决定，默认元）。缺失时渲染 `--`，**绝不回落 0**。 */
+  change?: number | null;
+  /**
+   * 涨跌额缺失时的占位符（如 `--`）。省略则**不渲染涨跌额槽**——没有该成员的载荷
+   * （如板块行的行业均涨幅）保持改造前的 DOM；需要"槽位留空、右边的涨跌幅列不许跳"
+   * 的标的清单显式传入（见 `instrumentTriplet.ts`）。
+   */
+  changePlaceholder?: string;
+  /**
+   * 行内数值槽的排布：
+   * - `stack`（默认）：最新价在上、涨跌幅在下（板块/行业清单的既有形态，改造前逐节点一致）；
+   * - `triplet`：**标的清单**的固定三列（最新价 → 涨跌额 → 涨跌幅），列宽取自
+   *   `instrumentTriplet.ts`。列宽固定 + `grid-column` 显式占位，才能跨行、跨表竖读。
+   */
+  variant?: "stack" | "triplet";
 }
 
 /** 标准数据行：左标识/名称，右数值/涨跌幅；有 `href` 时整行可点。 */
@@ -30,9 +46,14 @@ export function DataRow({
   href,
   delta,
   valuePlaceholder,
+  change,
+  changePlaceholder,
+  variant = "stack",
 }: DataRowProps) {
   const hasValue = value !== undefined && value !== "";
   const displayValue = hasValue ? value : valuePlaceholder;
+  const hasChange = change !== null && change !== undefined && !Number.isNaN(change);
+  const showChange = hasChange || changePlaceholder !== undefined;
   const body = (
     <>
       <span className="datarow__id">
@@ -42,14 +63,33 @@ export function DataRow({
           {ticker ? <span className="datarow__ticker">{ticker}</span> : null}
         </span>
       </span>
-      <span className="datarow__val num">
+      <span
+        className={`datarow__val num${variant === "triplet" ? " datarow__val--triplet" : ""}`}
+        // 三元组列宽是单一真相（`instrumentTriplet.ts`）：内联注入而不是让 CSS 再抄一套。
+        style={
+          variant === "triplet"
+            ? ({ gridTemplateColumns: TRIPLET_GRID_TEMPLATE } as CSSProperties)
+            : undefined
+        }
+      >
         {displayValue !== undefined && (
-          <span className="datarow__price">
+          <span className={`datarow__price datarow__slot--${TRIPLET_ORDER[0]}`}>
             {displayValue}
             {hasValue && unit ? <span className="datarow__unit"> {unit}</span> : null}
           </span>
         )}
-        <DeltaText value={delta} />
+        {showChange && (
+          <span className={`datarow__chg datarow__slot--${TRIPLET_ORDER[1]}`}>
+            {hasChange ? (
+              <DeltaAbsText value={change} />
+            ) : (
+              <span className="delta-abs delta--flat num">{changePlaceholder}</span>
+            )}
+          </span>
+        )}
+        <span className={`datarow__pct datarow__slot--${TRIPLET_ORDER[2]}`}>
+          <DeltaText value={delta} />
+        </span>
       </span>
     </>
   );

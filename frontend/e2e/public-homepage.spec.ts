@@ -1,5 +1,11 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
+import {
+  TRIPLET_GRID_TEMPLATE,
+  TRIPLET_LABEL,
+  TRIPLET_ORDER,
+  TRIPLET_WIDTH,
+} from "../src/shared/ui/instrumentTriplet";
 
 /**
  * 公开行情台首页 E2E。
@@ -580,6 +586,68 @@ test.describe("公开行情台首页 · 榜单区（Task 1.6 / 2.7）", () => {
     });
     // as_of 诚实展示（数据截至 2026-09-09，来自真实快照）
     await expect(section.getByText(/数据截至\s*9月9日/)).toBeVisible();
+
+    /**
+     * P1-2：**指标三元组契约**（最新价 → 涨跌额 → 涨跌幅，固定列位 + 右对齐 + 等宽数字）。
+     *
+     * 作用域 = 榜单卡（`section-rankings`）里的 **.datarow** 行：全局 getByText 在首页会
+     * 同时命中板块区/其它卡，故一律收进这一张卡、再收进行内。
+     *
+     * 断言的是**列位与列宽**，不是数值（数值随快照/实盘变；这里 mock 的行恰好
+     * `close`/`pct_chg` 有值而 `change` 不在载荷里，中间那格按契约渲染 `--`——
+     * 断言不读它，故后端将来补上 `change` 也不用改这条用例）。
+     */
+    const row = section.locator(".datarow", { hasText: "N洛轴股份" });
+    const val = row.locator(".datarow__val");
+    // ① 槽位**齐全、同序**（缺一个 / 换顺序 / 缺值不留位 都会让这条红）
+    const valSlots = val.locator(":scope > *");
+    await expect(
+      valSlots,
+      "三元组槽位数不等于契约 —— 缺成员或槽位被合并了"
+    ).toHaveCount(TRIPLET_ORDER.length);
+    for (let i = 0; i < TRIPLET_ORDER.length; i += 1) {
+      const cls = (await valSlots.nth(i).getAttribute("class")) ?? "";
+      expect(
+        cls.split(/\s+/),
+        `第 ${i + 1} 个槽位不是 ${TRIPLET_LABEL[TRIPLET_ORDER[i]]}：class="${cls}"`
+      ).toContain(`datarow__slot--${TRIPLET_ORDER[i]}`);
+      await expect(valSlots.nth(i), `${TRIPLET_LABEL[TRIPLET_ORDER[i]]} 槽位没有右对齐`).toHaveCSS(
+        "text-align",
+        "right"
+      );
+    }
+    // ② 栅格列宽 = 契约常量（槽位固定列宽是"跨行竖读"的前提：内容宽度排版会在缺值时左右跳）
+    await expect(val).toHaveCSS("grid-template-columns", TRIPLET_GRID_TEMPLATE);
+    // ③ 跨行竖读：**每一行**的三个槽位，宽度与"距该行右缘的偏移"都与第一行逐项相同
+    //    （3 列栅格里每行在各自栅格列，绝对 x 不同，故这里比的是相对行盒的几何）
+    const perRow = await section.locator(".datarow").evaluateAll((rows) =>
+      rows.map((r) => {
+        const rowRect = r.getBoundingClientRect();
+        return Array.from(r.querySelectorAll(".datarow__val > *")).map((s) => {
+          const rect = s.getBoundingClientRect();
+          return {
+            w: Math.round(rect.width),
+            fromRight: Math.round(rowRect.right - rect.right),
+          };
+        });
+      })
+    );
+    expect(perRow.length, "榜单没有行，三元组断言会退化成空转").toBeGreaterThan(1);
+    for (const [i, slots] of perRow.entries()) {
+      expect(slots.map((s) => s.w), `第 ${i + 1} 行的三元组列宽 ≠ 契约`).toEqual(
+        TRIPLET_ORDER.map((m) => TRIPLET_WIDTH[m])
+      );
+      expect(slots.map((s) => s.fromRight), `第 ${i + 1} 行的三元组列位与第 1 行不齐（竖读失败）`).toEqual(
+        perRow[0].map((s) => s.fromRight)
+      );
+    }
+    // ④ 正对照：删掉中间成员后，同一个计数断言必须变红 —— 证明上面的 `toHaveCount(3)`
+    //    不是写死的常量，而是真的在读 DOM（仓库里克隆卡片做正对照的同款思路）
+    await valSlots.nth(1).evaluate((el) => el.remove());
+    await expect(
+      val.locator(":scope > *"),
+      "正对照失败：删掉一个成员后槽位计数没变 —— 上面的计数断言是空转的"
+    ).toHaveCount(TRIPLET_ORDER.length - 1);
   });
 
   test("换手率榜：切 Tab 呈现换手率口径数据", async ({ page }) => {

@@ -72,7 +72,14 @@ export function RankingMatrix() {
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无榜单数据" />
       ) : (
         /* 3 列密排（Phase 4 §5.3）：10 行 × 64px 的竖排在 1120px 容器里两端相距 1300px，
-           改 3 列后同屏信息量 ×3、高度 ÷3（实测 694px → 约 300px），**一行数据都没删**。 */
+           改 3 列后同屏信息量 ×3、高度 ÷3（实测 694px → 约 300px），**一行数据都没删**。
+
+           P1-2：行内数值槽改成**指标三元组**（最新价 → 涨跌额 → 涨跌幅，固定列宽 + 右对齐 +
+           等宽数字），与自选/龙虎榜等标的清单同列宽，眼睛可以跨表竖读。`changePlaceholder="--"`
+           让中间的「涨跌额」槽**占位**：`/market/rankings` 的 `RankingItemOut` 只回
+           `close` / `pct_chg`（**没有** `change`/`pre_close`，实测载荷见 task-31-report），
+           所以这一格现在如实显示 `--`——留空槽位比省掉一列好：槽位塌陷会让右边的涨跌幅列
+           左右跳。补齐它需要后端在该端点加一个字段（前端不编造数字、不加新请求）。 */
         <DataRowList columns={3}>
           {rows.map((r) => {
             const amount = active === "amount" ? fmtAmountParts(r.amount) : undefined;
@@ -96,6 +103,8 @@ export function RankingMatrix() {
                 value={value}
                 unit={unit}
                 valuePlaceholder="--"
+                variant="triplet"
+                changePlaceholder="--"
                 delta={r.pct_chg}
                 href={`/company/${r.symbol}`}
               />

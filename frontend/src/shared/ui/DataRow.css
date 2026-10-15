@@ -47,6 +47,45 @@
   color: var(--text-secondary);
 }
 
+/* ── 标的清单的指标三元组（P1-2）────────────────────────────────────────────
+ * `最新价 → 涨跌额 → 涨跌幅` 三列**固定列宽**（列宽来自 `instrumentTriplet.ts` 的
+ * `TRIPLET_GRID_TEMPLATE`，由组件内联注入，这里不再抄一套数字）。
+ *
+ * 为什么是栅格而不是"按内容宽度排一排"：内容宽度排版在**缺值时会让右边的列左右跳**
+ * （同一清单里第 3 行有涨跌额、第 4 行没有 → 涨跌幅一栏对不齐），恰恰把"竖读"毁掉。
+ * 故用显式 `grid-column` 占位：某个成员缺失时该列**留空**，它右边的成员还在原来的列。
+ *
+ * `flex-shrink: 0` 是窄屏（390）不溢出的关键：三元组自身不压缩（压缩会让固定 px 的
+ * 列**溢出**行盒），需要让出的宽度由 `.datarow__id`（已有 `min-width: 0`）以标题省略号
+ * 的方式让出。
+ */
+.datarow__val--triplet {
+  display: grid;
+  justify-content: end;
+  align-items: baseline;
+  column-gap: 8px;
+  flex-shrink: 0;
+}
+.datarow__val--triplet .datarow__slot--price {
+  grid-column: 1;
+}
+.datarow__val--triplet .datarow__slot--change {
+  grid-column: 2;
+}
+.datarow__val--triplet .datarow__slot--pct {
+  grid-column: 3;
+}
+.datarow__val--triplet .datarow__slot--price,
+.datarow__val--triplet .datarow__slot--change,
+.datarow__val--triplet .datarow__slot--pct {
+  text-align: right;
+  white-space: nowrap;
+}
+.datarow__val--triplet .datarow__chg,
+.datarow__val--triplet .datarow__pct {
+  font-size: 13px;
+}
+
 /* ── 多列密排（Phase 4 §5.3）───────────────────────────────────────────────
  * `DataRowList` 的容器：把 n 个 DataRow 排成 columns 列。
  * - **边框归容器**：`.datarow` 的 `border-bottom` 在栅格里会让第 3、6、9 个元素
