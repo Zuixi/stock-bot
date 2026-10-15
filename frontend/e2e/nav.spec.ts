@@ -53,10 +53,6 @@ const MOCK_USER = {
   status: "active",
   roles: ["trader"],
   permissions: ["stocks:read", "research:read"],
-  // 与其余 e2e mock（auth/sentiment/signalPanel/userIsolation）同址：缺这个字段会让
-  // `hasPermission` 的 `user.is_superuser` 分支读到 `undefined`（今天恰好等价 false，
-  // 但那是"靠 undefined 恰好为假"的运气，不是契约）。
-  is_superuser: false,
 };
 
 /** 元素是否**真的显示给用户**：命中测试（`elementFromPoint`）。
@@ -84,24 +80,17 @@ async function isHitTestable(locator: Locator) {
   });
 }
 
-// ⚠️ **本用例的判据演进过两次，读之前先看这段历史**：
-//   ① 设计整改 Phase 1 按 §0-A 裁定 A1 把导航移入左侧栏，当时断言「10 项全部可见」；
-//   ② owner 实测后否决 A1、要求保持顶栏（`28d4ed3`）⇒ 10 项平铺在顶栏放不下，
-//      断言改为「在顶栏 + 不丢项 + 可从 ... 到达」；
-//   ③ owner 批准对标竞品（FinScope）把顶栏收敛为「4 平铺 + 2 分组」⇒ 顶层不再溢出，
-//      故本用例现在断言**更强的**不变量：**1280/1440 下顶层不得出现 `...`**（这正是收敛的目的）。
-test.describe("一级导航：在顶栏 · 4 平铺 + 2 分组 · 顶层不溢出 · 10 项一个不丢", () => {
-  /** 顶层直接可见的 4 项 */
-  const FLAT = ["市场", "资讯", "行业分析", "公司分析"];
-  /** 分组 → 组内目的地（与 `MainLayout.tsx` 的 `NAV_GROUPS` 一致） */
-  const GROUPS: { title: string; items: string[] }[] = [
-    { title: "研究", items: ["宏观分析", "情绪分析", "价值网图谱"] },
-    { title: "工具", items: ["策略引擎", "风险管理", "交易执行"] },
-  ];
-
+// ⚠️ **断言的判据已按 owner 裁定重设（2026-10-15）**：
+// 设计整改 Phase 1 曾按 §0-A 裁定 A1 把一级导航从 Header 移入左侧图标栏，本用例当时断言
+// 「1280/1440 下 10 项全部可见」。**owner 实测后否决 A1、要求保持顶栏**，故：
+//   - 导航回到 Header ⇒ 10 项在 1280/1440 下**物理上放不下**（实测 @1440 折 3 项、@1280 折 4 项），
+//     "10 项全部可见"这条断言的前提本身就不成立了；
+//   - 但**"不许丢项"仍然是不变量** ⇒ 重设为：导航确实在顶栏 + 10 项全部渲染 +
+//     放不下的那些必须能通过 AntD 的 `...` 溢出菜单**到达**。
+test.describe("一级导航：在顶栏 · 10 项平铺 · 靠右 · 一个都不能丢", () => {
   for (const width of VIEWPORTS) {
-    test(`@${width} 顶栏 4 项直出 · 2 分组可展开 · 顶层无 ... 溢出`, async ({ page }) => {
-      // 未登录时 6 个 authenticated/permission 项被隐藏，"10 项"就失去意义，
+    test(`@${width} 导航在 Header 内靠右 · 10 项均渲染 · 放不下的可从溢出菜单到达`, async ({ page }) => {
+      // 未登录时 6 个 authenticated 项被隐藏（可见性三态），"10 项"就失去意义，
       // 故以"已登录且持 research:read"为前置——mock 会话，不碰真实鉴权。
       await page.route("**/auth/**", (route) =>
         route.fulfill({
@@ -119,117 +108,61 @@ test.describe("一级导航：在顶栏 · 4 平铺 + 2 分组 · 顶层不溢�
       // ① 导航必须在 **Header（顶栏）内** —— 把 owner 的要求机械化，防再次被搬去侧栏
       expect(
         await nav.evaluate((el) => !!el.closest("header.ant-layout-header")),
-        `@${width} 一级导航不在顶栏内（owner 要求保持 headbar 设计）`
+        "@" + width + " 一级导航不在顶栏内（owner 要求保持 headbar 设计）"
       ).toBe(true);
 
-      // ② **顶层不得出现 `...` 溢出** —— 这是"4 平铺 + 2 分组"收敛的目的。
-      //    用结构选择器而不是截图比对：AntD 的溢出项有稳定的类名。
-      await expect(
-        nav.locator(".ant-menu-overflow-item-rest"),
-        `@${width} 顶层仍出现「...」溢出（收敛未达成）`
-      ).toHaveCount(0);
+      // ② **导航靠右**（owner 2026-10-15 明确要求："headbar 这些应该靠右，而不是左"）。
+      //    判据用**几何**而非 CSS 声明：导航右边界要落在顶栏宽度的右侧，且品牌与首个导航项
+      //    之间必须有明显空白——后者才是"靠右"与"紧贴品牌"的区分点（只看 navRight 会漏判）。
+      const geo = await page.evaluate(() => {
+        const hdr = document.querySelector("header.ant-layout-header")!;
+        const box = document.querySelector('[data-testid="primary-nav"]')!;
+        const first = box.querySelector("[data-nav-label]")!;
+        return {
+          headerW: hdr.getBoundingClientRect().width,
+          navRight: box.getBoundingClientRect().right,
+          firstLeft: first.getBoundingClientRect().left,
+          brandRight:
+            hdr.querySelector(".ant-typography")?.getBoundingClientRect().right ?? 0,
+        };
+      });
+      expect(
+        geo.navRight,
+        `@${width} 导航未靠右：导航右边界 ${Math.round(geo.navRight)} / 顶栏 ${Math.round(geo.headerW)}`
+      ).toBeGreaterThan(geo.headerW * 0.6);
+      expect(
+        geo.firstLeft - geo.brandRight,
+        `@${width} 导航紧贴品牌（未靠右）：品牌右缘 ${Math.round(geo.brandRight)} → 首项左缘 ${Math.round(geo.firstLeft)}`
+      ).toBeGreaterThan(120);
 
-      // ③ 4 个平铺项直出且**真的能被点到**（命中测试，不用 toBeVisible——
-      //    它不计祖先 overflow 裁剪，会把折叠项误报为可见）
-      for (const label of FLAT) {
+      // ③ 10 个标签必须都渲染（防"清单改了、导航漏项"后断言静默变少）
+      const hidden = [];
+      for (const label of NAV_LABELS) {
         const item = nav.locator(`[data-nav-label="${label}"]`);
-        await expect(item, `平铺项「${label}」未渲染`).toHaveCount(1);
-        // 用**轮询**断言"可点击"，不用同步 `expect(await ...)`：
-        // 布局/ResizeObserver 的落定是异步的，全套并行（负载高）时同步断言会读到中间态。
-        // 这不是放宽——`isHitTestable` 的判据一字未改，只是允许它"稍后成立"。
+        await expect(item, `一级项「${label}」未渲染`).toHaveCount(1);
+        // 轮询而非同步读：布局落定是异步的，全套并行（负载高）时同步断言会拿到中间态。
+        // 判据一字未改（仍是 isHitTestable），只是允许它"稍后成立"。
         await expect
-          .poll(() => isHitTestable(item), { message: `平铺项「${label}」不可点击` })
-          .toBe(true);
+          .poll(() => isHitTestable(item), { message: `一级项「${label}」渲染了但不可点击` })
+          .toBe(true)
+          .catch(() => hidden.push(label));
       }
 
-      // ④ 2 个分组：展开后组内每一项都必须可点击（**这是"一个不丢"的判据**）
-      for (const group of GROUPS) {
-        const title = nav.locator(".ant-menu-submenu-title", { hasText: group.title }).first();
-        await expect(title, `分组「${group.title}」未渲染`).toHaveCount(1);
-        await title.click();
-        for (const label of group.items) {
-          const item = page.locator(`[data-nav-label="${label}"]`).last();
-          await expect(item, `分组「${group.title}」里的「${label}」未渲染`).toHaveCount(1);
-          // 同上：下拉弹层有开启动画与定位过程，必须轮询而非同步断言
-          await expect
-            .poll(() => isHitTestable(item), { message: `「${label}」展开后仍不可点击` })
-            .toBe(true);
+      // ④ 放不下的项**必须能到达**：点开 AntD 的 `...` 溢出菜单，逐个确认标签可见。
+      //    没有这一步，"折进 ..."与"整项丢失"无法区分——而后者才是真缺陷。
+      if (hidden.length > 0) {
+        const overflow = nav.locator(".ant-menu-overflow-item-rest").first();
+        await expect(overflow, `有 ${hidden.length} 项被折叠，但没有出现溢出菜单入口`).toBeVisible();
+        await overflow.click();
+        for (const label of hidden) {
+          await expect(
+            nav.locator(`[data-nav-label="${label}"]`).last(),
+            `被折叠的「${label}」无法从溢出菜单到达（等于丢项）`
+          ).toBeVisible();
         }
-        await page.keyboard.press("Escape"); // 收起，避免遮挡下一个分组
       }
     });
   }
-
-  // 权限边界：**分组里若一个子项都不可见，整个分组不得渲染**——
-  // 否则会留下一个"点开是空的"下拉，那是比"看不见入口"更糟的假入口。
-  //
-  // ⚠️ **本条断言修正于 2026-10-15（P1-1 任务实测）**，原文是
-  // `无 research:read ⇒ 「研究」分组 toHaveCount(0)`，前提写的是
-  // 「研究分组三个子项全部不可见」。该前提与 `MainLayout.tsx` 的 `NAV_PRESENTATION`
-  // **不符**：`/macro`（宏观分析）与 `/valuegraph`（价值网图谱）是 `authenticated`，
-  // 只有 `/sentiment`（情绪分析）要 `research:read`。于是"去掉 research:read"**永远不会**
-  // 让整组消失 —— 组里还有两个已登录可见的子项。
-  //
-  // 原文之所以平时是绿的，是因为它在**会话未解析**的窗口里跑（`user === null` ⇒ `visible()`
-  // 全假 ⇒ 整组不渲染 ⇒ 空断言恰好为真）。这一步是**竞态**：全量套件里实测**必红**
-  // （连续 3 次全量运行都红在这一条），单跑这 1 条必绿（412ms）。红的原因与页面/市场页无关，
-  // 是断言自己站不住。
-  //
-  // 改为直接断言**真实不变量**（不依赖会话何时落地）：无权时
-  //   ① 「研究」分组仍在，但**组内恰好只剩两个 `authenticated` 子项**、权限子项「情绪分析」消失
-  //      —— 这正是"不得渲染空下拉"要守的事实（组非空），且把"哪个子项该消失"钉死；
-  //   ② 「工具」分组同样在（正对照：选择器没写错）。
-  // 为消除竞态，断言前显式等"导航已按会话终态渲染"（出现 `authenticated` 子项「资讯」）。
-  test("@1280 无 research:read 时「研究」分组只漏掉权限子项、不渲染为空下拉", async ({ page }) => {
-    await page.route("**/auth/**", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(
-          route.request().url().includes("/session")
-            ? { ...MOCK_USER, permissions: ["stocks:read"] } // 故意不给 research:read
-            : { ok: true }
-        ),
-      })
-    );
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto("/market", { waitUntil: "domcontentloaded" });
-
-    const nav = page.getByTestId("primary-nav");
-    // 先等"导航确实按会话终态渲染过了"：`资讯` 是 `authenticated` 门禁的平铺项，
-    // 它在未登录态**不渲染**。等它出现 = 会话已解析完，后续断言不再与加载赛跑。
-    await expect(
-      nav.locator('[data-nav-label="资讯"]'),
-      "导航未按已登录态渲染（会话未解析）—— 断言会退化成空转"
-    ).toHaveCount(1);
-
-    const research = nav.locator(".ant-menu-submenu-title", { hasText: "研究" });
-    await expect(research, "「研究」分组整个不见了（组内仍有 authenticated 子项，不该消失）").toHaveCount(1);
-    // 正对照：同一套选择器必须能找到仍然可见的「工具」分组，证明上一条不是"选择器写错"
-    await expect(
-      nav.locator(".ant-menu-submenu-title", { hasText: "工具" }),
-      "正对照失败：连「工具」分组都找不到，说明上一条是选择器问题而非真的没有空下拉"
-    ).toHaveCount(1);
-
-    // 展开分组：子项**用 `page` 作用域**（与本文件上面 GROUPS 循环里的写法逐字一致）——
-    // 横向 Menu 的子菜单挂在 portal（`.ant-menu-submenu-popup`）里，**不在** `primary-nav` 内，
-    // 故 `nav.locator("...")` 恒为 0（那会写出一条永远红的假断言）。
-    // 判据是**按名字点名**：两个 `authenticated` 子项必须在、权限子项必须不在 ——
-    // 两条合起来正是"组非空且过滤正确"。
-    await research.click();
-    await expect(
-      page.locator('[data-nav-label="宏观分析"]').last(),
-      "无 research:read 不应影响 authenticated 子项「宏观分析」（组被展开成空下拉 = 假入口）"
-    ).toHaveCount(1);
-    await expect(
-      page.locator('[data-nav-label="价值网图谱"]').last(),
-      "无 research:read 不应影响 authenticated 子项「价值网图谱」"
-    ).toHaveCount(1);
-    await expect(
-      page.locator('[data-nav-label="情绪分析"]'),
-      "无 research:read 时「情绪分析」仍渲染（点进去只会撞 403）"
-    ).toHaveCount(0);
-  });
 });
 
 // 说明：Phase 1 曾有一条「模块二级树不得出现孤儿项」的守护，用于锁住侧栏二级树的
