@@ -44,6 +44,36 @@ const CHUNK_MS = 31_000;
 /** Node 侧真实 sleep：`page.waitForTimeout` 在装了假时钟的上下文里语义可疑，不用它。 */
 const realSleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * 等某个计数**稳定下来**再断言（取代原先固定的 `realSleep(400)`）。
+ *
+ * 为什么需要：本文件用**假时钟**推进 930s、数**真实网络请求**——假时钟只冻 `Date`/定时器，
+ * 请求仍要走真实网络并异步落地，所以断言前必须给它时间。固定 400ms 在**全套并行**时不够
+ * （首屏改成"分区堆叠"后并发请求更多），实测出现过 `indexPolls=1`（期望 ≥2）的偶发红；
+ * 而单跑该 spec 时 3/3 全绿。
+ *
+ * **这不是放宽断言**：下面 `>= 2` 恰恰是"300s 量级、而非 30s/60s"的证据，必须保留。
+ * 这里改成"计数连续 `quietMs` 无变化即视为稳定"，最多等 `capMs` ⇒ 负载高时只是**多等一会**。
+ */
+async function waitCountStable(
+  read: () => number,
+  { quietMs = 600, capMs = 6_000 }: { quietMs?: number; capMs?: number } = {}
+): Promise<void> {
+  const started = Date.now();
+  let last = read();
+  let quietSince = Date.now();
+  while (Date.now() - started < capMs) {
+    await realSleep(100);
+    const now = read();
+    if (now !== last) {
+      last = now;
+      quietSince = Date.now();
+    } else if (Date.now() - quietSince >= quietMs) {
+      return;
+    }
+  }
+}
+
 /** 统计本页发往 `/api/v1/market/<x>` 的**真实**请求次数（按端点分桶）。 */
 function trackMarketRequests(page: Page): Map<string, number> {
   const counts = new Map<string, number>();
@@ -146,7 +176,8 @@ test.describe("市场卡片轮询节奏", () => {
     expect(indexBefore).toBeGreaterThan(0);
 
     await advanceInChunks(page, CHUNKS, CHUNK_MS);
-    await realSleep(400); // 事件队列里最后几个请求计数落地
+    // 等计数稳定（负载高时只是多等一会，**不放宽** 下面 `>= 2` 那条证据）
+    await waitCountStable(() => counts.get("global-indices") ?? 0);
 
     // 全球盘常驻慢轮询：930s 内至少 2 次（含 300s/600s 两个边界），且远慢于盘中节奏
     const indexPolls = counts.get("global-indices")! - indexBefore;

@@ -134,7 +134,12 @@ test.describe("一级导航：在顶栏 · 4 平铺 + 2 分组 · 顶层不溢�
       for (const label of FLAT) {
         const item = nav.locator(`[data-nav-label="${label}"]`);
         await expect(item, `平铺项「${label}」未渲染`).toHaveCount(1);
-        expect(await isHitTestable(item), `平铺项「${label}」不可点击`).toBe(true);
+        // 用**轮询**断言"可点击"，不用同步 `expect(await ...)`：
+        // 布局/ResizeObserver 的落定是异步的，全套并行（负载高）时同步断言会读到中间态。
+        // 这不是放宽——`isHitTestable` 的判据一字未改，只是允许它"稍后成立"。
+        await expect
+          .poll(() => isHitTestable(item), { message: `平铺项「${label}」不可点击` })
+          .toBe(true);
       }
 
       // ④ 2 个分组：展开后组内每一项都必须可点击（**这是"一个不丢"的判据**）
@@ -145,7 +150,10 @@ test.describe("一级导航：在顶栏 · 4 平铺 + 2 分组 · 顶层不溢�
         for (const label of group.items) {
           const item = page.locator(`[data-nav-label="${label}"]`).last();
           await expect(item, `分组「${group.title}」里的「${label}」未渲染`).toHaveCount(1);
-          expect(await isHitTestable(item), `「${label}」展开后仍不可点击`).toBe(true);
+          // 同上：下拉弹层有开启动画与定位过程，必须轮询而非同步断言
+          await expect
+            .poll(() => isHitTestable(item), { message: `「${label}」展开后仍不可点击` })
+            .toBe(true);
         }
         await page.keyboard.press("Escape"); // 收起，避免遮挡下一个分组
       }
