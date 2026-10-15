@@ -1,3 +1,18 @@
+## 2026-10-15 - **按 owner 实测反馈回退 A1：一级导航从左侧栏搬回顶栏**（推翻 §0-A 裁定 A1）
+
+owner 实测后表示不喜欢左侧栏、要求保持 headbar 设计。这是对设计整改 §0-A 裁定 **A1 的推翻**，按 owner 意愿回退（`28d4ed3`）。
+
+**做法（不是整体 revert）**：W1（导航入侧栏）与 W2（信息去重）在**同一个提交**（`7413c40`）里，故改为把 `MainLayout` 恢复到 Phase 1 之前，**再保留后续阶段的成果**——实测确认保留：Phase 2 的 `--mag-*` 中性色阶（申万网格已是灰阶、无 accent 蓝块）、瓦片单行、等宽数字、日期口径；Phase 3 的响应式；Phase 1 的 W2 去重与 `/market/data-sources`；Phase 4 的品牌 `StockBot`。
+
+**连带清理（随用途消失的死代码，Ruling 33）**：删除 `route-manifest.ts` 的 `MODULE_TREES` + `pickModuleTree`（**103 行**）——它们本就是 Phase 1 为侧栏新增的，回退后无任何消费者（已核：门禁亦不依赖）；并修正 `ModuleSideNav` 与 `module-roadmap` 里两处仍在引用 `MODULE_TREES` 的注释。
+
+**`nav.spec.ts` 的断言按 owner 裁定重设**（原断言的前提随 A1 一起失效）：
+- 原「@1280/@1440 下 **10 项全部可见**」——顶栏放 10 项**物理上不可能**（实测 @1440 折 3 项、@1280 折 4 项），该断言的前提不成立；
+- 新：① 导航**必须在 `header.ant-layout-header` 内**（把 owner 的要求机械化，防再被搬去侧栏）② 10 项全部渲染（**不丢项**）③ 被折叠的项**必须能通过 AntD 的 `...` 溢出菜单到达**（区分"折进 `...`"与"整项丢失"，后者才是真缺陷）；
+- 同时删除「模块二级树不得出现孤儿项」那条守护：侧栏回退后模块树不再渲染（`ModuleSideNav` 现由调用方传空数组 ⇒ 整块不渲染），**被测对象消失**，已在文件内写明历史与"将来若重启三级布局应恢复哪条不变量"。
+
+**验证**：`tsc` 0 · `build` 0 · `check:routes` 87 ✓ · `check:design` 0 ✓ · `self_review` ✓ · `nav.spec` **5 passed**（含"导航在 `header` 内"与"溢出项可到达"）· **全套 e2e 189 passed / 13 skipped / 0 failed** · 实测顶栏导航高 63px、DOM 中已无 `aside/Sider`、10 项齐。
+
 ## 2026-10-15 - **前端设计整改 Phase 4：W5 文案与打磨** —— 计划收官（Phase 0–4 全部完成）
 
 依 `plans/2026-10-13-frontend-design-remediation.md` §6 执行（`9f52574` + `e5ef9bf`）。计划 `status: completed`，`plans/index.md` 已同步。
