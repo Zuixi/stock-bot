@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -93,6 +94,58 @@ def test_lag_trading_days_counts_days_after_latest_up_to_target() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 1b. 纯函数：降级判据（值 → NULL 拒绝；NULL → 值 / 值 → 值 放行）
+# ---------------------------------------------------------------------------
+
+
+def _snap_row(key: str, day: date, value: float) -> dict[str, Any]:
+    return {
+        "industry_key": "market",
+        "stock_id": 0,
+        "metric_key": key,
+        "source": "local_calc",
+        "source_tier": "derived",
+        "freq": "daily",
+        "period": day,
+        "value": value,
+        "unit": "%",
+        "extra": {"k": 1},
+        "published_at": datetime(2026, 10, 1, 15, tzinfo=CN),
+        "caliber_version": "s1.8-v2",
+    }
+
+
+D1, D2 = date(2026, 10, 14), date(2026, 10, 15)
+
+
+def test_downgraded_rows_only_returns_non_null_to_null() -> None:
+    """只有"快照非 NULL、现在变 NULL"算降级；补数（NULL→值）与修订（值→值）都不算."""
+    snap = [_snap_row("k1", D1, 1.0), _snap_row("k2", D1, 2.0), _snap_row("k1", D2, 3.0)]
+    current = {
+        ("k1", D1): None,  # ← 降级，要恢复
+        ("k2", D1): 9.9,  # 修订：放行
+        ("k1", D2): 3.0,  # 未变
+    }
+    out = dms.downgraded_rows(snap, current)
+    assert [(r["metric_key"], r["period"]) for r in out] == [("k1", D1)]
+    # 恢复的是**整行**（唯一键四列都在），否则会插成另一条键而不是覆盖
+    assert out[0]["source"] == "local_calc" and out[0]["freq"] == "daily"
+    assert out[0]["value"] == 1.0
+
+
+def test_downgraded_rows_treats_missing_row_as_downgrade() -> None:
+    """行整个不见了（不该发生）也算降级 —— 恢复比丢值好."""
+    snap = [_snap_row("k1", D1, 1.0)]
+    assert len(dms.downgraded_rows(snap, {})) == 1
+
+
+def test_downgraded_rows_is_empty_when_all_kept() -> None:
+    snap = [_snap_row("k1", D1, 1.0), _snap_row("k2", D2, 2.0)]
+    current = {("k1", D1): 1.0, ("k2", D2): None if False else 2.5}
+    assert dms.downgraded_rows(snap, current) == []
+
+
+# ---------------------------------------------------------------------------
 # 2. 编排：假 session + 打桩
 # ---------------------------------------------------------------------------
 
@@ -138,6 +191,8 @@ def _patch_common(
         "runs": [],
         "latest": dict(latest_by_leg or {}),
         "default_latest": target,
+        "loads": [],
+        "restored": [],
     }
 
     async def _fake_recent(db: Any, *, as_of: date, limit: int) -> list[date]:
@@ -153,9 +208,20 @@ def _patch_common(
 
     state["first_key"] = {v: k for k, v in LEG_FIRST_KEY.items()}
 
+    async def _fake_load(db: Any, metric_keys: Any, day_lo: date, day_hi: date) -> list[Any]:
+        state["loads"].append((tuple(metric_keys), day_lo, day_hi))
+        return list(state.get("window_rows", []))
+
+    async def _fake_restore(db: Any, **kw: Any) -> list[Any]:
+        state["restore_calls"] = state.get("restore_calls", 0) + 1
+        return list(state.get("restored", []))
+
     monkeypatch.setattr(dms, "_recent_trade_days", _fake_recent)
     monkeypatch.setattr(dms, "prerequisites_ready", _fake_prereq)
     monkeypatch.setattr(dms, "_latest_period", _fake_latest)
+    # 降级保护的两处 IO 也要打桩：编排测试必须保持"不直接碰 session.execute"
+    monkeypatch.setattr(dms, "load_window_rows", _fake_load)
+    monkeypatch.setattr(dms, "restore_downgraded", _fake_restore)
     return state
 
 
@@ -273,6 +339,56 @@ async def test_converge_runs_all_legs_and_composite_when_ready(
     assert result.composite["effective_weight_at_target"] == 0.88
     assert result.composite["legs_at_target"] == 10
     assert result.alerts == []
+
+
+async def test_downgrade_blocked_is_surfaced_as_alert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """降级保护生效时必须**告警**（值保住了，但"源侧本轮缺数"不能沉默）."""
+    state = _patch_common(monkeypatch)
+    state["default_latest"] = date(2026, 10, 9)
+    state["window_rows"] = [_snap_row("above_ma20_ratio", date(2026, 10, 14), 23.2655)]
+    state["restored"] = [("above_ma20_ratio", date(2026, 10, 14))]
+    _stub_legs(monkeypatch, state)
+
+    from app.services import market_sentiment_composite_service as composite_svc
+
+    async def _fake_upsert(*_a: Any, **_k: Any) -> Any:
+        return composite_svc.BackfillStats(
+            period_lo=WINDOW_DAYS[0],
+            period_hi=TARGET,
+            rows_upserted=10,
+            value_days=10,
+            null_days=0,
+            missing_reasons={},
+            participating_days={},
+            eras=[],
+            rows_dropped_other_caliber={},
+            sources={},
+        )
+
+    async def _fake_row(*_a: Any, **_k: Any) -> Any:
+        return type(
+            "R",
+            (),
+            {
+                "value": 50.0,
+                "extra": {"participants": ["a"] * 10, "effective_weight_sum": 0.88},
+            },
+        )()
+
+    monkeypatch.setattr(composite_svc, "upsert_composite_range", _fake_upsert)
+    monkeypatch.setattr(composite_svc, "get_metric_row_at", _fake_row)
+
+    result = await dms._converge_inner(_FakeSession(), target=TARGET, legs_filter=None, window=10)
+
+    by_key = {leg.key: leg for leg in result.legs}
+    assert by_key["breadth"].detail.get("value_downgrade_blocked") == 1
+    # 四条腿 + composite 各被调一次；告警逐腿出现
+    assert "value_downgrade_blocked:breadth=1" in result.alerts
+    assert state["restore_calls"] == 5
+    # 快照必须是**重算前**读的（load 的窗口 = 腿自己的窗口）
+    assert any(lo == date(2026, 9, 25) and hi == TARGET for _keys, lo, hi in state["loads"])
 
 
 async def test_leg_failure_is_isolated_and_does_not_block_others(
@@ -855,3 +971,137 @@ def test_thin_day_is_rewritten_to_null_then_healed_on_rerun() -> None:
             await engine.dispose()
 
     assert asyncio.run(_count()) == baseline, "测试必须回滚，库里不得留下行"
+
+
+#: 降级保护用例专用：**合成 key + 远期日期**，与任何真实指标/日期都不重叠。
+_PROBE_KEY = "zz_test_downgrade_probe"
+_PROBE_DAY = date(2019, 7, 15)
+_PROBE_GOOD = 23.2655
+
+
+@pytest.mark.e2e
+@requires_pg
+def test_good_value_is_not_downgraded_to_null_by_a_transient_outage() -> None:
+    """**降级保护的真库证明**（复现复核里实测到的危险行为，全事务回滚）.
+
+    危险行为：共享 upsert 对 `value`/`extra` 是 `excluded.*` 直接覆盖，而收敛器每天 3 次
+    重写 10 天窗口 ⇒ 某一轮源侧返回空时，窗口内**早就正确观测到**的历史值会被改写成 NULL。
+
+    本用例用**合成 key + 远期日期**（不与任何真实指标/日期重叠），逐步断言：
+    1. 好值写入后，一次"源侧缺数"的 upsert **确实**会把它改成 NULL（证明危险是真的）；
+    2. `restore_downgraded` 把它恢复回原值，且 `missing_reason` 一并消失（extra 整行取回）；
+    3. 恢复是**覆盖**同一唯一键，不新增行（少取 source/freq 会插成第二条键）；
+    4. **NULL → 值（补数）不被拦**：源侧迟到补数照常写入（否则会挡死自愈）。
+    """
+    from sqlalchemy import text as sql_text
+    from sqlalchemy.ext.asyncio import AsyncSession as _Session
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    def _row(value: float | None, extra: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "industry_key": "market",
+            "stock_id": 0,
+            "metric_key": _PROBE_KEY,
+            "source": "local_calc",
+            "source_tier": "derived",
+            "freq": "daily",
+            "period": _PROBE_DAY,
+            "value": value,
+            "unit": "%",
+            "extra": extra,
+            "published_at": datetime(2019, 7, 15, 15, tzinfo=CN),
+            "caliber_version": "test-v1",
+        }
+
+    async def _go() -> dict[str, Any]:
+        eng = create_async_engine(ASYNC_URL)
+        try:
+            async with eng.connect() as conn:
+                tr = await conn.begin()
+                db = _Session(bind=conn)
+                try:
+                    q = sql_text(
+                        "SELECT value, extra->>'missing_reason', source, freq "
+                        "FROM industry_metrics "
+                        "WHERE industry_key='market' AND metric_key=:k AND period=:d"
+                    )
+                    await dms.upsert_metric_rows(db, [_row(_PROBE_GOOD, {"coverage": 1.0})])
+                    await db.commit()
+                    snap = await dms.load_window_rows(db, (_PROBE_KEY,), _PROBE_DAY, _PROBE_DAY)
+                    non_null = [r for r in snap if r["value"] is not None]
+                    assert len(non_null) == 1 and non_null[0]["value"] == _PROBE_GOOD
+
+                    # ① 源侧缺数：直写 NULL —— 确认危险行为真实存在
+                    await dms.upsert_metric_rows(
+                        db, [_row(None, {"missing_reason": "source_empty"})]
+                    )
+                    await db.commit()
+                    after_outage = (await conn.execute(q, {"k": _PROBE_KEY, "d": _PROBE_DAY})).all()
+
+                    # ② 恢复
+                    restored = await dms.restore_downgraded(
+                        db,
+                        metric_keys=(_PROBE_KEY,),
+                        day_lo=_PROBE_DAY,
+                        day_hi=_PROBE_DAY,
+                        snapshot=non_null,
+                    )
+                    after_restore = (
+                        await conn.execute(q, {"k": _PROBE_KEY, "d": _PROBE_DAY})
+                    ).all()
+
+                    # ③ 行数（覆盖而非新增）
+                    n_rows = (
+                        await conn.execute(
+                            sql_text(
+                                "SELECT count(*) FROM industry_metrics "
+                                "WHERE industry_key='market' AND metric_key=:k"
+                            ),
+                            {"k": _PROBE_KEY},
+                        )
+                    ).scalar()
+
+                    # ④ NULL → 值（迟到补数）不得被拦
+                    await dms.upsert_metric_rows(db, [_row(41.5, {"late": True})])
+                    await db.commit()
+                    upgraded = (await conn.execute(q, {"k": _PROBE_KEY, "d": _PROBE_DAY})).all()
+                    restored2 = await dms.restore_downgraded(
+                        db,
+                        metric_keys=(_PROBE_KEY,),
+                        day_lo=_PROBE_DAY,
+                        day_hi=_PROBE_DAY,
+                        snapshot=non_null,
+                    )
+                    after_upgrade = (
+                        await conn.execute(q, {"k": _PROBE_KEY, "d": _PROBE_DAY})
+                    ).all()
+
+                    await db.rollback()
+                    await tr.rollback()
+                    return {
+                        "after_outage": after_outage,
+                        "restored": restored,
+                        "after_restore": after_restore,
+                        "rows": n_rows,
+                        "upgraded": upgraded,
+                        "restored2": restored2,
+                        "after_upgrade": after_upgrade,
+                    }
+                finally:
+                    await db.close()
+        finally:
+            await eng.dispose()
+
+    out = asyncio.run(_go())
+
+    # ① 危险是真的：好值被 NULL 覆盖（这正是复核里实测到的形态）
+    assert out["after_outage"] == [(None, "source_empty", "local_calc", "daily")]
+    # ② 恢复：回到原值，且 missing_reason 消失（extra 整行取回）
+    assert out["restored"] == [(_PROBE_KEY, _PROBE_DAY)]
+    assert out["after_restore"] == [(Decimal("23.2655"), None, "local_calc", "daily")]
+    # ③ 覆盖而不是新增
+    assert out["rows"] == 1, "恢复必须命中同一唯一键（source/freq 少取会插成第二条键）"
+    # ④ 补数不被拦：值 → 值 放行，且无需恢复
+    assert out["upgraded"] == [(Decimal("41.5"), None, "local_calc", "daily")]
+    assert out["restored2"] == []
+    assert out["after_upgrade"] == out["upgraded"]

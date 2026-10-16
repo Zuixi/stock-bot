@@ -48,7 +48,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, cast
@@ -62,6 +62,7 @@ from app.models.industry_research import IndustryMetric
 from app.models.market_data import MarketSentimentDaily
 from app.repositories import limit_up_repo
 from app.services import industry_registry as registry
+from app.services.market_activity_service import upsert_metric_rows
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +246,118 @@ async def _latest_period(db: AsyncSession, metric_keys: Sequence[str]) -> date |
     if not seen or any(key not in seen for key in metric_keys):
         return None
     return min(seen.values())
+
+
+# ── 降级保护：重算历史时，已有的好值不得被"本轮源侧缺数"改写成 NULL ──────────
+#
+# 为什么需要它（2026-10-16 复核实测）：共享写路径 `industry_metric_repo.upsert_metrics`
+# 对 `value` / `extra` 是 `excluded.*` **直接覆盖**（只有 `published_at` /
+# `caliber_version` 用 `coalesce`，那是 Ruling 36 明确限定的两列）。而本收敛器**每天 3 次
+# 重写 10 个交易日的窗口** —— 于是某一轮 TuShare/AKShare 返回空时，窗口内**早就正确观测到**
+# 的历史值会被改写成 NULL（实测：`above_ma20_ratio` 2026-10-14 的 23.2655 被一行
+# `value=NULL` + `source_empty` 覆盖，且旧值无处可回退）。
+#
+# 为什么不在共享写路径上加 `coalesce(value, 既有)`：那会改掉**所有**写入方（行业指标、
+# 手工回补、其它 scope）的语义，而"源侧缺数 ⇒ 落 NULL + 原因码"正是本仓库刻意的数据纪律
+# （缺数不许落 0、不许前向填充）。要挡的不是"记下缺数"，而是"**重算把历史改坏**" ——
+# 故边界画在收敛器这一层：本轮的 NULL 照写，但快照里非 NULL 而重算后变 NULL 的行**恢复回去**。
+#
+# 方向性是关键：**值 → NULL 拒绝**（降级）；**NULL → 值 放行**（源侧迟到补数，如 QVIX
+# 本轮回填）；**值 → 值 放行**（修订）。故这条保护不会妨碍自愈，只妨碍"越算越差"。
+
+
+def downgraded_rows(
+    snapshot: Sequence[Mapping[str, Any]],
+    current: Mapping[tuple[str, date], float | None],
+) -> list[dict[str, Any]]:
+    """快照里**非 NULL**、但重算后变成 NULL（或整行消失）的行 —— 需要恢复的那些.
+
+    纯函数（无 IO、无时钟），故"什么算降级"可以逐位复核。`snapshot` 的元素必须是
+    **可直接 re-upsert 的行字典**（:func:`load_window_rows` 的产物）。
+    """
+    out: list[dict[str, Any]] = []
+    for row in snapshot:
+        key = (str(row["metric_key"]), cast("date", row["period"]))
+        if current.get(key) is None:
+            out.append(dict(row))
+    return out
+
+
+async def load_window_rows(
+    db: AsyncSession, metric_keys: Sequence[str], day_lo: date, day_hi: date
+) -> list[dict[str, Any]]:
+    """窗口内这些 key 的**全部**行 → 可直接 re-upsert 的行字典（含 NULL 行）.
+
+    列集与唯一键 `(industry_key, stock_id, metric_key, source, freq, period)` **逐列取回**：
+    少取 `source`/`freq` 会让"恢复"插成**另一条键**（插入而非覆盖），那比不恢复更糟。
+    """
+    stmt = select(
+        IndustryMetric.metric_key,
+        IndustryMetric.period,
+        IndustryMetric.value,
+        IndustryMetric.unit,
+        IndustryMetric.extra,
+        IndustryMetric.source,
+        IndustryMetric.source_tier,
+        IndustryMetric.freq,
+        IndustryMetric.published_at,
+        IndustryMetric.caliber_version,
+    ).where(
+        IndustryMetric.industry_key == "market",
+        IndustryMetric.stock_id == 0,
+        IndustryMetric.metric_key.in_(list(metric_keys)),
+        IndustryMetric.period >= day_lo,
+        IndustryMetric.period <= day_hi,
+    )
+    return [
+        {
+            "industry_key": "market",
+            "stock_id": 0,
+            "metric_key": row.metric_key,
+            "source": row.source,
+            "source_tier": row.source_tier,
+            "freq": row.freq,
+            "period": row.period,
+            "value": None if row.value is None else float(row.value),
+            "unit": row.unit,
+            "extra": row.extra,
+            "published_at": row.published_at,
+            "caliber_version": row.caliber_version,
+        }
+        for row in (await db.execute(stmt)).all()
+    ]
+
+
+async def restore_downgraded(
+    db: AsyncSession,
+    *,
+    metric_keys: Sequence[str],
+    day_lo: date,
+    day_hi: date,
+    snapshot: Sequence[Mapping[str, Any]],
+) -> list[tuple[str, date]]:
+    """把"重算后被改成 NULL"的行恢复回去并提交；返回被恢复的 `(metric_key, period)`.
+
+    `snapshot` 必须是**重算前**的 :func:`load_window_rows` 结果里 `value is not None`
+    的那些行。恢复走同一条 upsert（唯一键相同 ⇒ 覆盖回旧值，不新增行），
+    `published_at` / `caliber_version` 因 `coalesce` 语义保持不变。
+    """
+    if not snapshot:
+        return []
+    after = await load_window_rows(db, metric_keys, day_lo, day_hi)
+    current = {(str(row["metric_key"]), cast("date", row["period"])): row["value"] for row in after}
+    restore = downgraded_rows(snapshot, current)
+    if not restore:
+        return []
+    await upsert_metric_rows(db, restore)
+    await db.commit()
+    restored = sorted((str(r["metric_key"]), cast("date", r["period"])) for r in restore)
+    logger.warning(
+        "derived-metrics: 本轮源侧缺数本会把 %d 个已有值改写成 NULL，已恢复：%s",
+        len(restored),
+        [f"{k}@{d.isoformat()}" for k, d in restored[:10]],
+    )
+    return restored
 
 
 async def _run_breadth(db: AsyncSession, day_lo: date, day_hi: date) -> dict[str, Any]:
@@ -472,6 +585,13 @@ async def _converge_inner(
         )
         outcomes[spec.key] = outcome
         result.legs.append(outcome)
+        # 降级被挡 = 本轮源侧缺数（值已保住）。沉默会让"历史被改坏又悄悄改回来"
+        # 变成新的静默失败点 —— 与本次事故同一形态，必须响。
+        blocked = int(outcome.detail.get("value_downgrade_blocked") or 0)
+        if blocked:
+            result.alerts.append(f"value_downgrade_blocked:{spec.key}={blocked}")
+        if outcome.detail.get("downgrade_restore_error"):
+            result.alerts.append(f"value_downgrade_restore_failed:{spec.key}")
 
     composite_outcome, composite_alert = await _converge_composite(
         db,
@@ -530,6 +650,9 @@ async def _converge_leg(
 
     day_lo, day_hi = plan
     outcome.window = (day_lo, day_hi)
+    # 重算**前**的非 NULL 快照：本轮若因源侧缺数把这些值改写成 NULL，下面会恢复回去
+    before = await load_window_rows(db, spec.metric_keys, day_lo, day_hi)
+    non_null_before = [row for row in before if row["value"] is not None]
     runner = _LEG_RUNNERS[spec.key]
     try:
         detail = await runner(db, day_lo, day_hi)
@@ -542,6 +665,21 @@ async def _converge_leg(
     outcome.status = "ok"
     outcome.rows_upserted = int(detail.get("rows_upserted", 0))
     outcome.detail.update(detail)
+    try:
+        restored = await restore_downgraded(
+            db,
+            metric_keys=spec.metric_keys,
+            day_lo=day_lo,
+            day_hi=day_hi,
+            snapshot=non_null_before,
+        )
+    except Exception as exc:  # noqa: BLE001 — 保护失败不得把"腿跑成功"变成"腿失败"
+        await db.rollback()
+        logger.exception("derived-metrics leg %s: downgrade restore failed", spec.key)
+        restored = []
+        outcome.detail["downgrade_restore_error"] = f"{type(exc).__name__}: {exc}"
+    if restored:
+        outcome.detail["value_downgrade_blocked"] = len(restored)
     outcome.latest_after = await _latest_period(db, spec.metric_keys)
     outcome.detail["lag_trading_days_after"] = lag_trading_days(
         lag_days, latest=outcome.latest_after, target=target
@@ -593,6 +731,12 @@ async def _converge_composite(
             return composite_outcome, f"composite_lagging_legs:{','.join(lagging)}"
         return composite_outcome, None
 
+    # 与逐腿同一条降级保护：composite 的值由**当时的**齐备成分算出，一旦算过就是稳定的
+    # （分位窗口是回看的；成分修订才变）。本轮若因某条腿临时缺数而把历史值改成 NULL，
+    # 那是"用今天的缺数抹掉昨天算对的值"，恢复回去并告警（headline 不该来回跳）。
+    composite_before = await load_window_rows(db, (composite_svc.METRIC_KEY,), window_lo, target)
+    composite_non_null = [row for row in composite_before if row["value"] is not None]
+
     try:
         stats = await composite_svc.upsert_composite_range(db, day_lo=window_lo, day_hi=target)
         await db.commit()
@@ -604,6 +748,20 @@ async def _converge_composite(
             "window": [window_lo.isoformat(), target.isoformat()],
             "error": f"{type(exc).__name__}: {exc}",
         }, "composite_failed"
+
+    composite_restored: list[tuple[str, date]] = []
+    try:
+        composite_restored = await restore_downgraded(
+            db,
+            metric_keys=(composite_svc.METRIC_KEY,),
+            day_lo=window_lo,
+            day_hi=target,
+            snapshot=composite_non_null,
+        )
+    except Exception as exc:  # noqa: BLE001 — 保护失败不得把"写成功"变成"写失败"
+        await db.rollback()
+        logger.exception("derived-metrics composite: downgrade restore failed")
+        composite_outcome["downgrade_restore_error"] = f"{type(exc).__name__}: {exc}"
 
     row = await composite_svc.get_metric_row_at(db, target)
     # **立刻拷成纯 Python 值**：`get_metric_row_at` 用 `populate_existing` 读库，
@@ -625,6 +783,7 @@ async def _converge_composite(
             "effective_weight_at_target": weight,
             "legs_at_target": len(participants) if isinstance(participants, list) else None,
             "missing_reason_at_target": extra.get("missing_reason"),
+            "value_downgrade_blocked": len(composite_restored),
         }
     )
     logger.info(
@@ -636,6 +795,13 @@ async def _converge_composite(
         weight,
         composite_outcome["legs_at_target"],
     )
+    if composite_restored:
+        # 值已保住，但这是**源侧本轮缺数**的信号：不响的话，"历史值被改坏又被我们悄悄改回来"
+        # 就成了第二个静默失败点（与本次事故同一形态）。
+        return (
+            composite_outcome,
+            f"composite_value_downgrade_blocked:{len(composite_restored)}",
+        )
     if weight is not None and weight < ALERT_MIN_EFFECTIVE_WEIGHT:
         return composite_outcome, f"composite_below_publish_weight:{weight}"
     return composite_outcome, None

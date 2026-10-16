@@ -62,6 +62,29 @@ session factory ⇒ 默认门禁在**本机有 PG 时会静默连上 5433**（�
 计数器替身，任何 `connect()` 都让测试红）。同型风险以后加"自持 session 的 service 进 job"
 时会当场暴露，而不是靠人记得打桩。
 
+**复核后的加固（同日，评审提出后实测确认并修复）**：
+- **① 重算会把已有好值降级为 NULL（真实风险，已修）**：共享 `upsert_metrics` 对 `value`/`extra`
+  是 `excluded.*` 直接覆盖，而本收敛器每天 3 次重写 10 天窗口 ⇒ 某一轮源侧返回空时，窗口内
+  早已正确观测的历史值会被改写成 NULL。**实测复现**：`above_ma20_ratio` 2026-10-14 的
+  `23.2655` 被一行 `value=NULL`+`source_empty` 覆盖掉、旧值无处回退。修法是**在收敛器层加
+  降级保护**（不动共享写路径）：重算前做窗口非 NULL 快照，重算后把"非 NULL → NULL"的行用同一
+  唯一键恢复回去并**告警**（`value_downgrade_blocked:<leg>=<n>`）。方向性明确：**值 → NULL
+  拒绝**、**NULL → 值 放行**（迟到补数，如 QVIX 回填）、**值 → 值 放行**（修订）—— 故不妨碍
+  自愈，只妨碍"越算越差"；composite 同享该保护（它的值由当时的齐备成分算出，不该被今天的缺数
+  抹掉，headline 也不该来回跳）。决策与三个备选（改共享 upsert / 缩短窗口 / 写前预检）的否决
+  理由见 [ADR 0017](./decisions/0017-no-downgrade-on-recompute.md)。
+  验证：离线 3 条纯函数用例（降级判据三方向 + 整行恢复含 `source`/`freq`）+ 1 条真库 e2e
+  （合成 key/远期日期，逐步断言"缺数确实覆盖 → 恢复回 23.2655 且 `missing_reason` 消失 →
+  恰好 1 行即覆盖非新增 → 补数不被拦"）；**变异验证**：把 `downgraded_rows` 改成恒空 ⇒
+  2 条离线 + 1 条 e2e 立刻变红。
+- **② e2e 之前只做了类型检查、没真跑（已补跑并修正断言）**：补跑 `sentiment.spec.ts` +
+  `noRawIso.spec.ts` **19 passed**。首跑有 1 条失败，是**我的断言写错**（用了原始 ISO
+  `2026-10-14`），而页面按仓库规则走 `formatCnDate` 渲染成「10月14日」且 `noRawIso.spec` 明令
+  禁止直出 ISO —— **产品代码正确**，断言已改为中文日期并加 `not.toContainText("2026-10-")`。
+- **③ 编号分叉（已记录，合并时需人工重排）**：各分支 ADR 最大编号为 `main`=0008、
+  `feat/invite-only…`=0010、本 worktree=0017（同一份"邀请制"ADR 在三个分支分别是 0009/0010/0015）。
+  这是仓库既有分叉，非本次引入；`docs/decisions/index.md` 与 `plans/index.md` 合并时需重排。
+
 **部署与真实库验收（2026-10-16 01:35–01:40 CST 已完成）**：在本 worktree 内
 `docker compose -p stock-bot build api scheduler worker frontend` 后 `up -d --no-deps` 只重建
 这四个服务（**不碰 postgres**，其卷 `stock_bot_wt_p7_postgres_data` 不受影响；重建前已比对
