@@ -21,6 +21,7 @@
 | [0015](./0015-invite-only-provisioning-and-admin-console.md) | 邀请制开户与管理员控制台（关闭自助注册） | accepted | 2026-10-14 | 安全 / 产品 |
 | [0016](./0016-derived-metrics-converge.md) | 派生指标由「对账后置收敛」日更，薄日不发布值 | accepted | 2026-10-16 | 数据口径 / 调度 |
 | [0017](./0017-no-downgrade-on-recompute.md) | 重算历史时不得把已有好值降级为 NULL | accepted | 2026-10-16 | 数据口径 |
+| [0018](./0018-hypothesis-immutability-and-pit-verdicts.md) | 研究假设写下即冻结，判定是三态且受 PIT 约束 | accepted | 2026-10-16 | 数据建模 / 数据口径 |
 
 状态取值：`accepted`（现行）· `superseded`（被新决策取代，须填 `superseded-by` 并双向引用）· `rejected`（评审未采纳，保留以阻止重复提议）
 

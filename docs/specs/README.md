@@ -100,7 +100,7 @@
 
 ### S2 信号 · 因子 · 回测 · 提醒（Wave 1.5 · **复用既有基建**）
 
-> **只有骨架，没有引擎。** 规则 = 纯函数（同 `cycle_engine.py`）、阈值 = `industry_registry`、信号 = `industry_signals`、因子 = `stock_features` 物化模式。**新增表仅 3 张。**
+> **只有骨架，没有引擎。** 规则 = 纯函数（同 `cycle_engine.py`）、阈值 = `industry_registry`、信号 = `industry_signals`、因子 = `stock_features` 物化模式。**新增表仅 6 张**（S2.3 1 + S2.4 2 + S2.5 3）。
 
 | ID | 名称 | 交付物与契约要点 | 依赖 | 尺寸 |
 |---|---|---|---|---|
@@ -108,6 +108,7 @@
 | S2.2 | 规则与信号（**复用 `industry_signals`**）| 规则为纯函数；`industry_signals` **加 4 列**（`rule_key`/`rule_version`/`confidence`/`severity`）；`basis` 即证据链；**PIT 护栏** | S2.1 | M |
 | S2.3 | 事件研究回测（最小版）| `backtest_runs` 一表（**无 `backtest_events`**，读时算）；PIT 强制 + 样本切分强制；**PIT 对照实验** | S2.2 | M |
 | S2.4 | 提醒订阅与触达 | `alert_subscriptions` + `alerts`；站内必做；订阅管理 UI 推迟 | S2.2 | S |
+| S2.5 | 用户研究假设与自动判定 | `research_hypotheses` + `research_hypothesis_events`（append-only 证据链）+ `user_alert_cursors`；**写下即冻结**（无 PATCH/PUT/DELETE）；判定**三态**（缺数据 ≠ 不满足）+ PIT；`research:write` 权限；**证伪线推迟到 v2** | S1.2, S2.4 | L |
 
 ### S3 资讯地基（Wave 2）
 

@@ -1,9 +1,9 @@
 ---
 status:      active
-scope:       投研工作台的信息架构与数据模型主线——10 个一级导航、5 个横切地基（原料/视图分离 · 信号与因子【复用既有基建】 · PIT · 多态关注池 · 传导图）+ 1 个推迟（事件日历→Wave 3）、原料→视图映射、8 个 Wave 的分期路线图与 **57 个 spec** 的拆分（评审后由 59 收缩：S2 由 6 个并为 4 个）
+scope:       投研工作台的信息架构与数据模型主线——10 个一级导航、5 个横切地基（原料/视图分离 · 信号与因子【复用既有基建】 · PIT · 多态关注池 · 传导图）+ 1 个推迟（事件日历→Wave 3）、原料→视图映射、8 个 Wave 的分期路线图与 **58 个 spec** 的拆分（评审后由 59 收缩：S2 由 6 个并为 4 个；2026-10-16 owner 裁定把 S2.5 用户假设提前交付，S2 回增为 5 个）
 touches:     plans/, docs/specs/, docs/design/, docs/decisions/, docs/Changelog.md, backend/app/models/, backend/app/migrations/versions/, backend/app/api/v1/, backend/app/services/, backend/app/schemas/, backend/app/workers/, backend/app/scheduler/, backend/tests/, frontend/src/app/router/, frontend/src/app/layouts/, frontend/src/pages/, frontend/src/features/, frontend/src/shared/
-updated:     2026-10-12
-next-action: Wave 0 已关门（5 任务 / 16 提交）。Wave 1 进行中：S1.1 导航骨架与路由迁移 ✅ · S1.2 `industry_metrics` 加 2 列 + 统一读面 ✅ · S1.3 全球市场与跨市场标的 ✅ · **S1.4 行业分类钻取（实现完成，修复收口中）**。下一步 S1.5 热力图 → S1.6 排行 7 榜（两份 brief 已就绪，见 §13 Wave 1 段）。执行到第 10 轮时进度：**52 提交 / 约 51 条 Ruling**，剩约 18 个 spec
+updated:     2026-10-16
+next-action: Wave 0 已关门（5 任务 / 16 提交）。Wave 1 进行中：S1.1 导航骨架与路由迁移 ✅ · S1.2 `industry_metrics` 加 2 列 + 统一读面 ✅ · S1.3 全球市场与跨市场标的 ✅ · S1.4 行业分类钻取 ✅ · S1.5 热力图 ✅ · S1.6 排行 7 榜 ✅ · 派生指标日更收敛（ADR 0016/0017）✅。**2026-10-16 owner 裁定偏离：先把 S2.5 用户研究假设与自动判定落地（投研闭环缺口），再回补 S1.7–S1.14**（见 §13 末尾条目）
 ---
 
 # 投研工作台：信息架构与数据模型主线 实施计划
@@ -14,7 +14,7 @@ next-action: Wave 0 已关门（5 任务 / 16 提交）。Wave 1 进行中：S1.
 
 **本计划的输入**：10 张 owner 手绘思维导图（市场 / 资讯 / 行业分析 / 公司分析 / 宏观分析 / 情绪分析 / 价值网图谱 / 策略引擎 / 风险管理 / 交易执行）+ 6 轮对齐讨论。原始截图不在仓库内，其结构已在 §3–§6 逐条转录，是本计划的事实来源。
 
-**规格拆分（spec）**：本计划只回答"做什么、按什么顺序"。**每个模块的契约与验收判据在 [`docs/specs/`](../docs/specs/README.md)**——共 **57 个 spec**（S0 4 + S1 14 + S2 4 + S3 7 + S4 12 + S5 4 + S6 5 + S7 7），其中 S0–S3（Wave 0 · 1 · 1.5 · 2）已写详细契约，S4–S7（Wave 3–6）为 `catalog-only`，**启动前一周才细化**（渐进明细：Wave 1 的数据事实底座没落地前，Wave 5 的因子契约必然返工）。
+**规格拆分（spec）**：本计划只回答"做什么、按什么顺序"。**每个模块的契约与验收判据在 [`docs/specs/`](../docs/specs/README.md)**——共 **58 个 spec**（S0 4 + S1 14 + S2 5 + S3 7 + S4 12 + S5 4 + S6 5 + S7 7），其中 S0–S3（Wave 0 · 1 · 1.5 · 2）已写详细契约，S4–S7（Wave 3–6）为 `catalog-only`，**启动前一周才细化**（渐进明细：Wave 1 的数据事实底座没落地前，Wave 5 的因子契约必然返工）。
 
 | 规格文件 | 对应 Wave | 状态 |
 |---|---|---|
@@ -376,21 +376,31 @@ graph_edges(
 - [ ] 情绪 5 组指标有 ≥3 年历史序列，分位计算与 UI 一致
 - [ ] **不含任何"北向资金每日净买入"字段**（`grep` 可验），替代口径已在 UI 标注频率
 
-### Wave 1.5 — 信号 · 因子 · 回测 · 提醒（F2，**复用既有基建，4 个 spec**）
+### Wave 1.5 — 信号 · 因子 · 回测 · 提醒（F2，**复用既有基建，5 个 spec**）
 
 > 契约见 [docs/specs/S2-signal-engine.md](../docs/specs/S2-signal-engine.md)。**本 Wave 只交付骨架 + 打通第一个消费方**（情绪分位越界 → 站内提醒），其余按消费方落地顺序增长。
+>
+> **2026-10-16 owner 裁定（偏离路线图）**：**S2.5 用户研究假设与自动判定先于本 Wave 的 T1.5.1–T1.5.4 交付**，
+> 且在 **S1.7–S1.14 未完成时**开工。理由：owner 判断"当前产品还不能很好支持投研"，
+> 实测根因是研究过程**无处沉淀**（全库只有 `user_watchlist_items.notes` 一个自由文本字段，
+> 假设/结论/证据链/导出/复盘全部零代码），而路线图把「研究 → 决策」回路排在 Wave 5/6。
+> 代价如实记录：本 Wave 的"新增表 = 3 张"判据随之改为 **6 张**（S2.3 1 + S2.4 2 + S2.5 3），
+> 且 S2.5 依赖的 S2.4 提醒表**尚未实现**（先落最小形态的未读游标，S2.4 落地时泛化 `alerts`，见 S2.5 契约）。
 
 - [ ] T1.5.1 因子：复用 `stock_features` 物化模式 + 纯函数（**不建 `factor_defs` 表**）
 - [ ] T1.5.2 规则与信号：规则为纯函数（与 `cycle_engine.py` 同构，阈值进 registry）+ `industry_signals` **加 4 列**（`rule_key` / `rule_version` / `confidence` / `severity`）（**删 DSL、不建 `signal_rules`/`signals` 表**）
 - [ ] T1.5.3 事件研究回测（**最小版**：`backtest_runs` 一表，无 `backtest_events`；PIT 强制 + 样本切分强制；参数优化/walk-forward 留 Wave 5）
 - [ ] T1.5.4 `alert_subscriptions` + `alerts` + 站内触达（订阅管理 UI 推迟到消费方 #2）
+- [ ] **T1.5.5（提前执行）** S2.5 用户研究假设：`research_hypotheses` + `research_hypothesis_events` + `user_alert_cursors`；判定三态 + PIT；`research:write` 权限；站内铃铛
 
 **Acceptance criteria**
-- [ ] **新增表 = 3 张**；`industry_signals` 加 4 列、`industry_metrics` 加 2 列；**无 `factor_defs` / `signal_rules` / `signals` / `backtest_events` / action 表**
+- [ ] **新增表 = 6 张**（`backtest_runs` / `alert_subscriptions` / `alerts` / `research_hypotheses` / `research_hypothesis_events` / `user_alert_cursors`）；`industry_signals` 加 4 列、`industry_metrics` 加 2 列；**无 `factor_defs` / `signal_rules` / `signals` / `backtest_events` / action 表**
 - [ ] **无规则 DSL**：`grep -rn "eval(\|ast.parse" backend/app/services/signal_rules.py` 无命中；阈值全部来自 registry（改阈值不改代码）
 - [ ] 情绪"历史分位 >90% / <10% 触发预警"端到端跑通：规则 → 信号 → 提醒 → 站内可查
+- [ ] **用户假设端到端跑通**：建假设 → 数据落库 → 自动判定 → 铃铛可查 → 证据链可展开（S2.5）
 - [ ] 每个信号可展开证据链（`basis`），含来源与 `published_at`
 - [ ] **PIT 护栏测试 + PIT 对照实验双双通过**（构造"用报告期而非披露日"的对照，结果必须有显著差异 —— 证明 PIT 生效）
+- [ ] `bash scripts/check_hypothesis_metrics.py` 全绿（S2.5 的条件可选指标集合门禁）
 - [ ] `bash scripts/bench.sh` + `bash scripts/self_review.sh --full` 全绿
 
 ### Wave 2 — 资讯（地基）
@@ -621,3 +631,32 @@ graph_edges(
 **✅ 合并期待办 —— 已解决（同上，见 Ruling 11 落地）**：对方 ADR 已改号为 **0014**，本分支 0009–0013 不动；本分支已把 `origin/main` 合并进来并解除全部冲突（详见 §13 Wave 0 段的 ✅ 条目）。
 
 **下一步**：Task 8（S1.4）修复收口 → **S1.5 热力图**（brief 已就绪；关键风险：**现有行情端点上限均 ≤200，"≥3000 标的"必须新建批量读路**）→ **S1.6 排行 7 榜**（brief 已就绪；关键：**既有 5 个榜与 spec 的 7 个榜没有交集**，且财务类榜必须 **PIT 正确**——按交易日已公告可得的那一期排序，不得取"最新一期"）→ S1.7–S1.14。
+
+> **执行记录（2026-10-16 复核）**：上段"下一步"所列的 S1.5 热力图与 S1.6 排行 7 榜**均已落地**（`/market/heatmap` 与 `/market/rankings/:key`，见 `frontend/src/app/router/route-manifest.ts`），派生指标日更收敛亦已交付（[ADR 0016](../docs/decisions/0016-derived-metrics-converge.md) / [ADR 0017](../docs/decisions/0017-no-downgrade-on-recompute.md)，PR #18）。**S1.7–S1.14 仍未开工。**
+
+---
+
+### 偏离裁定 —— S2.5 用户研究假设先于 S1.7–S1.14（2026-10-16 · owner）
+
+**触发**：owner 在 PR #18 合并后判断"当前 stock bot 还不能很好支持投研工作"。
+
+**代码实测的根因（不是数据源，也不是页面形态）**：读面已建成约 21 个实页面（行情 / 行业钻取 / 热力图 / 7 榜 / 情绪读出台 / 生猪工作台），
+但**研究工作流侧只有「自选 + 标签」两件资产** —— 全库唯一的用户自由文本是 `user_watchlist_items.notes`；
+**假设、结论、证据链、导出、复盘全部零代码**。产品因此停在"看板"，而 §4 认定的两条回路排在 Wave 5/6。
+
+**裁定**：**先把 S2.5 落地**（用户研究假设 + 自动判定 + 站内铃铛），再回补 S1.7–S1.14。
+
+**如实记录的代价**：
+1. 本 Wave 完成判据里的"新增表 = 3 张"改为 **6 张**（S2.5 新增 3 张，逐张理由见 S2 spec）。
+2. spec 总数 **57 → 58**（S2 由 4 → 5 条），已同步 `docs/specs/README.md`、本文件头部与 §7。
+3. S2.5 依赖 S2.4 的提醒表，而 S2.4 **尚未实现** → S2.5 先落**最小形态的未读游标**（`user_alert_cursors`），
+   并在 S2.5 契约里写明 S2.4 落地时必须泛化 `alerts.signal_id → (source_kind, source_id)`，
+   **不得静默并存两套"已读"模型**。
+4. 偏离期间 Wave 1 未关门（S1.7–S1.14 缺），本计划 `status` 保持 `active`。
+
+**已确认的四个待裁定项**（不假装已解决，执行时逐条落）：
+① `evaluate` 是否纳入 Tier 1 基准（与 `cycle_engine` 同构，AGENTS.md 把"规则引擎"列为 Tier 1 热点）；
+② `notifications` 与 S2.4 `alerts` 的命名/迁移关系；③ `research:write` 的迁移与角色授予面；
+④ **证伪线（"若 X 则本轮判断失效"）= v2 第一优先项**（真实研报最常写的一句，本批刻意不做）。
+
+**契约**：[S2.5](../docs/specs/S2-signal-engine.md) · **决策**：[ADR 0018](../docs/decisions/0018-hypothesis-immutability-and-pit-verdicts.md)（写下即冻结 / 三态 / PIT）

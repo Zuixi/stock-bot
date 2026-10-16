@@ -1,3 +1,16 @@
+## 2026-10-16 - **契约层：S2.5 用户研究假设与自动判定立项（投研闭环缺口）+ ADR 0018（写下即冻结 / 判定三态 / PIT）**
+
+owner 在 PR #18 合并后判断"当前 stock bot 还不能很好支持投研"。**代码实测的根因不是数据源、也不是页面形态**：读面已建成约 21 个实页面，但研究工作流侧只有「自选 + 标签」两件资产 —— 全库唯一的用户自由文本是 `user_watchlist_items.notes`，**假设 / 结论 / 证据链 / 导出 / 复盘全部零代码**，而主线计划 §4 认定的两条回路排在 Wave 5/6。
+
+- **新增 S2.5 契约**（[docs/specs/S2-signal-engine.md](./specs/S2-signal-engine.md)）：`research_hypotheses` + `research_hypothesis_events`（append-only 证据链）+ `user_alert_cursors` **共 3 张新表**；**写下即冻结**（`claim`/`conditions`/`deadline` 不可改，接口层无 PATCH/PUT/DELETE，撤回 = 新增事件且**计入准确率分母**）；**判定三态**（`passed`/`failed`/**`insufficient_data`**，缺数据绝不等同于不满足）；**期间只可能判成立**，`falsified` 只来自到期未达；每条条件的 `sustained_periods` **各按该指标自己的 freq 计**（混合频率下不得用"最后 N 行"）；到期遇数据迟到**最多等 10 个交易日**再强制结算并标 `data_lag`；`mock` 数据源下**不产出**结论
+- **新增 [ADR 0018](./decisions/0018-hypothesis-immutability-and-pit-verdicts.md)**：假设独立成表（不塞进系统信号流 `industry_signals`）· 写下即冻结 · 三态 + PIT
+- **执行挂载**：复用 `reconcile_market_data_job` 尾步、**必须排在 `derived_metrics_converge` 之后**（否则拿薄行当结论）、**不新开 cron**；PG advisory lock + `unique(hypothesis_id, kind, as_of)` 幂等；列表**反 N+1** 需配"断言查询次数"的测试
+- **新权限 `research:write`**：能看不等于能往团队假设墙上写（owner 裁定）
+- **机械门禁**：条件可选指标集合**逐字等于** registry 中 `pig` scope **且有真实 writer** 的指标集合（当前有 3 个"已登记但全仓无写入"的指标必须机械地进不了下拉）；三态需**前端 Playwright e2e 视觉断言**（`数据不足` 不得渲染成未满足）
+- **如实记录的偏离**：S2.5 先于 S1.7–S1.14 交付 → Wave 1.5 判据"新增表 = 3 张"改为 **6 张**；spec 总数 **57 → 58**（S2 4 → 5 条），已同步 `docs/specs/README.md`、IA 计划头部/§7/§13 与 `plans/index.md`
+- **四个待裁定项（不假装已解决）**：① `evaluate` 是否纳入 Tier 1 基准 ② `notifications` 与 S2.4 `alerts` 的泛化与迁移（**不得并存两套"已读"**）③ `research:write` 迁移与角色授予面 ④ **证伪线 = v2 第一优先项**（真实研报最常写的一句，本批刻意不做）
+- 涉及文件：docs/{specs/{S2-signal-engine,README}.md,decisions/{0018-*,index}.md,Changelog.md}、plans/{2026-10-12-investment-research-platform-ia,index}.md
+
 ## 2026-10-16 - **派生指标日更收敛（§S1.7–§S1.13）：对账后置收敛器 + 发布闸门 0.80 + 读面"只展示齐备日"**
 
 owner 报"情绪分析的综合指数一直是 10.12，现在已经是 10.15"。
