@@ -14,6 +14,7 @@ from app.scheduler import jobs
 @pytest.fixture
 def _env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     calls: list[dict[str, Any]] = []
+    converge_calls: list[dict[str, Any]] = []
 
     class _Ctx:
         async def __aenter__(self) -> Any:
@@ -33,11 +34,19 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             }
         }
 
+    async def _converge(**kw: Any) -> dict[str, Any]:
+        converge_calls.append(kw)
+        return {"status": "ok", "target": kw.get("target"), "alerts": []}
+
     monkeypatch.setattr(jobs, "_is_workday", lambda: True)
     # jobs 内为函数内 import → patch 源模块属性，调用时取到替身
     monkeypatch.setattr("app.core.database.async_session_factory", _Ctx)
     monkeypatch.setattr("app.services.reconciliation_service.reconcile_market_data", _reconcile)
-    return {"calls": calls}
+    # 2026-10-16 起全量对账尾步会串联派生指标收敛：它**自持 engine/session**，
+    # 不打桩就会在默认门禁里真连 PG（本机 5433 可达 ⇒ 测试静默触库）。测试必须保持
+    # "绝不触 PG/Redis/网络"（收敛自身的契约在 tests/test_derived_metrics_converge.py）。
+    monkeypatch.setattr("app.services.derived_metrics_service.converge", _converge)
+    return {"calls": calls, "converge": converge_calls}
 
 
 async def test_quotes_job_is_single_domain_reconcile(_env: dict[str, Any]) -> None:
@@ -54,6 +63,9 @@ async def test_full_reconcile_job_no_scope_no_workday_guard(_env: dict[str, Any]
     monkeypatch_none_workday = _env  # noqa: F841 — fixture already forces workday; guard absence见下
     await jobs.reconcile_market_data_job()
     assert _env["calls"] == [{"only": None}]
+    # 2026-10-16：全量对账之后必须**接着**收敛派生指标（同一 job、同一次触发）
+    assert len(_env["converge"]) == 1
+    assert _env["converge"][0]["alert_job_id"] == "market_metrics_refresh"
 
 
 async def test_full_reconcile_job_runs_on_weekend(
@@ -62,6 +74,7 @@ async def test_full_reconcile_job_runs_on_weekend(
     monkeypatch.setattr(jobs, "_is_workday", lambda: False)
     await jobs.reconcile_market_data_job()
     assert _env["calls"] == [{"only": None}]  # 对账无工作日守卫：周末也要补周五的洞
+    assert len(_env["converge"]) == 1, "周末收敛也要跑（宿主周五晚挂起、周六开机的场景）"
 
 
 def test_fetch_yesterday_helpers_removed() -> None:

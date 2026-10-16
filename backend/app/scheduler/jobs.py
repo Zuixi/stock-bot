@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from datetime import datetime
+from datetime import date, datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -91,8 +92,14 @@ async def sse_post_close_job() -> None:
 # ------------------------------------------------------------------
 
 
-async def _run_reconcile(only: set[str] | None, job_ids: str | tuple[str, ...]) -> None:
-    """对账薄封装：会话生命周期 + 异常边界统一在这里（job_ids = 注册它的 scheduler id）。"""
+async def _run_reconcile(
+    only: set[str] | None, job_ids: str | tuple[str, ...]
+) -> dict[str, Any] | None:
+    """对账薄封装：会话生命周期 + 异常边界统一在这里（job_ids = 注册它的 scheduler id）。
+
+    返回对账结果（失败时 `None`）—— 后置的派生指标收敛要用它算出的 `expected_latest`
+    当目标日，不自己另算一份交易日历。
+    """
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.services import reconciliation_service  # noqa: PLC0415
 
@@ -104,9 +111,11 @@ async def _run_reconcile(only: set[str] | None, job_ids: str | tuple[str, ...]) 
             sorted(only) if only else "all",
             {k: v["status"] for k, v in result["domains"].items()},
         )
+        return result
     except Exception as exc:
         logger.exception("Reconcile failed (only=%s)", sorted(only) if only else "all")
         await _alert_job_failure(job_ids, exc)
+        return None
 
 
 async def daily_quotes_backfill_job() -> None:
@@ -115,6 +124,10 @@ async def daily_quotes_backfill_job() -> None:
     旧语义"只补 T-1 + exists-skip"有两个结构性缺陷：停摆一天=永久洞（9/10、
     9/11、9/14、9/15 四次事故），partial 行挡住全量回补形成死锁（9/16）。
     对账语义：窗口内（默认 10 个交易日）缺失日与行数不足日一律重拉。
+
+    ⚠️ 这里**不**串联派生指标收敛：16:30 时 T-1 的行情刚拉到、`daily_basic`/限价
+    都还没补齐（16:45/16:50），此时算派生指标只会算在半截底座上。
+    收敛挂在全量对账之后（见 :func:`reconcile_market_data_job`）。
     """
     if not _is_workday():
         logger.debug("Skipping daily quotes backfill — not a workday")
@@ -135,17 +148,64 @@ async def daily_basic_backfill_job() -> None:
 
 
 async def reconcile_market_data_job() -> None:
-    """全量对账（四域：quotes/basic/price_limits/sentiment）。
+    """全量对账（四域：quotes/basic/price_limits/sentiment）**+ 派生指标收敛**。
 
     触发：scheduler 启动 +2min、每交易日 17:45 兜底、非交易日 10:00、worker 手动。
     **无工作日守卫**：周末/节假日启动也要能补上一个交易日的洞（宿主周五晚上
     挂起、周六开机是真实场景）。幂等：无缺口时零 TuShare 请求。
+
+    ## 为什么收敛挂在这里（2026-10-16）
+
+    scope=`market` 的那一族派生指标（§S1.7–§S1.13）此前**只**由手工脚本写，
+    没有任何定时任务碰过 —— 于是行情天天更新、页面上的"数据截至"却停在人工回补的最后
+    一天。修法不是在盘后再加一个 cron（那会重新落入"任务准点跑才正确"的老坑：
+    宿主睡眠、容器挂起、上游晚到都会让它算在半截数据上），而是**挂在对账之后**：
+    对账已经把 T-1 的行情/限价/温度计收敛好，收敛器接着按同一个 `expected_latest`
+    把派生指标推到同一天。三个触发点因此都成为收敛点，且**顺序由代码保证**。
+
+    对账失败（返回 `None`）时**仍然**尝试收敛：底座可能只是部分域失败（例如
+    `daily_basic` 的洞不影响宽度腿），而收敛器自带前置闸门（底座没齐就跳过），
+    所以这里不需要替它再判一次。
     """
     logger.info("Full reconcile job triggered")
     # 同一 callable 挂在 3 个触发点（启动 +2min / 17:45 兜底 / 非交易日 10:00）上
-    await _run_reconcile(
+    result = await _run_reconcile(
         only=None,
         job_ids=("startup_reconcile", "reconcile_post_chain", "reconcile_weekend_catchup"),
+    )
+    await _converge_derived_metrics(result)
+
+
+async def _converge_derived_metrics(reconcile_result: dict[str, Any] | None) -> None:
+    """对账之后：把 §S1.7–§S1.13 的派生指标收敛到 `expected_latest`。
+
+    目标日取**对账算出的** `expected_latest`（`trade_cal` 截止昨日，T-1 语义），
+    与行情域的期望集完全同源；对账没给出（失败 / 降级）时传 `None`，
+    由收敛器退回"`daily_quotes` 的最近交易日"这个本地口径。
+
+    **异常边界独立**：派生指标失败不得让"对账成功"变成"job 失败"
+    （它们是两件事，告警也挂在两个不同的 id 上）。
+    """
+    from app.services import derived_metrics_service  # noqa: PLC0415
+
+    target: date | None = None
+    if reconcile_result:
+        raw = reconcile_result.get("expected_latest")
+        if raw:
+            target = date.fromisoformat(str(raw))
+    try:
+        payload = await derived_metrics_service.converge(
+            target=target, alert_job_id="market_metrics_refresh"
+        )
+    except Exception as exc:  # noqa: BLE001 — 收敛失败不得反噬对账 job 的成败
+        logger.exception("Derived metrics converge failed (target=%s)", target)
+        await _alert_job_failure("market_metrics_refresh", exc)
+        return
+    logger.info(
+        "Derived metrics converge done: status=%s target=%s alerts=%s",
+        payload.get("status"),
+        payload.get("target"),
+        payload.get("alerts"),
     )
 
 

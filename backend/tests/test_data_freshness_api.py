@@ -53,7 +53,37 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         return []
 
     monkeypatch.setattr("app.services.reconciliation_service.coverage_report", _coverage)
+
+    # 2026-10-16 追加：端点还会带派生指标（§S1.7–§S1.13）四条腿的落后报告。
+    # 同理打桩：本文件只测对账侧契约，腿报告自己的契约在
+    # tests/test_derived_metrics_converge.py。
+    async def _market_metrics(db: Any, **kw: Any) -> dict[str, Any]:
+        return _STUB_MARKET_METRICS
+
+    monkeypatch.setattr("app.services.derived_metrics_service.leg_lag_report", _market_metrics)
     return {"calls": calls}
+
+
+_STUB_MARKET_METRICS: dict[str, Any] = {
+    "target": "2026-10-14",
+    "checked_at": "2026-10-15T10:05:00+08:00",
+    "legs": [
+        {
+            "key": "breadth",
+            "label": "S1.8 市场宽度与动量",
+            "latest": "2026-10-14",
+            "lag_trading_days": 0,
+            "feeds_composite": True,
+        },
+        {
+            "key": "capital_flows",
+            "label": "S1.7 资金流",
+            "latest": "2026-10-09",
+            "lag_trading_days": 3,
+            "feeds_composite": False,
+        },
+    ],
+}
 
 
 async def test_data_freshness_is_dry_run(_env: dict[str, Any]) -> None:
@@ -75,6 +105,37 @@ async def test_data_freshness_exposes_universe_lag(_env: dict[str, Any]) -> None
     assert out.universe == 5546
     assert out.quotes_symbols_latest == 5485
     assert out.universe - out.quotes_symbols_latest == 61
+
+
+async def test_data_freshness_exposes_market_metrics_lag(_env: dict[str, Any]) -> None:
+    """派生指标四条腿的落后必须经 schema 透出（2026-10-16 的暴露面）。
+
+    这一族此前只由手工脚本写：行情天天更新、它却停在人工回补的最后一天，
+    而巡检端点看不见它。现在"哪条腿停在哪天"直接可读。
+    """
+    out = await api.get_data_freshness()
+    assert out.market_metrics is not None
+    assert out.market_metrics.target == "2026-10-14"
+    assert [leg.key for leg in out.market_metrics.legs] == ["breadth", "capital_flows"]
+    assert out.market_metrics.legs[0].lag_trading_days == 0
+    assert out.market_metrics.legs[1].lag_trading_days == 3
+    # 非成分腿（资金流）落后**不**阻断 composite —— 该标记必须透出，别让读者误判因果
+    assert out.market_metrics.legs[1].feeds_composite is False
+
+
+async def test_market_metrics_failure_is_additive_not_500(
+    monkeypatch: pytest.MonkeyPatch, _env: dict[str, Any]
+) -> None:
+    """腿报告失败（如迁移未应用）⇒ 该字段 `null`，端点照常 200（加法纪律）."""
+
+    async def _boom(db: Any, **kw: Any) -> dict[str, Any]:
+        raise RuntimeError("relation industry_metrics does not exist")
+
+    monkeypatch.setattr("app.services.derived_metrics_service.leg_lag_report", _boom)
+
+    out = await api.get_data_freshness()
+    assert out.market_metrics is None
+    assert out.domains["daily_quotes"].status == "ok", "加法失败不得反噬对账侧契约"
 
 
 def test_data_freshness_schema_exposes_adj_factor_repair() -> None:

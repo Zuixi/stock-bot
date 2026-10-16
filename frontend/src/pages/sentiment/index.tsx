@@ -41,18 +41,30 @@ function stateSentence(
     return "综合指数读数暂不可得，下方各模块的指标仍逐条标注口径与数据 vintage。";
   }
   const date = composite.asOf ? formatCnDate(composite.asOf) : "未知口径日";
+  // 新鲜度先说（2026-10-16）：hero 只展示「各腿齐备」的交易日，所以"读到哪天"必须
+  // 带上落后信息 —— 否则读者会把"各腿齐备的最后一天"直接当成"最新交易日"。
+  // 三态：true 落后 / false 追平（不加字）/ null 判不出（**不得**沉默，沉默读成新鲜）。
+  const freshness =
+    composite.stale === true
+      ? `，落后 ${composite.lagTradingDays ?? "--"} 个交易日（各腿齐备的数据已到 ${
+          composite.expectedAsOf ? formatCnDate(composite.expectedAsOf) : "未知"
+        }）`
+      : composite.stale == null
+        ? "（新鲜度无法判定）"
+        : "";
+  const head = `综合指数读到 ${date}${freshness}`;
   if (composite.insufficientHistory) {
-    return `综合指数读到 ${date}，但历史样本不足，本页不给分位。`;
+    return `${head}，但历史样本不足，本页不给分位。`;
   }
   if (composite.percentile == null) {
     // 后端第二档"没有分位"：当期 value 为 NULL（样本够，但没有今日值可分位）
-    return `综合指数读到 ${date}，但当期值算不出，本页不给分位。`;
+    return `${head}，但当期值算不出，本页不给分位。`;
   }
   // 旧口径行（extra 缺 participants / n_constituents）：没有"由 N/11 条腿合成"这句事实
   if ((composite.totalLegs ?? 0) <= 0 && composite.legs.length === 0) {
-    return `综合指数读到 ${date}。`;
+    return `${head}。`;
   }
-  return `综合指数读到 ${date}，当日由 ${composite.legCount ?? "--"}/${composite.totalLegs ?? "--"} 条腿合成。`;
+  return `${head}，当日由 ${composite.legCount ?? "--"}/${composite.totalLegs ?? "--"} 条腿合成。`;
 }
 
 export default function SentimentPage() {

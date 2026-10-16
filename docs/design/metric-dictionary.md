@@ -777,6 +777,29 @@ drop_and_renormalise`）。**绝不**静默用 0、**绝不**插值或前向填�
 `extra.missing_reason` + 覆盖率。0 分在这一列上是"市场情绪处于历史最悲观"这一**事实
 断言**，与"这天算不出"完全相反 ⇒ 缺数一律 NULL。
 
+#### 发布闸门（2026-10-16 增补；**与上面的 0.20 是两件事**）
+
+上面 0.20 是**方法下限**（低于它 `compose_series` 连算都不算）；2026-10-16 起另加一道
+**发布闸门** `COMPOSITE_PUBLISH_MIN_WEIGHT = 0.80`：
+
+- `0.20 <= 生效权重之和 < 0.80` ⇒ **行照落、参与集/逐腿分位/生效权重照落**，但
+  `value = NULL` + `extra.missing_reason = 'below_publish_weight'`，且当时算出的数字存
+  `extra.withheld_value`、当轮闸门存 `extra.publish_min_weight`（可复核"为什么这天没值"）；
+- `>= 0.80` ⇒ 正常发布值。**边界含等号**。
+- 为什么是 0.80：11 条腿里**最重的单腿是 0.12**（`qvix_50etf`）⇒ 0.80 蕴含"至少 7 条腿参与"；
+  而常态（只有 QVIX 一族缺值时是 **0.88**、10 条腿）仍在闸门之上 ⇒ 闸门**只挡结构性缺腿**
+  （各腿源侧可得日不齐），不误伤单源滞后。
+- 依据与替代方案见 [ADR 0016](../decisions/0016-derived-metrics-converge.md)；产品口径 =
+  「只展示各腿齐备到 T-1 的值」。**读面同判据**：`/market/sentiment/composite` 只取最新一个
+  过闸门的行，并给出 `expected_as_of` / `lag_trading_days` / `stale`（三态，`null` = 判不出，
+  **不得**读成"新鲜"）。
+- 上面「参与区间」表里的 `2026-10-12 ｜ 3 条腿 ｜ 0.23` 一行因此是**历史现象**：该日已被
+  收敛器重算覆盖为齐备值；若某日始终只有 < 7 条腿，它现在是 `value=NULL`（不再是薄值）。
+- **已发布的值不会被后续重算降级**（2026-10-16 加固，[ADR 0017](../decisions/0017-no-downgrade-on-recompute.md)）：
+  收敛器重算窗口时会先做非 NULL 快照，凡"本轮源侧缺数本会把已有值改写成 NULL"的行会被恢复回
+  旧值并告警（`value_downgrade_blocked`）。方向性是**值 → NULL 拒绝、NULL → 值 放行**，
+  故"某天补数后由 NULL 变成有值"（含由薄转齐备）照常生效。
+
 #### PIT（由成分的可得性决定；**不回退 `period`**）
 
 `published_at` = 当日**全部**成分行 `published_at` 的最大值（精确到时刻，Asia/Shanghai；

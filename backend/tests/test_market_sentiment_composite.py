@@ -406,3 +406,147 @@ def test_stats_summarise_rows_values_and_reasons() -> None:
     assert stats.missing_reasons == {"insufficient_participants": 130}
     assert stats.participating_days == {"a": 5}
     assert stats.sources == {registry.COMPOSITE_METRIC_KEY: "local_calc"}
+
+
+# ── F. 发布闸门（2026-10-16：薄行不作值发布）────────────────────────────
+
+
+def _quorum_observations() -> tuple[list[date], dict[str, list[svc.ConstituentObservation]]]:
+    """三条腿（0.5 / 0.3 / 0.2）：前两腿 130 天、第三腿只在最后一天缺 ⇒ 0.8 权重。
+
+    用来构造"过了方法下限但没过发布闸门"的日子（把第三腿的权重调大即可）。
+    """
+    periods = _days(130)
+    observations = {
+        "a": _obs(periods, [float(i) for i in range(130)]),
+        "b": _obs(periods, [float(130 - i) for i in range(130)]),
+        "c": _obs(periods, [1.0] * 130),
+    }
+    return periods, observations
+
+
+def test_publish_gate_passes_weight_above_threshold() -> None:
+    """生效权重 1.0 ⇒ 闸门**不动**它（原样返回同一个对象，值不变）."""
+    periods, observations = _quorum_observations()
+    days = svc.compose_series(
+        observations,
+        constituents=[_spec("a", 0.5), _spec("b", 0.3), _spec("c", 0.2, group="breadth_momentum")],
+    )
+    assert days[-1].extra["effective_weight_sum"] == pytest.approx(1.0)
+    gated = svc.apply_publish_gate(days)
+    assert gated[-1] is days[-1]
+    assert gated[-1].value is not None
+    assert gated[-1].missing_reason is None
+
+
+def test_publish_gate_withholds_thin_day_as_null_with_reason() -> None:
+    """生效权重 0.80（末日缺第三腿）⇒ **恰好过闸门**；把闸门抬到 0.81 即被改判为 NULL.
+
+    ⚠️ 这是与 `COMPOSITE_MIN_EFFECTIVE_WEIGHT`(0.20) **不同**的一道闸门：
+    0.80 早就过了方法下限（所以 `compose_series` 算出了数字），
+    闸门管的是"这个数字能不能当值发布"。边界**含等号**（`>=`）。
+    """
+    periods, observations = _quorum_observations()
+    specs = [_spec("a", 0.5), _spec("b", 0.3), _spec("c", 0.2, group="breadth_momentum")]
+    observations["c"] = _obs(periods[:-1], [1.0] * 129)  # 末日无行 ⇒ 剔除
+    days = svc.compose_series(observations, constituents=specs)
+    raw_last = days[-1]
+    assert raw_last.value is not None, "先确认方法层面**算得出**值"
+    assert raw_last.extra["effective_weight_sum"] == pytest.approx(0.8)
+
+    # 边界含等号：0.80 >= 0.80 ⇒ 原样发布
+    at_floor = svc.apply_publish_gate(days, min_weight=0.8)
+    assert at_floor[-1] is raw_last
+    assert at_floor[-1].value == pytest.approx(raw_last.value)
+
+    # 抬高一档 ⇒ 该日改判为 NULL + 原因码，值移入 extra.withheld_value
+    gated = svc.apply_publish_gate(days, min_weight=0.81)
+    last = gated[-1]
+    assert last.value is None
+    assert last.missing_reason == "below_publish_weight"
+    assert last.extra["missing_reason"] == "below_publish_weight"
+    assert last.extra["publish_min_weight"] == 0.81
+    assert last.extra["withheld_value"] == pytest.approx(raw_last.value)
+    # 参与集/权重/分位仍在 ⇒ 可复核"为什么这天没值"
+    assert last.extra["participants"] == ["a", "b"]
+    assert last.extra["effective_weights"] == pytest.approx({"a": 0.625, "b": 0.375})
+    assert last.extra["constituents"]["a"]["percentile"] is not None
+    # period / published_at 不变（PIT 语义不受闸门影响）
+    assert last.period == raw_last.period
+    assert last.published_at == raw_last.published_at
+    # 前 129 天权重是 1.0 ⇒ 未被改判（倒数第二天三条腿齐全，值仍在）
+    assert gated[-2].value is not None
+
+
+def test_publish_gate_keeps_insufficient_weight_null_untouched() -> None:
+    """闸门**不覆盖**上游方法的原因码：< 0.20 的日子仍是 `insufficient_effective_weight`."""
+    periods = _days(130)
+    a = _spec("a", 0.06)
+    b = _spec("b", 0.06)
+    c = _spec("c", 0.88)
+    observations = {
+        "a": _obs(periods, [float(i) for i in range(130)]),
+        "b": _obs(periods, [float(i) for i in range(130)]),
+        "c": _obs(periods[:5], [1.0] * 5),
+    }
+    days = svc.compose_series(observations, constituents=[a, b, c])
+    gated = svc.apply_publish_gate(days)
+    last = gated[-1]
+    assert last.value is None
+    assert last.missing_reason == "insufficient_effective_weight"
+    assert "withheld_value" not in last.extra
+
+
+def test_publish_gate_is_idempotent() -> None:
+    """闸门是纯函数：对已改判的日子再跑一次结果**相同**（收敛器可反复重跑）."""
+    periods, observations = _quorum_observations()
+    specs = [_spec("a", 0.5), _spec("b", 0.3), _spec("c", 0.2, group="breadth_momentum")]
+    observations["c"] = _obs(periods[:-1], [1.0] * 129)  # 末日只剩 a+b ⇒ 权重 0.8
+    days = svc.compose_series(observations, constituents=specs)
+    once = svc.apply_publish_gate(days, min_weight=0.9)
+    twice = svc.apply_publish_gate(once, min_weight=0.9)
+    assert [(d.period, d.value, d.missing_reason) for d in twice] == [
+        (d.period, d.value, d.missing_reason) for d in once
+    ]
+    # 已改判的日**仍带**同一份闸门记录（不新增、不丢键）
+    assert twice[-1].extra["publish_min_weight"] == 0.9
+    assert twice[-1].missing_reason == "below_publish_weight"
+    assert twice[-1].value is None
+
+
+def test_below_publish_weight_days_counts_only_withheld_valued_days() -> None:
+    """计数口径：只数"有值但未过闸门"的天；NULL 日（另有原因码）不计入。
+
+    c 只有前 125 行 ⇒ 后 5 天（= a、b 刚够 126 个分位样本的那 5 天）权重 0.8、
+    **算得出值**；把闸门设到 0.9 即全部被改判 ⇒ 计数 5。
+    """
+    periods, observations = _quorum_observations()
+    specs = [_spec("a", 0.5), _spec("b", 0.3), _spec("c", 0.2, group="breadth_momentum")]
+    observations["c"] = _obs(periods[:125], [1.0] * 125)
+    days = svc.compose_series(observations, constituents=specs)
+    valued = [d for d in days if d.value is not None]
+    assert len(valued) == 5, "窗口 126 行 ⇒ 只有最后 5 天有分位"
+    assert all(d.extra["effective_weight_sum"] == pytest.approx(0.8) for d in valued)
+    assert svc.below_publish_weight_days(days, min_weight=0.9) == 5
+    assert svc.below_publish_weight_days(days, min_weight=0.8) == 0  # 边界含等号
+    # 未被改判时不该凭空多出闸门字段
+    assert "publish_min_weight" not in days[-1].extra
+
+
+def test_effective_weight_treats_missing_or_bool_as_unknown() -> None:
+    """`effective_weight`：缺键 / 非数字 / bool ⇒ `None`（**不猜**，按不可发布处理）."""
+    assert svc.effective_weight({}) is None
+    assert svc.effective_weight({"effective_weight_sum": None}) is None
+    assert svc.effective_weight({"effective_weight_sum": "0.88"}) is None
+    assert svc.effective_weight({"effective_weight_sum": True}) is None
+    assert svc.effective_weight({"effective_weight_sum": 0.88}) == 0.88
+    assert svc.effective_weight({"effective_weight_sum": 1}) == 1.0
+
+
+def test_publish_min_weight_comes_from_registry_and_sits_above_method_floor() -> None:
+    """闸门常量**只有一个事实源**（registry），且严格高于方法下限（导入期也校验）."""
+    assert svc.PUBLISH_MIN_WEIGHT == registry.COMPOSITE_PUBLISH_MIN_WEIGHT
+    assert registry.COMPOSITE_MIN_EFFECTIVE_WEIGHT < registry.COMPOSITE_PUBLISH_MIN_WEIGHT <= 1
+    # 常态（只有 QVIX 一族缺值 ⇒ 10/11 条腿、0.88）必须在闸门之上：闸门只挡结构性缺腿
+    assert registry.COMPOSITE_PUBLISH_MIN_WEIGHT <= 0.88
+    assert "below_publish_weight" in registry.COMPOSITE_MISSING_REASONS

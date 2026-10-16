@@ -27,6 +27,9 @@ interface BackendSentimentComposite {
   effective_weight?: number | null;
   min_effective_weight?: number | null;
   caliber_version?: string | null;
+  expected_as_of?: string | null;
+  lag_trading_days?: number | null;
+  stale?: boolean | null;
 }
 
 export interface SentimentComposite {
@@ -56,6 +59,26 @@ export interface SentimentComposite {
   /** 低于该值即落 NULL（insufficient_effective_weight） */
   minEffectiveWeight: number | null;
   caliberVersion: string | null;
+  /**
+   * "现在应该有的最新完整交易日"（后端**本地**判定，不外呼）。
+   *
+   * `null` = 后端判不出（此时 `lagTradingDays`/`stale` 同为 `null`）。
+   */
+  expectedAsOf: string | null;
+  /**
+   * `asOf` 落后 `expectedAsOf` 几个**交易日**。
+   *
+   * ⚠️ 三态，不是布尔：`null` = **无法判定**，`0` = 追平。两者都不显示"滞后"徽标，
+   * 但语义完全不同 —— 故这里不把 `null` 归并成 `0`（同 `insufficientHistory` 的纪律）。
+   */
+  lagTradingDays: number | null;
+  /**
+   * 是否落后：`true` 落后 / `false` 追平 / `null` 无法判定。
+   *
+   * ⚠️ 逐字保留后端三态，**不**在这里 `Boolean(...)` 或 `?? false`：把"判不出"
+   * 显示成"新鲜"就是在数据可能过期时撒谎。
+   */
+  stale: boolean | null;
 }
 
 function mapComposite(b: BackendSentimentComposite): SentimentComposite {
@@ -75,6 +98,10 @@ function mapComposite(b: BackendSentimentComposite): SentimentComposite {
     effectiveWeight: b.effective_weight ?? null,
     minEffectiveWeight: b.min_effective_weight ?? null,
     caliberVersion: b.caliber_version ?? null,
+    expectedAsOf: b.expected_as_of ?? null,
+    lagTradingDays: b.lag_trading_days ?? null,
+    // 三态逐字搬运：`?? null` 只处理"字段缺失"，**不**把 null 塌成 false
+    stale: b.stale ?? null,
   };
 }
 
