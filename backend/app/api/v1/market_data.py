@@ -359,21 +359,26 @@ async def get_sentiment_intraday(
 
 
 @router.get("/sentiment/composite", response_model=SentimentCompositeOut)
-async def get_sentiment_composite() -> SentimentCompositeOut:
+async def get_sentiment_composite(cache: CacheDep) -> SentimentCompositeOut:
     """市场情绪综合指数 hero：**今天的值 + 它在自身历史里的历史分位**（后端算）。
 
     - 序列 = `industry_metrics` 的 `market / market_sentiment_composite`（s1.13-v1）；
+    - `as_of`/`value` 取**最新一个过发布闸门**的行（`effective_weight_sum >= 0.80`，
+      见 `industry_registry.COMPOSITE_PUBLISH_MIN_WEIGHT`）：2026-10-12 那种 3/11 条腿、
+      0.23 的薄行**不作头条**，读面退回上一个齐备日并用 `lag_trading_days` 报出落后；
     - `percentile` = 尾部 `window`（1260 交易日 ≈ 5 年）个**有效样本**上的
       nearest-rank 分位（`100 × count(v <= 今天) / n`，**无插值**，2 位小数）；
       `sample_count` 是实际参与分位的样本数（值为 NULL 的行不进样本、也不计 0）；
     - `sample_count < MIN_PERCENTILE_SAMPLES`(60) → `insufficient_history=true` 且
       `percentile=null`（**不给假分位**，与 `/sentiment/trends` 同一条 Ruling 4）；
-    - `legs` / `effective_weight` / `min_effective_weight` / `total_legs` 直读最新一行
+    - `legs` / `effective_weight` / `min_effective_weight` / `total_legs` 直读**选中行**的
       `extra`（S1.13 写入）；老行缺这些键 → `null` / 0（**不发明**旧口径）；
+    - `expected_as_of` / `lag_trading_days` / `stale` = 新鲜度（本地判定，**不外呼**）：
+      `stale=None` 表示无法判定，不得读成"新鲜"；
     - **公开**端点，与 `/sentiment/{calendar,trends,intraday}` 同一 auth 姿态
       （不在受保护的 `/api/v1/metrics/*` 下）。
     """
-    payload = await market_sentiment_composite_service.get_composite_hero()
+    payload = await market_sentiment_composite_service.get_composite_hero(cache=cache)
     return SentimentCompositeOut.model_validate(payload)
 
 
@@ -385,9 +390,16 @@ async def get_data_freshness() -> DataFreshnessOut:
     Task 3 追加 `coverage`：只读巡检域的覆盖率（含 `have_days` vs `complete_days`）——
     这些域没有 `_refetch_*`，永不进 apply 补漏，只在这里被看见。覆盖率是加法：
     它整体失败（如迁移未应用）也只回空列表，不得把本端点打成 500。
+
+    2026-10-16 追加 `market_metrics`：派生指标（§S1.7–§S1.13）四条腿各自的落库点与
+    落后交易日数。同一纪律 —— 加法失败（缺表/迁移未应用）留 `null`，不反噬本端点。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
-    from app.services import job_alert_service, reconciliation_service  # noqa: PLC0415
+    from app.services import (  # noqa: PLC0415
+        derived_metrics_service,
+        job_alert_service,
+        reconciliation_service,
+    )
 
     async with async_session_factory() as db:
         result = await reconciliation_service.reconcile_market_data(db, apply=False)
@@ -396,6 +408,11 @@ async def get_data_freshness() -> DataFreshnessOut:
         except Exception:  # noqa: BLE001 — 覆盖率是加法，失败不得反噬新鲜度巡检
             logger.warning("coverage report unavailable", exc_info=True)
             result["coverage"] = []
+        try:
+            result["market_metrics"] = await derived_metrics_service.leg_lag_report(db)
+        except Exception:  # noqa: BLE001 — 同 coverage：加法失败不得把端点打成 500
+            logger.warning("market metrics lag report unavailable", exc_info=True)
+            result["market_metrics"] = None
     # Redis 不可用 → 空列表（登记表是运行时告警，不影响"只读巡检"契约）
     result["failed_jobs"] = await job_alert_service.list_job_failures()
     return DataFreshnessOut(**result)

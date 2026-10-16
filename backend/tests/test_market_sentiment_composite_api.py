@@ -46,7 +46,25 @@ CONTRACT_KEYS = {
     "effective_weight",
     "min_effective_weight",
     "caliber_version",
+    "expected_as_of",
+    "lag_trading_days",
+    "stale",
 }
+
+#: 11 条腿的 key（`_healthy_row` 的默认参与集，形状与齐备日一致）。
+ALL_LEGS = [
+    "qvix_50etf",
+    "if_basis",
+    "ic_basis",
+    "im_basis",
+    "idx_turnover_ratio_csi300",
+    "margin_financing_balance",
+    "margin_financing_buy_ratio",
+    "above_ma20_ratio",
+    "advance_decline_ratio",
+    "limit_up_break_ratio",
+    "max_consecutive_limit_up",
+]
 
 D_START = date(2025, 10, 15)
 
@@ -87,7 +105,26 @@ def _row(
 
 
 def _full_row(day: date, value: float | Decimal | None = 32.8157) -> SimpleNamespace:
-    """S1.13 的**完整**行（`extra` 四键齐全，与库内 2026-10-12 同形状）。"""
+    """**齐备日**的行（11 条腿 / 生效权重 1.0，`extra` 四键齐全）。
+
+    这是发布闸门之上的正常形状 —— `_full_row` 是"过闸门"的基准行。
+    """
+    return _row(
+        day,
+        value,
+        participants=list(ALL_LEGS),
+        n_constituents=11,
+        effective_weight_sum=1.0,
+        min_effective_weight=0.2,
+    )
+
+
+def _thin_row(day: date, value: float | Decimal | None = 32.8157) -> SimpleNamespace:
+    """**薄行**：与库内 2026-10-12 同形状（3 条基差腿 / 生效权重 0.23）。
+
+    它过了 `compose_series` 的方法下限（0.20）但**过不了发布闸门**（0.80）——
+    读面不得把它当头条。
+    """
     return _row(
         day,
         value,
@@ -158,7 +195,7 @@ def test_composite_percentile_min_samples_is_overridable() -> None:
 
 
 def test_composite_hero_payload_reads_latest_row_extra() -> None:
-    """最新一行的 `extra` 直读：3 条腿 / 生效权重 0.23 / 下限 0.2（2026-10-12 形状）。"""
+    """齐备日作头条：11 条腿 / 生效权重 1.0，`extra` 直读（不发明、不现算）。"""
     rows = [_row(d, 20.0 + i) for i, d in enumerate(_days(59))]  # 20..78
     rows.append(_full_row(date(2026, 10, 12), Decimal("32.8157")))
 
@@ -172,16 +209,20 @@ def test_composite_hero_payload_reads_latest_row_extra() -> None:
     # 20..32 共 13 个 <= 32.8157，加末值自身 = 14
     assert payload["percentile"] == round(100 * 14 / 60, 2)
     assert payload["insufficient_history"] is False
-    assert payload["legs"] == ["if_basis", "ic_basis", "im_basis"]
-    assert payload["leg_count"] == 3
+    assert payload["legs"] == ALL_LEGS
+    assert payload["leg_count"] == 11
     assert payload["total_legs"] == 11
-    assert payload["effective_weight"] == 0.23
+    assert payload["effective_weight"] == 1.0
     assert payload["min_effective_weight"] == 0.2
     assert payload["caliber_version"] == "s1.13-v1"
 
 
-def test_composite_hero_payload_ignores_older_rows_extra() -> None:
-    """只有**最新行**的 `extra` 作数：09 日 10 条腿 / 0.88 不得漏进 12 日的响应。"""
+def test_composite_hero_payload_skips_thin_latest_row() -> None:
+    """**薄行不作头条**（2026-10-16 口径）：12 日 3 条腿/0.23 ⇒ 退回 09 日齐备行.
+
+    这是用户报的"数字对不上"的直接回归：3 条腿的值（0.23）与 10 条腿的值（0.88）
+    不可比，故读面必须跳过它，并把 `as_of` 落在上一个过闸门的行上。
+    """
     older = _row(
         date(2026, 10, 9),
         44.5068,
@@ -190,20 +231,50 @@ def test_composite_hero_payload_ignores_older_rows_extra() -> None:
         effective_weight_sum=0.88,
         min_effective_weight=0.2,
     )
-    rows = [*[_row(d, 10.0) for d in _days(58)], older, _full_row(date(2026, 10, 12))]
+    rows = [*[_row(d, 10.0) for d in _days(58)], older, _thin_row(date(2026, 10, 12))]
     payload = mscs.composite_hero_payload(rows)
-    assert payload["as_of"] == date(2026, 10, 12)
-    assert payload["leg_count"] == 3
-    assert payload["effective_weight"] == 0.23
+
+    assert payload["as_of"] == date(2026, 10, 9), "薄行不得占据 as_of"
+    assert payload["value"] == 44.5068
+    assert payload["leg_count"] == 10
+    assert payload["effective_weight"] == 0.88
+    # 薄行的 extra 一个键都不许漏进响应（直读的是**选中行**）
+    assert payload["value"] != 32.8157
+
+
+def test_composite_hero_percentile_window_stops_at_selected_row() -> None:
+    """分位窗口**截到选中行为止**：不能把选中行之后的中间值当成"今天".
+
+    70 个齐备日（值 1..70）+ 两个薄行（999、30）：
+    - 正确（截断）：样本 = 1..70，n=70，末值 70 是最大值 ⇒ `percentile=100.0`；
+    - 出错（不截断）：样本 = 尾部 70 个 = 3..70,999,30，末值 30 ⇒ `percentile=40.0`。
+    断言两者可区分 —— 这就是"薄行不得污染今天的分位"。
+    """
+    rows = [_full_row(date(2026, 8, 1) + timedelta(days=i), float(i + 1)) for i in range(70)]
+    rows.append(_thin_row(date(2026, 10, 12), 999.0))
+    rows.append(_thin_row(date(2026, 10, 13), 30.0))
+    payload = mscs.composite_hero_payload(rows, window=70)
+
+    assert payload["as_of"] == date(2026, 8, 1) + timedelta(days=69)
+    assert payload["value"] == 70.0
+    assert payload["sample_count"] == 70  # 不截断会是 72 → 尾窗 70 但末值不同
+    assert payload["percentile"] == 100.0
 
 
 def test_composite_hero_payload_absent_extra_is_null_not_invented() -> None:
-    """老行（`extra` 无这些键）→ `legs=null`、计数 0、权重 `null` ——**不发明**。"""
+    """老行（`extra` 无这些键）→ **不可发布**：权重说不清的行不作头条，字段 `null` 不发明.
+
+    一条可发布的都没有时 `as_of` 也是 `None` —— 这是**响亮**的空，
+    好过拿一个权重不明的数字当"今天的情绪"。
+    """
     rows = [_row(d, 10.0) for d in _days(2)]
     rows.append(_row(date(2026, 1, 1), 12.0, caliber=None))  # extra=None 的最老行
 
     payload = mscs.composite_hero_payload(rows)
 
+    assert payload["as_of"] is None
+    assert payload["value"] is None
+    assert payload["percentile"] is None
     assert payload["legs"] is None
     assert payload["leg_count"] == 0
     assert payload["total_legs"] == 0
@@ -213,8 +284,12 @@ def test_composite_hero_payload_absent_extra_is_null_not_invented() -> None:
 
 
 def test_composite_hero_payload_null_today_value_has_no_percentile() -> None:
-    """今天落 NULL（合成日缺数）→ `value=null` 且 `percentile=null`；
-    `sample_count` 仍如实报尾部有效样本数（60 ≥ 60 → `insufficient_history=false`）。"""
+    """过闸门的行落 NULL（合成日缺数）→ `value=null` 且 `percentile=null`；
+    `sample_count` 仍如实报尾部有效样本数（60 ≥ 60 → `insufficient_history=false`）。
+
+    这是**防御分支**：权重 ≥ 0.80 蕴含"至少 7 条腿"，实际很难同时缺数，
+    但读面不得因为"权重够"就把 NULL 当成分位对象。
+    """
     rows = [_row(d, 10.0) for d in _days(60)]
     rows.append(_full_row(date(2026, 10, 12), None))
     payload = mscs.composite_hero_payload(rows)
@@ -266,16 +341,46 @@ class _FakeSessionFactory:
         return None
 
 
-def _patch_composite_read(monkeypatch: pytest.MonkeyPatch, rows: list[Any]) -> list[tuple]:
-    """把 hero 的读路径换成桩，并记录 `(industry_key, metric_key)` 供断言。"""
+def _patch_composite_read(
+    monkeypatch: pytest.MonkeyPatch,
+    rows: list[Any],
+    *,
+    expected_as_of: date | None = None,
+    lag: int | None = 0,
+) -> list[tuple]:
+    """把 hero 的读路径换成桩，并记录 `(industry_key, metric_key)` 供断言。
+
+    `expected_as_of` 默认 `None` ⇒ 模拟"本地判不出最新完整交易日"（`market_day_service`
+    返回 None），此时新鲜度三字段必须留 `None` 而**不是**假装新鲜。
+    """
     calls: list[tuple] = []
 
     async def _fake_history(db: Any, industry_key: str, metric_key: str, limit: int = 240):
         calls.append((industry_key, metric_key, limit))
         return list(rows)
 
+    from app.services import market_day_service
+
+    async def _fake_day(db: Any, *, cache: Any = None):
+        if expected_as_of is None:
+            return None
+        return market_day_service.MarketDay(
+            day=expected_as_of,
+            quality="complete",
+            reason=None,
+            rows=5562,
+            universe=5563,
+            pct_chg_ratio=1.0,
+            limits_present=True,
+        )
+
+    async def _fake_lag(db: Any, *, after: date, upto: date) -> int:
+        return 0 if lag is None else lag
+
     monkeypatch.setattr(mscs, "async_session_factory", lambda: _FakeSessionFactory(object()))
     monkeypatch.setattr(industry_metric_repo, "get_metric_history", _fake_history)
+    monkeypatch.setattr(market_day_service, "resolve_latest_complete_day", _fake_day)
+    monkeypatch.setattr(mscs, "trading_days_between", _fake_lag)
     return calls
 
 
@@ -285,7 +390,7 @@ async def test_composite_endpoint_anonymous_200_contract_shape(
     """**匿名**（无 cookie/token）200；响应键逐字等于契约；`window` 恒 1260。"""
     rows = [_row(d, 20.0 + i) for i, d in enumerate(_days(59))]  # 20..78
     rows.append(_full_row(date(2026, 10, 12), Decimal("32.8157")))
-    calls = _patch_composite_read(monkeypatch, rows)
+    calls = _patch_composite_read(monkeypatch, rows, expected_as_of=date(2026, 10, 12))
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -301,15 +406,96 @@ async def test_composite_endpoint_anonymous_200_contract_shape(
     assert body["sample_count"] == 60
     assert body["percentile"] == round(100 * 14 / 60, 2)
     assert body["insufficient_history"] is False
-    assert body["legs"] == ["if_basis", "ic_basis", "im_basis"]
-    assert body["leg_count"] == 3
+    assert body["legs"] == ALL_LEGS
+    assert body["leg_count"] == 11
     assert body["total_legs"] == 11
-    assert body["effective_weight"] == 0.23
+    assert body["effective_weight"] == 1.0
     assert body["min_effective_weight"] == 0.2
     assert body["caliber_version"] == "s1.13-v1"
+    # 新鲜度：本地判定追平（as_of == expected_as_of）⇒ 不 stale
+    assert body["expected_as_of"] == "2026-10-12"
+    assert body["lag_trading_days"] == 0
+    assert body["stale"] is False
 
     assert calls and calls[0][0] == "market"
     assert calls[0][1] == "market_sentiment_composite"
+
+
+async def test_composite_endpoint_stale_when_thin_run_ahead(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**源侧超前**（薄行跑在齐备日之前）⇒ 退回齐备日 + `stale=true` + 落后交易日数.
+
+    这正是用户报的场景：薄行（3 条腿）比齐备日新，读面必须展示齐备日并如实报落后。
+    """
+    rows = [_row(d, 10.0) for d in _days(58)]
+    rows.append(
+        _row(
+            date(2026, 10, 9),
+            44.5068,
+            participants=[f"leg_{i}" for i in range(10)],
+            n_constituents=11,
+            effective_weight_sum=0.88,
+            min_effective_weight=0.2,
+        )
+    )
+    rows.append(_thin_row(date(2026, 10, 12)))
+    _patch_composite_read(monkeypatch, rows, expected_as_of=date(2026, 10, 12), lag=1)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/market/sentiment/composite")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["as_of"] == "2026-10-09"
+    assert body["leg_count"] == 10
+    assert body["effective_weight"] == 0.88
+    assert body["expected_as_of"] == "2026-10-12"
+    assert body["lag_trading_days"] == 1
+    assert body["stale"] is True
+
+
+async def test_composite_endpoint_freshness_unknown_is_not_fresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """判不出最新完整交易日 ⇒ 三字段 `null`（`stale=null` **不得**被读成"新鲜"）."""
+    _patch_composite_read(monkeypatch, [_full_row(d, 10.0) for d in _days(30)], expected_as_of=None)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/market/sentiment/composite")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["stale"] is None
+    assert body["lag_trading_days"] is None
+    assert body["expected_as_of"] is None
+    # 主数据不受新鲜度缺失影响
+    assert body["as_of"] == _days(30)[-1].isoformat()
+
+
+async def test_trading_days_between_skips_query_when_range_empty() -> None:
+    """`upto <= after` ⇒ 直接回 0，**不发查询**（新鲜度判定不得白跑一次全表范围扫描）."""
+
+    class _ExplodingSession:
+        async def execute(self, *_a: Any, **_k: Any) -> Any:  # pragma: no cover
+            raise AssertionError("范围为空时不得发查询")
+
+    assert (
+        await mscs.trading_days_between(
+            _ExplodingSession(), after=date(2026, 10, 12), upto=date(2026, 10, 12)
+        )
+        == 0
+    )
+    assert (
+        await mscs.trading_days_between(
+            _ExplodingSession(), after=date(2026, 10, 12), upto=date(2026, 10, 9)
+        )
+        == 0
+    )
 
 
 async def test_composite_endpoint_insufficient_history(

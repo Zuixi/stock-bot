@@ -2152,7 +2152,26 @@ COMPOSITE_PERCENTILE_MIN_SAMPLES = 126
 #: 参与成分数下限：低于它当日的合成值落 NULL（1 个成分的"加权分位"不是合成指数）。
 COMPOSITE_MIN_PARTICIPANTS = 2
 #: 生效权重之和下限：防止"只剩一两个零碎小权重腿"时仍报出一个名为合成值的数字。
+#: ⚠️ 与 :data:`COMPOSITE_PUBLISH_MIN_WEIGHT` **是两件事**，不得合并：
+#: 本常量是**方法下限**（低于它连"算"都不算，`compose_series` 直接落 NULL）；
+#: 后者是**发布闸门**（算得出数字，但腿太薄时**不作为值发布**，见下一条）。
 COMPOSITE_MIN_EFFECTIVE_WEIGHT = 0.20
+
+#: **发布闸门**：生效权重之和低于它 ⇒ 该日**不发布值**（`value=NULL` +
+#: `extra.missing_reason='below_publish_weight'`），但行仍在、参与集与生效权重仍落
+#: `extra`（可复算性与"缺数可见"两条都不丢）。
+#:
+#: 为什么在 0.20 之上再加一道 0.80（2026-10-16 产品裁决：用户口径 = 「只展示各腿齐备到
+#: T-1 的值」）：实测 2026-10-12 各腿可得日不齐（期货/基差腿到 10-12、行情锚定的腿只到
+#: 10-09），union 日历于是长出**3/11 条腿、生效权重 0.23** 的一行；它过了 0.20 的**方法**
+#: 下限，就被当成"当天的市场情绪综合指数"发布 —— 可它与前一日（10 条腿、0.88）
+#: **不是同一个东西**，读者会把 3 条腿的值直接与 10 条腿的值对比。
+#: 0.80 的取值理由：11 条腿里**最重的单腿是 0.12**（`qvix_50etf`），故 0.80 蕴含
+#: "至少 7 条腿参与"；而常态下只有 QVIX 一族缺值时是 **0.88**（10 条腿），仍在闸门之上
+#: —— 闸门只挡"结构性缺腿"，不误伤"单源滞后"。
+#: 改这个数 = 改发布口径 → 同步 :data:`COMPOSITE_MISSING_REASONS` 与字典 §4.2。
+COMPOSITE_PUBLISH_MIN_WEIGHT = 0.80
+
 #: 成分缺失的处置（**写死、公开、可机读**）：剔除该成分，对剩余成分的权重**重新归一化**
 #: —— 绝不静默用 0、绝不插值、绝不前向填充。当天的实际参与集与生效权重落
 #: `extra.participants` / `extra.effective_weights`（可复算性的前提）。
@@ -2167,6 +2186,13 @@ COMPOSITE_MISSING_REASONS: dict[str, str] = {
     "insufficient_effective_weight": (
         "当日参与成分的配置权重之和低于下限（extra.effective_weight_sum < "
         "extra.min_effective_weight）—— 少数零碎腿的合成不具代表性，落 NULL"
+    ),
+    "below_publish_weight": (
+        "当日生效权重之和过了方法下限但**未过发布闸门**（extra.min_effective_weight <= "
+        "extra.effective_weight_sum < extra.publish_min_weight）—— 值算得出，但腿太薄，"
+        "与齐备日的值不可比，故**不作为值发布**（`value=NULL`）。参与集/权重/分位仍在 "
+        "`extra` 里，可复核；成因通常是各腿的**源侧可得日不齐**（如行情锚定的腿停在 T-1、"
+        "而期货腿已到 T），由 `derived_metrics_service` 的收敛器在下一轮按 `target` 重算覆盖"
     ),
 }
 
@@ -2426,6 +2452,14 @@ def _assert_composite_spec() -> None:
         raise RuntimeError("§S1.13 参与成分下限必须 >= 2（1 个成分的加权分位不是合成指数）")
     if not 0 < COMPOSITE_MIN_EFFECTIVE_WEIGHT <= 1:
         raise RuntimeError("§S1.13 生效权重下限必须落在 (0, 1]")
+    # 发布闸门与方法下限的关系必须写死：闸门**松于或等于**方法下限时它形同虚设
+    # （永远不会有一条"算得出但不发布"的日子），那是配置错误而不是"更宽松的口径"。
+    if not COMPOSITE_MIN_EFFECTIVE_WEIGHT < COMPOSITE_PUBLISH_MIN_WEIGHT <= 1:
+        raise RuntimeError(
+            "§S1.13 发布闸门必须严格高于方法下限且不超过 1：须 "
+            "min_effective_weight < publish_min_weight <= 1（得到 "
+            f"{COMPOSITE_MIN_EFFECTIVE_WEIGHT} / {COMPOSITE_PUBLISH_MIN_WEIGHT}）"
+        )
     forbidden = sorted(set(keys) & set(COMPOSITE_FORBIDDEN_CONSTITUENT_KEYS))
     if forbidden:
         raise RuntimeError(

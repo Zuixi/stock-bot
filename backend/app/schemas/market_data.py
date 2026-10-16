@@ -397,6 +397,26 @@ class CoverageOut(BaseModel):
     degraded_trading_calendar: bool = False
 
 
+class MarketMetricsLegOut(BaseModel):
+    """派生指标（§S1.7–§S1.13）**一条腿**的落库点与落后交易日数（只读排障面）。"""
+
+    key: str
+    label: str
+    latest: str | None
+    #: `latest` 之后到最近交易日之间的交易日数；`latest` 缺失 ⇒ `None`（不是 0）。
+    lag_trading_days: int | None
+    #: 该腿是否喂综合指数（§S1.13）：非成分腿落后**不**阻断 composite。
+    feeds_composite: bool
+
+
+class MarketMetricsFreshnessOut(BaseModel):
+    """四条腿的收敛状态（这一族此前**只**由手工脚本写 —— 2026-10-16 事故的暴露面）."""
+
+    target: str | None
+    checked_at: str | None
+    legs: list[MarketMetricsLegOut] = []
+
+
 class DataFreshnessOut(BaseModel):
     as_of: str
     expected_latest: str | None
@@ -418,3 +438,7 @@ class DataFreshnessOut(BaseModel):
     # Task 3：只读巡检域覆盖率（加字段；老 producer 不传 → 空列表，端点照常 200）。
     # 这些域**没有** `_refetch_*`，永远不会出现在 `domains[*].refetched` 里。
     coverage: list[CoverageOut] = []
+    # 派生指标（§S1.7–§S1.13）四条腿的收敛状态（加字段；老 producer 不传 → null）。
+    # 这一族此前只由手工回补脚本写，**没有任何定时任务**碰过它 —— 2026-10-16 的
+    # "数据停在 10月12日"就是这个暴露面。这里让"哪条腿停在哪天"在巡检端点直接可读。
+    market_metrics: MarketMetricsFreshnessOut | None = None

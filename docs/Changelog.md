@@ -1,3 +1,89 @@
+## 2026-10-16 - **派生指标日更收敛（§S1.7–§S1.13）：对账后置收敛器 + 发布闸门 0.80 + 读面"只展示齐备日"**
+
+owner 报"情绪分析的综合指数一直是 10.12，现在已经是 10.15"。
+
+**根因不是数据源，是编排缺失**（逐条已复核）：
+- 这一族指标（`industry_metrics` 的 scope=`market`）**只有** `backend/scripts/backfill_*.py` 写，
+  `app/scheduler`/`app/workers` 从未引用过它们（`git log -S market_sentiment_composite -- app/scheduler/` 为空）；
+  名字最像的 `sentiment_daily_job`（17:15）写的是 `market_sentiment_daily`（涨停温度计），**另一张表**。
+- 反查 `created_at`：最后一次人工写入 = **2026-10-13 00:46 UTC**，此后三天零写入；而
+  `daily_quotes` 到 10-14、`index_dailies`/`fund_etf_daily` 到 10-15 —— 底座是新的。
+- 第二个缺陷：composite 的日历 = 各成分可得日的**并集**，各腿锚点不齐就长"薄行"。实测
+  10/12 那行只有 **3/11 条腿、生效权重 0.23**（行情锚定的腿只到 10-09，基差腿到 10-12），
+  而读面**盲取最后一行** ⇒ 这个 3 条腿的数字被当作"当天的综合指数"与前一日的 10 条腿值
+  直接可比地展示。
+
+**改动（不新增表、不 bump `s1.13-v1`、不改权重与分位方法）**
+- **发布闸门**：registry 新增 `COMPOSITE_PUBLISH_MIN_WEIGHT = 0.80` + 原因码
+  `below_publish_weight`（导入期守卫：闸门必须**严格高于**方法下限 0.20）。薄日仍落行、
+  仍落参与集/逐腿分位/生效权重，但 `value=NULL`，当时算出的数存 `extra.withheld_value`。
+  0.80 的依据：最重单腿 0.12 ⇒ 蕴含"至少 7 条腿"；常态（只缺 QVIX）为 0.88，仍在闸门之上。
+- **读面**：`select_latest_publishable_index` 只取最新一个过闸门的行（并在该行**截断**分位
+  序列，否则窗口末值会落在更晚的薄值上）；新增 `expected_as_of` / `lag_trading_days` /
+  `stale`（**三态**：`null` = 判不出，不得读成"新鲜"）。新鲜度用 `resolve_latest_complete_day`
+  本地判定（**不在 GET 里外呼** —— `expected_trade_dates` 无缓存，会把首屏绑到上游可用性上）。
+- **收敛器** `derived_metrics_service.converge()`：目标日取对账算出的 `expected_latest`（T-1）；
+  10 个**交易日**窗口 + 幂等 upsert ⇒ 自愈；四条腿（宽度/活跃度/波动率/资金流）**逐腿隔离**，
+  非成分腿（资金流）失败**不阻断** composite；PG advisory lock 互斥；落后 > 60 交易日只告警。
+- **挂载点**：`reconcile_market_data_job` 尾步（复用启动 +2min / 17:45 / 每日 10:00 三个触发点）。
+  **不新开 cron** —— 那会重现"任务准点跑才正确"的老坑（宿主睡眠、上游晚到都会算在半截底座上，
+  10/12 正是这么来的）；分域对账（16:30/16:45）**不**触发收敛。告警 id `market_metrics_refresh`。
+- **手动轨道**：`MarketDataJobType` 加 `market_metrics`（`target` 收 ISO 与 `YYYYMMDD` 两种写法），
+  worker 分支持同一个 `converge()`；结果**嵌一层**（`{"converge": {...}}`）—— 收敛自身的
+  `status` 与任务生命周期 `status` 撞键会让"任务成功但被闸门挡掉"看起来一样。
+- **前端**：hero 新增新鲜度披露（滞后档明写"滞后 N 个交易日 + 已有齐备数据到哪天"；
+  判不出档明写"无法判定"，**不沉默**）；页头一句话同步。
+- **巡检端点**：`/market/data-freshness` 追加 `market_metrics`（四条腿的落库点/落后天数），
+  加法失败只留 `null`，不把端点打成 500。
+- **根因守卫**（`derived_metrics_service.assert_market_keys_covered`）：39 个已登记的 market
+  指标，**每个**都必须落在某条腿上或写进 `CONVERGE_EXCLUDED_KEYS` 并给出理由（5 个：
+  PE 底座 / 月频 / 周频不可复算 / 季度披露 / S3.2 待接）。反向也核对：豁免项不得是死条目、
+  不得与腿重复声明。⇒ "登记了却没人日更"这种事故形态在**加 key 那次测试**就红，而不是三天后
+  被用户发现。
+
+**验证**：新增/改写 **62 条**用例（composite 纯函数与写面闸门、收敛编排、接线、手动轨道、
+巡检字段），全部离线；**变异验证**三处（读面去掉闸门过滤、写面去掉闸门、落库忘记过闸门）
+各让对应用例变红。真库 `-m e2e` 复现 10/12 场景：薄日被改判为 `value=NULL` +
+`below_publish_weight`（`withheld_value` 保留算出的数），补齐各腿后**重算同一天**即得
+10 条腿 / 0.88 的齐备值 —— 且全程事务回滚（跑完核对库内行数与 10/12 原值未变）。
+`ruff` 0 · `mypy` 0（198 文件）· `tsc` 0 · `npm run build` 0 · `doc_gate` 13 项全绿。
+
+**踩到的两个坑（已写进代码注释）**：① 落库走 Core 的 `ON CONFLICT DO UPDATE`，**不刷新**
+ORM identity map —— 同一 session 里"读→upsert→再读"会拿到旧对象，所以 `get_metric_row_at`
+必须 `populate_existing=True`，而且**跨着下一次写入去读旧引用**会看到被就地刷新的新值
+（测试里因此要立刻快照成纯值）；② `{"status": "completed", **result}` 里 payload 的
+`status` 会覆盖任务状态，撞键必须靠嵌一层隔离。
+
+**第三个坑（测试密闭性，已升级为门禁）**：收敛器**自持 engine 连接**（advisory lock 需要
+专用连接），于是 `test_reconcile_jobs.py` 的既有 case 只打桩了 `reconcile_market_data` 与
+session factory ⇒ 默认门禁在**本机有 PG 时会静默连上 5433**（测试仍全绿，已不密闭）。
+修法：那批 case 补打桩 `converge`，并**新增永久守卫**
+`test_job_layer_never_touches_the_real_engine`（把 `derived_metrics_service.engine` 换成
+计数器替身，任何 `connect()` 都让测试红）。同型风险以后加"自持 session 的 service 进 job"
+时会当场暴露，而不是靠人记得打桩。
+
+**部署与真实库验收（2026-10-16 01:35–01:40 CST 已完成）**：在本 worktree 内
+`docker compose -p stock-bot build api scheduler worker frontend` 后 `up -d --no-deps` 只重建
+这四个服务（**不碰 postgres**，其卷 `stock_bot_wt_p7_postgres_data` 不受影响；重建前已比对
+运行中容器的插值环境与 compose 输出逐字一致 —— `AUTH_ISSUER`/`AUTH_AUDIENCE`/`RABBITMQ_URL`
+都走 `${VAR:-default}`，故不需要 `.env`）。实测：
+- **重启 scheduler 容器本身就是验收** —— 启动 +2min 的对账把 10/15 行情拉回，**同一个 job 内**
+  收敛器把四条腿与 composite 推到 10/15（`derived-metrics leg ... latest=2026-10-15` →
+  `converge done: status=ok target=2026-10-15 alerts=[]`）；
+- hero：`as_of=2026-10-15`、`lag_trading_days=0`、`stale=false`、9/11 条腿、`effective_weight=0.84`；
+- 10/12 的薄行由 **3 条腿 / 0.23 / 32.8157** 改写为 **11 条腿 / 1.0 / 32.8160**，并补出
+  10/13、10/14、10/15（库内行数 4002 → 4005，**只 +3**）；
+- 再触发一轮：breadth/activity/capital_flows = `caught_up`（**零外呼**），volatility 按设计
+  重扫窗口，composite 值不变（27.546，幂等）；
+- 全链路 `http://localhost/api/v1/market/sentiment/composite` → 200；`/market/data-freshness`
+  的 `market_metrics` 四条腿 lag 全 0；部署窗口内无新增 `job:failures`；
+- **意外收获**：`qvix_50etf` 上游恢复，`always_rescan` 把窗口内此前落成 NULL 的行全部回填
+  （10/12 因此从 9 条腿变 11 条腿）—— "迟到补数必须能覆盖已落 NULL 行"的设计被实测验证。
+
+**遗留**：T-1 是管线固有语义（页面正常也只到昨日）；投资行为腿（月/周频）不在本次收敛范围。
+详见 [plans/2026-10-16-derived-metrics-converge.md](./plans/2026-10-16-derived-metrics-converge.md)
+与 [ADR 0016](./decisions/0016-derived-metrics-converge.md)。
+
 ## 2026-10-15 - **顶栏回退为 10 项平铺（含情绪分析）+ 整体靠右 + 搜索移到品牌与导航之间**
 
 owner 实测反馈两件事，本条**都是改正我上一轮的判断**：

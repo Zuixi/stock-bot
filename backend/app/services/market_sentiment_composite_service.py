@@ -64,6 +64,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -74,11 +75,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
 from app.models.industry_research import IndustryMetric
+from app.models.quote import DailyQuote
 from app.repositories import industry_metric_repo
 from app.schemas.limit_up import MIN_PERCENTILE_SAMPLES
 from app.services import industry_registry as registry
 from app.services.indicators import percentile_rank
 from app.services.market_activity_service import upsert_metric_rows
+
+logger = logging.getLogger(__name__)
 
 METRIC_KEY = registry.COMPOSITE_METRIC_KEY
 SOURCE = registry.COMPOSITE_SOURCE
@@ -90,6 +94,10 @@ CONSTITUENTS: tuple[registry.CompositeConstituent, ...] = registry.COMPOSITE_CON
 CONSTITUENT_KEYS: tuple[str, ...] = tuple(c.metric_key for c in CONSTITUENTS)
 WEIGHT_BY_KEY: dict[str, float] = {c.metric_key: c.weight for c in CONSTITUENTS}
 DIRECTION_BY_KEY: dict[str, int] = {c.metric_key: c.direction for c in CONSTITUENTS}
+
+#: **发布闸门**：生效权重之和低于它 ⇒ 该日不发布值（`value=NULL` +
+#: `below_publish_weight`）。唯一事实源是 registry，本模块只读取、不另存一份数。
+PUBLISH_MIN_WEIGHT: float = registry.COMPOSITE_PUBLISH_MIN_WEIGHT
 
 #: 分位不足 / 当日缺值的**逐成分**原因码（落 `extra.constituents[k].reason`）。
 CONSTITUENT_REASONS: dict[str, str] = {
@@ -137,6 +145,9 @@ class BackfillStats:
     #: 因 `caliber_version` 与 registry 不符而被丢弃的成分行数（口径断点，不混算）。
     rows_dropped_other_caliber: dict[str, int]
     sources: dict[str, str]
+    #: 本次**过不了发布闸门**（`effective_weight_sum < COMPOSITE_PUBLISH_MIN_WEIGHT`）
+    #: 而被改判为 NULL 的天数。这些天仍有行、仍可复核，只是不作为值发布。
+    days_below_publish_weight: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -152,6 +163,8 @@ class BackfillStats:
             "eras": self.eras,
             "rows_dropped_other_caliber": self.rows_dropped_other_caliber,
             "sources": self.sources,
+            "publish_min_weight": PUBLISH_MIN_WEIGHT,
+            "days_below_publish_weight": self.days_below_publish_weight,
         }
 
 
@@ -417,6 +430,81 @@ def composite_stats(days: Sequence[CompositeDay], rows_upserted: int) -> Backfil
     )
 
 
+# ── 发布闸门（纯函数：与"怎么算"无关，只决定"算出来的数能不能当值发布"）──────
+#
+# 背景（2026-10-16 产品裁决）：`compose_series` 的方法下限是 0.20，于是 2026-10-12
+# 那种"各腿可得日不齐"的日子（3/11 条腿、0.23）会带着一个**数字**发布出去，
+# 而它与齐备日（10 条腿、0.88）不是同一个东西。闸门把这类日子改判为"无值 + 原因码"，
+# 值仍在 `extra.withheld_value` 里可复核 —— **不删、不插值、不前向填充**。
+
+
+def effective_weight(extra: Mapping[str, Any]) -> float | None:
+    """`extra.effective_weight_sum` → float；缺键 / 非数字（含 bool）→ `None`。
+
+    `None` 的含义是"**说不清权重**"（老行、异常行），调用方按**不可发布**处理：
+    宁可退回上一个说得清的齐备日，也不拿一个权重不明的数字当头条。
+    """
+    value = extra.get("effective_weight_sum")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def is_publishable(day: CompositeDay, *, min_weight: float = PUBLISH_MIN_WEIGHT) -> bool:
+    """该日是否过**发布闸门**（`effective_weight_sum >= min_weight`）。
+
+    值本身为 NULL 的日子不算"未过闸门"（它另有原因码，如 `insufficient_participants`），
+    故调用方判"被闸门改判"时必须同时看 `value is not None`。
+    """
+    weight = effective_weight(day.extra)
+    return weight is not None and weight >= min_weight
+
+
+def apply_publish_gate(
+    days: Sequence[CompositeDay], *, min_weight: float = PUBLISH_MIN_WEIGHT
+) -> list[CompositeDay]:
+    """未过闸门的**有值**日子 → `value=NULL` + `missing_reason='below_publish_weight'`.
+
+    **为什么落 NULL 而不是不落行**（缺数可见原则）：行不存在时"各腿没齐"与"任务没跑"
+    在库里长得一样；落 NULL + 原因码，则该日仍在、参与集/生效权重/逐腿分位仍可复核，
+    只是不作为值发布。`extra.withheld_value` 保留当时算出的数（调试与对账用），
+    `extra.publish_min_weight` 记下当时生效的闸门，可复算"为什么这天没值"。
+
+    已经是 NULL 的日子**原样返回**（原因码由上游方法决定，闸门不覆盖它）。
+    纯函数：同一输入恒得同一输出（无时钟、无 IO），故收敛器可反复重跑。
+    """
+    out: list[CompositeDay] = []
+    for day in days:
+        if day.value is None or is_publishable(day, min_weight=min_weight):
+            out.append(day)
+            continue
+        extra = dict(day.extra)
+        extra["missing_reason"] = "below_publish_weight"
+        extra["publish_min_weight"] = min_weight
+        extra["withheld_value"] = day.value
+        out.append(
+            CompositeDay(
+                period=day.period,
+                value=None,
+                missing_reason="below_publish_weight",
+                published_at=day.published_at,
+                extra=extra,
+            )
+        )
+    return out
+
+
+def below_publish_weight_days(
+    days: Sequence[CompositeDay], *, min_weight: float = PUBLISH_MIN_WEIGHT
+) -> int:
+    """`days` 里被闸门改判的天数（`composite_stats` 的统计口径，与落库口径同一判据）."""
+    return sum(
+        1
+        for day in days
+        if day.value is not None and not is_publishable(day, min_weight=min_weight)
+    )
+
+
 # ── 落库 ───────────────────────────────────────────────────────────────
 
 
@@ -518,7 +606,10 @@ async def upsert_composite_range(
             f"§S1.13 在 [{day_lo}, {day_hi}] 一个合成日都没产出 —— 成分行缺失或窗口错，"
             "**不得**静默成功（那会把「没跑」伪装成「跑过」）。请先回补成分。"
         )
-    rows = [_row(day) for day in days]
+    # 发布闸门在**落库前**生效：算得出的薄日改判为 NULL + 原因码（有行、无值），
+    # 于是读面（hero）与通用读面都不会把一个 3/11 条腿的数字当成当天的合成值。
+    published = apply_publish_gate(days)
+    rows = [_row(day) for day in published]
     stats = composite_stats(days, 0)
     upserted = await upsert_metric_rows(db, rows)
     return BackfillStats(
@@ -532,6 +623,7 @@ async def upsert_composite_range(
         eras=stats.eras,
         rows_dropped_other_caliber=dict(sorted(dropped.items())),
         sources=stats.sources,
+        days_below_publish_weight=below_publish_weight_days(days),
     )
 
 
@@ -664,20 +756,61 @@ def composite_percentile(
     return n, round(100.0 * sum(1 for v in samples if v <= current) / n, 2)
 
 
+def select_latest_publishable_index(
+    rows: Sequence[Any], *, min_weight: float = PUBLISH_MIN_WEIGHT
+) -> int | None:
+    """**最新一个过发布闸门**的行的下标；一行都不过 ⇒ `None`（升序序列里从尾往前找）.
+
+    判据只有一条：该行 `extra.effective_weight_sum >= min_weight`。缺键的行（老行、
+    异常行）视为**不可发布** —— 见 :func:`effective_weight` 的说明。
+
+    为什么读面也要过滤（写面已经有闸门）：闸门是本轮才加的，**库里已经躺着**那些
+    按旧口径发布的薄行（实测 2026-10-12 = 3/11 条腿、0.23，全库有 2592 个这样的日子），
+    而收敛器只重算最近一个窗口、**不会**回头改写全部历史。读面不复核一遍，
+    这些历史薄行仍会被当成头条。
+    """
+    for idx in range(len(rows) - 1, -1, -1):
+        extra = getattr(rows[idx], "extra", None) or {}
+        weight = effective_weight(extra)
+        if weight is not None and weight >= min_weight:
+            return idx
+    return None
+
+
 def composite_hero_payload(
-    rows: Sequence[Any], *, window: int = COMPOSITE_HISTORY_WINDOW
+    rows: Sequence[Any],
+    *,
+    window: int = COMPOSITE_HISTORY_WINDOW,
+    min_weight: float = PUBLISH_MIN_WEIGHT,
+    expected_as_of: date | None = None,
+    lag_trading_days: int | None = None,
 ) -> dict[str, Any]:
     """合成序列（**升序** ORM 行 / 行替身）→ hero 响应（**纯函数**，无 IO、无时钟）。
 
-    只回**库里已有**的事实：`as_of`/`value`/`caliber_version` 取最新一行；
-    `legs`/`effective_weight`/`min_effective_weight`/`total_legs` 直读最新一行 `extra`
-    的既有键（`participants` / `effective_weight_sum` / `min_effective_weight` /
+    只回**库里已有**的事实：`as_of`/`value`/`caliber_version` 取**最新一个过发布闸门
+    的行**（`select_latest_publishable_index`）；`legs`/`effective_weight`/
+    `min_effective_weight`/`total_legs` 直读**同一行** `extra` 的既有键
+    （`participants` / `effective_weight_sum` / `min_effective_weight` /
     `n_constituents`）—— 缺键就 `None`/0，**绝不**回退去别的行或按配置权重现算。
+
+    为什么"最新一个过闸门的行"而不是盲取 `rows[-1]`（2026-10-16 裁决）：盲取会把
+    2026-10-12 那种 3/11 条腿的薄值当成"当天的市场情绪综合指数"，与前一日 10 条腿的
+    值直接可比地展示 —— 那正是用户看到的"数字对不上"。
+
+    **分位窗口截到选中行为止**：`values` 只取该行**及其之前**的非 NULL 值。若不过滤，
+    选中行之后那些"有值但未过闸门"的历史薄行会成为窗口末值，分位就算在错误的对象上。
+
+    `expected_as_of` / `lag_trading_days` 由调用方（`get_composite_hero`）注入 ——
+    本函数不认识交易日历，也不查库：`stale` 三态（`True`/`False`/`None`）中 `None`
+    表示"无法判定"（缺 `expected_as_of`），**不得**把它当"新鲜"。
     今天的值为 NULL（合成日缺数）时 `percentile=None`：没有"今天的位置"可分位
     （`sample_count` 仍如实返回尾部有效样本数）。
     """
-    latest = rows[-1] if rows else None
-    values = [float(r.value) for r in rows if r.value is not None]
+    idx = select_latest_publishable_index(rows, min_weight=min_weight)
+    latest = None if idx is None else rows[idx]
+    # 序列在选中行处截断：分位定义在"截至当天的历史"上，不能吃到更晚的薄行
+    series = list(rows[: idx + 1]) if idx is not None else []
+    values = [float(r.value) for r in series if r.value is not None]
     sample_count, percentile = composite_percentile(values, window)
     if latest is None or latest.value is None:
         percentile = None
@@ -686,9 +819,10 @@ def composite_hero_payload(
     legs_raw = extra.get("participants")
     legs = [str(k) for k in legs_raw] if isinstance(legs_raw, list) else None
     total_legs = extra.get("n_constituents")
+    as_of = None if latest is None else latest.period
 
     return {
-        "as_of": None if latest is None else latest.period,
+        "as_of": as_of,
         "value": None if latest is None or latest.value is None else float(latest.value),
         "window": window,
         "sample_count": sample_count,
@@ -704,19 +838,89 @@ def composite_hero_payload(
         "effective_weight": _extra_float(extra, "effective_weight_sum"),
         "min_effective_weight": _extra_float(extra, "min_effective_weight"),
         "caliber_version": None if latest is None else latest.caliber_version,
+        "expected_as_of": expected_as_of,
+        "lag_trading_days": lag_trading_days,
+        # `None` = 无法判定（缺 expected_as_of），**不是**"新鲜"：三态必须区分，
+        # 否则读面在信息缺失时会静默宣称"数据是新的"。
+        "stale": None if lag_trading_days is None else lag_trading_days > 0,
     }
 
 
-async def get_composite_hero() -> dict[str, Any]:
-    """`GET /api/v1/market/sentiment/composite` 的编排：一次索引读 + 纯函数组装。
+async def trading_days_between(db: AsyncSession, *, after: date, upto: date) -> int:
+    """`(after, upto]` 区间内的**交易日数**（本地口径：`daily_quotes` 真有行情的日子）.
 
-    **不新增 SQL、不新增表、不加缓存**：复用 `industry_metric_repo.get_metric_history`
+    为什么用 `daily_quotes` 而不是 `trade_cal`：库内没有持久化交易日历，且真源本来就是
+    "哪些日子真有行情"（`limit_up_repo.list_recent_trade_dates` 的同一条理由）。
+    只做一次范围计数（走 `trade_date` 索引），不拉回日期列表。
+    """
+    if upto <= after:
+        return 0
+    stmt = select(func.count(func.distinct(DailyQuote.trade_date))).where(
+        DailyQuote.trade_date > after, DailyQuote.trade_date <= upto
+    )
+    return int((await db.execute(stmt)).scalar() or 0)
+
+
+async def get_composite_hero(*, cache: Any = None) -> dict[str, Any]:
+    """`GET /api/v1/market/sentiment/composite` 的编排：索引读 + 纯函数组装 + 新鲜度判定。
+
+    **不新增表、不加新缓存**：复用 `industry_metric_repo.get_metric_history`
     （`idx_industry_metrics_lookup` 覆盖 `(industry_key, metric_key, period)`）。
     窗口是回看窗口（分位定义在它上面），读全量行是为了**从尾部取足** `window` 个有效样本 ——
     裁掉窗口前的历史不会改变结果，但少读 NULL 行会（故 `limit` 留足余量）。
+
+    新鲜度（`expected_as_of` / `lag_trading_days` / `stale`）：
+    - `expected_as_of` = **本地**判定的"现在应该有的最新完整交易日"，复用
+      `market_day_service.resolve_latest_complete_day`（`as_of_quality` 那套完整性判据，
+      可传 Redis `cache`）—— **不在 GET 里外呼 TuShare**：`expected_trade_dates` 没有缓存，
+      放进读面会把首屏绑到上游可用性上；
+    - `lag_trading_days` = 选中行到 `expected_as_of` 之间的交易日数（本地 `daily_quotes`）；
+    - 任一项算不出 ⇒ 三个字段留 `None`（**不假装新鲜**）。
     """
+    from app.services import market_day_service  # noqa: PLC0415 — 读面按需引入，避免环
+
     async with async_session_factory() as db:
         rows = await industry_metric_repo.get_metric_history(
             db, "market", METRIC_KEY, limit=COMPOSITE_READ_LIMIT
         )
-    return composite_hero_payload(rows)
+        expected_as_of: date | None = None
+        lag_trading_days: int | None = None
+        try:
+            market = await market_day_service.resolve_latest_complete_day(db, cache=cache)
+            expected_as_of = None if market is None else market.day
+            idx = select_latest_publishable_index(rows)
+            if expected_as_of is not None and idx is not None:
+                lag_trading_days = await trading_days_between(
+                    db, after=rows[idx].period, upto=expected_as_of
+                )
+        except Exception:  # noqa: BLE001 — 新鲜度是**加法**：算不出不得反噬 hero 主数据
+            logger.warning("composite hero: freshness unavailable", exc_info=True)
+            expected_as_of, lag_trading_days = None, None
+    return composite_hero_payload(
+        rows, expected_as_of=expected_as_of, lag_trading_days=lag_trading_days
+    )
+
+
+async def get_metric_row_at(db: AsyncSession, day: date) -> IndustryMetric | None:
+    """`market_sentiment_composite` 在 `day` 的那一行（收敛器据此判"发布了什么"）.
+
+    走 `idx_industry_metrics_lookup`，单行等值查询。
+
+    `populate_existing=True` 是**必需**的，不是优化：落库走 Core 的
+    `INSERT ... ON CONFLICT DO UPDATE`（`upsert_metric_rows`），它**不刷新** ORM
+    identity map —— 同一个 session 里先读过这一行、再 upsert、再读，会拿到**upsert
+    之前的旧对象**（2026-10-16 实测：薄行改成齐备值后再读仍是 `value=NULL`，
+    于是"自愈成功"被误判成"没变化"）。本函数的语义是"库里现在到底存了什么"，
+    故每次都必须从库里取，而不是复用会话里可能过期的那一份。
+    """
+    stmt = (
+        select(IndustryMetric)
+        .where(
+            IndustryMetric.industry_key == "market",
+            IndustryMetric.stock_id == 0,
+            IndustryMetric.metric_key == METRIC_KEY,
+            IndustryMetric.period == day,
+        )
+        .execution_options(populate_existing=True)
+    )
+    return (await db.execute(stmt)).scalars().first()

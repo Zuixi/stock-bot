@@ -91,6 +91,10 @@ MarketDataJobType = Literal[
     "limit_up_stock_facts",
     "concept_members",
     "reconcile",
+    # scope=`market` 的派生指标（§S1.7–§S1.13）收敛：与定时轨道挂在同一对账之后的
+    # `derived_metrics_service.converge`。params: target(yyyy-mm-dd 可选) /
+    # legs(逗号分隔或列表，可选) / window(交易日数，可选)。
+    "market_metrics",
 ]
 
 

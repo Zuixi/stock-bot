@@ -14,6 +14,12 @@ import { NOTE_COMPOSITE } from "../moduleTable";
  *  - 端点未就绪 / 读数失败 → 「暂不可得」+ 端点名，不显示任何占位数字；
  *  - `insufficient_history` 或 `percentile=null` → 显示「样本不足」，轨道上**不画标记**；
  *  - `value=null` → 大数字区显示 `--`，其余披露照常上屏（"算不出"与"等于 0"是两件事）。
+ *
+ * 第四件事（2026-10-16 新增）：**新鲜度三态**（`stale` = true / false / null）。
+ * 后端只展示"各腿齐备"的交易日，所以"本卡是哪一天"必须说清楚：
+ *  - `true` → 明写滞后几个交易日、数据已可用到哪天（别让读者以为是当日值）；
+ *  - `null` → 明写"无法判定"（**不得**沉默：沉默会被读成"新鲜"）；
+ *  - `false` → 追平，不加任何提示（正常态不制造噪声）。
  */
 
 function fmtWeight(v: number | null): string {
@@ -43,6 +49,9 @@ export function CompositeHero({ data, isLoading, isError }: CompositeHeroProps) 
   // 旧口径行（extra 缺 participants / n_constituents）后端给 legs=null / 计数 0：
   // 这时"由 N/11 条腿合成"这句话没有事实可依，明说"未登记"而不是印一个 0/0。
   const legsRegistered = (data?.totalLegs ?? 0) > 0 || (data?.legs.length ?? 0) > 0;
+  // 新鲜度三态：`undefined`（老后端不下发该字段）与 `null`（判不出）同处理 —— 都不声称新鲜。
+  const stale = data?.stale ?? null;
+  const lagDays = data?.lagTradingDays ?? null;
 
   return (
     <section className="sent-hero" id="sentiment-module-composite" data-testid="sentiment-hero">
@@ -65,6 +74,19 @@ export function CompositeHero({ data, isLoading, isError }: CompositeHeroProps) 
         </p>
       ) : (
         <>
+          {/* 新鲜度先说：读者在读到那个大数字**之前**就该知道它是哪一天的值 */}
+          {stale === true ? (
+            <p className="sent-hero__freshness sent-flag num" data-testid="sentiment-composite-stale">
+              数据滞后 {lagDays ?? "--"} 个交易日：已有齐备数据到{" "}
+              {data.expectedAsOf ? formatCnDate(data.expectedAsOf) : "--"}，本卡展示的是{" "}
+              {data.asOf ? formatCnDate(data.asOf) : "--"} 的值（各腿齐备到最后一天才发布）。
+            </p>
+          ) : stale === null ? (
+            <p className="sent-hero__freshness num" data-testid="sentiment-composite-freshness-unknown">
+              无法判定新鲜度（本地判不出最新完整交易日）：本卡**不**声称数据是新的。
+            </p>
+          ) : null}
+
           <div className="sent-hero__value-row">
             <span className="sent-hero__value num" data-testid="sentiment-composite-value">
               {data.value == null ? "--" : data.value.toFixed(2)}

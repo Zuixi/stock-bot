@@ -248,6 +248,16 @@
   color: var(--text-secondary);
 }
 
+/* 新鲜度披露（滞后 / 判不出）：在读数之前先讲清"这是哪一天的值"。
+ * 用 accent（信息性）而不是极值带的两个颜色 —— 与 .sent-flag 同一条纪律：
+ * 红/紫专供分位极值，挪作它用会让"红/紫 = 极端"的读法失效。 */
+.sent-hero__freshness {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
 .sent-hero__legs {
   margin: 12px 0 0;
   font-size: 13px;

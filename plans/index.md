@@ -32,6 +32,7 @@
 | [2026-10-12-investment-research-platform-ia.md](./2026-10-12-investment-research-platform-ia.md) | 2026-10-12 | 投研工作台信息架构与数据模型主线（10 导航 · 6 地基 · 原料视图分离 · 8 Wave 倒序路线图 · 57 spec 拆分） | active | 头部 `status: active`；契约在 [docs/specs/](../docs/specs/README.md)；进度见正文 §13（Wave 0 关门 + Wave 1 进行中） |
 | [2026-10-13-frontend-design-remediation.md](./2026-10-13-frontend-design-remediation.md) | 2026-10-13 | 前端设计整改（导航形态与三层布局 · 信息去重 · 字体与量级色阶 token · 对比度 AA · 四档响应式断点 · 文案与品牌） | **completed** | §0 五项裁定已完成（A1 / B2 / C1→实际 C2 / D1 / market-data-sources）；Phase 0–4 全部完成，**Phase 0 冻结的五条红线（0.2–0.6）全部转绿**且无回归。B2 使 Phase 3 成本约 B1 的三倍（逐组件窄屏形态），D1 使 landing 只做压缩排序、不删不迁 |
 | [2026-10-14-invite-only-provisioning-and-admin-console.md](./2026-10-14-invite-only-provisioning-and-admin-console.md) | 2026-10-14 | 邀请制开户与管理员控制台（关闭自助注册 · 管理员预开户 + 临时密码强制改密 · `/auth/admin/*` 用户 CRUD 与角色分配 · 首个 admin 引导 CLI） | completed | 头部 `status: completed`；Phase 0–7 全部落地：auth 89 + forward-auth 14 测试绿，容器实测 bootstrap→开户→强制改密→/api 恢复全链路通过，Playwright 93 passed |
+| [2026-10-16-derived-metrics-converge.md](./2026-10-16-derived-metrics-converge.md) | 2026-10-16 | 派生指标日更收敛（§S1.7–§S1.13 追上 T-1 + 薄日不发布值） | completed | 头部 `status: completed`；9 步全勾选；真实栈实测：hero `as_of=2026-10-15`/`stale=false`，10/12 薄行由 3 条腿改写为 11 条腿，库内行数 4002→4005，再跑一轮三腿零外呼 |
 
 ## 维护约定
 

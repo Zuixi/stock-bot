@@ -314,6 +314,7 @@ alter table industry_metrics
 - 行为：给定某一日，用成分指标重算 composite 能得到与库里一致的值（**可复算性测试**，须为**独立实现**而非重读 `extra`；并须做**破坏验证**证明断言非空转）
 - 行为：`grep -rn "恐贪\|fear.*greed" frontend/src/ docs/ --exclude-dir=specs --exclude=Changelog.md` **无命中**（⚠️ **2026-10-13 修正（Ruling 65/66）**：原判据未排除 `docs/specs/` 与 `docs/Changelog.md`，而**契约层陈述禁令**、**历史层记录该禁令**都必然命中 → 按字面**不可满足**。判据**意图是禁止产品命名**，故排除这两层；被排除层内的命中**只允许**是禁令陈述本身。测试文件内的用例名不在本判据范围内）
 - 行为（Ruling 66 补充）：**最新值的"薄"必须对使用者可见**——各腿最新日不同（`daily_quotes` 锚定的腿止于某日、QVIX 另止于某日），故**最新交易日的参与腿数会显著变少**（实测 `2026-10-12` 仅 **3/11 条腿**、生效权重 0.23，而前一日 `2026-10-09` 有 10 条）。**不得让用户把 3 条腿合成的值读成与 10 条腿等权** → UI 必须明示「当日由 N/11 条腿合成 + 生效权重」，且**下限 0.20 的取值理由须在字典写明**
+  - ⚠️ **2026-10-16 修正（Ruling 67）**：上一条要求"薄**值**可见"，实测证明它会把 3 条腿的数字送上头条（读者仍拿它与 10 条腿的值对比），而成因是**编排缺失** —— 这一族指标此前只由手工脚本写、没有日更任务，各腿锚点因此越漂越开。落地口径改为：**薄日不发布值** —— 生效权重之和落在 `[0.20, 0.80)` ⇒ `value = NULL` + `missing_reason='below_publish_weight'`（参与集/逐腿分位/生效权重仍落 `extra`，当时算出的数落 `extra.withheld_value`），闸门常量 `COMPOSITE_PUBLISH_MIN_WEIGHT = 0.80`。Ruling 66 要的"可见性"改由两处承担：①**发布日**的 `extra.participants` / `effective_weight_sum` → UI「当日由 N/11 条腿合成 · 生效权重 w」；②读面新增 `expected_as_of` / `lag_trading_days` / `stale`（三态，`null` ≠ 新鲜）明示"展示的是哪一个**齐备**日"。收敛编排（对账后置、T-1 目标日、10 交易日窗口、落后上限）见 [ADR 0016](../decisions/0016-derived-metrics-converge.md)，口径细节见 [metric-dictionary §4.2「发布闸门」](../design/metric-dictionary.md)
 - 行为（Ruling 65 补充）：**自建 composite 允许进信号链路**（S2.2 的示例规则正是消费它）；被禁入信号链路的是**第三方机构编制**的情绪指数（算法不公开、无法复算）
 
 ---

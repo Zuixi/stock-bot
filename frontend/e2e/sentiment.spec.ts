@@ -43,6 +43,31 @@ const COMPOSITE = {
   effective_weight: 0.23,
   min_effective_weight: 0.2,
   caliber_version: "s1.13-v1",
+  // 新鲜度三态（2026-10-16 新增）：追平 ⇒ 不显示任何滞后提示
+  expected_as_of: "2026-10-12",
+  lag_trading_days: 0,
+  stale: false,
+};
+
+/** 落后的读数（后端退回上一个「各腿齐备」的交易日）—— 必须明写滞后几个交易日。 */
+const COMPOSITE_STALE = {
+  ...COMPOSITE,
+  as_of: "2026-10-09",
+  value: 44.5068,
+  legs: ["if_basis", "ic_basis", "im_basis", "qvix_50etf"],
+  leg_count: 10,
+  effective_weight: 0.88,
+  expected_as_of: "2026-10-14",
+  lag_trading_days: 3,
+  stale: true,
+};
+
+/** 判不出新鲜度：三字段全 null —— 页面**不得**沉默（沉默会被读成"新鲜"）。 */
+const COMPOSITE_FRESHNESS_UNKNOWN = {
+  ...COMPOSITE,
+  expected_as_of: null,
+  lag_trading_days: null,
+  stale: null,
 };
 
 /** 只有分位、没有分位数字的退化响应（样本不足）。 */
@@ -284,6 +309,51 @@ test("hero：合成值 + 分位轨 + 「N/11 条腿 · 生效权重」必须上�
   await expect(page.getByTestId("sentiment-hero")).toContainText("有效样本 1260");
   // 页头一句话状态（不是 · 拼接清单）
   await expect(page.getByTestId("sentiment-state")).toContainText("当日由 3/11 条腿合成");
+});
+
+test("新鲜度：stale=true 必须明写滞后几个交易日与「已有齐备数据到哪天」", async ({ page }) => {
+  await mockStack(page, { composite: COMPOSITE_STALE });
+  await page.goto("/sentiment");
+
+  // 读者在读到那个大数字**之前**就得知道它是哪一天的值
+  const staleLine = page.getByTestId("sentiment-composite-stale");
+  await expect(staleLine).toBeVisible();
+  await expect(staleLine).toContainText("数据滞后 3 个交易日");
+  await expect(staleLine).toContainText("已有齐备数据到");
+  // 日期必须走 formatCnDate（「10月14日」），**不得**出现原始 ISO（见 noRawIso.spec.ts）
+  await expect(staleLine).toContainText("10月14日");
+  await expect(staleLine).toContainText("10月9日");
+  await expect(staleLine).not.toContainText("2026-10-");
+  // 落后的日子照常披露参与腿数（10/11 · 0.88），不得因为"滞后"就把数值藏起来
+  await expect(page.getByTestId("sentiment-composite-value")).toHaveText("44.51");
+  // 页头一句话也要带上落后信息（否则会被读成"最新交易日"）
+  await expect(page.getByTestId("sentiment-state")).toContainText("落后 3 个交易日");
+  await expect(page.getByTestId("sentiment-composite-legs-line")).toContainText(
+    "本日由 10/11 条腿合成",
+  );
+});
+
+test("新鲜度：stale=null（判不出）不得沉默 —— 沉默会被读成「新鲜」", async ({ page }) => {
+  await mockStack(page, { composite: COMPOSITE_FRESHNESS_UNKNOWN });
+  await page.goto("/sentiment");
+
+  await expect(page.getByTestId("sentiment-composite-freshness-unknown")).toContainText(
+    "无法判定新鲜度",
+  );
+  await expect(page.getByTestId("sentiment-state")).toContainText("新鲜度无法判定");
+  // 判不出 ≠ 滞后：不显示"滞后 N 个交易日"那条
+  await expect(page.getByTestId("sentiment-composite-stale")).toHaveCount(0);
+  // 主数据照常上屏
+  await expect(page.getByTestId("sentiment-composite-value")).toHaveText("32.82");
+});
+
+test("新鲜度：stale=false（追平）不加任何提示 —— 正常态不制造噪声", async ({ page }) => {
+  await mockStack(page);
+  await page.goto("/sentiment");
+
+  await expect(page.getByTestId("sentiment-composite-value")).toHaveText("32.82");
+  await expect(page.getByTestId("sentiment-composite-stale")).toHaveCount(0);
+  await expect(page.getByTestId("sentiment-composite-freshness-unknown")).toHaveCount(0);
 });
 
 test("样本不足：显示「样本不足」，不给分位数字、不画标记", async ({ page }) => {
