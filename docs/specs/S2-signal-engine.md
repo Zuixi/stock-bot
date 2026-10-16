@@ -257,7 +257,7 @@ research_hypotheses(
   deadline          date  not null,                -- ★ 创建后不可改；必须 > 创建日
   status            text  not null default 'open', -- open | satisfied | falsified | withdrawn
   resolved_at       timestamptz,
-  resolved_event_id bigint,                        -- → research_hypothesis_events.id
+  resolved_event_id bigint,                        -- → research_hypothesis_events.id（刻意不加 FK：避免与 events 互相引用）
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
   check (jsonb_array_length(conditions) between 1 and 3),
@@ -272,7 +272,7 @@ research_hypothesis_events(
   id             bigserial primary key,
   hypothesis_id  bigint not null references research_hypotheses(id),
   kind           text not null,        -- satisfied | falsified | withdrawn
-  as_of          date not null,        -- 判定所用数据边界（最新可得期）
+  as_of          date not null,        -- ★ 判定数据边界（最新可得期）；withdrawn 记撤回当日（仅作唯一键维度，非数据边界）
   readings       jsonb not null,       -- ★ 证据快照，见下
   note           text,                 -- 撤回理由（withdrawn 时必填，应用层校验）
   actor_user_id  text,                 -- 系统判定为 NULL
@@ -293,6 +293,10 @@ user_alert_cursors(
 [{"metric_key":"hog_price","op":"lt","threshold":13.0,"threshold_hi":null,"sustained_periods":5}]
 ```
 `op ∈ {lt,lte,gt,gte,between}`；`between` 用 `threshold`(下界) + `threshold_hi`(上界) 且必 `threshold < threshold_hi`；`sustained_periods ∈ [1,60]`。
+
+**校验边界（一律 422，不得落 500）**：`claim ≤ 200` 字；`deadline` 必须 > 创建日；
+同一 `scope_key` 的 `open` 假设 ≤ 50（防刷）；`conditions[].metric_key` 必须 ∈ registry 的 `pig` scope 且**有真实 writer**；
+`conditions` 1–3 条、`op` 取值、`between` 顺序与 `sustained_periods` 范围见上。
 
 `readings` 形状（证据链，判定不可变）：
 ```json
