@@ -6,7 +6,8 @@ import { test, expect as baseExpect, type Page } from "@playwright/test";
  * ## 为什么全部 mock
  *
  * 本文件的每条判据都只依赖**响应 → 渲染**这一段：条目数、分级分组、`folded` 折叠行、
- * 三种空/异常态、免责与禁用词。把 `GET /api/v1/watchlists/triage` 用 `page.route` 钉住之后，
+ * `state` 的三态（全静默 / 无数据日 / 无自选）+ error、免责与禁用词。
+ * 把 `GET /api/v1/watchlists/triage` 用 `page.route` 钉住之后，
  * 判据**不随当天行情变化**，也不依赖后端新端点是否已上线/本机是否有自选（否则
  * "今天恰好没命中"会让"有条目"那条假红，"自选恰好为空"又会让它假绿）。
  *
@@ -14,7 +15,7 @@ import { test, expect as baseExpect, type Page } from "@playwright/test";
  *
  * `research.spec.ts` 的教训（`signalPanel.spec.ts` 文件头有完整版）：没真 cookie 时
  * 只 mock `/auth/session` 会让其它真接口 401 → 全局 `auth:unauthorized` 清态 →
- * 布局反复重挂。故本文件把 `/auth/session`、`/auth/csrf` 与 triage 读面**一起** mock，
+ * 页面反复重挂。故本文件把 `/auth/session`、`/auth/csrf` 与 triage 读面**一起** mock，
  * 没有真接口参与，不存在"部分真、部分假"造成的清态循环。
  *
  * ## 禁用词断言的边界
@@ -38,9 +39,14 @@ const USER = {
   created_at: "2026-10-01T00:00:00Z",
 };
 
-/** 响应契约逐字照抄 brief / spec §S8.4：`items ≤ 8`、`quiet_count`、`folded`、`unavailable`、`disclaimer`。 */
+/**
+ * 响应契约逐字照抄 spec §S8.4 + 集成收尾后的两个新字段：
+ * `state`（三态：ok / no_data / no_watchlist）与 `unavailable`（**人话 label**，
+ * 机器 key 只在 `unavailable_keys`，禁止上屏）。
+ */
 const FIXTURE = {
   as_of: "2026-10-17",
+  state: "ok",
   quiet_count: 3,
   folded: 2,
   items: [
@@ -82,11 +88,13 @@ const FIXTURE = {
     },
   ],
   unavailable: [],
+  unavailable_keys: [],
   disclaimer: "本产品只展示已发生的数据事实，不构成投资建议；历史数据不代表未来表现。",
 };
 
 /** 本页可见文本里**一个都不许出现**的判断词（spec §S8.5 禁用词表中与本页文案相关的子集）。 */
-const FORBIDDEN = ["买入", "卖出", "推荐", "看好", "建议关注", "目标价", "机会", "布局"];
+// 下面这行必须**逐字**列出禁用词才有断言对象，故给它行级豁免（扫描器会打印豁免行，评审可见）
+const FORBIDDEN = ["买入", "卖出", "推荐", "看好", "建议关注", "目标价", "机会", "布局"]; // compliance-allow: 断言清单本身必须包含禁用词
 
 /** 登录态 + triage 读面的最小完整 mock（见文件头"假登录"一节）。 */
 async function mockAuthedTriage(page: Page, payload: unknown) {
@@ -157,7 +165,13 @@ test.describe("今日体检（/me?tab=triage）", () => {
   });
 
   test("无自选：给「添加自选」入口，不留白页", async ({ page }) => {
-    await mockAuthedTriage(page, { ...FIXTURE, items: [], quiet_count: 0, folded: 0 });
+    await mockAuthedTriage(page, {
+      ...FIXTURE,
+      state: "no_watchlist",
+      items: [],
+      quiet_count: 0,
+      folded: 0,
+    });
     await page.goto("/me?tab=triage");
 
     await expect(page.getByText(/还没有自选股/)).toBeVisible();
@@ -180,20 +194,52 @@ test.describe("今日体检（/me?tab=triage）", () => {
     await expect(page.getByTestId("triage-item")).toHaveCount(FIXTURE.items.length);
   });
 
+  test("无数据日：`state=no_data` 说的是「数据没就绪」，不是「没有自选」", async ({ page }) => {
+    // 第四态：有自选，但最近完整交易日还不存在。修 bug 前这里会被渲染成
+    // 「还没有自选股」——把"今天查不了"说成"你没加自选"，是本页最坏的一种误导。
+    await mockAuthedTriage(page, {
+      ...FIXTURE,
+      state: "no_data",
+      items: [],
+      quiet_count: 0,
+      folded: 0,
+      unavailable: ["跌破 20 日线", "所属板块在动"],
+      unavailable_keys: ["break_ma20", "sector_move"],
+    });
+    await page.goto("/me?tab=triage");
+
+    await expect(page.getByText(/最近一个完整交易日的数据还没就绪/)).toBeVisible();
+    // 不能与另外两种空态撞车
+    await expect(page.getByText(/还没有自选股/)).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "添加自选" })).toHaveCount(0);
+    await expect(page.getByText(/都平静/)).toHaveCount(0);
+    // as_of 在 no_data 下是服务端当天兜底值，不得当作"数据日"上屏
+    await expect(page.getByText(/数据截至/)).toHaveCount(0);
+  });
+
   test("缺数据：不静默当作无事件（页面留痕），且不把内部 key 贴到屏幕上", async ({ page }) => {
     await mockAuthedTriage(page, {
       ...FIXTURE,
       items: [],
       quiet_count: 0,
       folded: 0,
-      unavailable: ["dragon_tiger", "sector_relative"],
+      // 契约：unavailable 是**人话 label**；key 只在 unavailable_keys 里（禁止上屏）
+      unavailable: ["上了龙虎榜", "所属板块在动"],
+      unavailable_keys: ["dragon_tiger", "sector_move"],
     });
     await page.goto("/me?tab=triage");
 
     // §S8.4：「探测器缺数据 → 进 unavailable，**不静默当作无事件**」
-    await expect(page.getByText("2 项检查因数据暂缺未执行")).toBeVisible();
+    await expect(page.getByText(/2 项检查因数据暂缺未执行/)).toBeVisible();
+    // 人话 label 必须真的上屏（否则用户只知道"有检查没跑"，不知道是哪几项）
+    await expect(page.getByText(/上了龙虎榜、所属板块在动/)).toBeVisible();
+
     const text = await page.locator("body").innerText();
     expect(text, "内部探测器 key 不该出现在屏幕上").not.toContain("dragon_tiger");
+    // 更强的一条：整块体检区域不得出现任何 `xxx_yyy` 形态的机器串
+    // （漏一个 key 就命中；同时不会误伤中文文案与「10月17日」这类日期）
+    const panelText = await page.locator(".triage").innerText();
+    expect(panelText, `体检面板出现机器串：${panelText}`).not.toMatch(/[a-z]+_[a-z_]+/);
   });
 
   test("防回归：/me?tab=watchlist 仍是自选清单", async ({ page }) => {

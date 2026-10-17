@@ -1,3 +1,276 @@
+## 2026-10-17 - **自选体检上线：`/me?tab=triage`（默认 Tab）+ 8 事实型探测器 + 合规门禁**
+
+- **后端**（`c2cadca`）：`app/services/triage_detectors.py`（8 个纯函数探测器 + registry，导入期校验 8 个/key 唯一/阈值集中/`required_fields` 在 ORM 元数据里真实存在）·
+  `triage_service.py`（固定 6 条批量查询装载上下文，查询数不随自选数增长；单股合并 / severity 排序 / ≤8 折叠）·
+  `GET /api/v1/watchlists/triage`（**登录即可**、>50 只 422 不静默截断、`limit` 1..8）
+- **前端**（`d6acf3d`）：`/me` 新增「今日体检」并设为**默认 Tab**（`/me?tab=triage`，**零新增路由**；独立 `/today` 推迟，
+  需登记 IA §4 + `route-manifest.ts` + `check:routes`）；卡片只给「发生了什么 / 数据截至 / 复核」，分级只用风险/事件/关注/背景
+- **集成收尾（本次）修掉三个契约缺口**：
+  1. `unavailable` 原本下发探测器 key（`['sector_move']`）会被前端 `join` 上屏 → 改为**人话 label**（「所属板块在动」），
+     机器 key 另开 `unavailable_keys`（**仅排查，前端禁止渲染**）；
+  2. 新增 `state = ok | no_data | no_watchlist`：此前"有自选但最近完整交易日不存在"与"没有自选"在前端不可区分，
+     后者被渲染成「还没有自选股」（把"今天查不了"说成"你没加自选"）；现在三态各有文案，`no_data` 还不显示 `as_of`（那是当天兜底值）
+  3. 合规门禁落地：`backend/scripts/triage_compliance.py`（`BANNED_WORDS` 24 个，≥20 下限在导入期断言）+
+     `backend/scripts/check_triage_compliance.py`（扫前端体检测试/页面/API 常量/探测器 headline，命中即非零退出；目标缺失也失败，
+     防"扫 0 个文件 → 0 命中 → 通过"）+ `tests/test_triage_compliance.py` 让 `pytest` 就是那道门禁
+- 涉及文件：`backend/app/services/{triage_detectors,triage_service}.py`、`backend/app/schemas/triage.py`、
+  `backend/app/api/v1/watchlist_triage.py`、`backend/scripts/{triage_compliance,check_triage_compliance}.py`(新)、
+  `backend/tests/test_{triage_detectors,triage_service,watchlist_triage_api,triage_compliance}.py`、
+  `frontend/src/{shared/api/triage.ts,features/triage/components/TriagePanel.tsx,pages/me/index.tsx}`、`frontend/e2e/watchlistTriage.spec.ts`、
+  `docs/{features.md,specs/S8-watchlist-triage.md}`、`plans/2026-10-17-watchlist-triage-impl.md`
+
+## 2026-10-17 - **规则标定证伪预测型清单 → 转向「自选体检」（spec S8 改写）**
+
+- **标定**（只读、可复跑）：把"每日信号清单"的 5 条规则按**复权收益 + 交易日历对齐 + winsorize + 每日 n≥10 + 按日超额中位数**重跑，
+  结果 **放量新高 −0.922% / 首板 −0.275% / PE 低位 +0.123%**（5 日超额中位数），候选的"缩量新高 +1.031%""急跌未破位 +1.004%"**仅 in-sample 且样本日少**。
+  证据台账：[docs/design/signal-rule-calibration.md](../docs/design/signal-rule-calibration.md)（含可复跑 SQL）
+- **标定顺带查出 4 个数据面错误**：`turnover_rate_f` **全列 NULL**（0/133,308）· `market_limit_up_stock_daily` **仅 2 个交易日**（247 行）·
+  **无个股融资余额表**（只有市场级 `margin`）· `daily_basic` 仅自 2025-04-01（做不了 PE 三年分位）· `adj_factor` 仅 1.3% 非空（不能判除权）
+- **第一次跑的 +3.9%/+4.9% 超额是假的**（未复权 + 停牌跨期 + 小样本日）；改口径后回落到 +1.0% —— 这条写进了标定口径，防后人重犯
+- **结论（owner 采纳 A）**：砍掉预测型信号清单，改为**自选体检**（事实型、零新表、8 探测器、噪声控制当门禁）
+- **文档改判**：`docs/specs/S8-decision-digest.md` → [`S8-watchlist-triage.md`](../docs/specs/S8-watchlist-triage.md)（S8.1–S8.5 重写）；
+  `plans/2026-10-17-retail-decision-digest.md` → [`2026-10-17-watchlist-triage.md`](../plans/2026-10-17-watchlist-triage.md)（M0–M3）
+- 涉及文件：`docs/design/signal-rule-calibration.md(新)`、`docs/specs/{S8-watchlist-triage.md(改名+重写),README.md}`、
+  `plans/{2026-10-17-watchlist-triage.md(改名+重写),index.md}`、`docs/Changelog.md`
+
+## 2026-10-17 - **产品转向：散户工具型「决策筛子」立项（spec S8 + 计划）+ 四轮 owner 裁定**
+
+owner 判「上述功能有很多无用的地方，要把实用价值提上去」。四轮对话后定案，**先把产品定位与契约钉死**（本条目仍无业务代码）：
+
+- **目标用户 = 泛散户**（要选股/抄作业）；**合规定位 = 工具型**（只给「符合规则的标的 + 客观理由 + 风险 + 失效条件」，**不出买卖指令、不承诺收益**）；**不做社区/关注人/跟单**
+- **形态 = 每日清单（A）+ 自选体检（B）合体**，规则战绩作为副产品；新增 [spec S8](../docs/specs/S8-watchlist-triage.md)（当时名 `S8-decision-digest.md`，同日已改判为自选体检）与 [计划](../plans/2026-10-17-watchlist-triage.md)（当时名 `retail-decision-digest.md`）
+- **owner 修正两条**：`/market` 的 5 个 tab **零改动**；6 个一级导航**不隐藏**（占位页保持"规划中"）⇒ `/today` 只做**筛选/解释/提醒**，不复刻行情图表
+- **契约要点**：仅 1 张信号表 `daily_signal_items`（`reasons` 恰 3 条 check、`invalidation` **机器可判定**）+ 提醒 2 表；
+  5 条规则登记在 `SIGNAL_RULE_SPECS`（阈值即配置、改阈值 bump `rule_version`、`required_fields` 导入期核对）；
+  **PIT 三条硬约束**（只用 `published_at ≤ as_of 21:00`、财务只用已公告期、**对照实验必须变红**）；
+  **战绩只展示检验期**（训练 ≤2024-12-31、样本 <30 不给数字、必展示最差 5%）；**禁用词清单在代码**、文档只写"≥20 词"的下限
+- **kill criteria（先写死）**：规则不过后验不上线；`/today` 连续 5 个交易日没被打开 → 改设计；铃铛 2 周内"点开→加自选"<10% → 改文案不加规则
+- 登记：[docs/specs/README.md](../docs/specs/README.md)（交付序 S8 · detailed）· [plans/index.md](../plans/index.md)
+- 涉及文件：`docs/specs/{S8-watchlist-triage.md(当时名 S8-decision-digest.md),README.md}`、`plans/{2026-10-17-watchlist-triage.md(当时名 retail-decision-digest.md),index.md}`、`docs/Changelog.md`
+
+## 2026-10-17 - **止损：D1‑D2 / F 两条腿转 dormant（无消费方）——并给 S2.5 出任务分解**
+
+owner 追问「这块有价值吗」，代码实测的答案是**近乎零用户可见收益**：本轮四条腿里只有 **ETF 篮子 6→8** 改了页面上一个数字；
+`equity_change`（`/news` 仍占位）、`insider_net_change_daily`（前端 0 引用）、`northbound_holding_quarterly`（前端列了但**读不到**：
+市场读面按 `stock_id=0` 取数，数据是 per-stock）**都没有消费方**。
+
+- **撤腿**：`derived_metrics_service` 移除 `insider` / `northbound` 的 LegSpec 与 runner（`LEG_KEYS` 回到 4 条），
+  改列 `CONVERGE_EXCLUDED_KEYS` 并写明 **dormant（2026-10-17）** 理由；新增单测
+  `test_dormant_metrics_are_explained_not_converged` 钉住「不在腿上 + 理由含 dormant + 理由说清无消费方」
+- **不删数据/脚本**：`backfill_insider_change.py` / `backfill_northbound_holding.py` 保留（手工回补仍可用）；
+  库里 392 / 11,634 行保留（消费方出现后可直接用）
+- **收益**：每天少 2 次交易所外呼、每季少 2 次上游取数
+- **同步标注**：registry（两条 MetricDef 的描述）、[metric-dictionary](./design/metric-dictionary.md)、
+  [data-source 附.11.5](./design/data-source.md)；计划 §13 记录裁定与本计划级教训
+  （**同一错误的镜像**：F5 事件日历因「零消费方」被推迟，本轮却先建数据后想消费者 ⇒
+  以后一条数据腿动手前必须指出具体消费方，否则只允许 dormant）
+- **下一步**：转 S2.5（用户研究假设）—— 任务分解写在计划 §13（T1 权限与门禁 / T2 数据层 / T3 判定引擎 / T4 服务与 API / T5 执行挂载 / T6 前端 / T7 收尾）
+- **e2e 收尾（按要求跑）**：`E2E_BASE_URL=http://localhost npx playwright test` → **200 passed / 13 skipped / 0 failed**。
+  期间把一条**长期假红**的用例修成确定性：`limitUpSentiment.spec.ts › 限价缺失时显示原因而非空态` ——
+  该分区里其实有**第五块**面板（次新股情绪 `/api/v1/new-stocks`）没被 mock、打活栈，活栈无数据时渲染通用空态 ⇒ 分区级「无「暂无数据」」断言假红
+  （实测单跑绿、全量红过两次）；补齐该 mock 后又暴露**第二个问题**：分区里出现**两处**同款降级文案 ⇒ 裸 `getByText` 触发 strict mode 失败，
+  已把正向断言**收进具体卡片**（`getByTestId("section-情绪温度计")`）。修完单 spec 连跑 3 次全绿、全量 200 passed。
+- 涉及文件：`backend/app/services/{derived_metrics_service,industry_registry}.py`、`backend/tests/test_derived_metrics_converge.py`、
+  `docs/{Changelog.md,design/{data-source,metric-dictionary}.md}`、`plans/2026-10-12-investment-research-platform-ia.md`
+
+## 2026-10-17 - **官方一手腿 A/D1‑D2/F 收口 + B/C 对拍：ETF 篮子 6→8（v3）、董监高日频 key、陆股通季度 11.6k 行**
+
+按 [ADR 0019](../docs/decisions/0019-official-first-source-layer.md) 的排期把剩余四条腿做完（D3 已于同日先行落地）。**关键不是"接了官网"，而是每条腿都先对拍再决定接不接**。
+
+- **A · ETF 份额：对拍后裁定「不切换源」+ 篮子 6→8**
+  - 对拍（新 probe `spike --probe etf-share-compare`）：**沪市官方与 TuShare `fund_share` 同日逐点一致**（30 点 0 差异；单位差 10000 被当场识别：官方=**份**、`fd_share`=万份）；
+    **深市逐值一致但日期标签差 1 个交易日**（8 个值匹配点 0 未匹配，日期差 {1,3} 天 = 下一个交易日）。因沪市官方只有**按单日**查询（回补 = N 次请求，判据 ② 不过）⇒ **保持 L2**，官方只作对拍
+  - **篮子 6 → 8**（沪深300 族补 `510310.SH` / `159919.SZ` —— 此前"已知收窄"会系统性低估该族净申购）；口径版本 `s1.7-v2` → **`s1.7-etf-v3`**（与南向**解耦**：新增 `ETF_SHARE_CALIBER_VERSION` + 每 key 的 `CALIBER_VERSIONS`），已整段重灌：**932 行 / 单一 v3 口径 / 0 混用**
+- **D1/D2 · 董监高及关联人持股变动（新 key `insider_net_change_daily`）**
+  - 沪 `COMMON_SSE_XXPL_CXJL_SSGSGFBDQK_S`（**带 `FORM_DATE` 披露日**）+ 深 `1801_cxda`（**无披露日**）；单位归一（沪原生**股**、深原生**万股** → **万股**）
+  - **共享 PIT 守卫新增唯一豁免**：只有显式带 `extra.disclosure_date_unavailable=True` 的 NULL 才被放过（漏带仍响亮失败）；深市行因此**不进回测/信号链路**
+  - **实测新坑**：沪市窗口过滤的是**变动日**而非披露日（取证：变动 2024-03-05 / 填报 2026-09-20 的补报只在变动日窗口内可取）⇒ 日更回看 30 天，长滞后补报靠回补脚本；已写进 registry 描述与字典
+  - 实机：2026-09-21~10-16 → **606 事件 / 394 行**（189 行无 PIT = 深市）；新增 `backfill_insider_change.py` + worker 手动触发 `insider_change`；**7 个单测**（含"翻满页必红"、"PIT 豁免只认显式标记"）
+- **F · 陆股通持仓（季度）：历史走 `hk_hold` 逐交易所取**
+  - 港交所页面只作当期快照/校验：**更早季末返回 0 行**，且 2026-10-16 查 09-30 仍回上一季数据 ⇒ **对齐未证实**（未验证余项）
+  - `hk_hold` 单次 **4200 行上限**实测会**截断 SZ**（不带 `exchange` 时 SH 2089 + SZ 1097 + HK 1014 = 4200）；**必须把 `exchange` 传到上游**（本地过滤救不了截断）→ SH 2089 + SZ 2320 = 4409 才完整
+  - `published_at` = 季末后**第 5 个交易日** 21:00（用库内 `daily_quotes` 交易日算，规则可复算；不足则响亮失败）
+  - 实机：3 个季末 → **11,634 行**（3750/3932/3952）；ETF 伪代码（`ETF300`…）计入 `non_stock`，`unresolved=0`；新增 `backfill_northbound_holding.py`
+- **B/C · 对拍（不换源）**：**两融**沪市官方 vs TuShare `margin` **逐日一致**（0 差异）；**沪深300 PE** 官方 `市盈率1` vs TuShare `index_dailybasic.pe` 存在**系统性口径差**（14 天：中位 **−0.44%**、最大 **−0.94%**）——有界、已登记为已知口径差（不是 bug），官网只有近 20 行故不切换
+- **语义化改动**：`akshare_client` 新增 4 个**官方出口**薄封装（沪/深 ETF 份额、沪两融汇总、中证指数估值）；`tushare_client` 新增 `fetch_hk_hold`（`exchange` **必须**作为上游参数）
+- **文档**：data-source 附.11.5 新增 4 行实现记录 + 3 条新未验证余项；字典把 `insider_net_change_daily` 移入**已注册表**（核对 49 行 MISMATCH 0）、ETF 口径改 8 只/v3、新增 insider 口径段；研究报告标记 A/D 已落地
+- **Playwright e2e（收尾必跑）**：`E2E_BASE_URL=http://localhost npx playwright test` → **200 passed / 13 skipped / 0 failed**（1.2m）。
+  首轮 2 红，逐条定性后修的是**测试的陈旧前提**而不是放宽断言：`marketLayout.spec.ts` 原本断言「板块主力资金流卡**不得**印口径徽标，因为该端点不返回 `as_of_quality`」——
+  但该卡的徽标来自它**自己的**行业涨跌子请求（`/market/sw-industry/performance`，实测**返回** `as_of_quality: "complete"`）⇒ 改为**与 payload 自洽**（`as_of_quality` 有 ⇒ 徽标必须有，无 ⇒ 不得凭空印），比原断言更强且不会因后端补齐字段而假红；
+  另一条 `limitUpSentiment.spec.ts` 首轮红、复跑绿（数据态相关，非本批改动）。
+- **环境发现（未处置，交 owner 裁定）**：本机存在 **`docker-compose.override.yml`**（未入库），它把 `postgres_data` 指向 **`stock-bot_postgres_data`**，而主文件锚定的是 `stock_bot_wt_p7_postgres_data` ——
+  `docker compose config` 实测**以 override 为准**（运行中的 postgres 挂的正是前者）。两个 5.0G 卷**内容已分叉**：本批的实机数据已在运行卷上**重灌并核对**（`etf v3 / insider 392 / northbound 11634 / equity_change 30`）；
+  **风险**：任何不带 override 的 `docker compose up`（或把 override 删掉）会让 postgres 切到另一个卷、看起来像数据全丢。处理方式需 owner 选：①把 override 的卷名写进主文件；②把数据并进锚定卷；③保持现状并在部署文档写明"必须带 override"。
+- 涉及文件：`backend/app/services/{insider_change_service,northbound_holding_service}.py(新)`、`backend/app/core/providers/{tushare_client,akshare_client}.py`、`backend/app/services/{industry_registry,capital_flows_service,market_activity_service,market_data_service}.py`、`backend/scripts/{backfill_insider_change,backfill_northbound_holding}.py(新)`、`backend/scripts/spike_official_sources.py`、`backend/tests/{test_insider_change_s17,test_northbound_holding_s17}.py(新)`、`backend/tests/test_capital_flows_s17*.py`、`docs/{Changelog.md,design/{data-source,metric-dictionary,official-data-sources-verification}.md}`、`frontend/e2e/{marketLayout,limitUpSentiment}.spec.ts`
+
+## 2026-10-17 - **当日盘后（T+0）纳入期望集：交易日收盘后页面显示当日数据，数据没到如实报滞后**
+
+[ADR 0020](../docs/decisions/0020-t0-after-close-expected-day.md) · 计划 [plans/2026-10-16-t0-after-close-expected-latest.md](../plans/2026-10-16-t0-after-close-expected-latest.md) 的 P0.5–P7 全部落地。
+
+**用户报的现象**：2026-10-16（周五）22:30，`/sentiment` 的 hero 还显示 15 号，且后端声称"不滞后"。
+根因两条叠加：① 期望集硬编码"截止昨日"（`end = today - 1`）⇒ 当日行情**永远**不被拉，
+页面"数据截至"天天不动；② 新鲜度锚取自 `max(daily_quotes)`，**与被判据的对象同源** ⇒
+"今天整天没采"时反而报 `stale=false`（判据永远自洽、永远不报警）。
+
+- **期望日与齐备性拆成两个判据**：`market_day_service.calendar_expected_latest_day`（纯函数：
+  交易日 + 时钟 ≥ `T0_CUTOFF`=17:30 CST ⇒ 当日；**不探库不看行数**）负责"该到哪天"；
+  `reconciliation_service._gated_expected_latest`（对账补齐底座后，按 `is_day_complete`
+  三元组门禁逐日回退）负责"真到没到"。**不拆开就会两头死锁**（拉取前当日必然无数据；
+  读面若看齐备性则"没采"时退回昨天而自称新鲜）——见 ADR 0020 §决策 1。
+- **cutoff=17:30 使既有的 17:45 全量对账自动成为 T+0 收敛点**（不新开 cron）：晚于 16:50 限价
+  入库、早于 17:45 兜底对账；当日数据未出全时拉取会写 partial（2026-09-16 事故），故不得前移。
+- **修掉 0.8/0.9 阈值分叉的死锁**：对账原先按 `COMPLETENESS_RATIO=0.8` 行数判"要不要重拉"，
+  读面按 0.9 + 列级 + 限价；两数之间的日子"无需重拉却永远过不了门禁"⇒ 当天卡在 T-1 且
+  **永不自愈**。现统一到 `is_day_complete`，并让过不了门禁的日子重新进重拉队列。
+- **落后天数改由日历计数**（`count_trading_days_between`）：旧实现数 `daily_quotes` 的持有日，
+  而"今天整天没采"时行情表里没有今天 ⇒ 数出 0 ⇒ `stale=false`（自指换个形式复活）。
+  同时**删掉** `trading_days_between`（那个自指 helper 留着就是下一个坑）。
+- **交易日历进 Redis**（`market:day:trade_calendar`，含 `covered_through`，TTL 7 天，对账在
+  非降级时写）：读面判新鲜度**不外呼 TuShare**；覆盖不到今天一律返回 `None`（判不出，不许猜）；
+  两侧显式 ISO（orjson 不认 `date`，写 date 读回 str 会让比较抛 `TypeError`）。
+- **`provisional` 三态（读时推导，不写库）**：交易所融资融券是 T+1 披露 ⇒ 当日盘后读到的合成值
+  必然缺这两条腿（合计权重 0.16），会在上游披露后被重算改写。registry 给成分加 `late_arrival`
+  声明，读面据此判 `True`（会被改写）/ `False`（终值，含已落到改写窗口之外的）/
+  `None`（判不出，**不得**塌成 False）。文案写"待上游披露后重算"，**不写"次日"**（实测 10-15
+  的两融到 10-16 21:32 仍未披露，承诺时点会失实）。
+- **编排串联 + 条件重试 tick**：个股级涨停事实（`limit_up_stock_daily` 在巡检域、对账永不自愈）
+  改为对账尾步 `_refresh_limit_up_facts`（**顺序由代码保证，不靠把 cron 挪到 17:55 的时间差**）；
+  新增 `reconcile_retry_1830` / `reconcile_retry_2000`，先做**零外呼**判定（期望日是不是今天、
+  今天是否已过门禁）再决定是否跑整条链 —— 收敛器的波动率腿 `always_rescan=True` 每轮真外呼。
+- **前端**：三个 query 全部 `refetchOnWindowFocus:true`；只在 `stale===true` 时 5 分钟探测
+  （追平即停；**不**因 `provisional=true` 轮询——它能持续一天以上）；`asOf` 变化时联动失效
+  metrics/trends（否则 hero 是今天、下方模块是昨天）；hero 与页头补 provisional 两档披露。
+- **术语统一（用户可见文案）**：「N/11 条腿」→「成分指标」（代码字段 `legs`/`legCount`/`totalLegs`
+  与 queryKey/testid 一律未动）。
+- **P0.5 实测**（决定方案可行性）：距周五收盘 9.4 小时探测上游 —— `daily`/`daily_basic`/
+  `stk_limit`/`fut_daily`/`index_daily`/QVIX 均含当日，**只有融资融券是 0 行**（T+1）；
+  QVIX CSV `Last-Modified`=16:53 CST，早于 cutoff 37 分钟。⇒ 当日 9/11 条腿、权重 0.84 > 闸门
+  0.80，**发布闸门维持不变**（曾担心 QVIX 迟到会掉到 0.72 而被闸门挡死）。
+- **真库实证**（2026-10-17 11:12–11:30 CST，真实 docker 栈，`docker compose -p stock-bot -f docker-compose.yml
+  up -d --no-deps api scheduler worker frontend`，postgres 全程未触碰）：周六启动对账
+  `RECONCILE all domains ok (expected_latest=2026-10-16)` ⇒ `daily_quotes` 的 10-16 从 **0 行变 5567 行**；
+  收敛 `status=ok target=2026-10-16`；hero `as_of=expected_as_of=2026-10-16`、`lag=0`、`stale=false`、
+  `value=32.2336`、**11/11 条成分 / 权重 1.0**；`/market/data-freshness` 给出
+  `calendar_expected_latest=2026-10-16` / `expected_latest=2026-10-16` / `expected_latest_source=gated`。
+  **顺带证实"临时值会被改写"**：10-15 由 9 条腿/0.84/27.546 改写为 **11 条腿/1.0/24.2180**（周五两融在周六上午到位）。
+- **门禁**：ruff ✓ · mypy（199 文件）✓ · **pytest 1489 passed / 46 skipped**（4 个失败**全部**来自并行工作流的
+  `insider_net_change_daily` 未接入任何腿，与本任务无关）· `npx tsc --noEmit` ✓ · `doc_gate` ✓。
+  关键用例做过**变异验证**（把 cutoff 比较改成 `>`、把 `covered_through` 守卫改成 `<=`、把日历计数恒置 0
+  —— 三处都让测试转红，随后按 sha256 还原）。
+- **部署注意（写进结论，避免下次踩）**：本机 Docker Hub 不通（基础镜像按 digest 钉死），构建时临时把
+  `FROM` 前缀指向镜像站 `docker.1ms.run`（同 digest ⇒ 同一内容），构建后按 sha256 还原 Dockerfile；
+  上线必须 `-p stock-bot` **且** `-f docker-compose.yml`（排除 override 的卷名改写），否则会把 postgres 挂到空卷。
+- 涉及文件：`backend/app/services/{market_day_service,reconciliation_service,market_sentiment_composite_service,industry_registry}.py`、
+  `backend/app/scheduler/{jobs,runner}.py`、`backend/app/{config.py,api/v1/market_data.py,workers/market_data_worker.py,schemas/limit_up.py}`、
+  `backend/tests/{test_market_day_service,test_reconciliation_service,test_reconcile_jobs,test_derived_metrics_job,test_market_sentiment_composite_api,test_market_coverage,test_data_freshness_api,test_job_alerts}.py`、
+  `frontend/src/{features/sentiment/**,pages/sentiment/index.tsx}`、`frontend/e2e/sentiment.spec.ts`、
+  `docs/{decisions/0020-*,decisions/index.md,Changelog.md}`、`plans/2026-10-16-t0-after-close-expected-latest.md`
+
+## 2026-10-17 - **T+0 期望日判据 P1：`calendar_expected_latest_day` 纯函数 + 交易日历缓存（纯新增，零行为变更）**
+
+按 [plans/2026-10-16-t0-after-close-expected-latest.md](../plans/2026-10-16-t0-after-close-expected-latest.md) 开工"当日盘后（T+0）纳入期望集"的 **P1**（P0.5 实测已先行完成，见计划）。
+
+- **为什么先做这一步**：2026-10-16 晚用户报"16 号了页面还显示 15 号"。根因是期望集硬编码 `end = today - 1`，
+  而新鲜度锚又取自 `max(daily_quotes)`（与滞后的数据链同源 ⇒ 自指 ⇒ 永远报 `stale=false`）。
+  P1 只落地**判据本体与它的缓存**，不接线：`expected_trade_dates` / hero 的改锚分别在 P2/P5。
+- **`market_day_service.calendar_expected_latest_day(calendar, *, covered_through, now)`**：只回答"按日历与时钟现在该出到哪天"，
+  **不探库、不看行数**。刻意与 `is_day_complete` 分开的理由写在源码注释里：混在一起会造成两处死锁 ——
+  ① 对账拉取前当日必然无数据，若判据要看齐备则**当日永远进不了期望集**（鸡生蛋）；
+  ② 读面新鲜度若看齐备，"今天整天没采"时会退回昨天而报 `stale=false`（ADR 0016 时代的自指 bug 复活）。
+- **`T0_CUTOFF = 17:30`（Asia/Shanghai）**：晚于 16:50 的限价入库（`is_day_complete` 要求 `limits_present`）、
+  早于 17:45 的兜底对账 ⇒ 既有的 17:45 全量对账自动成为 T+0 收敛点，**不新开 cron**。
+- **日历缓存带 `covered_through`**（`market:day:trade_calendar`，TTL 7 天）：只存日期列表无法区分"今天休市"与
+  "缓存停在昨天"，后者若当成"今天不是交易日"会让期望日静默退回昨天 —— 又是一次"自称新鲜"。覆盖不到今天一律返回 `None`（判不出，不许猜）。
+- **序列化两侧都显式 ISO**：`CacheClient` 走 orjson，`date` 不是原生类型（stdlib `json` 会靠 `default=str` 悄悄转字符串，
+  orjson 直接抛）；"写进去是 date、读回来是 str"会让 `day <= today` 抛 `TypeError`。
+- **时区规整**：naive 输入按**上海本地**解释（容器默认 UTC，按 UTC 解释则北京时间 17:30 时 UTC 才 09:30，T+0 永不触发）。
+- **env 开关 `T0_AFTER_CLOSE_ENABLED`**（默认开）：一键退回 T-1 语义，用于灰度与回滚。
+- **测试 22 条**（边界：cutoff 前 1 分 / 正点 / 后 1 分、周末、覆盖度不足、空日历、全在未来、naive vs aware、
+  载荷往返与畸形、编排四类 reason、以及一条结构性护栏"判据不得触库"——用签名断言钉死参数集）。
+  **变异验证**：`>= T0_CUTOFF` → `>`、`covered_through < today` → `<=` 两处变异都让测试转红，随后按 sha256 校验还原。
+- **门禁**：ruff ✓ · mypy（198 文件）✓ · `pytest tests/test_market_day_service.py tests/test_reconciliation_service.py tests/test_market_sentiment_composite_api.py` **66 passed** ✓
+- 涉及文件：`backend/app/services/market_day_service.py`、`backend/app/config.py`、`backend/tests/test_market_day_service.py`、`plans/2026-10-16-t0-after-close-expected-latest.md`
+
+## 2026-10-17 - **官方一手腿 D3 落地：巨潮「股本变动」类目（5%+ 股东增减持原料）+ 分页截断响亮失败 + 读面类目过滤**
+
+按 [ADR 0019](../docs/decisions/0019-official-first-source-layer.md) 的裁定顺序开工，第一刀做 D3（成本最低、不动 TuShare）。
+
+- **新增公告类目 `equity_change`**（cninfo `category_gqbd_szsh` = 5%+ 股东 / 实控人 / 机构的**权益变动、减持计划（含届满）、增持**）：
+  类目面**清单化**为 `cninfo_client.ANNOUNCEMENT_CATEGORIES`（client 与 service 都从此迭代，禁止各写一份），
+  并有**导入期断言**：三张配置表（类目元组 / category code / 分页档位）必须覆盖同一集合、code 不得重复
+- **分页截断从「静默」改为「响亮失败」**（旧实现跑满 `max_pages` 就静默返回）：现在跑满上限时先取**探针页**区分
+  「恰好整除」与「真还有更多」，后者 `RuntimeError`。**为什么必须改**：`equity_change` 实测 ≈ **157 条/交易日**
+  （1102 条 / 7 个交易日），沿用 30×10 档会在 3 天窗口被截断；而 cninfo 分页只回最新页，被截掉的更早页**永久不回补**，
+  10 分钟轮询谁也发现不了。取数档位因此按类目分档（`equity_change` = 50×25）
+- **读面 `GET /market/announcements` 新增 `category` 过滤**：未知类目 **400**（实测 cninfo 对不存在的 code
+  **静默退化为全量 9,236 条** —— 不显式拒绝就会把全量公告当"某一类"返回，ADR 0019 硬纪律）；缓存键加类目，避免 report/equity_change 互相污染
+- **共用 ingest**：抽出 `announcement_service.ingest_announcements_window(db, se_date, categories)`，
+  轮询（近 3 日滚动窗）与回补**共用同一函数**（不写第二套）；新增回补入口
+  [backfill_announcements.py](../backend/scripts/backfill_announcements.py)（分段窗口、幂等、逐类目覆盖率对账、退出码）
+- **实机（真库）**：2026-10-16 单日单类目 → **30 行入库**；重跑 → **0 行**（幂等）。样例即目标内容：
+  「控股股东、实际控制人权益变动触及1%整数倍暨减持计划期限届满」「持股5%以上股东增持股份比例触及1%整数倍」
+- **阻塞点变更（如实记录）**：本腿交付的是**原料 + 家数读面**，**不是指标值**。`industrial_capital_net_change`
+  仍为 0 行，但原因**只剩公告正文的金额抽取**（S3.4）—— registry / metric-dictionary / capital_flows_service /
+  derived_metrics_service 四处"待接 S3.2"的文案已同步为"原料已采、金额抽取待接"
+- **spike 探针加严**：`cninfo-category` 从"只验一个 code"扩为**遍历全部已登记类目**逐个断言过滤生效
+  （report 160 / event 228 / equity_change 1102 vs 无类目 9,236，无效 code 9,236）
+- **门禁**：ruff ✓ · mypy（198 文件）✓ · **pytest 1434 passed / 46 skipped / 0 failed** ✓ · doc_gate ✓
+- **顺带定位并修掉一个门禁假阳性**（与本腿无关的既有缺陷）：`self_review --full` 第一轮出现 2 failed
+  （`test_market_activity_leverage_db`），而**同一条命令重跑 1436 passed** —— 该文件 docstring 早写明「上游不可达时 skip，不假装通过」，
+  但三处真调 TuShare/AKShare 的调用是直调、无 try/except，上游变慢（该轮 195s vs 92s）时就判红。已收敛为 `_upsert_or_skip(...)`（**只**捕上游/网络类异常，真 bug 仍照红），
+  并做破坏验证：用**无效 token** 跑 → 两个用例由「红」变「skip」。教训入 [best-practices/testing](../docs/references/best-practices/testing.md)（写下「能否机械检测：不能」的理由）
+- 涉及文件：`backend/app/{core/providers/cninfo_client.py,services/announcement_service.py,repositories/market_data_repo.py,api/v1/market_data.py,schemas/market_data.py}`、
+  `backend/app/services/{industry_registry.py,capital_flows_service.py,derived_metrics_service.py}`、
+  `backend/scripts/{backfill_announcements.py(新),spike_official_sources.py,backfill_capital_flows.py}`、
+  `backend/tests/test_announcement.py`、`docs/{Changelog.md,design/{data-source.md,metric-dictionary.md,official-data-sources-verification.md}}`
+
+## 2026-10-16 - **官方一手优先落成政策（ADR 0019）+ 附.11 出口复核收口 + §S1.7 拆 key / §S1.14 结案**
+
+owner 裁定「**官方第一手数据源优先**」。本次把该裁定**先落成契约与权威文档**（不改代码），
+使后续每条腿的实现都有可核对的判据，而不是每次接源重吵一遍。
+
+- **新增 [ADR 0019](../docs/decisions/0019-official-first-source-layer.md)**：默认主源不变（TuShare Pro 仍是行情/财务/分类/复权的默认，[ADR 0001](../docs/decisions/0001-single-primary-source-tushare.md) 的工程纪律原样保留），
+  **新增"例外门"5 条判据**——某数据集**全满足**才改以官方一手为主源：①官方是权威一手 ②出口可按**时间窗增量**（不得要求全量翻页）③带**披露时点** ④TuShare 没有/已受限/口径需一手复算 ⑤要进信号链路。
+  分层与 tier：**L1 官方一手**→`official`；**L2 主源转售**→按上游实际；**L3 第三方编制**（东财/乐咕/optbbs）→`highfreq`/`calc` 且**禁入信号链路**。
+  **硬纪律**：增量键取披露日、类目过滤必须**断言生效**、单位频率在 registry 固定、同一指标双源须对拍不得混算。**刻意不 supersede 0001**：默认主源未变，变的只是"何时可以离开默认"，属加例外判据而非推翻结论
+- **`docs/design/data-source.md` 新增 附.11（7 项出口三态 + 8 条实机记录 + 5 条未验证余项 + 5 条裁定）**：A ETF 份额（沪深官网全市场，沪 922/深 756，可回补到 2015/2020）· B 两融（2010-03-31 起 4016 交易日，**只作对拍**）· C 中证指数估值（**只有近 20 行**）· D1/D2 董监高持股变动（沪带 `FORM_DATE`、深**无披露日**）· D3 巨潮 `category_gqbd_szsh`（1102 条/7 交易日）· E 开户数（官方月度已断）· F 陆股通季报（港交所可程序化，但**只留最近几季**：2025-12-31 已 0 行）· G 搜索热度（无官方）
+- **更正 附.1③ 的一处推断**：原推测「栏目自述只含行情/会员/上市公司/公告 ⇒ 月报可能无开户字段」被实测推翻——**2021-12 期 PDF 第 69–70 页确有**「帐户新开户状况表 / 股票帐户新开户状况表」（256.05 万户、含个人/机构拆分）；但 PDF 归档**止于 2021-12**、中国结算只剩年度 ⇒ **结论不变（当期不可得），依据更精确**
+- **关闭 附.4 #1（ETF 份额取数路径）与 #2（开户数口径）**；新增 5 条未验证余项（港交所真实可用窗口、**南向每日披露的现行状态**等）
+- **修订 [spec §S1.7](../docs/specs/S1-market-sentiment.md)**：`industrial_capital_net_change` **拆成两个 key** ——
+  **`insider_net_change_daily`**（董监高及关联人，日频，交易所官网官方一手；沪用 `FORM_DATE`、深 `published_at=NULL` 且**不进回测/信号链路**）与
+  **`industrial_capital_net_change`**（5%+ 股东/实控人，事件驱动，巨潮类目）；**解除对 S3.2 的阻塞**；新增 3 条机械验收判据（披露日/单位归一为万股/**类目过滤断言生效**、spike 脚本全绿）与一条口径禁令（两种主体**不得混装**）
+- **[spec §S1.14](../docs/specs/S1-market-sentiment.md) 落 `superseded`**（无官方出口；东财股吧人气榜不是"媒体搜索热度"口径），[specs/README](../docs/specs/README.md) 两行同步
+- **[metric-dictionary](../docs/design/metric-dictionary.md)**：提案表登记 `insider_net_change_daily`（未注册，5 列）；`industrial_capital_net_change` 的"待接"注改为"官方类目已具备、采集待实现"；陆股通季报补官方出口与"只留最近几季"
+- **证据可复现**：[spike_official_sources.py](../backend/scripts/spike_official_sources.py) 7 个 probe 实跑 **exit 0**，附.11 的每个数字都可一键复跑
+- **本次只落契约与文档**（零代码改动）：实现顺序按裁定为 **D3（类目）→ A（ETF 份额官方化）→ D1/D2（insider key）→ F（季报快照）**；B/C 只做对拍
+
+## 2026-10-16 - **数据源调研：A 股官方一手出口核实（Wave 1 缺口 · 增减持 / ETF 份额 / 两融 / 开户数）**
+
+owner 问「Wave 1 还缺的数据打算从哪来，能否走官网」。逐项**实测**（web_search 定位 → 页面/接口直取）核实并写成
+[docs/design/official-data-sources-verification.md](./design/official-data-sources-verification.md)（Step-0 证据台账 +
+分层判据 + 工程评估；三态结论的权威归属仍是 `data-source.md`，裁定后回写）。
+
+- **最重要的发现：S1.7「产业资本增减持」在官网有两条现成路径，但口径不同、必须拆 key**。①**董监高及关联人**：沪 `commonQuery.do`(`COMMON_SSE_XXPL_CXJL_SSGSGFBDQK_S`) 按日期窗口取（实测 2026-10-12~16 = **69 行 / 1 页**、单日 5 行；全历史 71,512 行 / 716 页）、**带 `FORM_DATE` 披露日**；深 `ShowReport`(`1801_cxda`，全历史 124,057 行 / 6203 页，**带 `txtStart/txtEnd` 后同窗口 = 73 行 / 4 页**）、**无披露日**。②**5%+ 股东/实控人**：cninfo `category_gqbd_szsh`（股本变动）类目，实测 2026-10-08~16 共 1102 条（权益变动 8 / 减持 4 / 增持 1，其余多为回购噪音）→ 既有 cninfo 管道加一个类目即可。**故不能再把两种数据混进一个 `industrial_capital_net_change`**（附三个实测坑：沪=股 vs 深=万股；补报滞后使增量窗口必须用披露日，实测一条 2024-03-05 变动 `FORM_DATE=2026-09-20`；无效 `category` 静默退化为全量（同窗口 9,236 条））
+- **ETF 每日份额：可得且可回补（此前"深市历史未证实"被本轮实测推翻）**。沪 `ETFGM_SEARCH_L&STAT_DATE=`（2026-10-14 → **922 只**；2024-01-15 → 518；2020-01-15 → 174；2015-06-30 → 69；10-16 实测 924）、深 `CATALOGID=scsj_fund_jjgm` + `txtStart/txtEnd`（xlsx）（2026-10-14 → 756；2024-01-15 → 355；2020-01-15 → 72）→ 现有 6 只宽基篮子可补全（`ETF_BASKET_CALIBER` 自述收窄 510310/159919）并去掉 TuShare `fund_share` 的 2000 行逐代码约束；深市官网页脚自述 **T 日夜间值以 T+1 早间为准**
+- **两融：可得（2010-03-31 起 4016 个交易日），但建议只作对拍**。沪 `RZRQ_HZ_INFO` + 逐日静态 `.xls`（实测回溯到 2011-01-04，含个股明细）；深 `1837_xxpl` 一次全量返回。中证金融已不是出口（据界面新闻，2022-02-25 起官微停发两融日频）。坑：深市 JSON **行内无日期列**、沪元 vs 深亿元、沪汇总含已调出标的
+- **中证指数官方估值只有近 20 行**（000300/000905 实测各 20 行）→ 仅够附.7.4 #5 的 PE 口径对拍，不能作历史序列
+- **月度开户数：官方月度序列事实已断**。上交所《上证统计月报》**确有**开户表（实测 2021-12 期第 69–70 页，总数 256.05 万户、含个人/机构拆分）——**据此更正 `data-source.md` 附.1③ 的推断**（栏目自述未列全）；但 PDF 归档止于 2021-12，中国结算旧月度 URL 实测 404、只剩年度 → 维持 S1.12「不接入」
+- **共同坑（与主源转售的本质差异）**：官方现成封装（AKShare 的沪/深增减持）都是**全历史翻页**（深 6203 页），实测翻到第 176 页即被断连 → 必须自写**按日期窗口**的增量取数 + 限速 + 断点续采；接口无 SLA；页面均为 JS 渲染，抓 HTML 无效
+- **陆股通持仓（季度）：官方出口已实测到，但它是"当期快照"不是历史序列**。港交所披露易 CCASS 沪深港通持股查询（`www3.hkexnews.hk/sdw/search/mutualmarket.aspx?t=sh` / `?t=sz`，ASP.NET POST + `txtShareholdingDate`）实测：沪 2026-09-30 → **2039 行**、2026-06-30/03-31 → 1958/1907、深 2026-09-30 → **2269 行**；而 **2025-12-31 及更早（2025-06-30、2024-09-30）全部返回 0 行 ⇒ 历史季度不可回补**（页面自述"持股日数据保留 12 个月"，与实测不符，规则待核）→ 只能"官方取当期 + `hk_hold` 补历史"，且必须落**季度快照纪律**（错过即永久缺）；页面逐字确认 2024-08-19 起季度化、季末后第 5 个北向交易日发布
+- **判据与建议**：给出「L1 官方一手 / L2 主源转售 / L3 第三方编制」三层判据（5 条判据全满足才开 L1）与 Wave 1 排序（cninfo 类目 → ETF 份额 → 董监高 key → 两融对拍；开户数/搜索热度不做）；**待 owner 裁定 4 件**：是否立「官方一手优先」ADR、S1.7 是否拆 key、深市 PIT 缺口如何处置、陆股通是否接受"官网当期 + 主源历史"双源拼接
+- **证据可复现（Ruling 51）**：**已交付** `backend/scripts/spike_official_sources.py`（7 个 probe、带反证断言、`--probe` 可选、只读不写库），本轮实跑 **exit 0 / 全 probe 通过**，报告里的每个数字都能一键复跑核对
+
+## 2026-10-16 - **生产升级固化为脚本 `scripts/deploy_prod.sh` + 全局 skill `deploying-stock-bot`；服务器升到 v0.0.11**
+
+散文文档治不了"每次重犯"，机制能。落地两件产物：
+
+- **`scripts/deploy_prod.sh`（仓库，唯一副本）** —— fail-fast 顺序：预检（拒浮动 tag / 磁盘 / 在跑的慢 pull）→ **备份两库并 `pg_restore -l` 验读** → `ghcr.nju.edu.cn` 拉取 + **OCI label 与本地 tag 指向的 commit 对账** + 改回 `ghcr.io` 真名 → `up -d --no-build` → 收尾断言（镜像 tag / `alembic current==heads` / `/health` version+commit / 错误日志）；`--check` 为只读巡检
+- **全局 skill `~/.agents/skills/deploying-stock-bot/`（本机，不入库）** —— 三条铁律 + 7 条真实坑表 + 回滚；它里面的 `scripts/deploy_prod.sh` 是**软链回仓库副本**（单一真相源）。**为何不入库**：项目级 `.agents/skills/` 是 pi 的**信任门控资源**（`~/Developer/stock-bot` 不在 `~/.pi/agent/trust.json`）→ 实测新进程列出的 72 个 skill 里没有它，等于死文件；放全局目录才真加载，且 pi / Codex / Gemini / Copilot 都认
+- **修掉一个自证漏洞**：只卡 `version` label 等于自证（同版本号可被重建），故脚本**强制**传该 tag 指向的 commit（`git rev-parse vX.Y.Z^{commit}`），并断到 `/health` 上形成 "本地 tag → 镜像 label → 运行时" 闭环
+- **实测教训（本次现场数据）**：服务器直连 ghcr 的 blob CDN（`185.199.x`）仅 **20–35 KB/s**（900MB ≈ 8h）；镜像站那份会被 dockerd 的 **layer 下载锁**卡死（须先杀慢 pull，且**不能用 `pkill -f`** —— 自匹配会杀掉自己的 ssh 会话）；`docker exec` 没有 `-T`（那是 `compose exec` 的参数）
+- **同时上线 v0.0.11**（`32ab97d`，领先 0.0.10 共 175 个提交）：迁移 backend `b6a1f0c2d7e4` / auth `a002_invite_only` 均到 head，`/health` version+commit 与镜像 label 对账一致，经边缘取前端 asset 与镜像内文件 sha256 相同
+- 涉及文件：`scripts/deploy_prod.sh`、`docs/{Changelog.md,index.md,deployment/production.md}`
+
 ## 2026-10-16 - **契约层：S2.5 用户研究假设与自动判定立项（投研闭环缺口）+ ADR 0018（写下即冻结 / 判定三态 / PIT）**
 
 owner 在 PR #18 合并后判断"当前 stock bot 还不能很好支持投研"。**代码实测的根因不是数据源、也不是页面形态**：读面已建成约 21 个实页面，但研究工作流侧只有「自选 + 标签」两件资产 —— 全库唯一的用户自由文本是 `user_watchlist_items.notes`，**假设 / 结论 / 证据链 / 导出 / 复盘全部零代码**，而主线计划 §4 认定的两条回路排在 Wave 5/6。

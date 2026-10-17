@@ -67,6 +67,24 @@ def test_registry_assertion_rejects_missing_column(monkeypatch: pytest.MonkeyPat
         td._assert_detectors()
 
 
+def test_unavailable_labels_are_human_readable() -> None:
+    """``unavailable`` 上屏的必须是 label（人话），一个机器 key 都不许漏。
+
+    回归对象：后端最初直接下发 ``["sector_move"]``，前端 ``join("、")`` 上屏后用户
+    看到的就是代码串。这条用"含 ``_`` 即失败"钉住，比逐字比对更难被绕过。
+    """
+    labels = td.unavailable_labels([spec.key for spec in td.TRIAGE_DETECTORS])
+    assert labels == [spec.label for spec in td.TRIAGE_DETECTORS], "顺序 = registry 顺序"
+    assert all("_" not in label for label in labels), f"label 里出现机器串：{labels}"
+    # 已知 key 的人话必须与 spec §S8.2 表一致（例如 sector_move → 所属板块在动）
+    assert td.unavailable_labels({"sector_move"}) == ["所属板块在动"]
+
+
+def test_unavailable_labels_drop_unknown_keys() -> None:
+    """未登记的 key 不进 label（信息不丢：它仍在 ``unavailable_keys`` 里）。"""
+    assert td.unavailable_labels({"not_a_detector"}) == []
+
+
 def test_no_forbidden_fields_in_detector_source() -> None:
     """口径禁令：不得引用 ``turnover_rate_f`` / ``market_limit_up_stock_daily`` / ``adj_factor``.
 

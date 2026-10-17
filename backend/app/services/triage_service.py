@@ -19,6 +19,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
+from typing import Literal, get_args
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import or_, select, text
@@ -49,6 +50,15 @@ DRAGON_TIGER_TRADING_DAYS = 3
 DRAGON_TIGER_NATURAL_DAYS = 7
 #: 单页上限（spec §S8.4）
 LIMIT = 8
+
+#: 页面状态唯一真相（与 ``app/schemas/triage.py`` 的 ``TriageState`` 由测试对拍，
+#: 与 ``SEVERITIES`` 的两处对拍同一套做法）。
+#:
+#: 为什么要显式状态而不是让前端从 ``items=[] & quiet_count=0`` 反推：那个组合同时对应
+#: "用户没有自选"和"有自选但最近完整交易日还不存在"，前端只能二选一，实测就把后者
+#: 渲染成了"还没有自选股"（把"今天查不了"说成"你没自选"，是最坏的一种误导）。
+TriageState = Literal["ok", "no_data", "no_watchlist"]
+STATES: tuple[str, ...] = tuple(get_args(TriageState))
 
 _SH = ZoneInfo("Asia/Shanghai")
 
@@ -101,7 +111,12 @@ class TriageResult:
     items: list[td.TriageItem] = field(default_factory=list)
     quiet_count: int = 0
     folded: int = 0
+    #: ``STATES`` 之一。默认 ``ok`` 让纯组合类用例不必逐条写状态。
+    state: TriageState = "ok"
+    #: 上屏用的人话 label（「所属板块在动」）
     unavailable: list[str] = field(default_factory=list)
+    #: 与 ``unavailable`` 对应的探测器 key（排查用，前端禁止渲染）
+    unavailable_keys: list[str] = field(default_factory=list)
 
 
 def _today_sh() -> date:
@@ -356,12 +371,20 @@ async def get_triage(
 ) -> TriageResult:
     """一次体检：解析最近完整日 → 批量装载 → 跑探测器 → 合并/排序/折叠。"""
     codes = list(dict.fromkeys(symbols))
+    if not codes:
+        # 一只自选都没有：**不是**"今天都平静"，也不该报"8 项检查缺数据"（没有东西可查）。
+        # 前端据 ``state`` 给"去添加自选"入口（spec §S8.1 第三态）。
+        return TriageResult(as_of=_today_sh(), state="no_watchlist")
     day = await resolve_latest_complete_day(db)
     if day is None:
-        # 库内没有可用交易日：**不**报"今天都平静"，而是全部探测器标缺数据
+        # 有自选但库内没有可用交易日：**不**报"今天都平静"，也不说"你没有自选"
+        # （第四态 ``no_data``）；全部探测器标缺数据，前端据此给"数据还没就绪"文案。
+        keys = sorted(spec.key for spec in td.TRIAGE_DETECTORS)
         return TriageResult(
             as_of=_today_sh(),
-            unavailable=sorted(spec.key for spec in td.TRIAGE_DETECTORS),
+            state="no_data",
+            unavailable=td.unavailable_labels(keys),
+            unavailable_keys=keys,
         )
     ctx = await load_context(db, codes, day.day)
     found = td.run_detectors(ctx)
@@ -371,10 +394,13 @@ async def get_triage(
     # 把它算进 quiet_count 会把"没查"读成"没事"（spec §S8.4 的同一条禁令）。
     judgeable = set(ctx.quotes)
     quiet = len({code for code in codes if code in judgeable and code not in hit})
+    keys = sorted(ctx.unavailable)
     return TriageResult(
         as_of=day.day,
         items=items,
         quiet_count=quiet,
         folded=folded,
-        unavailable=sorted(ctx.unavailable),
+        state="ok",
+        unavailable=td.unavailable_labels(keys),
+        unavailable_keys=keys,
     )

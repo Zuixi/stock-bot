@@ -226,7 +226,35 @@ def test_get_triage_without_any_trading_day_marks_all_unavailable(
     result = asyncio.run(svc.get_triage(None, ["600000"]))  # type: ignore[arg-type]
     assert result.items == []
     assert result.quiet_count == 0, "没有数据就不得宣称'今天都平静'"
-    assert result.unavailable == sorted(spec.key for spec in td.TRIAGE_DETECTORS)
+    # 第四态：有自选但没有完整交易日 → no_data（不是 no_watchlist，也不是 ok）
+    assert result.state == "no_data"
+    assert result.unavailable_keys == sorted(spec.key for spec in td.TRIAGE_DETECTORS)
+    # 上屏字段是**人话**：一个机器串都不许有（含 "_" 即漏了内部 key）
+    assert result.unavailable == [spec.label for spec in td.TRIAGE_DETECTORS], (
+        "unavailable 必须是 registry 的 label（registry 顺序）"
+    )
+    assert not any("_" in label for label in result.unavailable)
+
+
+def test_get_triage_without_watchlist_is_no_watchlist_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """一只自选都没有 → ``no_watchlist``，且不报"8 项检查缺数据"（没有东西可查）。
+
+    这条防的是前端把"有自选但今天没数据"渲染成"还没有自选股"：两种空态必须
+    在**契约层**就能区分，不能靠 ``items=[] & quiet_count=0`` 猜。
+    """
+
+    async def _boom(_db: Any) -> None:
+        raise AssertionError("没有自选不得去解析交易日（白跑查询）")
+
+    monkeypatch.setattr(svc, "resolve_latest_complete_day", _boom)
+    result = asyncio.run(svc.get_triage(None, []))  # type: ignore[arg-type]
+    assert result.state == "no_watchlist"
+    assert result.items == []
+    assert result.quiet_count == 0
+    assert result.unavailable == [], "无自选时没有'缺数据'可言，别拿 8 条 label 吓用户"
+    assert result.unavailable_keys == []
 
 
 # ---------------------------------------------------------------------------

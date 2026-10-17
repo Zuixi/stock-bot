@@ -4,8 +4,10 @@
 - **登录即可读**（spec §S8.1 的鉴权判据）：数据是公开行情 + 用户自己的自选，若被
   ``research:read`` 之类的细粒度权限挡住，普通用户就看不到自己自选的体检；
 - **>50 只 422 而不是静默截断**（spec §S8.3）：截断会让用户以为"其余都没事"；
-- **载荷字段齐全**：``as_of`` / ``quiet_count`` / ``folded`` / ``unavailable`` / ``disclaimer``
-  缺一个前端就会退化成空态或丢掉合规文案（前端不硬编码免责声明）。
+- **载荷字段齐全**：``as_of`` / ``state`` / ``quiet_count`` / ``folded`` / ``unavailable`` /
+  ``unavailable_keys`` / ``disclaimer`` 缺一个前端就会退化成空态或丢掉合规文案
+  （前端不硬编码免责声明）。``state`` 缺了更糟：三种空态只能靠猜。
+- **``unavailable`` 是 label 不是 key**：机器串上屏（``sector_move``）用户读不懂。
 
 本文件不连库：``get_triage`` / ``user_symbols`` 打桩，只验证 HTTP 契约与鉴权。
 """
@@ -29,7 +31,7 @@ from app.api.v1 import router as api_v1_router
 from app.api.v1 import watchlist_triage as api
 from app.config import settings
 from app.core.auth.jwks import jwks_client
-from app.schemas.triage import TriageItemOut
+from app.schemas.triage import TriageItemOut, TriageOut
 from app.services import triage_detectors as td
 from app.services import triage_service as svc
 
@@ -120,13 +122,24 @@ def _sample_result() -> svc.TriageResult:
         items=[item],
         quiet_count=3,
         folded=1,
-        unavailable=["sector_move"],
+        state="ok",
+        unavailable=["所属板块在动"],
+        unavailable_keys=["sector_move"],
     )
 
 
 def test_schema_severity_enum_matches_registry() -> None:
     """响应契约的四枚举必须与探测器 registry 逐字一致（两处漂移 = 第五种分级上屏）。"""
     assert set(get_args(TriageItemOut.model_fields["severity"].annotation)) == set(td.SEVERITIES)
+
+
+def test_schema_state_enum_matches_service() -> None:
+    """``state`` 的三枚举必须与 ``triage_service.STATES`` 逐字一致。
+
+    漏一个的后果不是报错而是**落进前端 `else`**——"没数据"会被画成"没自选"，
+    正是这次集成要修的那个 bug。
+    """
+    assert set(get_args(TriageOut.model_fields["state"].annotation)) == set(svc.STATES)
 
 
 # ── 用例 ────────────────────────────────────────────────────────────────────
@@ -193,11 +206,15 @@ async def test_triage_returns_full_contract(
     assert resp.status_code == 200
     body = resp.json()
     assert body["as_of"] == AS_OF.isoformat()
+    assert body["state"] == "ok"
     assert body["quiet_count"] == 3
     assert body["folded"] == 1
-    assert body["unavailable"] == ["sector_move"]
     assert body["disclaimer"] == api.DISCLAIMER
     assert "不构成投资建议" in body["disclaimer"], "合规页脚必须随载荷下发（spec §S8.5）"
+    # 上屏字段是**人话 label**（不含 "_" 即不含探测器 key）；机器串只在 unavailable_keys
+    assert body["unavailable"] == ["所属板块在动"]
+    assert not any("_" in label for label in body["unavailable"])
+    assert body["unavailable_keys"] == ["sector_move"]
     item = body["items"][0]
     assert item["symbol"] == "600000"
     assert item["severity"] == "risk"
@@ -248,6 +265,35 @@ async def test_triage_defaults_to_user_watchlist(
     assert resp.status_code == 200
     assert seen["codes"] == ["600000"]
     assert seen["user_id"], "必须把登录用户的 id 传下去（自选是用户私有数据）"
+
+
+async def test_triage_serializes_no_watchlist_state(
+    triage_app: FastAPI,
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """空自选 → ``state='no_watchlist'`` 必须真的到客户端（前端据此给"去添加自选"入口）。
+
+    若这个字段丢了，前端只能靠 ``items=[] & quiet_count=0`` 猜，就会把"今天数据没就绪"
+    也画成"还没有自选股"（本次集成修的正是这条）。
+    """
+
+    async def _empty(_db: Any, _user_id: str, _watchlist_id: uuid.UUID | None = None) -> list[str]:
+        return []
+
+    async def _stub(_db: Any, codes: list[str], limit: int = svc.LIMIT) -> svc.TriageResult:
+        assert codes == []
+        return svc.TriageResult(as_of=AS_OF, state="no_watchlist")
+
+    monkeypatch.setattr(svc, "user_symbols", _empty)
+    monkeypatch.setattr(svc, "get_triage", _stub)
+    resp = await _get(triage_app, "/api/v1/watchlists/triage", token=_assertion(rsa_key_pair))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["state"] == "no_watchlist"
+    assert body["items"] == []
+    assert body["quiet_count"] == 0
+    assert body["unavailable"] == [] and body["unavailable_keys"] == []
 
 
 async def test_triage_dedupes_repeated_symbols(

@@ -79,9 +79,12 @@ async def get_triage(
     result = await triage_service.get_triage(db, codes, limit=limit)
     return TriageOut(
         as_of=result.as_of,
+        state=result.state,
         quiet_count=result.quiet_count,
         folded=result.folded,
+        # 上屏用 label；机器 key 只进 unavailable_keys（前端禁止渲染）
         unavailable=result.unavailable,
+        unavailable_keys=result.unavailable_keys,
         disclaimer=DISCLAIMER,
         items=[_item_out(item) for item in result.items],
     )

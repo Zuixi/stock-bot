@@ -20,7 +20,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
@@ -299,6 +299,20 @@ def _assert_detectors() -> None:
 
 
 _assert_detectors()
+
+
+def unavailable_labels(keys: Iterable[str]) -> list[str]:
+    """把探测器 key 换成**上屏用**的人话 label（registry 顺序、去重）。
+
+    为什么必须有这一层：``key`` 是机器串（``sector_move``），直接下发会让 `TriagePanel`
+    把内部标识当文案渲染（实测过：用户看到 "sector_move"）。契约因此把 ``unavailable``
+    定义为 label 列表，机器串只在 ``unavailable_keys``（排查用、**禁止上屏**）里出现。
+
+    **未知 key 一律不进 label**：宁可少一行提示，也不把未登记的内部串漏到屏幕上
+    （信息不会丢——它仍在 ``unavailable_keys`` 里，且 ``count`` 用它算）。
+    """
+    asked = set(keys)
+    return [spec.label for spec in TRIAGE_DETECTORS if spec.key in asked]
 
 
 def make_context_for_test(
