@@ -1,0 +1,248 @@
+/* 自选体检（`/me?tab=triage`）：**事实清单**的排版。
+ *
+ * 一处刻意的取舍：分级色（风险/事件/关注/背景）做成**组件级变量**而不是全局令牌。
+ * 全局 `theme.css` 的令牌是「涨跌/主题」语义（`--up`/`--down`/`--bg-page`…），
+ * 现实里没有 severity 一族；硬塞进去会让设计门禁（`check-design-tokens.mjs`）的
+ * 「令牌必须有定义」变成「先加令牌再加组件」的循环。其余颜色仍只走全局令牌。
+ *
+ * 卡片左缘色条 = 分级，正文一律 `--text-primary`，避免有人只靠颜色读事实。 */
+
+.triage {
+  --triage-risk: #b3261e;
+  --triage-risk-tint: rgba(179, 38, 30, 0.1);
+  --triage-event: #a15c00;
+  --triage-event-tint: rgba(161, 92, 0, 0.12);
+  --triage-attention: #1f4ed8;
+  --triage-attention-tint: rgba(31, 78, 216, 0.1);
+  --triage-background: #566072;
+  --triage-background-tint: rgba(86, 96, 114, 0.1);
+}
+
+:root[data-theme="dark"] .triage {
+  --triage-risk: #f2757a;
+  --triage-risk-tint: rgba(242, 117, 122, 0.16);
+  --triage-event: #f0a93c;
+  --triage-event-tint: rgba(240, 169, 60, 0.16);
+  --triage-attention: #7ea6ff;
+  --triage-attention-tint: rgba(126, 166, 255, 0.16);
+  --triage-background: #98a3b3;
+  --triage-background-tint: rgba(152, 163, 179, 0.16);
+}
+
+/* ── 顶部口径行：数据截至 · 平静只数 · 折叠条数 ─────────────── */
+.triage__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 18px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+}
+
+.triage__folded {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.triage__unavailable {
+  margin-bottom: 14px;
+}
+
+/* ── 分组 ─────────────────────────────────────────────── */
+.triage__group {
+  margin-bottom: 20px;
+}
+
+.triage__group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.triage__group-count {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.triage__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+/* ── 单条事实卡片 ─────────────────────────────────────── */
+.triage__card {
+  position: relative;
+  min-width: 0;
+  padding: 12px 14px 10px 16px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  /* 左缘色条 = 分级（不依赖颜色也能读：Tag 上有文字） */
+  box-shadow: inset 3px 0 0 0 var(--triage-accent, var(--border));
+}
+
+.triage__card:hover {
+  background: var(--hover);
+}
+
+.triage__card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 8px;
+}
+
+.triage__tag {
+  margin-inline-end: 0;
+  border: none;
+  font-size: 11.5px;
+  line-height: 18px;
+  padding-inline: 8px;
+}
+
+.triage__tag--risk {
+  color: var(--triage-risk);
+  background: var(--triage-risk-tint);
+}
+
+.triage__tag--event {
+  color: var(--triage-event);
+  background: var(--triage-event-tint);
+}
+
+.triage__tag--attention {
+  color: var(--triage-attention);
+  background: var(--triage-attention-tint);
+}
+
+.triage__tag--background {
+  color: var(--triage-background);
+  background: var(--triage-background-tint);
+}
+
+.triage__card--risk {
+  --triage-accent: var(--triage-risk);
+}
+
+.triage__card--event {
+  --triage-accent: var(--triage-event);
+}
+
+.triage__card--attention {
+  --triage-accent: var(--triage-attention);
+}
+
+.triage__card--background {
+  --triage-accent: var(--triage-background);
+}
+
+.triage__name {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.triage__symbol {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 发生了什么（含数值）：正文，不折行成噪音 */
+.triage__headline {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+
+/* ── facts：label: value+unit ────────────────────────── */
+.triage__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0 0 10px;
+}
+
+.triage__fact {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.triage__fact-label {
+  color: var(--text-secondary);
+}
+
+.triage__fact-value {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+/* ── 卡片脚：数据截至 + 复核 ─────────────────────────── */
+.triage__card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.triage__verify {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.triage__verify:hover {
+  text-decoration: underline;
+}
+
+/* ── 空态与页脚 ───────────────────────────────────────── */
+.triage__empty {
+  margin: 32px 0 16px;
+}
+
+.triage__add {
+  margin-left: 8px;
+  font-weight: 600;
+}
+
+.triage__disclaimer {
+  margin: 18px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 720px) {
+  .triage__list {
+    grid-template-columns: 1fr;
+  }
+}
