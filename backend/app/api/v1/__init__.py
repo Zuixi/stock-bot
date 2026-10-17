@@ -29,6 +29,7 @@ from app.api.v1 import (
     stocks,
     tags,
     tasks,
+    watchlist_triage,
     watchlists,
 )
 
@@ -68,6 +69,9 @@ router.include_router(tags.router, prefix="/tags", tags=["tags"])
 
 # User watchlists
 router.include_router(watchlists.router, prefix="/watchlists", tags=["watchlists"])
+
+# 自选体检（spec §S8.3）：/api/v1/watchlists/triage —— 只读、读时算、零新表
+router.include_router(watchlist_triage.router, prefix="/watchlists", tags=["watchlists"])
 
 # Industry research workbench: /api/v1/industries/...
 router.include_router(industries.router, prefix="/industries", tags=["industry-research"])
