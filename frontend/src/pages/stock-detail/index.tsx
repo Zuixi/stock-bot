@@ -25,10 +25,27 @@ import {
   toEventMarkers,
 } from "@/features/stock-detail/lib/eventMarkers";
 import { useTheme } from "@/app/theme-context";
+import { BlockBoundary } from "@/shared/ui";
 import { KlineChart, type KlineFocusRequest } from "@/shared/ui/kline";
 import { fetchKlineBySymbol } from "@/shared/api/quotes";
 import { fetchStockEnrichedBySymbol } from "@/shared/api/stocks";
 import type { StockRecord } from "@/shared/types";
+
+/**
+ * 各块的**实测自然高度**（px），只用作 `BlockBoundary` 错误态的占位高度。
+ *
+ * 取值来源：P2-1 在 1440×900 下用 Playwright `boundingBox().height` 量的真实渲染高度，
+ * 不引入新的间距刻度：
+ * - 历史行情 482 = 卡头 40 + ribbon 行 18 + 画布 400（`KlineChart` 里写死的 400）+ 卡内边距 24；
+ * - 股性事实行 93 = `padding-top 10` + 1px 上边框 + chip 行 40 + 6 gap + 一句人话 36；
+ * - 公司概况 151（四项齐全时）。
+ *
+ * 为什么占位高度不放在正常渲染态：`CompanyProfile` / `CharacterFacts` 都可以**合法地整块
+ * 不渲染**（四项全空 / 样本不足 60 根），给正常态钉最小高度会把"没有记录"画成一块空地。
+ */
+const KLINE_CARD_MIN_HEIGHT = 482;
+const CHARACTER_ROW_MIN_HEIGHT = 93;
+const COMPANY_CARD_MIN_HEIGHT = 151;
 
 /** Tab 三态（F13）。非法值一律回落 `overview`，不写回 URL（只读归一化，不替用户改地址栏）。 */
 const TAB_KEYS = ["overview", "valuation", "financial"] as const;
@@ -221,38 +238,59 @@ export default function StockDetailPage() {
             label: "概览",
             children: (
               <>
-                {/* 三段式（D3）：左 16 K 线、右 8 侧栏卡，事件列表全宽 */}
+                {/* 三段式（D3）：左 16 K 线、右 8 侧栏卡，事件列表全宽。
+                    每块各自一层 `BlockBoundary`（不包整页）：一块渲染崩了只坏那一块。 */}
                 <Row gutter={[16, 16]}>
                   <Col xs={24} lg={16}>
-                    <KlineChart
-                      title="历史行情"
-                      queryKey={`stock-kline-${stock.symbol}`}
-                      fetcher={(days, adjust) => fetchKlineBySymbol(stock.symbol, days, adjust)}
-                      showAdjust
-                      eventMarkers={eventMarkers}
-                      focusRequest={focusRequest}
-                    />
+                    <BlockBoundary title="历史行情" minHeight={KLINE_CARD_MIN_HEIGHT}>
+                      <KlineChart
+                        title="历史行情"
+                        queryKey={`stock-kline-${stock.symbol}`}
+                        fetcher={(days, adjust) => fetchKlineBySymbol(stock.symbol, days, adjust)}
+                        showAdjust
+                        eventMarkers={eventMarkers}
+                        focusRequest={focusRequest}
+                      />
+                    </BlockBoundary>
                   </Col>
                   <Col xs={24} lg={8}>
                     {/* 侧栏堆叠顺序（计划 §5 / D3）：估值 → 成长 → 股性 → 公司概况。
                         后两块是 P2 的「事实」区：不套第二层卡片外壳（股性是"事实行"，
-                        公司概况有自己的 Card），两者都可能整块不渲染（缺失 ≠ 0）。 */}
+                        公司概况有自己的 Card），两者都可能整块不渲染（缺失 ≠ 0）。
+
+                        `FundamentalCards` 内部再给两张卡各包一层边界（只读名录的估值卡
+                        与读 `financial-summary` 的成长卡没有共享状态，各自受影响）；
+                        成长卡同时接三态（加载 / 无记录 / 失败），失败不再冒充 `--`。 */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                      <FundamentalCards stock={stock} summary={summaryQuery.data} />
-                      <CharacterFacts stats={character} />
-                      <CompanyProfile stock={stock} />
+                      <FundamentalCards
+                        stock={stock}
+                        summary={summaryQuery.data}
+                        summaryLoading={summaryQuery.isLoading}
+                        summaryError={summaryQuery.isError}
+                        onRetrySummary={() => summaryQuery.refetch()}
+                      />
+                      <BlockBoundary title="股性事实行" minHeight={CHARACTER_ROW_MIN_HEIGHT}>
+                        <CharacterFacts stats={character} />
+                      </BlockBoundary>
+                      <BlockBoundary title="公司概况" minHeight={COMPANY_CARD_MIN_HEIGHT}>
+                        <CompanyProfile stock={stock} />
+                      </BlockBoundary>
                     </div>
                   </Col>
                 </Row>
 
                 <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
                   <Col span={24}>
-                    <RelatedEvents
-                      events={stockEvents}
-                      kind={eventKind}
-                      onKindChange={setEventKind}
-                      onSelectDate={handleSelectDate}
-                    />
+                    {/* 事件列表的三态（五个 tab 各自 错误 + 重试 / 成功为空 / 加载）
+                        已经在 `RelatedEvents` 内做好，这里只补一层渲染错误边界 */}
+                    <BlockBoundary title="相关数据">
+                      <RelatedEvents
+                        events={stockEvents}
+                        kind={eventKind}
+                        onKindChange={setEventKind}
+                        onSelectDate={handleSelectDate}
+                      />
+                    </BlockBoundary>
                   </Col>
                 </Row>
 

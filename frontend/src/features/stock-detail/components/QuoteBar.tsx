@@ -1,7 +1,7 @@
 import { Button, Tag, Tooltip } from "antd";
 import { StarFilled, StarOutlined } from "@ant-design/icons";
 import { useTheme } from "@/app/theme-context";
-import { ChangeText, useIsNarrowViewport } from "@/shared/ui";
+import { ChangeText, BlockBoundary, useIsNarrowViewport } from "@/shared/ui";
 import { EXCHANGE_LABELS } from "@/shared/types";
 import { useWatchlist } from "@/features/watchlist/useWatchlist";
 import type { StockRecord } from "@/shared/types";
@@ -62,8 +62,16 @@ export function QuoteBar({ stock, range, percentile }: QuoteBarProps) {
         )}
         <div className="quote-bar__actions">
           {/* 动作区顺序固定为 [记一笔 default] [加入自选 primary]（设计稿 §2 行 1）：
-              自选是这一条上唯一的「主操作」，记一笔是次级入口，故不给它 primary。 */}
-          <JournalEntryAction symbol={stock.symbol} />
+              自选是这一条上唯一的「主操作」，记一笔是次级入口，故不给它 primary。
+
+              `key={stock.symbol}` 是**语义要求**，不是性能调优（review round 1）：
+              `JournalEntryAction` 里有 `recorded` / `open` 两个内部 state，而 symbol 变化时
+              路由元素与 `<StockHeader>` **都不会重挂**（React 按位置复用同一棵子树）。
+              没有 key 时，用户在 600519 记完一笔后切到 600000，动作区会继续显示
+              「已记录 · 查看」—— 页面在一只**没有任何记录**的股票上说了假话。
+              加 key 后换股票即换实例，state 归零（`e2e/stockDetailJournal.spec.ts` 用 DOM
+              哨兵证伪"复用旧节点"）。 */}
+          <JournalEntryAction key={stock.symbol} symbol={stock.symbol} />
           <Button
             size="small"
             type={isWatched ? "primary" : "default"}
@@ -99,12 +107,17 @@ export function QuoteBar({ stock, range, percentile }: QuoteBarProps) {
       {/* 行 3：八个事实 */}
       <QuoteMetricRow stock={stock} />
 
-      {/* 行 4：52 周区间 + 估值分位 + 数据截至 */}
-      <PositionStrip
-        range={range}
-        percentile={percentile}
-        latestQuoteDate={stock.latestQuoteDate}
-      />
+      {/* 行 4：52 周区间 + 估值分位 + 数据截至。单独一层 BlockBoundary：
+          这一行是**整个报价条里唯一读查询的部分**（区间统计 / 估值分位），它渲染崩了
+          不该把上面的名称、现价与八项事实一起换掉。高 18px = 这一行的实测自然高度
+          （`.quote-bar__strip` 的 12px 文字 + line-height 18，区间条 8px 在其内）。 */}
+      <BlockBoundary title="区间与估值分位" minHeight={18}>
+        <PositionStrip
+          range={range}
+          percentile={percentile}
+          latestQuoteDate={stock.latestQuoteDate}
+        />
+      </BlockBoundary>
     </div>
   );
 }
