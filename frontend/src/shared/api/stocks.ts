@@ -22,6 +22,8 @@ export interface BackendStock {
   full_name?: string | null;
   category: string;
   list_date?: string | null;
+  area?: string | null;
+  act_name?: string | null;
   csrc_code?: string | null;
   csrc_desc?: string | null;
   province?: string | null;
@@ -37,6 +39,12 @@ export function mapBackendStock(item: BackendStock): StockRecord {
     name: item.name,
     category: item.category,
     industry: item.csrc_desc ?? undefined,
+    // 「公司概况」四个字段（F17）：后端一直有，`null` 原样落成 `undefined`，
+    // 由组件决定整项不渲染（缺失 ≠ 0，不在这里编默认值）。
+    fullName: item.full_name ?? undefined,
+    listDate: item.list_date ?? undefined,
+    area: item.area ?? undefined,
+    actName: item.act_name ?? undefined,
     asof: item.asof,
     // Backend M0 currently does not provide quote/fundamental fields yet.
     latestPrice: undefined,

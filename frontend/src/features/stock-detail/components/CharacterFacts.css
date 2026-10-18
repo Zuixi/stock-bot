@@ -1,0 +1,60 @@
+/*
+ * 股性事实行（P2-3 / D2）：一行 chip + 一句人话。
+ *
+ * 设计纪律（与报价条同源）：
+ * - **零新色值**：只用 `var(--text-primary)` / `var(--text-secondary)` / `var(--border)`；
+ *   涨跌色由组件内联注入（`useTheme().colors.up/down/flat`），CSS 里不重复声明。
+ * - **零新字号**：只出现 11 / 12 两档。
+ * - 数字等宽走全局 `.num`（不在这里重写 font-family —— 那条声明全站只许一次）。
+ */
+
+.character-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* 侧栏里排在卡片之下：用一条 1px 上边框把它和上面的 Card 分开，
+     不套第二层 Card（"事实行"不是"卡片墙"的又一格，见计划 §7「不做 KPI 卡」）。 */
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.character-facts__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.character-facts__chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  /* 定义在 tooltip 里，鼠标移上去是"读定义"的语义 */
+  cursor: help;
+}
+
+.character-facts__label {
+  color: var(--text-secondary);
+}
+
+.character-facts__value {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* 一句人话：12px 次级色，最多两三行；不给它加引号/背景，避免变成第二个"结论卡" */
+.character-facts__reading {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-secondary);
+}
+
+.character-facts__asof {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}

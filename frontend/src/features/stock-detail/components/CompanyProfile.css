@@ -1,0 +1,40 @@
+/*
+ * 公司概况（P2-3 / F17）：label / value 两列，行距紧、无表格线。
+ *
+ * 为什么不用 AntD `Descriptions`：`column={1}` 下它会给出固定 label 宽度与较大行高，
+ * 侧栏里四项要占掉近 140px；本块是"身份信息"，读者一眼扫过即可，不需要表格语义的
+ * 视觉重量。`<dl>` 保留语义（定义列表），e2e 断言用 `data-field` 与文本。
+ *
+ * 字号只出现 12 / 13 两档（全站已有档位），颜色只走全局令牌。
+ */
+
+.company-profile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+}
+
+.company-profile__row {
+  display: grid;
+  /* label 固定 4 字宽（"上市日期"= 4 字），值占据剩余，避免"全称"与"实控人"两行错位 */
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.company-profile__label {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.company-profile__value {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-primary);
+  /* 实控人可能是 20 字以上的机构全名：允许断行，别撑破侧栏 */
+  overflow-wrap: anywhere;
+}

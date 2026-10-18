@@ -10,9 +10,12 @@ import {
   RelatedEvents,
   FinancialTab,
   ValuationTab,
+  CompanyProfile,
+  CharacterFacts,
 } from "@/features/stock-detail/components";
 import { useFinancialSummary } from "@/features/stock-detail/hooks/useFinancialSummary";
 import { useStockRangeStats } from "@/features/stock-detail/hooks/useStockRangeStats";
+import { useCharacterStats } from "@/features/stock-detail/hooks/useCharacterStats";
 import { usePeTtmPercentile } from "@/features/stock-detail/hooks/usePeTtmPercentile";
 import { useStockEvents, type EventTab } from "@/features/stock-detail/hooks/useStockEvents";
 import { useKlineDates } from "@/features/stock-detail/hooks/useKlineDates";
@@ -108,6 +111,13 @@ export default function StockDetailPage() {
    */
   const range = useStockRangeStats(symbol);
   const percentile = usePeTtmPercentile(stock?.exchange, stock?.symbol ?? symbol);
+
+  /**
+   * 股性事实行（P2-3）。同样在早退之前调用以保持 hooks 顺序；取数复用 K 线在 qfq 下的
+   * 缓存键（`useCharacterStats` 内有 R7 注释），**不新增任何请求** ——
+   * `e2e/stockDetailCompany.spec.ts` 用「`/quotes/daily` 请求数 == 1」钉住这一点。
+   */
+  const character = useCharacterStats(symbol);
 
   /**
    * 事件列表 + 图上事件标记（P1-2）：**同一份查询**同时供给两处。
@@ -224,7 +234,14 @@ export default function StockDetailPage() {
                     />
                   </Col>
                   <Col xs={24} lg={8}>
-                    <FundamentalCards stock={stock} summary={summaryQuery.data} />
+                    {/* 侧栏堆叠顺序（计划 §5 / D3）：估值 → 成长 → 股性 → 公司概况。
+                        后两块是 P2 的「事实」区：不套第二层卡片外壳（股性是"事实行"，
+                        公司概况有自己的 Card），两者都可能整块不渲染（缺失 ≠ 0）。 */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                      <FundamentalCards stock={stock} summary={summaryQuery.data} />
+                      <CharacterFacts stats={character} />
+                      <CompanyProfile stock={stock} />
+                    </div>
                   </Col>
                 </Row>
 
