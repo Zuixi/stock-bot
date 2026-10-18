@@ -420,6 +420,15 @@ export function toMarkPoints(events: StockEvent[], dates: string[], maxBubbles =
   7. 「收起」在展开后消失 → 常驻；
   8. **回滚**：`tsconfig.include` 加 `e2e` 触发 33 个既有类型错误（30 个缺 `@types/node`），
      修它需要装依赖、动到共享 node_modules，超出本轮范围 ⇒ 记为遗留。
+- **补审（P1-1 / P2-1 的逐任务评审，收尾时补做）**：spec ✅ / quality Approved。两份评审各提 1 个 Important，
+  已在本轮收口（`ae4a8dd`）：
+  1. ribbon 与光标的**映射从未被断言**（只断言「日期变了」）⇒ tooltip 日期头加 `.kline-tooltip__date`，
+     e2e 断言 ribbon 日期与 tooltip 日期**逐字相等**（并把 `readHoverIndex` 收紧为只接受 `axisDim==="x" && axisIndex===0`，
+     否则 y 上的价格/成交量会被当成下标）；
+  2. K 线**加载态仍差 19px**（400 vs 400+ribbon）⇒ 常量 `RIBBON_HEIGHT = 19` 同时被加载高度与 ribbon `minHeight` 引用，
+     实测 1440/820 加载=落地 482、390 窄屏 463；
+  3. 窄屏量轴左缘裁切 ⇒ narrow 用整数万手（`100万手`≈33px < 44px 可用宽），单位仍与 tooltip 同源；
+  4. 股性成功态补 `minHeight`（三态同高）；`BlockBoundary` 删除无效的 `key={attempt}` 并把注释改成真实机制。
 - **已知遗留**：`tsconfig.include` 未含 `e2e`（前端 e2e 既不受 tsc 覆盖、CI 也无 Playwright job，R15 的代价）；`dragon_tiger_entries` 无 `ts_code` 前导索引（跨日按标的过滤走 seq scan，~2k 行 1.9ms，
   零迁移约束下留待单独迁移）；已登录「记一笔」分支无 e2e（环境无凭据，用例 skip 并在凭据存在时自动执行）；
   图上事件气泡只覆盖已加载类型（要全覆盖需放弃懒加载）。
