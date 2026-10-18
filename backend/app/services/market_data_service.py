@@ -1947,6 +1947,9 @@ async def get_dragon_tiger(
                 rows_cached: list[dict[str, Any]] = cached
                 return rows_cached[:limit]
         if scope == "range":
+            # scope=="range" 的定义就是 `symbol and day is None` ⇒ 此处 symbol 必非空；
+            # 显式断言让类型收窄到 str（mypy 看不见上面那个字符串表达式的蕴含关系）。
+            assert symbol is not None
             entries = await market_data_repo.list_dragon_tiger_by_symbol(
                 db, symbol, DRAGON_TIGER_CACHE_LIMIT
             )

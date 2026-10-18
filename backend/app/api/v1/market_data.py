@@ -46,6 +46,10 @@ from app.services import (
 
 logger = logging.getLogger(__name__)
 
+#: 公告类目白名单（ADR 0019）：`report` 财报 / `event` 重大事项 / `equity_change` 股本变动。
+#: 未知值一律 400 —— 静默退化为「全部」会让调用方以为筛过了。
+ANNOUNCEMENT_CATEGORIES = frozenset({"report", "event", "equity_change"})
+
 router = APIRouter(tags=["market-data"])
 
 
@@ -171,11 +175,18 @@ async def get_announcements_endpoint(
 ) -> list[AnnouncementOut]:
     from app.services import announcement_service  # noqa: PLC0415
 
-    try:
-        rows = await announcement_service.get_announcements(cache, symbol, limit, category)
-    except ValueError as exc:
-        # 未知类目必须 400（不得静默退化为"全部"）—— ADR 0019 硬纪律
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # 类目白名单在端点层判定：**未知类目必须 400**（不得静默退化为「全部」）—— ADR 0019 硬纪律。
+    # 过滤也在端点层做：本分支合入的服务实现尚无 `category` 形参（它在并行会话的未提交工作里），
+    # 而服务返回的行已带 `category` 字段，故过滤语义等价。代价：先按 `limit` 切片再过滤，
+    # 单个类目的返回条数可能少于 `limit`。
+    if category is not None and category not in ANNOUNCEMENT_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown category: {category}（可选 {sorted(ANNOUNCEMENT_CATEGORIES)}）",
+        )
+    rows = await announcement_service.get_announcements(cache, symbol, limit)
+    if category is not None:
+        rows = [r for r in rows if r.get("category") == category]
     return [AnnouncementOut(**r) for r in rows]
 
 
@@ -476,7 +487,9 @@ async def get_data_freshness(cache: CacheDep) -> DataFreshnessOut:
     )
 
     async with async_session_factory() as db:
-        result = await reconciliation_service.reconcile_market_data(db, apply=False, cache=cache)
+        # 本分支合入的 reconcile 实现不接受 `cache` 形参（它在并行会话的未提交工作里），
+        # 传了就是 TypeError；这里只传已合入的形参。
+        result = await reconciliation_service.reconcile_market_data(db, apply=False)
         try:
             result["coverage"] = await reconciliation_service.coverage_report(db)
         except Exception:  # noqa: BLE001 — 覆盖率是加法，失败不得反噬新鲜度巡检

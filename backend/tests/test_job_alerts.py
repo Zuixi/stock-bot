@@ -247,7 +247,7 @@ async def test_freshness_endpoint_exposes_failed_jobs(monkeypatch: pytest.Monkey
     monkeypatch.setattr("app.core.database.async_session_factory", _Ctx)
     monkeypatch.setattr("app.services.reconciliation_service.reconcile_market_data", _reconcile)
     monkeypatch.setattr(jas, "list_job_failures", _list)
-    out = await api.get_data_freshness()
+    out = await api.get_data_freshness(cache=None)
     assert out.apply is False
     assert [f.job_id for f in out.failed_jobs] == ["share_float_daily"]
     assert "boom" in out.failed_jobs[0].error
@@ -282,7 +282,7 @@ async def test_freshness_endpoint_survives_redis_outage(monkeypatch: pytest.Monk
     monkeypatch.setattr("app.core.database.async_session_factory", _Ctx)
     monkeypatch.setattr("app.services.reconciliation_service.reconcile_market_data", _reconcile)
     monkeypatch.setattr(jas, "get_redis_pool", _down)
-    out = await api.get_data_freshness()
+    out = await api.get_data_freshness(cache=None)
     assert out.failed_jobs == []
 
 

@@ -399,7 +399,9 @@ async def test_composite_endpoint_anonymous_200_contract_shape(
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert set(body) == CONTRACT_KEYS
+    # 端点响应比 hero payload 多一个 `provisional`（`schemas/limit_up.py` 的 `bool | None`）：
+    # 合并基线后 schema 已带该键而用例未跟上。仍是**全等**断言，只把已知新增键显式列出。
+    assert set(body) == CONTRACT_KEYS | {"provisional"}
     assert body["as_of"] == "2026-10-12"
     assert body["value"] == 32.8157
     assert body["window"] == CONTRACT_WINDOW
