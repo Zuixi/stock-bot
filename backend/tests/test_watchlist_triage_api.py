@@ -329,7 +329,7 @@ async def test_triage_rules_maps_static_stats(
     )
     assert resp.status_code == 200
     rules = {rule["key"]: rule for rule in resp.json()["rules"]}
-    assert len(rules) == 8
+    assert len(rules) == 9
     assert rules["drop_sharp"]["stats"] == {
         "as_of": AS_OF.isoformat(),
         "window_months": 12,

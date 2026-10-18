@@ -108,6 +108,8 @@ __all__ = [
     "SNAPSHOT_FIELDS",
     "SNAPSHOT_META_FIELDS",
     "SNAPSHOT_VERSION",
+    "UNLOCK_IN_WINDOW_NOTE",
+    "UNLOCK_RISK_RATIO",
     "WILSON_Z",
     "AlreadyReviewed",
     "EntryNotFound",
@@ -299,6 +301,19 @@ CONSISTENCY_NOTE = '不自洽不代表你说谎：按过程评价自己（如"�
 #: 窗口内有披露时的人话模板（``n`` = 窗口内 **distinct 公告日**的个数）。同一天公告
 #: 多份报表（例如 Q3 与修正版同日）算**一次**披露——用户感知的"事件"是那一天。
 EARNINGS_IN_WINDOW_NOTE = "窗口内含 {n} 次财报披露（{days}），结果可能被财报事件主导"
+
+# ── 契约 §S11.3 解禁窗口（`evaluation.unlock_in_window` / `unlock_note`） ────
+#: 窗口内有 ≥3% 解禁时的人话模板（``n`` = 窗口内 ≥3% 的**解禁日**个数；同日多个持有人算
+#: 一次解禁，与 ``share_floats`` 的持有人级明细无关）。与财报窗口同构。
+#:
+#: **分母是总股本**（实机核过：301387 的 63,999,208 股 / ``daily_basic.total_share``
+#: 10,730.19 万股 = 59.64%，与源 ``float_ratio`` 59.6441 逐位吻合）。spec §S11.3 的
+#: 示例写"占流通"，源数据不支持这个分母（对流通股本是 150%），故文案按真实口径写
+#: "占总股本"——宁可偏离示例措辞，也不把 3 倍大的比例当成"占流通"给用户。
+UNLOCK_IN_WINDOW_NOTE = "窗口内含 {n} 次解禁（{days}），结果可能被解禁冲击主导"
+#: 「解禁窗口」只认**占总股本 ≥ 这个比例**的解禁日（spec §S11.3）：小比例解禁不足以主导结果，
+#: 把它算成 true 会让"窗口内有解禁"变成几乎所有股票都成立的空话。
+UNLOCK_RISK_RATIO = 3.0
 
 # ── spec §S9.7.9 导出 ───────────────────────────────────────────────────────
 #: 统计卡下发的导出地址（前端直接用，不自己拼；改路径必须同时改这里与路由）。
@@ -991,11 +1006,12 @@ async def build_snapshot(
 #: 失效条件（``inv_kind`` + ``threshold``）在同一条 SQL 里算出来：区间极值算不出的
 #: "**哪一天**首次触达"，必须让 SQL 逐日比较，否则要按天再查一次库（N+1）。
 #:
-#: 契约 §1 的财报窗口（``window_ann_dates`` / ``all_rows``）也**并进这一条**：
-#: 评估的查询数仍然是 3 条封顶（标的 face / 行业基准 / 沪深300），不因财报多一条。
+#: 契约 §1 的财报窗口（``window_ann_dates`` / ``all_rows``）与 spec §S11.3 的解禁窗口
+#: （``unlock_dates`` / ``unlock_ratios`` / ``unlock_all_rows``）也**并进这一条**：
+#: 评估的查询数仍然是 3 条封顶（标的 face / 行业基准 / 沪深300），不因这两个窗口多一条。
 _SYMBOL_FACE_BATCH_SQL = text(
     """
-    WITH req(id, symbol, start_date, end_date, inv_kind, threshold) AS (
+    WITH raw_req(id, symbol, start_date, end_date, inv_kind, threshold) AS (
         SELECT * FROM unnest(
             CAST(:ids AS bigint[]),
             CAST(:symbols AS text[]),
@@ -1004,6 +1020,22 @@ _SYMBOL_FACE_BATCH_SQL = text(
             CAST(:inv_kinds AS text[]),
             CAST(:thresholds AS double precision[])
         ) AS t(id, symbol, start_date, end_date, inv_kind, threshold)
+    ),
+    -- ★ spec §S11.3：把 symbol 还原成 ``share_floats.ts_code``（形如 600519.SH）。
+    -- 为什么要在 SQL 里算：``share_floats`` 没有 ``stock_id`` 外键，只能按 ts_code 查；
+    -- 而按 ``split_part(ts_code,'.',1)`` 过滤用不上索引 —— 一次列表评估有 ≤200 条判断，
+    -- 每条再全表扫一遍 share_floats 就是几十秒（实测 50 条 4.9s）。用 ts_code 等值
+    -- （ix_share_floats_code）后是每条一次索引查找。
+    -- 后缀映射与 ``EXCHANGE_TO_TS_SUFFIX`` 一致（三值由 stocks 的 CHECK 约束保证）。
+    req(id, symbol, start_date, end_date, inv_kind, threshold, ts_code) AS (
+        SELECT r.id, r.symbol, r.start_date, r.end_date, r.inv_kind, r.threshold,
+               s.symbol || CASE s.exchange
+                               WHEN 'Shanghai_Stocks' THEN '.SH'
+                               WHEN 'Shenzen_Stocks' THEN '.SZ'
+                               ELSE '.BJ'
+                           END
+          FROM raw_req r
+          LEFT JOIN stocks s ON s.symbol = r.symbol
     )
     SELECT req.id,
            w.window_low,
@@ -1014,7 +1046,10 @@ _SYMBOL_FACE_BATCH_SQL = text(
            ft.first_touch,
            d.days_to,
            earn.window_ann_dates,
-           earn.all_rows
+           earn.all_rows,
+           unl.unlock_dates,
+           unl.unlock_ratios,
+           unl.unlock_all_rows
       FROM req
       LEFT JOIN LATERAL (
           SELECT min(q.low) AS window_low, max(q.high) AS window_high
@@ -1074,6 +1109,39 @@ _SYMBOL_FACE_BATCH_SQL = text(
            WHERE s.symbol = req.symbol
              AND f.ann_date IS NOT NULL
       ) earn ON true
+      -- ★ spec §S11.3：**(快照日, due_on]** 内的解禁日（按解禁日合计占总股本比）。
+      -- PIT：只用 ``ann_date <= req.end_date`` 的记录（公告后才可知）；
+      -- ``unlock_all_rows`` 只用来区分「有解禁记录但都不在窗口内」(false) 与「该股没有任何
+      -- 解禁记录」(null)，不参与"窗口内发生了什么"的判定。
+      -- 两个 array_agg 必须成对：同一个 ORDER BY + 同一个 FILTER，_unlock() 按下标 zip。
+      LEFT JOIN LATERAL (
+          SELECT array_agg(u.float_date ORDER BY u.float_date) FILTER (
+                     WHERE u.float_date > req.start_date
+                       AND u.float_date <= req.end_date
+                 ) AS unlock_dates,
+                 array_agg(u.float_ratio ORDER BY u.float_date) FILTER (
+                     WHERE u.float_date > req.start_date
+                       AND u.float_date <= req.end_date
+                 ) AS unlock_ratios,
+                 count(*) AS unlock_all_rows
+            FROM (
+                -- 同一笔解禁会被多次公告（初次 + 修订）：按 (holder, share_type) 取
+                -- **PIT 可见的（ann_date <= due_on）最新一次**，否则同一笔加两次
+                -- （实测单日合计 119%，真实 59.6%）。
+                SELECT d.float_date, sum(d.float_ratio) AS float_ratio
+                  FROM (
+                      SELECT DISTINCT ON (sf.float_date, sf.holder_name, sf.share_type)
+                             sf.float_date, sf.float_ratio
+                        FROM share_floats sf
+                       WHERE sf.ts_code = req.ts_code
+                         AND sf.ann_date IS NOT NULL
+                         AND sf.ann_date <= req.end_date
+                       ORDER BY sf.float_date, sf.holder_name, sf.share_type,
+                                sf.ann_date DESC
+                  ) d
+                 GROUP BY d.float_date
+            ) u
+      ) unl ON true
     """
 )
 
@@ -1245,9 +1313,10 @@ def _plan(entry: DecisionJournalEntry) -> _Plan:
 def _face_from_row(row: Any) -> dict[str, Any]:
     """把一条 face 行拆成字段（按下标读：``_SYMBOL_FACE_BATCH_SQL`` 的列序是契约）。
 
-    指数 face（``_INDEX_FACE_BATCH_SQL``）只有 6 列 → ``first_touch`` / ``days_to``
-    与契约 §1 的财报两列（``window_ann_dates`` / ``all_rows``）自动为 ``None`` / ``0``
-    （市场级判断没有"标的披露日"，财报窗口对它不适用）。
+    指数 face（``_INDEX_FACE_BATCH_SQL``）只有 6 列 → ``first_touch`` / ``days_to``、
+    契约 §1 的财报两列（``window_ann_dates`` / ``all_rows``）与 spec §S11.3 的解禁三列
+    （``unlock_dates`` / ``unlock_ratios`` / ``unlock_all_rows``）自动为 ``None`` / ``0``
+    （市场级判断没有"标的披露日/解禁日"，这两个窗口对它不适用）。
     """
     if row is None:
         return {
@@ -1261,6 +1330,10 @@ def _face_from_row(row: Any) -> dict[str, Any]:
             # 契约 §1：财报窗口（没有 face 行 = 没有任何财报证据）
             "window_ann_dates": None,
             "all_rows": 0,
+            # spec §S11.3：解禁窗口（同样：没有 face 行 = 没有任何解禁证据）
+            "unlock_dates": None,
+            "unlock_ratios": None,
+            "unlock_all_rows": 0,
         }
     return {
         "window_low": row[1],
@@ -1274,6 +1347,10 @@ def _face_from_row(row: Any) -> dict[str, Any]:
         # ★ 契约 §1 财报窗口（同样只在标的 face 里；指数 face 读不到 → 缺省值）
         "window_ann_dates": row[8] if len(row) > 8 else None,
         "all_rows": int(row[9] or 0) if len(row) > 9 else 0,
+        # ★ spec §S11.3 解禁窗口（与财报同一条 SQL 的第 10–12 列；成对的 dates/ratios）
+        "unlock_dates": row[10] if len(row) > 10 else None,
+        "unlock_ratios": row[11] if len(row) > 11 else None,
+        "unlock_all_rows": int(row[12] or 0) if len(row) > 12 else 0,
     }
 
 
@@ -1476,6 +1553,58 @@ def _earnings(face: dict[str, Any], *, market_level: bool) -> tuple[dict[str, An
     return values, missing
 
 
+def _unlock(face: dict[str, Any], *, market_level: bool) -> tuple[dict[str, Any], dict[str, str]]:
+    """契约 §S11.3 的解禁窗口（**纯函数**：只读持仓里带回来的三列，不查库）。
+
+    ==========================  =====================================================
+    字段                        口径
+    ==========================  =====================================================
+    ``unlock_in_window``        ``True`` = ``(快照日, due_on]`` 内有解禁且该**解禁日**合计
+                                占总股本 ``>= UNLOCK_RISK_RATIO``（3%）；
+                                ``False`` = 有解禁记录，但窗口内没有 ≥3% 的解禁；
+                                ``None`` = 该股**没有任何解禁记录**（缺数据，不猜 ——
+                                不渲染成"不会解禁"）
+    ``unlock_note``             人话；``False`` / ``None`` 时是空串（没有事件就没有提示）
+    ==========================  =====================================================
+
+    PIT：``unlock_all_rows`` 与两个数组都只由 ``ann_date <= due_on`` 的记录算出
+    （公告之后才可知，见 face SQL 的 LATERAL）。窗口过滤发生在 **``float_date``**
+    （= 解禁日，事件发生的那天）上，与财报窗口的 ``ann_date`` 口径不同，这是刻意的。
+
+    "N 次解禁"按 **distinct 解禁日** 数（同一天多个持有人 = 一次解禁事件）。
+
+    ``None`` 只写**降级键** ``missing_reason["unlock"]``：它不阻塞复盘（阻塞键见
+    spec §S9 的清单，只认 outcome/bench/invalidation），否则"没有解禁记录"的股票会
+    永远评不了分 —— 而这类股票在真实数据里占多数，会把复盘功能整体废掉。
+    """
+    values: dict[str, Any] = {"unlock_in_window": None, "unlock_note": ""}
+    missing: dict[str, str] = {}
+    if market_level:
+        missing["unlock"] = "market_level_no_symbol"
+        return values, missing
+    if int(face.get("unlock_all_rows") or 0) == 0:
+        # 该股一行解禁记录都没有 → 缺数据（不是"不会解禁"）
+        missing["unlock"] = "no_share_float_rows"
+        return values, missing
+    # SQL 用同一个 ORDER BY + FILTER 成对生成两个数组（见 face SQL 注释），故可按下标 zip。
+    events: list[tuple[date, float]] = []
+    for raw_day, ratio in zip(face.get("unlock_dates") or [], face.get("unlock_ratios") or []):
+        day = _as_date(raw_day)
+        if day is None or ratio is None:
+            continue
+        events.append((day, float(ratio)))
+    big = [(day, ratio) for day, ratio in events if ratio >= UNLOCK_RISK_RATIO]
+    if not big:
+        # 有解禁数据，只是窗口内没有 ≥3% 的解禁 —— 这是一个可核对的事实，不是缺数
+        values["unlock_in_window"] = False
+        return values, missing
+    values["unlock_in_window"] = True
+    values["unlock_note"] = UNLOCK_IN_WINDOW_NOTE.format(
+        n=len(big), days="；".join(f"{day:%m-%d}，占总股本 {ratio:.1f}%" for day, ratio in big)
+    )
+    return values, missing
+
+
 def _assemble(
     plan: _Plan,
     face: dict[str, Any],
@@ -1506,6 +1635,9 @@ def _assemble(
         # ★ 契约 §1 财报窗口（三态：True 有 / False 有数据但不在窗口 / None 无数据）
         "earnings_in_window": None,
         "earnings_note": "",
+        # ★ spec §S11.3 解禁窗口（同样三态；None 只写降级键，不阻塞复盘）
+        "unlock_in_window": None,
+        "unlock_note": "",
         # ★ spec §S9.7.3：基准到底是什么（人话 + 是否退化），与 bench_pct 同时下发
         "bench_basis_note": bench.note,
         "bench_fallback": bench.fallback,
@@ -1564,6 +1696,11 @@ def _assemble(
     result.update(earnings_values)
     missing.update(earnings_missing)
 
+    # ★ spec §S11.3：解禁窗口（数据与财报同一条批 SQL 带回，不新增查询）
+    unlock_values, unlock_missing = _unlock(face, market_level=market_level)
+    result.update(unlock_values)
+    missing.update(unlock_missing)
+
     gross_outcome = result["outcome_pct"]
     bench_pct = result["bench_pct"]
     if gross_outcome is not None and bench_pct is not None:
@@ -1605,7 +1742,7 @@ async def evaluate_entries(
     谁需要                     查什么
     ==========================  ================================================
     有 symbol 的判断           标的的期末行情/区间极值 + **首次触达失效条件的交易日**
-                               + **财报窗口**（同一个 SQL 的三条 LATERAL，不按天查）
+                               + **财报窗口 + 解禁窗口**（同一个 SQL 的多条 LATERAL，不按天查）
     要行业基准的判断           申万一级成员等权平均（一条批 LATERAL；只有 ``relative``）
     要沪深300 的判断            指数起止收盘（一条批 LATERAL，三种情形合并：
                                 ``direction`` / ``market`` / ``relative`` 退化）

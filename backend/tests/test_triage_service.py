@@ -18,10 +18,10 @@ from typing import Any
 
 import asyncpg
 import pytest
-from sqlalchemy import event, insert, select
+from sqlalchemy import delete, event, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from app.models.market_data import Announcement, DragonTigerEntry, StockPriceLimit
+from app.models.market_data import Announcement, DragonTigerEntry, ShareFloat, StockPriceLimit
 from app.models.quote import DailyQuote
 from app.models.stock import Stock
 from app.models.sw_industry import SwIndustryClass, SwIndustryMember
@@ -359,6 +359,44 @@ async def _seed(session: AsyncSession) -> None:
             }
         ],
     )
+    # 解禁：T90019 在 +10 天有一次解禁，同日两个持有人（+ 一条修订前的旧公告）
+    # → 装载层必须合计成一行、且只算最新公告；其余自选没有解禁行
+    # （"没记录" ≠ "没有解禁"，探测器对它们一律不输出）。
+    # 单位是**股**（TuShare 原值，见 ``UnlockRow``）：100 万股 + 200 万股。
+    await session.execute(
+        insert(ShareFloat),
+        [
+            {
+                "ann_date": AS_OF,
+                "float_date": AS_OF + timedelta(days=10),
+                "ts_code": "T90019.SH",
+                "float_share": 1_000_000.0,
+                "float_ratio": 3.0,
+                "holder_name": "股东甲",
+                "share_type": "首发原始股",
+            },
+            {
+                "ann_date": AS_OF,
+                "float_date": AS_OF + timedelta(days=10),
+                "ts_code": "T90019.SH",
+                "float_share": 2_000_000.0,
+                "float_ratio": 2.0,
+                "holder_name": "股东乙",
+                "share_type": "首发原始股",
+            },
+            # 同一笔解禁的**旧公告**（修订前的版本）：唯一键含 ann_date 所以会共存，
+            # 读面必须按最新公告取一次 —— 否则同一个持有人会被加两次（下面 300/5.0 就变 350/6.0）。
+            {
+                "ann_date": AS_OF - timedelta(days=30),
+                "float_date": AS_OF + timedelta(days=10),
+                "ts_code": "T90019.SH",
+                "float_share": 500_000.0,
+                "float_ratio": 1.0,
+                "holder_name": "股东乙",
+                "share_type": "首发原始股",
+            },
+        ],
+    )
     await session.execute(
         insert(SwIndustryClass),
         [
@@ -414,7 +452,11 @@ async def _seed(session: AsyncSession) -> None:
 
 @requires_pg
 def test_load_context_query_count_is_constant() -> None:
-    """**反 N+1 门禁**：查询数 ≤6 且不随自选数增长（1 / 5 / 20 只都一样）。"""
+    """**反 N+1 门禁**：查询数 ≤7 且不随自选数增长（1 / 5 / 20 只都一样）。
+
+    预算从 6 变 7 是 S11 加的第 6 个数据面（``share_floats``：没有 ``stock_id`` 外键，
+    只能按 ``ts_code`` 另起一条批量查询）；"与自选数无关"这条**没有**变。
+    """
 
     async def _go(session: AsyncSession, conn: Any) -> tuple[int, int, int]:
         await _seed(session)
@@ -436,17 +478,17 @@ def test_load_context_query_count_is_constant() -> None:
         return counts[0], counts[1], counts[2]
 
     one, five, twenty = asyncio.run(_with_rollback(_go))
-    assert twenty <= 6, f"一次请求的查询数必须 ≤6，实际 {twenty}"
+    assert twenty <= 7, f"一次请求的查询数必须 ≤7，实际 {twenty}"
     assert one == five == twenty, "查询数不得随自选数增长（N+1 回归）"
 
 
 @requires_pg
 def test_load_context_loads_every_face() -> None:
-    """六个数据面都要真的装进 context（否则探测器静默不出、假事实当"今天没事"）。"""
+    """七个数据面都要真的装进 context（否则探测器静默不出、假事实当"今天没事"）。"""
 
     async def _go(session: AsyncSession, _conn: Any) -> td.TriageContext:
         await _seed(session)
-        return await svc.load_context(session, _SYMBOLS[:2], AS_OF)
+        return await svc.load_context(session, [*_SYMBOLS[:2], "T90019"], AS_OF)
 
     ctx = asyncio.run(_with_rollback(_go))
     assert ctx.as_of == AS_OF
@@ -462,6 +504,14 @@ def test_load_context_loads_every_face() -> None:
     assert ctx.announcements["T90001"][0].category == "equity_change"
     # 龙虎榜（ts_code 前缀匹配回 symbol）
     assert ctx.dragon_tiger["T90001"][0].net_amount == pytest.approx(1.2e7)
+    # 解禁：T90019 同一解禁日的两个持有人已合计（股数 / 占比各自求和）；
+    # 股东乙有两次公告（旧 50 万股/1.0%、新 200 万股/2.0%）→ 只算最新那次（否则是 350 万股/6.0%）
+    assert len(ctx.unlocks["T90019"]) == 1
+    unlock = ctx.unlocks["T90019"][0]
+    assert unlock.float_date == AS_OF + timedelta(days=10)
+    assert unlock.float_share == pytest.approx(3_000_000.0), "300 万股（源单位=股）"
+    assert unlock.float_ratio == pytest.approx(5.0)
+    assert "unlock_soon" not in ctx.unavailable
     # 板块：甲板块 -8%，乙板块 +0.5% → 甲的分位是 1.0（变动最大）
     assert ctx.sector_of["T90001"] == "T91001"
     assert ctx.sector_name["T91001"] == "测试一级甲"
@@ -519,6 +569,27 @@ def test_get_triage_composes_merges_and_folds() -> None:
     assert primary.source_table == "daily_quotes"
     assert primary.rule_text == td.SPEC_BREAK_MA20.rule_text
     assert result.unavailable == [], "合成数据齐备时不得有缺数据探测器"
+
+
+@requires_pg
+def test_load_context_marks_unlock_unavailable_only_when_table_is_empty() -> None:
+    """`unavailable` 的两种情形必须分开（spec §S11.4）：
+
+    - 整表**零行**（= 回填没跑、覆盖率为 0）→ ``unlock_soon`` 进 unavailable（页面留痕）；
+    - 表里有行、只是**这只股票**没有解禁计划 → **不**进 unavailable（那是常态，不是缺数据）。
+    """
+
+    async def _go(session: AsyncSession, _conn: Any) -> tuple[td.TriageContext, td.TriageContext]:
+        await _seed(session)
+        with_rows = await svc.load_context(session, ["T90020"], AS_OF)
+        await session.execute(delete(ShareFloat))
+        empty = await svc.load_context(session, ["T90020"], AS_OF)
+        return with_rows, empty
+
+    with_rows, empty = asyncio.run(_with_rollback(_go))
+    assert with_rows.unlocks == {}, "该股没有解禁行 → 不装载（不猜'没有解禁'）"
+    assert "unlock_soon" not in with_rows.unavailable, "表里有数据就不得标整表不可用"
+    assert "unlock_soon" in empty.unavailable, "整表零行必须留痕（否则覆盖率 0 会静默）"
 
 
 @requires_pg

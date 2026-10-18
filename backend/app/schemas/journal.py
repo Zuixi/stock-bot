@@ -181,6 +181,14 @@ class JournalEvaluationOut(BaseModel):
       ``ann_date <= due_on`` 的记录判断；
     - ``earnings_note``：人话（"窗口内含 1 次财报披露（10-15），结果可能被财报事件主导"）；
       ``False`` / ``None`` 时是**空串**（没有事件就没有提示）。
+
+    spec §S11.3 解禁窗口（与财报窗口同构）**再加两字段**：
+
+    - ``unlock_in_window``：``(快照日, due_on]`` 内有没有**占流通/总股本 ≥3%** 的解禁日。
+      三态：``True`` 有 / ``False`` 有解禁记录但窗口内没有（或都 <3%）/ ``None`` 该股没有
+      PIT 可见的解禁记录（缺数据，不猜"不会解禁"）；
+    - ``unlock_note``：人话（"窗口内含 1 次解禁（11-02，占总股本 4.2%），结果可能被解禁
+      冲击主导"）；``False`` / ``None`` 时是空串。
     """
 
     due_on: date
@@ -202,6 +210,10 @@ class JournalEvaluationOut(BaseModel):
     earnings_in_window: bool | None = None
     #: ★ 契约 §1 财报窗口的人话说明（``False`` / ``None`` 时为空串）
     earnings_note: str = ""
+    #: ★ spec §S11.3 解禁窗口（三态；``None`` 只写降级键，不阻塞复盘）
+    unlock_in_window: bool | None = None
+    #: ★ spec §S11.3 解禁窗口的人话说明（``False`` / ``None`` 时为空串）
+    unlock_note: str = ""
     #: ★ spec §S9.7.3：基准的人话说明 + 是否退化（``bench_pct`` 的口径附注）
     bench_basis_note: str = ""
     bench_fallback: bool = False

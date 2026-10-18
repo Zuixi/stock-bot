@@ -47,9 +47,9 @@ def _days(n: int):
 
 
 def test_detector_specs_are_locked() -> None:
-    assert len(td.TRIAGE_DETECTORS) == 8
+    assert len(td.TRIAGE_DETECTORS) == 9
     keys = [spec.key for spec in td.TRIAGE_DETECTORS]
-    assert len(set(keys)) == 8
+    assert len(set(keys)) == 9
     assert {spec.severity for spec in td.TRIAGE_DETECTORS} <= set(td.SEVERITIES)
 
 
@@ -64,7 +64,7 @@ def test_every_spec_carries_full_provenance() -> None:
 
     为什么这条不能只靠导入期断言：字段齐全 ≠ 内容有意义——这里额外钉住"4 条以上
     失效场景"与"来源表是库内真实表"，并把 ``with_provenance`` 的**单向映射**拿住
-    （卡片三字段只能从 spec 取，不能在 8 个探测器里各写一份）。
+    （卡片三字段只能从 spec 取，不能在 9 个探测器里各写一份）。
     """
     tables = td._field_tables()
     for spec in td.TRIAGE_DETECTORS:
@@ -193,9 +193,10 @@ def test_all_headlines_and_facts_avoid_judgement_words() -> None:
         sector_rank={"801780": 0.95},
         sector_of={"600000": "801780"},
         sector_name={"801780": "银行"},
+        unlocks={"600000": [(AS_OF + _days(10), 12_000_000.0, 4.2)]},
     )
     items = td.run_detectors(ctx)
-    assert len(items) >= 5, "该 context 应命中多类事实（否则禁用词断言样本不足）"
+    assert len(items) >= 6, "该 context 应命中多类事实（否则禁用词断言样本不足）"
     for item in items:
         assert item.severity in td.SEVERITIES
         assert item.facts, f"{item.detector} 必须给出可核对的事实"
@@ -466,6 +467,115 @@ def test_sector_move_ignores_symbol_with_industry_but_no_pct() -> None:
 def test_sector_move_ignores_symbols_without_industry() -> None:
     ctx = td.make_context_for_test(as_of=AS_OF, sector_pct={"801780": 4.5})
     assert td.detect(td.SPEC_SECTOR_MOVE, ctx, "600000") is None
+
+
+# ---------------------------------------------------------------------------
+# 9) unlock_soon（spec §S11.2）
+# ---------------------------------------------------------------------------
+
+
+def _unlock(days: int = 10, share: float | None = 12_000_000.0, ratio: float | None = 4.2):
+    """一条解禁计划：``(float_date, float_share 股, float_ratio %)``。
+
+    ``float_share`` 是**股**（TuShare 原值；实机核对见 ``UnlockRow`` 的 docstring），
+    卡片按 万股 上屏（``/10000``）——所以 12,000,000 股 = 「1,200 万股」。
+    """
+    return (AS_OF + _days(days), share, ratio)
+
+
+def test_unlock_soon_hits_inside_thirty_days_with_human_headline() -> None:
+    ctx = td.make_context_for_test(as_of=AS_OF, unlocks={"600000": [_unlock(10)]})
+    item = td.detect(td.SPEC_UNLOCK_SOON, ctx, "600000")
+    assert item is not None
+    assert item.severity == "risk"
+    # spec §S11.2 逐字文案形状：「30 天内解禁 1,200 万股（占流通 4.2%），解禁日 11-02」
+    assert item.headline == "30 天内解禁 1,200 万股（占总股本 4.2%），解禁日 10-26"
+    assert {fact.label: fact.value for fact in item.facts} == {
+        "解禁股数": 1200.0,
+        "占总股本比": 4.2,
+        "解禁日": "10-26",
+    }
+    assert item.source == "share_floats"
+    assert item.day_pct is None, "解禁与当日行情无关，不得拿涨跌幅充排序键"
+
+
+def test_unlock_soon_includes_day_thirty_and_excludes_day_thirty_one() -> None:
+    """spec §S11.4 边界：解禁日 = 今天+30 命中、今天+31 不命中。"""
+    hit = td.make_context_for_test(as_of=AS_OF, unlocks={"600000": [_unlock(30, 5_000_000.0, 1.5)]})
+    miss = td.make_context_for_test(
+        as_of=AS_OF, unlocks={"600000": [_unlock(31, 5_000_000.0, 1.5)]}
+    )
+    assert td.detect(td.SPEC_UNLOCK_SOON, hit, "600000") is not None
+    assert td.detect(td.SPEC_UNLOCK_SOON, miss, "600000") is None
+
+
+def test_unlock_soon_ratio_boundaries_are_one_and_three_percent() -> None:
+    """spec §S11.4 边界：``ratio=1.0`` 属 attention、``3.0`` 属 risk、``<1.0`` 不命中。"""
+
+    def _hit(ratio: float):
+        ctx = td.make_context_for_test(as_of=AS_OF, unlocks={"600000": [_unlock(10, 100.0, ratio)]})
+        return td.detect(td.SPEC_UNLOCK_SOON, ctx, "600000")
+
+    assert _hit(0.99) is None
+    attention = _hit(1.0)
+    assert attention is not None and attention.severity == "attention"
+    near_risk = _hit(2.99)
+    assert near_risk is not None and near_risk.severity == "attention"
+    risk = _hit(3.0)
+    assert risk is not None and risk.severity == "risk"
+
+
+def test_unlock_soon_is_silent_without_rows() -> None:
+    """无记录 ≠ 没有解禁（spec §S11.2）：不输出，也不冒充"今天没事"。"""
+    ctx = td.make_context_for_test(as_of=AS_OF)
+    assert td.detect(td.SPEC_UNLOCK_SOON, ctx, "600000") is None
+
+
+def test_unlock_soon_ignores_the_as_of_day_itself() -> None:
+    """解禁日 = ``as_of`` 当天（那天已经可流通）不属于"未来"，不报。"""
+    ctx = td.make_context_for_test(as_of=AS_OF, unlocks={"600000": [_unlock(0, 12_000_000.0, 9.9)]})
+    assert td.detect(td.SPEC_UNLOCK_SOON, ctx, "600000") is None
+
+
+def test_unlock_soon_aggregates_holders_on_the_same_unlock_day() -> None:
+    """同一天多个持有人合计（1.5% + 1.6% > 3%）→ 一次 risk，而不是两条各自 attention。"""
+    ctx = td.make_context_for_test(
+        as_of=AS_OF,
+        unlocks={"600000": [_unlock(10, 1_000_000.0, 1.5), _unlock(10, 2_000_000.0, 1.6)]},
+    )
+    item = td.detect(td.SPEC_UNLOCK_SOON, ctx, "600000")
+    assert item is not None
+    assert item.severity == "risk"
+    facts = {fact.label: fact.value for fact in item.facts}
+    assert facts["解禁股数"] == pytest.approx(300.0), "3,000,000 股 = 300 万股"
+    assert facts["占总股本比"] == pytest.approx(3.1)
+    assert "解禁日 10-26" in item.headline
+
+
+def test_unlock_soon_reports_count_when_several_days_hit() -> None:
+    """窗口内多次解禁：facts 追加次数；文案说 **risk 档里最近** 的那一次。"""
+    ctx = td.make_context_for_test(
+        as_of=AS_OF,
+        unlocks={"600000": [_unlock(5, 1_000_000.0, 1.2), _unlock(12, 2_000_000.0, 3.5)]},
+    )
+    item = td.detect(td.SPEC_UNLOCK_SOON, ctx, "600000")
+    assert item is not None
+    assert item.severity == "risk"
+    facts = {fact.label: fact.value for fact in item.facts}
+    assert facts["30 天内解禁"] == "2"
+    assert "解禁日 10-28" in item.headline
+
+
+def test_unlock_soon_skips_day_when_ratio_is_missing() -> None:
+    """占比缺失 → 无法核对"占流通 ≥1%" → 该日不判，别的日子照常。"""
+    ctx = td.make_context_for_test(
+        as_of=AS_OF,
+        unlocks={"600000": [_unlock(3, 9_000_000.0, None), _unlock(9, 1_000_000.0, 2.0)]},
+    )
+    item = td.detect(td.SPEC_UNLOCK_SOON, ctx, "600000")
+    assert item is not None
+    assert "解禁日 10-25" in item.headline
+    assert {fact.label: fact.value for fact in item.facts}["占总股本比"] == pytest.approx(2.0)
 
 
 # ---------------------------------------------------------------------------

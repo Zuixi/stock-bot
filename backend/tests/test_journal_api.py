@@ -593,6 +593,10 @@ async def test_review_is_201_and_then_409(
     assert evaluation["earnings_in_window"] is None
     assert evaluation["earnings_note"] == ""
     assert evaluation["missing_reason"]["earnings"] == "no_financial_reports"
+    # ★ spec §S11.3 解禁窗口：同一只合成标的也没有 share_floats 行 → ``null`` + 降级键
+    assert evaluation["unlock_in_window"] is None
+    assert evaluation["unlock_note"] == ""
+    assert evaluation["missing_reason"]["unlock"] == "no_share_float_rows"
     assert detail["status"] == "due"
 
     first = await _post(

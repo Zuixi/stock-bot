@@ -1,4 +1,4 @@
-"""自选体检的 8 个**事实型**探测器（纯函数，无 IO）.
+"""自选体检的 9 个**事实型**探测器（纯函数，无 IO）.
 
 为什么是"事实"而不是"信号"：2026-10-17 的规则标定把预测型规则证伪（放量新高 −0.92%、
 首板 −0.28%），见 ``docs/design/signal-rule-calibration.md``。本模块只陈述**已发生的事**，
@@ -9,7 +9,10 @@
 - 涨停判定只能走 ``stock_price_limits.up_limit``：``market_limit_up_stock_daily``
   实测只有 2 个交易日；
 - 个股融资余额不可得（库里只有市场级 margin）⇒ 不得出现"个股杠杆"条件；
-- 涨跌幅一律 ``close/pre_close - 1``（``adj_factor`` 仅 1.3% 非空，不能用于除权判断）。
+- 涨跌幅一律 ``close/pre_close - 1``（``adj_factor`` 仅 1.3% 非空，不能用于除权判断）；
+- 解禁只能走 ``share_floats``（``float_date`` / ``float_share`` / ``float_ratio``）：
+  该股**没有行**时一律不输出（不猜"没有解禁"），文案只写"解禁/可流通"
+  （解禁只是"可流通"，与股东会不会卖是两件事，spec §S11.2 命名禁令）。
 
 分级契约：``DetectorSpec.severity`` 是该探测器可能给出的**最高**分级，探测器可以按事实
 **降级**（例如 ``limit_up_state`` 涨停=attention、炸板=risk；``new_high_low`` 新高=attention、
@@ -22,7 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 SEVERITIES: tuple[str, ...] = ("risk", "event", "attention", "background")
@@ -114,6 +117,29 @@ class DtRow:
     net_amount: float
 
 
+@dataclass(frozen=True)
+class UnlockRow:
+    """一条限售解禁计划（``share_floats``；**``float_share`` 单位是「股」**、``float_ratio`` %）。
+
+    单位是实机核出来的（spec §S11.5 写"万股"、模型注释也写"万股"，但源值是「股」）：
+    301387 单日 63,999,208 与其 ``daily_basic.total_share`` 10,730.19 万股之比 = 59.64%，
+    与源 ``float_ratio`` 59.6441 逐位吻合；按"万股"读会大 10,000 倍。
+    卡片一律换成 **万股** 上屏（``/10000``），口径不给读的人留坑。
+
+    ``float_ratio`` 的分母是**总股本**（不是流通股本）：上例 59.64% 只对得上
+    ``total_share``，对流通股本是 150%（301387 当时流通股仅 4,268 万股）。
+
+    ``share_floats`` 是**持有人级**明细：同一解禁日可能有几十至几千行（每个股东/资管产品
+    一行）。``triage_service`` 在 SQL 里已按 ``(ts_code, float_date)`` 合计成一行（把一次
+    请求的行数从"上万"压到"≤30 天"），探测器仍按 ``float_date`` 再合计一次 —— 于是
+    "多持有人 = 一次解禁事件"这条口径不依赖装载层，纯函数单独调用也成立。
+    """
+
+    float_date: date
+    float_share: float | None = None
+    float_ratio: float | None = None
+
+
 @dataclass
 class TriageContext:
     """一次请求的全部输入（生产由 ``triage_service.load_context`` 批量装载）。
@@ -130,6 +156,8 @@ class TriageContext:
     limits: dict[str, LimitRow] = field(default_factory=dict)
     announcements: dict[str, list[AnnRow]] = field(default_factory=dict)
     dragon_tiger: dict[str, list[DtRow]] = field(default_factory=dict)
+    #: 自选代码 → 未来窗口内的解禁计划（按解禁日升序；**没有行 = 没有数据**，不是"没有解禁"）
+    unlocks: dict[str, list[UnlockRow]] = field(default_factory=dict)
     #: 申万一级代码 → 当日成分股平均涨跌幅（%，收盘/前收-1）
     sector_pct: dict[str, float] = field(default_factory=dict)
     #: 申万一级代码 → 涨幅绝对值在全市场 L1 中的分位（0..1，1.0 = 变动最大）
@@ -359,6 +387,38 @@ SPEC_NEW_HIGH_LOW = DetectorSpec(
         "上市首日：没有前 60 个交易日收盘，静默不判",
     ),
 )
+SPEC_UNLOCK_SOON = DetectorSpec(
+    key="unlock_soon",
+    label="30 天内解禁",
+    # 上限；1%–3% 按事实降级为 attention（spec §S11.2）
+    severity="risk",
+    thresholds={"days": 30, "min_ratio": 1.0, "risk_ratio": 3.0},
+    required_fields=(
+        "share_floats.float_date",
+        "share_floats.float_share",
+        "share_floats.float_ratio",
+    ),
+    verify="kline",
+    version="r1",
+    rule_text=(
+        "未来 30 个自然日内有解禁，且当日合计占总股本 ≥ 1%；≥ 3% 记 risk，1%–3% 记 attention"
+    ),
+    definition="陈述「未来 30 天将有可流通股份解禁」这一事实与规模（占总股本几成），"
+    "不判断解禁后会不会抛售。",
+    source_tables=("share_floats",),
+    update_note=(
+        "解禁计划入库后即可计算（按 float_date 取未来 30 个自然日；解禁日=当天不算「未来」）"
+    ),
+    failure_modes=(
+        "解禁日 = 当天（as_of 是最近完整交易日）不报：那天已经可流通，不属于「未来 30 天」",
+        "该股在 share_floats 里没有任何行时一律不输出：无记录 ≠ 没有解禁（覆盖不足时静默）",
+        "float_ratio 缺失的解禁行不参与判定（无从核对「占比多少」），只有股数的记录会被漏掉",
+        "占比的分母是总股本（源口径），不是流通股本：小盘股解禁 3% 总股本可能已是流通盘的几倍",
+        "同一笔解禁被多次公告（修订）时读面按最新公告取一次；若上游把新增的一笔发成同持有人同类型，会被并成一条",
+        "同一天多个持有人按 float_date 合计：看得到那天的总量，看不到单个股东的规模",
+        "解禁只表示股份可流通，不等于股东会抛售；卡片上的规模数字不是未来的实际抛压",
+    ),
+)
 
 TRIAGE_DETECTORS: tuple[DetectorSpec, ...] = (
     SPEC_BREAK_MA20,
@@ -369,6 +429,7 @@ TRIAGE_DETECTORS: tuple[DetectorSpec, ...] = (
     SPEC_VOLUME_SPIKE,
     SPEC_NEW_HIGH_LOW,
     SPEC_SECTOR_MOVE,
+    SPEC_UNLOCK_SOON,
 )
 
 #: ``required_fields`` 的静态校验表：ORM 元数据（**不连库**，只读 ``Table.columns``）。
@@ -383,6 +444,7 @@ def _field_tables() -> dict[str, Any]:
         from app.models.market_data import (  # noqa: PLC0415
             Announcement,
             DragonTigerEntry,
+            ShareFloat,
             StockPriceLimit,
         )
         from app.models.quote import DailyQuote  # noqa: PLC0415
@@ -394,17 +456,18 @@ def _field_tables() -> dict[str, Any]:
             "announcements": Announcement,
             "dragon_tiger_entries": DragonTigerEntry,
             "sw_industry_members": SwIndustryMember,
+            "share_floats": ShareFloat,
         }
     return _FIELD_TABLES
 
 
 def _assert_detectors() -> None:
-    """导入期断言：8 个 · key 唯一 · severity 合法 · 来源字段齐全 · required_fields 真实存在。
+    """导入期断言：9 个 · key 唯一 · severity 合法 · 来源字段齐全 · required_fields 真实存在。
 
     故意做成 raise（不是 assert）：``python -O`` 会删掉 assert，登记表就静默失去护栏。
     """
-    if len(TRIAGE_DETECTORS) != 8:
-        raise RuntimeError(f"探测器必须是 8 个，实际 {len(TRIAGE_DETECTORS)}")
+    if len(TRIAGE_DETECTORS) != 9:
+        raise RuntimeError(f"探测器必须是 9 个，实际 {len(TRIAGE_DETECTORS)}")
     keys = [s.key for s in TRIAGE_DETECTORS]
     if len(set(keys)) != len(keys):
         raise RuntimeError(f"探测器 key 重复：{keys}")
@@ -454,7 +517,7 @@ SPEC_BY_KEY: dict[str, DetectorSpec] = {spec.key: spec for spec in TRIAGE_DETECT
 def with_provenance(item: TriageItem) -> TriageItem:
     """把规则来源三字段补进卡片（``triage_service`` 在组合/排序**之前**调用）。
 
-    为什么不在 8 个探测器里各写一遍：同一份 ``rule_text`` 写 8 次必然漂移；这里从
+    为什么不在 9 个探测器里各写一遍：同一份 ``rule_text`` 写 9 次必然漂移；这里从
     ``SPEC_BY_KEY`` 单向取值，探测器只负责判定，来源只有一个真相。
     """
     spec = SPEC_BY_KEY[item.detector]
@@ -489,6 +552,7 @@ def make_context_for_test(
     limits: dict[str, tuple[float, float, float, float]] | None = None,
     announcements: dict[str, list[AnnRow]] | None = None,
     dragon_tiger: dict[str, list[tuple[date, float]]] | None = None,
+    unlocks: dict[str, list[tuple[date, float | None, float | None]]] | None = None,
     sector_pct: dict[str, float] | None = None,
     sector_rank: dict[str, float] | None = None,
     sector_of: dict[str, str] | None = None,
@@ -500,7 +564,8 @@ def make_context_for_test(
     元组顺序与 dataclass 字段一致，省掉测试里反复写 ``QuoteRow(...)``：
     ``quotes`` 为 ``(trade_date, close, pre_close, amount)``，
     ``limits`` 为 ``(up_limit, high, close, pre_close)``，
-    ``dragon_tiger`` 为 ``(trade_date, net_amount)``。
+    ``dragon_tiger`` 为 ``(trade_date, net_amount)``，
+    ``unlocks`` 为 ``(float_date, float_share, float_ratio)``（**股** / %，见 ``UnlockRow``）。
     """
     ctx = TriageContext(
         as_of=as_of,
@@ -518,6 +583,9 @@ def make_context_for_test(
     ctx.announcements = {symbol: list(rows) for symbol, rows in (announcements or {}).items()}
     ctx.dragon_tiger = {
         symbol: [DtRow(*row) for row in rows] for symbol, rows in (dragon_tiger or {}).items()
+    }
+    ctx.unlocks = {
+        symbol: [UnlockRow(*row) for row in rows] for symbol, rows in (unlocks or {}).items()
     }
     if symbols_order is not None:
         ctx.symbols_order = list(symbols_order)
@@ -779,6 +847,69 @@ def _detect_sector_move(spec: DetectorSpec, ctx: TriageContext, symbol: str) -> 
     )
 
 
+def _detect_unlock_soon(spec: DetectorSpec, ctx: TriageContext, symbol: str) -> TriageItem | None:
+    """未来 N 个自然日内有解禁且合计**占总股本** ≥ ``min_ratio``（≥ ``risk_ratio`` 升为 risk）。
+
+    三个"不猜"（spec §S11.2）：
+    - 该股**没有 share_floats 行** → 返回 ``None``（缺数据，不是"没有解禁"）；
+    - 解禁日 = ``ctx.as_of`` 当天 → **不算"未来"**（那天已经可流通；``as_of`` 是最近完整
+      交易日，用户看到卡片时该解禁已经发生）；
+    - 某一天**所有行**的 ``float_ratio`` 都缺失 → 无法核对"占比多少"，该日不判。
+    """
+    rows = ctx.unlocks.get(symbol) or []
+    if not rows:
+        return None
+    days = int(spec.thresholds["days"])
+    window_end = ctx.as_of + timedelta(days=days)
+    # 按解禁日合计（同一日多个持有人/多笔 = 一次解禁事件）。装载层已按 (ts_code, float_date)
+    # 聚合过一遍（把上万行压成 ≤N 天），这里再聚合一次：纯函数被单独调用时口径也一致。
+    share_of: dict[date, float] = {}
+    ratio_of: dict[date, float] = {}
+    has_ratio: set[date] = set()
+    for row in rows:
+        if not (ctx.as_of < row.float_date <= window_end):
+            continue
+        day = row.float_date
+        share_of[day] = share_of.get(day, 0.0) + (row.float_share or 0.0)
+        if row.float_ratio is not None:
+            ratio_of[day] = ratio_of.get(day, 0.0) + row.float_ratio
+            has_ratio.add(day)
+    # sorted → 同一天只有一个元素；跨天取"最近的一次"，排序键必须确定（可重放）
+    hits = [
+        (day, share_of[day], ratio_of[day])
+        for day in sorted(has_ratio)
+        if ratio_of[day] >= spec.thresholds["min_ratio"]
+    ]
+    if not hits:
+        return None
+    # 分级取窗口内**最高**一档，文案说那一档里**最近**的一次（用户先要知道最快到来的大额解禁）
+    risk_hits = [hit for hit in hits if hit[2] >= spec.thresholds["risk_ratio"]]
+    day, share, ratio = (risk_hits or hits)[0]
+    # 源 ``float_share`` 是「股」，卡片按 spec §S11.2 的「万股」上屏 → /10000
+    share_wan = share / 10_000.0
+    facts: list[Fact] = [
+        Fact("解禁股数", round(share_wan, 2), "万股"),
+        Fact("占总股本比", round(ratio, 2), "%"),
+        Fact("解禁日", day.strftime("%m-%d"), ""),
+    ]
+    if len(hits) > 1:
+        facts.append(Fact(f"{days} 天内解禁", str(len(hits)), "次"))
+    return TriageItem(
+        symbol=symbol,
+        name=_name(ctx, symbol),
+        detector=spec.key,
+        severity="risk" if risk_hits else "attention",
+        headline=(
+            f"{days} 天内解禁 {share_wan:,.0f} 万股（占总股本 {ratio:.1f}%），解禁日 {day:%m-%d}"
+        ),
+        facts=tuple(facts),
+        as_of=ctx.as_of,
+        source="share_floats",
+        verify=spec.verify,
+        day_pct=None,
+    )
+
+
 _RUNNERS: dict[str, Callable[[DetectorSpec, TriageContext, str], TriageItem | None]] = {
     "break_ma20": _detect_break_ma20,
     "drop_sharp": _detect_drop_sharp,
@@ -788,6 +919,7 @@ _RUNNERS: dict[str, Callable[[DetectorSpec, TriageContext, str], TriageItem | No
     "volume_spike": _detect_volume_spike,
     "new_high_low": _detect_new_high_low,
     "sector_move": _detect_sector_move,
+    "unlock_soon": _detect_unlock_soon,
 }
 if set(_RUNNERS) != {s.key for s in TRIAGE_DETECTORS}:  # 纯防御：加 spec 必须加实现
     raise RuntimeError("TRIAGE_DETECTORS 与探测器实现不一致")

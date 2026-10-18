@@ -48,6 +48,8 @@ ANNOUNCEMENT_DAYS = 3
 DRAGON_TIGER_TRADING_DAYS = 3
 #: 龙虎榜兜底自然日窗口（行情窗口为空、拿不到交易日时用）
 DRAGON_TIGER_NATURAL_DAYS = 7
+#: 解禁：探测器只看**未来** N 个自然日（spec §S11.2）。窗口右闭、左开（当天不算"未来"）。
+UNLOCK_DAYS = 30
 #: 单页上限（spec §S8.4）
 LIMIT = 8
 
@@ -102,6 +104,43 @@ _SECTOR_SQL = text(
     """
 )
 
+#: 解禁计划（spec §S11.2）：未来 ``UNLOCK_DAYS`` 个自然日的解禁，**按解禁日合计**。
+#:
+#: 为什么必须合计：``share_floats`` 是**持有人级**明细（同一只股票同一天可有上千行，
+#: 实测 2026-10-19 单日 18,130 行）。不聚合就要把上万行搬进内存再算，聚合后一次请求
+#: 至多 ``UNLOCK_DAYS × 自选数`` 行。
+#:
+#: 为什么要多带一个 ``has_any``：``unavailable`` 只能标"**整表**不可用"（= 回填没跑、
+#: 覆盖率为 0），不能标"这只股票没有计划" —— 自选里大多数股票本来就没有解禁计划，
+#: 逐股标缺数据会让页面永远挂着一条假告警。两者的区别必须在这里就定死。
+_UNLOCK_SQL = text(
+    """
+    WITH latest AS (
+        -- **同一笔解禁会被多次公告**（初次 + 修订）：唯一键含 ann_date，故库里会同时存着
+        -- 2023 年初次公告与 2026 年修订版。按 (holder, share_type) 取最新公告那一次，
+        -- 否则同一笔会被加两次（实测 301387 单日合计 119%，真实是 59.6%）。
+        SELECT DISTINCT ON (ts_code, float_date, holder_name, share_type)
+               ts_code, float_date, float_share, float_ratio
+          FROM share_floats
+         WHERE float_date > :as_of
+           AND float_date <= :window_end
+           AND split_part(ts_code, '.', 1) = ANY(:symbols)
+         ORDER BY ts_code, float_date, holder_name, share_type, ann_date DESC NULLS LAST
+    ),
+    win AS (
+        SELECT split_part(ts_code, '.', 1) AS symbol,
+               float_date,
+               sum(float_share) AS float_share,
+               sum(float_ratio) AS float_ratio
+          FROM latest
+         GROUP BY 1, 2
+    )
+    SELECT w.symbol, w.float_date, w.float_share, w.float_ratio, x.has_any
+      FROM (SELECT EXISTS (SELECT 1 FROM share_floats) AS has_any) x
+      LEFT JOIN win w ON true
+    """
+)
+
 
 @dataclass
 class TriageResult:
@@ -136,9 +175,10 @@ def _recent_trade_days(quotes: dict[str, list[td.QuoteRow]], limit: int) -> list
 async def load_context(db: AsyncSession, symbols: list[str], as_of: date) -> td.TriageContext:
     """批量装载探测器输入 —— **固定查询数**（与自选数无关）。
 
-    六条查询：① 代码 → id/名称 ② 行情窗口 ③ 涨停价+当日高低 ④ 公告 ⑤ 龙虎榜 ⑥ 板块。
-    （spec 说的"5 条固定查询"是五个**数据面**；①是为把 symbol 映射成 ``stock_id`` 的
-    一行解析查询，不随自选数增长，总数落在 spec §S8.3 的"≤6"预算内。）
+    七条查询：① 代码 → id/名称 ② 行情窗口 ③ 涨停价+当日高低 ④ 公告 ⑤ 龙虎榜 ⑥ 板块
+    ⑦ 解禁。①是为把 symbol 映射成 ``stock_id`` 的一行解析查询；②–⑦ 是六个**数据面**。
+    spec §S8.3 的"≤6"是 5 个数据面的预算，S11 加了解禁面（``share_floats`` 没有
+    ``stock_id`` 外键，只能按 ``ts_code`` 另起一条），预算随之 7 —— 仍然**与自选数无关**。
     """
     codes = list(dict.fromkeys(symbols))
     ctx = td.TriageContext(as_of=as_of, names={}, symbols_order=list(codes))
@@ -298,6 +338,34 @@ async def load_context(db: AsyncSession, symbols: list[str], as_of: date) -> td.
     if not ctx.sector_of:
         # 缺板块归属/缺当日行情 → 明示不可用，不静默当作"板块没动"
         ctx.unavailable.add("sector_move")
+
+    # ⑦ 解禁计划（未来 N 个自然日，按解禁日合计；窗口右闭、左开）
+    unlock_rows = (
+        await db.execute(
+            _UNLOCK_SQL,
+            {
+                "as_of": as_of,
+                "window_end": as_of + timedelta(days=UNLOCK_DAYS),
+                "symbols": codes,
+            },
+        )
+    ).all()
+    has_any_unlock = False
+    for symbol, float_date, float_share, float_ratio, has_any in unlock_rows:
+        has_any_unlock = has_any_unlock or bool(has_any)
+        if symbol is None:
+            continue
+        ctx.unlocks.setdefault(str(symbol), []).append(
+            td.UnlockRow(
+                float_date=float_date,
+                float_share=None if float_share is None else float(float_share),
+                float_ratio=None if float_ratio is None else float(float_ratio),
+            )
+        )
+    if not has_any_unlock:
+        # 整表一行都没有 = 回填没跑（覆盖率 0）→ 必须留痕（spec §S11.4）；
+        # "这只股票没有计划"**不**进 unavailable（那是常态，不是缺数据）。
+        ctx.unavailable.add("unlock_soon")
 
     return ctx
 
