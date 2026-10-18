@@ -123,6 +123,24 @@
   background: var(--journal-open-tint);
 }
 
+/* 仓位标签（spec §S9.7.1）：中性色，与状态/归因标签区分（它不是评价，只是一档事实） */
+.journal-entry__size {
+  margin-inline-end: 0;
+  padding-inline: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 11.5px;
+  line-height: 18px;
+  color: var(--text-secondary);
+}
+
+/* 不可复盘（spec §S9.7.8）：这里必须是一句话而不是一个禁用按钮——
+   禁用按钮暗示"以后还能点"，而失效条件不可观测是**这条记录本身**没有归因入口。 */
+.journal-entry__not-reviewable {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .journal-entry__symbol {
   font-size: 13px;
   font-weight: 600;
@@ -188,7 +206,6 @@
 .journal__open {
   margin-top: 14px;
 }
-
 .journal__open-title {
   margin: 0 0 8px;
   font-size: 12.5px;
@@ -276,6 +293,11 @@
   font-size: 11.5px;
   font-weight: 600;
   color: var(--journal-due);
+}
+
+/* 信心档（1–5，可清空）：宽度够放「留空 = 不参与校准」的占位文案 */
+.journal-form__confidence {
+  max-width: 220px;
 }
 
 /* ── 统计卡 ───────────────────────────────────────────── */
@@ -396,6 +418,86 @@
   color: var(--text-secondary);
 }
 
+/* ── 校准卡（spec §S9.7.5：信心 vs 实际结果） ─────────────── */
+.journal-calibration {
+  max-width: 620px;
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.journal-calibration__lead {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.journal-calibration__list {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.journal-calibration__row {
+  display: grid;
+  grid-template-columns: 1fr auto 64px;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.journal-calibration__rate {
+  text-align: right;
+}
+
+.journal-calibration__n {
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.journal-calibration__foot,
+.journal-calibration__note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.journal-calibration__foot {
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+/* ── 页脚：导出 + 隐私告知（spec §S9.7.9） ─────────────── */
+.journal__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 16px;
+  margin-top: 22px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.journal__export {
+  font-weight: 600;
+  color: var(--journal-verdict);
+  text-decoration: underline;
+}
+
+.journal__privacy {
+  color: var(--text-secondary);
+}
+
 /* ── 复盘弹窗 ─────────────────────────────────────────── */
 .journal-review__lead {
   margin: 0 0 10px;
@@ -446,6 +548,46 @@
   font-size: 11.5px;
   line-height: 1.6;
   color: var(--text-secondary);
+}
+
+/* 路径三格（spec §S9.7.4）：最大不利偏移 / 首次触达日 / 距入场交易日数 */
+.journal-review__path {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: var(--bg-panel);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+.journal-review__path .journal-review__cell dt {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.journal-review__path .journal-review__cell dd {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* 路径提示：先触失效、之后反弹 → "更像纪律问题"。是提示，不是结论（也不预选归因） */
+.journal-review__path-hint {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: var(--journal-due-tint);
+  border-left: 3px solid var(--journal-due);
+  border-radius: 4px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.journal-review__path-hint strong {
+  font-weight: 600;
 }
 
 .journal-review__no-result {

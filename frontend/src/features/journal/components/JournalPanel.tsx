@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchJournalEntries,
   fetchJournalStats,
+  journalExportUrl,
   type JournalEntry,
   type JournalStats,
 } from "@/shared/api/journal";
@@ -12,11 +13,15 @@ import { EntryForm } from "./EntryForm";
 import { ReviewModal } from "./ReviewModal";
 import { VERDICT_META, VERDICT_ORDER, verdictLabel } from "../verdicts";
 import { KIND_META, KIND_ORDER, kindCountsOutcome } from "../kinds";
+import { POSITION_SIZE_META, POSITION_SIZE_ORDER, positionSizeLabel, positionSizeOf } from "../sizes";
 import {
   GROSS_FALLBACK_LABEL,
+  formatBrier,
+  formatCalibrationRate,
   formatShare,
   formatShareOrSample,
   formatSignedPct,
+  hasCalibrationCurve,
   netBasisLabel,
   netExcessOf,
   pickBasisValue,
@@ -47,12 +52,20 @@ const { Text } = Typography;
  * - **比例带区间**（§S9.7.7）：有 `share_ci` 时写 `4/6（95% 区间 30%–90%）`，
  *   `n < 5` 只写"样本不足"。
  *
+ * Phase B 的四处（同样只做加法，字段缺省时退化）：
+ * - **仓位**（§S9.7.1）：列表行显示 `position_size` 标签；统计卡加 `by_size` 分栏与
+ *   `avg_weighted_excess_pct`（`none` 排除，缺省不显示而非补 0）；
+ * - **信心校准**（§S9.7.5）：独立校准卡，每档 `n >= 10` 才给命中率，总 `n < 20` 只显示
+ *   `calibration_note`；
+ * - **不可复盘**（§S9.7.8）：`reviewable === false` 的到期条目**没有**「复盘」按钮；
+ * - **导出/隐私**（§S9.7.9）：页底「导出我的日志」链接 + 「不提供单条删除」原文告知。
+ *
  * 分块（不新增路由，挂在 `/me` 的 tab 内）：
  * - 顶部一行：「待复盘 N 条」（N = `due` 条数，页面角标语义，v1 不做推送）；
  * - 「记一笔」表单；
  * - 「待复盘」= `due`（每条带"复盘"按钮）+ 其下的「未到期（M）」= `open`；
- * - 「已复盘」= `reviewed`（每条带归因标签、没有编辑/删除入口）+ 统计卡；
- * - 页脚固定免责（逐字照 spec §S9.5）。
+ * - 「已复盘」= `reviewed`（每条带归因标签、没有编辑/删除入口）+ 统计卡 + 校准卡；
+ * - 页脚：导出链接、隐私告知（S9.7.9）、固定免责（逐字照 spec §S9.5）。
  */
 
 /** thesis 的第一行（列表行只展示一行，全文留在条目里）。 */
@@ -125,7 +138,15 @@ function EntryOutcome({ entry }: { entry: JournalEntry }) {
   );
 }
 
-/** 一条记录（`due` / `open` / `reviewed` 共用骨架，差别只在标签与操作区）。 */
+/**
+ * 一条记录（`due` / `open` / `reviewed` 共用骨架，差别只在标签与操作区）。
+ *
+ * S9.7 的两处展示纪律：
+ * - **仓位标签**（§S9.7.1）：只在后端真给了 `position_size` 时显示——缺字段时**不补**
+ *   「只观察」（那会把"没记录"说成"没下单"）；
+ * - **不可复盘**（§S9.7.8）：`reviewable === false` 时**没有**「复盘」按钮，改成一句
+ *   「不可复盘（失效条件不可观测）」。缺字段（`undefined`）按可复盘处理，旧条目照旧能复盘。
+ */
 function EntryRow({
   entry,
   onReview,
@@ -135,6 +156,8 @@ function EntryRow({
 }) {
   const reviewed = entry.status === "reviewed";
   const review = entry.review;
+  const size = positionSizeOf(entry.position_size);
+  const reviewable = entry.reviewable !== false;
   const testId =
     entry.status === "reviewed"
       ? "journal-reviewed-item"
@@ -159,6 +182,11 @@ function EntryRow({
           </Tag>
         )}
         <span className="journal-entry__symbol num">{symbolText(entry)}</span>
+        {size && (
+          <Tag className="journal-entry__size" data-testid="journal-entry-size">
+            {`仓位：${positionSizeLabel(size)}`}
+          </Tag>
+        )}
         <span className="journal-entry__due-on">{`到期 ${formatAsOfDate(entry.due_on)}`}</span>
         <EntryOutcome entry={entry} />
       </div>
@@ -172,14 +200,20 @@ function EntryRow({
 
       {onReview && entry.status === "due" && (
         <div className="journal-entry__actions">
-          <Button
-            type="primary"
-            size="small"
-            data-testid="journal-review-open"
-            onClick={() => onReview(entry)}
-          >
-            复盘
-          </Button>
+          {reviewable ? (
+            <Button
+              type="primary"
+              size="small"
+              data-testid="journal-review-open"
+              onClick={() => onReview(entry)}
+            >
+              复盘
+            </Button>
+          ) : (
+            <span className="journal-entry__not-reviewable" data-testid="journal-not-reviewable">
+              不可复盘（失效条件不可观测）
+            </span>
+          )}
         </div>
       )}
     </li>
@@ -201,9 +235,14 @@ function StatsCard({ stats }: { stats: JournalStats }) {
   const counts = stats.by_verdict ?? {};
   const reviewedN = stats.reviewed_n;
   const byKind = stats.by_kind ?? null;
+  const bySize = stats.by_size ?? null;
   const shareCi = stats.share_ci ?? null;
   // 平均超额默认净口径；Phase A 未上线（缺 `avg_net_excess_pct`）时回退毛并标注。
   const avgExcess = pickBasisValue(stats.avg_excess_pct, stats.avg_net_excess_pct);
+  // 加权超额（spec §S9.7.1，`none` 排除）：**只在后端给了数字时显示**——
+  // 缺省补 0 会把"没有可加权的样本"说成"加权超额正好是 0"。
+  const weighted = stats.avg_weighted_excess_pct;
+  const hasWeighted = typeof weighted === "number" && Number.isFinite(weighted);
 
   return (
     <div className="journal-stats" data-testid="journal-stats">
@@ -241,6 +280,13 @@ function StatsCard({ stats }: { stats: JournalStats }) {
               </span>
               <span className="num">{` ${formatSignedPct(avgExcess.value)}`}</span>
             </span>
+            {hasWeighted && (
+              <span data-testid="journal-stats-weighted-excess">
+                加权超额
+                <span className="journal-stats__basis">（按仓位加权，只观察不计）</span>
+                <span className="num">{` ${formatSignedPct(weighted)}`}</span>
+              </span>
+            )}
             <span data-testid="journal-stats-discipline">
               没按计划执行占比
               <span className="num">
@@ -276,9 +322,78 @@ function StatsCard({ stats }: { stats: JournalStats }) {
         </div>
       )}
 
+      {/* 仓位分栏（spec §S9.7.1）：只是**条数事实**，故与 `by_kind` 一样不受 `reviewed_n < 5` 限制；
+          缺字段（Phase B 后端未上线）时整块不显示。 */}
+      {bySize && (
+        <div className="journal-stats__kinds" data-testid="journal-stats-by-size">
+          {POSITION_SIZE_ORDER.map((key) => (
+            <span className="journal-stats__kind" key={key}>
+              <span className="journal-stats__kind-label">{POSITION_SIZE_META[key].label}</span>
+              <span className="journal-stats__kind-count num">{bySize[key] ?? 0}</span>
+            </span>
+          ))}
+          <span className="journal-stats__kind-hint">
+            「只观察」= 只记判断：计入判断，不计入收益
+          </span>
+        </div>
+      )}
+
       {stats.multiple_comparison_note && (
         <p className="journal-stats__note" data-testid="journal-stats-multiple-note">
           {stats.multiple_comparison_note}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 校准卡（spec §S9.7.5）：**「你的信心与实际结果的对照」**（固定文案，不评价用户）。
+ *
+ * 三条展示纪律：
+ * - 总样本 `n < 20` 或后端没给 `calibration`（给的是 `null`）→ **只显示**
+ *   `calibration_note`（后端给的原因）；两者都缺 → 整块不渲染（不补 0、不虚构曲线）；
+ * - 每档 `n >= 10` 才显示"实际命中率"，否则该档写"样本不足（n=4）"——不给点估计；
+ * - `brier` 有就给一位小数的三位值，没有就不显示这一项。
+ */
+function CalibrationCard({ stats }: { stats: JournalStats }) {
+  const calibration = stats.calibration ?? null;
+  const note = stats.calibration_note ?? null;
+  const curve = hasCalibrationCurve(calibration) ? calibration : null;
+  const bins = (curve?.bins ?? []).slice().sort((a, b) => a.confidence - b.confidence);
+  const brier = formatBrier(curve?.brier);
+
+  // 后端 Phase B 未上线：两个字段都没有 → 不画卡（画一张空卡等于暗示"你的校准是 0"）。
+  if (!curve && !note) return null;
+
+  return (
+    <div className="journal-calibration" data-testid="journal-calibration">
+      <p className="journal-calibration__lead">你的信心与实际结果的对照</p>
+      {curve && bins.length > 0 ? (
+        <>
+          <ul className="journal-calibration__list">
+            {bins.map((bin) => (
+              <li
+                className="journal-calibration__row"
+                key={bin.confidence}
+                data-testid="journal-calibration-bin"
+              >
+                <span className="journal-calibration__confidence">{`信心 ${bin.confidence}`}</span>
+                <span className="journal-calibration__rate num">
+                  {formatCalibrationRate(bin)}
+                </span>
+                <span className="journal-calibration__n num">{`n=${bin.n}`}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="journal-calibration__foot" data-testid="journal-calibration-foot">
+            {`共 ${curve.n} 条已复盘且填了信心`}
+            {brier ? ` · Brier ${brier}` : ""}
+          </p>
+        </>
+      ) : (
+        <p className="journal-calibration__note" data-testid="journal-calibration-note">
+          {note ?? "样本不足（已复盘且填了信心的样本太少）"}
         </p>
       )}
     </div>
@@ -433,9 +548,27 @@ export function JournalPanel() {
             description="接口暂时没能返回统计数据，请稍后刷新重试；这不代表你的记录有变化。"
           />
         ) : (
-          <StatsCard stats={statsQuery.data} />
+          <>
+            <StatsCard stats={statsQuery.data} />
+            <CalibrationCard stats={statsQuery.data} />
+          </>
         )}
       </section>
+
+      {/* 导出与隐私（spec §S9.7.9）：链接用后端给的 `export_hint`，缺省拼契约端点；
+          隐私那句是**原文告知**（逐字上屏，不翻译、不改写）。 */}
+      <div className="journal__footer" data-testid="journal-footer">
+        <a
+          className="journal__export"
+          data-testid="journal-export"
+          href={journalExportUrl(statsQuery.data?.export_hint)}
+        >
+          导出我的日志
+        </a>
+        <span className="journal__privacy" data-testid="journal-privacy">
+          日志不提供单条删除，以保证复盘记录不可篡改；如需清除请删除账号
+        </span>
+      </div>
 
       {/* spec §S9.5 的固定免责，逐字上屏；页面不另写一份"投资建议"类文案。 */}
       <p className="journal__disclaimer">

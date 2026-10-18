@@ -1,3 +1,30 @@
+## 2026-10-19 - **S9.7 Phase B 前端：仓位 / 信心校准 / 不可复盘 / 路径提示 / 导出与隐私**
+
+只做加法（契约 `.superpowers/sdd/journal-s97/contract-phaseB.md` §6；后端 Phase B 的统计与导出尚未上线，
+前端按契约字段写，**任一字段缺省即优雅退化**：不崩、不显示 0、不拿默认值补数据）：
+
+- **仓位**（§S9.7.1）：`EntryForm` 四选一（只观察/轻仓/标准/重仓，默认「只观察」）→ 载荷 `position_size`；
+  列表行显示「仓位：X」标签（缺字段**不显示**——缺字段 ≠ 只观察）；统计卡加 `by_size` 分栏与
+  `avg_weighted_excess_pct`（缺省不显示；「只观察不计收益」的说明随分栏上屏）
+- **信心与校准**（§S9.7.5）：`EntryForm` 1–5 档、**可清空**（留空 = 不参与校准，载荷**不带**
+  `confidence` 键）；新增独立校准卡「你的信心与实际结果的对照」：每档 `n>=10` 才给命中率、否则
+  「样本不足（n=X）」，总 `n<20` 只显示 `calibration_note`，`brier` 有才显示
+- **不可复盘**（§S9.7.8）：`reviewable === false` 的到期条目**不渲染**「复盘」按钮，改显示
+  「不可复盘（失效条件不可观测）」；字段缺省按可复盘处理（旧条目行为不变）
+- **路径提示**（§S9.7.4）：复盘弹窗新增路径三格（`mae_pct` / `first_touch_invalidation` /
+  `days_to_invalidation`）；`touched_then_reversed === true` 时在归因选择**上方**提示
+  「你先触发了失效条件，之后才反弹——这更像纪律问题」（是提示：不预选归因、不强制选择）
+- **导出与隐私**（§S9.7.9）：页底「导出我的日志」链接（优先 `stats.export_hint`，缺省
+  `/api/v1/journal/export?format=csv`）+ 隐私原文告知（逐字，与 spec 一致）
+- e2e：`decisionJournal.spec.ts` 14 → **21 条**（新增 7 条，全 mock）：仓位/信心提交后出现与载荷、
+  不可复盘无复盘按钮、路径提示出现在归因上方且不预选、`by_size` + 加权 + 校准 n<10 与 n≥10 两种、
+  总样本不足只给 `calibration_note`、导出链接与隐私原文、Phase B 字段全缺省不崩；顺带修掉 mock
+  **就地修改共享 fixture** 造成的跨用例顺序依赖（不复用同一对象就不会互相污染）
+- 涉及文件：`frontend/src/shared/api/journal.ts`、`frontend/src/features/journal/sizes.ts(新)`、
+  `frontend/src/features/journal/metrics.ts`、`frontend/src/features/journal/components/`
+  `{EntryForm,JournalPanel,ReviewModal}.tsx` 与 `JournalPanel.css`、`frontend/e2e/decisionJournal.spec.ts`、
+  `.superpowers/sdd/journal-s97/frontend-B-report.md(新)`
+
 ## 2026-10-19 - **S9.7 Phase B1 后端：仓位 / 信心 / 可证伪闸（只做字段与闸）**
 
 只做加法（契约 `.superpowers/sdd/journal-s97/contract-phaseB.md` §1–§3；统计与导出**不在本阶段**）：

@@ -30,7 +30,11 @@ const { Text } = Typography;
  *    毛口径只作为括注出现；净字段缺省（后端 Phase A 未上线）时回退毛口径并明确标注。
  * 2. **基准口径**（只读）：`bench_basis_note` 原文（"同行业成分股等权平均收益，
  *    不是指数行情"），`bench_fallback = true` 时补一句"无行业归属，基准退化为沪深300"。
- * 3. **用户选的**（必选）：五个归因之一。未选时「确认复盘」**禁用**（不是点了再报错）；
+ * 3. **路径**（只读，spec §S9.7.4）：`mae_pct` / `first_touch_invalidation` /
+ *    `days_to_invalidation` 有就展示；`touched_then_reversed = true` 时在归因选择**上方**
+ *    给一句「你先触发了失效条件，之后才反弹——这更像纪律问题」——
+ *    这是**提示**，不预选归因、不强制选择（归因仍是用户自己的）。
+ * 4. **用户选的**（必选）：五个归因之一。未选时「确认复盘」**禁用**（不是点了再报错）；
  *    归因是用户自己的，产品不替他分类，也不给倾向性结论。
  *
  * 一次复盘只写一条（后端 `unique(entry_id)`，重复提交 409）——故弹窗提交成功即关闭，
@@ -101,6 +105,14 @@ export function ReviewModal({ entry, onClose }: ReviewModalProps) {
 
   const evaluation = entry ? pickEvaluation(entry) : null;
   const canConfirm = verdict !== undefined && !mutation.isPending;
+
+  // 路径（spec §S9.7.4）：四个派生指标都**只是事实**，缺省就不显示（不补 0）。
+  const mae = typeof evaluation?.mae_pct === "number" ? evaluation.mae_pct : null;
+  const firstTouch = evaluation?.first_touch_invalidation ?? null;
+  const daysTo = typeof evaluation?.days_to_invalidation === "number" ? evaluation.days_to_invalidation : null;
+  const hasPath = mae !== null || !!firstTouch || daysTo !== null;
+  // 先触发失效、到期反而盈利 → 显示"更像纪律问题"的提示（**不预选**归因、不强制选择）。
+  const touchedThenReversed = evaluation?.touched_then_reversed === true;
 
   // 净/毛口径：默认净；净字段缺省时回退毛（`basis = "gross"`）并明确标注。
   const outcome = netOutcomeOf(evaluation);
@@ -195,6 +207,41 @@ export function ReviewModal({ entry, onClose }: ReviewModalProps) {
           {benchFallback && (
             <p className="journal-review__bench" data-testid="journal-bench-fallback">
               无行业归属，基准退化为沪深300。
+            </p>
+          )}
+
+          {/* 路径（spec §S9.7.4）：入场到期的中途发生了什么——终点对错之外的另一层事实。 */}
+          {hasPath && (
+            <dl className="journal-review__path" data-testid="journal-review-path">
+              {mae !== null && (
+                <div className="journal-review__cell">
+                  <dt>最大不利偏移</dt>
+                  <dd className="num" data-testid="journal-review-mae">
+                    {formatSignedPct(mae)}
+                  </dd>
+                </div>
+              )}
+              {firstTouch && (
+                <div className="journal-review__cell">
+                  <dt>首次触达失效</dt>
+                  <dd data-testid="journal-review-first-touch">{formatAsOfDate(firstTouch)}</dd>
+                </div>
+              )}
+              {daysTo !== null && (
+                <div className="journal-review__cell">
+                  <dt>首次触达距入场</dt>
+                  <dd className="num" data-testid="journal-review-days-to">
+                    {`第 ${daysTo} 个交易日`}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          )}
+
+          {/* 先触失效、之后反弹 → 提示"更像纪律问题"（**提示**不是结论，也不预选任何归因）。 */}
+          {touchedThenReversed && (
+            <p className="journal-review__path-hint" data-testid="journal-path-hint">
+              你先触发了失效条件，之后才反弹——这更像<strong>纪律</strong>问题
             </p>
           )}
 

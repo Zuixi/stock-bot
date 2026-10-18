@@ -19,8 +19,10 @@ import {
   type JournalHorizon,
   type JournalInvalidationKind,
   type JournalKind,
+  type JournalPositionSize,
 } from "@/shared/api/journal";
 import { KIND_META, KIND_ORDER } from "../kinds";
+import { POSITION_SIZE_META, POSITION_SIZE_ORDER } from "../sizes";
 
 const { Text } = Typography;
 
@@ -44,6 +46,10 @@ const { Text } = Typography;
  *   唯一的口径差别是 `pass` 计入判断、不计入收益（spec §S9.7.6）；
  * - `bet_type`：赌的是什么（方向/跑赢同行/市场级，spec §S9.7.3），**默认「方向」**，
  *   决定基准怎么选；创建时写进快照，事后不可改。
+ * - `position_size`：仓位四选一（只观察/轻仓/标准/重仓，spec §S9.7.1），**默认「只观察」**；
+ *   只观察计入判断、不计入收益统计（与 `pass` 同一条口径）。
+ * - `confidence`：事前信心 1–5（spec §S9.7.5），**刻意留空**——留空 = 不参与校准；
+ *   用可清空的 `Select` 而不是单选组，是因为单选组点过就回不到"没填"。
  *
  * 「标的」旁有「我决定不动」一键（spec §S9.7.6）：点它只把 `kind` 设为 `pass`，
  * **不跳过 3 个必填**——放弃的判断同样要写清"当时看到了什么"和"什么情况说明想错了"，
@@ -76,6 +82,27 @@ const INVALIDATION_OPTIONS: { value: JournalInvalidationKind; label: string }[] 
   { value: "date_only", label: "只看日期（到期即算触发）" },
 ];
 
+/**
+ * 仓位四选一（spec §S9.7.1）：`none` = 只观察，是**默认**（多数记录只是"想了一下"）。
+ *
+ * 默认值只在这里出现一次：列表行与统计卡**不**用默认值补齐缺失的 `position_size`
+ * （那会把"后端没给"显示成"用户选了只观察"）。
+ */
+const POSITION_SIZE_OPTIONS: { value: JournalPositionSize; label: string }[] = POSITION_SIZE_ORDER.map(
+  (value) => ({ value, label: POSITION_SIZE_META[value].label })
+);
+
+/**
+ * 事前信心 1–5（spec §S9.7.5 的固定映射 20% / 35% / 50% / 65% / 80%）。
+ *
+ * 用可清空的 `Select` 而不是 `Radio.Group`：`Radio.Group` 一旦点过就**没法回到"没填"**，
+ * 那会把"我不确定"悄悄变成某一档；而"留空 = 不参与校准"正是 spec 允许的常态。
+ */
+const CONFIDENCE_OPTIONS: { value: number; label: string }[] = [1, 2, 3, 4, 5].map((value) => ({
+  value,
+  label: `${value} 分`,
+}));
+
 const HORIZONS: readonly JournalHorizon[] = [7, 30, 90];
 
 /** 提示里用的**字段人话名**（顺序即表单顺序；缺几项就写几项）。 */
@@ -99,6 +126,9 @@ export function EntryForm({ onCreated }: EntryFormProps) {
   const [priceValue, setPriceValue] = useState<number | null>(null);
   const [dateValue, setDateValue] = useState<Dayjs | null>(null);
   const [horizon, setHorizon] = useState<JournalHorizon | undefined>(undefined);
+  // 仓位默认「只观察」（spec §S9.7.1 的默认值）；信心**刻意留空**（见 `CONFIDENCE_OPTIONS`）。
+  const [positionSize, setPositionSize] = useState<JournalPositionSize>("none");
+  const [confidence, setConfidence] = useState<number | undefined>(undefined);
 
   const mutation = useMutation({
     mutationFn: (payload: JournalEntryCreate) => createJournalEntry(payload),
@@ -112,6 +142,9 @@ export function EntryForm({ onCreated }: EntryFormProps) {
       setPriceValue(null);
       setDateValue(null);
       setHorizon(undefined);
+      // 仓位/信心回到默认（仓位「只观察」、信心留空）：下一笔重新选，不把上一笔的选择带过去。
+      setPositionSize("none");
+      setConfidence(undefined);
     },
     onError: () => {
       // 不把后端 message 直接上屏（可能是英文/机器串）；用户要的是"没记上，再试一次"。
@@ -147,6 +180,10 @@ export function EntryForm({ onCreated }: EntryFormProps) {
       symbol: symbol.trim() ? symbol.trim() : undefined,
       kind,
       bet_type: betType,
+      // 仓位总是随载荷发（默认 `none`）；信心留空时**不发这个键**（= 不参与校准，
+      // 与 `confidence: 0` / 缺省成一档 3 是两件事）。
+      position_size: positionSize,
+      confidence,
       thesis: thesis.trim(),
       invalidation,
       horizon_days: horizon,
@@ -254,6 +291,43 @@ export function EntryForm({ onCreated }: EntryFormProps) {
         <Text className="journal-form__hint">
           方向 → 所属行业成分股等权平均收益；跑赢同行 → 同行业等权；市场级 → 沪深300。
           创建时选定，之后不可改。
+        </Text>
+      </div>
+
+      <div className="journal-form__row">
+        <Text className="journal-form__label">仓位（选填，默认「只观察」）</Text>
+        <Radio.Group
+          data-testid="journal-position-size"
+          value={positionSize}
+          onChange={(event) => setPositionSize(event.target.value as JournalPositionSize)}
+        >
+          {POSITION_SIZE_OPTIONS.map((option) => (
+            <Radio.Button key={option.value} value={option.value}>
+              {option.label}
+            </Radio.Button>
+          ))}
+        </Radio.Group>
+        <Text className="journal-form__hint">
+          只观察 = 只记判断、不下单（不计入收益统计）；其余三档按粗档加权。
+        </Text>
+      </div>
+
+      <div className="journal-form__row">
+        <Text className="journal-form__label">
+          你当时有多大把握（选填，1–5；留空 = 不参与校准）
+        </Text>
+        <Select
+          className="journal-form__confidence"
+          data-testid="journal-confidence"
+          value={confidence}
+          onChange={(value) => setConfidence(value ?? undefined)}
+          options={CONFIDENCE_OPTIONS}
+          allowClear
+          placeholder="留空 = 不参与校准"
+          aria-label="你当时有多大把握"
+        />
+        <Text className="journal-form__hint">
+          1 = 最没把握，5 = 最有把握；只用于「你的信心与实际结果的对照」，不用于评价你。
         </Text>
       </div>
 

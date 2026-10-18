@@ -1,7 +1,13 @@
-import type { JournalEvaluation, JournalShareCI } from "@/shared/api/journal";
+import type {
+  JournalCalibration,
+  JournalCalibrationBin,
+  JournalEvaluation,
+  JournalShareCI,
+} from "@/shared/api/journal";
 
 /**
- * 决策日志的**口径与格式化单一入口**（S9.7.2 净成本 / S9.7.3 基准 / S9.7.7 区间）。
+ * 决策日志的**口径与格式化单一入口**（S9.7.2 净成本 / S9.7.3 基准 / S9.7.5 校准 /
+ * S9.7.7 区间）。
  *
  * 为什么单独一个文件：同一个净超额在列表行与复盘弹窗两处上屏，同一句"毛/净（成本 12bp）"
  * 两处各写一份，必然漂移成"列表按净、弹窗按毛"这种最难查的错。故：
@@ -90,4 +96,44 @@ export function formatShareOrSample(
 ): string {
   if (ci) return formatShareWithCi(ci) ?? "样本不足";
   return formatShare(fallbackShare);
+}
+
+// ── 校准（spec §S9.7.5） ────────────────────────────────────────────────
+
+/** 每档显示命中率的样本下限（spec §S9.7.5：每档 `n >= 10` 才显示）。 */
+export const MIN_CALIBRATION_BIN_SAMPLE = 10;
+
+/** 校准曲线的总样本下限（spec §S9.7.5：总 `n < 20` 只显示 `calibration_note`）。 */
+export const MIN_CALIBRATION_SAMPLE = 20;
+
+/**
+ * 总样本够不够给校准曲线：`calibration` 缺省（Phase B 后端未上线）或 `n < 20` 都按"不够"。
+ * 不够时页面**只显示后端给的 `calibration_note`**，不画半条曲线。
+ */
+export function hasCalibrationCurve(
+  calibration: JournalCalibration | null | undefined
+): calibration is JournalCalibration {
+  return (
+    !!calibration &&
+    Number.isFinite(calibration.n) &&
+    calibration.n >= MIN_CALIBRATION_SAMPLE
+  );
+}
+
+/**
+ * 一档的"实际命中率"：`n >= 10`（且后端没判该档样本不足）才给比例，
+ * 否则写"样本不足（n=4）"——**不给**点估计，也不补 0。
+ */
+export function formatCalibrationRate(bin: JournalCalibrationBin): string {
+  const n = Number.isFinite(bin.n) ? bin.n : 0;
+  if (n < MIN_CALIBRATION_BIN_SAMPLE || bin.sufficient === false) {
+    return `样本不足（n=${n}）`;
+  }
+  return formatShare(bin.hit_rate);
+}
+
+/** `brier` 的展示：`0.231`（后端已算好，前端只保留三位小数）；缺省 → `null`（不显示）。 */
+export function formatBrier(brier: number | null | undefined): string | null {
+  if (brier === null || brier === undefined || Number.isNaN(brier)) return null;
+  return brier.toFixed(3);
 }

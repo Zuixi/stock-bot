@@ -73,6 +73,13 @@ interface FixtureEvaluation {
   net_excess_pct?: number | null;
   bench_basis_note?: string | null;
   bench_fallback?: boolean | null;
+  /** S9.7.4 路径分析（Phase B 后端未上线时可缺省）。 */
+  mae_pct?: number | null;
+  first_touch_invalidation?: string | null;
+  touched_then_reversed?: boolean | null;
+  days_to_invalidation?: number | null;
+  /** S9.7.8：失效条件是否可观测。 */
+  invalidation_observable?: boolean | null;
 }
 
 interface FixtureEntry {
@@ -93,6 +100,12 @@ interface FixtureEntry {
   } | null;
   /** S9.7.3：赌注类型（Phase A 未上线时可缺省）。 */
   bet_type?: string | null;
+  /** S9.7.1：仓位粗档（Phase B 未上线时可缺省；缺省时列表**不显示**标签）。 */
+  position_size?: string | null;
+  /** S9.7.5：事前信心 1–5（缺省 = 不参与校准）。 */
+  confidence?: number | null;
+  /** S9.7.8：`false` 时**不提供**复盘入口（缺省 = 可复盘）。 */
+  reviewable?: boolean | null;
   /** 自动结果（到期后才有；契约见 `shared/api/journal.ts` 的 `JournalEvaluation`）。 */
   evaluation: FixtureEvaluation | null;
   review: FixtureReview | null;
@@ -113,6 +126,26 @@ interface FixtureStats {
   net_cost_bps?: number | null;
   /** S9.7.7：固定标注（页面原样展示）。 */
   multiple_comparison_note?: string | null;
+  /** S9.7.1：四种仓位粗档各自条数（Phase B 未上线时可缺省）。 */
+  by_size?: Record<string, number> | null;
+  /** S9.7.1：按 `size_weight` 加权的平均超额（`none` 排除）。 */
+  avg_weighted_excess_pct?: number | null;
+  /** S9.7.5：校准曲线（样本不足时为 `null`）。 */
+  calibration?: {
+    n: number;
+    bins?: {
+      confidence: number;
+      p?: number | null;
+      n: number;
+      hit_rate?: number | null;
+      sufficient?: boolean | null;
+    }[];
+    brier?: number | null;
+  } | null;
+  /** S9.7.5：样本不足的原因（总样本不足时只显示它）。 */
+  calibration_note?: string | null;
+  /** S9.7.9：导出端点（缺省时页面拼固定路径）。 */
+  export_hint?: string | null;
 }
 
 /**
@@ -271,6 +304,43 @@ const GROSS_ONLY_REVIEWED_ENTRY: FixtureEntry = {
   },
 };
 
+/**
+ * 不可复盘条目（spec §S9.7.8）：`reviewable = false` —— 失效条件不可观测，
+ * 到期只显示结果、**没有**「复盘」按钮，改成「不可复盘（失效条件不可观测）」。
+ */
+const NOT_REVIEWABLE_ENTRY: FixtureEntry = {
+  ...DUE_ENTRY,
+  id: 107,
+  symbol: "002714",
+  thesis: "失效条件写的是一句话，没有价格也没有日期",
+  reviewable: false,
+  evaluation: {
+    outcome_pct: -2.1,
+    bench_pct: -0.4,
+    excess_pct: -1.7,
+    invalidation_hit: null,
+    invalidation_observable: false,
+  },
+};
+
+/**
+ * 路径：**先触发失效、到期反而盈利**（spec §S9.7.4 的 `touched_then_reversed`）。
+ * 弹窗要给"更像纪律问题"的提示，并且**不预选**归因。
+ */
+const REVERSED_DUE_ENTRY: FixtureEntry = {
+  ...NET_DUE_ENTRY,
+  id: 108,
+  thesis: "先跌破失效线，到期反而收涨",
+  evaluation: {
+    ...(NET_DUE_ENTRY.evaluation as FixtureEvaluation),
+    mae_pct: -12.4,
+    first_touch_invalidation: "2026-10-14",
+    touched_then_reversed: true,
+    days_to_invalidation: 2,
+    invalidation_observable: true,
+  },
+};
+
 /** 样本够（`reviewed_n >= 5`）：五类条数 + 占比 + 平均超额都可见。 */
 const STATS_ENOUGH: FixtureStats = {
   n: 10,
@@ -311,6 +381,47 @@ const STATS_SMALL_WITH_CI: FixtureStats = {
     discipline_break: { n: 4, successes: 1, ci_low: 0.05, ci_high: 0.72 },
     win: { n: 4, successes: 2, ci_low: 0.15, ci_high: 0.85 },
   },
+};
+
+/**
+ * Phase B 统计：`by_size` + 加权超额 + 校准曲线（spec §S9.7.1/§S9.7.5）+ `export_hint`。
+ *
+ * 校准两档刻意一档不够、一档够：`信心 1`（n=4）只许写"样本不足"，
+ * `信心 3`（n=12）才给命中率 58.0% —— 同屏对照，避免"每档都写样本不足"这种假绿。
+ */
+const STATS_WITH_SIZE_AND_CALIBRATION: FixtureStats = {
+  n: 26,
+  reviewed_n: 22,
+  by_verdict: {
+    thesis_wrong: 6,
+    timing_wrong: 4,
+    discipline_break: 6,
+    right_for_wrong_reason: 3,
+    luck: 3,
+  },
+  avg_excess_pct: -1.7,
+  discipline_break_share: 0.27,
+  by_kind: { watch: 10, buy: 4, sell: 2, pass: 8, hold: 2 },
+  avg_net_excess_pct: -1.82,
+  net_cost_bps: 12,
+  by_size: { none: 2, light: 1, normal: 3, heavy: 0 },
+  avg_weighted_excess_pct: -1.8,
+  calibration: {
+    n: 22,
+    bins: [
+      { confidence: 1, p: 0.2, n: 4, hit_rate: 0.25, sufficient: false },
+      { confidence: 3, p: 0.5, n: 12, hit_rate: 0.58, sufficient: true },
+    ],
+    brier: 0.231,
+  },
+  export_hint: "/api/v1/journal/export?format=csv&scope=mine",
+};
+
+/** 校准总样本不足：后端给 `calibration: null` + 原因，页面**只显示**原因，不画曲线。 */
+const STATS_CALIBRATION_INSUFFICIENT: FixtureStats = {
+  ...STATS_WITH_CI,
+  calibration: null,
+  calibration_note: "样本不足（<20 条已复盘且填了信心）",
 };
 
 interface JournalStore {
@@ -386,6 +497,11 @@ async function mockJournal(page: Page, store: JournalStore) {
         status: "open",
         // 创建响应里的 `bet_type` 跟着请求走；快照由后端固化（Phase A 未上线时缺省）
         bet_type: body.bet_type ?? null,
+        // S9.7.1/§S9.7.5：仓位与信心跟着请求走（后端 Phase B 落列后同形）
+        position_size: body.position_size ?? null,
+        confidence: body.confidence ?? null,
+        // 新条目默认可复盘（spec §S9.7.8 的闸只对"失效条件不可观测"置 false）
+        reviewable: true,
         evaluation: null,
         review: null,
       };
@@ -408,11 +524,15 @@ async function mockJournal(page: Page, store: JournalStore) {
 
 /** 打开 journal tab 的最小语境（空记录 + 样本不足统计）。 */
 async function openJournal(page: Page, store?: Partial<JournalStore>): Promise<JournalStore> {
+  // 每条 fixture 都**浅拷贝**一份：mock 的复盘会就地把条目改成 `reviewed`，
+  // 直接改模块级常量会让**后面的用例**看到被上一轮改过的 `DUE_ENTRY`
+  // （表现为"这条本该 due 的却出现在已复盘里"这种跨用例的隐性顺序依赖）。
+  const entries = (store?.entries ?? [DUE_ENTRY, REVIEWED_ENTRY]).map((entry) => ({ ...entry }));
   const state: JournalStore = {
-    entries: [DUE_ENTRY, REVIEWED_ENTRY],
     stats: STATS_INSUFFICIENT,
     lastCreate: null,
     ...store,
+    entries,
   };
   await mockJournal(page, state);
   await page.goto("/me?tab=journal");
@@ -450,6 +570,24 @@ async function pickBetType(page: Page, label: string) {
     .locator(".ant-radio-button-wrapper", { hasText: label })
     .first()
     .click();
+}
+
+/**
+ * 表单里选仓位（S9.7.1 的四选一，AntD `Radio.Button`）。
+ * 与期限/赌注同理：真 `<input>` 是透明覆盖层，点可见的 label 外壳。
+ */
+async function pickPositionSize(page: Page, label: string) {
+  await page
+    .getByTestId("journal-position-size")
+    .locator(".ant-radio-button-wrapper", { hasText: label })
+    .first()
+    .click();
+}
+
+/** 表单里选信心档（S9.7.5，AntD Select：点开下拉再点选项）。 */
+async function pickConfidence(page: Page, label: string) {
+  await page.getByTestId("journal-confidence").click();
+  await page.locator(".ant-select-item-option", { hasText: label }).first().click();
 }
 
 test.describe("决策日志（/me?tab=journal）", () => {
@@ -763,6 +901,198 @@ test.describe("决策日志（/me?tab=journal）", () => {
     );
   });
 
+  test("仓位与信心：默认「只观察」，提交后列表行显示仓位标签、载荷带四选一与 1–5", async ({
+    page,
+  }) => {
+    const store = await openJournal(page, { entries: [] });
+
+    const sizeGroup = page.getByTestId("journal-position-size");
+    // 四选一：多一个都说明枚举被扩了
+    await expect(sizeGroup.getByRole("radio")).toHaveCount(4);
+    // 默认「只观察」（spec §S9.7.1 的默认值，不是空白）
+    await expect(sizeGroup.locator(".ant-radio-button-wrapper-checked")).toHaveText("只观察");
+    // 信心可留空：默认没有值，占位文案说清"留空 = 不参与校准"
+    await expect(page.getByTestId("journal-confidence")).toContainText("留空 = 不参与校准");
+
+    // 第一笔：仓位/信心全默认 → 载荷 position_size=none，且**不带** confidence 键
+    await page.getByTestId("journal-thesis").fill("只记判断，不下单");
+    await pickInvalidationKind(page, "跌破某价格");
+    await page.getByTestId("journal-inv-price").fill("1500");
+    await pickHorizon(page, "30 天");
+    await page.getByTestId("journal-submit").click();
+    await expect(page.getByTestId("journal-open-item")).toHaveCount(1);
+    expect(store.lastCreate).toMatchObject({ position_size: "none" });
+    expect(store.lastCreate).not.toHaveProperty("confidence");
+    await expect(
+      page.getByTestId("journal-open-item").first().getByTestId("journal-entry-size")
+    ).toHaveText("仓位：只观察");
+
+    // 第二笔：轻仓 + 信心 4 → 载荷逐字，列表行显示「仓位：轻仓」
+    await page.getByTestId("journal-thesis").fill("轻仓试一下，怕看错");
+    await pickInvalidationKind(page, "跌破某价格");
+    await page.getByTestId("journal-inv-price").fill("12.5");
+    await pickHorizon(page, "7 天");
+    await pickPositionSize(page, "轻仓");
+    await pickConfidence(page, "4 分");
+    await page.getByTestId("journal-submit").click();
+    await expect(page.getByTestId("journal-open-item")).toHaveCount(2);
+    expect(store.lastCreate).toMatchObject({ position_size: "light", confidence: 4 });
+    await expect(
+      page.getByTestId("journal-open-item").first().getByTestId("journal-entry-size")
+    ).toHaveText("仓位：轻仓");
+  });
+
+  test("不可复盘：reviewable=false 的条目没有「复盘」按钮，改为文字说明", async ({ page }) => {
+    await openJournal(page, { entries: [NOT_REVIEWABLE_ENTRY, DUE_ENTRY] });
+
+    await expect(page.getByTestId("journal-due-item")).toHaveCount(2);
+    // 两条到期里只有可复盘的那条有按钮
+    await expect(page.getByTestId("journal-review-open")).toHaveCount(1);
+
+    const blocked = page.getByTestId("journal-due-item").first();
+    await expect(blocked).toContainText("失效条件写的是一句话");
+    await expect(blocked.getByTestId("journal-not-reviewable")).toHaveText(
+      "不可复盘（失效条件不可观测）"
+    );
+    // 不是"禁用的按钮"，而是**没有**按钮（禁用会暗示以后还能点）
+    await expect(blocked.locator("button")).toHaveCount(0);
+
+    // 另一条照旧能复盘（AntD 会给两个汉字的按钮插空格，故用正则而不是逐字 "复盘"）
+    await expect(
+      page.getByTestId("journal-due-item").nth(1).getByTestId("journal-review-open")
+    ).toHaveText(/复\s*盘/);
+  });
+
+  test("路径提示：先触失效后反弹时在归因上方提示「更像纪律问题」，且不预选归因", async ({
+    page,
+  }) => {
+    await openJournal(page, { entries: [REVERSED_DUE_ENTRY, DUE_ENTRY] });
+
+    await page.getByTestId("journal-review-open").first().click();
+    const modal = page.getByTestId("journal-review-modal");
+    await expect(modal).toBeVisible();
+
+    // 路径三格：最大不利偏移 / 首次触达日 / 距入场交易日数（逐字）
+    const pathBox = modal.getByTestId("journal-review-path");
+    await expect(pathBox.getByTestId("journal-review-mae")).toHaveText("-12.40%");
+    await expect(pathBox.getByTestId("journal-review-first-touch")).toHaveText("10月14日");
+    await expect(pathBox.getByTestId("journal-review-days-to")).toHaveText("第 2 个交易日");
+
+    // 提示文案逐字（"纪律"两个字是提示的重点）
+    const hint = modal.getByTestId("journal-path-hint");
+    await expect(hint).toContainText("你先触发了失效条件，之后才反弹——这更像纪律问题");
+    // 位置在「归因」选择**上方**：按 DOM 文本顺序断言（`innerText` 跟着文档顺序，
+    // 比拿 boundingBox 比 y 稳——弹窗有入场动画、长内容还会滚动）。
+    const modalText = await modal.innerText();
+    const hintAt = modalText.indexOf("你先触发了失效条件");
+    const verdictAt = modalText.indexOf("归因（必选");
+    expect(hintAt).toBeGreaterThan(-1);
+    expect(verdictAt).toBeGreaterThan(-1);
+    expect(hintAt).toBeLessThan(verdictAt);
+
+    // 提示不是强制选择：没有预选归因，确认仍禁用
+    await expect(modal.locator("input[type=radio]:checked")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "确认复盘" })).toBeDisabled();
+
+    // 没有"先触失效"的条目不给这条提示
+    // （AntD 会给两个汉字的按钮插空格：可访问名是「取 消」，故用正则）
+    await page.getByRole("button", { name: /取\s*消/ }).click();
+    await expect(modal).toHaveCount(0);
+    await page.getByTestId("journal-review-open").nth(1).click();
+    await expect(page.getByTestId("journal-review-modal")).toBeVisible();
+    await expect(page.getByTestId("journal-path-hint")).toHaveCount(0);
+  });
+
+  test("统计：by_size 分栏 + 加权超额，校准每档 n>=10 才给命中率", async ({ page }) => {
+    await openJournal(page, { stats: STATS_WITH_SIZE_AND_CALIBRATION });
+    const card = page.getByTestId("journal-stats");
+
+    // 仓位分栏：四个档各自条数（纯条数事实，不是比例）
+    const bySize = card.getByTestId("journal-stats-by-size");
+    await expect(bySize).toBeVisible();
+    for (const label of ["只观察", "轻仓", "标准", "重仓"]) {
+      await expect(bySize).toContainText(label);
+    }
+    await expect(bySize).toContainText("只记判断");
+
+    // 加权超额用后端给的 -1.80%（不是净平均 -1.82%）
+    const weighted = card.getByTestId("journal-stats-weighted-excess");
+    await expect(weighted).toContainText("加权超额");
+    await expect(weighted).toContainText("-1.80%");
+
+    // 校准卡：n<10 的档只写"样本不足"，n>=10 的档才给命中率
+    const calibration = page.getByTestId("journal-calibration");
+    await expect(calibration).toBeVisible();
+    await expect(calibration).toContainText("你的信心与实际结果的对照");
+    const bins = calibration.getByTestId("journal-calibration-bin");
+    await expect(bins).toHaveCount(2);
+    await expect(bins.nth(0)).toContainText("信心 1");
+    await expect(bins.nth(0)).toContainText("样本不足（n=4）");
+    await expect(bins.nth(1)).toContainText("信心 3");
+    await expect(bins.nth(1)).toContainText("58.0%");
+    await expect(bins.nth(1)).toContainText("n=12");
+    await expect(calibration.getByTestId("journal-calibration-foot")).toContainText(
+      "共 22 条已复盘且填了信心 · Brier 0.231"
+    );
+
+    // 导出链接优先用后端给的 `export_hint`
+    await expect(page.getByTestId("journal-export")).toHaveAttribute(
+      "href",
+      "/api/v1/journal/export?format=csv&scope=mine"
+    );
+  });
+
+  test("校准：总样本不足时只显示 calibration_note，不画曲线", async ({ page }) => {
+    await openJournal(page, { stats: STATS_CALIBRATION_INSUFFICIENT });
+
+    const calibration = page.getByTestId("journal-calibration");
+    await expect(calibration).toBeVisible();
+    await expect(calibration.getByTestId("journal-calibration-note")).toHaveText(
+      "样本不足（<20 条已复盘且填了信心）"
+    );
+    // 没有曲线、没有命中率、没有百分比
+    await expect(calibration.getByTestId("journal-calibration-bin")).toHaveCount(0);
+    await expect(calibration).not.toContainText("命中率");
+    await expect(calibration).not.toContainText("%");
+  });
+
+  test("导出与隐私：页底「导出我的日志」与不提供单条删除的原文告知", async ({ page }) => {
+    const store = await openJournal(page, { stats: STATS_INSUFFICIENT });
+
+    const link = page.getByTestId("journal-export");
+    await expect(link).toHaveText("导出我的日志");
+    // 后端没给 export_hint（Phase B 未上线）→ 拼契约里的固定端点
+    await expect(link).toHaveAttribute("href", "/api/v1/journal/export?format=csv");
+
+    // 隐私告知原文，逐字
+    await expect(page.getByTestId("journal-privacy")).toHaveText(
+      "日志不提供单条删除，以保证复盘记录不可篡改；如需清除请删除账号"
+    );
+
+    // 后端给了 export_hint 时优先用它
+    store.stats = STATS_WITH_SIZE_AND_CALIBRATION;
+    await page.reload();
+    await expect(page.getByTestId("journal-panel")).toBeVisible();
+    await expect(page.getByTestId("journal-export")).toHaveAttribute(
+      "href",
+      "/api/v1/journal/export?format=csv&scope=mine"
+    );
+  });
+
+  test("Phase B 字段缺省（后端未上线）：不画仓位分栏/校准卡，也不补 0", async ({ page }) => {
+    await openJournal(page, { stats: STATS_ENOUGH, entries: [DUE_ENTRY, REVIEWED_ENTRY] });
+
+    // 旧统计照旧（五类占比 + 平均超额），Phase B 的块一个都不画
+    await expect(page.getByTestId("journal-stats-breakdown")).toBeVisible();
+    await expect(page.getByTestId("journal-stats-by-size")).toHaveCount(0);
+    await expect(page.getByTestId("journal-stats-weighted-excess")).toHaveCount(0);
+    await expect(page.getByTestId("journal-calibration")).toHaveCount(0);
+
+    // 列表行不显示仓位标签（缺字段 ≠ 只观察）；到期条目照旧有复盘按钮
+    await expect(page.getByTestId("journal-entry-size")).toHaveCount(0);
+    await expect(page.getByTestId("journal-review-open")).toHaveCount(1);
+  });
+
   test("已复盘条目没有编辑/删除入口（append-only）", async ({ page }) => {
     // 只放已复盘条目：这样"没有任何复盘按钮"是确定判据（有 due 条目时本来就该有一个）
     await openJournal(page, { entries: [REVIEWED_ENTRY] });
@@ -775,7 +1105,10 @@ test.describe("决策日志（/me?tab=journal）", () => {
     await expect(panel.getByRole("button", { name: "删除" })).toHaveCount(0);
     await expect(panel.getByRole("button", { name: "复盘" })).toHaveCount(0);
     await expect(panel).not.toContainText("编辑");
-    await expect(panel).not.toContainText("删除");
+    // 「删除」只允许出现在页脚的隐私告知原文里（spec §S9.7.9 要求逐字告知"不提供单条删除"），
+    // 所以这一条**按条目行**断言：已复盘条目自己没有删除入口。
+    const reviewedRow = page.getByTestId("journal-reviewed-item").first();
+    await expect(reviewedRow).not.toContainText("删除");
 
     // 已复盘条目只有"看"：归因标签 + 备注都在，且没有操作按钮
     const reviewed = page.getByTestId("journal-reviewed-item").first();

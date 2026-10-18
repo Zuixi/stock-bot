@@ -38,6 +38,14 @@ export type JournalInvalidationKind = "price_below" | "price_above" | "date_only
 export type JournalKind = "watch" | "buy" | "sell" | "pass" | "hold";
 
 /**
+ * 仓位粗档（`position_size`，spec §S9.7.1）：`none` = 只观察不下单，创建时选定。
+ *
+ * 权重口径 `size_weight = {none:0, light:0.5, normal:1, heavy:2}` 由后端算（`weighted_*`），
+ * 前端只用它写清"只观察不计收益"，不自己乘。
+ */
+export type JournalPositionSize = "none" | "light" | "normal" | "heavy";
+
+/**
  * 赌的是什么（`bet_type`，spec §S9.7.3）：基准必须匹配赌注类型，创建时选定、事后不可改。
  *
  * - `direction`（默认）：赌这个行业/标的会涨 → 所属申万一级**成分股等权平均收益**；
@@ -124,6 +132,18 @@ export interface JournalEvaluation {
   bench_basis_note?: string | null;
   /** 无行业归属、基准退化为沪深300 时为 `true`。 */
   bench_fallback?: boolean | null;
+
+  // ── 路径分析（spec §S9.7.4；Phase B 后端未上线时全部缺省） ──────────────
+  /** 入场到到期期间的最大不利偏移（%）。 */
+  mae_pct?: number | null;
+  /** 首次触达失效条件的日期（`YYYY-MM-DD`）；未触达 = `null`。 */
+  first_touch_invalidation?: string | null;
+  /** 先触发失效条件、到期反而盈利。复盘弹窗据此给"纪律问题"提示（不强制选择）。 */
+  touched_then_reversed?: boolean | null;
+  /** 首次触达失效条件距入场交易日数；未触达 = `null`。 */
+  days_to_invalidation?: number | null;
+  /** 失效条件是否可观测（`false` = 该条不可复盘，spec §S9.7.8 的闸）。 */
+  invalidation_observable?: boolean | null;
 }
 
 /** 一条复盘（append-only，`unique(entry_id)`：一个条目至多一条）。 */
@@ -160,6 +180,20 @@ export interface JournalEntry {
   review?: JournalReview | null;
   /** 创建时选定的赌注类型（spec §S9.7.3）；Phase A 未上线时缺省。 */
   bet_type?: JournalBetType | null;
+  /**
+   * 仓位粗档（spec §S9.7.1）；缺省时列表**不猜**「只观察」（那会把"没记录"说成"没下单"）。
+   */
+  position_size?: JournalPositionSize | null;
+  /**
+   * 事前信心 1–5（spec §S9.7.5）；`null`/缺省 = 不参与校准。
+   * 只用于统计分档，前端不拿它改写任何结果。
+   */
+  confidence?: number | null;
+  /**
+   * 是否可复盘（spec §S9.7.8）：`false` = 失效条件不可观测 → **不提供**复盘入口。
+   * 缺省按可复盘处理（Phase B 后端未上线时旧条目照旧能复盘）。
+   */
+  reviewable?: boolean | null;
 }
 
 export interface JournalListResponse {
@@ -172,6 +206,10 @@ export interface JournalEntryCreate {
   kind?: JournalKind;
   /** 赌注类型（spec §S9.7.3，默认 `direction`）；后端 Phase A 未上线时多传它的后果见契约。 */
   bet_type?: JournalBetType;
+  /** 仓位粗档（spec §S9.7.1，默认 `none` = 只观察）；Phase B 后端未上线时后端会忽略。 */
+  position_size?: JournalPositionSize;
+  /** 事前信心 1–5（spec §S9.7.5）；**省略 = 不参与校准**（不是 0，也不是 3）。 */
+  confidence?: number;
   thesis: string;
   invalidation: JournalInvalidation;
   horizon_days: JournalHorizon;
@@ -214,6 +252,33 @@ export interface JournalShareCI {
  */
 export type JournalShareCIKey = "discipline_break" | "win";
 
+/**
+ * 校准曲线的一档（`stats.calibration.bins[]`，spec §S9.7.5）。
+ *
+ * - `confidence`：1–5 的信心档；
+ * - `p`：该档的**固定**先验概率（`{1:0.2, 2:0.35, 3:0.5, 4:0.65, 5:0.8}`，后端算，前端不重算）；
+ * - `hit_rate`：该档实际净超额 > 0 的比例（0–1）；
+ * - `sufficient`：后端判定该档样本是否够（展示层仍以 `n >= 10` 为准，两者取严）。
+ */
+export interface JournalCalibrationBin {
+  confidence: number;
+  p?: number | null;
+  n: number;
+  hit_rate?: number | null;
+  sufficient?: boolean | null;
+}
+
+/**
+ * 校准卡（spec §S9.7.5）：`n` = 已复盘且填了信心的总样本；样本不足时后端给 `null`。
+ * 全部字段可选——Phase B 后端未上线时整块缺省，页面**不显示**校准卡（不补 0、不虚构）。
+ */
+export interface JournalCalibration {
+  n: number;
+  bins?: JournalCalibrationBin[] | null;
+  /** `mean((p - I[net_excess>0])**2)`；`null`/缺省时只不显示这一个数。 */
+  brier?: number | null;
+}
+
 export interface JournalStats {
   n: number;
   reviewed_n: number;
@@ -233,6 +298,27 @@ export interface JournalStats {
   multiple_comparison_note?: string | null;
   sample_sufficient?: boolean | null;
   min_reviewed_for_share?: number | null;
+
+  // ── Phase B 追加（全部可选；缺省时页面按旧形态退化） ────────────────────
+  /** 四种仓位粗档各自的条数（spec §S9.7.1；`none` 计入判断、不计入收益）。 */
+  by_size?: Partial<Record<JournalPositionSize, number>> | null;
+  /** 按 `size_weight` 加权的平均超额（`none` 排除，spec §S9.7.1）；缺省时**不显示**，不补 0。 */
+  avg_weighted_excess_pct?: number | null;
+  /** 校准曲线（spec §S9.7.5）；样本不足时为 `null`，原因在 `calibration_note`。 */
+  calibration?: JournalCalibration | null;
+  /** 校准样本不足的原因（原样展示，前端不改写）。 */
+  calibration_note?: string | null;
+  /** 导出端点（spec §S9.7.9），前端直接用；缺省时拼固定路径。 */
+  export_hint?: string | null;
+}
+
+/** 导出端点的退化路径（后端未给 `export_hint` 时用它）。 */
+export const JOURNAL_EXPORT_FALLBACK = "/api/v1/journal/export?format=csv";
+
+/** 取导出链接：**优先**后端给的 `export_hint`，缺省用契约里的固定端点。 */
+export function journalExportUrl(hint?: string | null): string {
+  const trimmed = (hint ?? "").trim();
+  return trimmed.length > 0 ? trimmed : JOURNAL_EXPORT_FALLBACK;
 }
 
 /** 按状态取列表（三种状态各一次请求；页面并行取三份）。 */
