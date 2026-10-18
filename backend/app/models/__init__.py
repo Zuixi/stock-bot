@@ -20,6 +20,7 @@ from app.models.industry_research import (
     IndustryReferencePoint,
     IndustrySignal,
 )
+from app.models.journal import DecisionJournalEntry, DecisionJournalReview
 from app.models.market_data import (  # noqa: F401
     Announcement,
     BlockTrade,
@@ -63,6 +64,8 @@ __all__ = [
     "IndustryReferencePoint",
     "IndustrySignal",
     "IndustryKnowledge",
+    "DecisionJournalEntry",
+    "DecisionJournalReview",
     "FundEtfDaily",
     "CbDaily",
     "SectorMoneyflowSnapshot",

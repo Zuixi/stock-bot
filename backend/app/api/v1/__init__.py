@@ -22,6 +22,7 @@ from app.api.v1 import (
     concepts,
     financials,
     industries,
+    journal,
     market,
     market_data,
     metrics,
@@ -84,3 +85,6 @@ router.include_router(metrics.router, prefix="/metrics", tags=["metrics"])
 
 # New-stock board: /api/v1/new-stocks（T10，东财 BK0501 成分 × 本地行情）
 router.include_router(new_stocks.router, prefix="/new-stocks", tags=["new-stocks"])
+
+# 决策日志（spec §S9）：/api/v1/journal —— 只有 POST/GET（不可篡改），登录即可
+router.include_router(journal.router, prefix="/journal", tags=["journal"])
