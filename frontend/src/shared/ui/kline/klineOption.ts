@@ -80,6 +80,21 @@ const AXIS_POINTER_PER_AXIS = {
   triggerOn: "mousemove|click",
 } as const;
 
+/**
+ * 窄屏成交量刻度：`grid[1].left = 46px` 的留白里装不下 `fmtVolume` 的两位小数 ——
+ * 「100.00万手」在 9px 字号下实测约 46px，首字会压到画布左缘外（P1-1 只拿 600519
+ * 的万手两位数验过，没覆盖这个量级）。窄屏降到**整数万手**：
+ *
+ * - 单位仍是 `fmtVolume` 的「手 / 万手」（不换「亿手」、不换口径），tooltip 继续用
+ *   `fmtVolume` 的两位小数 —— 轴上要的是量级参照，精确读数在 tooltip；
+ * - 整数万手的最大宽度（`10000万手` ≈ 43px）仍落在 46px 内，任何现实量级都不裁字。
+ *
+ * 宽屏（左留白 60px / 10px 字号）保持与 tooltip 逐字同源，不降精度。
+ */
+function narrowVolumeLabel(v: number): string {
+  return v >= 10000 ? `${Math.round(v / 10000)}万手` : fmtVolume(v);
+}
+
 export function buildKlineOption({
   points, maSeries, visibleMas, colors, narrow = false, eventMarkers,
 }: KlineOptionInput) {
@@ -141,7 +156,7 @@ export function buildKlineOption({
       return v == null ? "" : row(name, v.toFixed(2), c.flat, def?.color);
     };
     return `<div style="font-size:12px;line-height:1.8;min-width:150px">
-      <div style="font-weight:600;margin-bottom:2px">${p.date}</div>
+      <div class="kline-tooltip__date" style="font-weight:600;margin-bottom:2px">${p.date}</div>
       ${row("开盘", open.toFixed(2), c.flat, color)}
       ${row("收盘", close.toFixed(2), c.flat, color)}
       ${row("最高", high.toFixed(2), c.flat, color)}
@@ -217,14 +232,14 @@ export function buildKlineOption({
         // 单位口径与 tooltip 一致（`fmtVolume`：手 / 万手）—— 两个入口两套单位
         // 会让"轴上 3.2万手"与"tooltip 32000手"看起来像两个数（同 F5 那类口径病）。
         // 两个 pane 的 y 轴标签列**纵向不相交**（grid 0 top:28 / grid 1 top:68%），
-        // 故窄屏收窄左轴到 46px 也不会压到价格标签；窄屏再降一档字号 + margin，
-        // 保证「1234.57万手」这类最长标签仍落在 46px 留白内（400px 画布实测见报告）。
+        // 故窄屏收窄左轴到 46px 也不会压到价格标签；窄屏改走 `narrowVolumeLabel`
+        // （整数万手），避免「100.00万手」这档被画布左缘裁掉首字。
         axisLabel: {
           show: true,
           color: c.textSecondary,
           fontSize: narrow ? 9 : 10,
           margin: narrow ? 2 : 4,
-          formatter: (v: number) => fmtVolume(v),
+          formatter: narrow ? narrowVolumeLabel : fmtVolume,
         },
         splitLine: { show: false },
       },

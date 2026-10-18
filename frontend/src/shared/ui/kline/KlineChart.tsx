@@ -22,6 +22,20 @@ const DEFAULT_VISIBLE_MAS: MaKey[] = ["MA5", "MA10", "MA20"];
 const FOCUS_HALF_WINDOW = 20;
 
 /**
+ * ribbon 单行高度（px）：**实测 19**（1440×900 下 `boundingBox().height`），
+ * 不等于 CSS 里的 `line-height: 18px` —— 「开 1311.57」这类格子混排了 PingFang（中文）
+ * 与 `--font-num` 等宽数字，两种字体的基线对齐后行盒多出 1px。
+ *
+ * 它是画布之外**实实在在多出来的一行**：画布 400 + ribbon 19 = 实测卡片 482（与
+ * `pages/stock-detail/index.tsx` 的 `KLINE_CARD_MIN_HEIGHT` 同口径）。所以加载态占位
+ * 必须把这一行一起预留，否则数据落地时卡片会从 463 长到 482、下方各块整体下移。
+ *
+ * 只定义这一处：ribbon 的 `minHeight` 与加载态高度都引用它，两边不会漂。
+ * 窄屏（`<768`）不渲染 ribbon（计划 §5），故窄屏不预留。
+ */
+const RIBBON_HEIGHT = 19;
+
+/**
  * `updateAxisPointer` 的事件体只承诺"轴上有值"，不承诺形态。
  *
  * 类目轴（本图两条 xAxis 都是 `type: "category"`）实测给的是 **dataIndex 数字**
@@ -141,7 +155,21 @@ export function KlineChart({
     const dateIndex = new Map(points.map((p, i) => [p.date, i]));
 
     const readHoverIndex = (event: unknown): number | null => {
-      const raw = (event as AxisPointerEvent | undefined)?.axesInfo?.[0]?.value;
+      /**
+       * 事件体只承诺"某条轴上有值"，**不承诺是哪条轴**。两个 y 轴的 `value` 是**价格**
+       * （如 1340），`Math.trunc` 之后会变成一个语法上完全合法的下标 —— ribbon 会静默
+       * 显示第 1340 根（或任意相邻一根），而不是光标下的那根，且不抛任何错。所以：
+       * 只要事件里**声明了**轴身份，就只认 candlestick 所在的 x 轴
+       * （`axisDim === "x"`，`axisIndex === 0`；`axisIndex` 缺失时按 x 轴接受）；
+       * 一条都不符合 ⇒ 返回 null，宁可回落最后一根也不写下坏值。
+       * 字段整体缺失（其它 echarts 版本 / 合成事件）才退回原来的 `axesInfo[0]`。
+       */
+      const axes = (event as AxisPointerEvent | undefined)?.axesInfo ?? [];
+      const identitiesDeclared = axes.some((axis) => axis.axisDim !== undefined);
+      const entry = identitiesDeclared
+        ? axes.find((axis) => axis.axisDim === "x" && (axis.axisIndex == null || axis.axisIndex === 0))
+        : axes[0];
+      const raw = entry?.value;
       if (typeof raw === "number" && Number.isFinite(raw)) return Math.trunc(raw);
       if (typeof raw === "string" && raw !== "") {
         const numeric = Number(raw);
@@ -319,7 +347,17 @@ export function KlineChart({
       }
     >
       {isLoading ? (
-        <div style={{ height: 400, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        // 400（画布）+ 19（宽屏 ribbon 行，`RIBBON_HEIGHT` 实测值）= 落地后的真实高度：
+        // 不预留这一行，数据一到卡片就长一截，下面的块整体下移（CLS 只在事件卡上量过，
+        // 漏了这里 —— 左栏比右栏矮，事件卡的位置被侧栏挡住，量不到左栏自己的增长）。
+        <div
+          style={{
+            height: 400 + (narrow ? 0 : RIBBON_HEIGHT),
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
           <Spin />
         </div>
       ) : failed ? (
@@ -372,6 +410,9 @@ export function KlineChart({
                 paddingRight: 20,
                 fontSize: 11,
                 lineHeight: "18px",
+                // 行盒高度钉成与加载态预留值一致（`RIBBON_HEIGHT`）：改了这一行的高度，
+                // 加载态的占位必须同步，否则就是一次位移。
+                minHeight: RIBBON_HEIGHT,
                 color: colors.flat,
               }}
             >

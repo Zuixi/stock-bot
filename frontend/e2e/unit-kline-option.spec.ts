@@ -142,7 +142,12 @@ test("buildKlineOption：成交量轴有可读刻度（fmtVolume 口径，splitN
   const narrowOption = buildKlineOption({ points, maSeries, visibleMas: ["MA5"], narrow: true });
   const narrowAxis = narrowOption.yAxis[1] as unknown as AxisLike;
   expect(narrowAxis.axisLabel?.show).toBe(true);
-  expect(narrowAxis.axisLabel?.formatter?.(12_345)).toBe(fmtVolume(12_345));
+  // 窄屏 46px 留白 + 9px 字号装不下 `fmtVolume` 的两位小数（「100.00万手」实测约 46px，
+  // 首字会压到画布左缘外）⇒ 轴上降为整数万手；单位仍是「万手」，tooltip 继续用
+  // `fmtVolume` 的精确值（轴上只是量级参照）。
+  expect(narrowAxis.axisLabel?.formatter?.(12_345)).toBe("1万手");
+  expect(narrowAxis.axisLabel?.formatter?.(1_000_000)).toBe("100万手");
+  expect(narrowAxis.axisLabel?.formatter?.(9_999)).toBe("9999手");
   expect((narrowOption.grid as Array<{ left: number }>)[1].left).toBe(46);
 
   // 价格 pane 与成交量 pane 的 y 轴标签列**纵向不相交**：grid[0] 从 28px 起、高 50%；

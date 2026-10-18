@@ -114,6 +114,21 @@ test("个股K线：ribbon 日期随悬停变化，移出画布回落最后一根
   // web-first 断言自带重试：rAF 节流 + 事件派发完成后 ribbon 才会换文本
   await expect(ribbonDate).not.toHaveText(lastDate);
 
+  // ⚠️ 只断言"日期变了"**不够**：ribbon 换成相邻一根（off-by-one）、或把 y 轴的价格
+  // 当成下标再夹进序列，都能让上一条通过。这里把三方钉在一起 —— tooltip 的日期头来自
+  // ECharts 的 `params[0].dataIndex`（光标真正命中的那根），ribbon 的日期来自
+  // `updateAxisPointer` 解析出的下标；两者逐字相等，才证明 ribbon ↔ 悬停 bar 的映射正确。
+  // `.kline-tooltip__date` 是 `klineOption.ts` formatter 里显式声明的类名。
+  const tooltipDate = card.locator(".kline-tooltip__date");
+  await expect(tooltipDate).toBeVisible();
+  const hoveredDate = (await tooltipDate.innerText()).trim();
+  expect(hoveredDate, "tooltip 日期头应是 ISO 日期（否则下面拿它当 oracle 没有意义）").toMatch(
+    /^\d{4}-\d{2}-\d{2}$/,
+  );
+  await expect(ribbonDate, "ribbon 日期必须等于 tooltip 那一根（同一根悬停 bar）").toHaveText(
+    hoveredDate,
+  );
+
   // 验收项「鼠标移出恢复最后一根」：`globalout` / axisPointer leave 两条路都写回 null
   await page.mouse.move(10, 10);
   await expect(ribbonDate).toHaveText(lastDate);

@@ -23,12 +23,6 @@ interface Props {
 
 interface State {
   error: Error | null;
-  /**
-   * 重试代数。渲染正常时作为子树容器的 `key`：点「重试」→ 代数 +1 → 子树**整体重挂**，
-   * 崩溃时残留的局部 state（半初始化的 ref、被写坏的表单值）随卸载消失，不会带着脏状态
-   * 再渲染一遍同一个错误。
-   */
-  attempt: number;
 }
 
 /**
@@ -40,14 +34,16 @@ interface State {
  * 卸载整棵子树）。所以这里只做三件事：
  *
  * 1. `getDerivedStateFromError` 把异常收在本块内，渲染一张行内错误卡；
- * 2. 错误卡带「重试」，`key` 换代重挂子树（不是只把错误卡换成"再试一次"的空白）；
+ * 2. 错误卡带「重试」，点击清掉错误后子树**重新挂载**。错误态渲染的是错误卡而不是
+ *    `children`，子树此时已经卸载，重试时自然是全新实例（半初始化的 ref / 脏表单值随
+ *    卸载消失）—— 不需要 `key` 强制换代，故也没有 `key`；
  * 3. 错误卡按 `minHeight` 占位，失败不搬家。
  *
  * 视觉上复用既有语言：`Alert type="error"` + 小号 `Button`，与 `RelatedEvents` 的
  * 行内错误块同款；不新造颜色/字号/圆角。
  */
 export class BlockBoundary extends Component<Props, State> {
-  state: State = { error: null, attempt: 0 };
+  state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): Partial<State> {
     return { error };
@@ -58,7 +54,8 @@ export class BlockBoundary extends Component<Props, State> {
   }
 
   private handleRetry = () => {
-    this.setState((prev) => ({ error: null, attempt: prev.attempt + 1 }));
+    // 清掉错误即可：错误态下 `children` 已被卸载，恢复渲染时是全新的子树。
+    this.setState({ error: null });
   };
 
   render() {
@@ -87,11 +84,11 @@ export class BlockBoundary extends Component<Props, State> {
       );
     }
 
-    // `key` 是重试代数：换 key = 子树整体重挂（错误态残留的局部 state 一并清掉）。
     // 这一层 div 是**错误边界的层级**（和错误卡同层），正常渲染时不给最小高度 ——
     // 见 `minHeight` 的注释：留白占位会把"合法地什么都没有"画成一块空地。
+    // 不需要 `key`：重试时 `error` 被清掉，子树从"根本没挂载"直接进入首次挂载。
     return (
-      <div key={this.state.attempt} data-block={title}>
+      <div data-block={title}>
         {children}
       </div>
     );

@@ -115,17 +115,20 @@ const SKELETON_CHIP_LABELS: Array<string | null> = [
  * 本块的**实测自然高度**（1440×900 侧栏，P2-1 用 Playwright `boundingBox().height` 量得）：
  * `padding-top 10` + 1px 上边框 + chip 行 40（六枚在 1/3 页宽里折两行）+ 6 gap + 一句人话 36。
  *
- * 只用在**骨架**上（`min-height`）：加载中 chip 值是短 `--`，折行数与正式行可能不同 ——
- * 不钉住的话，日线一到这一行会从 ~50px 长到 93px，把下面的公司概况与事件卡整体下推。
+ * **三态都钉住**（`min-height`）：加载骨架、失败行、成功行。加载中 chip 值是短 `--`、
+ * 成功行在更宽的侧栏里六枚 chip 可能排成一行 —— 谁矮了都会让下面的公司概况与事件卡
+ * 上下跳（骨架 → 成功是向下长，成功 → 骨架是向上抽）。钉住后三态高度一致。
  */
 const CHARACTER_ROW_MIN_HEIGHT = 93;
 
 /**
  * 股性事实行的**三态**（P2-1）：
- * - **加载中** → 六个 chip 的 `--` 骨架（高度由页面那层 `BlockBoundary` 的 `minHeight`
- *   钉在实测自然高度 93px）。不写「暂无…」：还没到 ≠ 没有；
+ * - **加载中** → 六个 chip 的 `--` 骨架（`min-height` 钉在实测自然高度 93px）。
+ *   不写「暂无…」：还没到 ≠ 没有；
  * - **成功但样本不足** → `stats === null` ⇒ 整行不渲染（设计稿与 P2-3 brief 都要求
  *   "新股不足 60 根时股性行不出现"，**不显示 0**）；
+ * - **成功** → 六枚 chip + 一句人话，同样 `min-height: 93px`：chip 少一枚（量能不可用）
+ *   或宽到六枚排成一行时，自然高度会低于骨架，不钉住就是一次**向上**跳；
  * - **失败** → 行内「加载失败 · 重试」。**这里为什么可以再放一枚重试**：同一份 qfq 日线
  *   还被报价条行 4（`PositionStrip`）消费，那里也有一枚「重试」；两枚按钮打的是**同一个**
  *   React Query 缓存键，`refetch()` 由查询层去重，不会多取一次。反过来若失败时本行直接
@@ -251,7 +254,13 @@ export function CharacterFacts({ stats: state }: { stats: CharacterStatsState })
   }
 
   return (
-    <div className="character-facts" data-testid="character-facts">
+    // 成功态也钉在骨架的实测高度：chip 少一枚或宽到排成一行时自然高度会低于 93px，
+    // 不钉住就会在数据落地后把下面两块**往上抽**（与加载态的向下长是同一类位移）。
+    <div
+      className="character-facts"
+      data-testid="character-facts"
+      style={{ minHeight: CHARACTER_ROW_MIN_HEIGHT }}
+    >
       {/* ONE chip row（brief 第 7 条）+ 每个 chip 一枚定义 tooltip */}
       <div className="character-facts__chips">
         {chips.map((chip) => (
