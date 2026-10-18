@@ -1,3 +1,17 @@
+## 2026-10-19 - 计划登记：标的详情页整改（**自审后改版为 P0/P1/P2**：5 处假数据 · 联动 · 防复发契约测试 · 图内事件标记）
+
+- **触发**：owner 实测反馈「K 线虚线与成交量不跨区联动」，全量审计 `features/stock-detail`（1175 行）+ 后端读面后，联动只是表层——更严重的是**页面在说假话**
+- **5 处页面输出错误信息（P0 假数据）**：①「成长与盈利」三张卡恒 `--`，因为 `StockEnrichedOut`/`StockOut` 根本没有 `roe`/`revenue_growth`/`profit_growth`，而 `FundamentalCards` 在读它们（数据其实在 `/financials/{symbol}/financial-summary`）②龙虎榜 tab 对绝大多数股票恒为空，因为 `/market/dragon-tiger` **无 `symbol` 参数**，前端只能取全市场最新日 top50 再 filter ③**查询失败时 5 张表都显示「暂无相关公告」**——`dataSource={x.data ?? []}` 且无 `isError` 分支，网络故障被伪装成「这只票没公告」
+- **能力已建、页面未接**：估值 3 年分位（`/valuation-history` 已返回 `percentiles`）、公司概况 4 字段（`StockOut` 已返回，前端连类型都没映射）、决策日志（`POST /journal` 带 `symbol`，详情页无入口）
+- **对上一轮口头判断的更正**：特征雷达端点存在但**全仓没有任何代码写 `stock_features`**，且 `RadarAxis.percentile` 恒 `None` ⇒「有端点、无数据、无分位」；北向持股/高管增减持**只有 ingest 侧**，读面三件套不存在
+- **对本计划第一版的四处自我更正（owner 要求以"审别人计划"的标准自审）**：①**10 个 Task 平铺 6 人日是错的**——价值集中在 P0，改为三档（P0 2 人日 ≈70% 价值 / P1 2.5 人日 / P2 1.5 人日 / 砍掉一批）②**漏掉了两件更值钱的事**：图内事件标记 + 列表定位联动（回答「那天为什么涨」，复用同批数据几乎零额外请求）、`check-api-fields.mjs` 契约测试（F1 的根因是 `StockRecord.roe?: number` 是可选字段所以 TS 永不报错，只删字段不建护栏 ⇒ 下一个人加 `dividendYield?` 会一模一样复发）③**编造了验收阈值**（首屏 ≤8 请求 / P95 <16ms / K 线 ≥800px 全是估的），改为「改前测基线、改后不劣化」④**编号自相矛盾**：第一版让 `A1`–`A18` 同时表示"审计事实"与"Task 编号"，同一串字母两种含义；本版改为 `F*`（事实）/ `P0-*` `P1-*` `P2-*`（任务），并把每档覆盖哪些 `F` 写进 §2 范围裁定
+- **两项判断被降级**：D1「事件时间轴取代 5 tab」——同花顺/东财/雪球都用 tabs，我把偏好写成了行业标准，改为「角标计数 + 图内标记」；D2 雷达措辞「用图形撒谎」过重，真实原因是分位需全市场特征生产管道，**是取舍不是不可能**
+- **产出**：`plans/2026-10-19-stock-detail-overhaul.md`（改写）+ `plans/index.md` 登记（`status: draft`），审计事实表 **18 条**逐条带落点与档位，§2「范围裁定」给出三档与累计价值，§5 移动端专章，§6 验收改为基线对照
+- **新增机械门禁**：`check-api-fields.mjs`（前端 `StockRecord` 字段 ⊆ 后端 `StockOut ∪ StockEnrichedOut`，单向 + 显式允许清单，注入假字段必红）、`check-chart-theme.mjs`（`echarts-for-react` 只允许出现在 `EChart.tsx` 与 `kline/KlineChart.tsx`）
+- **明确不做（附理由）**：事件时间轴取代 tab · 右轴涨跌幅 · 股性雷达 · 北向/增减持 · 个股资金流 · 新闻聚合 · 分时线 · 叠加对比 · 拖选区间统计 · 实时轮询
+- **计划上限已写入文档**：做完是「不丢人的通用行情页」，不碰投研差异化层（猪周期/成本曲线/行业位置）
+- 涉及文件：plans/2026-10-19-stock-detail-overhaul.md、plans/index.md、docs/Changelog.md
+
 ## 2026-10-19 - **S11 解禁日历后端：回填脚本 + triage `unlock_soon` + journal `evaluation.unlock_in_window`**
 
 零新表、零迁移、不改调度、`/market` 未动（spec `docs/specs/S11-unlock-calendar.md`）：
