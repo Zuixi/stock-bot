@@ -25,6 +25,7 @@ from app.api.v1 import (
     journal,
     market,
     market_data,
+    market_regime,
     metrics,
     new_stocks,
     stocks,
@@ -61,6 +62,9 @@ router.include_router(market.router, prefix="/market", tags=["market"])
 
 # Market-data face: /api/v1/market/global-indices（后续 moneyflow/龙虎榜等面片追加至此）
 router.include_router(market_data.router, prefix="/market", tags=["market-data"])
+
+# 市场状态机（spec §S10）：/api/v1/market/regime —— 离线产物投影，登录即可
+router.include_router(market_regime.router, prefix="/market", tags=["market"])
 
 # Background tasks
 router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])

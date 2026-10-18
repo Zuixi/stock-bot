@@ -1,3 +1,15 @@
+## 2026-10-19 - **S10 市场状态机：五态（迟滞 3 日）+ 转移矩阵 + 同态后续分布**
+
+零新表、零迁移、零新 cron，`/market` 前端未动（spec `docs/specs/S10-market-regime.md`）：
+
+- **服务层** `backend/app/services/market_regime_service.py(新)`：`compute_features`（纯函数，输入是按日聚合的行，**不查库**）/ `classify`（五态 + 优先级 亢奋>冰点>退潮>修复>中性，特征未就绪返回 `None` 而不是"中性"）/ `classify_series`（迟滞 3 日，**切换日 = 连续满足的第 3 天**）/ `build_series` / `transition_matrix`（行和=1；从未作为起点的态不出行，不编造均匀先验）/ `forward_stats`（同态后续 5/20 日：逐日复合、winsorize ±50%、`n<30` 不给数字、**入场日当天收益不参与**）。阈值唯一真相 `REGIME_THRESHOLDS` + `REGIME_VERSION`，import 期断言 key 齐全、窗口常量与 `DayFeatures` 滞后字段一致
+- **标定（spec §S10.5 先标定再上线）**：真库 834 个交易日（60 天特征预热 → 774 天可判定）跑出 spec 原始阈值下 **亢奋 0.4% / 冰点 16.1% / 退潮 1.2% / 修复 2.7% / 中性 79.6%**——三态 <5%，故 `REGIME_VERSION` `s10.1 → s10.2` 只调 4 个数字：`frenzy_new_high_above` 0.30→0.08（`new_high_ratio` 实测中位 3.3%、p90 9.1%）、`retreat_amount_pctile_drop` 0.20→0.05（20 日回落 p75=0.167）、`repair_amount_pctile` [0.30,0.70]→[0.20,0.80]；冰点三条件与迟滞**未动**。调整后 **亢奋 60(7.8%) / 冰点 146(18.9%) / 退潮 54(7.0%) / 修复 40(5.2%) / 中性 474(61.2%)**，五态均 ≥5%（新旧对照、扫描过程与逐年分布见 `.superpowers/sdd/regime-unlock/regime-report.md`）
+- **离线产物** `backend/scripts/build_market_regime.py(新)` → `backend/app/services/market_regime_history.json(新，52966 字节)`：一条 `SET TRANSACTION READ ONLY` 会话里的只读 SQL 按日聚合；涨跌幅 `close/前收-1`，`pre_close` 缺失退化到**该股上一行收盘**（`pct_chg` 列 308 万行 NULL，不能当唯一来源）；**不用**涨停/连板族（`stock_price_limits` 只有 259 天）。产物自带 `version`/`as_of`/`basis`/`thresholds` 快照、无时间戳 → **两次运行逐字节一致**（30s，`cmp` 通过）
+- **读面** `GET /api/v1/market/regime`（登录即可；`backend/app/api/v1/market_regime.py(新)` + `app/schemas/market_regime.py(新)`，注册进 `api/v1/__init__.py`）：`{state, since, duration_days, transition:{下一态:概率}, forward:{5d:{n,median_pct,p05_pct},20d:…}, notes, as_of, version}`；产物缺失/损坏 → **200 + `state=null` + 原因 note**（spec 允许 503 或空态，选空态：一行文案的降级不该让前端走异常分支），产物落后最新交易日 / 产物版本与 registry 不一致 → 写进 `notes`
+- **测试** `backend/tests/test_market_regime.py(新，43 条)`：五态表驱动 / 三处优先级 / 边界（闭区间端点、中位恰 0）/ 缺特征不判中性 / 迟滞（1 天抖动不切、连续 3 天切在第 3 天、中断后重计数、天数读 registry）/ 转移矩阵行和=1 与"无出边不出行" / `n<30` 不给数字 / 无前视（塞未来收益结果不变、入场日当天收益不参与）/ winsorize ±50% / 产物确定性 / 读面四种降级 / 路由注册 + **入库产物与 registry 版本·阈值对拍**（并机械校验每态 ≥5%）
+- **对账**：随机 5 个交易日（2023-11-28 / 2025-07-11 / 2025-09-16 / 2026-03-02 / 2026-06-08）用独立 Python 实现从原始 `daily_quotes` 重算日级原语，与脚本 SQL 的六项（成交额/涨跌家数/中位涨跌幅/新高数/新高分母）逐项一致
+- **门禁**：改动文件 `ruff check` + `ruff format --check` ✓、`mypy`（4 个文件）✓、`pytest tests/test_market_regime.py -q` **43 passed**、全量 `pytest -q` **1851 passed / 1 failed**（`test_derived_metrics_job` 的顺序依赖失败，隔离运行通过，与本次改动无关）、`bash scripts/build_market_regime.py` ✓、`bash scripts/self_review.sh` ✓（doc_gate 16 项 + check:routes 89 项）
+
 ## 2026-10-19 - **S9 深度优化后端：`evaluation.earnings_in_window` / `stats.consistency`**
 
 两块新能力，全部**只加字段**（契约 `.superpowers/sdd/journal-deep/contract.md` §1/§2；无新表、无迁移、
