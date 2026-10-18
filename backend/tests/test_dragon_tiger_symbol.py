@@ -182,11 +182,11 @@ async def test_cache_keys_are_isolated_per_symbol(monkeypatch: pytest.MonkeyPatc
     assert {r["ts_code"] for r in b} == {"600000.SH"}
     assert not ({r["ts_code"] for r in a} & {r["ts_code"] for r in b})
 
-    # 两个键都带 symbol 且都带 v2 前缀，取值互不覆盖
+    # 两个键都带 scope+symbol 且都带 v2 前缀，取值互不覆盖
     assert len(cache.store) == 2
-    assert all(k.startswith("market:dragon-tiger:v2:") for k in cache.store)
-    key_a = f"market:dragon-tiger:v2:000488:{LATEST.isoformat()}"
-    key_b = f"market:dragon-tiger:v2:600000:{LATEST.isoformat()}"
+    assert all(k.startswith("market:dragon-tiger:v2:range:") for k in cache.store)
+    key_a = f"market:dragon-tiger:v2:range:000488:{LATEST.isoformat()}"
+    key_b = f"market:dragon-tiger:v2:range:600000:{LATEST.isoformat()}"
     assert set(cache.store) == {key_a, key_b}
     assert {r["ts_code"] for r in cache.store[key_a]} == {"000488.SZ"}
     assert {r["ts_code"] for r in cache.store[key_b]} == {"600000.SH"}
@@ -213,7 +213,7 @@ async def test_legacy_market_wide_cache_entry_is_never_served_for_a_symbol(
     assert [r["ts_code"] for r in rows] == ["000488.SZ", "000488.SZ"]
     assert all(r["ts_code"] != "600000.SH" for r in rows)
     # 旧键既没被读（只有 v2 键进 gets）也没被写
-    assert cache.gets == [f"market:dragon-tiger:v2:000488:{LATEST.isoformat()}"]
+    assert cache.gets == [f"market:dragon-tiger:v2:range:000488:{LATEST.isoformat()}"]
     assert legacy_key not in cache.sets
 
 
@@ -236,15 +236,15 @@ async def test_without_symbol_matches_legacy_latest_date_market_wide(
     assert {r["trade_date"] for r in rows} == {LATEST.isoformat()}
     assert calls.by_symbol == [], "缺 symbol 时不得走个股路径"
     assert calls.by_date == [(LATEST, mds.DRAGON_TIGER_CACHE_LIMIT, None)]
-    # 全市场键用 all 占位，绝不与任何个股键相等
-    assert list(cache.store) == [f"market:dragon-tiger:v2:all:{LATEST.isoformat()}"]
+    # 全市场键用 all 占位、scope=day，绝不与任何个股键相等
+    assert list(cache.store) == [f"market:dragon-tiger:v2:day:all:{LATEST.isoformat()}"]
 
 
 @pytest.mark.asyncio
 async def test_without_symbol_ignores_stale_symbol_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     """反向隔离：个股键存在时，全市场请求不得拿它当结果。"""
     _install(monkeypatch)
-    key_a = f"market:dragon-tiger:v2:000488:{LATEST.isoformat()}"
+    key_a = f"market:dragon-tiger:v2:range:000488:{LATEST.isoformat()}"
     cache = _FakeCache(store={key_a: [{"trade_date": LATEST.isoformat(), "ts_code": "000488.SZ"}]})
 
     rows = await mds.get_dragon_tiger(cache)
@@ -279,6 +279,62 @@ async def test_date_and_symbol_with_no_hit_is_empty(monkeypatch: pytest.MonkeyPa
     cache = _FakeCache()
     assert await mds.get_dragon_tiger(cache, D15.isoformat(), symbol="000488") == []
     assert cache.store == {}
+
+
+# ---------------------------------------------------------------------------
+# 4b) 缓存键按查询形态（scope）分段：跨日 / 单日结果集不同，不得互相顶掉
+#
+# ``date`` 省略时 effective 取表内最新日；``date`` 显式给成同一天时 effective 完全相同 ——
+# 此时唯一能区分两种查询的只有 scope。少这一段就会静默串味：
+#   跨日先入缓存 → 同日同股的显式 date 请求拿到多日行（违背 date 语义）；
+#   单日先入缓存 → 个股页的无 date 请求只拿到一天（**正是 P0-2 要消除的空榜症状**）。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_range_cache_is_not_served_to_a_day_scoped_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """防回归：跨日查询的缓存不得被 ``?symbol=X&date=<表内最新日>`` 当成单日结果返回。"""
+    calls = _install(monkeypatch)
+    cache = _FakeCache()
+
+    ranged = await mds.get_dragon_tiger(cache, symbol="000488")
+    assert [r["trade_date"] for r in ranged] == [D16.isoformat(), D14.isoformat()]
+
+    # date 显式给成"表内最新日"：effective 与上一步相同，唯一的区分就是 scope
+    day_rows = await mds.get_dragon_tiger(cache, LATEST.isoformat(), symbol="000488")
+
+    assert [r["trade_date"] for r in day_rows] == [LATEST.isoformat()], (
+        "跨日缓存被当成单日结果返回了 —— 缓存键缺 scope 段"
+    )
+    assert len(calls.by_date) == 1, "显式 date 必须缓存未命中并真查逐日榜"
+    assert set(cache.store) == {
+        f"market:dragon-tiger:v2:range:000488:{LATEST.isoformat()}",
+        f"market:dragon-tiger:v2:day:000488:{LATEST.isoformat()}",
+    }
+
+
+@pytest.mark.asyncio
+async def test_day_scoped_cache_is_not_served_to_a_range_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """防回归（原症状）：单日缓存先入后，个股页的无 date 请求不得只拿到一天的行。"""
+    _install(monkeypatch)
+    cache = _FakeCache()
+
+    one_day = await mds.get_dragon_tiger(cache, LATEST.isoformat(), symbol="000488")
+    assert [r["trade_date"] for r in one_day] == [LATEST.isoformat()]
+
+    ranged = await mds.get_dragon_tiger(cache, symbol="000488")
+
+    assert [r["trade_date"] for r in ranged] == [D16.isoformat(), D14.isoformat()], (
+        "单日缓存被当成跨日结果返回了 —— 个股页又只剩一天"
+    )
+    assert set(cache.store) == {
+        f"market:dragon-tiger:v2:range:000488:{LATEST.isoformat()}",
+        f"market:dragon-tiger:v2:day:000488:{LATEST.isoformat()}",
+    }
 
 
 # ---------------------------------------------------------------------------

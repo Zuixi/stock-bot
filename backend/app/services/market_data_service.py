@@ -1903,9 +1903,11 @@ async def ingest_block_trades(db: AsyncSession, trade_date: date | None = None) 
     return {"upserted": upserted, "days": len(days)}
 
 
-#: ``v2`` + ``symbol``：旧键 ``market:dragon-tiger:{date}`` 里缓存的是**全市场**行，
+#: ``v2`` + ``scope`` + ``symbol``：旧键 ``market:dragon-tiger:{date}`` 里缓存的是**全市场**行，
 #: 复用它会把 A 股的榜当成 B 股返回（本功能唯一的静默错误风险点）→ 换键，不兼容旧键。
-DRAGON_TIGER_CACHE_KEY = "market:dragon-tiger:v2:{symbol}:{date}"
+#: ``scope`` 必须分段：同一标的、同一 effective 日期下，``range``（跨日）与 ``day``（逐日）
+#: 的结果集**不同** —— 共用一个键会让二者互相顶掉（同键同日期正是最容易踩到的情形）。
+DRAGON_TIGER_CACHE_KEY = "market:dragon-tiger:v2:{scope}:{symbol}:{date}"
 DRAGON_TIGER_TTL = 300
 DRAGON_TIGER_CACHE_LIMIT = 100  # 端点 limit 上限（le=100）：缓存全量再按请求切片
 
@@ -1925,6 +1927,9 @@ async def get_dragon_tiger(
     - ``symbol`` + 显式 ``date``：逐日榜内按标的过滤。
     """
     day = datetime.fromisoformat(date_iso).date() if date_iso else None
+    # 查询形态：range=跨日（个股且无 date）/ day=逐日榜（全市场，或个股 + 显式 date）。
+    # 两种形态结果集不同 → 缓存键必须带 scope，否则同 symbol 同日期会互相串。
+    scope = "range" if symbol and day is None else "day"
 
     from app.core.database import async_session_factory  # noqa: PLC0415
 
@@ -1933,13 +1938,15 @@ async def get_dragon_tiger(
         effective = day or await market_data_repo.max_dragon_tiger_date(db)
         if effective is None:
             return []
-        key = DRAGON_TIGER_CACHE_KEY.format(symbol=symbol or "all", date=effective.isoformat())
+        key = DRAGON_TIGER_CACHE_KEY.format(
+            scope=scope, symbol=symbol or "all", date=effective.isoformat()
+        )
         if cache is not None:
             cached = await cache.get(key)
             if cached:
                 rows_cached: list[dict[str, Any]] = cached
                 return rows_cached[:limit]
-        if symbol and day is None:
+        if scope == "range":
             entries = await market_data_repo.list_dragon_tiger_by_symbol(
                 db, symbol, DRAGON_TIGER_CACHE_LIMIT
             )
