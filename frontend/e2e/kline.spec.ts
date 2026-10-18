@@ -59,6 +59,31 @@ test("个股K线：tooltip 结构化展示（无可见日期轴）", async ({ pa
   await expect(card.getByText(/涨跌额/)).toBeVisible();
 });
 
+test("个股K线：悬停成交量 pane 仍出完整 tooltip（跨 pane 联动）", async ({ page }) => {
+  await page.goto("/stock/600519");
+  const card = page.locator(".ant-card").filter({ hasText: "历史行情" });
+  await expect(card).toBeVisible();
+  // 同样的等待策略（见上一个用例的注释）：MA 图例带数值 = ECharts 已拿到数据，
+  // 否则悬停在空 canvas 上不会有任何 tooltip，全量跑时必 flake。
+  await expect(card.getByText(/MA5 \d/)).toBeVisible();
+  const canvas = card.locator("canvas").first();
+  // 先滚进视口再算坐标（同上一个用例的注释）。
+  await canvas.scrollIntoViewIfNeeded();
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error("canvas not visible");
+  // y = 78% 落在成交量 pane 内：grid[1] 是 `top: "68%", height: "16%"` ⇒ 68%–84%。
+  // ECharts 的 axis tooltip 只收集**当前悬停 axis 上**的 series，该 pane 只有那条
+  // `成交量` bar，没有 candlestick ⇒ formatter 若只认 candlestick 就返回空串（F5）。
+  await page.mouse.move(box.x + box.width * 0.75, box.y + box.height * 0.78);
+  await page.waitForTimeout(600);
+  // 11 行完整内容：成交量/成交额这两个「只有 bar 侧才在读」的行 + 需回查 points 的 OHLC
+  await expect(card.getByText(/成交量/)).toBeVisible();
+  await expect(card.getByText(/成交额/)).toBeVisible();
+  await expect(card.getByText(/涨跌幅/)).toBeVisible();
+  await expect(card.getByText(/^开盘$/)).toBeVisible();
+  await expect(card.getByText(/^收盘$/)).toBeVisible();
+});
+
 test("指数K线：频率Tab可用，无复权控件", async ({ page }) => {
   await page.goto("/index/000001.SH");
   const card = page.locator(".ant-card").filter({ hasText: "指数历史行情" });

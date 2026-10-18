@@ -38,6 +38,28 @@ const row = (label: string, value: string, flat: string, color?: string) =>
   `<span class="num"${color ? ` style="color:${color};font-weight:600"` : ""}>${value}</span>` +
   `</div>`;
 
+/**
+ * 轴级 axisPointer（两个 xAxis 共用）。
+ *
+ * ⚠️ `type` 这里**只能是 `"line"`**（或 `"shadow"`），不能写 `"cross"`：
+ * `cross` 只属于 `tooltip.axisPointer` / 顶层 axisPointer。写在这里会被
+ * `modelHelper.makeAxisPointerModel` 的模型链（`axis.model.getModel('axisPointer',
+ * <tooltip 派生模型>)`，轴级优先级最高）覆盖掉 tooltip 派生出来的 `"line"`，
+ * 随后 `CartesianAxisPointer.makeElOption` 执行 `pointerShapeBuilder["cross"](...)`
+ * ——该表只有 line/shadow/none ⇒ 抛 `pointerShapeBuilder[axisPointerType] is not a
+ * function`（PAGEERROR，整张图的十字光标与 tooltip 全灭，实测 echarts 5.6.0）。
+ * 跨 pane 的"cross 形"由顶层 `axisPointer.link` + `tooltip.axisPointer.type` 给出：
+ * 竖线贯穿两个 pane（link），横线只在本 pane（tooltip 的 cross）。
+ *
+ * `snap` 吸附蜡烛中心；`triggerOn` 带 `click` 才有触屏十字（ECharts 实际从顶层
+ * axisPointer 读 triggerOn，这里保留以满足轴级语义/可读性，顶层也有同名兜底）。
+ */
+const AXIS_POINTER_PER_AXIS = {
+  type: "line",
+  snap: true,
+  triggerOn: "mousemove|click",
+} as const;
+
 export function buildKlineOption({ points, maSeries, visibleMas, colors, narrow = false }: KlineOptionInput) {
   const c = colors ?? THEME_COLORS.light;
   const dates = points.map((p) => p.date); // 原始 ISO 日期串（tooltip 直接消费）
@@ -51,11 +73,15 @@ export function buildKlineOption({ points, maSeries, visibleMas, colors, narrow 
 
   const tooltipFormatter = (params: unknown): string => {
     const list = params as Array<{ dataIndex: number; seriesType: string; seriesName?: string; value?: unknown }>;
-    const candle = list.find((p) => p.seriesType === "candlestick");
-    if (!candle || !points[candle.dataIndex]) return "";
-    const i = candle.dataIndex;
+    // ⚠️ **任意 series 定位**，不能只认 candlestick：ECharts 的 axis 触发只收集
+    // **当前悬停 axis 上的 series**，悬停成交量 pane（xAxisIndex 1）时 params 里
+    // 只有 `成交量` 这条 bar、没有 candlestick ⇒ 旧写法 `find(seriesType ===
+    // "candlestick")` 返回 undefined ⇒ 成交量区 tooltip 空白（用户报的 F5）。
+    // `dataIndex` 在所有 axis 上语义相同，故取 `list[0]` 即可，OHLC 一律回查 points。
+    const i = list[0]?.dataIndex;
+    if (i == null || !points[i]) return "";
     const p = points[i];
-    const [open, close, low, high] = candle.value as number[];
+    const { open, close, low, high } = p;
     const prev = i > 0 ? points[i - 1].close : undefined;
     // A股习惯：开/收/高/低/涨跌额/涨跌幅 随当日涨跌着色（首日中性）
     const color = prev == null ? c.flat : close >= prev ? c.up : c.down;
@@ -82,7 +108,23 @@ export function buildKlineOption({ points, maSeries, visibleMas, colors, narrow 
 
   return {
     textStyle: { color: c.textSecondary },
-    tooltip: { trigger: "axis", axisPointer: { type: "cross" }, formatter: tooltipFormatter },
+    // 顶层 axisPointer 是跨 pane 联动的**唯一**开关（F4）：`link.xAxisIndex: "all"`
+    // 把两个 grid 的 x 轴绑成一条十字光标 —— 竖线同时贯穿 K 线 pane 与成交量 pane，
+    // 横线只留在当前 pane（ECharts cross 的语义）。缺这一行就只剩当前 pane 内的十字。
+    axisPointer: {
+      link: [{ xAxisIndex: "all" as const }],
+      lineStyle: { color: c.flat, type: "dashed" as const, width: 1 },
+      label: { backgroundColor: c.textPrimary, color: c.bgPage, fontSize: 10 },
+      // 触屏点按也出十字（ECharts 的 triggerOn 只认顶层/global，轴级那份是文档性的）
+      triggerOn: "mousemove|click" as const,
+    },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "cross" as const },
+      formatter: tooltipFormatter,
+      // 窄屏（308px）下 tooltip 默认会溢出视口被裁掉；confine 关进画布内（§5.1）
+      ...(narrow ? { confine: true } : {}),
+    },
     legend: { show: false },
     grid: [
       { left: axisLeft, right: narrow ? 12 : 20, top: 28, height: "50%" },
@@ -96,6 +138,7 @@ export function buildKlineOption({ points, maSeries, visibleMas, colors, narrow 
         axisLine: { onZero: false, lineStyle: { color: c.border } },
         axisLabel: { show: false },
         gridIndex: 0,
+        axisPointer: AXIS_POINTER_PER_AXIS,
       },
       {
         type: "category",
@@ -104,6 +147,7 @@ export function buildKlineOption({ points, maSeries, visibleMas, colors, narrow 
         axisLine: { lineStyle: { color: c.border } },
         axisLabel: { show: false },
         gridIndex: 1,
+        axisPointer: AXIS_POINTER_PER_AXIS,
       },
     ],
     yAxis: [
