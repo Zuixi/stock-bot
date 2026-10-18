@@ -1,3 +1,27 @@
+## 2026-10-19 - **S9.7 Phase A 后端：净成本 / 基准三选一 / pass 一等公民 / Wilson 区间**
+
+只做加法（契约 `.superpowers/sdd/journal-s97/contract-phaseA.md`；既有响应字段**类型一个没改**）：
+
+- **净成本**（§S9.7.2）：`COST_ROUND_TRIP_BPS = 12`（佣金双边 5 + 印花税卖出 5 + 过户费/滑点 2，
+  假设与日期写在常量区）+ 配对常量 `JOURNAL_STATS_VERSION`；`evaluation` 新增 `net_outcome_pct`
+  （= 毛 − 0.12）/ `net_excess_pct`；`stats` 新增 `avg_net_excess_pct` / `net_cost_bps`
+- **基准**（§S9.7.3）：`bet_type ∈ {direction, relative, market}` **落列**（迁移 `a7d3e9f1b2c4`：
+  `NOT NULL DEFAULT 'direction'` + `ck_journal_bet_type`，只加列不动既有数据），同时写 `snapshot.bench_spec` /
+  `bench_basis_note`（s9.r2）；`direction`/`relative` → 申万一级**成分股等权平均收益**（诚实标注"非指数行情"），
+  `market` → 沪深300；无行业 → 退化沪深300 且 `bench_fallback=true`（显式计算了 `market` 不算退化）
+- **pass 一等公民**（§S9.7.6）：`stats.by_kind` 五栏（合计 = `n`）；`avg_excess_pct` / `avg_net_excess_pct`
+  **排除 `pass`**（放弃的判断不计收益）；`discipline_break_share` 仍是 `number|null`
+- **Wilson 区间**（§S9.7.7）：`wilson_interval(successes, n)`（z=1.96，`n=0 → null`，4/6 → [0.30, 0.90]，
+  5/5 → [0.566, 1.0] 不高估）；`stats.share_ci = {discipline_break, win}`（`win` = 净超额 > 0）+ 固定文案
+  `multiple_comparison_note`
+- **反 N+1 保持**：batch evaluation 仍是 3 条查询封顶（三种沪深300 需求合并成一条），`stats` 恰好 2 条聚合
+  （用例逐条数 SQL 并断言只读）
+- 测试：`tests/test_journal_s97.py`（23 条：净口径逐值 / 三种基准手工对照 / fallback / pass 排除 / Wilson 边界 /
+  迁移只加列 / stats 查询数）；`test_journal_{api,service,model_db}.py` 同步更新（快照 s9.r2、新字段、422、DB check）
+- 涉及文件：`backend/app/{models/journal.py,services/journal_service.py,schemas/journal.py,api/v1/journal.py}`、
+  `backend/app/migrations/versions/a7d3e9f1b2c4_add_journal_bet_type.py(新)`、`backend/tests/test_journal_*.py`、
+  `docs/specs/S9-decision-journal.md`（§S9.3 快照新键 + §S9.7 落地注记）、`.superpowers/sdd/journal-s97/backend-A-report.md(新)`
+
 ## 2026-10-18 - **S9.7 Phase A 前端：pass 一键 / 净成本口径 / 基准三选一 / 比例 Wilson 区间**
 
 - **「我决定不动」**：`/me?tab=journal` 表单在「标的」旁一键把 `kind` 设为 `pass`（**仍要求 3 必填**）；

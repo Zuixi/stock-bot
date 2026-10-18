@@ -105,6 +105,17 @@ decision_journal_reviews(
 | `events` | 复用 S8 探测器（该标的当日命中，最多 3 条 `{detector, headline}`） | `[]` |
 | `valuation_pct` | `pe_ttm` 近 120 日区间位置（%） | `null` |
 
+快照**元数据键**（`version` / `as_of` / `quote_as_of` / `symbol` / `missing_reason`）
+之外，`s9.r2`（S9.7 Phase A）新增两个键，同样**创建时固化、事后不可改**：
+
+| 键 | 形状 | 说明 |
+|---|---|---|
+| `bench_spec` | `{bet_type, kind, industry_code, industry_name, fallback}` | 基准口径（spec §S9.7.3）：`kind ∈ {industry_equal_weight, hs300}` |
+| `bench_basis_note` | `string` | 上者的人话说明（后端下发，前端不硬编码） |
+
+`s9.r1` 的历史行没有这两个键：读取方按列上的 `bet_type`（迁移给了默认 `direction`）
+兜底，**不得改写历史快照**（快照是"当时怎么定的"的证据）。
+
 **不做什么**：不在快照里放大段文案 · 不存原始 K 线 · 不做跨用户对比
 
 **验收判据**
@@ -129,6 +140,11 @@ decision_journal_reviews(
   - `invalidation_hit`：`price_below` / `price_above` 用 `due_on` 前是否触达判定；`date_only` 到期即为 `true`
 - 归因（**用户必选**，5 枚举）与可选 `note`（≤500 字）
 - `stats`：`{n, reviewed_n, by_verdict{...}, by_attribution{...}, avg_excess_pct, discipline_break_share}`
+  - Phase A 追加（spec §S9.7.2/§S9.7.6/§S9.7.7，**既有字段类型不变**）：
+    `by_kind{...}`（五 `kind` 条数，合计 = `n`）· `avg_net_excess_pct`（净口径，排除 `pass`）·
+    `net_cost_bps` · `share_ci{discipline_break,win}`（Wilson 95%）· `multiple_comparison_note`；
+    `avg_excess_pct` 同样**排除 `pass`**；`discipline_break_share` 仍是 `number|null`
+  - `evaluation` 追加：`net_outcome_pct` / `net_excess_pct` / `bench_basis_note` / `bench_fallback`
 - **不写不归因**：未选 `verdict` 不得写入（`422`）；`reviewed` 后条目移到"已复盘"，不可再评
 
 **验收判据**
@@ -264,6 +280,9 @@ decision_journal_reviews(
 ### S9.7.2 净成本（毛收益会让所有统计虚高）
 
 - 常量 `COST_ROUND_TRIP_BPS = 12`（佣金双边 5bp + 印花税卖出 5bp + 过户费/滑点 2bp，**保守估计**），写在 registry 常量里并注明日期与假设。
+- **已落地（Phase A，2026-10-19）**：常量在 `backend/app/services/journal_service.py` 的常量区（含假设表与日期），
+  配对常量 `JOURNAL_STATS_VERSION = "s97.a1"`（改成本必须同时改它与本 spec）；净口径由
+  `evaluation.net_outcome_pct` / `evaluation.net_excess_pct` / `stats.avg_net_excess_pct` / `stats.net_cost_bps` 下发。
 - `net_outcome_pct = outcome_pct - COST_ROUND_TRIP_BPS / 100`；`net_excess_pct = net_outcome_pct - bench_pct`。
 - 统计与展示**默认用净口径**，毛口径只在"口径说明"里出现。
 - 不做：按持有天数分档的成本、税费差异（v2 再说）。
@@ -280,6 +299,9 @@ decision_journal_reviews(
 
 - `bet_type` 在创建时选定并写入快照（`snapshot.bench_spec`），事后不可改。
 - **诚实标注**：我们用的是"同行业成分股等权平均收益"，**不是**申万一级指数行情（我们没有指数日线）；差异在 `bench_basis_note` 里写清，不假装是指数。
+- **已落地（Phase A）**：`bet_type` 落列（`decision_journal_entries.bet_type`，`NOT NULL DEFAULT 'direction'` + `ck_journal_bet_type`），
+  同时写 `snapshot.bench_spec` + `snapshot.bench_basis_note`；`bench_fallback` 只在"要行业基准却拿不到行业归属"时为 `true`
+  （显式 `market` 的沪深300 是用户选的，不算退化）。
 
 **验收**：三种 `bet_type` 各自命中正确基准（用例断言 `bench_pct` 与手工计算一致）；`bench_spec` 落快照；缺失行业时退化到沪深300 并标 `bench_fallback=true`。
 
@@ -306,6 +328,9 @@ decision_journal_reviews(
 - 统计新增 `by_kind`：`watch / buy / sell / pass / hold` 各自的条数与净超额中位。
 - **每周提示**（页面一行，不推送）：若近 30 天 `buy|watch` ≥ 3 且 `pass` = 0 →
   「你还没记录过放弃的判断；只记买入会让胜率偏高。」（一次性、可关闭）
+- **已落地（Phase A）**：`stats.by_kind` 只给条数（合计 = `n`）；收益统计（`avg_excess_pct` /
+  `avg_net_excess_pct` / `share_ci.win` 的分母）按契约 §4 排除 `pass`。`by_kind` 的**净超额中位**未做
+  （契约 §4 未定义该字段），留 Phase B。
 - 不做：强迫记录、扣分、社交比较。
 
 **验收**：`pass` 条目计入判断统计、不计入收益统计；提示只在条件满足时出现一次；`by_kind` 合计 = `n`。
@@ -315,6 +340,9 @@ decision_journal_reviews(
 - 所有比例**必须带 Wilson 95% 区间**（`wilson_interval(successes, n)`，`n=0` 时返回 `null`）。
 - 展示纪律：`n < 5` 不给比例（沿用 S9.6）；`n ≥ 5` 时必须同时给区间（例如「4/6（95% 区间 30%–90%）」）。
 - 统计页固定标注：「**未做多重比较校正**：按 45 个桶检索时，总会有桶看起来显著」。
+- **已落地（Phase A）**：`journal_service.wilson_interval(successes, n)`（`z = 1.96`，`n = 0 → null`）；
+  `stats.share_ci = {discipline_break, win}` 各下发 `{n, successes, ci_low, ci_high}`，
+  固定文案 `stats.multiple_comparison_note` 由后端原样下发。
 - 不做：显著性检验、p 值、排序榜单。
 
 **验收**：Wilson 边界值表驱动（0/0→null、1/1、4/6≈[0.30,0.90]、5/5）；展示层 `n<5` 无百分比。
