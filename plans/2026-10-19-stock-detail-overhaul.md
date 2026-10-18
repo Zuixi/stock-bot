@@ -408,6 +408,18 @@ export function toMarkPoints(events: StockEvent[], dates: string[], maxBubbles =
   R15 用 Playwright spec 代替单测（仓无前端单测 runner）；R16 ROE 不带符号不着涨跌色；
   **R21 撤销「每类角标计数」**（与零额外请求及既有懒加载 e2e 冲突）；R22 周/月频率不定位；
   R23 采纳基线文档已承诺却未提交的文件；R7 52 周统计钉 `qfq`（复权回补期会有 2 次 `/quotes/daily`）。
-- **已知遗留**：`dragon_tiger_entries` 无 `ts_code` 前导索引（跨日按标的过滤走 seq scan，~2k 行 1.9ms，
+- **终审（全分支评审）整改 8 项**，1 项明确回滚：
+  1. **K 线失败态仍在说假话**（`KlineChart` 只判 `isLoading` ⇒ 500 时落「暂无K线数据」，与报价条同时显示的
+     「加载失败」自相矛盾）→ 补 `isError/refetch` + 块内 Alert/重试，并加 e2e 钉住；
+  2. 免责声明在重构时被移进概览 tab，估值/财务两 tab 丢失 → 移回 `</Tabs>` 之后；
+  3. 标签行在 SW 查询失败时显示「暂无分类标签」→ 失败态单独文案；编辑按钮补 title；
+  4. `docs/Changelog.md` 因合并出现 S12 重复条目 → 合并为一条；
+  5. 全景迁移（`e3f1a7c9d2b4`）建了 3 张表却无 ORM 模型（`--autogenerate` 会提议删表）→ 补三个模型类，
+     与迁移的列/类型/约束逐字一致，无 repo/service/endpoint/writer；
+  6. 补 K 线缓存键的**符号归一**（URL 参数 vs 后端归一曾分叉，短代码会让 52 周与股性行空）；
+  7. 「收起」在展开后消失 → 常驻；
+  8. **回滚**：`tsconfig.include` 加 `e2e` 触发 33 个既有类型错误（30 个缺 `@types/node`），
+     修它需要装依赖、动到共享 node_modules，超出本轮范围 ⇒ 记为遗留。
+- **已知遗留**：`tsconfig.include` 未含 `e2e`（前端 e2e 既不受 tsc 覆盖、CI 也无 Playwright job，R15 的代价）；`dragon_tiger_entries` 无 `ts_code` 前导索引（跨日按标的过滤走 seq scan，~2k 行 1.9ms，
   零迁移约束下留待单独迁移）；已登录「记一笔」分支无 e2e（环境无凭据，用例 skip 并在凭据存在时自动执行）；
   图上事件气泡只覆盖已加载类型（要全覆盖需放弃懒加载）。
