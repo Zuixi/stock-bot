@@ -28,7 +28,7 @@
 
 | 功能 | 说明 | 代码入口 |
 |---|---|---|
-| 个股详情 | 日线 K 线（复权开关 · 十字光标跨价格/成交量 pane 联动 · 成交量刻度 · 数据条随光标联动 · 公告/龙虎榜/大宗/解禁/回购事件标注与点击定位）、报价条（八项行情 + 距 52 周高/低 + PE(TTM) 3 年分位）、成长与盈利（读 financial-summary，与财务 tab 共用缓存）、财务摘要与估值历史；相关数据五类**失败态与空态分离**（失败给重试，不冒充「无记录」） | `frontend/src/pages/stock-detail` · `frontend/src/features/stock-detail` · `/api/v1/exchanges`（`/{exchange}/stocks/{symbol}/quotes`·`/financial-summary`·`/financial-statements`·`/valuation-history`） |
+| 个股详情 | 日线 K 线（复权开关 · 十字光标跨价格/成交量 pane 联动 · 成交量刻度 · 数据条随光标联动 · 公告/龙虎榜/大宗/解禁/回购**事件标注**与点击定位，仅日K定位）；报价条（八项行情 + 距 52 周高/低 + PE(TTM) 3 年分位）；成长与盈利（读 financial-summary，与财务 tab 共用缓存）；股性事实行（60 日收益/波动/回撤/趋势 R²/均线多头/量能，样本不足整行不渲染）；公司概况（全称/上市日期/地区/实控人，NULL 不渲染）；「记一笔」直达决策日志（公开路由下未登录给登录入口）；相关数据五类**失败态与空态分离**（失败给重试，不冒充「无记录」）；各区块独立错误边界 + 固定高度占位（加载不跳动） | `frontend/src/pages/stock-detail` · `frontend/src/features/stock-detail` · `/api/v1/exchanges`（`/{exchange}/stocks/{symbol}/quotes`·`/financial-summary`·`/financial-statements`·`/valuation-history`）· `/api/v1/market`（`/dragon-tiger`·`/announcements` 等，均支持 `symbol`）· `/api/v1/journal` |
 | 个股搜索 | 代码/名称/拼音搜索 | `frontend/src/features/search` · `/api/v1/exchanges` |
 | 股票名录与分类 | 交易所名录、类别、enriched 列表（含行业与估值字段） | `/api/v1/exchanges` |
 | 次新股 | 次新股列表与追踪 | `frontend/src/shared/api/market.ts` · `/api/v1/new-stocks` |
