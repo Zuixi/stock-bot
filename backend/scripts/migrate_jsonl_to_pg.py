@@ -21,7 +21,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Migrate JSONL snapshots to PostgreSQL")
     parser.add_argument("--snapshot-dir", required=True, help="Path to data/universe/")
     parser.add_argument("--dry-run", action="store_true", help="Parse only, no DB writes")
-    parser.add_argument("--latest-only", action="store_true", help="Only migrate the newest snapshot")
+    parser.add_argument(
+        "--latest-only", action="store_true", help="Only migrate the newest snapshot"
+    )
     return parser.parse_args()
 
 
@@ -82,7 +84,9 @@ async def migrate_snapshot(snapshot: Path, dry_run: bool) -> int:
                     asof = datetime.now(UTC)
             except ValueError:
                 skipped += 1
-                logger.warning("Skipping invalid asof value for %s/%s", rec.get("exchange"), rec.get("symbol"))
+                logger.warning(
+                    "Skipping invalid asof value for %s/%s", rec.get("exchange"), rec.get("symbol")
+                )
                 continue
             list_date = parse_listing_date(rec.get("list_date"))
 

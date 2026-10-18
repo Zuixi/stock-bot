@@ -26,6 +26,7 @@ from pathlib import Path
 # Force UTF-8 output on Windows
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     import io
+
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 # Allow running from repo root or backend/
@@ -35,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 # ---------------------------------------------------------------------------
 # 1. mcode generation (no network)
 # ---------------------------------------------------------------------------
+
 
 def test_mcode() -> None:
     from app.core.providers.cninfo_client import _generate_mcode  # noqa: PLC0415
@@ -52,6 +54,7 @@ def test_mcode() -> None:
 # ---------------------------------------------------------------------------
 # 2. CNINFO p_index2905 — 交易所指数日行情
 # ---------------------------------------------------------------------------
+
 
 async def test_p_index2905() -> None:
     """GET /api/index/p_index2905 — no token required (free endpoint)."""
@@ -79,13 +82,17 @@ async def test_p_index2905() -> None:
         matched = [r for r in records if r.get("code") in target]
         print(f"[INFO] Target indices found: {[r['code'] for r in matched]}")
         for r in matched:
-            print(f"       {r['code']} {r['name']:10s}  "
-                  f"close={r.get('close')}  change={r.get('change')}  "
-                  f"pct={r.get('changePercent')}%")
+            print(
+                f"       {r['code']} {r['name']:10s}  "
+                f"close={r.get('close')}  change={r.get('change')}  "
+                f"pct={r.get('changePercent')}%"
+            )
         if matched:
             print("[PASS] p_index2905 returned live index data")
         else:
-            print(f"[WARN] p_index2905 returned {len(records)} records but none matched target codes")
+            print(
+                f"[WARN] p_index2905 returned {len(records)} records but none matched target codes"
+            )
             print(f"       Sample codes: {[r.get('code') for r in records[:5]]}")
     else:
         print("[WARN] p_index2905 returned no records")
@@ -95,6 +102,7 @@ async def test_p_index2905() -> None:
 # ---------------------------------------------------------------------------
 # 3. CNINFO p_swindex — 申万指数行情
 # ---------------------------------------------------------------------------
+
 
 async def test_p_swindex() -> None:
     """GET /api/index/p_swindex — no token required (free endpoint)."""
@@ -114,8 +122,10 @@ async def test_p_swindex() -> None:
     if records:
         print(f"[INFO] Sample SW indices (first 5):")
         for r in records[:5]:
-            print(f"       {r.get('code')} {r.get('name'):15s}  "
-                  f"close={r.get('close')}  pct={r.get('changePercent')}%")
+            print(
+                f"       {r.get('code')} {r.get('name'):15s}  "
+                f"close={r.get('close')}  pct={r.get('changePercent')}%"
+            )
         print("[PASS] p_swindex returned SW industry index data")
     else:
         print("[WARN] p_swindex returned no records")
@@ -124,6 +134,7 @@ async def test_p_swindex() -> None:
 # ---------------------------------------------------------------------------
 # 4. CNINFO p_sysapi1015 — 个股日行情（需要 token）
 # ---------------------------------------------------------------------------
+
 
 async def test_p_sysapi1015() -> None:
     from app.core.providers.cninfo_client import CnInfoClient  # noqa: PLC0415
@@ -156,6 +167,7 @@ async def test_p_sysapi1015() -> None:
 # 5. AKShare fallback — market indices
 # ---------------------------------------------------------------------------
 
+
 def test_akshare_indices_fallback() -> None:
     """AKShare is the fallback when CNINFO index API is unavailable."""
     print("\n[TEST] AKShare fallback: stock_zh_index_spot_sina")
@@ -178,8 +190,9 @@ def test_akshare_indices_fallback() -> None:
 # Runner
 # ---------------------------------------------------------------------------
 
+
 def _section(label: str) -> None:
-    print(f"\n{'='*60}\n  {label}\n{'='*60}")
+    print(f"\n{'=' * 60}\n  {label}\n{'=' * 60}")
 
 
 async def main() -> None:
@@ -210,7 +223,7 @@ async def main() -> None:
     except Exception as e:
         print(f"[FAIL] {e}")
 
-    print(f"\n{'='*60}\n  Done.\n{'='*60}")
+    print(f"\n{'=' * 60}\n  Done.\n{'=' * 60}")
 
 
 if __name__ == "__main__":

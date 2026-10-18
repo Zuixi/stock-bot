@@ -46,9 +46,7 @@ async def _load_trade_dates(start: date, end: date, limit: int) -> list[date]:
         "ORDER BY trade_date DESC"
     )
     async with async_session_factory() as db:
-        dates = (
-            (await db.execute(stmt, {"start": start, "end": end})).scalars().all()
-        )
+        dates = (await db.execute(stmt, {"start": start, "end": end})).scalars().all()
     if limit > 0:
         dates = dates[:limit]
     return list(dates)
@@ -94,9 +92,7 @@ async def main(years: int, limit: int, start_date: date | None, end_date: date |
         total_updated += updated
         logger.info("%s: updated=%d", ymd, updated)
 
-    logger.info(
-        "Backfill finished: %d trade_date(s), %d row(s) updated", len(dates), total_updated
-    )
+    logger.info("Backfill finished: %d trade_date(s), %d row(s) updated", len(dates), total_updated)
 
 
 if __name__ == "__main__":

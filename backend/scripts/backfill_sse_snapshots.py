@@ -31,11 +31,15 @@ async def main(start_date: date, end_date: date) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Backfill SSE index snapshots")
     parser.add_argument(
-        "--start", type=date.fromisoformat, default=DEFAULT_START,
+        "--start",
+        type=date.fromisoformat,
+        default=DEFAULT_START,
         help="Start date (YYYY-MM-DD), default: 2026-04-01",
     )
     parser.add_argument(
-        "--end", type=date.fromisoformat, default=DEFAULT_END,
+        "--end",
+        type=date.fromisoformat,
+        default=DEFAULT_END,
         help="End date (YYYY-MM-DD), default: 2026-04-21",
     )
     args = parser.parse_args()
