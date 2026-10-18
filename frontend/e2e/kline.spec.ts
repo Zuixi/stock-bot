@@ -50,13 +50,18 @@ test("个股K线：tooltip 结构化展示（无可见日期轴）", async ({ pa
   if (!box) throw new Error("canvas not visible");
   await page.mouse.move(box.x + box.width * 0.75, box.y + box.height * 0.35);
   await page.waitForTimeout(600);
-  await expect(card.getByText(/涨跌幅/)).toBeVisible();
-  await expect(card.getByText(/成交量/)).toBeVisible();
-  await expect(card.getByText(/成交额/)).toBeVisible();
+  // P1-1 起卡片内多了一行「日期 开 高 低 收 涨跌幅 量 额 + MA」的 ribbon（图上方），
+  // 它和 tooltip 会同时出现「涨跌幅/成交量/成交额」这些同名标签 ⇒ 不 scope 就撞
+  // strict-mode（一个 locator 解析到 2 个元素）。`.kline-tooltip` 是 option 里显式
+  // 声明的类名（见 `klineOption.ts` 的 `tooltip.className`），专为这种读数断言而留。
+  const tooltip = card.locator(".kline-tooltip");
+  await expect(tooltip.getByText(/涨跌幅/)).toBeVisible();
+  await expect(tooltip.getByText(/成交量/)).toBeVisible();
+  await expect(tooltip.getByText(/成交额/)).toBeVisible();
   // 列式布局（P5）：标签逐行 + 涨跌额行
-  await expect(card.getByText(/^开盘$/)).toBeVisible();
-  await expect(card.getByText(/^收盘$/)).toBeVisible();
-  await expect(card.getByText(/涨跌额/)).toBeVisible();
+  await expect(tooltip.getByText(/^开盘$/)).toBeVisible();
+  await expect(tooltip.getByText(/^收盘$/)).toBeVisible();
+  await expect(tooltip.getByText(/涨跌额/)).toBeVisible();
 });
 
 test("个股K线：悬停成交量 pane 仍出完整 tooltip（跨 pane 联动）", async ({ page }) => {
@@ -76,12 +81,14 @@ test("个股K线：悬停成交量 pane 仍出完整 tooltip（跨 pane 联动�
   // `成交量` bar，没有 candlestick ⇒ formatter 若只认 candlestick 就返回空串（F5）。
   await page.mouse.move(box.x + box.width * 0.75, box.y + box.height * 0.78);
   await page.waitForTimeout(600);
-  // 11 行完整内容：成交量/成交额这两个「只有 bar 侧才在读」的行 + 需回查 points 的 OHLC
-  await expect(card.getByText(/成交量/)).toBeVisible();
-  await expect(card.getByText(/成交额/)).toBeVisible();
-  await expect(card.getByText(/涨跌幅/)).toBeVisible();
-  await expect(card.getByText(/^开盘$/)).toBeVisible();
-  await expect(card.getByText(/^收盘$/)).toBeVisible();
+  // 11 行完整内容：成交量/成交额这两个「只有 bar 侧才在读」的行 + 需回查 points 的 OHLC。
+  // scope 到 `.kline-tooltip`：图上方 ribbon 也有同名标签（见上一个用例的注释）。
+  const tooltip = card.locator(".kline-tooltip");
+  await expect(tooltip.getByText(/成交量/)).toBeVisible();
+  await expect(tooltip.getByText(/成交额/)).toBeVisible();
+  await expect(tooltip.getByText(/涨跌幅/)).toBeVisible();
+  await expect(tooltip.getByText(/^开盘$/)).toBeVisible();
+  await expect(tooltip.getByText(/^收盘$/)).toBeVisible();
 });
 
 test("指数K线：频率Tab可用，无复权控件", async ({ page }) => {
