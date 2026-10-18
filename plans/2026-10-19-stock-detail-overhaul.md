@@ -192,18 +192,25 @@ export function exchangeCandidates(symbol: string): Exchange[] {
 axisPointer: {
   link: [{ xAxisIndex: "all" }],
   lineStyle: { color: c.flat, type: "dashed", width: 1 },
-  label: { backgroundColor: c.text, color: c.bg, fontSize: 10 },
+  label: { backgroundColor: c.textPrimary, color: c.bgPage, fontSize: 10 },
 },
 ```
-- [ ] 两个 `xAxis` 各加 `axisPointer: { type: "cross", snap: true, triggerOn: "mousemove|click" }`
-      （`snap` 吸附蜡烛中心；带 `click` 才有触屏十字）。
+- [ ] 两个 `xAxis` 各加 `axisPointer: { type: "line", snap: true }`。
+      **实测修正（2026-10-19，P0-5 落地时发现）**：轴级写 `type: "cross"` 会让 ECharts 5.6.0
+      抛 `pointerShapeBuilder[axisPointerType] is not a function`，十字光标与 tooltip 一起消失
+      （`modelHelper.makeAxisPointerModel` 里轴级配置优先级最高，盖掉了 tooltip 派生的 `line`，
+      而 `pointerShapeBuilder` 只有 `line`/`shadow`/`none`）。**`cross` 只能出现在
+      `tooltip.axisPointer.type` 与顶层 axisPointer**：轴级给 `line` + `snap`，跨 pane 由顶层
+      `link` 提供，十字语义由 `tooltip.axisPointer.type: "cross"` 提供。轴级 `triggerOn` 是惰性的
+      （`AxisPointerView` 只读顶层），`triggerOn` 写在顶层。
 - [ ] `tooltip.confine` 在 `narrow` 时开启。
 - [ ] formatter 改「任意 series 定位」：`const i = list[0]?.dataIndex; if (i == null || !points[i]) return "";`
 - **验收**（人工）：竖线贯穿 K 线与成交量两个 pane、横线只在当前 pane、吸附蜡烛中心、触屏点按出十字；
       悬停成交量区 tooltip 完整 11 行。
 - **门禁**（**本题唯一的回归护栏，必须写**）：option 单测断言
-      ①`axisPointer.link` 深等于 `[{xAxisIndex:'all'}]` ②两个 `xAxis[].axisPointer.type === 'cross'`
-      ③formatter 在 `params=[{dataIndex:3,seriesType:"bar"}]` 下返回非空且含日期。
+      ①`axisPointer.link` 深等于 `[{xAxisIndex:'all'}]` ②两个 `xAxis[].axisPointer.type === 'line'`
+      **且不是 `'cross'`**（断言"不能写成 cross"本身，见上面的实测修正）③`tooltip.axisPointer.type === 'cross'`
+      ④formatter 在 `params=[{dataIndex:3,seriesType:"bar"}]` 下返回非空且含日期。
 
 ### P0-6 · 契约测试防 F1 复发（F7，0.5 天，杠杆最高）
 
@@ -327,8 +334,8 @@ export function toMarkPoints(events: StockEvent[], dates: string[], maxBubbles =
 
 | 指标 | 怎么测 | 判据 |
 |---|---|---|
-| 首屏请求数 | Network 面板，深市 + 北交所各一只 | 改后 ≤ 改前 − 2（`P0-4` 省 2 次探活） |
-| K 线区宽度 | 1440 视口量 canvas 宽度 | 改后 ≥ 750px（改前约 640px，按 `F14` 反推） |
+| 首屏 `/api` 请求数 | Playwright 记录 `request`，1440×900，`/stock/<code>` | **实测基线（2026-10-19，主树 :3000）**：`600519` 16 次 / 探活 3 次（全上海）；`000001` **17 次 / 探活 4 次，其中 2 次打错交易所**（enriched 与 quotes 各先试上海）。**改后实测**：`000001` 的 4 次请求全部直达 Shenzen，错所探活 **2 → 0**；请求总数不变是因为 `P0-1` 同时新增了 `financial-summary`，不要用总数下结论 |
+| K 线区宽度 | 1440 视口量 canvas `boundingBox().width` | **实测基线 756px**（`lg={14}`）。`P1-3` 改 `lg={16}` 后应 ≥ 850px；不回退即可 |
 | hover 掉帧 | 连续移动 100 次，`performance.now` 记录 | ribbon 落地后 P95 不高于落地前（**先测再比**） |
 | 无错误伪装 | 断后端 30s 后逐块检查 | 每个失败块都出现「加载失败/重试」 |
 | 契约盲区 | 注入假字段 | `check-api-fields` 必红 |
