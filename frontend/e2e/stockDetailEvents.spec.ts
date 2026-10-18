@@ -427,6 +427,62 @@ test("点击事件行 → K 线视窗移到该日 ±20 根并高亮该日", asyn
   await expect(page.getByTestId("kline-ribbon-date")).toHaveText(target);
 });
 
+test("周K 下点事件行**不跳**（日线下标不得套到聚合序列），切回日K 才定位", async ({ page }) => {
+  const bars = await fetchBarDates(page);
+  test.skip(bars.length < 240, "K 线样本不足 240 根，无法构造有效的日线下标");
+  const target = bars[100];
+  await page.route("**/announcements**", (route) => fulfillJson(route, [announcementRow("600519", target)]));
+
+  await page.goto("/stock/600519");
+  const card = await openRelatedEvents(page);
+  await expect(card.locator("tbody tr.ant-table-row")).toHaveCount(1);
+
+  const daily = await waitForChart(page);
+  const dailyIdx = daily.dates.indexOf(target);
+  expect(dailyIdx, "mock 的公告日不在日线序列里").toBeGreaterThan(-1);
+
+  const history = page.locator(".ant-card").filter({ hasText: "历史行情" });
+  const seg = (text: string) => history.locator(".ant-segmented-item").filter({ hasText: text });
+  const ribbonDate = page.getByTestId("kline-ribbon-date");
+  const rowDateCell = card.locator("tbody tr.ant-table-row").first().locator("td").first();
+
+  // 切周K：序列被聚合成更短的一维，x 轴日期随之变化（等它真的生效再断言）
+  await seg("周K").click();
+  await expect
+    .poll(async () => (await readChart(page))?.dates.length ?? 0, { message: "周K 未生效" })
+    .toBeLessThan(daily.dates.length);
+  const weekly = (await readChart(page)) as ChartSnapshot;
+  const ribbonBefore = (await ribbonDate.innerText()).trim();
+
+  /**
+   * 旧实现的 bug：`dailyIdx`（≈100）被 clamp 到周线序列上，视窗会从尾部跳到 [80,120]，
+   * 高亮与 ribbon 也会落到**另一周**——比"不跳"更糟的静默事实错误。
+   * 负向断言需要给 React effect 一个落地窗口（handler 是同步的，600ms 是数量级上的余量）；
+   * 紧跟着的正对照（切回日K 再点）证明"这一次点击本来会生效"。
+   */
+  await rowDateCell.click();
+  await page.waitForTimeout(600);
+
+  const weeklyAfter = (await readChart(page)) as ChartSnapshot;
+  expect(weeklyAfter.start, "周K 下视窗不应移动（日线下标不能套到聚合序列）").toBe(weekly.start);
+  expect(weeklyAfter.end, "周K 下视窗不应移动").toBe(weekly.end);
+  await expect(ribbonDate, "周K 下 ribbon 不应显示一个错误日期").toHaveText(ribbonBefore);
+
+  // 正对照：切回日K 再点同一行 → 必须真的定位到该日 ±20 根
+  await seg("日K").click();
+  await expect
+    .poll(async () => (await readChart(page))?.dates.length ?? 0, { message: "日K 未恢复" })
+    .toBe(daily.dates.length);
+  await rowDateCell.click();
+  await expect
+    .poll(async () => {
+      const chart = await readChart(page);
+      return chart ? (chart.start as number) <= dailyIdx && dailyIdx <= (chart.end as number) : false;
+    }, { message: "切回日K 后仍未定位到事件日" })
+    .toBe(true);
+  await expect(ribbonDate).toHaveText(target);
+});
+
 test("事件日画出 markPoint 气泡：坐标落在该日，不是最近一根", async ({ page }) => {
   const bars = await fetchBarDates(page);
   // 取靠后的交易日：落在默认视窗内，气泡可见

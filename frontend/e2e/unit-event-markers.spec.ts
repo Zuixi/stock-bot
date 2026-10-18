@@ -34,7 +34,7 @@ const PALETTE: Record<EventKind, string> = {
 /** 六个交易日（升序，与图表 x 轴同序）。 */
 const DATES = ["2026-10-09", "2026-10-10", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16"];
 
-const ev = (kind: EventKind, date: string, title = "t"): StockEvent => ({ kind, date, title });
+const ev = (kind: EventKind, date: string): StockEvent => ({ kind, date });
 
 test("① 同日多事件合并成一个气泡，标签带计数（公告+1）", () => {
   const markers = toEventMarkers(
@@ -116,7 +116,7 @@ test("⑤ 输出顺序稳定：按 bar 顺序升序，与入参事件顺序无�
 });
 
 test("⑥ 单条事件标签没有 +N 尾巴（+0 是无意义的噪声）", () => {
-  const markers = toEventMarkers([ev("dragon-tiger", "2026-10-16", "日涨幅偏离值达7%")], DATES, PALETTE);
+  const markers = toEventMarkers([ev("dragon-tiger", "2026-10-16")], DATES, PALETTE);
   expect(markers).toHaveLength(1);
   expect(markers[0].label).toBe("龙虎榜");
   expect(markers[0].label).not.toContain("+");

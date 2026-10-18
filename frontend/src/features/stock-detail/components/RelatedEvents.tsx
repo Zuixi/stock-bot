@@ -204,7 +204,8 @@ export function RelatedEvents({ events, kind, onKindChange, onSelectDate }: Rela
         />
       )}
       <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
-        龙虎榜按本股代码查询，最多展示最近 50 条；点击任一行可在 K 线上定位到该日期
+        龙虎榜按本股代码查询，最多展示最近 50 条。点击任一行可在日K上定位到该日期（周K/月K
+        暂不支持）；K 线上的事件气泡只包含已展开过的类型——没有气泡不代表没有事件。
       </Typography.Text>
     </Card>
   );

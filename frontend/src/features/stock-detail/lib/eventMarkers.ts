@@ -22,16 +22,17 @@ import type { ThemePalette } from "@/app/theme";
 
 export type EventKind = "announcement" | "dragon-tiger" | "block-trade" | "share-float" | "repurchase";
 
-/** 一条归一化后的事件（域内唯一形状；各 API 的字段差异在 hook 里消化）。 */
+/**
+ * 一条归一化后的事件（域内唯一形状；各 API 的字段差异在 hook 里消化）。
+ *
+ * **只有图上标记真正消费的字段**：标题/数值/外链已经在 `RelatedEvents` 的表格列里
+ * 渲染（那才是它们的唯一真源）。这里再抄一份 title/meta 只会变成"看着有用、
+ * 其实没人读"的死构造，下一个读者还会以为改它能让列表变样。
+ */
 export interface StockEvent {
   kind: EventKind;
   /** 事件日，`YYYY-MM-DD`（与 K 线 bar 的 `date` 同形，可直接 + 严格比较） */
   date: string;
-  title: string;
-  /** 可选的关键数值/原因（列表副标题用；不参与图上标记） */
-  meta?: string[];
-  /** 外部详情链接（公告 PDF）；「可点定位」不依赖它 */
-  url?: string;
 }
 
 /** K 线气泡标记：`date` 必须能在 bar 日期里**精确**命中，否则不画。 */

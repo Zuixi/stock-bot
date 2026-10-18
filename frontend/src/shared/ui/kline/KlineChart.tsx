@@ -188,6 +188,13 @@ export function KlineChart({
    * **不重新取数**（数据早已在）。`nonce` 是"这次点击"的代数：同一根 K 线连点两次
    * 也要重新执行（否则第二次点击毫无反馈）。
    *
+   * ⚠️ **只在日K生效**：`focusRequest.index` 是上层用**日线**日期解析出来的（`useKlineDates`），
+   * 而周/月K 画的是 `aggregateDaily(points, freq)` 聚合后的、**更短**的序列。把日线下标
+   * 直接夹到聚合序列上会落到错误的蜡烛上，ribbon 随后显示一个**错误日期** —— 那比"不跳"
+   * 更糟（静默的事实错误）。因此非日K 时直接 no-op；这一限制由事件列表脚注披露。
+   * `freq` 刻意**不进依赖**：定位只在"这次点击发生时的频率"下判定一次，切频率不该
+   * 让上一次点击复活。
+   *
    * 索引来自上层（`indexOfDate(dates, date)`），越界在此收敛；`points` 用 ref 读，
    * 是为了**不把 points 放进依赖**——否则数据刷新（复权因子回补触发的 10s 轮询）
    * 会把用户刚定位的视窗又拽回去。
@@ -199,6 +206,8 @@ export function KlineChart({
 
   useEffect(() => {
     if (focusIndex == null) return;
+    // 日线下标 ≠ 聚合序列下标（见上方注释）：周/月下宁可不跳，也不跳到错误日期
+    if (freq !== "day") return;
     const instance = chartRef.current?.getEchartsInstance();
     if (!instance) return;
     const total = pointsRef.current.length;

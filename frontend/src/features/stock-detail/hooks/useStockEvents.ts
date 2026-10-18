@@ -6,7 +6,6 @@ import {
   type AnnouncementItem, type BlockTradeItem, type DragonTigerItem,
   type RepurchaseItem, type ShareFloatItem,
 } from "@/shared/api/marketData";
-import { fmtSignedYi, fmtWanGu, fmtYi, fmtYiGu, fmtWanYi } from "@/features/market/components/format";
 import type { StockEvent } from "../lib/eventMarkers";
 
 /**
@@ -121,53 +120,16 @@ export function useStockEvents(symbol: string | undefined, activeKind: EventTab 
    */
   const events = useMemo<StockEvent[]>(() => {
     const out: StockEvent[] = [];
+    const push = (kind: StockEvent["kind"], raw: string | null | undefined) => {
+      const date = isoDate(raw);
+      if (date) out.push({ kind, date });
+    };
 
-    for (const row of announcement.data ?? []) {
-      const date = isoDate(row.announceTime);
-      if (!date) continue;
-      out.push({
-        kind: TAB_TO_KIND.announcements,
-        date,
-        title: row.title,
-        meta: [row.category === "report" ? "定期报告" : "临时公告"],
-        url: row.pdfUrl ?? undefined,
-      });
-    }
-    for (const row of dragon.data ?? []) {
-      const date = isoDate(row.tradeDate);
-      if (!date) continue;
-      out.push({
-        kind: TAB_TO_KIND["dragon-tiger"],
-        date,
-        title: `上榜：${row.reason}`,
-        meta: [`净买额 ${fmtSignedYi(row.netAmount)}`],
-      });
-    }
-    for (const row of block.data ?? []) {
-      const date = isoDate(row.tradeDate);
-      if (!date) continue;
-      out.push({
-        kind: TAB_TO_KIND["block-trades"],
-        date,
-        title: `大宗交易 ${row.price == null ? "--" : `${row.price.toFixed(2)} 元`}`,
-        meta: [fmtWanGu(row.volume), fmtWanYi(row.amount)],
-      });
-    }
-    for (const row of floats.data ?? []) {
-      const date = isoDate(row.floatDate);
-      if (!date) continue;
-      out.push({
-        kind: TAB_TO_KIND["share-floats"],
-        date,
-        title: `${row.shareType ?? "限售"}解禁`,
-        meta: [fmtYiGu(row.floatShare), row.floatRatio == null ? "--" : `${row.floatRatio.toFixed(2)}%`],
-      });
-    }
-    for (const row of repo.data ?? []) {
-      const date = isoDate(row.annDate);
-      if (!date) continue;
-      out.push({ kind: TAB_TO_KIND.repurchases, date, title: `回购 ${row.proc}`, meta: [fmtYi(row.amount)] });
-    }
+    for (const row of announcement.data ?? []) push(TAB_TO_KIND.announcements, row.announceTime);
+    for (const row of dragon.data ?? []) push(TAB_TO_KIND["dragon-tiger"], row.tradeDate);
+    for (const row of block.data ?? []) push(TAB_TO_KIND["block-trades"], row.tradeDate);
+    for (const row of floats.data ?? []) push(TAB_TO_KIND["share-floats"], row.floatDate);
+    for (const row of repo.data ?? []) push(TAB_TO_KIND.repurchases, row.annDate);
 
     return out;
   }, [announcement.data, dragon.data, block.data, floats.data, repo.data]);
