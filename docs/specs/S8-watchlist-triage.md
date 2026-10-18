@@ -25,7 +25,8 @@
 
 **契约**
 - `/me?tab=triage` 三区（顺序固定）：① **今日有事的票**（分组：风险 / 事件 / 关注 / 背景）② **今日平静的票**（一行数字）③ 页脚（`as_of` + 免责声明）
-- 每条只输出三件事：**发生了什么（含数值）** · **数据截至** · **点这里复核**（公告原文 / K 线 / 龙虎榜）
+- 每条输出四件事：**发生了什么（含数值）** · **规则出处**（`规则：{阈值人话} · {版本} · 数据 {表}`）· **数据截至** · **点这里复核**（公告原文 / K 线 / 龙虎榜）
+- 每条卡片带「规则说明」入口 → 抽屉展示：定义 / 阈值原值 / 数据源表与更新时点 / **已知失效场景** / **历史统计**（见 S8.6）
 - 没有"推荐 / 看好 / 建议"这类判断词；分级只用 **风险 / 事件 / 关注 / 背景** 四枚举
 - **状态是契约字段**：`state = ok | no_data | no_watchlist`，前端按它选文案，**不**从 `items=[] && quiet_count=0` 反推
   （那个组合同时对应"没自选"和"最近完整交易日不存在"，反推就会把后者画成"你还没加自选"）
@@ -65,7 +66,15 @@ class DetectorSpec:
     thresholds: dict[str, float]
     required_fields: tuple[str, ...]   # 例 ('daily_quotes.close',)
     verify: str                 # 'kline' | 'announcement' | 'dragon_tiger' | 'sector'
+    # ── 规则来源（provenance）：用户凭什么信这条判定（S8.6）──
+    rule_text: str              # 人话阈值，如「当日跌幅 ≥ 7%，或 5 日跌幅 ≥ 12%」
+    definition: str             # 一句话定义
+    source_tables: tuple[str, ...]
+    update_note: str            # 「盘后 15:30 起可由 daily_quotes 计算」
+    failure_modes: tuple[str, ...]   # ≥3：跳空 / 停牌 / 除权 / 次新 / 一字板 …
 ```
+
+导入期断言追加：上述五个 provenance 字段非空 · `failure_modes ≥ 3` · `source_tables` 非空。
 
 | # | key | 人话 | 判定（事实） | severity | 数据 |
 |---|---|---|---|---|---|
@@ -181,10 +190,54 @@ GET /api/v1/watchlists/triage?group=&limit=
 
 ---
 
+---
+
+## S8.6 规则来源（provenance）—— 让用户相信"判定有出处"
+
+**范围**：做完之后，每条判定都能回答三问：规则是什么（阈值/版本）、数据从哪来（表/更新时点）、这条规则历史上怎样（含**不利**数据）。
+
+**为什么需要这一节**：2026-10-17 实测页面只有「分级 + 数值 + 数据截至 + 复核」——用户无法判断阈值是谁定的、数据何时更新、判定靠不靠谱。
+事实型探测器没有预测能力（见标定报告），因此"可信"**只能来自可追溯与诚实披露**，不能来自话术。
+
+**交付物**
+- `DetectorSpec` 的 provenance 五字段（S8.2）
+- `GET /api/v1/watchlists/triage/rules`（登录即可，**无 DB 查询**；`stats` 读仓库内静态 JSON）
+- `backend/scripts/build_triage_rule_stats.py`（可复跑，产物 `backend/app/services/triage_rule_stats.json` 入库）
+- 前端「规则说明」抽屉
+
+**契约**
+- 卡片字段追加：`rule_text` / `rule_version` / `source_table`
+- `rules[]` 元素形状（字段名即契约）：
+  ```json
+  { "key": "drop_sharp", "label": "跌得急", "severity": "risk", "version": "r1",
+    "rule_text": "当日跌幅 ≥ 7%，或 5 日跌幅 ≥ 12%", "definition": "一句话定义",
+    "thresholds": {"day_pct": -7.0, "five_day_pct": -12.0},
+    "source_tables": ["daily_quotes"], "update_note": "盘后 15:30 起可由 daily_quotes 计算",
+    "failure_modes": ["跳空缺口", "停牌复牌", "除权", "次新（上市不足 60 交易日）"],
+    "stats": {"as_of": "2026-10-16", "window_months": 12, "signals": 1234, "days": 240,
+              "per_day": 5.1, "t1_excess_med": -0.30, "t5_excess_med": -1.02,
+              "t20_excess_med": -1.23, "t5_p05": -9.81, "basis": "超额=信号组中位−当日全市场中位"},
+    "stats_note": null }
+  ```
+- **统计口径（写死，与标定报告一致）**：最近 **12 个月**；收益按 `close/pre_close` **连乘**（复权）；**交易日历对齐**；winsorize ±50%；
+  `tN_excess_med` = 各信号日「信号组中位收益 − 当日全市场中位收益」的跨日**中位数**；`t5_p05` = 信号组 5 日收益 5% 分位；
+  阈值**必须从 `TRIAGE_DETECTORS` 读**，禁止脚本里重写数字
+- `stats` 允许 `null`，此时 `stats_note` **必填**（如"源表覆盖不足 12 个月，样本不足"）
+- 展示纪律：负值必须带符号原样展示；`null` 不得显示成 `0`；每次展示带「统计截至 / 样本数 / 历史统计不代表未来表现」
+
+**不做什么**：不做"命中率排行"· 不做规则推荐/订阅 · 不做参数优化 · 不在请求路径里跑全市场统计（只用静态产物）
+
+**验收判据**
+- 行为：8 条规则在 `rules` 里各出现一次，`key/label/version/rule_text/definition/thresholds/source_tables/update_note/failure_modes` 全部非空
+- 行为：`failure_modes` ≥3 条/规则；`stats=null` 时 `stats_note` 非空
+- 行为：`build_triage_rule_stats.py` 重跑两次产物**逐字节一致**（确定性），且脚本里的阈值来自 registry（`grep` 无魔法数字）
+- 门禁：e2e 断言卡片有「规则：…」行、抽屉里能看到失效场景与"历史统计不代表未来表现"、`stats=null` 显示原因而不是 0
+- 门禁：合规词表 0 命中（含抽屉文案）
+
 ## S8 整体验收判据
 
 - 数据契约：**零新表**（本 spec 相关迁移 `create_table` = 0）· 无新 cron
-- 行为：一次请求返回 ≤8 条 + `quiet_count`；用户能看到当天真实事件
+- 行为：一次请求返回 ≤8 条 + `quiet_count`；用户能看到当天真实事件与**规则出处**
 - 行为：查询次数 ≤6 且不随自选数增长；自选 >50 返回 422
 - 行为：`/today` 三种状态（有命中 / 全静默 / 无自选）都有明确文案
 - 门禁：`self_review --full` · `doc_gate` · Playwright（条目与响应一致、免责可见、`/market` 5 tab 未回归、0 禁用词）
