@@ -7,6 +7,7 @@ import { useWatchlist } from "@/features/watchlist/useWatchlist";
 import type { StockRecord } from "@/shared/types";
 import type { PeTtmPercentileState } from "../hooks/usePeTtmPercentile";
 import type { StockRangeStatsState } from "../hooks/useStockRangeStats";
+import { JournalEntryAction } from "./JournalEntryAction";
 import { PositionStrip } from "./PositionStrip";
 import { QuoteMetricRow } from "./QuoteMetricRow";
 import "./QuoteBar.css";
@@ -60,6 +61,9 @@ export function QuoteBar({ stock, range, percentile }: QuoteBarProps) {
           </Tag>
         )}
         <div className="quote-bar__actions">
+          {/* 动作区顺序固定为 [记一笔 default] [加入自选 primary]（设计稿 §2 行 1）：
+              自选是这一条上唯一的「主操作」，记一笔是次级入口，故不给它 primary。 */}
+          <JournalEntryAction symbol={stock.symbol} />
           <Button
             size="small"
             type={isWatched ? "primary" : "default"}

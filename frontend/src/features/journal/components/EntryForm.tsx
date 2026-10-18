@@ -44,6 +44,7 @@ const { Text } = Typography;
  *
  * 选填项（不带默认值之外的风险）：
  * - `symbol`：留空 = 市场级判断（后端按沪深 300 对比，页面显示"市场"）；
+ *   传了 `defaultSymbol` 时预填并锁定（详情页「记一笔」的入口，见 `defaultSymbol` 的注释）；
  * - `kind`：归档标签（观察/买/卖/放弃/持有）：只用于统计分栏，不改变结果数字；
  *   唯一的口径差别是 `pass` 计入判断、不计入收益（spec §S9.7.6）；
  * - `bet_type`：赌的是什么（方向/跑赢同行/市场级，spec §S9.7.3），**默认「方向」**，
@@ -117,11 +118,24 @@ const MISSING_LABEL = {
 interface EntryFormProps {
   /** 创建成功后的回调（面板据此刷新三份列表与统计）。 */
   onCreated: () => void;
+  /**
+   * 预填并**锁定**「标的」代码（P2-2：从个股详情页「记一笔」进来时，用户已经在那只股票上）。
+   *
+   * 锁定（`disabled`）而不是仅预填：详情页上的这一笔语义上就是"给这只股票记一笔"，
+   * 允许改代码等于允许在 A 股票页面写下对 B 股票的判断，而页面标题仍写着 A —— 记录
+   * 与上下文对不上，事后复盘时看不出这笔是从哪来的。
+   *
+   * 不传 = 保持原行为（`/me?tab=journal` 的面板里留空 = 市场级判断）。
+   */
+  defaultSymbol?: string;
 }
 
-export function EntryForm({ onCreated }: EntryFormProps) {
+export function EntryForm({ onCreated, defaultSymbol }: EntryFormProps) {
   const [thesis, setThesis] = useState("");
-  const [symbol, setSymbol] = useState("");
+  /** 锁定态：`defaultSymbol` 非空即锁定（空白串按"没传"处理，避免把空值当锁） */
+  const lockedSymbol = defaultSymbol?.trim() ?? "";
+  const symbolLocked = lockedSymbol !== "";
+  const [symbol, setSymbol] = useState(lockedSymbol);
   const [kind, setKind] = useState<JournalKind>("watch");
   const [betType, setBetType] = useState<JournalBetType>("direction");
   const [invKind, setInvKind] = useState<JournalInvalidationKind | undefined>(undefined);
@@ -338,7 +352,9 @@ export function EntryForm({ onCreated }: EntryFormProps) {
       </div>
 
       <div className="journal-form__row">
-        <Text className="journal-form__label">标的（选填，留空 = 市场级判断）</Text>
+        <Text className="journal-form__label">
+          {symbolLocked ? "标的（已锁定为当前股票，不可改）" : "标的（选填，留空 = 市场级判断）"}
+        </Text>
         <Space wrap size={8}>
           <Input
             className="journal-form__symbol"
@@ -348,6 +364,9 @@ export function EntryForm({ onCreated }: EntryFormProps) {
             placeholder="例如 600519"
             aria-label="标的代码"
             maxLength={16}
+            // 锁定态用 `disabled` 而不是 `readOnly`：禁用的输入框在视觉与可访问性上都
+            // 明确"这不是给你改的"，readOnly 看起来仍是一个可编辑框。
+            disabled={symbolLocked}
           />
           {/* 一键把归档标签设为 `pass`；**不碰** 3 个必填，放弃的判断也要能复盘 */}
           <Button data-testid="journal-pass" onClick={() => setKind("pass")}>
