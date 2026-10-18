@@ -235,7 +235,8 @@ decision_journal_reviews(
 ```
 
 - **落库意义**：以后算法或数据变了，用户当时看到的"同类历史"仍可复现（与本模块"不可篡改"同一条哲学）。
-- 计算失败**不得阻断创建**：`peer_history` 写 `null` 并在 `notes` 写明原因（`no_stats_product` / `pipeline_error`）。
+- 计算失败**不得阻断创建**：`peer_history` 降级为 `self=null / market=null`，并在 `notes` 写明原因
+  （`no_stats_product` / `pipeline_error` / `stale_guard`）。
 - `notes` 里也必须写明"该统计只描述过去，不预测结果"。
 
 ### S9.6.5 展示契约（一句话 + 一个比例 + 一个指向）
@@ -251,13 +252,21 @@ decision_journal_reviews(
 - 样本不足时只显示"样本不足"那句 + 已有什么（不显示 0、不显示百分比）。
 - 不出现判断词（沿用 S8 禁用词表）。
 
-### S9.6.6 实现与离线产物（**排期未定，等 owner 批准本口径**）
+### S9.6.6 实现与离线产物（**2026-10-19 已落地**）
 
-- 新增 `backend/app/services/peer_history_service.py`：`bucket_of(snapshot)`、`self_history(db, user_id, bucket, before)`、`market_history(bucket)`
-- 新增离线脚本 `build_peer_history_stats.py`（**待建**，落 `backend/` 脚本目录）→ 产物 `peer_history_stats.json`
-  （12 个月、按 45 桶聚合、交易日历对齐 + 复权 + winsorize ±50%，与既有 `triage_rule_stats` **同口径**）
-- `POST /journal` 响应与快照新增 `peer_history`（不影响既有字段）
-- 前端：创建成功后的结果卡片（无新路由、无新 tab）
+- **已落地** `backend/app/services/peer_history_service.py`：`bucket_of(snapshot)` · `self_history(db, user_id, bucket, before)` ·
+  `market_history(bucket, snapshot_day)`；分桶常量 `SIMILARITY_BUCKETS`（边界 20/40/60/80、±2、±5，`unknown` 单列）
+- **已落地** `backend/scripts/build_peer_history_stats.py` → `backend/app/services/peer_history_stats.json`
+  （12 个月、按 45 桶聚合、交易日历对齐 + 复权 + winsorize ±50%，与既有 `triage_rule_stats` **同口径**；
+  超额 = 个股 T+N 收益 − 当日全市场中位；样本 = 桶内「股票 × 交易日」，两次运行**逐字节一致**）
+- **已落地** `POST /journal` 响应与 `snapshot.peer_history` 新增 `peer_history`（快照版本 `s9.r3`；不影响既有字段）
+- **已落地** 前端：创建成功后的结果卡片 `features/journal/components/PeerHistoryCard.tsx`（无新路由、无新 tab）
+- **隐私口径（实现时写死）**：L2 产物只由行情/行业/情绪三张表算出，**不含任何用户日志**
+  （spec §S9.7.9 不做跨用户聚合）；L1 只查本人。
+- **降级**：算不出来 → `notes=["pipeline_error"]`（创建照旧 201）；产物缺失 → `notes=["no_stats_product"]`；
+  产物 `as_of >= 快照日` → `notes=["stale_guard"]` 且 `market=null`（PIT）
+- 查询预算：`self_history` 一次查询（用户自己的日志），L2 读进程内产物（0 查询）；
+  `build_snapshot` 的「≤5 条」契约不受影响（`peer_history` 在它之外算）
 
 ### S9.6.7 验收判据
 

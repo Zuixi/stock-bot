@@ -67,6 +67,7 @@ from app.models.market_data import Announcement, DragonTigerEntry, StockPriceLim
 from app.models.quote import DailyQuote
 from app.models.stock import Stock
 from app.schemas.journal import JournalEntryCreate
+from app.services import peer_history_service as peer_history
 from app.services import triage_detectors as td
 from app.services.industry_registry import (
     COMPOSITE_METRIC_KEY,
@@ -137,7 +138,11 @@ _SH = ZoneInfo("Asia/Shanghai")
 #: ``s9.r2``（2026-10-19，S9.7 Phase A）：新增 ``bench_spec`` / ``bench_basis_note``
 #: 两个元数据键（基准口径在**创建时**固化，spec §S9.7.3）。``s9.r1`` 的行没有这两个键，
 #: 读取方按 ``bet_type=entry.bet_type`` + 当场可得的数据重算（不得改写历史快照）。
-SNAPSHOT_VERSION = "s9.r2"
+#:
+#: ``s9.r3``（2026-10-19，S9.6）：新增 ``peer_history``（创建那一刻的同类历史，
+#: spec §S9.6.4）。老行没有它 → 读取方按"当时没有这段信息"处理，**不补算**
+#: （补算等于把今天的数据塞进昨天的快照）。
+SNAPSHOT_VERSION = "s9.r3"
 
 #: 快照固定字段（顺序即上屏顺序）。``tests/test_journal_service.py`` 逐字对拍。
 SNAPSHOT_FIELDS: tuple[str, ...] = (
@@ -161,6 +166,9 @@ SNAPSHOT_META_FIELDS: tuple[str, ...] = (
     # ★ s9.r2（spec §S9.7.3）：基准口径与它的人话说明，创建时固化、事后不可改
     "bench_spec",
     "bench_basis_note",
+    # ★ s9.r3（spec §S9.6.4）：创建那一刻看到的"同类历史"必须落库——
+    # 以后算法/行情变了，用户当时看到的那段仍然可复现（与"不可篡改"同一条哲学）
+    "peer_history",
 )
 
 #: 行情窗口的自然日下界：≈130 个交易日 —— 同时覆盖 MA20（20 行）、探测器（61 行）
@@ -560,6 +568,9 @@ def _empty_snapshot(symbol: str | None, as_of: date) -> dict[str, Any]:
             "fallback": True,
         },
         "bench_basis_note": BENCH_NOTE_FALLBACK,
+        # s9.r3（spec §S9.6.4）：同类历史由 ``create_entry`` 在快照抓完之后填进来；
+        # 这里先占位，保证"快照永远有这一格"（读方不用判键在不在，只判值）
+        "peer_history": None,
         "missing_reason": {},
     }
 
@@ -1504,6 +1515,19 @@ async def create_entry(
     as_of = created_at.date()
     bet_type = payload.bet_type
     snapshot = await build_snapshot(db, symbol=payload.symbol, as_of=as_of, bet_type=bet_type)
+    # ★ spec §S9.6.4：同类历史在**创建时**算一次并落进快照（失败也不阻断创建）。
+    # 放在 build_snapshot 之外是刻意的：快照的"五个数据面 ≤5 条查询"是既有契约，
+    # 而这一段多一条 L1 查询（本人历史），不该让它挤进那 5 条的预算里。
+    try:
+        snapshot["peer_history"] = await peer_history.peer_history(
+            db,
+            uid,
+            snapshot=snapshot,
+            symbol=payload.symbol,
+            computed_at=created_at,
+        )
+    except Exception:  # noqa: BLE001 — 任何失败都降级，创建必须成功（spec §S9.6.4）
+        snapshot["peer_history"] = peer_history.failure()
     entry = DecisionJournalEntry(
         user_id=uid,
         symbol=payload.symbol,

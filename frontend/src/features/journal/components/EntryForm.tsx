@@ -15,6 +15,7 @@ import type { Dayjs } from "dayjs";
 import {
   createJournalEntry,
   type JournalBetType,
+  type JournalEntry,
   type JournalEntryCreate,
   type JournalHorizon,
   type JournalInvalidationKind,
@@ -23,6 +24,7 @@ import {
 } from "@/shared/api/journal";
 import { KIND_META, KIND_ORDER } from "../kinds";
 import { POSITION_SIZE_META, POSITION_SIZE_ORDER } from "../sizes";
+import { PeerHistoryCard } from "./PeerHistoryCard";
 
 const { Text } = Typography;
 
@@ -129,11 +131,15 @@ export function EntryForm({ onCreated }: EntryFormProps) {
   // 仓位默认「只观察」（spec §S9.7.1 的默认值）；信心**刻意留空**（见 `CONFIDENCE_OPTIONS`）。
   const [positionSize, setPositionSize] = useState<JournalPositionSize>("none");
   const [confidence, setConfidence] = useState<number | undefined>(undefined);
+  // 刚创建的那一条（spec §S9.6.5：创建成功后**立刻**把"同类情形"还给用户）。
+  // 不下发到列表面板，是因为这段只在"刚写完"这一刻有意义，刷新后由快照里那份承载。
+  const [created, setCreated] = useState<JournalEntry | null>(null);
 
   const mutation = useMutation({
     mutationFn: (payload: JournalEntryCreate) => createJournalEntry(payload),
-    onSuccess: () => {
+    onSuccess: (entry) => {
       message.success("已记下这一笔");
+      setCreated(entry);
       // 后端把状态分好，前端不自己往列表里塞条目：由面板统一失效重取三份列表 + 统计，
       // 这样"创建后立刻在列表里看到"与"到期/复盘后的移动"走的是同一条数据路径。
       onCreated();
@@ -389,6 +395,9 @@ export function EntryForm({ onCreated }: EntryFormProps) {
           记下这一笔
         </Button>
       </div>
+
+      {/* 同类历史（spec §S9.6.5）：只在刚创建成功时展示；缺字段时组件自己整卡不渲染 */}
+      {created && <PeerHistoryCard entry={created} />}
     </form>
   );
 }

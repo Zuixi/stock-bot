@@ -92,7 +92,13 @@ test.describe("一级导航：在顶栏 · 10 项平铺 · 靠右 · 一个都�
     test(`@${width} 导航在 Header 内靠右 · 10 项均渲染 · 放不下的可从溢出菜单到达`, async ({ page }) => {
       // 未登录时 6 个 authenticated 项被隐藏（可见性三态），"10 项"就失去意义，
       // 故以"已登录且持 research:read"为前置——mock 会话，不碰真实鉴权。
-      await page.route("**/auth/**", (route) =>
+      // 只 mock **根级 `/auth/*` 接口**，不能用 `**/auth/**`：dev server 的模块请求
+      // `http://localhost:3000/src/features/auth/index.ts` 也含 `/auth/`，会被同一条路由
+      // 命中并返回 JSON → 模块 MIME 错 → 整页不挂载（`primary-nav` 永远等不到）。
+      // 谓词版正好能表达"只拦 `/auth/` 开头、不拦 `/src/` 下的模块"。
+      await page.route(
+        (url) => url.pathname.startsWith("/auth/") && !url.pathname.startsWith("/src/"),
+        (route) =>
         route.fulfill({
           status: 200,
           contentType: "application/json",

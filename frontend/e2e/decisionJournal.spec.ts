@@ -43,6 +43,85 @@ const USER = {
 // 下面这行必须**逐字**列出禁用词才有断言对象，故给它行级豁免（扫描器会打印豁免行，评审可见）
 const FORBIDDEN = ["买入", "卖出", "推荐", "看好", "建议关注", "目标价", "机会", "布局"]; // compliance-allow: 断言清单本身必须包含禁用词
 
+/**
+ * 同类历史（spec §S9.6.4/§S9.6.5）。三层必须**分开**上屏：`你自己` 与 `全市场同桶`
+ * 不合并；`notes` 由后端给（"只描述过去，不预测结果"），页面原样展示。
+ */
+interface FixturePeerHistory {
+  version: string;
+  computed_at: string;
+  bucket: { sentiment: string; sector: string; ma20: string } | null;
+  self: {
+    same_symbol?: {
+      n: number;
+      right: number;
+      wrong: number;
+      wrong_by?: Record<string, number>;
+      right_for_wrong_reason?: number;
+      luck?: number;
+      insufficient?: boolean;
+    } | null;
+    same_bucket?: { n: number; right: number; wrong: number } | null;
+    min_sample?: number;
+  } | null;
+  market: {
+    as_of: string;
+    n: number;
+    t5_excess_med: number | null;
+    t20_excess_med: number | null;
+    min_sample?: number;
+    insufficient?: boolean;
+  } | null;
+  notes: string[];
+}
+
+/** 样本够：自己 6 条（4 对 / 2 错，两次都是时机）+ 市场 812 条。 */
+const PEER_HISTORY: FixturePeerHistory = {
+  version: "ph-v1",
+  computed_at: "2026-10-18T09:00:00+08:00",
+  bucket: { sentiment: "20_40", sector: "mid", ma20: "mid" },
+  self: {
+    same_symbol: {
+      n: 6,
+      right: 4,
+      wrong: 2,
+      wrong_by: { timing_wrong: 2 },
+      right_for_wrong_reason: 1,
+      luck: 1,
+      insufficient: false,
+    },
+    same_bucket: { n: 9, right: 5, wrong: 4 },
+    min_sample: 5,
+  },
+  market: {
+    as_of: "2026-10-16",
+    n: 812,
+    t5_excess_med: -0.42,
+    t20_excess_med: -1.1,
+    min_sample: 30,
+    insufficient: false,
+  },
+  notes: ["该统计只描述过去，不预测结果"],
+};
+
+/** 样本不足：自己 3 条（<5）、市场 29 条（<30）——两行都只许写"样本不足"。 */
+const PEER_HISTORY_INSUFFICIENT: FixturePeerHistory = {
+  ...PEER_HISTORY,
+  self: {
+    same_symbol: { n: 3, right: 2, wrong: 1, wrong_by: { timing_wrong: 1 }, insufficient: true },
+    same_bucket: { n: 3, right: 2, wrong: 1 },
+    min_sample: 5,
+  },
+  market: {
+    as_of: "2026-10-16",
+    n: 29,
+    t5_excess_med: null,
+    t20_excess_med: null,
+    min_sample: 30,
+    insufficient: true,
+  },
+};
+
 interface FixtureReview {
   id: number;
   entry_id: number;
@@ -97,6 +176,10 @@ interface FixtureEntry {
   snapshot?: {
     bench_spec?: { bet_type?: string; fallback?: boolean } | null;
     bench_basis_note?: string | null;
+    /** S9.6.1 的分桶维度（人话文案用真实数值，缺数才退回桶标签）。 */
+    sentiment_percentile?: number | null;
+    ma20_dist_pct?: number | null;
+    sector_flow_state?: { code: string; name: string; pct: number } | null;
   } | null;
   /** S9.7.3：赌注类型（Phase A 未上线时可缺省）。 */
   bet_type?: string | null;
@@ -106,6 +189,8 @@ interface FixtureEntry {
   confidence?: number | null;
   /** S9.7.8：`false` 时**不提供**复盘入口（缺省 = 可复盘）。 */
   reviewable?: boolean | null;
+  /** S9.6.4：同类历史（创建时落快照；缺省 → 整卡不渲染，不补 0）。 */
+  peer_history?: FixturePeerHistory | null;
   /** 自动结果（到期后才有；契约见 `shared/api/journal.ts` 的 `JournalEvaluation`）。 */
   evaluation: FixtureEvaluation | null;
   review: FixtureReview | null;
@@ -429,6 +514,11 @@ interface JournalStore {
   stats: FixtureStats;
   /** 断言用：最后一次「记一笔」的请求载荷（表单到底发了什么）。 */
   lastCreate: Record<string, unknown> | null;
+  /**
+   * 创建响应里挂哪种同类历史：`full`（样本够）/ `insufficient`（两行都不足）/
+   * `absent`（老条目/后端未上线 → 整卡不渲染，不补 0）。
+   */
+  peerHistory?: "full" | "insufficient" | "absent";
 }
 
 /**
@@ -492,6 +582,12 @@ async function mockJournal(page: Page, store: JournalStore) {
         horizon_days: body.horizon_days,
         // 快照是**后端**在创建时落的（spec §S9.3），前端只显示摘要。
         snapshot_summary: "价格 1588.00 元 · 当日 +0.40% · 情绪分位 55",
+        // 同类历史的分桶维度（人话文案用快照里的真实数值；缺数才退回桶标签）
+        snapshot: {
+          sentiment_percentile: 35.4,
+          sector_flow_state: { code: "270000", name: "电子", pct: -1.8 },
+          ma20_dist_pct: -3.2,
+        },
         created_at: "2026-10-18T09:00:00Z",
         due_on: "2026-11-17",
         status: "open",
@@ -504,6 +600,13 @@ async function mockJournal(page: Page, store: JournalStore) {
         reviewable: true,
         evaluation: null,
         review: null,
+        // spec §S9.6.4：只有创建响应/创建时快照里才有这段（列表不会现算）
+        peer_history:
+          store.peerHistory === "absent"
+            ? null
+            : store.peerHistory === "insufficient"
+              ? PEER_HISTORY_INSUFFICIENT
+              : PEER_HISTORY,
       };
       store.entries.unshift(created);
       return route.fulfill({ status: 201, json: created });
@@ -1091,6 +1194,74 @@ test.describe("决策日志（/me?tab=journal）", () => {
     // 列表行不显示仓位标签（缺字段 ≠ 只观察）；到期条目照旧有复盘按钮
     await expect(page.getByTestId("journal-entry-size")).toHaveCount(0);
     await expect(page.getByTestId("journal-review-open")).toHaveCount(1);
+  });
+
+  test("同类历史：创建后立刻显示三段（你自己 / 全市场同桶 / 只描述过去）", async ({ page }) => {
+    await openJournal(page, { entries: [] });
+
+    await page.getByTestId("journal-thesis").fill("渠道库存回到常态");
+    await pickInvalidationKind(page, "跌破某价格");
+    await page.getByTestId("journal-inv-price").fill("1500");
+    await pickHorizon(page, "30 天");
+    await page.getByTestId("journal-symbol").fill("600519");
+    await page.getByTestId("journal-submit").click();
+
+    const card = page.getByTestId("journal-peer-history");
+    await expect(card).toBeVisible();
+    // ① 同类情形：三个维度的**人话**（不是机器桶名）
+    await expect(page.getByTestId("journal-peer-bucket")).toContainText("同类情形（");
+    await expect(page.getByTestId("journal-peer-bucket")).toContainText("情绪 35% 分位");
+    await expect(page.getByTestId("journal-peer-bucket")).toContainText("板块 -1.80%");
+    await expect(page.getByTestId("journal-peer-bucket")).toContainText("距 MA20 -3.20%");
+    // ② 你自己的历史：几条 → 几对几错，且**错在哪一类**（spec §S9.6.5 要求）
+    const self = page.getByTestId("journal-peer-self");
+    await expect(self).toContainText("6 条");
+    await expect(self).toContainText("4 对 / 2 错");
+    await expect(self).toContainText("时机错了×2");
+    // ③ 全市场同桶：样本数 + 5/20 日超额中位，两层**分开**（不合并成"胜率"）
+    const market = page.getByTestId("journal-peer-market");
+    await expect(market).toContainText("全市场同桶");
+    await expect(market).toContainText("812 条");
+    await expect(market).toContainText("5 日超额中位 -0.42%");
+    await expect(market).toContainText("20 日超额中位 -1.10%");
+    // ④ notes 原样（后端下发，前端不改写）
+    await expect(page.getByTestId("journal-peer-note")).toContainText("该统计只描述过去，不预测结果");
+  });
+
+  test("同类历史：样本不足时两层都只写「样本不足」，不给比例也不给中位", async ({ page }) => {
+    await openJournal(page, { entries: [], peerHistory: "insufficient" });
+
+    await page.getByTestId("journal-thesis").fill("渠道库存回到常态");
+    await pickInvalidationKind(page, "跌破某价格");
+    await page.getByTestId("journal-inv-price").fill("1500");
+    await pickHorizon(page, "30 天");
+    await page.getByTestId("journal-submit").click();
+
+    await expect(page.getByTestId("journal-peer-history")).toBeVisible();
+    const self = page.getByTestId("journal-peer-self");
+    await expect(self).toContainText("样本不足");
+    await expect(self).toContainText("3 条");
+    // 不足时**不给**"X 对 / Y 错"这种比例
+    await expect(self).not.toContainText("对 / ");
+
+    const market = page.getByTestId("journal-peer-market");
+    await expect(market).toContainText("样本不足");
+    await expect(market).toContainText("29 条");
+    await expect(market).not.toContainText("超额中位");
+  });
+
+  test("同类历史：peer_history 缺省（老条目/后端未上线）时整卡不渲染，不补 0", async ({ page }) => {
+    await openJournal(page, { entries: [], peerHistory: "absent" });
+
+    await page.getByTestId("journal-thesis").fill("渠道库存回到常态");
+    await pickInvalidationKind(page, "跌破某价格");
+    await page.getByTestId("journal-inv-price").fill("1500");
+    await pickHorizon(page, "30 天");
+    await page.getByTestId("journal-submit").click();
+
+    // 条目照旧创建成功（同类历史只是附赠，缺了不影响主路径）
+    await expect(page.getByTestId("journal-open-item")).toHaveCount(1);
+    await expect(page.getByTestId("journal-peer-history")).toHaveCount(0);
   });
 
   test("已复盘条目没有编辑/删除入口（append-only）", async ({ page }) => {

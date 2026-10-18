@@ -76,6 +76,57 @@ export interface JournalSnapshotEvent {
 }
 
 /**
+ * 同类历史里的"你自己"一层（spec §S9.6.2）：只数**本人已复盘**的条目。
+ *
+ * `n < 5` 时 `insufficient = true`：页面只许显示"样本不足"，不给比例（§S9.6.5）。
+ * `right` = 没有被判成错（`wrong` 由三类归因合起来算）；`right_for_wrong_reason` /
+ * `luck` **单独计数**——"赚了但理由错"既不算对也不算错。
+ */
+export interface JournalPeerHistorySelf {
+  n: number;
+  right: number;
+  wrong: number;
+  /** 错在哪一类的构成：`verdict → 次数`（spec §S9.6.5 要求必须显示）。 */
+  wrong_by?: Record<string, number> | null;
+  right_for_wrong_reason?: number | null;
+  luck?: number | null;
+  insufficient?: boolean | null;
+}
+
+/** 同类历史里的"全市场同桶"一层（spec §S9.6.2；**不含任何他人日志**，只用行情统计）。 */
+export interface JournalPeerHistoryMarket {
+  /** 产物统计截止到哪天（PIT：必须早于快照日）。 */
+  as_of: string;
+  n: number;
+  t20_n?: number | null;
+  t5_excess_med: number | null;
+  t20_excess_med: number | null;
+  min_sample?: number | null;
+  /** `n < 30` → 不给数字（§S9.6.2）。 */
+  insufficient?: boolean | null;
+}
+
+/**
+ * 同类历史（`snapshot.peer_history`，spec §S9.6.4）：**创建那一刻**算一次并落库。
+ *
+ * 三层纪律：`self` 与 `market` **分开呈现**（不得合并成一个"胜率"）；
+ * `bucket` 是当时的分桶（情绪|板块|MA20 三维，`unknown` 单列）；
+ * `notes` 由后端给（"只描述过去，不预测结果" + 降级原因），页面**原样**展示。
+ */
+export interface JournalPeerHistory {
+  version: string;
+  computed_at: string;
+  bucket: { sentiment: string; sector: string; ma20: string } | null;
+  self: {
+    same_symbol?: JournalPeerHistorySelf | null;
+    same_bucket?: JournalPeerHistorySelf | null;
+    min_sample?: number | null;
+  } | null;
+  market: JournalPeerHistoryMarket | null;
+  notes: string[];
+}
+
+/**
  * 创建时固化的基准（`snapshot.bench_spec`，spec §S9.7.3；**创建时写死、事后不可改**）。
  *
  * 全部字段可选：后端 Phase A 未上线时快照里就没有这一块，页面必须优雅退化
@@ -91,6 +142,16 @@ export interface JournalBenchSpec {
   fallback?: boolean | null;
 }
 
+/** 所属申万一级的当日状态（`snapshot.sector_flow_state`，spec §S9.3）。 */
+export interface JournalSectorFlowState {
+  code: string;
+  name: string;
+  /** 当日涨跌幅（%）：同类历史的分桶维度之一（spec §S9.6.1）。 */
+  pct: number;
+  /** 全市场 L1 分位（%）；老快照可能缺省。 */
+  rank?: number | null;
+}
+
 /**
  * 创建时的市场快照（`snapshot` jsonb，spec §S9.3 的字段表；**字段名由契约固定**）。
  *
@@ -102,7 +163,8 @@ export interface JournalSnapshot {
   pct_chg?: number | null;
   ma20_dist_pct?: number | null;
   sentiment_percentile?: number | null;
-  sector_flow_state?: string | null;
+  /** 所属申万一级当日状态（后端下发**对象**；老数据/缺数时为 `null`）。 */
+  sector_flow_state?: JournalSectorFlowState | null;
   events?: JournalSnapshotEvent[] | null;
   valuation_pct?: number | null;
   /** 缺数原因（字段名 → 原因）；`null`/缺省 = 没有缺数记录。 */
@@ -194,6 +256,11 @@ export interface JournalEntry {
    * 缺省按可复盘处理（Phase B 后端未上线时旧条目照旧能复盘）。
    */
   reviewable?: boolean | null;
+  /**
+   * 同类历史（spec §S9.6.4）：创建时写进快照、原样下发；老行（s9.r1/r2）没有它 → `null`。
+   * 页面缺省时**不渲染**这张卡（不补 0、不虚构"你以前 0 对 0 错"）。
+   */
+  peer_history?: JournalPeerHistory | null;
 }
 
 export interface JournalListResponse {

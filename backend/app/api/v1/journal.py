@@ -66,6 +66,8 @@ def _entry_out(row: svc.JournalRow, evaluation: dict | None = None) -> JournalEn
         snapshot_summary=svc.snapshot_line(entry.snapshot),
         review=(None if row.review is None else JournalReviewOut.model_validate(row.review)),
         evaluation=None if evaluation is None else JournalEvaluationOut(**evaluation),
+        # spec §S9.6.4：同类历史与快照里那份逐字一致（前端只读，不重算）
+        peer_history=(entry.snapshot or {}).get("peer_history"),
     )
 
 

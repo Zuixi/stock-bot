@@ -1,3 +1,34 @@
+## 2026-10-19 - **S9.6 同类历史（peer history）落地：写完那一刻就换回信息**
+
+S9.7 八个 phase 之外的最后一节（spec §S9.6 原排期"等 owner 批准口径"）。核心：**创建响应立刻带两段事实**，
+不再"写完等到期、什么也没换回来"（计划里叫留存杀手）。
+
+- **L1 你自己的历史**（`self_history`）：只查**本人**已复盘日志，按「同标的 / 同桶」两层分别给
+  `n / right / wrong / wrong_by`（三类错因单列构成）；`n<5` 标 `insufficient`，页面只写"样本不足"。
+  **PIT**：`created_at < 本条 created_at`（把未来塞进候选集 → 用例必须变红）
+- **L2 全市场同桶**（离线产物 `app/services/peer_history_stats.json` + `scripts/build_peer_history_stats.py`）：
+  12 个月、45 桶（情绪分位 × 板块当日涨跌 × 距 MA20，`unknown` 单列）、交易日历对齐 + winsorize ±50%、
+  超额 = 个股 T+N − 当日全市场中位（与 `triage_rule_stats` 同口径）；**只用行情/行业/情绪三张表，
+  不含任何用户日志**（§S9.7.9 不做跨用户聚合）；两次运行**逐字节一致**（有用例）
+- **PIT 闸**：产物 `as_of >= 快照日` → `stale_guard` 且 `market=null`；缺产物 → `no_stats_product`；
+  算不出来 → `pipeline_error`（**创建照旧 201**，`notes` 写原因）
+- **落快照**：`snapshot.peer_history`（快照版本 `s9.r2 → s9.r3`），响应原样下发；老行没有它 → `null`
+- **前端**：`PeerHistoryCard`（创建成功后出现）——「同类情形（情绪 35% 分位 · 板块 -1.80% · 距 MA20 -3.20%）」/
+  「你自己：N 条 → X 对 / Y 错，错的 N 次是 时机错了×N」/「全市场同桶（截至 X，N 条）：5 日超额中位 …」/
+  notes 原样；字段缺省 → **整卡不渲染**（不补 0）
+- 测试：`tests/test_journal_s96.py` 37 条（分桶边界逐值 / L1 只用本人且只用过去 / 两层分开 / n=4 vs 5 /
+  L2 n=29 vs 30 / stale_guard / 降级不阻断 / 产物自描述 / 产物两次逐字节一致）；e2e 新增 3 条（三段上屏、
+  样本不足不给比例、字段缺省不渲染）
+- 顺带修 **e2e/nav.spec.ts 的 mock 路由**（pre-existing：`page.route("**/auth/**")` 会把 dev server 的
+  `src/features/auth/*` 模块请求也吞掉 → 模块 MIME 错 → 整页不挂载；改为"只拦根级 `/auth/` 接口"）
+- 门禁：`pytest -q` 1739 passed / `mypy app` 0 错 / ruff ✓ / `pytest tests/test_journal_*.py` 166 passed /
+  Playwright 全量 **233 passed** / `self_review` ✓
+- 涉及文件：`backend/app/services/{peer_history_service.py(新),peer_history_stats.json(新),journal_service.py}`、
+  `backend/scripts/build_peer_history_stats.py(新)`、`backend/{app/schemas/journal.py,app/api/v1/journal.py}`、
+  `backend/tests/{test_journal_s96.py(新),test_journal_service.py}`、
+  `frontend/src/{shared/api/journal.ts,features/journal/components/{PeerHistoryCard.tsx(新),EntryForm.tsx,JournalPanel.css}}`、
+  `frontend/e2e/{decisionJournal.spec.ts,nav.spec.ts}`、`docs/{specs/S9-decision-journal.md,Changelog.md}`
+
 ## 2026-10-19 - **S9.7 Phase B2 后端：路径 / 校准 / 仓位统计 / 导出**
 
 只做加法（契约 `.superpowers/sdd/journal-s97/contract-phaseB.md` §2/§4/§5；无新表、无迁移，

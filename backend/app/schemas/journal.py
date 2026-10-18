@@ -215,6 +215,9 @@ class JournalEntryOut(BaseModel):
     review: JournalReviewOut | None = None
     #: 只有单条详情（``GET /journal/{id}``）会算：列表不逐条算，避免 N+1
     evaluation: JournalEvaluationOut | None = None
+    #: ★ spec §S9.6.4：**创建那一刻**的同类历史（同快照里那份，原样下发）。
+    #: 老行（s9.r1/r2）没有它 → ``None``（"当时没有这段信息"，不补算）。
+    peer_history: dict[str, Any] | None = None
 
 
 class JournalListOut(BaseModel):
