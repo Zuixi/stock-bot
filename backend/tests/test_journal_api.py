@@ -1,6 +1,6 @@
 """``/api/v1/journal`` 契约（spec §S9.1/§S9.4）：鉴权 / 201 / 422 / 409 / 404 / stats 形状。
 
-四组断言，每组对应 spec 的一句验收判据：
+四组断言 + Phase B1 一组，每组对应 spec 的一句验收判据：
 
 1. **不可篡改**（§S9.2 门禁）：路由表里 journal 只有 ``GET``/``POST``——
    源码里出现 ``@router.patch`` / ``@router.put`` / ``@router.delete`` 就红；
@@ -9,6 +9,8 @@
 3. **一次复盘一条**（§S9.4）：二次复盘 → **409**；非本人 → **404**（不泄露"有没有这条"）；
 4. **PIT 在 API 层也成立**：创建后行情再涨，``GET /journal/{id}`` 的 ``outcome_pct``
    仍以**快照价**为起点（创建后新插的 K 线只影响期末价，不影响起始价）。
+5. **Phase B1 闸**（§S9.7.1/§S9.7.5/§S9.7.8）：``position_size`` / ``confidence`` 越界 → **422**；
+   自由文本失效条件 → **422 + 指导文案**；``reviewable=false`` 的条目复盘 → **422**（结果仍展示）。
 
 **真 PG + 真路由**：``get_db`` 被替换成"同一个连接上的会话"，整个用例包在一个**回滚**
 事务里（Ruling 17：跑完库与跑前一致）。鉴权用静态 RSA 公钥 + 自签 assertion
@@ -346,6 +348,167 @@ async def test_create_rejects_invalid_payload_with_422(
         payload.pop("thesis")  # 缺一必填 → 422
     resp = await _post(app, "/api/v1/journal", token=_token(rsa_key_pair), json=payload)
     assert resp.status_code == 422, resp.text
+
+
+# ── §S9.7.1 / §S9.7.5 / §S9.7.8：仓位 / 信心 / 可证伪闸 ─────────────────────
+
+
+@pytest.mark.parametrize("position_size", ["half", "LIGHT", "", 2])
+@requires_pg
+async def test_create_rejects_position_size_outside_enum(
+    journal_app: tuple[FastAPI, AsyncSession],
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
+    position_size: Any,
+) -> None:
+    """spec §S9.7.1：``position_size`` 只接受 ``none|light|normal|heavy``，越界 422。"""
+    app, session = journal_app
+    await _seed(session)
+    resp = await _post(
+        app,
+        "/api/v1/journal",
+        token=_token(rsa_key_pair),
+        json=_payload(position_size=position_size),
+    )
+    assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.parametrize("confidence", [0, 6, -1, 2.5, 100])
+@requires_pg
+async def test_create_rejects_confidence_outside_1_to_5(
+    journal_app: tuple[FastAPI, AsyncSession],
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
+    confidence: Any,
+) -> None:
+    """spec §S9.7.5：``confidence`` 不在 1..5 → 422（不静默夹到边界）。"""
+    app, session = journal_app
+    await _seed(session)
+    resp = await _post(
+        app,
+        "/api/v1/journal",
+        token=_token(rsa_key_pair),
+        json=_payload(confidence=confidence),
+    )
+    assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.parametrize(
+    "invalidation",
+    [
+        {"kind": "logic_broken", "value": "逻辑破坏"},
+        {"kind": "text", "value": "跌穿成本就撤"},
+    ],
+)
+@requires_pg
+async def test_create_rejects_free_text_invalidation_with_422_and_guidance(
+    journal_app: tuple[FastAPI, AsyncSession],
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
+    invalidation: dict[str, Any],
+) -> None:
+    """spec §S9.7.8：自由文本失效条件 → 422 **且**给"怎么改"的指导文案。"""
+    app, session = journal_app
+    await _seed(session)
+    resp = await _post(
+        app,
+        "/api/v1/journal",
+        token=_token(rsa_key_pair),
+        json=_payload(invalidation=invalidation),
+    )
+    assert resp.status_code == 422, resp.text
+    detail = str(resp.json())
+    assert "价格或日期" in detail, "422 必须告诉用户可观测形态，而不是只说校验失败"
+    for kind in ("price_below", "price_above", "date_only"):
+        assert kind in detail, f"指导文案应列出可观测形态：{kind}"
+
+
+@requires_pg
+async def test_create_persists_position_size_and_confidence_and_echoes_them(
+    journal_app: tuple[FastAPI, AsyncSession],
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
+) -> None:
+    """创建可传、列表/详情带出；不传时 ``position_size=none`` / ``confidence=null``。"""
+    app, session = journal_app
+    await _seed(session)
+    token = _token(rsa_key_pair)
+    chosen = (await _create(app, token, position_size="heavy", confidence=4)).json()
+    assert chosen["position_size"] == "heavy"
+    assert chosen["confidence"] == 4
+    assert chosen["reviewable"] is True
+    default = (await _create(app, token)).json()
+    assert default["position_size"] == "none"
+    assert default["confidence"] is None, "没填信心 → null（不是默认 3，否则校准样本被污染）"
+
+    listed = (await _get(app, "/api/v1/journal", token=token, params={"status": "open"})).json()
+    by_id = {item["id"]: item for item in listed["items"]}
+    assert by_id[chosen["id"]]["position_size"] == "heavy"
+    assert by_id[chosen["id"]]["confidence"] == 4
+    assert by_id[default["id"]]["position_size"] == "none"
+    assert by_id[default["id"]]["confidence"] is None
+    detail = (await _get(app, f"/api/v1/journal/{chosen['id']}", token=token)).json()
+    assert (detail["position_size"], detail["confidence"], detail["reviewable"]) == (
+        "heavy",
+        4,
+        True,
+    )
+
+
+async def _insert_unobservable_due_entry(session: AsyncSession, user_id: uuid.UUID) -> int:
+    """直接写一条**历史形态**的条目（自由文本失效条件，当前 API 已不允许创建）。"""
+    from app.models.journal import DecisionJournalEntry
+
+    entry = DecisionJournalEntry(
+        user_id=user_id,
+        symbol=SYMBOL,
+        kind="watch",
+        bet_type="direction",
+        position_size="none",
+        thesis="逻辑破坏就撤（历史自由文本）",
+        invalidation={"kind": "logic_broken", "value": "逻辑破坏"},
+        horizon_days=7,
+        snapshot={
+            "version": "s9.r1",
+            "as_of": SNAPSHOT_DAY.isoformat(),
+            "quote_as_of": SNAPSHOT_DAY.isoformat(),
+            "symbol": SYMBOL,
+            "price": 100.0,
+            "sector_flow_state": None,
+            "missing_reason": {},
+        },
+        created_at=datetime(2026, 10, 1, 15, 0),
+        due_on=REVIEW_DAY,
+    )
+    session.add(entry)
+    await session.flush()
+    return int(entry.id)
+
+
+@requires_pg
+async def test_unobservable_entry_is_reviewable_false_and_review_is_rejected(
+    journal_app: tuple[FastAPI, AsyncSession],
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
+) -> None:
+    """spec §S9.7.8：``reviewable=false`` 的条目**复盘端点拒绝**（422 + 明确文案）。
+
+    库里仍可看到结果（``evaluation`` 照常下发），只是不给"归因"这个动作。
+    """
+    app, session = journal_app
+    await _seed(session)
+    user_id = uuid.uuid4()
+    token = _token(rsa_key_pair, user_id)
+    entry_id = await _insert_unobservable_due_entry(session, user_id)
+
+    detail = (await _get(app, f"/api/v1/journal/{entry_id}", token=token)).json()
+    assert detail["reviewable"] is False
+    assert detail["status"] == "due"
+    assert detail["evaluation"] is not None, "不可复盘 ≠ 不给结果：结果照常展示"
+    assert detail["evaluation"]["invalidation_observable"] is False
+
+    resp = await _post(
+        app, f"/api/v1/journal/{entry_id}/review", token=token, json={"verdict": "thesis_wrong"}
+    )
+    assert resp.status_code == 422, resp.text
+    message = str(resp.json())
+    assert "不可复盘" in message
+    assert "不可观测" in message
 
 
 @requires_pg

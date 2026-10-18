@@ -53,6 +53,7 @@ from app.models.industry_research import IndustryMetric
 from app.models.journal import (
     BET_TYPES,
     ENTRY_KINDS,
+    OBSERVABLE_INVALIDATION_KINDS,
     VERDICTS,
     DecisionJournalEntry,
     DecisionJournalReview,
@@ -95,6 +96,7 @@ __all__ = [
     "EvaluationNotReady",
     "JournalRow",
     "NotDueYet",
+    "NotReviewable",
     "bench_note",
     "bench_spec",
     "build_snapshot",
@@ -102,8 +104,10 @@ __all__ = [
     "evaluate_entry",
     "evaluate_entries",
     "get_entry",
+    "invalidation_observable",
     "list_entries",
     "review_entry",
+    "reviewable",
     "snapshot_line",
     "stats",
     "status_counts",
@@ -233,6 +237,10 @@ class EvaluationNotReady(JournalError):
     """自动结果算不出来（缺行情/缺基准）：**不得**用 0 兜底写入。"""
 
 
+class NotReviewable(JournalError):
+    """失效条件不可观测（spec §S9.7.8）：允许创建/展示结果，但**不给归因入口**。"""
+
+
 # ── 小工具 ──────────────────────────────────────────────────────────────────
 
 
@@ -297,6 +305,48 @@ def wilson_interval(successes: int, n: int, *, z: float = WILSON_Z) -> dict[str,
         "ci_low": round(max(0.0, center - half), 4),
         "ci_high": round(min(1.0, center + half), 4),
     }
+
+
+# ── §S9.7.8 可证伪闸：失效条件可观测吗（决定"能不能复盘"） ───────────────────
+
+
+def invalidation_observable(invalidation: dict[str, Any] | None) -> bool:
+    """失效条件是否**可观测**（spec §S9.7.8）：能落成 ``invalidation_observable``/``reviewable``。
+
+    ==================  ====================================================
+    形状                可观测？
+    ==================  ====================================================
+    ``price_below``     ``value`` 是正数 → 行情窗口能判定（``True``）
+    ``price_above``     同上
+    ``date_only``       ``value`` 是合法日期（到期即命中）→ ``True``
+    其它/缺失/值无法解析  ``False``（历史行里的自由文本形态，如 ``{"kind":"logic_broken"}``）
+    ==================  ====================================================
+
+    **为什么值也要校验**：只看 ``kind`` 会把 ``{"kind":"price_below","value":"跌穿成本"}``
+    判成可观测，而评估时它算不出 ``invalidation_hit``（``_plan`` 里 float() 失败）——
+    "可复盘"必须与"结果能算"同一个判据，否则用户会被允许给一条算不出结果的判断归因。
+
+    历史数据**不改写**：本函数只影响读取时的 ``reviewable`` / 端点是否拒绝。
+    """
+    if not isinstance(invalidation, dict):
+        return False
+    kind = invalidation.get("kind")
+    if kind not in OBSERVABLE_INVALIDATION_KINDS:
+        return False
+    value = invalidation.get("value")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return False
+    if kind == "date_only":
+        return _as_date(value) is not None
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def reviewable(entry: DecisionJournalEntry) -> bool:
+    """条目能否复盘（= 失效条件可观测，spec §S9.7.8）：响应字段 ``reviewable`` 与端点闸共用。"""
+    return invalidation_observable(entry.invalidation)
 
 
 # ── §S9.7.3 基准口径（创建时固化进快照，评估时按快照选基准） ────────────────
@@ -855,6 +905,8 @@ class _Plan:
     threshold: float | None
     sector_code: str | None
     bet_type: str
+    #: ★ spec §S9.7.8：失效条件可观测（与 ``reviewable`` 同一判据）
+    observable: bool
 
 
 def _plan(entry: DecisionJournalEntry) -> _Plan:
@@ -889,6 +941,8 @@ def _plan(entry: DecisionJournalEntry) -> _Plan:
         threshold=threshold,
         sector_code=str(code) if code else None,
         bet_type=bet_type,
+        # 与 reviewable 同一判据：不可观测的失效条件算不出 invalidation_hit，也不能复盘
+        observable=invalidation_observable(invalidation),
     )
 
 
@@ -1019,6 +1073,8 @@ def _assemble(
         # ★ spec §S9.7.3：基准到底是什么（人话 + 是否退化），与 bench_pct 同时下发
         "bench_basis_note": bench.note,
         "bench_fallback": bench.fallback,
+        # ★ spec §S9.7.8：失效条件可观测（False = 该条不可复盘，与 reviewable 同一判据）
+        "invalidation_observable": plan.observable,
         "missing_reason": {},
     }
     missing: dict[str, str] = result["missing_reason"]
@@ -1207,11 +1263,14 @@ async def create_entry(
     """写入一条判断（快照在**创建时**抓，``due_on`` 在**写入时**固化）。
 
     ``payload`` 是 ``app/schemas/journal.py`` 的 ``JournalEntryCreate``，字段：
-    ``symbol/kind/bet_type/thesis/invalidation/horizon_days``。``invalidation`` 的 DB
-    形状由 schema 的 ``to_json()`` 产出（``{"kind":..., "value":...}``）。
+    ``symbol/kind/bet_type/position_size/confidence/thesis/invalidation/horizon_days``。
+    ``invalidation`` 的 DB 形状由 schema 的 ``to_json()`` 产出（``{"kind":..., "value":...}``）；
+    非三形态在 schema 层已经是 422（spec §S9.7.8），本函数**不做二次收口**（单一闸门）。
 
     ``bet_type``（spec §S9.7.3）同时落**列**（聚合用）与``snapshot.bench_spec``
     （不可变口径，评估时以它为准）：一处是查询用的结构，一处是"当时怎么定的"证据。
+    ``position_size`` / ``confidence``（spec §S9.7.1/§S9.7.5）只落列：它们是**判断的
+    属性**（风险单位 / 事前信心），不是市场状态，进快照会让"当时市场什么样"混进主观项。
     """
     uid = _to_uuid(user_id)
     created_at = now or datetime.now(_SH)
@@ -1223,6 +1282,8 @@ async def create_entry(
         symbol=payload.symbol,
         kind=payload.kind,
         bet_type=bet_type,
+        position_size=payload.position_size,
+        confidence=payload.confidence,
         thesis=payload.thesis,
         invalidation=payload.invalidation.to_json(),
         horizon_days=payload.horizon_days,
@@ -1342,13 +1403,23 @@ async def review_entry(
     note: str | None = None,
     now: datetime | None = None,
 ) -> DecisionJournalReview:
-    """写入一次复盘（append-only）：未到期/已复盘/结果未就绪都**拒绝**，不静默兜底。"""
+    """写入一次复盘（append-only）：不可复盘/未到期/已复盘/结果未就绪都**拒绝**，不静默兜底。
+
+    拒绝顺序是有讲究的：**已复盘（409）优先于可复盘性**——历史状态已经存在时，"这条
+    已经评过了"比"它本来就不该被评"更准确；而可复盘性（spec §S9.7.8，422）优先于到期
+    判断，因为它是**条目自身的属性**，与"今天几号"无关。
+    """
     if verdict not in VERDICTS:
         raise ValueError(f"verdict 越界：{verdict}（只接受 {list(VERDICTS)}）")
     today = (now or datetime.now(_SH)).date()
     row = await get_entry(db, user_id, entry_id, today=today)
     if row.review is not None:
         raise AlreadyReviewed(f"条目 {entry_id} 已复盘，不可再评")
+    if not reviewable(row.entry):
+        raise NotReviewable(
+            f"条目 {entry_id} 不可复盘：失效条件不可观测（历史数据里的形态不是 "
+            f"{' / '.join(OBSERVABLE_INVALIDATION_KINDS)}）。该条只展示结果，不接受归因。"
+        )
     if today < row.entry.due_on:
         raise NotDueYet(f"条目 {entry_id} 尚未到期（due_on={row.entry.due_on}）")
     evaluation = await evaluate_entry(db, row.entry, as_of=today)

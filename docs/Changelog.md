@@ -1,3 +1,24 @@
+## 2026-10-19 - **S9.7 Phase B1 后端：仓位 / 信心 / 可证伪闸（只做字段与闸）**
+
+只做加法（契约 `.superpowers/sdd/journal-s97/contract-phaseB.md` §1–§3；统计与导出**不在本阶段**）：
+
+- **仓位**（§S9.7.1）：`position_size ∈ {none, light, normal, heavy}` **落列**（迁移 `b1c8d4e7f2a9`：
+  `NOT NULL DEFAULT 'none'` + `ck_journal_position_size`，只加列、PG 回填默认值不改既有值）；创建请求可传
+  （越界 **422**），列表/详情响应带出；`risk_note` 与 `by_size`/加权统计留 B2
+- **信心**（§S9.7.5）：`confidence` **落列**（int，**可空无默认值** = 没填不参与校准 + `ck_journal_confidence`
+  1..5）；创建可传（越界 **422**），响应带出；`calibration`/`brier` 留 B2
+- **可证伪闸**（§S9.7.8）：`invalidation` 白名单三形态（`price_below`/`price_above`/`date_only`），自由文本
+  → **422 + 指导文案**（`INVALIDATION_GUIDANCE`：给价格/日期或改用备注）；条目响应新增 `reviewable`，
+  `evaluation` 新增 `invalidation_observable`（三形态 true，历史不可识别形态 false）；
+  `reviewable=false` → 复盘端点 **422**（`NotReviewable`，明确文案），结果仍照常展示；历史行不改写
+- 测试：`tests/test_journal_s97_b1.py`（23 条：三形态可观测/不可观测真值表、库 check 拒绝、默认值、
+  evaluation 集成、历史自由文本复盘拒绝、迁移只加列、schema 边界）；`tests/test_journal_api.py` 新增 5 组
+  （`position_size` 越界 422 / `confidence` 越界 422 / 自由文本 422 + 文案 / 创建带出与缺省 / `reviewable=false` 复盘 422）
+- 涉及文件：`backend/app/{models/journal.py,services/journal_service.py,schemas/journal.py,api/v1/journal.py}`、
+  `backend/app/migrations/versions/b1c8d4e7f2a9_add_journal_position_size_confidence.py(新)`、
+  `backend/tests/{test_journal_s97_b1.py(新),test_journal_api.py}`、`docs/specs/S9-decision-journal.md`
+  （§S9.4/§S9.7.1/§S9.7.5/§S9.7.8 落地注记）、`.superpowers/sdd/journal-s97/backend-B1-report.md(新)`
+
 ## 2026-10-19 - **S9.7 Phase A 后端：净成本 / 基准三选一 / pass 一等公民 / Wilson 区间**
 
 只做加法（契约 `.superpowers/sdd/journal-s97/contract-phaseA.md`；既有响应字段**类型一个没改**）：

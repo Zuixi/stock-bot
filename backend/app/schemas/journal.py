@@ -7,6 +7,10 @@
 2. **创建后不可改**：本模块**没有** Update 模型，路由层也没有 PATCH/PUT/DELETE
    （``tests/test_journal_api.py`` 用 grep 断言）。
 3. **归因必选**：``verdict`` 是五枚举之一且**必填**；未选不得写入（422）。
+4. **可证伪闸**（spec §S9.7.8）：``invalidation`` 只接受**可观测**三形态
+   （``price_below`` / ``price_above`` / ``date_only``）。自由文本（"逻辑破坏"）在
+   入参层就是 422 + 指导文案（``INVALIDATION_GUIDANCE``），不给"先建后判不可复盘"
+   的模糊地带；历史行里已有的不可识别形态读取时标 ``reviewable = false``。
 
 ``invalidation`` 用 pydantic 的**判别联合**而不是 ``dict``：三种形状的值语义完全不同
 （价格是浮点、日期是 ISO 串），交给校验器比在服务里 ``if kind == ...`` 安全。
@@ -26,6 +30,19 @@ HorizonDays = Literal[7, 30, 90]
 #: 赌的是什么（spec §S9.7.3）：决定基准口径，创建时选定、事后不可改。
 #: 与 ``app/models/journal.py`` 的 ``BET_TYPES`` 逐字一致（测试对拍）。
 BetType = Literal["direction", "relative", "market"]
+#: 风险单位分档（spec §S9.7.1）：``none`` = 只观察不下单（默认）。
+#: 与 ``app/models/journal.py`` 的 ``POSITION_SIZES`` 逐字一致（测试对拍）。
+PositionSize = Literal["none", "light", "normal", "heavy"]
+#: 可观测的失效条件形态（spec §S9.7.8）：**唯一白名单**。
+#: 与 ``app/models/journal.py`` 的 ``OBSERVABLE_INVALIDATION_KINDS`` 逐字一致（测试对拍）。
+INVALIDATION_KINDS: tuple[str, ...] = ("price_below", "price_above", "date_only")
+#: 自由文本失效条件的 422 指导文案（spec §S9.7.8 逐字意图）：告诉用户**怎么改**，
+#: 而不是只说"校验失败"。后端下发，前端不另写一份。
+INVALIDATION_GUIDANCE = (
+    "失效条件必须是可观测的形态：price_below / price_above / date_only。"
+    "请给一个价格或日期，或改用备注（note）写理由。"
+)
+
 Verdict = Literal[
     "thesis_wrong",
     "timing_wrong",
@@ -70,6 +87,10 @@ class JournalEntryCreate(BaseModel):
     kind: JournalKind = "watch"
     #: 赌的是什么（spec §S9.7.3）：``direction`` 默认；``market`` = 市场级判断（基准沪深300）
     bet_type: BetType = "direction"
+    #: 风险单位（spec §S9.7.1）：``none`` 默认 = 只观察不下单；越界 422
+    position_size: PositionSize = "none"
+    #: 事前信心（spec §S9.7.5）：1..5 的整数；**不填 = 不参与校准**（不是 3 分）
+    confidence: int | None = Field(default=None, ge=1, le=5)
     thesis: str = Field(min_length=1, max_length=200)
     invalidation: Invalidation
     horizon_days: HorizonDays
@@ -78,6 +99,20 @@ class JournalEntryCreate(BaseModel):
     @classmethod
     def _blank_symbol_is_none(cls, value: str | None) -> str | None:
         return value or None
+
+    @field_validator("invalidation", mode="before")
+    @classmethod
+    def _observable_invalidation_only(cls, value: Any) -> Any:
+        """可证伪闸（spec §S9.7.8）：非三形态 → 422 + **指导文案**。
+
+        为什么在联合校验**之前**拦：判别联合对 ``{"kind": "logic_broken"}`` 只会报
+        "union_tag_invalid"（用户看不懂），而 spec 要求 422 时给出"请给一个价格或日期，
+        或改用备注写理由"。判据只看 ``kind``（形状/值域仍交给下面的联合校验）。
+        """
+        kind = value.get("kind") if isinstance(value, dict) else getattr(value, "kind", None)
+        if kind not in INVALIDATION_KINDS:
+            raise ValueError(f"{INVALIDATION_GUIDANCE}（收到 kind={kind!r}）")
+        return value
 
 
 class JournalReviewCreate(BaseModel):
@@ -114,6 +149,8 @@ class JournalEvaluationOut(BaseModel):
     - ``net_excess_pct`` = ``net_outcome_pct - bench_pct``；
     - ``bench_basis_note``：基准到底是什么（**人话**，后端下发，前端不硬编码）；
     - ``bench_fallback``：``True`` = 本来要行业基准但拿不到行业，已退化到沪深300。
+    - ``invalidation_observable``（spec §S9.7.8）：失效条件能否被行情/日期客观判定。
+      三形态 = ``True``；历史行里的不可识别形态 = ``False``（该条不可复盘）。
     """
 
     due_on: date
@@ -128,17 +165,32 @@ class JournalEvaluationOut(BaseModel):
     #: ★ spec §S9.7.3：基准的人话说明 + 是否退化（``bench_pct`` 的口径附注）
     bench_basis_note: str = ""
     bench_fallback: bool = False
+    #: ★ spec §S9.7.8：失效条件可观测 → ``True``；不可观测 → ``False``（≠ 结果算不出来）
+    invalidation_observable: bool = True
     missing_reason: dict[str, str] = Field(default_factory=dict)
 
 
 class JournalEntryOut(BaseModel):
-    """一条判断（``snapshot`` 是**创建时**的不可变快照，原样下发）。"""
+    """一条判断（``snapshot`` 是**创建时**的不可变快照，原样下发）。
+
+    Phase B1（spec §S9.7.1/§S9.7.5/§S9.7.8）**只加字段**：
+
+    - ``position_size`` / ``confidence``：创建时选定的风险单位与事前信心（原样回读）；
+    - ``reviewable``：失效条件可观测 = ``True``；``False`` 时前端**不提供**复盘入口
+      （端点也会拒绝：不可复核的判断不该被"归因"）。
+    """
 
     id: int
     symbol: str | None
     kind: str
     #: ★ spec §S9.7.3：``direction`` / ``relative`` / ``market``（同时也在 snapshot.bench_spec）
     bet_type: str = "direction"
+    #: ★ spec §S9.7.1：``none`` / ``light`` / ``normal`` / ``heavy``（历史行由迁移回填 ``none``）
+    position_size: str = "none"
+    #: ★ spec §S9.7.5：1..5；``None`` = 当时没填（不参与校准）
+    confidence: int | None = None
+    #: ★ spec §S9.7.8：``False`` = 失效条件不可观测，不提供复盘入口
+    reviewable: bool = True
     thesis: str
     invalidation: dict[str, Any]
     horizon_days: int

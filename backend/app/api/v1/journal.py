@@ -14,7 +14,7 @@
     GET  /api/v1/journal?status=            → 列表 + 三态计数
     GET  /api/v1/journal/stats              → 统计（占比无样本为 null）
     GET  /api/v1/journal/{id}               → 单条（含到期自动结果）
-    POST /api/v1/journal/{id}/review        → 201 归因（二次复盘 409）
+    POST /api/v1/journal/{id}/review        → 201 归因（二次复盘 409；不可复盘 422，spec §S9.7.8）
 """
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -45,6 +45,11 @@ def _entry_out(row: svc.JournalRow, evaluation: dict | None = None) -> JournalEn
         kind=entry.kind,
         # spec §S9.7.3：基准口径（同时也在 snapshot.bench_spec 里，这里给平铺的一份）
         bet_type=entry.bet_type,
+        # spec §S9.7.1/§S9.7.5：风险单位与事前信心（迁移给了 position_size 默认 none）
+        position_size=entry.position_size or "none",
+        confidence=entry.confidence,
+        # spec §S9.7.8：失效条件不可观测 → false（前端**不提供**复盘入口）
+        reviewable=svc.reviewable(entry),
         thesis=entry.thesis,
         invalidation=entry.invalidation or {},
         horizon_days=entry.horizon_days,
@@ -132,7 +137,7 @@ async def review_journal_entry(
     db: DbDep,
     user: CurrentUserDep,
 ) -> JournalReviewOut:
-    """一次复盘（不可覆盖）：未到期 422 · 已复盘 409 · 非本人 404 · 结果未就绪 422。"""
+    """一次复盘：不可复盘 422 · 未到期 422 · 已复盘 409 · 非本人 404 · 结果未就绪 422。"""
     assert user.user_id is not None
     try:
         review = await svc.review_entry(
@@ -142,7 +147,7 @@ async def review_journal_entry(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except svc.AlreadyReviewed as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except (svc.NotDueYet, svc.EvaluationNotReady) as exc:
+    except (svc.NotReviewable, svc.NotDueYet, svc.EvaluationNotReady) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc

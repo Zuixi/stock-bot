@@ -145,6 +145,8 @@ decision_journal_reviews(
     `net_cost_bps` · `share_ci{discipline_break,win}`（Wilson 95%）· `multiple_comparison_note`；
     `avg_excess_pct` 同样**排除 `pass`**；`discipline_break_share` 仍是 `number|null`
   - `evaluation` 追加：`net_outcome_pct` / `net_excess_pct` / `bench_basis_note` / `bench_fallback`
+  - Phase B1 追加（spec §S9.7.1/§S9.7.5/§S9.7.8，**只加字段**）：条目响应 `position_size` / `confidence` /
+    `reviewable`；`evaluation` 再加 `invalidation_observable`（`reviewable=false` 时复盘端点 422）
 - **不写不归因**：未选 `verdict` 不得写入（`422`）；`reviewed` 后条目移到"已复盘"，不可再评
 
 **验收判据**
@@ -271,6 +273,9 @@ decision_journal_reviews(
 ### S9.7.1 仓位与风险单位（不记 size，收益无法解释）
 
 - 新增可选字段 `position_size ∈ {none, light, normal, heavy}`（默认 `none` = 只观察不下单）与 `risk_note`（≤100 字，写"这笔最多能亏多少"）。
+- **已落地（Phase B1，2026-10-19）**：`position_size` **落列**（`NOT NULL DEFAULT 'none'` + `ck_journal_position_size`，
+  迁移只加列、不搬数据），创建请求可传（越界 **422**），列表/详情响应带出；`risk_note` 与
+  `by_size` / 加权超额统计留 Phase B2。
 - 统计口径：`weighted_outcome = outcome_pct × size_weight`，`size_weight = {none:0, light:0.5, normal:1, heavy:2}`。
 - **`none` 的条目依然参与"判断对错"统计**（那是决策质量），但**不参与收益统计**（`weighted_*` 与"实际盈亏"类字段一律排除）。
 - 不做：真实成交价/股数/手续费明细（属 Wave 6 交易执行），v1 只到粗档。
@@ -316,6 +321,9 @@ decision_journal_reviews(
 ### S9.7.5 事前信心与校准（零新数据里最强的反馈）
 
 - 新增字段 `confidence ∈ {1,2,3,4,5}`，映射固定概率 `{1:0.2, 2:0.35, 3:0.5, 4:0.65, 5:0.8}`（写在常量里，不可在实现时"优化"）。
+- **已落地（Phase B1，2026-10-19）**：`confidence` **落列**（int，**可空、无默认值** —— NULL = 当时没填，
+  不参与校准，给默认值会把没填的人算进校准样本）+ `ck_journal_confidence`（1..5）；创建请求可传
+  （越界 **422**），响应带出；`calibration` / `brier` 统计留 Phase B2。
 - `calibration`：按信心档分组，算**实际净超额 > 0 的比例**与样本数；`brier = mean((p - I[net_excess>0])**2)`。
 - 展示纪律：每档 `n ≥ 10` 才显示该档；总样本 `n < 20` 不给曲线，只显示"样本不足"。
 - **不把校准当作"能力评价"**：文案固定为"你的信心与实际结果的对照"，不出现"你高估自己"这类判断。
@@ -353,6 +361,12 @@ decision_journal_reviews(
 - `invalidation` 只接受**可观测**形态：`price_below` / `price_above` / `date_only`（日期本身可观测）。
 - 自由文本式失效条件（"逻辑破坏"）**不收**：`422` + 指导文案（"请给一个价格或日期，或改用备注写理由"）。
 - 新建条目若无 `invalidation` 的可观测值 → 允许创建但标记 `reviewable: false`（到期只显示结果，不给归因入口），并在列表上显示"不可复盘"。
+- **已落地（Phase B1，2026-10-19）**：入参闸在 `app/schemas/journal.py`（白名单 `INVALIDATION_KINDS` +
+  指导文案 `INVALIDATION_GUIDANCE`；自由文本 → **422 且带"怎么改"**，不是只报 `union_tag_invalid`）；
+  条目响应新增 `reviewable`，`evaluation` 新增 `invalidation_observable`（三形态 `true`，
+  历史行里的不可识别形态 `false`）；`reviewable=false` 时 `POST /journal/{id}/review` → **422**
+  （`NotReviewable`，明确文案"失效条件不可观测"），但**结果照常展示**。历史行**不改写**（闸只影响
+  读取判断与复盘动作）。
 
 **验收**：自由文本失效条件 422；`reviewable=false` 的条目在到期列表里**没有**"复盘"按钮（e2e 断言）。
 
