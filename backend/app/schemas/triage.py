@@ -35,7 +35,12 @@ class FactOut(BaseModel):
 
 
 class TriageItemOut(BaseModel):
-    """一条体检结论：只陈述事实 + 数据截至 + 复核去处。"""
+    """一条体检结论：只陈述事实 + 数据截至 + 复核去处 + **规则来源**。
+
+    ``rule_text`` / ``rule_version`` / ``source_table`` 是 provenance 契约的三字段
+    （见 ``.superpowers/sdd/triage-provenance/contract.md``）：卡片右上角据此显示
+    "依据哪条规则（哪个版本）、数据来自哪张表"，口径改版后历史卡片仍可解释。
+    """
 
     symbol: str
     name: str
@@ -46,6 +51,12 @@ class TriageItemOut(BaseModel):
     as_of: date
     source: str
     verify: str
+    #: 人话阈值（与 ``GET /watchlists/triage/rules`` 的 ``rule_text`` 逐字一致）
+    rule_text: str
+    #: 规则版本（如 ``r1``）：阈值/判据变更时必须升版
+    rule_version: str
+    #: 主要来源表（如 ``daily_quotes``）
+    source_table: str
 
 
 class TriageOut(BaseModel):
@@ -66,3 +77,51 @@ class TriageOut(BaseModel):
     #: 前端**禁止**渲染本字段——key 形如 ``sector_move``，上屏就是机器串。
     unavailable_keys: list[str]
     disclaimer: str
+
+
+class TriageStatsOut(BaseModel):
+    """一条规则的标定统计（``scripts/build_triage_rule_stats.py`` 生成，静态 JSON 读出）。
+
+    字段名逐字照抄 provenance 契约：``tN_excess_med`` = 各信号日「信号组中位收益 −
+    当日全市场中位收益」的跨日中位数（%），``t5_p05`` = 信号组 5 日收益的 5% 分位（%）。
+    **只放事实统计，不放预测/评分**（合规扫描面覆盖 ``watchlist_triage.py``）。
+    """
+
+    as_of: date
+    window_months: int
+    signals: int
+    days: int
+    per_day: float
+    t1_excess_med: float | None
+    t5_excess_med: float | None
+    t20_excess_med: float | None
+    t5_p05: float | None
+    #: 口径说明（超额怎么算、收益怎么复权、样本限制）
+    basis: str
+
+
+class TriageRuleOut(BaseModel):
+    """一条探测器的来源 + 统计（``GET /api/v1/watchlists/triage/rules`` 的数组项）。
+
+    ``stats=null`` 是**合法且必须**的表达（统计产物缺失/源表覆盖不足/窗口内无信号），
+    此时 ``stats_note`` 必须写原因——静默给一个空对象会让前端把"没算"画成"没影响"。
+    """
+
+    key: str
+    label: str
+    severity: TriageSeverity
+    version: str
+    rule_text: str
+    definition: str
+    thresholds: dict[str, float]
+    source_tables: list[str]
+    update_note: str
+    failure_modes: list[str]
+    stats: TriageStatsOut | None = None
+    stats_note: str | None = None
+
+
+class TriageRulesOut(BaseModel):
+    """``GET /api/v1/watchlists/triage/rules`` 的完整载荷（固定 8 条，registry 顺序）。"""
+
+    rules: list[TriageRuleOut]

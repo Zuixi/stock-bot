@@ -1,3 +1,19 @@
+## 2026-10-17 - **自选体检补「规则来源」（provenance）：spec 来源字段 + 卡片三字段 + `/triage/rules` + 12 个月标定统计**
+
+- **后端**：`DetectorSpec` 新增 `version`/`rule_text`/`definition`/`source_tables`/`update_note`/`failure_modes`（8 条 spec 全填，
+  `failure_modes` 4–5 条/条；导入期断言拒绝空值、<3 条、重复项、未知来源表）· `TriageItem`/`TriageItemOut` 新增
+  `rule_text`/`rule_version`/`source_table`（只从 `spec` 单向填充，`triage_service` 在**合并之前**补齐，卡片可回答"依据哪条规则哪个版本、来自哪张表"）·
+  新端点 `GET /api/v1/watchlists/triage/rules`（**登录即可、零 DB 查询**，`stats` 读随仓库入库的静态产物；产物缺失/损坏/源表不足 →
+  `stats=null` + `stats_note` 写原因，**不给"没算"画成"0 信号"**）
+- **统计**：`backend/scripts/build_triage_rule_stats.py`（只读 PG、12 个月窗口、`close/pre_close` 连乘 + 交易日历对齐 + winsorize ±50%、
+  阈值全部从 registry 读、SQL 无阈值字面量）→ `backend/app/services/triage_rule_stats.json` **入库**（同库重跑逐字节确定）；
+  6 条可算（`break_ma20` T+5 超额中位 −0.26% / `drop_sharp` −1.24% / `limit_up_state` −0.74% / `volume_spike` −1.55% /
+  `new_high_low` −0.19% / `sector_move` −0.81%），`new_announcement`（公告仅 1.5 个月）与 `dragon_tiger`（龙虎榜仅 1.7 个月）按纪律写 `null` + 原因
+- 涉及文件：`backend/app/services/{triage_detectors,triage_service,triage_rules(新)}.py`、`backend/app/schemas/triage.py`、
+  `backend/app/api/v1/watchlist_triage.py`、`backend/app/services/triage_rule_stats.json(新)`、
+  `backend/scripts/build_triage_rule_stats.py(新)`、`backend/tests/test_{triage_detectors,triage_service,watchlist_triage_api}.py`、
+  `.superpowers/sdd/triage-provenance/backend-report.md`
+
 ## 2026-10-17 - **自选体检上线：`/me?tab=triage`（默认 Tab）+ 8 事实型探测器 + 合规门禁**
 
 - **后端**（`c2cadca`）：`app/services/triage_detectors.py`（8 个纯函数探测器 + registry，导入期校验 8 个/key 唯一/阈值集中/`required_fields` 在 ORM 元数据里真实存在）·

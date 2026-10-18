@@ -387,7 +387,9 @@ async def get_triage(
             unavailable_keys=keys,
         )
     ctx = await load_context(db, codes, day.day)
-    found = td.run_detectors(ctx)
+    # 规则来源（rule_text / rule_version / source_table）在**组合之前**从 registry 补齐：
+    # 合并会保留主条目的来源，若在合并后补，被并进 facts 的其他规则就没有自己的口径了。
+    found = [td.with_provenance(item) for item in td.run_detectors(ctx)]
     items, folded = compose(found, limit=limit)
     hit = {item.symbol for item in found}
     # "平静"只对**有行情**的自选成立：没有行情（停牌/新入库/代码错误）等于"未被判定"，

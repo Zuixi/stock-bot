@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from typing import Any
 
@@ -43,7 +43,14 @@ class Fact:
 
 @dataclass(frozen=True)
 class DetectorSpec:
-    """一个探测器的登记项（阈值即配置；``verify`` = 复核去处语义）。"""
+    """一个探测器的登记项（阈值即配置；``verify`` = 复核去处语义）。
+
+    **来源字段（provenance）是卡片契约的一部分**：``rule_text`` / ``version`` /
+    ``source_tables`` / ``update_note`` / ``failure_modes`` 会经 ``with_provenance``
+    填进 ``TriageItem``，再由 ``GET /api/v1/watchlists/triage/rules`` 原样下发。
+    它们不是注释——``_assert_detectors`` 在导入期就拒绝空值，因为"规则从哪来、
+    什么时候能算、什么时候会给出误导性事实"缺一条，用户就无法核对卡片上的数字。
+    """
 
     key: str
     label: str
@@ -51,6 +58,18 @@ class DetectorSpec:
     thresholds: dict[str, float]
     required_fields: tuple[str, ...]
     verify: str
+    #: 规则版本（阈值/判据变更必须升版）：历史卡片靠它解释当时的口径
+    version: str
+    #: 人话阈值（逐字上屏，前端不再自己拼文案）
+    rule_text: str
+    #: 一句话定义（这条规则在陈述什么事实）
+    definition: str
+    #: 判定依赖的表（第一项 = 卡片 ``source_table``；顺序即主次）
+    source_tables: tuple[str, ...]
+    #: 什么时候能算（更新时机）；写"盘后 X 起"，不写"实时"这类做不到的话
+    update_note: str
+    #: 该规则会给出**误导性事实**的具体场景（≥3 条，按规则各自相关）
+    failure_modes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -125,7 +144,12 @@ class TriageContext:
 
 @dataclass(frozen=True)
 class TriageItem:
-    """一条体检结论：只陈述事实 + 数据截至 + 复核去处。"""
+    """一条体检结论：只陈述事实 + 数据截至 + 复核去处 + **规则来源**。
+
+    ``rule_text`` / ``rule_version`` / ``source_table`` 不在这里写死：探测器只负责
+    "命中/不命中"，来源由 ``with_provenance`` 从 ``DetectorSpec`` 补（``triage_service``
+    组合前调用），保证卡片文案与 registry 单向同源、不会两处漂移。
+    """
 
     symbol: str
     name: str
@@ -136,6 +160,12 @@ class TriageItem:
     as_of: date
     source: str
     verify: str
+    #: 人话阈值（来自 ``spec.rule_text``；空串只可能出现在未经 ``with_provenance`` 的构造里）
+    rule_text: str = ""
+    #: 规则版本（来自 ``spec.version``）
+    rule_version: str = ""
+    #: 主要来源表（来自 ``spec.source_tables[0]``）
+    source_table: str = ""
     #: 当日涨跌幅（%，同 severity 时的次级排序键；无行情来源的探测器为 None）
     day_pct: float | None = None
 
@@ -161,6 +191,18 @@ SPEC_BREAK_MA20 = DetectorSpec(
     thresholds={"ma_days": 20},
     required_fields=("daily_quotes.close",),
     verify="kline",
+    version="r1",
+    rule_text="今日收盘跌破 20 日均线，且昨日收盘仍在 20 日均线上方（首次跌破才报）",
+    definition="用 MA20 判「刚跌破」：只报首次跌破那一天，不重复报持续下跌的每一天。",
+    source_tables=("daily_quotes",),
+    update_note="盘后日线入库后即可计算（需最近 21 个交易日收盘）",
+    failure_modes=(
+        "停牌：当日无行情行时沿用停牌前最后一个交易日的数据，卡片仍标今天，看起来像今天跌破",
+        "跳空低开：缺口一天跨过 MA20，前一日「还在均线上方」的状态无法反映跳空幅度，"
+        "跌破发生在开盘一瞬间",
+        "除权除息：当日跌幅的分母已按除权调整，但历史收盘未复权，除权日前后 MA20 本身会跳变",
+        "次新（上市不足 21 个交易日）：没有 MA20，规则静默不判，看起来像「没跌破」",
+    ),
 )
 SPEC_DROP_SHARP = DetectorSpec(
     key="drop_sharp",
@@ -169,6 +211,19 @@ SPEC_DROP_SHARP = DetectorSpec(
     thresholds={"day_pct": -7.0, "five_day_pct": -12.0},
     required_fields=("daily_quotes.close", "daily_quotes.pre_close"),
     verify="kline",
+    version="r1",
+    rule_text="当日跌幅 ≥ 7%，或 5 日跌幅 ≥ 12%",
+    definition="陈述已发生的跌幅是否越过阈值，不判断跌完没有、也不给方向。",
+    source_tables=("daily_quotes",),
+    update_note="盘后日线入库后即可计算；5 日跌幅取最近 6 个交易日收盘",
+    failure_modes=(
+        "除权除息：当日跌幅分母已按除权调整故不会误报，但 5 日跌幅用的是未复权的历史收盘，"
+        "除权日会凭空多出一段跌幅",
+        "停牌复牌：复牌首日的前收是停牌前价格，一天内可能补跌越过阈值，读起来像「今天跌得急」",
+        "一字跌停：跌幅被涨跌停板限制截断，连续一字跌停时 5 日跌幅会低估真实累计跌幅",
+        "停牌：当日无行情行时沿用停牌前最后一个交易日的数据，卡片仍标今天",
+        "次新（上市不足 6 个交易日）：没有 5 日可比收盘，规则静默不判",
+    ),
 )
 SPEC_VOLUME_SPIKE = DetectorSpec(
     key="volume_spike",
@@ -177,6 +232,18 @@ SPEC_VOLUME_SPIKE = DetectorSpec(
     thresholds={"amount_ratio": 2.0, "abs_pct": 5.0, "avg_days": 20},
     required_fields=("daily_quotes.amount",),
     verify="kline",
+    version="r1",
+    rule_text="当日成交额 ≥ 前 20 个交易日均额的 2 倍，且当日涨跌幅绝对值 ≥ 5%",
+    definition="用成交额相对自身近期均值的倍数描述「量突然放大」，同时要求价格也有异动。",
+    source_tables=("daily_quotes",),
+    update_note="盘后成交额入库后即可计算（amount 单位千元，判定用比值故不影响）",
+    failure_modes=(
+        "停牌复牌：均额按有行情的交易日算，复牌首日放量容易被算成「2 倍异动」，而那只是积压成交",
+        "一字板：封板日成交额可能被压到极低而非放大，规则不触发，用户会误以为「板上没有异动」",
+        "停牌：当日无行情行时沿用停牌前最后一个交易日的数据，卡片仍标今天",
+        "成交额缺失或为 0：均额为 0 时直接不判（避免除零），等于当天漏检且不给提示",
+        "次新（上市不足 21 个交易日）：均额样本不足，规则静默不判",
+    ),
 )
 SPEC_LIMIT_UP_STATE = DetectorSpec(
     key="limit_up_state",
@@ -187,6 +254,19 @@ SPEC_LIMIT_UP_STATE = DetectorSpec(
     thresholds={"touch_tolerance": 0.005},
     required_fields=("stock_price_limits.up_limit", "daily_quotes.high", "daily_quotes.close"),
     verify="kline",
+    version="r1",
+    rule_text="收盘 ≥ 涨停价 − 0.005 元记为涨停；盘中最高 ≥ 涨停价 − 0.005 元而收盘在板下记为炸板",
+    definition="用交易所口径的涨停价描述「封住涨停」或「盘中触板后打开」这一事实。",
+    source_tables=("stock_price_limits", "daily_quotes"),
+    update_note="盘后 stk_limit 与日线同时入库后计算（涨停价只认交易所口径的 up_limit）",
+    failure_modes=(
+        "ST 股：真实限幅 5%，用名称/代码前缀推 10% 会判错；本规则只认 up_limit 故不受影响，"
+        "但 up_limit 缺失当天整条不判",
+        "一字板：全天封死且成交极少，事实是「涨停」，但读到的人容易把它当成可成交的价格",
+        "次新股：上市初期无涨跌停或限幅不同，up_limit 可能为空，规则静默不判",
+        "除权除息：涨停价按除权后的前收计算，除权日涨停价会跳变，与历史涨停价不可直接比较",
+        "停牌：停牌日没有行情行，既不报涨停也不报炸板，看起来像「今天正常」",
+    ),
 )
 SPEC_NEW_ANNOUNCEMENT = DetectorSpec(
     key="new_announcement",
@@ -195,6 +275,17 @@ SPEC_NEW_ANNOUNCEMENT = DetectorSpec(
     thresholds={"days": 3},
     required_fields=("announcements.title", "announcements.announce_time"),
     verify="announcement",
+    version="r1",
+    rule_text="近 3 个自然日有公告；含权益变动（equity_change）时优先展示",
+    definition="只陈述「最近三天公司发了公告」这一事实，不解读公告内容的好坏。",
+    source_tables=("announcements",),
+    update_note="公告入库后即可计算（announce_time 为本地时间，按近 3 个自然日窗口取）",
+    failure_modes=(
+        "公告时间与交易日错位：盘后或周末公告会在下一个交易日被报出，读起来像「今天发的」",
+        "公告分类只有 report/event 两类，分类缺失时权益变动会退化成普通新公告",
+        "同一事项多条（更正/补充/摘要）会按条数重复计入，条数不等于事项数量",
+        "公告源覆盖有限（实测仅近 1–2 个月），窗口外的历史日不判，等于静默漏报",
+    ),
 )
 SPEC_DRAGON_TIGER = DetectorSpec(
     key="dragon_tiger",
@@ -203,6 +294,17 @@ SPEC_DRAGON_TIGER = DetectorSpec(
     thresholds={"days": 3},
     required_fields=("dragon_tiger_entries.net_amount", "dragon_tiger_entries.trade_date"),
     verify="dragon_tiger",
+    version="r1",
+    rule_text="近 3 个交易日上过龙虎榜；展示上榜次数与净买卖额",
+    definition="陈述「最近三个交易日出现在龙虎榜」这一事实，不解读资金意图。",
+    source_tables=("dragon_tiger_entries",),
+    update_note="龙虎榜盘后入库后计算；近 3 个交易日取行情里实际出现过的日期",
+    failure_modes=(
+        "上榜不等于全市场资金：net_amount 只是龙虎榜前五席位的净额，不是全市场主力资金",
+        "同一股票同一天因多个上榜原因各有一行，净额会被重复累加，上榜次数也会重复计数",
+        "未上榜不等于没有大额进出：龙虎榜只覆盖达到披露标准的个股",
+        "数据源覆盖有限（实测仅近 1–2 个月），窗口外的历史日不判，等于静默漏报",
+    ),
 )
 SPEC_SECTOR_MOVE = DetectorSpec(
     key="sector_move",
@@ -218,6 +320,19 @@ SPEC_SECTOR_MOVE = DetectorSpec(
         "daily_quotes.pre_close",
     ),
     verify="sector",
+    version="r1",
+    rule_text="所属申万一级当日涨跌幅进入全市场一级行业前 10%，且绝对涨跌幅 ≥ 2%",
+    definition="用申万一级行业当日平均涨跌幅的全市场分位描述「所在板块在动」。",
+    source_tables=("sw_industry_members", "daily_quotes"),
+    update_note="盘后日线入库后按当前成分快照聚合；成分归属不做 PIT 还原（v1 已知口径）",
+    failure_modes=(
+        "成分归属用当前快照（非 PIT）：历史日回放会把今天的行业归属套到过去，"
+        "改过行业的股票会被算进错的板块",
+        "停牌成分股：板块均值是当日有行情成分股的算术平均，大面积停牌时均值失真",
+        "涨跌停一字板：板块涨幅被涨跌停板截断，实际情绪强于数字所显示的程度",
+        "次新/新上市：申万归属可能缺失，规则静默不判，看起来像「板块没动」",
+        "分位只有 31 个一级行业：前 10% 实际是第 28–31 名，边界日第 28 名与第 27 名的差异可能极小",
+    ),
 )
 SPEC_NEW_HIGH_LOW = DetectorSpec(
     key="new_high_low",
@@ -227,6 +342,22 @@ SPEC_NEW_HIGH_LOW = DetectorSpec(
     thresholds={"days": 60},
     required_fields=("daily_quotes.close",),
     verify="kline",
+    version="r1",
+    rule_text=(
+        "今日收盘 > 前 60 个交易日最高收盘 = 创 60 日新高；"
+        "今日收盘 < 前 60 个交易日最低收盘 = 创 60 日新低"
+    ),
+    definition="用收盘价与自身近 60 个交易日区间比较，描述是否创区间新高/新低。",
+    source_tables=("daily_quotes",),
+    update_note="盘后日线入库后即可计算；上市不足 60 个交易日一律不判",
+    failure_modes=(
+        "次新（上市不足 60 个交易日）：窗口里没有 60 日历史，一律不判，看起来像「没创新高」",
+        "除权除息：历史收盘未复权，除权后的收盘与除权前不可比，除权日附近会假报「创 60 日新低」",
+        "停牌：60 日窗口按有行情的交易日算，长期停牌股复牌后比较的其实是更早的价格；"
+        "当日停牌还会沿用旧数据并标今天",
+        "一字板：封板日收盘即新高是真实事实，但没有成交，读到的人容易把它当成可成交的价",
+        "上市首日：没有前 60 个交易日收盘，静默不判",
+    ),
 )
 
 TRIAGE_DETECTORS: tuple[DetectorSpec, ...] = (
@@ -268,7 +399,7 @@ def _field_tables() -> dict[str, Any]:
 
 
 def _assert_detectors() -> None:
-    """导入期断言：8 个 · key 唯一 · severity 合法 · required_fields 真实存在。
+    """导入期断言：8 个 · key 唯一 · severity 合法 · 来源字段齐全 · required_fields 真实存在。
 
     故意做成 raise（不是 assert）：``python -O`` 会删掉 assert，登记表就静默失去护栏。
     """
@@ -285,6 +416,22 @@ def _assert_detectors() -> None:
             raise RuntimeError(f"{spec.key} 必须把阈值写进 thresholds（禁止裸魔法数）")
         if not spec.required_fields:
             raise RuntimeError(f"{spec.key} 必须声明 required_fields")
+        # 来源字段缺一条，卡片就无法回答"规则是什么/从哪来/什么时候能算/何时会误导"。
+        # 校验的是**文本非空**（strip 后），因为空串比缺字段更隐蔽：前端会渲染成空白行。
+        for attr in ("version", "rule_text", "definition", "update_note"):
+            if not getattr(spec, attr).strip():
+                raise RuntimeError(f"{spec.key} 的来源字段 {attr} 不得为空（provenance 契约）")
+        if not spec.source_tables:
+            raise RuntimeError(f"{spec.key} 必须声明 source_tables（至少一张表）")
+        if len(spec.failure_modes) < 3:
+            raise RuntimeError(f"{spec.key} 的 failure_modes 不足 3 条，无法讲清何时误导")
+        if any(not mode.strip() for mode in spec.failure_modes):
+            raise RuntimeError(f"{spec.key} 的 failure_modes 含空串")
+        if len(set(spec.failure_modes)) != len(spec.failure_modes):
+            raise RuntimeError(f"{spec.key} 的 failure_modes 有重复项")
+        for table in spec.source_tables:
+            if table not in tables:
+                raise RuntimeError(f"{spec.key} 的 source_tables 指向未知表：{table}")
         for field_name in spec.required_fields:
             table, _, column = field_name.partition(".")
             model = tables.get(table)
@@ -299,6 +446,24 @@ def _assert_detectors() -> None:
 
 
 _assert_detectors()
+
+#: ``detector`` → spec 的查表（``with_provenance`` 用；导入期断言已保证 key 唯一）
+SPEC_BY_KEY: dict[str, DetectorSpec] = {spec.key: spec for spec in TRIAGE_DETECTORS}
+
+
+def with_provenance(item: TriageItem) -> TriageItem:
+    """把规则来源三字段补进卡片（``triage_service`` 在组合/排序**之前**调用）。
+
+    为什么不在 8 个探测器里各写一遍：同一份 ``rule_text`` 写 8 次必然漂移；这里从
+    ``SPEC_BY_KEY`` 单向取值，探测器只负责判定，来源只有一个真相。
+    """
+    spec = SPEC_BY_KEY[item.detector]
+    return replace(
+        item,
+        rule_text=spec.rule_text,
+        rule_version=spec.version,
+        source_table=spec.source_tables[0],
+    )
 
 
 def unavailable_labels(keys: Iterable[str]) -> list[str]:

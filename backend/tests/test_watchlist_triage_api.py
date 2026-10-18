@@ -14,9 +14,11 @@
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from datetime import date
+from pathlib import Path
 from typing import Any, get_args
 
 import jwt
@@ -115,6 +117,9 @@ def _sample_result() -> svc.TriageResult:
         as_of=AS_OF,
         source="daily_quotes",
         verify="kline",
+        rule_text=td.SPEC_BREAK_MA20.rule_text,
+        rule_version=td.SPEC_BREAK_MA20.version,
+        source_table=td.SPEC_BREAK_MA20.source_tables[0],
         day_pct=-8.0,
     )
     return svc.TriageResult(
@@ -221,6 +226,157 @@ async def test_triage_returns_full_contract(
     assert item["verify"] == "kline"
     assert item["as_of"] == AS_OF.isoformat()
     assert item["facts"][0] == {"label": "收盘", "value": 9.2, "unit": "元"}
+    # 规则来源三字段（provenance 契约）：卡片据此显示"依据哪条规则（哪个版本）、来自哪张表"
+    assert item["rule_text"] == td.SPEC_BREAK_MA20.rule_text
+    assert item["rule_version"] == "r1"
+    assert item["source_table"] == "daily_quotes"
+
+
+async def test_triage_rules_returns_eight_rules_with_full_fields(
+    triage_app: FastAPI,
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``GET /watchlists/triage/rules``：固定 8 条、字段齐全、登录即可（不查库）。
+
+    契约字段名逐字照抄 ``.superpowers/sdd/triage-provenance/contract.md``：
+    少一个字段前端就无法渲染规则的来源/失效场景，``stats`` 缺失更会被画成"0 信号"。
+    """
+    monkeypatch.setattr(api.triage_rules, "STATS_PATH", tmp_path / "missing.json")
+    resp = await _get(
+        triage_app,
+        "/api/v1/watchlists/triage/rules",
+        token=_assertion(rsa_key_pair),
+    )
+    assert resp.status_code == 200
+    rules = resp.json()["rules"]
+    assert [rule["key"] for rule in rules] == [spec.key for spec in td.TRIAGE_DETECTORS]
+    expected = {
+        "key",
+        "label",
+        "severity",
+        "version",
+        "rule_text",
+        "definition",
+        "thresholds",
+        "source_tables",
+        "update_note",
+        "failure_modes",
+        "stats",
+        "stats_note",
+    }
+    for rule, spec in zip(rules, td.TRIAGE_DETECTORS, strict=True):
+        assert set(rule) == expected
+        assert rule["severity"] == spec.severity
+        assert rule["version"] == spec.version
+        assert rule["rule_text"] == spec.rule_text
+        assert rule["definition"] == spec.definition
+        assert rule["thresholds"] == spec.thresholds
+        assert rule["source_tables"] == list(spec.source_tables)
+        assert rule["update_note"] == spec.update_note
+        assert rule["failure_modes"] == list(spec.failure_modes)
+        assert len(rule["failure_modes"]) >= 3
+        # 统计产物缺失：stats 必须为 null 且**写明原因**（不许静默给空统计）
+        assert rule["stats"] is None
+        assert rule["stats_note"], f"{rule['key']} 的 stats 为空却没有说明原因"
+        assert "尚未生成" in rule["stats_note"]
+
+
+async def test_triage_rules_requires_login(triage_app: FastAPI) -> None:
+    resp = await _get(triage_app, "/api/v1/watchlists/triage/rules", token=None)
+    assert resp.status_code in (401, 403)
+
+
+async def test_triage_rules_maps_static_stats(
+    triage_app: FastAPI,
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """有统计产物时逐字段透传（``stats`` 的字段名就是标定报告的口径）。"""
+    stats_path = tmp_path / "triage_rule_stats.json"
+    stats_path.write_text(
+        json.dumps(
+            {
+                "as_of": AS_OF.isoformat(),
+                "window_months": 12,
+                "basis": "超额=信号组中位收益−当日全市场中位收益",
+                "rules": {
+                    "drop_sharp": {
+                        "stats": {
+                            "signals": 1234,
+                            "days": 240,
+                            "per_day": 5.14,
+                            "t1_excess_med": -0.3,
+                            "t5_excess_med": -1.02,
+                            "t20_excess_med": -1.23,
+                            "t5_p05": -9.81,
+                        },
+                        "stats_note": None,
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(api.triage_rules, "STATS_PATH", stats_path)
+    resp = await _get(
+        triage_app,
+        "/api/v1/watchlists/triage/rules",
+        token=_assertion(rsa_key_pair),
+    )
+    assert resp.status_code == 200
+    rules = {rule["key"]: rule for rule in resp.json()["rules"]}
+    assert len(rules) == 8
+    assert rules["drop_sharp"]["stats"] == {
+        "as_of": AS_OF.isoformat(),
+        "window_months": 12,
+        "signals": 1234,
+        "days": 240,
+        "per_day": 5.14,
+        "t1_excess_med": -0.3,
+        "t5_excess_med": -1.02,
+        "t20_excess_med": -1.23,
+        "t5_p05": -9.81,
+        "basis": "超额=信号组中位收益−当日全市场中位收益",
+    }
+    assert rules["drop_sharp"]["stats_note"] is None
+    # 产物里没有的规则仍然要给 null + 原因（8 条必须一个不少）
+    assert rules["break_ma20"]["stats"] is None
+    assert rules["break_ma20"]["stats_note"]
+
+
+async def test_triage_rules_reads_committed_artifact(
+    triage_app: FastAPI,
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
+) -> None:
+    """**随仓库入库**的统计产物必须能被端点完整投影（产物损坏/缺规则 = 门禁红）。
+
+    为什么不只测 tmp JSON：产物本身是交付物（``backend/app/services/triage_rule_stats.json``）。
+    只测 tmp 的话，入库文件写坏了、或新增规则后忘了复跑脚本，端点会安静地退化成 8 条
+    ``stats=null``，而这条用例就是那个"安静"的对手。
+    """
+    resp = await _get(
+        triage_app,
+        "/api/v1/watchlists/triage/rules",
+        token=_assertion(rsa_key_pair),
+    )
+    assert resp.status_code == 200
+    rules = {rule["key"]: rule for rule in resp.json()["rules"]}
+    assert set(rules) == {spec.key for spec in td.TRIAGE_DETECTORS}
+    with_stats = 0
+    for rule in rules.values():
+        if rule["stats"] is None:
+            assert rule["stats_note"], f"{rule['key']} 的 stats 为空却没有说明原因"
+            continue
+        with_stats += 1
+        assert rule["stats"]["window_months"] == 12
+        assert rule["stats"]["days"] >= 1
+        assert rule["stats"]["signals"] >= rule["stats"]["days"]
+    # 产物覆盖 8 条里的 6 条（公告/龙虎榜源表不足 12 个月 → 允许为 null + 说明）
+    assert with_stats >= 6
 
 
 async def test_triage_rejects_oversized_user_watchlist(

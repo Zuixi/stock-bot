@@ -59,6 +59,50 @@ def test_severity_order_is_fixed() -> None:
     assert td.SEVERITY_RANK["risk"] < td.SEVERITY_RANK["background"]
 
 
+def test_every_spec_carries_full_provenance() -> None:
+    """8 条 spec 的来源字段必须齐全（provenance 契约；空值/短列表都算回归）。
+
+    为什么这条不能只靠导入期断言：字段齐全 ≠ 内容有意义——这里额外钉住"4 条以上
+    失效场景"与"来源表是库内真实表"，并把 ``with_provenance`` 的**单向映射**拿住
+    （卡片三字段只能从 spec 取，不能在 8 个探测器里各写一份）。
+    """
+    tables = td._field_tables()
+    for spec in td.TRIAGE_DETECTORS:
+        assert spec.version == "r1", f"{spec.key} 的版本号必须显式登记"
+        assert spec.rule_text.strip(), f"{spec.key} 缺 rule_text（人话阈值）"
+        assert spec.definition.strip(), f"{spec.key} 缺 definition"
+        assert spec.update_note.strip(), f"{spec.key} 缺 update_note"
+        assert spec.source_tables, f"{spec.key} 缺 source_tables"
+        assert set(spec.source_tables) <= set(tables), f"{spec.key} 的来源表不在库内"
+        assert len(spec.failure_modes) >= 3, f"{spec.key} 的 failure_modes 不足 3 条"
+        assert all(mode.strip() for mode in spec.failure_modes)
+        assert len(set(spec.failure_modes)) == len(spec.failure_modes)
+
+    item = td.TriageItem(
+        symbol="600000",
+        name="浦发银行",
+        detector=td.SPEC_DROP_SHARP.key,
+        severity="risk",
+        headline="今天跌得急",
+        facts=(),
+        as_of=AS_OF,
+        source="daily_quotes",
+        verify="kline",
+    )
+    filled = td.with_provenance(item)
+    assert filled.rule_text == td.SPEC_DROP_SHARP.rule_text
+    assert filled.rule_version == td.SPEC_DROP_SHARP.version
+    assert filled.source_table == td.SPEC_DROP_SHARP.source_tables[0]
+
+
+def test_registry_assertion_rejects_missing_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """来源字段为空时**导入期就炸**（空串比缺字段更隐蔽：前端会画成空白行）。"""
+    bad = replace(td.SPEC_BREAK_MA20, failure_modes=("停牌",))
+    monkeypatch.setattr(td, "TRIAGE_DETECTORS", (bad, *td.TRIAGE_DETECTORS[1:]))
+    with pytest.raises(RuntimeError, match="failure_modes"):
+        td._assert_detectors()
+
+
 def test_registry_assertion_rejects_missing_column(monkeypatch: pytest.MonkeyPatch) -> None:
     """``required_fields`` 指向不存在的列时**导入期就炸**（不是运行期静默不出）。"""
     bogus = replace(td.SPEC_BREAK_MA20, required_fields=("daily_quotes.not_a_column",))

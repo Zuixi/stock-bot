@@ -514,6 +514,10 @@ def test_get_triage_composes_merges_and_folds() -> None:
     # T90001 命中 6 项（跌破 20 日线 / 跌得急 / 新低 / 板块 / 公告 / 龙虎榜）→ 合并 1 条
     assert primary.detector == "break_ma20"
     assert "另有 5 项" in primary.headline
+    # 规则来源三字段由 ``triage_service`` 在组合前从 registry 补齐（合并后仍是最强条目的口径）
+    assert primary.rule_version == "r1"
+    assert primary.source_table == "daily_quotes"
+    assert primary.rule_text == td.SPEC_BREAK_MA20.rule_text
     assert result.unavailable == [], "合成数据齐备时不得有缺数据探测器"
 
 
