@@ -1,3 +1,41 @@
+## 2026-10-19 - **标的详情页整改落地（P0/P1/P2）**：5 处「页面说假话」+ K 线跨 pane 联动/数据条/事件标记 + 报价条 + 分块边界；两条新机械门禁
+
+计划 [plans/2026-10-19-stock-detail-overhaul.md](../plans/2026-10-19-stock-detail-overhaul.md)（31 提交 / 73+ 文件）。
+零新表、零新 cron；新增 1 个迁移之外的**零**表改动（唯一新增迁移来自基线合并，非本计划）。
+
+**P0 · 不再撒谎**
+- 「成长与盈利」三张卡恒 `--` 的根因是 `StockRecord` 声明了 `roe/revenueGrowth/profitGrowth` 三个**后端不存在**的字段（可选 ⇒ `tsc` 永不报错）。改接 `financial-summary`（`roe`/`revenue_yoy`/`profit_yoy`），与财务 tab **共用 query key**（`useFinancialSummary`，`staleTime 5min`），并删除那三个死字段及其写端 stub
+- 龙虎榜 `symbol`：`/market/dragon-tiger` 新增 `symbol`，仓储层用 `ts_code IN (…)` 精确匹配（不用 `split_part`/`LIKE`），**缓存键按查询形态分段** `market:dragon-tiger:v2:{scope}:{symbol}:{date}`（评审抓到的缺陷：跨日查询与「标的+日期」查询曾共用一个键，谁先缓存谁污染对方 300s）
+- 失败不再伪装成「无记录」：`RelatedEvents` 五张表接 `isError` → 行内「加载失败 + 重试」；龙虎榜「有返回却筛不出本股」单独报「返回结果未按本股过滤」。**实现细节**：React Query v5 的 `fetchState()` 在 refetch 开始就把 `error` 清空，故错误态由本地 `retrying` 维持，否则错误块在请求发出前就卸载
+- 交易所直连：`exchangeCandidates/exchangeOrder` 按代码前缀定位，深市/北交所不再先试上交所（实测 `000001` 改前 4 次探活里 2 次打错所 → 改后 0 次）
+
+**K 线（用户反馈的主体）**
+- 跨 pane 联动：顶层 `axisPointer.link: [{xAxisIndex:"all"}]` + 两个 xAxis `snap`。**实测修正**：轴级写 `type:"cross"` 会让 ECharts 5.6.0 抛 `pointerShapeBuilder[...] is not a function` 导致整图崩，故 `cross` 只放 `tooltip.axisPointer`，轴级用 `line`
+- 空 tooltip：formatter 改为按 `list[0].dataIndex` 回查，成交量区不再「有框无内容」
+- 数据条 ribbon 随光标联动（`updateAxisPointer` + rAF 节流），**option 不随 hover 重建**（源码门禁钉 `useMemo` 依赖 + 运行时探针：50 次 mousemove 下 `setOption` 调用 0 次）；成交量 y 轴刻度
+- 事件标记：`markPoint` 只标最近 8 个、同日多类合并为 `公告+1`；点事件行 → `dataZoom` 到该日 ±20 根并高亮。**频率感知**（评审抓到的缺陷：索引按日线解析却施加到聚合序列 ⇒ 周/月会跳到错日期，现为日K 才定位并披露）
+- 已知边界：图上气泡只覆盖**已加载**的事件类型（首屏只有公告类）。要全覆盖必须放弃懒加载并接受首屏 5 个事件请求
+
+**概览与侧栏**
+- 三段式：报价条（四行：身份/现价/八项事实/区间与分位）+ K 线 `lg=16` + 侧栏 `lg=8`
+- 52 周区间条（唯一「大胆处」）+ `PE(TTM)` 3 年分位；**零新增请求**（复用 K 线缓存键，钉 `qfq`；e2e 断言 `/quotes/daily` 恰 1 次）
+- Tab 进 URL `?tab=overview|valuation|financial`；**修了 redirect 丢 query** 的真 bug（`/stock/<code>?tab=…` 深链在入口处原本不成立），新增 `mergeSearch()`（目标参数优先）
+- 股性事实行（`characterStats` 纯函数：60 日收益/年化波动/最大回撤/趋势 R²/均线多头/量能比，样本不足返回 `null` 且整行不渲染）；公司概况四字段（NULL 不渲染）；「记一笔」（公开路由 ⇒ 未登录给 `/login` 链接而非必 401 的表单；`recorded` 按标的派生）
+- 分块错误边界 `BlockBoundary` + 固定高度占位：单块失败不拖垮整页，加载→落地事件卡 y 位移实测 **0px**
+
+**两条新机械门禁（都进了 `self_review.sh` 与 CI `frontend-lint`）**
+- `check-api-fields.mjs`：前端 `StockRecord` 字段 ⊆ 后端 `StockOut ∪ StockEnrichedOut`（**单向**），映射权威来源是运行时解析 `stocks.ts` 的 mapper（不手抄）。**解析不出的行必须红**——评审证明过「静默跳过」会让它假绿；现以 `readonly`/引号 key/一行两字段/跨行 mapper/`extends` 六种注入逐条验红
+- `check-chart-theme.mjs`：`echarts-for-react` 只许出现在 `EChart.tsx` 与 `kline/KlineChart.tsx`（估值/财务两张图曾裸用 ⇒ 暗色下轴与图例不可读）
+
+**顺带修好的（评审发现、不在原计划）**
+- `CustomSwTags` 编辑按钮在标签查询未就绪时可点，`handleOpen` 抓空快照 ⇒ 确认即 PUT `industry_codes: []` **清空用户标签**；现 `!isLoading && !isError` 双保险 + 闸门 e2e
+- 财务指标趋势图期间错位（`histories[0]` 当时间轴）+ `smooth` 伪造连续性 → 并集对齐 + 断点保留
+
+**门禁**：`self_review.sh --full` 全绿（ruff / **mypy 220 文件** / **pytest 1818 passed** / tsc / doc_gate 16 项 / check:routes 89 / check:api-fields 37 / check:chart-theme 4）；`npm run build` ✓；详情页 e2e **107 passed / 1 skipped**（skip = 无凭据的已登录记一笔分支）、邻域回归 **84 passed**。
+
+**基线自洽（merge 的代价，已处理）**：合并 `feat/hypothesis-verification` 后基线处于「半个特性」状态——API 已按新签名调用而服务实现仍在对方未提交的工作里。处置是**让本分支自洽、不搬对方的在途实现**：公告类目改在端点层按白名单判定并过滤、`reconcile_market_data` 只传已合入形参、龙虎榜 `scope=="range"` 加不变量断言收窄类型；并采纳基线文档已承诺却未提交的 5 个文件（`backfill_announcements.py`/`spike_official_sources.py`/`deploy_prod.sh`/ADR 0019/ADR 0020）+ 缺失迁移 `e3f1a7c9d2b4`。`doc_gate` 由 7 项红转全绿。
+- 涉及文件：`frontend/src/shared/ui/kline/**`、`frontend/src/shared/ui/{EChart,BlockBoundary,index}.ts(x)`、`frontend/src/features/stock-detail/**`、`frontend/src/pages/stock-detail/index.tsx`、`frontend/src/shared/{api,config,types}/**`、`frontend/src/app/router/route-elements.tsx`、`frontend/src/features/journal/components/{EntryForm,JournalEntryAction}.tsx`、`frontend/scripts/{check-api-fields,check-chart-theme}.mjs`、`frontend/e2e/{kline,stockDetail*,unit-*}.spec.ts`、`backend/app/{api/v1,services,repositories}/market_data*.py`、`backend/tests/test_dragon_tiger_symbol.py`、`scripts/self_review.sh`、`.github/workflows/ci.yml`、`docs/{features.md,testing/index.md,decisions/*}`、`docs/Changelog.md`
+
 ## 2026-10-19 - **S12 闭环三件：一键记一笔 / 到期提醒 / 离线产物自愈**
 
 目标不是加功能，而是把 triage / journal / regime 接成一条回路：

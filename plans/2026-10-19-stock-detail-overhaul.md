@@ -1,9 +1,9 @@
 ---
-status:      draft
+status:      completed
 scope:       标的详情页（`/company/:symbol`）整改，分 P0/P1/P2 三档：P0 修 5 处「页面说假话」+ K 线跨 pane 联动 + 防复发契约测试（2 人日）；P1 ribbon / 图内事件标记与定位联动 / 概览重排 / 移动端 / 财务口径（2.5 人日）；P2 记一笔 / 股性事实 / 加载错误态（1.5 人日）
 touches:     frontend/src/shared/ui/kline/, frontend/src/shared/ui/EChart.tsx, frontend/src/shared/api/{stocks,quotes,marketData,financial}.ts, frontend/src/shared/config/exchange.ts(新), frontend/src/features/stock-detail/, frontend/src/features/journal/components/EntryForm.tsx, frontend/src/pages/stock-detail/, frontend/scripts/check-api-fields.mjs(新), backend/app/api/v1/market_data.py, backend/app/services/market_data_service.py, backend/app/repositories/market_data_repo.py, backend/tests/, docs/features.md, docs/Changelog.md
 updated:     2026-10-19
-next-action: 待 owner 批准范围（§2 三档）；批准后从 P0-1 开工
+next-action: -
 ---
 
 # 标的详情页整改（`/company/:symbol`）实施计划
@@ -390,3 +390,24 @@ export function toMarkPoints(events: StockEvent[], dates: string[], maxBubbles =
 | 8 | P2-1 / P2-2 / P2-3 | 1.5 | 无 |
 
 **P0 落地即发布**（页面不再撒谎、联动修好），P1 单独发布（结构变化），P2 视排期。
+
+## 10. 实施结果（2026-10-19 收尾）
+
+- **P0/P1/P2 全部落地**：23 个本计划提交 + 1 个 merge 提交 + 1 个基线一致性提交（分支共 31 提交）。
+- **门禁**：`self_review.sh --full` 全绿 —— ruff / **mypy 220 文件 0 错** / **pytest 1818 passed** /
+  tsc / `doc_gate` 16 项 / `check:routes` 89 / `check:api-fields` 37 / `check:chart-theme` 4；
+  `npm run build` ✓；详情页 e2e **107 passed / 1 skipped**、邻域回归 **84 passed**。
+- **三条验收判据的实测**（§6 要求「先测基线再比」）：
+  - 错所探活：`000001` 改前 4 次探活里 2 次打错交易所 → 改后 **0 次**；
+  - 无布局跳动：加「加载中 / 无记录 / 加载失败」三态后，事件卡 `boundingBox().y` 位移 **0px**（阈值 ≤2）；
+  - 契约盲区：注入 `dividendYield`、历史形态 `roe`、mapper 变异 → `check-api-fields` 逐条转红。
+- **计划外但必须修的 2 个真缺陷**（评审发现）：
+  1. `CustomSwTags` 在标签查询未就绪时可编辑，确认即 PUT `industry_codes: []` **清空用户标签**；
+  2. `/stock/<code>?tab=…` 的 redirect 用 `<Navigate>` 会**丢 query**，深链直达在其入口处根本不成立。
+- **Ruling 汇总（含撤销项）**：R12 轴级 `axisPointer` 用 `line` 而非 `cross`（后者让 ECharts 5.6.0 崩）；
+  R15 用 Playwright spec 代替单测（仓无前端单测 runner）；R16 ROE 不带符号不着涨跌色；
+  **R21 撤销「每类角标计数」**（与零额外请求及既有懒加载 e2e 冲突）；R22 周/月频率不定位；
+  R23 采纳基线文档已承诺却未提交的文件；R7 52 周统计钉 `qfq`（复权回补期会有 2 次 `/quotes/daily`）。
+- **已知遗留**：`dragon_tiger_entries` 无 `ts_code` 前导索引（跨日按标的过滤走 seq scan，~2k 行 1.9ms，
+  零迁移约束下留待单独迁移）；已登录「记一笔」分支无 e2e（环境无凭据，用例 skip 并在凭据存在时自动执行）；
+  图上事件气泡只覆盖已加载类型（要全覆盖需放弃懒加载）。
