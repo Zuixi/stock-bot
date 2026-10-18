@@ -126,7 +126,9 @@ export function FundamentalCards({ stock, summary }: Props) {
       <Card title="估值指标" size="small">
         <Row gutter={[16, 16]}>
           {VALUATION_METRICS.map((m) => (
-            <Col key={m.key} xs={12} sm={6}>
+            // `lg={12}`：`lg` 起本卡挪进 `lg={8}` 的侧栏（约 1/3 页宽），四列会把
+            // 「1.66万亿」折成两行（P1-3 实测）。侧栏里改成 2×2；中屏/窄屏本卡仍全宽，维持四列。
+            <Col key={m.key} xs={12} sm={6} lg={12}>
               <Statistic
                 title={<MetricLabel label={m.label} tip={m.tip} />}
                 valueRender={() => renderValuation(stock, m)}

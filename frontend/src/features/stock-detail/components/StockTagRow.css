@@ -1,0 +1,31 @@
+/*
+ * 分类/标签合并行（F14）：三块标签共用一个 flex-wrap 行，超出折叠成 `+N`。
+ * 颜色一律走 CSS 变量，不新增色值；字号只用 12px（与旧三块的标签前缀一致）。
+ */
+.stock-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+}
+
+/* 行内芯片间距统一交给 `gap`，抵消 AntD Tag 自带的 margin-inline-end */
+.stock-tag-row .ant-tag {
+  margin-inline-end: 0;
+}
+
+.stock-tag-row__label {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/*
+ * 概念组：`display: contents` 让芯片直接参与整行的 flex 排布（保持单行流动），
+ * 同时保留 `data-testid="concept-tags"` 这个可判断的边界（概念为空/失败时整组消失）。
+ */
+.stock-tag-row__group {
+  display: contents;
+}

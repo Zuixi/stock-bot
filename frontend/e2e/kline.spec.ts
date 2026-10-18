@@ -106,18 +106,19 @@ test("复权开关：数据就绪后可切换前复权/不复权", async ({ page
 
 test("个股头部：8项指标网格含今开/昨收/换手率", async ({ page }) => {
   await page.goto("/stock/600519");
-  await expect(page.locator(".ant-descriptions").first()).toBeVisible();
+  // P1-3：头部由 antd `<Descriptions>` 换成报价条（`.quote-bar`）。锚点改用 data-* 语义选择器
+  // （`data-testid` / `data-metric`），不再依赖 AntD 的内部类名 —— 否则下一次改版又会红。
+  const bar = page.getByTestId("quote-bar");
+  await expect(bar).toBeVisible();
   for (const label of ["今开", "最高", "最低", "昨收", "成交量", "成交额", "换手率", "总市值"]) {
-    await expect(page.locator(".ant-descriptions-item-label").filter({ hasText: label })).toBeVisible();
+    await expect(bar.locator(`[data-metric="${label}"]`)).toBeVisible();
   }
 
   // 单位口径：600519 总市值 ≈1.6万亿(>1e12)、成交额为亿级——断言形状不断言精确数
-  const mcapCell = page.locator(".ant-descriptions-item").filter({ hasText: "总市值" });
-  await expect(mcapCell).toContainText(/万亿/);
-  const turnoverCell = page.locator(".ant-descriptions-item").filter({ hasText: "成交额" });
-  await expect(turnoverCell).toContainText(/亿/);
+  await expect(bar.locator('[data-metric="总市值"]')).toContainText(/万亿/);
+  await expect(bar.locator('[data-metric="成交额"]')).toContainText(/亿/);
 
   // "数据截至"绑定最新行情 trade_date（全站统一的「9月16日」口径），而不是
   // 名录 asof —— 后者是 ingest 时间戳，会渲染成 2026-05-08T15:09:16.546850Z
-  await expect(page.getByText(/数据截至/)).toContainText(/^数据截至 \d+月\d+日$/);
+  await expect(page.getByTestId("quote-asof")).toContainText(/^数据截至 \d+月\d+日$/);
 });

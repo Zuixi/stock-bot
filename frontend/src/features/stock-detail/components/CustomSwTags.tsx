@@ -8,12 +8,20 @@ import type { Exchange } from "@/shared/types";
 interface Props {
   exchange: Exchange;
   symbol: string;
+  /**
+   * 渲染形态：
+   * - `full`（默认）：标签前缀 + chips + 编辑入口，自成一块（历史行为，其他调用方不受影响）；
+   * - `controls`：**只出「编辑」按钮 + 弹窗**。chips 由 `StockTagRow` 与其它两组标签合并到
+   *   同一行统一渲染（F14：三块不再各占一行）。此形态仍用同一个 query key
+   *   `["stock-sw-tags", exchange, symbol]`，与 `StockTagRow` 共享缓存，**不新增请求**。
+   */
+  variant?: "full" | "controls";
 }
 
 const TAG_COLORS: Record<number, string> = { 2: "blue", 3: "purple" };
 const STALE_TIME = 5 * 60 * 1000;
 
-export function CustomSwTags({ exchange, symbol }: Props) {
+export function CustomSwTags({ exchange, symbol, variant = "full" }: Props) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
@@ -94,28 +102,37 @@ export function CustomSwTags({ exchange, symbol }: Props) {
     setSelectedCodes([...l2Values, ...codes]);
   };
 
-  if (isLoading) return <Spin size="small" />;
+  // `controls` 形态下加载中不需要骨架：chips 由 StockTagRow 渲染，这里只关心按钮
+  if (isLoading && variant === "full") return <Spin size="small" />;
+
+  const editButton = (
+    <Button type="link" size="small" icon={<EditOutlined />} onClick={handleOpen}>
+      编辑
+    </Button>
+  );
 
   return (
     <>
-      <Space size={4} wrap>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          自定义分类：
-        </Typography.Text>
-        {tags.length === 0 && (
+      {variant === "controls" ? (
+        editButton
+      ) : (
+        <Space size={4} wrap>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            暂无
+            自定义分类：
           </Typography.Text>
-        )}
-        {tags.map((t) => (
-          <Tag key={t.industryCode} color={TAG_COLORS[t.level] ?? "default"}>
-            {t.industryName}
-          </Tag>
-        ))}
-        <Button type="link" size="small" icon={<EditOutlined />} onClick={handleOpen}>
-          编辑
-        </Button>
-      </Space>
+          {tags.length === 0 && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              暂无
+            </Typography.Text>
+          )}
+          {tags.map((t) => (
+            <Tag key={t.industryCode} color={TAG_COLORS[t.level] ?? "default"}>
+              {t.industryName}
+            </Tag>
+          ))}
+          {editButton}
+        </Space>
+      )}
 
       <Modal
         title="编辑自定义申万分类"
