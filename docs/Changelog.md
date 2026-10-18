@@ -1,3 +1,17 @@
+## 2026-10-18 - **S9.7 Phase A 前端：pass 一键 / 净成本口径 / 基准三选一 / 比例 Wilson 区间**
+
+- **「我决定不动」**：`/me?tab=journal` 表单在「标的」旁一键把 `kind` 设为 `pass`（**仍要求 3 必填**）；
+  列表收益列对 `pass` 显示 `—（不计收益）`（不是 0），统计新增 `by_kind` 分栏
+- **净口径**（`net_outcome_pct` / `net_excess_pct`）：列表与复盘弹窗默认净，毛只作括注并标「毛/净（成本 12bp）」；
+  净字段缺省（后端 Phase A 未上线）时回退毛口径并标「净字段缺失，显示毛口径」
+- **基准**（`bet_type`）：表单三选一（方向/跑赢同行/市场级，**默认方向**）；复盘弹窗展示 `bench_basis_note`，
+  `bench_fallback=true` 时补「无行业归属，基准退化为沪深300」
+- **比例带区间**（`stats.share_ci`）：`4/6（95% 区间 30%–90%）`；`reviewed_n < 5` 仍只显示"样本不足"；
+  统计卡底部**原样**展示 `multiple_comparison_note`
+- 契约只做加法（`shared/api/journal.ts` 既有字段一个不删不改）；无新路由、`/market` 未动
+- e2e：`decisionJournal.spec.ts` 14 条（新增 5 条，全 mock）；回归 `watchlistTriage.spec.ts` 9 条 + `userIsolation.spec.ts` 2 条全绿
+- 涉及文件：`frontend/src/shared/api/journal.ts`、`frontend/src/features/journal/{kinds.ts(新),metrics.ts(新),components/{EntryForm,JournalPanel,ReviewModal}.tsx,components/JournalPanel.css}`、`frontend/e2e/decisionJournal.spec.ts`
+
 ## 2026-10-18 - **S9 决策日志与归因（P1）落地：3 行必填 + 自动快照 + 五类归因**
 
 owner 判断「用户最需要的是把历史经验沉淀出来、优化个人交易系统」——此前全库唯一的用户自由文本是

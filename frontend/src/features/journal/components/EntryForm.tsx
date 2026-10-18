@@ -14,11 +14,13 @@ import { useMutation } from "@tanstack/react-query";
 import type { Dayjs } from "dayjs";
 import {
   createJournalEntry,
+  type JournalBetType,
   type JournalEntryCreate,
   type JournalHorizon,
   type JournalInvalidationKind,
   type JournalKind,
 } from "@/shared/api/journal";
+import { KIND_META, KIND_ORDER } from "../kinds";
 
 const { Text } = Typography;
 
@@ -36,21 +38,35 @@ const { Text } = Typography;
  * 实际会让"用户根本没想过多久之后复核"这件事被一个默认值悄悄盖掉——而 S9 的全部价值
  * 就在"到期时被迫面对结果"，期限是用户自己定的契约。
  *
- * 选填两项（不带默认值之外的风险）：
+ * 选填项（不带默认值之外的风险）：
  * - `symbol`：留空 = 市场级判断（后端按沪深 300 对比，页面显示"市场"）；
- * - `kind`：归档标签（观察/买/卖/放弃/持有），**不参与任何计算**。
+ * - `kind`：归档标签（观察/买/卖/放弃/持有）：只用于统计分栏，不改变结果数字；
+ *   唯一的口径差别是 `pass` 计入判断、不计入收益（spec §S9.7.6）；
+ * - `bet_type`：赌的是什么（方向/跑赢同行/市场级，spec §S9.7.3），**默认「方向」**，
+ *   决定基准怎么选；创建时写进快照，事后不可改。
+ *
+ * 「标的」旁有「我决定不动」一键（spec §S9.7.6）：点它只把 `kind` 设为 `pass`，
+ * **不跳过 3 个必填**——放弃的判断同样要写清"当时看到了什么"和"什么情况说明想错了"，
+ * 否则"没做"这件事没有可复盘的依据。
  *
  * 创建成功后**不可修改**（接口层无 PATCH/PUT/DELETE），所以这里只做"记一笔"，
  * 不提供编辑态——这不是漏做，是 S9 的 append-only 纪律。
  */
 
-/** 归档标签（spec §S9.1 的五枚举；只用于用户自己分类）。 */
-const KIND_OPTIONS: { value: JournalKind; label: string }[] = [
-  { value: "watch", label: "观察" },
-  { value: "buy", label: "买" },
-  { value: "sell", label: "卖" },
-  { value: "pass", label: "放弃" },
-  { value: "hold", label: "持有" },
+/** 归档标签（spec §S9.1 的五枚举；`pass` = 我决定不动，只计入判断、不计入收益）。 */
+const KIND_OPTIONS: { value: JournalKind; label: string }[] = KIND_ORDER.map((value) => ({
+  value,
+  label: KIND_META[value].label,
+}));
+
+/**
+ * 赌的是什么（spec §S9.7.3）：决定基准怎么选，**默认「方向」**。
+ * 文案只描述基准口径，不评价结果（不出现判断词）。
+ */
+const BET_TYPE_OPTIONS: { value: JournalBetType; label: string }[] = [
+  { value: "direction", label: "方向" },
+  { value: "relative", label: "跑赢同行" },
+  { value: "market", label: "市场级" },
 ];
 
 /** 失效条件三形态（与后端 `invalidation.kind` 逐字一致）。 */
@@ -78,6 +94,7 @@ export function EntryForm({ onCreated }: EntryFormProps) {
   const [thesis, setThesis] = useState("");
   const [symbol, setSymbol] = useState("");
   const [kind, setKind] = useState<JournalKind>("watch");
+  const [betType, setBetType] = useState<JournalBetType>("direction");
   const [invKind, setInvKind] = useState<JournalInvalidationKind | undefined>(undefined);
   const [priceValue, setPriceValue] = useState<number | null>(null);
   const [dateValue, setDateValue] = useState<Dayjs | null>(null);
@@ -129,6 +146,7 @@ export function EntryForm({ onCreated }: EntryFormProps) {
     return {
       symbol: symbol.trim() ? symbol.trim() : undefined,
       kind,
+      bet_type: betType,
       thesis: thesis.trim(),
       invalidation,
       horizon_days: horizon,
@@ -221,20 +239,54 @@ export function EntryForm({ onCreated }: EntryFormProps) {
       </div>
 
       <div className="journal-form__row">
-        <Text className="journal-form__label">标的（选填，留空 = 市场级判断）</Text>
-        <Input
-          className="journal-form__symbol"
-          data-testid="journal-symbol"
-          value={symbol}
-          onChange={(event) => setSymbol(event.target.value)}
-          placeholder="例如 600519"
-          aria-label="标的代码"
-          maxLength={16}
-        />
+        <Text className="journal-form__label">赌的是什么（选填，默认「方向」；决定用哪个基准）</Text>
+        <Radio.Group
+          data-testid="journal-bet-type"
+          value={betType}
+          onChange={(event) => setBetType(event.target.value as JournalBetType)}
+        >
+          {BET_TYPE_OPTIONS.map((option) => (
+            <Radio.Button key={option.value} value={option.value}>
+              {option.label}
+            </Radio.Button>
+          ))}
+        </Radio.Group>
+        <Text className="journal-form__hint">
+          方向 → 所属行业成分股等权平均收益；跑赢同行 → 同行业等权；市场级 → 沪深300。
+          创建时选定，之后不可改。
+        </Text>
       </div>
 
       <div className="journal-form__row">
-        <Text className="journal-form__label">归档标签（选填，只用于你自己分类）</Text>
+        <Text className="journal-form__label">标的（选填，留空 = 市场级判断）</Text>
+        <Space wrap size={8}>
+          <Input
+            className="journal-form__symbol"
+            data-testid="journal-symbol"
+            value={symbol}
+            onChange={(event) => setSymbol(event.target.value)}
+            placeholder="例如 600519"
+            aria-label="标的代码"
+            maxLength={16}
+          />
+          {/* 一键把归档标签设为 `pass`；**不碰** 3 个必填，放弃的判断也要能复盘 */}
+          <Button data-testid="journal-pass" onClick={() => setKind("pass")}>
+            我决定不动
+          </Button>
+        </Space>
+        {kind === "pass" ? (
+          <Text className="journal-form__pass-hint" data-testid="journal-pass-hint">
+            已标为「我决定不动」：这条计入判断统计，不计入收益统计。
+          </Text>
+        ) : (
+          <Text className="journal-form__hint">
+            放弃的判断同样值得记一笔：点「我决定不动」，3 个必填照旧。
+          </Text>
+        )}
+      </div>
+
+      <div className="journal-form__row">
+        <Text className="journal-form__label">归档标签（选填，用于统计分栏）</Text>
         <Select
           className="journal-form__kind"
           data-testid="journal-kind"

@@ -9,29 +9,33 @@ import {
 } from "@/shared/api/journal";
 import { formatAsOfDate } from "@/shared/ui/date";
 import { VERDICT_META, VERDICT_ORDER } from "../verdicts";
+import {
+  GROSS_FALLBACK_LABEL,
+  formatSignedPct,
+  netBasisLabel,
+  netExcessOf,
+  netOutcomeOf,
+} from "../metrics";
 
 const { Text } = Typography;
 
 /**
- * 复盘弹窗：**自动结果只读 + 归因五选一必选**（spec §S9.4）。
+ * 复盘弹窗：**自动结果只读 + 归因五选一必选**（spec §S9.4；S9.7.2/§S9.7.3 的净口径与基准）。
  *
  * 三段固定次序：
- * 1. **系统算的**（只读）：结果 / 基准 / 超额 / 失效条件是否触发。这四个数是后端
+ * 1. **系统算的**（只读）：结果 / 基准 / 超额 / 失效条件。这四个数是后端
  *    `evaluate_entry` 用 `snapshot.price` 到 `due_on` 收盘算的，前端**不重算也不改写**；
  *    取不到（`null`）就显示 `—`，不补 0——"没有数据"和"结果正好是 0"是两件事。
- * 2. **用户选的**（必选）：五个归因之一。未选时「确认复盘」**禁用**（不是点了再报错）；
+ *    **结果与超额默认净口径**（`net_outcome_pct` / `net_excess_pct`，毛 − 12bp 往返成本），
+ *    毛口径只作为括注出现；净字段缺省（后端 Phase A 未上线）时回退毛口径并明确标注。
+ * 2. **基准口径**（只读）：`bench_basis_note` 原文（"同行业成分股等权平均收益，
+ *    不是指数行情"），`bench_fallback = true` 时补一句"无行业归属，基准退化为沪深300"。
+ * 3. **用户选的**（必选）：五个归因之一。未选时「确认复盘」**禁用**（不是点了再报错）；
  *    归因是用户自己的，产品不替他分类，也不给倾向性结论。
- * 3. **可选备注**（≤500 字）：用户自己的话，原样保存。
  *
  * 一次复盘只写一条（后端 `unique(entry_id)`，重复提交 409）——故弹窗提交成功即关闭，
  * 不做"再次复盘"的入口。
  */
-
-/** 百分比口径：保留符号（可以为负），取不到时 `—` 而不是 0。 */
-function formatSignedPct(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
-  return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
-}
 
 /** 失效条件是否触发：三态（true/false/未知），未知不编。 */
 function formatInvalidationHit(hit: boolean | null | undefined): string {
@@ -46,6 +50,20 @@ function formatInvalidationHit(hit: boolean | null | undefined): string {
  */
 function pickEvaluation(entry: JournalEntry): JournalEvaluation | null {
   return entry.evaluation ?? entry.review ?? null;
+}
+
+/** 基准的人话说明：`evaluation` 优先，其次创建时的快照（Phase A 可能只写在一处）。 */
+function benchBasisNoteOf(
+  entry: JournalEntry,
+  evaluation: JournalEvaluation | null
+): string | null {
+  return evaluation?.bench_basis_note ?? entry.snapshot?.bench_basis_note ?? null;
+}
+
+/** 基准是否退化为沪深300：`evaluation.bench_fallback` 优先，其次快照里的 `bench_spec`。 */
+function benchFallbackOf(entry: JournalEntry, evaluation: JournalEvaluation | null): boolean {
+  if (typeof evaluation?.bench_fallback === "boolean") return evaluation.bench_fallback;
+  return entry.snapshot?.bench_spec?.fallback === true;
 }
 
 interface ReviewModalProps {
@@ -84,6 +102,13 @@ export function ReviewModal({ entry, onClose }: ReviewModalProps) {
   const evaluation = entry ? pickEvaluation(entry) : null;
   const canConfirm = verdict !== undefined && !mutation.isPending;
 
+  // 净/毛口径：默认净；净字段缺省时回退毛（`basis = "gross"`）并明确标注。
+  const outcome = netOutcomeOf(evaluation);
+  const excess = netExcessOf(evaluation);
+  const usesNet = outcome.basis === "net" || excess.basis === "net";
+  const benchNote = entry ? benchBasisNoteOf(entry, evaluation) : null;
+  const benchFallback = entry ? benchFallbackOf(entry, evaluation) : false;
+
   const confirm = () => {
     if (!verdict || !entry) return;
     mutation.mutate({ id: entry.id, verdict, note: note.trim() ? note.trim() : undefined });
@@ -108,24 +133,47 @@ export function ReviewModal({ entry, onClose }: ReviewModalProps) {
           </p>
 
           {evaluation ? (
-            <dl className="journal-review__result" data-testid="journal-review-result">
-              <div className="journal-review__cell">
-                <dt>结果</dt>
-                <dd className="num">{formatSignedPct(evaluation.outcome_pct)}</dd>
-              </div>
-              <div className="journal-review__cell">
-                <dt>基准</dt>
-                <dd className="num">{formatSignedPct(evaluation.bench_pct)}</dd>
-              </div>
-              <div className="journal-review__cell">
-                <dt>超额</dt>
-                <dd className="num">{formatSignedPct(evaluation.excess_pct)}</dd>
-              </div>
-              <div className="journal-review__cell">
-                <dt>失效条件</dt>
-                <dd>{formatInvalidationHit(evaluation.invalidation_hit)}</dd>
-              </div>
-            </dl>
+            <>
+              <dl className="journal-review__result" data-testid="journal-review-result">
+                <div className="journal-review__cell">
+                  <dt>{outcome.basis === "net" ? "结果（净）" : "结果"}</dt>
+                  <dd className="num" data-testid="journal-review-outcome">
+                    {formatSignedPct(outcome.value)}
+                  </dd>
+                  {outcome.basis === "net" && (
+                    <dd className="journal-review__gross num">
+                      {`毛 ${formatSignedPct(evaluation.outcome_pct)}`}
+                    </dd>
+                  )}
+                </div>
+                <div className="journal-review__cell">
+                  <dt>基准</dt>
+                  <dd className="num" data-testid="journal-review-bench">
+                    {formatSignedPct(evaluation.bench_pct)}
+                  </dd>
+                </div>
+                <div className="journal-review__cell">
+                  <dt>{excess.basis === "net" ? "超额（净）" : "超额"}</dt>
+                  <dd className="num" data-testid="journal-review-excess">
+                    {formatSignedPct(excess.value)}
+                  </dd>
+                  {excess.basis === "net" && (
+                    <dd className="journal-review__gross num">
+                      {`毛 ${formatSignedPct(evaluation.excess_pct)}`}
+                    </dd>
+                  )}
+                </div>
+                <div className="journal-review__cell">
+                  <dt>失效条件</dt>
+                  <dd>{formatInvalidationHit(evaluation.invalidation_hit)}</dd>
+                </div>
+              </dl>
+              <p className="journal-review__basis" data-testid="journal-review-basis">
+                {usesNet
+                  ? `${netBasisLabel(null)}：结果与超额为净口径，括注为毛口径。`
+                  : `${netBasisLabel(null)}：${GROSS_FALLBACK_LABEL}。`}
+              </p>
+            </>
           ) : (
             // 没有自动结果时**不画 0**：让用户知道"这次没有可展示的结果"，
             // 而不是误以为"结果是 0%"。
@@ -136,6 +184,18 @@ export function ReviewModal({ entry, onClose }: ReviewModalProps) {
               message="这次没有可展示的自动结果"
               description="到期后的收盘数据暂不可用，不影响你记录自己的归因。"
             />
+          )}
+
+          {/* 基准必须匹配「赌的是什么」（spec §S9.7.3）：说明是后端写的人话，原样上屏。 */}
+          {benchNote && (
+            <p className="journal-review__bench" data-testid="journal-bench-basis-note">
+              {benchNote}
+            </p>
+          )}
+          {benchFallback && (
+            <p className="journal-review__bench" data-testid="journal-bench-fallback">
+              无行业归属，基准退化为沪深300。
+            </p>
           )}
 
           <div className="journal-review__section">

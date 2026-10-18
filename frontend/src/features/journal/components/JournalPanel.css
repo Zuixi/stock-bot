@@ -139,6 +139,19 @@
   color: var(--text-primary);
 }
 
+/* 收益列：数值 + 口径小字（`pass` 只有"不计收益"，没有数字） */
+.journal-entry__outcome {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+}
+
+.journal-entry__basis {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 /* thesis 只显示第一行：全文太长会把列表读成文章 */
 .journal-entry__thesis {
   margin: 0 0 4px;
@@ -258,6 +271,13 @@
   color: var(--journal-due);
 }
 
+/* 「我决定不动」生效后的确认：让用户知道 kind 已经被改成了 pass */
+.journal-form__pass-hint {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--journal-due);
+}
+
 /* ── 统计卡 ───────────────────────────────────────────── */
 .journal-stats {
   max-width: 620px;
@@ -324,6 +344,58 @@
   color: var(--text-secondary);
 }
 
+/* 平均超额的口径后缀（净/毛口径） */
+.journal-stats__basis {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+/* 净字段缺失、回退毛口径时的显式标注 */
+.journal-stats__basis-note {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* 归档标签分栏（`by_kind`）：`pass` 与其它标签一样列条数，但不进收益 */
+.journal-stats__kinds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.journal-stats__kind {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.journal-stats__kind-label {
+  color: var(--text-secondary);
+}
+
+.journal-stats__kind-hint {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+/* 底部固定标注：未做多重比较校正（后端给的原话，原样展示） */
+.journal-stats__note {
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
 /* ── 复盘弹窗 ─────────────────────────────────────────── */
 .journal-review__lead {
   margin: 0 0 10px;
@@ -357,6 +429,23 @@
   font-size: 13.5px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+/* 净口径为主值时，毛口径作为括注（小一号、不加粗） */
+.journal-review__cell .journal-review__gross {
+  margin-top: 1px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+/* 口径与基准说明：小字、只陈述事实（净/毛、基准是什么），不做评价 */
+.journal-review__basis,
+.journal-review__bench {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
 }
 
 .journal-review__no-result {

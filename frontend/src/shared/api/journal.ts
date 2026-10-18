@@ -37,6 +37,17 @@ export type JournalInvalidationKind = "price_below" | "price_above" | "date_only
 /** 归档标签：只用于用户自己分类，**不参与任何计算**（spec §S9.1）。 */
 export type JournalKind = "watch" | "buy" | "sell" | "pass" | "hold";
 
+/**
+ * 赌的是什么（`bet_type`，spec §S9.7.3）：基准必须匹配赌注类型，创建时选定、事后不可改。
+ *
+ * - `direction`（默认）：赌这个行业/标的会涨 → 所属申万一级**成分股等权平均收益**；
+ * - `relative`：赌这只**跑赢同行** → 同行业等权平均收益；
+ * - `market`：市场级判断（无标的）→ 沪深300。
+ *
+ * Phase A 的后端字段尚未上线时，请求体省略它即可（后端按默认 `direction` 处理）。
+ */
+export type JournalBetType = "direction" | "relative" | "market";
+
 /** 观察期限三选一（spec §S9.2 的 `check (horizon_days in (7,30,90))`）。 */
 export type JournalHorizon = 7 | 30 | 90;
 
@@ -57,6 +68,22 @@ export interface JournalSnapshotEvent {
 }
 
 /**
+ * 创建时固化的基准（`snapshot.bench_spec`，spec §S9.7.3；**创建时写死、事后不可改**）。
+ *
+ * 全部字段可选：后端 Phase A 未上线时快照里就没有这一块，页面必须优雅退化
+ * （不显示基准说明，而不是显示 "undefined"）。
+ */
+export interface JournalBenchSpec {
+  bet_type?: JournalBetType | null;
+  /** 基准种类（如 `industry_equal_weight`），前端只展示不解释。 */
+  kind?: string | null;
+  industry_code?: string | null;
+  industry_name?: string | null;
+  /** 无行业归属 → 基准退化为沪深300 时为 `true`。 */
+  fallback?: boolean | null;
+}
+
+/**
  * 创建时的市场快照（`snapshot` jsonb，spec §S9.3 的字段表；**字段名由契约固定**）。
  *
  * 纪律：任一来源缺数 → 该字段 `null`（不是 0），原因在 `missing_reason` 里。
@@ -72,14 +99,31 @@ export interface JournalSnapshot {
   valuation_pct?: number | null;
   /** 缺数原因（字段名 → 原因）；`null`/缺省 = 没有缺数记录。 */
   missing_reason?: Record<string, string> | string | null;
+  /** 创建时固化的基准（spec §S9.7.3）；Phase A 未上线时缺省。 */
+  bench_spec?: JournalBenchSpec | null;
+  /** 基准口径的人话说明（创建时也写一份）；Phase A 未上线时缺省。 */
+  bench_basis_note?: string | null;
 }
 
-/** 自动结果（到期后、复盘前即可展示；全部由后端 `evaluate_entry` 算）。 */
+/**
+ * 自动结果（到期后、复盘前即可展示；全部由后端 `evaluate_entry` 算）。
+ *
+ * 净口径四字段（spec §S9.7.2/§S9.7.3）都是**可选**的：后端 Phase A 未上线时只有毛字段，
+ * 页面回退毛口径并明确标注"毛"，绝不把毛当净、也绝不补 0。
+ */
 export interface JournalEvaluation {
   outcome_pct: number | null;
   bench_pct: number | null;
   excess_pct: number | null;
   invalidation_hit: boolean | null;
+  /** 净收益 = 毛收益 − 12bp 往返成本（spec §S9.7.2）。 */
+  net_outcome_pct?: number | null;
+  /** 净超额 = 净收益 − 基准（spec §S9.7.2）。 */
+  net_excess_pct?: number | null;
+  /** 基准的人话说明（spec §S9.7.3）。 */
+  bench_basis_note?: string | null;
+  /** 无行业归属、基准退化为沪深300 时为 `true`。 */
+  bench_fallback?: boolean | null;
 }
 
 /** 一条复盘（append-only，`unique(entry_id)`：一个条目至多一条）。 */
@@ -114,6 +158,8 @@ export interface JournalEntry {
   evaluation?: JournalEvaluation | null;
   /** 已复盘才有。 */
   review?: JournalReview | null;
+  /** 创建时选定的赌注类型（spec §S9.7.3）；Phase A 未上线时缺省。 */
+  bet_type?: JournalBetType | null;
 }
 
 export interface JournalListResponse {
@@ -124,6 +170,8 @@ export interface JournalListResponse {
 export interface JournalEntryCreate {
   symbol?: string;
   kind?: JournalKind;
+  /** 赌注类型（spec §S9.7.3，默认 `direction`）；后端 Phase A 未上线时多传它的后果见契约。 */
+  bet_type?: JournalBetType;
   thesis: string;
   invalidation: JournalInvalidation;
   horizon_days: JournalHorizon;
@@ -136,14 +184,36 @@ export interface JournalReviewPayload {
 }
 
 /**
- * 统计卡载荷（spec §S9.4）。
+ * 一个比例的 Wilson 95% 区间（spec §S9.7.7）：`4/6（95% 区间 30%–90%）`。
+ * `ci_low` / `ci_high` 是 0–1 的小数；`n` 是**该比例的**样本数（不一定等于 `reviewed_n`）。
+ */
+export interface JournalShareCI {
+  n: number;
+  successes: number;
+  ci_low: number;
+  ci_high: number;
+}
+
+/**
+ * 统计卡载荷（spec §S9.4，S9.7 追加项见下）。
  *
  * - `n` / `reviewed_n`：总条数 / 已复盘条数；
  * - `by_verdict`：五类归因各自的条数（合计 = `reviewed_n`）；
  * - `avg_excess_pct` / `discipline_break_share`：无样本时是 **`null`**（不是 0），
  *   页面显示 `—`；
  * - `by_attribution` 是后端可能一并给出的同一组数的另一个名字，前端**不**依赖它。
+ *
+ * S9.7 追加（全部**可选**：Phase A 未上线时页面按毛口径/旧形态退化）：
+ * - `by_kind`：五种归档标签的条数（合计 = `n`；`pass` = 我决定不动，只计入判断）；
+ * - `avg_net_excess_pct`：净口径平均超额（默认展示它，毛字段只做退化兜底）；
+ * - `share_ci`：比例一律带 Wilson 区间（键见 `JournalShareCIKey`）；
+ * - `net_cost_bps`：净口径用的往返成本（展示"毛/净（成本 Nbp）"）；
+ * - `multiple_comparison_note`：固定标注，前端**原样**展示，不改写；
+ * - `sample_sufficient` / `min_reviewed_for_share`：后端的样本判定，前端以 `reviewed_n < 5`
+ *   为准（两者不一致时仍守住"不显示占比"这条底线）。
  */
+export type JournalShareCIKey = "discipline_break" | "win";
+
 export interface JournalStats {
   n: number;
   reviewed_n: number;
@@ -151,6 +221,18 @@ export interface JournalStats {
   by_attribution?: Partial<Record<JournalVerdict, number>> | null;
   avg_excess_pct: number | null;
   discipline_break_share: number | null;
+  /** 五种归档标签各自条数（spec §S9.7.6）；Phase A 未上线时缺省。 */
+  by_kind?: Partial<Record<JournalKind, number>> | null;
+  /** 净口径平均超额（spec §S9.7.2）；缺省时回退 `avg_excess_pct`。 */
+  avg_net_excess_pct?: number | null;
+  /** 比例 + Wilson 区间（spec §S9.7.7）；Phase A 未上线时缺省。 */
+  share_ci?: Partial<Record<JournalShareCIKey, JournalShareCI>> | null;
+  /** 净口径的往返成本（bp）；缺省按契约常量 12 展示。 */
+  net_cost_bps?: number | null;
+  /** 「未做多重比较校正」固定标注（spec §S9.7.7），原样展示。 */
+  multiple_comparison_note?: string | null;
+  sample_sufficient?: boolean | null;
+  min_reviewed_for_share?: number | null;
 }
 
 /** 按状态取列表（三种状态各一次请求；页面并行取三份）。 */

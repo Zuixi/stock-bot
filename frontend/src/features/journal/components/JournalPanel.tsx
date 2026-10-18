@@ -11,6 +11,16 @@ import { formatAsOfDate } from "@/shared/ui/date";
 import { EntryForm } from "./EntryForm";
 import { ReviewModal } from "./ReviewModal";
 import { VERDICT_META, VERDICT_ORDER, verdictLabel } from "../verdicts";
+import { KIND_META, KIND_ORDER, kindCountsOutcome } from "../kinds";
+import {
+  GROSS_FALLBACK_LABEL,
+  formatShare,
+  formatShareOrSample,
+  formatSignedPct,
+  netBasisLabel,
+  netExcessOf,
+  pickBasisValue,
+} from "../metrics";
 import "./JournalPanel.css";
 
 const { Text } = Typography;
@@ -29,6 +39,14 @@ const { Text } = Typography;
  * 统计卡的口径：`reviewed_n < 5` 时**只说"样本不足"**、不给任何占比（4 条里的 50%
  * 是噪声，读起来却像结论）；`null` 一律显示 `—` 而不是 0。
  *
+ * S9.7 的三处口径（都走 `metrics.ts` 的单一实现）：
+ * - **净成本**（§S9.7.2）：收益/超额默认净口径，毛只在括注里出现；净字段缺省时回退毛
+ *   并明确标"净字段缺失"，绝不把毛当净；
+ * - **`pass` 不计收益**（§S9.7.6）：「我决定不动」的条目收益列是 `—（不计收益）`，
+ *   不是 0（0 会被读成"这次收益正好是 0"）；
+ * - **比例带区间**（§S9.7.7）：有 `share_ci` 时写 `4/6（95% 区间 30%–90%）`，
+ *   `n < 5` 只写"样本不足"。
+ *
  * 分块（不新增路由，挂在 `/me` 的 tab 内）：
  * - 顶部一行：「待复盘 N 条」（N = `due` 条数，页面角标语义，v1 不做推送）；
  * - 「记一笔」表单；
@@ -36,18 +54,6 @@ const { Text } = Typography;
  * - 「已复盘」= `reviewed`（每条带归因标签、没有编辑/删除入口）+ 统计卡；
  * - 页脚固定免责（逐字照 spec §S9.5）。
  */
-
-/** 百分比口径：保留符号（可以为负），取不到时 `—` 而不是 0。 */
-function formatSignedPct(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
-  return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
-}
-
-/** 占比（后端给 0–1 的小数）：`0.375` → `37.5%`；`null` → `—`。 */
-function formatShare(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
-  return `${(value * 100).toFixed(1)}%`;
-}
 
 /** thesis 的第一行（列表行只展示一行，全文留在条目里）。 */
 function thesisFirstLine(thesis: string): string {
@@ -81,6 +87,42 @@ function snapshotLine(entry: JournalEntry): string {
 /** 标的列：`null` = 市场级判断。 */
 function symbolText(entry: JournalEntry): string {
   return entry.symbol ?? "市场";
+}
+
+/**
+ * 列表行的**收益列**（口径单一入口：`metrics.ts`）。
+ *
+ * - `pass`（我决定不动）：`—（不计收益）`——`pass` 计入判断、不计入收益（spec §S9.7.6），
+ *   这里**不能**显示 0（0 会被读成"这次收益正好是 0"，是另一种假话）；
+ * - 其余已复盘条目：默认净超额（`net_excess_pct`），净字段缺省时回退毛超额并标注
+ *   「净字段缺失，显示毛口径」；净口径下用小字标「毛/净（成本 12bp）」；
+ * - 未复盘（`open`/`due`）：不显示收益列——那时还没有到期结果（由复盘弹窗展示）。
+ */
+function EntryOutcome({ entry }: { entry: JournalEntry }) {
+  if (!kindCountsOutcome(entry.kind)) {
+    return (
+      <span className="journal-entry__outcome" data-testid="journal-entry-outcome">
+        <span className="journal-entry__excess num">{"收益 —（不计收益）"}</span>
+      </span>
+    );
+  }
+  if (entry.status !== "reviewed") return null;
+  const evaluation = entry.evaluation ?? entry.review ?? null;
+  const excess = netExcessOf(evaluation);
+  return (
+    <span className="journal-entry__outcome" data-testid="journal-entry-outcome">
+      <span className="journal-entry__excess num" data-testid="journal-reviewed-excess">
+        {`超额 ${formatSignedPct(excess.value)}`}
+      </span>
+      <span className="journal-entry__basis">
+        {excess.basis === "net"
+          ? netBasisLabel(null)
+          : excess.basis === "gross"
+            ? GROSS_FALLBACK_LABEL
+            : null}
+      </span>
+    </span>
+  );
 }
 
 /** 一条记录（`due` / `open` / `reviewed` 共用骨架，差别只在标签与操作区）。 */
@@ -118,11 +160,7 @@ function EntryRow({
         )}
         <span className="journal-entry__symbol num">{symbolText(entry)}</span>
         <span className="journal-entry__due-on">{`到期 ${formatAsOfDate(entry.due_on)}`}</span>
-        {reviewed && (
-          <span className="journal-entry__excess num" data-testid="journal-reviewed-excess">
-            {`超额 ${formatSignedPct(review?.excess_pct)}`}
-          </span>
-        )}
+        <EntryOutcome entry={entry} />
       </div>
 
       <p className="journal-entry__thesis">{thesisFirstLine(entry.thesis)}</p>
@@ -149,16 +187,23 @@ function EntryRow({
 }
 
 /**
- * 统计卡（spec §S9.4/§S9.5）。
+ * 统计卡（spec §S9.4/§S9.5 + §S9.7.2/§S9.7.6/§S9.7.7）。
  *
  * - `reviewed_n < 5` → 只写「样本不足（<5 条）」，**不显示任何占比**；
- * - 样本够 → 五类归因各自的条数与占比、平均超额、没按计划执行的占比；
+ * - 样本够 → 五类归因各自的条数与占比、按归档标签的条数（`by_kind`）、平均超额（默认净）、
+ *   没按计划执行的占比；比例有 `share_ci` 时写 `4/6（95% 区间 30%–90%）`，
+ *   该比例 `n < 5` 时写"样本不足"（不给点估计）；
+ * - 底部原样展示 `multiple_comparison_note`（后端给的那句话，前端不改写）；
  * - 任何 `null` → `—`（"没有数据"不是"0"）。
  */
 function StatsCard({ stats }: { stats: JournalStats }) {
   const insufficient = stats.reviewed_n < 5;
   const counts = stats.by_verdict ?? {};
   const reviewedN = stats.reviewed_n;
+  const byKind = stats.by_kind ?? null;
+  const shareCi = stats.share_ci ?? null;
+  // 平均超额默认净口径；Phase A 未上线（缺 `avg_net_excess_pct`）时回退毛并标注。
+  const avgExcess = pickBasisValue(stats.avg_excess_pct, stats.avg_net_excess_pct);
 
   return (
     <div className="journal-stats" data-testid="journal-stats">
@@ -191,14 +236,50 @@ function StatsCard({ stats }: { stats: JournalStats }) {
           <div className="journal-stats__foot">
             <span>
               平均超额
-              <span className="num">{` ${formatSignedPct(stats.avg_excess_pct)}`}</span>
+              <span className="journal-stats__basis">
+                {avgExcess.basis === "net" ? "（净）" : avgExcess.basis === "gross" ? "（毛口径）" : ""}
+              </span>
+              <span className="num">{` ${formatSignedPct(avgExcess.value)}`}</span>
             </span>
-            <span>
+            <span data-testid="journal-stats-discipline">
               没按计划执行占比
-              <span className="num">{` ${formatShare(stats.discipline_break_share)}`}</span>
+              <span className="num">
+                {` ${formatShareOrSample(shareCi?.discipline_break, stats.discipline_break_share)}`}
+              </span>
             </span>
+            {shareCi?.win && (
+              <span data-testid="journal-stats-win">
+                净超额为正
+                <span className="num">{` ${formatShareOrSample(shareCi.win, null)}`}</span>
+              </span>
+            )}
           </div>
+          {avgExcess.basis === "gross" && (
+            <p className="journal-stats__basis-note" data-testid="journal-stats-basis-note">
+              {GROSS_FALLBACK_LABEL}
+            </p>
+          )}
         </>
+      )}
+
+      {byKind && (
+        <div className="journal-stats__kinds" data-testid="journal-stats-by-kind">
+          {KIND_ORDER.map((key) => (
+            <span className="journal-stats__kind" key={key}>
+              <span className="journal-stats__kind-label">{KIND_META[key].label}</span>
+              <span className="journal-stats__kind-count num">{byKind[key] ?? 0}</span>
+            </span>
+          ))}
+          <span className="journal-stats__kind-hint">
+            「放弃」= 我决定不动：计入判断，不计入收益
+          </span>
+        </div>
+      )}
+
+      {stats.multiple_comparison_note && (
+        <p className="journal-stats__note" data-testid="journal-stats-multiple-note">
+          {stats.multiple_comparison_note}
+        </p>
       )}
     </div>
   );

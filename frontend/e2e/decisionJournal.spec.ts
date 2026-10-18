@@ -51,8 +51,28 @@ interface FixtureReview {
   bench_pct: number | null;
   excess_pct: number | null;
   invalidation_hit: boolean | null;
+  /** S9.7.2：净口径（毛 − 12bp）；Phase A 未上线时可缺省。 */
+  net_outcome_pct?: number | null;
+  net_excess_pct?: number | null;
   verdict: string;
   note: string | null;
+}
+
+/**
+ * 自动结果（契约见 `shared/api/journal.ts` 的 `JournalEvaluation`）。
+ *
+ * S9.7 的四个字段刻意都是**可选**：Phase A 的后端可能只给毛口径，页面必须优雅退化，
+ * 所以"净字段缺省"是这里的一等公民（否则 e2e 只能验证新后端，一遇到旧响应就白屏）。
+ */
+interface FixtureEvaluation {
+  outcome_pct: number | null;
+  bench_pct: number | null;
+  excess_pct: number | null;
+  invalidation_hit: boolean | null;
+  net_outcome_pct?: number | null;
+  net_excess_pct?: number | null;
+  bench_basis_note?: string | null;
+  bench_fallback?: boolean | null;
 }
 
 interface FixtureEntry {
@@ -66,13 +86,15 @@ interface FixtureEntry {
   created_at: string;
   due_on: string;
   status: "open" | "due" | "reviewed";
-  /** 自动结果（到期后才有；契约见 `shared/api/journal.ts` 的 `JournalEvaluation`）。 */
-  evaluation: {
-    outcome_pct: number | null;
-    bench_pct: number | null;
-    excess_pct: number | null;
-    invalidation_hit: boolean | null;
+  /** S9.7.3：创建时固化的基准（Phase A 未上线时可缺省）。 */
+  snapshot?: {
+    bench_spec?: { bet_type?: string; fallback?: boolean } | null;
+    bench_basis_note?: string | null;
   } | null;
+  /** S9.7.3：赌注类型（Phase A 未上线时可缺省）。 */
+  bet_type?: string | null;
+  /** 自动结果（到期后才有；契约见 `shared/api/journal.ts` 的 `JournalEvaluation`）。 */
+  evaluation: FixtureEvaluation | null;
   review: FixtureReview | null;
 }
 
@@ -82,6 +104,15 @@ interface FixtureStats {
   by_verdict: Record<string, number>;
   avg_excess_pct: number | null;
   discipline_break_share: number | null;
+  /** S9.7.6：五种归档标签各自条数（合计 = n）。 */
+  by_kind?: Record<string, number> | null;
+  /** S9.7.2：净口径平均超额。 */
+  avg_net_excess_pct?: number | null;
+  /** S9.7.7：比例 + Wilson 95% 区间。 */
+  share_ci?: Record<string, { n: number; successes: number; ci_low: number; ci_high: number }> | null;
+  net_cost_bps?: number | null;
+  /** S9.7.7：固定标注（页面原样展示）。 */
+  multiple_comparison_note?: string | null;
 }
 
 /**
@@ -139,6 +170,107 @@ const STATS_INSUFFICIENT: FixtureStats = {
   discipline_break_share: 0.333,
 };
 
+/**
+ * 净口径 + 基准说明的到期条目（S9.7.2/§S9.7.3）：净字段齐备，基准是行业等权。
+ * 毛 −3.50% / 净 −3.62%（差 12bp）；超额毛 −2.50% / 净 −2.62%。
+ */
+const NET_DUE_ENTRY: FixtureEntry = {
+  ...DUE_ENTRY,
+  id: 103,
+  bet_type: "direction",
+  snapshot: {
+    bench_spec: { bet_type: "direction", fallback: false },
+    bench_basis_note: "基准=所属申万一级成分股等权平均收益（非指数行情）",
+  },
+  evaluation: {
+    outcome_pct: -3.5,
+    bench_pct: -1,
+    excess_pct: -2.5,
+    invalidation_hit: true,
+    net_outcome_pct: -3.62,
+    net_excess_pct: -2.62,
+    bench_basis_note: "基准=所属申万一级成分股等权平均收益（非指数行情）",
+    bench_fallback: false,
+  },
+};
+
+/** 无行业归属 → 基准退化为沪深300（`bench_fallback = true`）的市场级条目。 */
+const FALLBACK_DUE_ENTRY: FixtureEntry = {
+  ...DUE_ENTRY,
+  id: 104,
+  symbol: null,
+  bet_type: "market",
+  thesis: "市场级：连续缩量，等下一次放量再说",
+  snapshot: {
+    bench_spec: { bet_type: "market", fallback: true },
+    bench_basis_note: "基准=沪深300 指数收益",
+  },
+  evaluation: {
+    outcome_pct: 2,
+    bench_pct: 1.8,
+    excess_pct: 0.2,
+    invalidation_hit: false,
+    net_outcome_pct: 1.88,
+    net_excess_pct: 0.08,
+    bench_basis_note: "基准=沪深300 指数收益",
+    bench_fallback: true,
+  },
+};
+
+/** 净口径已复盘条目（非 pass）：列表收益列默认净超额 2.18%，不是毛 2.30%。 */
+const NET_REVIEWED_ENTRY: FixtureEntry = {
+  ...REVIEWED_ENTRY,
+  id: 105,
+  symbol: "000001",
+  kind: "watch",
+  thesis: "净口径样例：到期结果按净成本展示",
+  bet_type: "relative",
+  evaluation: {
+    outcome_pct: 3.5,
+    bench_pct: 1.2,
+    excess_pct: 2.3,
+    invalidation_hit: false,
+    net_outcome_pct: 3.38,
+    net_excess_pct: 2.18,
+    bench_basis_note: "基准=所属申万一级成分股等权平均收益（非指数行情）",
+    bench_fallback: false,
+  },
+  review: {
+    id: 9005,
+    entry_id: 105,
+    reviewed_at: "2026-10-11T01:00:00Z",
+    outcome_pct: 3.5,
+    bench_pct: 1.2,
+    excess_pct: 2.3,
+    invalidation_hit: false,
+    net_outcome_pct: 3.38,
+    net_excess_pct: 2.18,
+    verdict: "right_for_wrong_reason",
+    note: null,
+  },
+};
+
+/** 只有毛口径的已复盘条目：净字段缺省（Phase A 未上线）时必须标注"毛口径"。 */
+const GROSS_ONLY_REVIEWED_ENTRY: FixtureEntry = {
+  ...REVIEWED_ENTRY,
+  id: 106,
+  symbol: "600036",
+  kind: "watch",
+  thesis: "净字段缺省时回退毛口径",
+  evaluation: { outcome_pct: -1, bench_pct: 0.2, excess_pct: -1.2, invalidation_hit: true },
+  review: {
+    id: 9006,
+    entry_id: 106,
+    reviewed_at: "2026-10-11T01:00:00Z",
+    outcome_pct: -1,
+    bench_pct: 0.2,
+    excess_pct: -1.2,
+    invalidation_hit: true,
+    verdict: "timing_wrong",
+    note: null,
+  },
+};
+
 /** 样本够（`reviewed_n >= 5`）：五类条数 + 占比 + 平均超额都可见。 */
 const STATS_ENOUGH: FixtureStats = {
   n: 10,
@@ -146,6 +278,39 @@ const STATS_ENOUGH: FixtureStats = {
   by_verdict: { thesis_wrong: 2, timing_wrong: 1, discipline_break: 3, right_for_wrong_reason: 1, luck: 1 },
   avg_excess_pct: 0.42,
   discipline_break_share: 0.375,
+};
+
+/**
+ * 比例带 Wilson 区间（spec §S9.7.7）：`share_ci.win = {4/6, [30%, 90%]}` 必须原样写成
+ * `4/6（95% 区间 30%–90%）`；`by_kind` 与 `multiple_comparison_note` 也一起给。
+ */
+const STATS_WITH_CI: FixtureStats = {
+  n: 6,
+  reviewed_n: 6,
+  by_verdict: { thesis_wrong: 2, timing_wrong: 1, discipline_break: 2, right_for_wrong_reason: 1, luck: 0 },
+  avg_excess_pct: -2.4,
+  discipline_break_share: 0.333,
+  by_kind: { watch: 3, buy: 2, sell: 0, pass: 1, hold: 0 },
+  avg_net_excess_pct: -2.52,
+  share_ci: {
+    discipline_break: { n: 6, successes: 3, ci_low: 0.19, ci_high: 0.81 },
+    win: { n: 6, successes: 4, ci_low: 0.3, ci_high: 0.9 },
+  },
+  net_cost_bps: 12,
+  multiple_comparison_note: "未做多重比较校正：按 45 个桶检索时总会有桶看起来显著",
+};
+
+/** `reviewed_n < 5` 但后端仍给了 `share_ci`：页面只许写"样本不足"，不给区间也不给百分比。 */
+const STATS_SMALL_WITH_CI: FixtureStats = {
+  n: 4,
+  reviewed_n: 4,
+  by_verdict: { thesis_wrong: 2, luck: 2 },
+  avg_excess_pct: 0.5,
+  discipline_break_share: 0.25,
+  share_ci: {
+    discipline_break: { n: 4, successes: 1, ci_low: 0.05, ci_high: 0.72 },
+    win: { n: 4, successes: 2, ci_low: 0.15, ci_high: 0.85 },
+  },
 };
 
 interface JournalStore {
@@ -190,6 +355,9 @@ async function mockJournal(page: Page, store: JournalStore) {
         bench_pct: entry?.evaluation?.bench_pct ?? null,
         excess_pct: entry?.evaluation?.excess_pct ?? null,
         invalidation_hit: entry?.evaluation?.invalidation_hit ?? null,
+        // 复盘响应与 `evaluation` 同形：净口径字段一并带过去（S9.7.2）
+        net_outcome_pct: entry?.evaluation?.net_outcome_pct ?? null,
+        net_excess_pct: entry?.evaluation?.net_excess_pct ?? null,
         verdict: body.verdict,
         note: body.note ?? null,
       };
@@ -216,6 +384,8 @@ async function mockJournal(page: Page, store: JournalStore) {
         created_at: "2026-10-18T09:00:00Z",
         due_on: "2026-11-17",
         status: "open",
+        // 创建响应里的 `bet_type` 跟着请求走；快照由后端固化（Phase A 未上线时缺省）
+        bet_type: body.bet_type ?? null,
         evaluation: null,
         review: null,
       };
@@ -265,6 +435,21 @@ async function pickHorizon(page: Page, label: string) {
 async function pickInvalidationKind(page: Page, label: string) {
   await page.getByTestId("journal-inv-kind").click();
   await page.locator(".ant-select-item-option", { hasText: label }).first().click();
+}
+
+/**
+ * 表单里选「赌的是什么」（S9.7.3）。
+ *
+ * 与期限同理：AntD 的 `Radio.Button` 把真 `<input>` 渲染成透明覆盖层，`check()` 会
+ * 判不可见；用户点的是可见的 label 外壳。范围限定在 `journal-bet-type` 里，
+ * 避免和「方向 → 所属行业…」那句 hint 撞文本。
+ */
+async function pickBetType(page: Page, label: string) {
+  await page
+    .getByTestId("journal-bet-type")
+    .locator(".ant-radio-button-wrapper", { hasText: label })
+    .first()
+    .click();
 }
 
 test.describe("决策日志（/me?tab=journal）", () => {
@@ -342,6 +527,8 @@ test.describe("决策日志（/me?tab=journal）", () => {
     expect(store.lastCreate).toMatchObject({
       symbol: "600519",
       kind: "watch",
+      // S9.7.3：默认「方向」，创建时随载荷提交
+      bet_type: "direction",
       thesis: "渠道库存回到常态",
       invalidation: { kind: "price_below", value: 1500 },
       horizon_days: 30,
@@ -448,6 +635,132 @@ test.describe("决策日志（/me?tab=journal）", () => {
     await expect(card).toContainText("+0.42%");
     await expect(card).toContainText("没按计划执行占比");
     await expect(card).toContainText("37.5%");
+  });
+
+  test("pass 一键：点「我决定不动」把 kind 设为 pass，收益列显示「—（不计收益）」", async ({
+    page,
+  }) => {
+    const store = await openJournal(page, { entries: [] });
+
+    // 一键按钮**不跳过** 3 个必填：空表单时按钮可点，但提交仍禁用
+    await page.getByTestId("journal-pass").click();
+    await expect(page.getByTestId("journal-pass-hint")).toContainText("我决定不动");
+    await expect(page.getByTestId("journal-submit")).toBeDisabled();
+    await expect(page.getByTestId("journal-missing")).toContainText("判断依据");
+
+    await page.getByTestId("journal-thesis").fill("没有把握，先记下不动的理由");
+    await pickInvalidationKind(page, "跌破某价格");
+    await page.getByTestId("journal-inv-price").fill("1500");
+    await pickHorizon(page, "30 天");
+    await page.getByTestId("journal-submit").click();
+
+    await expect(page.getByTestId("journal-open-item")).toHaveCount(1);
+    const row = page.getByTestId("journal-open-item").first();
+    // pass 计入判断、不计入收益：收益列写"不计收益"，**不能**是 0.00%
+    await expect(row.getByTestId("journal-entry-outcome")).toHaveText("收益 —（不计收益）");
+    await expect(row).not.toContainText("0.00%");
+
+    expect(store.lastCreate).toMatchObject({ kind: "pass", bet_type: "direction" });
+  });
+
+  test("净口径：列表与复盘弹窗默认净，并标「毛/净（成本 12bp）」", async ({ page }) => {
+    await openJournal(page, {
+      entries: [NET_DUE_ENTRY, NET_REVIEWED_ENTRY, GROSS_ONLY_REVIEWED_ENTRY],
+    });
+
+    // 列表默认净超额（+2.18%），毛 +2.30% 不单独上屏；口径小字跟着数值走
+    const reviewed = page.getByTestId("journal-reviewed-item").first();
+    await expect(reviewed.getByTestId("journal-reviewed-excess")).toContainText("+2.18%");
+    await expect(reviewed.getByTestId("journal-entry-outcome")).toContainText(
+      "毛/净（成本 12bp）"
+    );
+    await expect(reviewed).not.toContainText("+2.30%");
+
+    // 净字段缺省（Phase A 未上线）：回退毛口径并明确标注，不假装是净
+    const grossOnly = page.getByTestId("journal-reviewed-item").nth(1);
+    await expect(grossOnly.getByTestId("journal-reviewed-excess")).toContainText("-1.20%");
+    await expect(grossOnly.getByTestId("journal-entry-outcome")).toContainText(
+      "净字段缺失，显示毛口径"
+    );
+
+    // 复盘弹窗：结果/超额主值是净，毛只作括注
+    await page.getByTestId("journal-review-open").first().click();
+    const modal = page.getByTestId("journal-review-modal");
+    await expect(modal.getByTestId("journal-review-outcome")).toHaveText("-3.62%");
+    await expect(modal.getByTestId("journal-review-excess")).toHaveText("-2.62%");
+    await expect(modal.getByTestId("journal-review-result")).toContainText("毛 -3.50%");
+    await expect(modal.getByTestId("journal-review-result")).toContainText("毛 -2.50%");
+    await expect(modal.getByTestId("journal-review-basis")).toContainText("毛/净（成本 12bp）");
+    await expect(modal.getByTestId("journal-review-basis")).toContainText("净口径");
+  });
+
+  test("统计：比例带 95% 区间，底部原样展示多重比较标注", async ({ page }) => {
+    await openJournal(page, { stats: STATS_WITH_CI });
+    const card = page.getByTestId("journal-stats");
+
+    // 4/6 + Wilson 区间，逐字
+    await expect(card.getByTestId("journal-stats-win")).toContainText("4/6（95% 区间 30%–90%）");
+    // 没按计划执行占比同样带区间（3/6 → 19%–81%）
+    await expect(card.getByTestId("journal-stats-discipline")).toContainText(
+      "3/6（95% 区间 19%–81%）"
+    );
+    // 平均超额默认净口径（-2.52%，不是毛 -2.40%）
+    await expect(card).toContainText("平均超额（净）");
+    await expect(card).toContainText("-2.52%");
+    await expect(card).not.toContainText("-2.40%");
+
+    // by_kind 分栏：pass 与其它标签一样列条数，并说明不计收益
+    const byKind = card.getByTestId("journal-stats-by-kind");
+    await expect(byKind).toContainText("放弃");
+    await expect(byKind).toContainText("我决定不动");
+    await expect(byKind).toContainText("3");
+
+    // 底部固定标注：后端给的原话，前端不改写
+    await expect(card.getByTestId("journal-stats-multiple-note")).toHaveText(
+      "未做多重比较校正：按 45 个桶检索时总会有桶看起来显著"
+    );
+  });
+
+  test("统计：n<5 即使后端给了区间也不显示百分比", async ({ page }) => {
+    await openJournal(page, { stats: STATS_SMALL_WITH_CI });
+    const card = page.getByTestId("journal-stats");
+
+    await expect(card.getByTestId("journal-stats-insufficient")).toHaveText("样本不足（<5 条）");
+    await expect(card).not.toContainText("95% 区间");
+    await expect(card).not.toContainText("%");
+    await expect(card.getByTestId("journal-stats-breakdown")).toHaveCount(0);
+  });
+
+  test("基准：bet_type 三选一（默认「方向」）与 bench_fallback 提示", async ({ page }) => {
+    const store = await openJournal(page, { entries: [FALLBACK_DUE_ENTRY] });
+
+    // 三选一，默认「方向」
+    const betGroup = page.getByTestId("journal-bet-type");
+    await expect(betGroup.getByRole("radio")).toHaveCount(3);
+    await expect(betGroup.locator(".ant-radio-button-wrapper-checked")).toHaveText("方向");
+    await expect(betGroup).toContainText("跑赢同行");
+    await expect(betGroup).toContainText("市场级");
+
+    // 选「跑赢同行」后，创建载荷带 bet_type
+    await page.getByTestId("journal-thesis").fill("同行扩产更慢，想验证能不能跑赢同行");
+    await pickInvalidationKind(page, "跌破某价格");
+    await page.getByTestId("journal-inv-price").fill("12.5");
+    await pickHorizon(page, "7 天");
+    await pickBetType(page, "跑赢同行");
+    await page.getByTestId("journal-submit").click();
+    // 先等创建真正落库（请求被 mock 接住并返回），再断言载荷——点击返回 ≠ 请求已发出
+    await expect(page.getByTestId("journal-open-item")).toHaveCount(1);
+    expect(store.lastCreate).toMatchObject({ bet_type: "relative" });
+
+    // 复盘弹窗：展示 bench_basis_note；bench_fallback=true 时补一句退化提示
+    await page.getByTestId("journal-review-open").first().click();
+    const modal = page.getByTestId("journal-review-modal");
+    await expect(modal.getByTestId("journal-bench-basis-note")).toHaveText(
+      "基准=沪深300 指数收益"
+    );
+    await expect(modal.getByTestId("journal-bench-fallback")).toContainText(
+      "无行业归属，基准退化为沪深300"
+    );
   });
 
   test("已复盘条目没有编辑/删除入口（append-only）", async ({ page }) => {
