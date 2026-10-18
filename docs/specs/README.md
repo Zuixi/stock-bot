@@ -32,6 +32,8 @@
 | S7 | _(待建)_ | Wave 6 交易执行 + 风险管理 | catalog-only |
 | S8 | [S8-watchlist-triage.md](./S8-watchlist-triage.md) | 散户工具型「自选体检」（8 个事实型探测器 + 噪声控制 + 站内角标）| detailed |
 | S9 | [S9-decision-journal.md](./S9-decision-journal.md) | 决策日志与归因（3 行必填 + 自动快照 + 五类归因 + 个人「最常犯的错」统计）| detailed |
+| S10 | [S10-market-regime.md](./S10-market-regime.md) | 市场状态机（五态 + 迟滞 + 转移矩阵 + 同态后续分布；零新表零新源）| detailed |
+| S11 | [S11-unlock-calendar.md](./S11-unlock-calendar.md) | 解禁日历（补 `share_floats` 写入方 + triage 探测器 + 日志窗口标记；零新表）| detailed |
 
 > **渐进明细**：只有 S0–S3 写详细契约——S4 起的 spec 在**启动前一周**才细化。理由：Wave 1 的数据事实底座没落地前，Wave 5 的因子契约一定会返工，提前细化是浪费。
 

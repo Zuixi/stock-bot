@@ -1,3 +1,37 @@
+## 2026-10-19 - **S11 解禁日历后端：回填脚本 + triage `unlock_soon` + journal `evaluation.unlock_in_window`**
+
+零新表、零迁移、不改调度、`/market` 未动（spec `docs/specs/S11-unlock-calendar.md`）：
+
+- **写入口** `backend/scripts/backfill_share_floats.py`（新）：按**解禁日**窗口分批（≤90 天/批，默认 30 天）
+  分页回填 `share_floats`，默认窗口**近 24 个月 + 未来 6 个月**。实测两个上游硬限制（写进模块 docstring
+  与 spec §S11.5.1）：`share_float(start,end)` 过滤的是 **`float_date`** 而不是 `ann_date`；单次只回
+  **6000 行**且 **`offset ≤ 100000`** ⇒ 逐页取 + 触上限时**对半拆窗**重取（单日仍超限则**响亮失败**：
+  非零退出 + 逐条 stderr，绝不静默丢行）。`ON CONFLICT DO NOTHING` 幂等（重跑新增 **0** 行）；
+  `--coverage` 只读打印「有解禁记录的股票数 / 全市场 / 占比 / 未来 30·90 天覆盖 / 最近成功窗口」
+- **覆盖（真跑）**：162 只（2.90%）→ **2,353 只（42.12%）**，2,103,957 行（未来 334,355 行），
+  未来 30 天有解禁的 144 只、未来 90 天 348 只；31 批 / 454 页 / 5 次拆窗 / **0 失败**
+- **triage 探测器** `unlock_soon`（registry 8 → **9**，导入期断言与计数用例同步）：未来 30 自然日内解禁
+  且当日合计**占总股本** ≥1%；`≥3%` → risk、`1%–3%` → attention；facts = 解禁股数(万股)/占总股本比(%)/解禁日；
+  `source_table="share_floats"`；**该股无记录 → 不输出**（不猜"没有解禁"），只有**整表零行**才进 `unavailable`。
+  装载层一条 SQL 先按持有人取**最新公告**（同一笔会被多次公告，否则同一笔加两次：实测 119% vs 真实 59.6%）
+  再按解禁日合计；查询预算 6 → 7（仍与自选数无关）。文案按实测口径写「占总股本」而非 spec 示例的「占流通」
+  （源 `float_ratio` 分母是总股本），`float_share` 源单位是**股**（卡片 ÷10000 上屏）
+- **journal** `evaluation.unlock_in_window` + `unlock_note`（与 `earnings_in_window` 同构）：`true` =
+  `(快照日, due_on]` 内有 ≥3% 解禁、`false` = 有记录但窗口内没有、`null` = 该股无 PIT 可见的解禁记录
+  （写**降级键** `missing_reason["unlock"]`，**不阻塞复盘**——有真实写入复盘的用例）；PIT 只用
+  `ann_date <= due_on`；解禁面并进标的 face 的**同一条批 SQL**（仍 3 条封顶）。第一版按 `split_part(ts_code)`
+  过滤实测 **50 条判断 4.9 s**，改 `ts_code =`（索引）后 **0.015 s**
+- 测试（+56 条）：探测器 +30/+31 天、1%/3% 边界、同日持有人合计、占比缺失跳过、无记录不输出；
+  装载层合计 / 最新公告 / 整表零行 → `unavailable` / 查询数 ≤7；journal 三态 + 窗口左开右闭 + 事后公告
+  PIT + 降级键不阻塞复盘 + 不新增查询；回填分窗 / 月份平移 / **幂等重跑 0 行** / 拆窗 / 单日超限响亮失败 /
+  覆盖率（`fetch` 注入，**零真网**）
+- 门禁：改动文件 `ruff check` + `format --check` ✔ / `mypy` ✔ / 目标用例 **291 passed** / 全量
+  **1852 passed, 1 failed**（唯一失败是并行 limit-up 分支的告警用例，与解禁无关）/ `--coverage` 已贴数
+- 涉及文件：`backend/scripts/backfill_share_floats.py(新)`、`backend/app/services/{triage_detectors,triage_service,
+  journal_service}.py`、`backend/app/schemas/journal.py`、`backend/tests/{test_triage_detectors,test_triage_service,
+  test_watchlist_triage_api,test_journal_api}.py`、`backend/tests/{test_journal_unlock,test_backfill_share_floats}.py(新)`、
+  `docs/specs/S11-unlock-calendar.md`（§S11.5.1 实测口径修正）、`docs/features.md`、`docs/Changelog.md`
+
 ## 2026-10-19 - **S10 市场状态机：五态（迟滞 3 日）+ 转移矩阵 + 同态后续分布**
 
 零新表、零迁移、零新 cron，`/market` 前端未动（spec `docs/specs/S10-market-regime.md`）：
@@ -207,6 +241,29 @@ S9.7 八个 phase 之外的最后一节（spec §S9.6 原排期"等 owner 批准
 - 涉及文件：`backend/app/{models/journal.py,services/journal_service.py,schemas/journal.py,api/v1/journal.py}`、
   `backend/app/migrations/versions/a7d3e9f1b2c4_add_journal_bet_type.py(新)`、`backend/tests/test_journal_*.py`、
   `docs/specs/S9-decision-journal.md`（§S9.3 快照新键 + §S9.7 落地注记）、`.superpowers/sdd/journal-s97/backend-A-report.md(新)`
+
+## 2026-10-18 - **情绪指标详情页体验修复：切指标不再整页重挂 / 头部与分布重做 / 近 20 日改折线**
+
+用户实测反馈的四个问题，逐条定位到根因并修复（不是调样式）：
+
+- **切指标整页抖动**：根因不在页面，而在 `App.tsx` 的 `RouteErrorBoundary` 用 `key={pathname}` 做"换页重置错误态"——`/market/sentiment/zt_count → /broken_rate` 的 pathname 变化会把整棵树（含 `MainLayout`）卸载重挂：骨架闪一下、图表重建、滚动位置丢失。改为 `routePatternKey(pathname)`（按路由清单归一成 `/market/sentiment/:metric`），同页换参数不再重挂；再给 query 加 `keepPreviousData` + 顶部 2px 进度条，数据保留到新值到达才整体切换（实测切指标 scroll 600→600、skeleton 0）。新增 `check-routes` 断言防回归（`<ErrorBoundary key={pathname}>` 直接转红）
+- **返回入口过于草率**：裸文字 `← 返回短线情绪` 改为带 `ArrowLeftOutlined` 的胶囊按钮（hover/focus 态、触屏命中区）；标题旁的 `·` 长句改为「情绪温度计 / 模块」chip + 分隔线 + 数据截至/收盘/有效样本的 meta 行
+- **历史分布文字没落在中线上方**：`当前` 标签改 `position:"end"` + 水平居中 + 底色描边（不再被 y 轴名"天数"压住）；窄屏隐藏 y 轴名、`top` 收窄，标签落在第 1~2 箱时也不重叠；标签值改为完整精度（`44.74%` 而非 `44.7%`）
+- **最近 20 日应看折线**：表格改为 20 日折线（点色=较前一交易日：红增/绿减/灰缺前值，末点带数值标签）；精确数字放进默认收起的「逐日明细（表格）」，不抢主叙事
+- 附带：主图三条分位线的标签在数值接近时会互相压字（炸板率实测）→ 图内不再贴标签，图下给 `分位参考：P25 23.89% · P50 29.21% · P75 35.45%`；指标切换器吸附在顶栏下（读长图时也能换指标）；窄屏 switcher 右缘渐隐提示可横滑；20 日图纵轴补 `%` 单位、`showMaxLabel` 保证最新日期可读
+- 涉及文件：`frontend/src/{App.tsx,app/router/routeKey.ts(新),pages/market-sentiment-metric/*,features/sentiment/metricDetailFormat.ts}`、`frontend/scripts/check-routes.mjs`、`docs/{features.md,Changelog.md}`、`plans/2026-10-18-sentiment-metric-tracking.md`
+- 验证：Playwright 实测切指标无骨架/滚动保持/加载条出现；桌面 1440 + 窄屏 390 截图；`tsc` / `build` / `check:routes` ✓
+
+## 2026-10-18 - **短线情绪指标持久化补齐 + 单指标历史追踪详情页**
+
+用户实测「温度计能读今天、但每张卡进不去历史」。核对源码后确认缺的不是事实表（`market_sentiment_daily` 已有 244 天），而是**两张卡的列**与**单指标读面**：
+
+- **持久化补齐**：迁移 `c1a4e7b9d2f6` 给 `market_sentiment_daily` 加 `yzt_avg_open_premium`（今开溢价）与 `yzt_n`（昨日涨停样本数）；`persist_snapshot` 一并写；`list_sentiment_calendar` 回两列。历史行由 `backend/scripts/backfill_sentiment_metrics.py` 只补 NULL（一条 CTE，不覆写既有事实）——真库实测 244/244 行，`2026-10-16` 的 `1.4038` / `36` 与 `get_snapshot` KPI 逐字一致
+- **趋势序列补列**：`sentiment_series_row` 追加 `yzt_avg_pct` / `yzt_avg_open_premium` / `yzt_n` / `promo_2to3` / `promo_2to3_n`（此前库里冻结、端点却丢弃）；`/sentiment/trends` 的 3 个分位指标不变
+- **新端点** `GET /market/sentiment/metrics/{metric_key}?days=250`（公开、读时计算）：9 个指标各自的统计量 / 分位位置 / 直方图 / 连续同向天数 / peers；NULL 不进样本、样本 <60 不给分位、<5 不给均值、<10 不画分布、未知 key 404
+- **新页面** `/market/sentiment/:metric`：hero（值/较前值/分位/连续天数/样本）+ 9 指标切换器 + 250 日 ECharts（P25/P50/P75 参考线 + 全窗 dataZoom）+ 分布（当前值落箱）+ 窗口统计 + 最近 20 日表 + 口径注；温度计 9 张卡在**收盘口径**下改为 `<Link>`（键盘可达/可中键新开），**盘中不可点**（盘中不落库）
+- 路由同步 IA §4（S1.x 8 条）/ ARCHITECTURE §6 / `check-routes.mjs`；ADR 0021 记录「盘后冻结、盘中不落日表、详情读时计算」
+- 门禁：后端 ruff ✓ / mypy ✓ / 相关 pytest **89 passed**（新增 16 条指标详情用例）；前端 `tsc --noEmit` ✓ / `npm run build` ✓ / `npm run check:routes` ✓；1440×2320 真渲染截图核对两个代表指标
 
 ## 2026-10-18 - **S9.7 Phase A 前端：pass 一键 / 净成本口径 / 基准三选一 / 比例 Wilson 区间**
 
