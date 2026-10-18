@@ -43,8 +43,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: 扫描面：体检文案会出现的全部文件/目录（见模块 docstring 的逐条理由）
 TARGETS: tuple[str, ...] = (
     "frontend/src/features/triage",
+    "frontend/src/features/journal",
+    "frontend/src/shared/api/journal.ts",
     "frontend/src/pages/me/index.tsx",
     "frontend/e2e/watchlistTriage.spec.ts",
+    "frontend/e2e/decisionJournal.spec.ts",
+    "backend/app/api/v1/journal.py",
+    "backend/app/services/journal_service.py",
     "backend/app/api/v1/watchlist_triage.py",
     "backend/app/services/triage_detectors.py",
 )

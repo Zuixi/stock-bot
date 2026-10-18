@@ -1,3 +1,24 @@
+## 2026-10-18 - **S9 决策日志与归因（P1）落地：3 行必填 + 自动快照 + 五类归因**
+
+owner 判断「用户最需要的是把历史经验沉淀出来、优化个人交易系统」——此前全库唯一的用户自由文本是
+`user_watchlist_items.notes`，「经验沉淀」零代码。本轮把它做成可用的最小闭环：
+
+- **2 张表**（`decision_journal_entries` / `decision_journal_reviews`，append-only、`unique(entry_id)`）：
+  创建后 thesis/invalidation/horizon/symbol **不可改**（路由无 PATCH/PUT/DELETE，测试用 grep + 真实路由表双断言）
+- **3 行必填**（thesis ≤200 / invalidation 价格或日期 / horizon ∈ {7,30,90}），缺一 422
+- **自动快照**（`build_snapshot`，**恰好 5 条查询**）：价格、MA20 距离、情绪分位、申万一级状态、当日事件（复用 S8 探测器）、PE 区间位置；
+  缺数一律 `null + missing_reason`，**不用 0 兜底**
+- **到期 → 结果 → 归因**：自动算 `outcome/bench/excess/invalidation_hit`；归因五选一（判断错/时机错/纪律/赚错因/运气）必选；
+  `stats` 里 `reviewed_n < 5` 时占比为 `null`（样本不足不装作有结论）
+- **PIT 硬证据**：把 `snapshot.price` 换成复盘日价格，`outcome_pct` 从 +7.17% 变 0 → 测试必须红（API 层同款对照）
+- 入口 `/me?tab=journal`（**无新路由**）；合规扫描面扩到 journal 三路径 + 两个后端文件（`TARGETS` 10 个目标）
+- 实机闭环（真库）：创建 → 快照（as_of 2026-10-18, price 171.01）→ 到期列表 → 归因 `timing_wrong`（outcome −14.28% / bench −4.91% / excess −9.38% / 未触及失效）→ stats（`reviewed_n=1`，占比 `null`）
+- 门禁：`self_review --full` ✔ · Playwright 全量 ✔（含 journal 9 条 e2e）
+- 涉及文件：`backend/app/{models/journal.py,services/journal_service.py,schemas/journal.py,api/v1/journal.py}(新)`、
+  `backend/app/migrations/versions/c64df59c0e86_*`、`backend/tests/test_journal_*.py(新)`、
+  `frontend/src/{features/journal/**,shared/api/journal.ts}(新)`、`frontend/src/pages/me/index.tsx`、
+  `frontend/e2e/decisionJournal.spec.ts(新)`、`docs/{features.md,specs/S9-decision-journal.md(新),Changelog.md}`、`plans/2026-10-18-decision-journal.md(新)`
+
 ## 2026-10-17 - **自选体检补「规则来源」（provenance）：spec 来源字段 + 卡片三字段 + `/triage/rules` + 12 个月标定统计**
 
 - **后端**：`DetectorSpec` 新增 `version`/`rule_text`/`definition`/`source_tables`/`update_note`/`failure_modes`（8 条 spec 全填，

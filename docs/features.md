@@ -35,6 +35,7 @@
 | 功能 | 说明 | 代码入口 |
 |---|---|---|
 | 自选股 | 用户自选列表 + 标题/清空（数据归属按 `user_id` 隔离，需登录）；路由 `/me?tab=watchlist`（`/watchlist` redirect 到此） | `frontend/src/features/watchlist`（`WatchlistPanel` / `WatchlistTable`） · `/api/v1/watchlists` |
+| 决策日志与归因 | 用户 30 秒记录一次判断（thesis / invalidation / horizon 三必填），创建时自动落市场快照（价格、MA20 距离、情绪分位、板块状态、当日事件、估值位置）；到期自动算 outcome/bench/excess 与是否触及失效条件，用户从五类归因里选一个，长期统计「最常犯的错」。创建后不可改、一次只可复盘一次；`reviewed_n<5` 不显示占比。路由 `/me?tab=journal` | `frontend/src/features/journal`（`JournalPanel` / `EntryForm` / `ReviewModal`） · `/api/v1/journal` |
 | 自定义标签 | 标签分组总览与按标签看股票；路由 `/me?tab=tags`（`/tags` redirect 到此）、`/tags/:tagName`（**redirect** 到 `/me?tab=tags&name=`） | `frontend/src/features/watchlist`（`TagsOverview` / `TagsPanel`） · `/api/v1/tags` |
 | 今日体检 | 自选的事实清单（8 个事实型探测器：跌破 20 日线 / 跌得急 / 放量异动 / 涨停与炸板 / 新公告 / 龙虎榜 / 创 60 日新高新低 / 所属板块在动），分级只有 风险 / 事件 / 关注 / 背景；`as_of` = 最近完整交易日；缺数据的检查逐项留痕（`unavailable` 是**人话** label，机器 key 只在 `unavailable_keys`，不上屏）；四态显式（`state`：有命中 / 全静默 / 无数据日 / 无自选），无自选给「添加自选」入口；路由 `/me?tab=triage`（**默认 Tab**；独立 `/today` 推迟，见 S8.1） | `frontend/src/features/triage`（`TriagePanel`） · `/api/v1/watchlists/triage` · `backend/app/services/triage_detectors.py`（8 探测器） / `triage_service.py`（装载+组合） |
 | 账号设置 | 已登录用户自助修改自己的用户名 / 邮箱 / 显示名（唯一性校验 + 审计） | `frontend/src/features/auth/components/ProfileModal.tsx` · `PATCH /auth/profile` |
