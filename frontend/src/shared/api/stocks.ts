@@ -48,9 +48,6 @@ export function mapBackendStock(item: BackendStock): StockRecord {
     circulatingCap: undefined,
     pe: undefined,
     pb: undefined,
-    roe: undefined,
-    revenueGrowth: undefined,
-    profitGrowth: undefined,
     detail: item.detail ?? undefined,
   };
 }

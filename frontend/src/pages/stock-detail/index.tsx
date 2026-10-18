@@ -3,6 +3,7 @@ import { Typography, Result, Button, Divider, Row, Col, Spin, Breadcrumb, Tabs }
 import type { BreadcrumbProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { StockHeader, FundamentalCards, CustomSwTags, UserTags, RelatedEvents, FinancialTab, ValuationTab } from "@/features/stock-detail/components";
+import { useFinancialSummary } from "@/features/stock-detail/hooks/useFinancialSummary";
 import { ConceptTags } from "@/features/concept";
 import { KlineChart } from "@/shared/ui/kline";
 import { fetchKlineBySymbol } from "@/shared/api/quotes";
@@ -51,6 +52,16 @@ export default function StockDetailPage() {
     queryFn: async () => (symbol ? fetchStockEnrichedBySymbol(symbol) : null),
     enabled: Boolean(symbol),
   });
+
+  /**
+   * 财务摘要：概览「成长与盈利」卡与财务 tab 共用**同一个** query key
+   * （`["financial-summary", exchange, symbol]`，见 useFinancialSummary）。
+   * 因此切到财务 tab 时命中缓存、不二次请求。
+   *
+   * 必须在下面所有 return 之前调用，保持 hooks 调用顺序稳定。缺失/加载中
+   * 时 `data` 为 undefined，卡片显示 `--`，**不阻塞**页面其余部分渲染。
+   */
+  const summaryQuery = useFinancialSummary(stock?.exchange, stock?.symbol);
 
   if (isLoading) {
     return (
@@ -128,7 +139,7 @@ export default function StockDetailPage() {
                     />
                   </Col>
                   <Col xs={24} lg={10}>
-                    <FundamentalCards stock={stock} />
+                    <FundamentalCards stock={stock} summary={summaryQuery.data} />
                   </Col>
                 </Row>
 

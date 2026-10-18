@@ -60,9 +60,6 @@ export interface StockRecord {
   circulatingCap?: number;
   pe?: number;
   pb?: number;
-  roe?: number;
-  revenueGrowth?: number;
-  profitGrowth?: number;
   open?: number;
   high?: number;
   low?: number;

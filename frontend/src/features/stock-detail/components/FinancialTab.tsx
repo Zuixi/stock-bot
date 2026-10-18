@@ -2,13 +2,11 @@ import { Card, Row, Col, Segmented, Empty, Spin, Tooltip, Table, Typography, Ale
 import ReactECharts from "echarts-for-react";
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  fetchFinancialSummary,
-  fetchFinancialStatements,
-  fetchFinancialMetricsHistory,
-} from "@/shared/api/financial";
+import { fetchFinancialStatements, fetchFinancialMetricsHistory } from "@/shared/api/financial";
 import type { FinancialSummary, MetricHistory } from "@/shared/api/financial";
 import type { Exchange } from "@/shared/types";
+import { QualityTag } from "./QualityTag";
+import { useFinancialSummary } from "../hooks/useFinancialSummary";
 
 interface Props {
   exchange: Exchange;
@@ -65,48 +63,6 @@ function formatYi(value: number | null | undefined): string {
   return `${(value / 1e8).toFixed(2)}亿`;
 }
 
-function QualityTag({
-  quality,
-  source,
-}: {
-  quality?: string | null;
-  source?: string | null;
-}) {
-  const preset =
-    quality === "derived"
-      ? { color: "#faad14", label: "估算" }
-      : quality === "reported"
-        ? { color: "#52c41a", label: "财报" }
-        : null;
-  return (
-    <Tooltip title={`质量: ${quality ?? "未知"}${source ? ` · 来源: ${source}` : ""}`}>
-      <span
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 4,
-          fontSize: 12,
-          color: "#999",
-        }}
-      >
-        {preset ? (
-          <span
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: "50%",
-              background: preset.color,
-              display: "inline-block",
-            }}
-          />
-        ) : null}
-        {preset?.label}
-        {source ? ` · ${source}` : ""}
-      </span>
-    </Tooltip>
-  );
-}
-
 function SummaryMetricCards({ summary }: { summary?: FinancialSummary }) {
   if (!summary) return null;
   return (
@@ -133,14 +89,6 @@ function SummaryMetricCards({ summary }: { summary?: FinancialSummary }) {
       </Row>
     </Card>
   );
-}
-
-function useSummary(exchange: Exchange, symbol: string) {
-  return useQuery({
-    queryKey: ["financial-summary", exchange, symbol],
-    queryFn: () => fetchFinancialSummary(exchange, symbol),
-    enabled: Boolean(exchange && symbol),
-  });
 }
 
 function MetricsHistoryChart({ histories }: { histories: MetricHistory[] }) {
@@ -276,7 +224,7 @@ function StatementsCard({
 export function FinancialTab({ exchange, symbol }: Props) {
   const [periodCount, setPeriodCount] = useState<number>(8);
 
-  const summaryQuery = useSummary(exchange, symbol);
+  const summaryQuery = useFinancialSummary(exchange, symbol);
   const historyQuery = useQuery({
     queryKey: ["financial-metrics-history", exchange, symbol],
     queryFn: () => fetchFinancialMetricsHistory(exchange, symbol, CHART_METRIC_KEYS),
