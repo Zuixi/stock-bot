@@ -589,6 +589,10 @@ async def test_review_is_201_and_then_409(
     # ★ spec §S9.7.3：基准是沪深300（direction 自选，非退化），文案由后端下发
     assert evaluation["bench_fallback"] is False
     assert evaluation["bench_basis_note"] == svc.BENCH_NOTE_HS300
+    # ★ 契约 §1 财报窗口：合成标的没有任何财报行 → 三态里的 ``null``（缺数据，不猜）
+    assert evaluation["earnings_in_window"] is None
+    assert evaluation["earnings_note"] == ""
+    assert evaluation["missing_reason"]["earnings"] == "no_financial_reports"
     assert detail["status"] == "due"
 
     first = await _post(
@@ -696,6 +700,8 @@ async def test_stats_shape_and_sample_gate(
         "calibration",
         "calibration_note",
         "export_hint",
+        # ★ 深度优化（契约 §2）
+        "consistency",
     }
     assert stats["n"] == 1
     assert stats["reviewed_n"] == 1
@@ -729,6 +735,14 @@ async def test_stats_shape_and_sample_gate(
     assert stats["calibration"] is None, "1 < 20 → 不给曲线"
     assert "样本不足" in stats["calibration_note"]
     assert stats["export_hint"] == "/api/v1/journal/export?format=csv"
+    # ★ 契约 §2 归因自洽：``luck`` + 净超额 8.88 > 0 → 自洽；n=1 < 5 → 比例与区间 null
+    consistency = stats["consistency"]
+    assert consistency["n"] == 1
+    assert consistency["consistent"] == 1
+    assert consistency["share"] is None
+    assert consistency["ci_low"] is None
+    assert consistency["ci_high"] is None
+    assert consistency["note"] == svc.CONSISTENCY_NOTE
 
 
 # ── §S9.7.9 导出：只含本人 + 固定列序 + BOM ─────────────────────────────────

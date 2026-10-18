@@ -153,6 +153,16 @@ decision_journal_reviews(
     `calibration{n,bins,brier}` / `calibration_note` / `export_hint`；新增
     `GET /api/v1/journal/export?format=json|csv`（`Content-Disposition: attachment`，只含本人，
     CSV = UTF-8 BOM + 固定列序）
+  - **已落地（深度优化，2026-10-19）**：`evaluation` 再加 `earnings_in_window`（**三态**：`true` =
+    窗口 `(快照日, due_on]` 内有**财报披露日** `financial_report_versions.ann_date`；`false` = 有财报
+    数据但不在窗口内；`null` = 该股没有任何带公告日的财报记录，**缺数据不猜**）与 `earnings_note`
+    （人话，如「窗口内含 1 次财报披露（10-15），结果可能被财报事件主导」；`false`/`null` = 空串）。
+    PIT：**只**用 `ann_date <= due_on` 的记录判断（事后才公告的不得进窗口）；「N 次披露」按
+    **distinct 公告日** 数（同日多份报表算一次）。`null` 的原因写进 `missing_reason["earnings"]`
+    （`no_financial_reports` / 市场级判断 `market_level_no_symbol`）。数据源 = `financial_report_versions`
+    自带的 `stock_id` + `ann_date`（直连 `stocks`，无需绕 `income_statement_facts`），并**进**标的
+    face 的同一条批 SQL —— 评估的查询数仍是 3 条封顶，不随条目数增长。契约：
+    `.superpowers/sdd/journal-deep/contract.md` §1。
 - **不写不归因**：未选 `verdict` 不得写入（`422`）；`reviewed` 后条目移到"已复盘"，不可再评
 
 **验收判据**
@@ -371,6 +381,14 @@ decision_journal_reviews(
 - `calibration`：按信心档分组，算**实际净超额 > 0 的比例**与样本数；`brier = mean((p - I[net_excess>0])**2)`。
 - 展示纪律：每档 `n ≥ 10` 才显示该档；总样本 `n < 20` 不给曲线，只显示"样本不足"。
 - **不把校准当作"能力评价"**：文案固定为"你的信心与实际结果的对照"，不出现"你高估自己"这类判断。
+- **已落地（深度优化，2026-10-19）：`stats.consistency`（归因自洽率）** —— 契约见
+  `.superpowers/sdd/journal-deep/contract.md` §2。自洽 = "我归类的原因"与"净超额的符号"方向一致：
+  `thesis_wrong` / `timing_wrong` 自洽当且仅当 `net_excess_pct < 0`；`discipline_break`
+  **恒自洽**（纪律问题与盈亏独立）；`right_for_wrong_reason` / `luck` 自洽当且仅当
+  `net_excess_pct > 0`。`n` = 已复盘且净超额可算的条数，`n < 5` 时 `share` / `ci_low` /
+  `ci_high` 一律 `null`（只给 `n`），区间**复用** §S9.7.7 的 `wilson_interval`（不另造算法）；
+  `note` 逐字为「不自洽不代表你说谎：按过程评价自己（如"赚了但理由错"）本来就会与收益符号不一致」。
+  分子/分母并进**既有聚合**（统计仍 ≤2 条查询），`JOURNAL_STATS_VERSION` 升到 `s97.b3`。
 
 **验收**：`confidence` 越界 422；校准分档样本 <10 该档不显示；`brier` 用 `net_excess>0` 而非毛收益（PIT 对照：改成本常量 → brier 变）。
 

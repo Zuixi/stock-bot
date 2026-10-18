@@ -1,3 +1,30 @@
+## 2026-10-19 - **S9 深度优化后端：`evaluation.earnings_in_window` / `stats.consistency`**
+
+两块新能力，全部**只加字段**（契约 `.superpowers/sdd/journal-deep/contract.md` §1/§2；无新表、无迁移、
+既有响应类型一个都没动；`/market` 未动）：
+
+- **财报窗口三态**（契约 §1）：`evaluation` 新增 `earnings_in_window`（`true` = 窗口 `(快照日, due_on]`
+  内有**财报披露日** `financial_report_versions.ann_date` / `false` = 有财报数据但不在窗口内 / `null` =
+  该股没有任何带公告日的财报记录，缺数据不猜）+ `earnings_note`（「窗口内含 N 次财报披露（MM-DD），
+  结果可能被财报事件主导」；`false`/`null` = 空串）。PIT：**只**用 `ann_date <= due_on` 的记录判断；
+  「N 次」按 **distinct 公告日** 数（同日多份报表算一次）。缺数原因进 `missing_reason["earnings"]`
+  （`no_financial_reports` / 市场级 `market_level_no_symbol`）。数据源直连 `financial_report_versions`
+  的 `stock_id` + `ann_date`（该表自带 `stock_id`，无需绕 `income_statement_facts`），并**进**标的 face
+  的同一条批 SQL —— 评估查询数仍 **3 条封顶**，不随条目数增长（有 SQL 计数用例）
+- **归因自洽率**（契约 §2）：`stats.consistency = {n, consistent, share, ci_low, ci_high, note}`。
+  `thesis_wrong`/`timing_wrong` 自洽当且仅当净超额 < 0；`discipline_break` **恒自洽**（纪律与盈亏独立）；
+  `right_for_wrong_reason`/`luck` 自洽当且仅当净超额 > 0（恰在成本线上 = 0 不算赚）。`n` = 已复盘且
+  净超额可算的条数，`n < 5` → `share`/`ci_low`/`ci_high` 一律 `null`（只给 `n`）；区间**复用**
+  `wilson_interval`（不新造算法）。分子/分母并进**既有聚合**（统计仍 **≤2 条查询**），
+  `JOURNAL_STATS_VERSION` `s97.b2` → `s97.b3`
+- 测试：新增 `tests/test_journal_deep.py`（24 条：真 PG 的财报三态/窗口左右边界/事后公告 PIT/市场级/
+  无财报数据/SQL 计数 + 自洽五类逐类/n<5/边界 12bp/未复盘不进分母）；API 层补 `evaluation` 新字段与
+  `stats.consistency` 序列化断言
+- 涉及文件：`backend/app/services/journal_service.py`、`backend/app/schemas/journal.py`、
+  `backend/tests/test_journal_deep.py`（新增）、`backend/tests/test_journal_api.py`、
+  `backend/tests/test_journal_s97.py`（统计产物版本 pin）、`docs/specs/S9-decision-journal.md`、
+  `docs/Changelog.md`
+
 ## 2026-10-19 - **S9 深度优化前端：`by_kind_median` / 归因自洽 / 复盘受阻 / 财报窗口**
 
 四项全部**只做加法**（契约 `.superpowers/sdd/journal-deep/contract.md` §3；新字段一律可选、`undefined` 容错；

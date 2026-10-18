@@ -172,6 +172,15 @@ class JournalEvaluationOut(BaseModel):
     - ``first_touch_invalidation``：首次触达失效条件的交易日；未触达/``date_only`` 为 ``None``；
     - ``touched_then_reversed``：先触达失效条件、到期净收益反而 > 0。缺证据一律 ``False``；
     - ``days_to_invalidation``：入场日之后到首次触达日的**交易日数**；未触达为 ``None``。
+
+    深度优化（契约 §1 `.superpowers/sdd/journal-deep/contract.md`）**再加两字段**：
+
+    - ``earnings_in_window``：``(快照日, due_on]`` 内有没有财报披露日。**三态**：
+      ``True`` 有（结果可能被财报事件主导）/ ``False`` 有财报数据但窗口内没有 /
+      ``None`` 该股没有任何带公告日的财报记录（缺数据，不猜）。PIT：只用
+      ``ann_date <= due_on`` 的记录判断；
+    - ``earnings_note``：人话（"窗口内含 1 次财报披露（10-15），结果可能被财报事件主导"）；
+      ``False`` / ``None`` 时是**空串**（没有事件就没有提示）。
     """
 
     due_on: date
@@ -188,6 +197,11 @@ class JournalEvaluationOut(BaseModel):
     first_touch_invalidation: date | None = None
     touched_then_reversed: bool = False
     days_to_invalidation: int | None = None
+    #: ★ 契约 §1 财报窗口：``True`` 窗口内有披露 / ``False`` 有数据但不在窗口 /
+    #: ``None`` 无财报数据（缺数据，不猜）。三态**不可合并**：``None`` 不是"没有财报"。
+    earnings_in_window: bool | None = None
+    #: ★ 契约 §1 财报窗口的人话说明（``False`` / ``None`` 时为空串）
+    earnings_note: str = ""
     #: ★ spec §S9.7.3：基准的人话说明 + 是否退化（``bench_pct`` 的口径附注）
     bench_basis_note: str = ""
     bench_fallback: bool = False
@@ -296,6 +310,32 @@ class JournalKindMedianOut(BaseModel):
     median_net_excess_pct: float | None = None
 
 
+class JournalConsistencyOut(BaseModel):
+    """归因自洽率（契约 §2 `.superpowers/sdd/journal-deep/contract.md`）。
+
+    自洽 = "我归类的原因"与"净超额的符号"方向一致：
+
+    - ``thesis_wrong`` / ``timing_wrong`` → 自洽当且仅当 ``net_excess_pct < 0``；
+    - ``discipline_break`` → **恒自洽**（纪律问题与盈亏独立）；
+    - ``right_for_wrong_reason`` / ``luck`` → 自洽当且仅当 ``net_excess_pct > 0``。
+
+    ``n`` 是**分母**：已复盘且净超额可算的条数。``n < 5`` 时 ``share`` / ``ci_low`` /
+    ``ci_high`` 一律 ``None``（只给 ``n``）—— 4 条样本上的百分比会被读成"我很一致"。
+    区间复用 :func:`app.services.journal_service.wilson_interval`（spec §S9.7.7），
+    不另造一套算法。``note`` 是契约 §2 的**逐字**免责文案，前端原样展示、不改写。
+    """
+
+    n: int
+    consistent: int
+    #: ``consistent / n``；``n < 5`` 时为 ``None``（不是 0）
+    share: float | None = None
+    #: Wilson 95% 区间（``n < 5`` 时为 ``None``）
+    ci_low: float | None = None
+    ci_high: float | None = None
+    #: 契约 §2 逐字（不自洽 ≠ 说谎）
+    note: str
+
+
 class JournalStatsOut(BaseModel):
     """统计（spec §S9.4）：``by_attribution`` 合计恒等于 ``reviewed_n``。
 
@@ -315,6 +355,9 @@ class JournalStatsOut(BaseModel):
     - ``export_hint``：导出地址，前端直接用（spec §S9.7.9）；
     - ``exclusion_note``：收益统计的排除口径（``pass`` 与「只观察」都不计入），
       前端**原样展示**，不改写（spec §S9.7.1/§S9.7.6 口径修正）。
+
+    深度优化（契约 §2）**再加一个字段**：``consistency``（归因自洽率，见
+    :class:`JournalConsistencyOut`）。它只加字段，既有字段的类型一个都没动。
     """
 
     n: int
@@ -354,3 +397,5 @@ class JournalStatsOut(BaseModel):
     export_hint: str = ""
     #: ★ spec §S9.7.1/§S9.7.6 收益统计的排除口径（``pass`` 与「只观察」都不计入）
     exclusion_note: str = ""
+    #: ★ 契约 §2 归因自洽率（``n < 5`` 时只给 ``n``，比例与区间为 ``None``）
+    consistency: JournalConsistencyOut | None = None

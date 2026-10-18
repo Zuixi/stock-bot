@@ -596,7 +596,9 @@ def test_cost_constant_and_stats_version_are_pinned() -> None:
     # 改成本常量必须同时改统计产物版本（spec 的验收判据）→ 两者一起钉在这里。
     # Phase B2：``share_ci.win`` 的分母排除 pass（裁定 2）= 区间口径变了 → 从
     # ``s97.a1`` 升到 ``s97.b1``（常量注释里写明了原因）
-    assert svc.JOURNAL_STATS_VERSION == "s97.b2"
+    # 深度优化：新增 ``consistency``（新比例、新样本集合与判据）→ ``s97.b2`` 升到
+    # ``s97.b3``（同样是"统计口径变了"，不是"多了一个无关字段"）
+    assert svc.JOURNAL_STATS_VERSION == "s97.b3"
     source = inspect.getsource(svc)
     assert "2026-10-19" in source, "常量必须注明假设的日期（改了要一起改）"
     for assumption in ("佣金", "印花税", "过户费", "滑点", "保守"):

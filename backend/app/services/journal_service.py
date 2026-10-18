@@ -47,7 +47,7 @@ from math import sqrt
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -90,8 +90,13 @@ __all__ = [
     "BENCH_NOTE_HS300",
     "BENCH_NOTE_INDUSTRY",
     "CALIBRATION_P",
+    "CONSISTENCY_ALWAYS_VERDICTS",
+    "CONSISTENCY_NEGATIVE_VERDICTS",
+    "CONSISTENCY_NOTE",
+    "CONSISTENCY_POSITIVE_VERDICTS",
     "COST_ROUND_TRIP_BPS",
     "COST_ROUND_TRIP_PCT",
+    "EARNINGS_IN_WINDOW_NOTE",
     "EXCLUSION_NOTE",
     "EXPORT_CSV_COLUMNS",
     "EXPORT_HINT",
@@ -114,6 +119,7 @@ __all__ = [
     "bench_spec",
     "build_snapshot",
     "calibration_summary",
+    "consistency_summary",
     "create_entry",
     "evaluate_entry",
     "evaluate_entries",
@@ -227,7 +233,11 @@ COST_ROUND_TRIP_PCT = round(COST_ROUND_TRIP_BPS / 100.0, 4)
 #: 沪深300、``relative`` → 行业等权，spec §S9.7.3），且收益均值（``avg_excess_pct`` /
 #: ``avg_net_excess_pct`` / ``avg_weighted_excess_pct``）**同时排除 ``pass`` 与
 #: ``position_size=none``**（spec §S9.7.1/§S9.7.6）—— 样本集合变了 = 口径变了。
-JOURNAL_STATS_VERSION = "s97.b2"
+#:
+#: ``s97.b3``（2026-10-19，深度优化）：新增 ``consistency``（归因自洽率，契约 §2）——
+#: 这是一个**新的比例**，它的样本集合（已复盘且净超额可算）与分子判据（verdict 与
+#: 净超额符号的一致性）都是新口径，统计产物因此换代。
+JOURNAL_STATS_VERSION = "s97.b3"
 
 # ── spec §S9.7.3 基准口径 ───────────────────────────────────────────────────
 #: 基准种类 ①：**所属申万一级成分股的等权平均收益**。诚实标注：这**不是**申万一级
@@ -271,6 +281,24 @@ SIZE_WEIGHTS: dict[str, float] = {"none": 0.0, "light": 0.5, "normal": 1.0, "hea
 #: 统计卡原样展示的一句话（前端不改写）：``pass`` 没有方向，不进任何均值；
 #: ``position_size=none``（只观察）仍进"判断均值"，但不进"按仓位加权的收益均值"。
 EXCLUSION_NOTE = "「我决定不动」不计入均值；「只观察」计入判断均值、不计入按仓位加权的收益均值"
+
+# ── 契约 §2 归因自洽（"我归类的原因"与"净超额的符号"是否方向一致） ──────────
+#: 「我错了」这两类：自洽当且仅当**净超额 < 0**（确实亏了，才叫"理由错/时机错"）。
+CONSISTENCY_NEGATIVE_VERDICTS: tuple[str, ...] = ("thesis_wrong", "timing_wrong")
+#: 「我对了」这两类：自洽当且仅当**净超额 > 0**（赚过成本线，才叫"运气/蒙对"）。
+CONSISTENCY_POSITIVE_VERDICTS: tuple[str, ...] = ("right_for_wrong_reason", "luck")
+#: 恒自洽（契约 §2 逐字）：纪律问题与盈亏**独立**——破纪律却赚钱，纪律这一条事实
+#: 依然成立，不该被收益符号判成"前后矛盾"。这一条是自洽率的**锚**：没有它，
+#: 用户会觉得"记纪律问题反而被扣分"，从而学会不记。
+CONSISTENCY_ALWAYS_VERDICTS: tuple[str, ...] = ("discipline_break",)
+#: 契约 §2 **逐字**文案（前端原样展示，不得改写）。
+#: 内层引号是 ASCII 双引号（契约原文如此）：故意不在措辞上做"优化"。
+CONSISTENCY_NOTE = '不自洽不代表你说谎：按过程评价自己（如"赚了但理由错"）本来就会与收益符号不一致'
+
+# ── 契约 §1 财报窗口（`evaluation.earnings_in_window` / `earnings_note`） ────
+#: 窗口内有披露时的人话模板（``n`` = 窗口内 **distinct 公告日**的个数）。同一天公告
+#: 多份报表（例如 Q3 与修正版同日）算**一次**披露——用户感知的"事件"是那一天。
+EARNINGS_IN_WINDOW_NOTE = "窗口内含 {n} 次财报披露（{days}），结果可能被财报事件主导"
 
 # ── spec §S9.7.9 导出 ───────────────────────────────────────────────────────
 #: 统计卡下发的导出地址（前端直接用，不自己拼；改路径必须同时改这里与路由）。
@@ -387,6 +415,61 @@ def wilson_interval(successes: int, n: int, *, z: float = WILSON_Z) -> dict[str,
         "successes": k,
         "ci_low": round(max(0.0, center - half), 4),
         "ci_high": round(min(1.0, center + half), 4),
+    }
+
+
+# ── 契约 §2 归因自洽：把"分子/分母"装配成 `stats.consistency`（纯函数） ─────
+
+
+def consistency_summary(consistent: int, n: int) -> dict[str, Any]:
+    """归因自洽率（契约 §2）：调用方只从库里数两个数，**判定与算术全在这里**。
+
+    ================  ==========================================================
+    输出               口径
+    ================  ==========================================================
+    ``n``             已复盘**且净超额可算**的条数（分母）
+    ``consistent``    分子：``thesis_wrong``/``timing_wrong`` 且净超额 < 0 ·
+                      ``discipline_break``（恒）· ``right_for_wrong_reason``/``luck``
+                      且净超额 > 0
+    ``share``         ``consistent / n``（4 位）；``n < 5`` 时 **``None``**（不是 0）
+    ``ci_low/high``   复用 :func:`wilson_interval`（spec §S9.7.7，**不另造区间**）；
+                      ``n < 5`` 时同样 ``None``
+    ``note``          契约 §2 逐字免责文案（前端原样展示）
+    ================  ==========================================================
+
+    为什么 ``n < 5`` 连点估计都不给（契约 §2 逐字）：3/4 与 4/6 在 4 条样本上
+    没有可区分性，给个百分比只会被读成"我的归因有 75% 是对的"。样本不足时只报
+    ``n``，页面上写"样本不足"。
+
+    为什么 ``discipline_break`` 恒自洽：纪律与盈亏是**两件独立的事**（契约 §2）。
+    若"破纪律却赚钱"被记成不自洽，等于告诉用户"守纪律会扣分"，自洽率就成了
+    惩罚诚实记录的指标——那比不统计更糟。
+
+    边界：净超额**恰好等于 0**（毛超额正好 12bp）不算赚也不算亏 → 四个"需要符号"
+    的类别全部记不自洽（``>` / ``<` 都为假），与 ``share_ci.win`` 的"恰在成本线上
+    不算对"同一口径。
+    """
+    denominator = max(int(n), 0)
+    numerator = min(max(int(consistent), 0), denominator)
+    if denominator < MIN_REVIEWED_FOR_SHARE:
+        return {
+            "n": denominator,
+            "consistent": numerator,
+            "share": None,
+            "ci_low": None,
+            "ci_high": None,
+            "note": CONSISTENCY_NOTE,
+        }
+    interval = wilson_interval(numerator, denominator)
+    # ``denominator >= 5`` 保证了 interval 不为 None；断言而非猜测（改了上面阈值要一起改）
+    assert interval is not None
+    return {
+        "n": denominator,
+        "consistent": numerator,
+        "share": round(numerator / denominator, 4),
+        "ci_low": interval["ci_low"],
+        "ci_high": interval["ci_high"],
+        "note": CONSISTENCY_NOTE,
     }
 
 
@@ -907,6 +990,9 @@ async def build_snapshot(
 #: **first_touch / days_to**。后两列是 spec §S9.7.4 的路径指标，由 ``req`` 里带的
 #: 失效条件（``inv_kind`` + ``threshold``）在同一条 SQL 里算出来：区间极值算不出的
 #: "**哪一天**首次触达"，必须让 SQL 逐日比较，否则要按天再查一次库（N+1）。
+#:
+#: 契约 §1 的财报窗口（``window_ann_dates`` / ``all_rows``）也**并进这一条**：
+#: 评估的查询数仍然是 3 条封顶（标的 face / 行业基准 / 沪深300），不因财报多一条。
 _SYMBOL_FACE_BATCH_SQL = text(
     """
     WITH req(id, symbol, start_date, end_date, inv_kind, threshold) AS (
@@ -926,7 +1012,9 @@ _SYMBOL_FACE_BATCH_SQL = text(
            e.trade_date AS end_trade_date,
            CAST(NULL AS double precision) AS start_close,
            ft.first_touch,
-           d.days_to
+           d.days_to,
+           earn.window_ann_dates,
+           earn.all_rows
       FROM req
       LEFT JOIN LATERAL (
           SELECT min(q.low) AS window_low, max(q.high) AS window_high
@@ -969,6 +1057,23 @@ _SYMBOL_FACE_BATCH_SQL = text(
              AND q.trade_date > req.start_date
              AND q.trade_date <= ft.first_touch
       ) d ON true
+      -- ★ 契约 §1：**(快照日, due_on]** 内的财报披露日（distinct 公告日）。
+      -- PIT：窗口本身只看 ``ann_date <= req.end_date`` 的记录（事后才公告的不进窗口）；
+      -- ``all_rows`` 只用来区分「有财报数据但不在窗口内」(false) 与「该股没有任何
+      -- 财报记录」(null)，它不参与"窗口内发生了什么"的判定。
+      -- 只数**带公告日**的财报行：没有 ``ann_date`` 的记录无法用于任何披露判断，
+      -- 不拿它冒充"有财报数据"。
+      LEFT JOIN LATERAL (
+          SELECT array_agg(DISTINCT f.ann_date ORDER BY f.ann_date) FILTER (
+                     WHERE f.ann_date > req.start_date
+                       AND f.ann_date <= req.end_date
+                 ) AS window_ann_dates,
+                 count(*) AS all_rows
+            FROM financial_report_versions f
+            JOIN stocks s ON s.id = f.stock_id
+           WHERE s.symbol = req.symbol
+             AND f.ann_date IS NOT NULL
+      ) earn ON true
     """
 )
 
@@ -1141,7 +1246,8 @@ def _face_from_row(row: Any) -> dict[str, Any]:
     """把一条 face 行拆成字段（按下标读：``_SYMBOL_FACE_BATCH_SQL`` 的列序是契约）。
 
     指数 face（``_INDEX_FACE_BATCH_SQL``）只有 6 列 → ``first_touch`` / ``days_to``
-    自动为 ``None``（市场级判断没有"标的失效条件触达日"，spec §S9.7.4 的路径指标对它不适用）。
+    与契约 §1 的财报两列（``window_ann_dates`` / ``all_rows``）自动为 ``None`` / ``0``
+    （市场级判断没有"标的披露日"，财报窗口对它不适用）。
     """
     if row is None:
         return {
@@ -1152,6 +1258,9 @@ def _face_from_row(row: Any) -> dict[str, Any]:
             "start_close": None,
             "first_touch": None,
             "days_to": None,
+            # 契约 §1：财报窗口（没有 face 行 = 没有任何财报证据）
+            "window_ann_dates": None,
+            "all_rows": 0,
         }
     return {
         "window_low": row[1],
@@ -1162,6 +1271,9 @@ def _face_from_row(row: Any) -> dict[str, Any]:
         # ★ spec §S9.7.4（只有标的 face 有这两列，见上面的列序契约）
         "first_touch": row[6] if len(row) > 6 else None,
         "days_to": row[7] if len(row) > 7 else None,
+        # ★ 契约 §1 财报窗口（同样只在标的 face 里；指数 face 读不到 → 缺省值）
+        "window_ann_dates": row[8] if len(row) > 8 else None,
+        "all_rows": int(row[9] or 0) if len(row) > 9 else 0,
     }
 
 
@@ -1319,6 +1431,51 @@ def _path_metrics(
     return values, missing
 
 
+def _earnings(face: dict[str, Any], *, market_level: bool) -> tuple[dict[str, Any], dict[str, str]]:
+    """契约 §1 的财报窗口（**纯函数**：只读成交里带回来的两个字段，不查库）。
+
+    ======================  =====================================================
+    字段                    口径
+    ======================  =====================================================
+    ``earnings_in_window``  ``True`` = ``(快照日, due_on]`` 内至少一次财报披露；
+                            ``False`` = 有财报数据但窗口内没有；
+                            ``None`` = 该股**没有任何（带公告日的）财报记录**
+                            （缺数据，不猜 —— 不渲染成"没有财报"）
+    ``earnings_note``       人话；``False`` / ``None`` 时是空串（没有事件就没有提示）
+    ======================  =====================================================
+
+    PIT：窗口只由 ``ann_date <= due_on`` 的记录算出（``window_ann_dates`` 在 SQL 里
+    已经按 ``(start_date, end_date]`` 过滤）。``all_rows``（该股全部带公告日的财报行数）
+    **只**用于区分 ``None`` 与 ``False``：它不参与"窗口内有没有发生披露"的判定，
+    所以不会把"事后才公告"的记录读成窗口内事件。
+
+    "N 次披露"按 **distinct 公告日** 数（同一天公告多份报表 = 一次披露）。
+
+    市场级判断（``symbol is None``）：快照没有标的，财报窗口不适用 →
+    ``None`` + ``missing_reason["earnings"] = "market_level_no_symbol"``。
+    """
+    values: dict[str, Any] = {"earnings_in_window": None, "earnings_note": ""}
+    missing: dict[str, str] = {}
+    if market_level:
+        missing["earnings"] = "market_level_no_symbol"
+        return values, missing
+    if int(face.get("all_rows") or 0) == 0:
+        # 该股一行带公告日的财报都没有 → 缺数据（不是"没有披露"）
+        missing["earnings"] = "no_financial_reports"
+        return values, missing
+    raw_dates = face.get("window_ann_dates") or []
+    days = sorted({parsed for raw in raw_dates if (parsed := _as_date(raw)) is not None})
+    if not days:
+        # 有财报数据，只是都不在 (快照日, due_on] 里 —— 这是一个可核对的事实
+        values["earnings_in_window"] = False
+        return values, missing
+    values["earnings_in_window"] = True
+    values["earnings_note"] = EARNINGS_IN_WINDOW_NOTE.format(
+        n=len(days), days="、".join(day.strftime("%m-%d") for day in days)
+    )
+    return values, missing
+
+
 def _assemble(
     plan: _Plan,
     face: dict[str, Any],
@@ -1346,6 +1503,9 @@ def _assemble(
         "first_touch_invalidation": None,
         "touched_then_reversed": False,
         "days_to_invalidation": None,
+        # ★ 契约 §1 财报窗口（三态：True 有 / False 有数据但不在窗口 / None 无数据）
+        "earnings_in_window": None,
+        "earnings_note": "",
         # ★ spec §S9.7.3：基准到底是什么（人话 + 是否退化），与 bench_pct 同时下发
         "bench_basis_note": bench.note,
         "bench_fallback": bench.fallback,
@@ -1399,6 +1559,11 @@ def _assemble(
     result.update(path_values)
     missing.update(path_missing)
 
+    # ★ 契约 §1：财报窗口（数据由标的 face 同一条批 SQL 带回，不新增查询）
+    earnings_values, earnings_missing = _earnings(face, market_level=market_level)
+    result.update(earnings_values)
+    missing.update(earnings_missing)
+
     gross_outcome = result["outcome_pct"]
     bench_pct = result["bench_pct"]
     if gross_outcome is not None and bench_pct is not None:
@@ -1440,7 +1605,7 @@ async def evaluate_entries(
     谁需要                     查什么
     ==========================  ================================================
     有 symbol 的判断           标的的期末行情/区间极值 + **首次触达失效条件的交易日**
-                               （spec §S9.7.4：同一批 LATERAL 里算，不按天再查）
+                               + **财报窗口**（同一个 SQL 的三条 LATERAL，不按天查）
     要行业基准的判断           申万一级成员等权平均（一条批 LATERAL；只有 ``relative``）
     要沪深300 的判断            指数起止收盘（一条批 LATERAL，三种情形合并：
                                 ``direction`` / ``market`` / ``relative`` 退化）
@@ -1765,7 +1930,11 @@ async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
     - ★ 裁定 2：``share_ci.win`` 的**分母排除 ``pass``**（pass = 不参与市场，
       它的"超额"没有意义；分母 = 已复盘且 ``kind != pass``）；
     - ★ ``calibration`` 的总样本 = "已复盘且填了 ``confidence``"的条数，
-      ``< 20`` 时为 ``None`` + ``calibration_note``（不画半条曲线）。
+      ``< 20`` 时为 ``None`` + ``calibration_note``（不画半条曲线）；
+    - ★ 契约 §2 ``consistency``：分子/分母都在**同一条聚合**里数（分母 = 已复盘且
+      净超额可算，分子 = :func:`consistency_summary` 的判据），``n < 5`` 时
+      ``share`` / ``ci_low`` / ``ci_high`` 为 ``null``（只给 ``n``），区间复用
+      :func:`wilson_interval`（不另造一套）。
 
     为什么两个名字给**同一组计数**：spec 的验收判据是"``by_attribution`` 合计 =
     ``reviewed_n``（算术自洽）"，而前端类型（``JournalStats.by_verdict``）要的是
@@ -1859,6 +2028,32 @@ async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
             .label(f"size_{size}_excess_n")
             for size in POSITION_SIZES
         ),
+        # ★ 契约 §2 归因自洽：分母 = 已复盘**且净超额可算**的条数；分子按
+        #   verdict 与净超额符号的一致性判定（判据与 `>` / `<` 在同一条聚合里，
+        #   stats 仍然是 2 条查询，不为每条 entry 再查一次）。
+        #   净超额 = excess_pct − 12bp，所以"净超额 > 0"就是"excess_pct > 0.12"
+        #   （恰在成本线上不算赚，与 share_ci.win 同一口径）。
+        func.count(DecisionJournalReview.id)
+        .filter(DecisionJournalReview.excess_pct.is_not(None))
+        .label("consistency_n"),
+        func.count(DecisionJournalReview.id)
+        .filter(
+            or_(
+                # 纪律问题与盈亏独立 → 恒自洽（契约 §2 逐字）
+                DecisionJournalReview.verdict.in_(CONSISTENCY_ALWAYS_VERDICTS),
+                # 「我错了」必须对应亏钱，才叫前后一致
+                and_(
+                    DecisionJournalReview.verdict.in_(CONSISTENCY_NEGATIVE_VERDICTS),
+                    DecisionJournalReview.excess_pct < cost,
+                ),
+                # 「我对了」必须对应赚钱（且赚过成本线）
+                and_(
+                    DecisionJournalReview.verdict.in_(CONSISTENCY_POSITIVE_VERDICTS),
+                    DecisionJournalReview.excess_pct > cost,
+                ),
+            )
+        )
+        .label("consistency_consistent"),
     ]
     total_row = (
         await db.execute(
@@ -1982,6 +2177,10 @@ async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
             # 裁定 2：分母排除 pass（全是 pass 时 0/0 → None，而不是 100%）
             "win": wilson_interval(int(m["win_n"] or 0), int(m["win_denominator"] or 0)),
         },
+        # ★ 契约 §2 归因自洽率（n < 5 → 只给 n，比例与区间都是 None）
+        "consistency": consistency_summary(
+            int(m["consistency_consistent"] or 0), int(m["consistency_n"] or 0)
+        ),
         "net_cost_bps": COST_ROUND_TRIP_BPS,
         "multiple_comparison_note": MULTIPLE_COMPARISON_NOTE,
         # ★ spec §S9.7.1/§S9.7.6 收益统计的排除口径（前端原样展示，不改写）
