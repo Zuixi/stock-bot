@@ -167,7 +167,10 @@ BROKEN_NOTE = "状态产物无法解析（重新运行 backend/scripts/build_mar
 #: 固定口径（spec §S10.3 逐字，前端原样展示）
 BASIS_NOTE = "状态由固定规则判定，不预测未来"
 SAMPLES_NOTE = "每态样本 <30 不给分布（只给 n）"
-FORWARD_NOTE = "同态后续 5/20 个交易日为全市场中位收益（按交易日连乘），winsorize ±50%"
+FORWARD_NOTE = (
+    "同态后续 5/20 个交易日为全市场中位收益（按交易日连乘），winsorize ±50%；"
+    "样本期整体有漂移，读绝对水平时应与「中性」态同期对比（spec §S10.3）"
+)
 
 
 def _t(key: str) -> float:
