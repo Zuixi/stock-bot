@@ -264,7 +264,7 @@ async def _quote_rows(db: AsyncSession, symbol: str, as_of: date) -> list[Any]:
         .order_by(DailyQuote.trade_date)
     )
     rows = (await db.execute(stmt)).all()
-    # 同一 symbol 在不同交易所各有一行 stocks 时 join 会翻倍：按交易日取首行
+    # 同一 symbol 在不同交易所各有一行 stocks 时 join 会重复出行：按交易日取首行
     # （A 股代码在交易所间不重叠；这里的去重只为"别让窗口里出现重复日"）。
     by_date: dict[date, Any] = {}
     for row in rows:
