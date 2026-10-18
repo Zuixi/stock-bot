@@ -155,12 +155,103 @@ decision_journal_reviews(
 
 ---
 
+---
+
+## S9.6 同类历史（peer history）—— 让"记录"立刻换回信息
+
+**为什么有这一节**：S9.1–S9.5 只在**到期时**给回报，写完那一刻用户什么都没得到——这是留存杀手。
+本节让创建响应**立刻**返回两段事实：**你在同类情形下的历史** 与 **全市场同桶的历史分布**。
+
+**这一节只定义口径**（owner 2026-10-18：「先设计口径再写」）。实现排期见 §S9.6.6。
+
+### S9.6.1 相似的三个维度（不多不少）
+
+只用快照里**当时就存在**的 3 个字段分桶，避免"事后才有的信息"混进来：
+
+| 维度 | 来源字段 | 桶 |
+|---|---|---|
+| 市场情绪 | `snapshot.sentiment_percentile` | `<20` · `20–40` · `40–60` · `60–80` · `≥80` · **`unknown`**（null） |
+| 板块方向 | `snapshot.sector_flow_state.pct` | `≤−2%` · `(−2%, 2%)` · `≥2%` · **`unknown`**（无行业/null） |
+| 位置 | `snapshot.ma20_dist_pct` | `<−5%` · `[−5%, 5%]` · `>5%` · **`unknown`**（null） |
+
+- 组合桶 = `(情绪, 板块, 位置)`，上限 5×3×3 = **45** 个（`unknown` 单列，不与其他值合并）。
+- 分桶常量放代码 `SIMILARITY_BUCKETS`（边界值 20/40/60/80、±2、±5），**改动必须 bump `PEER_HISTORY_VERSION`**。
+- **只按桶相等匹配**：不做距离、不做加权、不做聚类（避免"看起来很像"的伪相似）。
+- **标的**：用户历史层**优先同标的**（`same_symbol`），不足再退到同桶任意标的；两层分别标注来源。
+
+### S9.6.2 两层样本与阈值
+
+| 层 | 来源 | 最少样本 | 不足时 |
+|---|---|---|---|
+| L1 你自己的历史 | 该用户**已复盘**的日志（`reviewed_n`） | **5** | 只显示"同类情形下你只有 N 条，样本不足（<5）"，**不给比例** |
+| L2 全市场同桶 | 离线统计产物 `peer_history_stats.json`（12 个月、同口径） | **30** | 该桶只显示"样本不足"，**不给数字** |
+
+- L1 与 L2 **必须分开呈现**，不得合并成一个"胜率"（用户历史是自我参照，全市场是背景，混在一起就是误导）。
+- L1 的"对/错"用 `verdict` 分类：`thesis_wrong` / `timing_wrong` / `discipline_break` → 错；`right_for_wrong_reason` 单列"结果对但理由错"；`luck` 单列"不可归因"；未复盘不计入。
+- L2 只给**统计量**（同桶 5/20 日超额中位与样本数），不给"对错"。
+
+### S9.6.3 PIT 纪律（本节最容易写错的地方）
+
+- L1 **只能使用 `created_at < 当前条目 created_at` 且已复盘**的条目——**不得包含未来**，否则等于自己泄露自己。
+- L2 的统计窗口必须在**当前条目的快照日之前**结束（离线产物带 `as_of`，请求时若 `as_of >= 快照日` 则拒绝使用并标 `stale_guard`）。
+- 对照实验（必测）：把一条**未来**的 reviewed 日志塞进候选集，输出**必须不变**；把 L2 的 `as_of` 调到快照日之后，必须拒绝。
+
+### S9.6.4 计算结果必须落进不可变快照
+
+`POST /journal` 的响应新增 `peer_history`，并**同时写进该条目的 `snapshot.peer_history`**：
+
+```json
+{ "version": "ph-v1", "computed_at": "2026-10-18T10:00:00+08:00",
+  "bucket": { "sentiment": "20-40", "sector": "below_-2", "ma20": "neg_5" },
+  "self": { "same_symbol": {"n": 2, "right": 1, "wrong": 1},
+            "same_bucket": {"n": 6, "right": 4, "wrong": 2,
+                            "wrong_by": {"timing_wrong": 2}} },
+  "market": { "as_of": "2026-09-30", "n": 812, "t5_excess_med": -0.42, "t20_excess_med": -1.10 },
+  "notes": [] }
+```
+
+- **落库意义**：以后算法或数据变了，用户当时看到的"同类历史"仍可复现（与本模块"不可篡改"同一条哲学）。
+- 计算失败**不得阻断创建**：`peer_history` 写 `null` 并在 `notes` 写明原因（`no_stats_product` / `pipeline_error`）。
+- `notes` 里也必须写明"该统计只描述过去，不预测结果"。
+
+### S9.6.5 展示契约（一句话 + 一个比例 + 一个指向）
+
+前端在创建成功后原样展示三段，不得改写：
+
+> **同类情形**（情绪 30–40 分位 · 电子 −1.8% · 距 MA20 −3.2%）
+> 你自己：6 条 → 4 对 / 2 错，**错的 2 次都是"时机错"**
+> 全市场同桶（截至 9 月 30 日，812 条）：5 日超额中位 −0.42%
+> *以上只描述过去，不预测结果。*
+
+- **必须**显示 `wrong_by` 的构成（"错在哪"比"错几次"有用）。
+- 样本不足时只显示"样本不足"那句 + 已有什么（不显示 0、不显示百分比）。
+- 不出现判断词（沿用 S8 禁用词表）。
+
+### S9.6.6 实现与离线产物（**排期未定，等 owner 批准本口径**）
+
+- 新增 `backend/app/services/peer_history_service.py`：`bucket_of(snapshot)`、`self_history(db, user_id, bucket, before)`、`market_history(bucket)`
+- 新增离线脚本 `build_peer_history_stats.py`（**待建**，落 `backend/` 脚本目录）→ 产物 `peer_history_stats.json`
+  （12 个月、按 45 桶聚合、交易日历对齐 + 复权 + winsorize ±50%，与既有 `triage_rule_stats` **同口径**）
+- `POST /journal` 响应与快照新增 `peer_history`（不影响既有字段）
+- 前端：创建成功后的结果卡片（无新路由、无新 tab）
+
+### S9.6.7 验收判据
+
+- 行为：分桶边界（19.9/20/40/60/80/80.1、板块 ±2、MA20 ±5）逐值落桶确定（单测表驱动）
+- 行为：**PIT 对照** —— 候选集加入未来条目 → 输出不变；L2 `as_of ≥ 快照日` → 拒绝并 `notes=stale_guard`
+- 行为：L1 `n=4` 显示"样本不足"；`n=5` 显示比例；L2 `n=29` 不给数字、`n=30` 给
+- 行为：`self` 与 `market` 分开展示（e2e 断言两块标题各自存在，且不存在合并的"胜率"）
+- 数据契约：`snapshot.peer_history.version` 必填；`wrong_by` 合计 = `wrong`
+- 行为：`peer_history` 计算失败时创建仍成功（201）且 `notes` 有原因
+- 门禁：离线脚本可复跑、两次产物逐字节一致；`PEER_HISTORY_VERSION` 变更必须同时改 spec
+
 ## S9 整体验收判据
 
 - 数据契约：**仅 2 张新表**（`decision_journal_entries` / `decision_journal_reviews`）· 无新 cron
 - 行为：3 行必填（缺一 422）· 创建后不可改（无 PATCH/PUT/DELETE）
 - 行为：快照落库且不随行情变化；缺数用 `null + missing_reason`
 - 行为：到期 → 自动结果 → 归因（必选）→ `stats` 自洽
+- 行为：创建响应含 `peer_history`（S9.6），且**写入不可变快照**；失败不阻断创建（`notes` 有原因）
 - 门禁：`self_review --full` · `doc_gate` · Playwright（表单三态、到期列表、归因五选一、样本不足文案）
 
 ## 明确推迟
