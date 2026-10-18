@@ -45,7 +45,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services import job_alert_service
+from app.services import job_alert_service, market_regime_service, peer_history_service
 from scripts import build_market_regime, build_peer_history_stats, build_triage_rule_stats
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,12 @@ class Artifact:
     build: Callable[[AsyncSession], Awaitable[dict[str, Any]]]
     #: ``(document, path) -> Path``：确定性序列化（同一文档两次运行逐字节一致）
     write: Callable[[dict[str, Any], Path], Path]
+    #: 代码侧**当前**版本（产物里的 ``version`` 与它不一致 ⇒ 视为过期，即使 ``as_of`` 很新）。
+    #: 为什么需要：口径改了（阈值/统计窗口）但 ``as_of`` 没变时，只按日期判会让"新规则 + 旧数字"
+    #: 静默并存（2026-10-19 regime 的 basis 文案落后就是这么来的）。
+    #: ``None`` = 该产物**没有版本字段**（如 `triage_rule_stats`）→ 只按 ``as_of`` 判，避免
+    #: 每轮都重建一个 35s 的产物。
+    version: str | None = None
 
 
 #: 产物登记表（键 = 返回值里用的名字，也是日志/告警里的标识）。
@@ -77,16 +83,19 @@ ARTIFACTS: dict[str, Artifact] = {
         path=build_market_regime.OUT_PATH,
         build=build_market_regime.build,
         write=build_market_regime.write_document,
+        version=market_regime_service.REGIME_VERSION,
     ),
     "peer_history_stats": Artifact(
         path=build_peer_history_stats.OUT_PATH,
         build=build_peer_history_stats.build,
         write=build_peer_history_stats.write_document,
+        version=peer_history_service.PEER_HISTORY_VERSION,
     ),
     "triage_rule_stats": Artifact(
         path=build_triage_rule_stats.OUT_PATH,
         build=build_triage_rule_stats.build,
         write=build_triage_rule_stats.write_document,
+        version=None,  # 该产物没有 version 字段：只按 as_of 判（避免每轮重建 35s）
     ),
 }
 
@@ -123,6 +132,28 @@ def _read_as_of(path: Path) -> date | None:
     return _as_of_from_document(document)
 
 
+def _read_version(path: Path) -> str | None:
+    """产物里的 ``version``（口径版本）；缺失/读不了 → ``None``（= 需重建）。"""
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    raw = document.get("version")
+    return raw if isinstance(raw, str) else None
+
+
+def _is_stale(artifact: Artifact, day: date) -> bool:
+    """过期 = ``as_of`` 缺失/落后 **或** 产物版本与代码不一致（口径变了）。"""
+    as_of = _read_as_of(artifact.path)
+    if as_of is None or as_of < day:
+        return True
+    if artifact.version is None:
+        return False
+    return _read_version(artifact.path) != artifact.version
+
+
 def _write_atomic(artifact: Artifact, document: dict[str, Any]) -> None:
     """写同目录临时文件再 ``os.replace``：要么旧文件、要么完整新文件，不存在半截。"""
     tmp = artifact.path.with_name(f".{artifact.path.name}.tmp")
@@ -142,8 +173,7 @@ def stale_artifacts(day: date) -> list[str]:
     """
     stale: list[str] = []
     for name, artifact in ARTIFACTS.items():
-        as_of = _read_as_of(artifact.path)
-        if as_of is None or as_of < day:
+        if _is_stale(artifact, day):
             stale.append(name)
     return stale
 
@@ -169,10 +199,11 @@ async def refresh_stale_artifacts(db: AsyncSession, day: date) -> dict[str, list
     skipped: list[str] = []
     failed: list[str] = []
     for name, artifact in ARTIFACTS.items():
-        as_of = _read_as_of(artifact.path)
-        if as_of is not None and as_of >= day:
+        if not _is_stale(artifact, day):
             skipped.append(name)
             continue
+        # 重建前先记下现有 as_of：若重建出来的值与它相同或更旧，不写文件（不覆盖更新的产物）
+        as_of = _read_as_of(artifact.path)
         try:
             document = await artifact.build(db)
             new_as_of = _as_of_from_document(document)

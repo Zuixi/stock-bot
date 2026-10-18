@@ -66,7 +66,12 @@ def _install(
 
             return build
 
-        registry[name] = replace(base, path=path, build=_build(), write=_write_minimal)
+        # 版本置 None：本文件测的是"as_of 新鲜度"这一条判据；版本比对由
+        # `test_version_mismatch_counts_as_stale` 单独覆盖（否则假产物没有 version 字段，
+        # 会被版本判据判成永远过期）。
+        registry[name] = replace(
+            base, path=path, build=_build(), write=_write_minimal, version=None
+        )
 
     monkeypatch.setattr(svc, "ARTIFACTS", registry)
     return calls, paths
@@ -186,3 +191,41 @@ async def test_rebuild_without_advancing_keeps_old_file(
     assert calls == {name: 1 for name in NAMES}
     assert payload == {"refreshed": [], "skipped": list(NAMES), "failed": []}
     assert {name: path.read_bytes() for name, path in paths.items()} == before
+
+
+def test_builders_are_importable_from_the_app_package() -> None:
+    """镜像里必须能 import 三个 builder（`backend/.dockerignore` 曾整体忽略 `scripts/`）。
+
+    为什么这条要存在：`artifacts_service` 在 reconcile 尾步直接 import `scripts.build_*`，
+    而 `scripts/` 一度被 `.dockerignore` 排除 ⇒ 测试全绿、容器里 `ModuleNotFoundError`。
+    这条测试只能证明"测试环境可导入"，镜像侧的对应检查是
+    `docker run --rm <image> python -c "import scripts.build_market_regime"`（收尾验证跑）。
+    """
+    import importlib
+
+    for name in (
+        "scripts.build_market_regime",
+        "scripts.build_peer_history_stats",
+        "scripts.build_triage_rule_stats",
+    ):
+        assert importlib.import_module(name) is not None, (
+            f"{name} 必须可导入（artifacts_service 依赖它）"
+        )
+
+
+def test_version_mismatch_counts_as_stale(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """产物 `as_of` 很新但**版本对不上** ⇒ 仍要重建。
+
+    为什么需要：口径改了（阈值/统计窗口）而 `as_of` 没变时，只按日期判会让"新规则 + 旧数字"
+    静默并存（2026-10-19 regime 的 basis 文案落后就是这么来的）。
+    """
+    base = svc.ARTIFACTS["market_regime_history"]
+    path = tmp_path / "regime.json"
+    path.write_text(json.dumps({"version": "s-old", "as_of": "2026-10-16"}), encoding="utf-8")
+    artifact = replace(base, path=path, version="s-new")
+    monkeypatch.setattr(svc, "ARTIFACTS", {"market_regime_history": artifact})
+    assert svc.stale_artifacts(date(2026, 10, 16)) == ["market_regime_history"]
+
+    # 版本对上 + 日期新鲜 ⇒ 不重建
+    path.write_text(json.dumps({"version": "s-new", "as_of": "2026-10-16"}), encoding="utf-8")
+    assert svc.stale_artifacts(date(2026, 10, 16)) == []
