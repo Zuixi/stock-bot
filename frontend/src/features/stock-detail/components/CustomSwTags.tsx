@@ -131,6 +131,9 @@ export function CustomSwTags({ exchange, symbol, variant = "full" }: Props) {
       size="small"
       icon={<EditOutlined />}
       disabled={!tagsReady}
+      // `tagsReady === false`（加载中或**失败**）时按钮不可点，必须说明原因：
+      // 置灰而无解释会被读成"这个功能坏了"，而真实原因只是标签还没就绪。
+      title={tagsReady ? undefined : "标签未就绪，稍后重试"}
       onClick={handleOpen}
     >
       编辑

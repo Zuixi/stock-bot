@@ -17,6 +17,10 @@ import { test, expect as baseExpect, type Page, type Route } from "@playwright/t
  * 5. **块间隔离（渲染异常）**：让成长卡读到 `value: "boom"`（字符串当数字用 ⇒ 渲染期
  *    `TypeError`），断言只有这一块被 `BlockBoundary` 换成错误卡，K 线 / 报价条 / 估值卡 /
  *    公司概况 / 事件表全部还在（React 18 单个组件抛错会卸载整棵子树，这是 blast radius 的判据）。
+ * 6. **K 线块失败 ≠ 无记录**：`/quotes/daily` 打 500 时，K 线卡必须给「加载失败 + 重试」，
+ *    **不得**落到 `<Empty>暂无K线数据</Empty>` —— 旧实现只解构 `{data,isLoading}`，于是同一屏
+ *    上报价条已经报「加载失败」（同一个缓存键）、K 线卡却宣称"这只票没有 K 线"。
+ * 7. **K 线重试真的重取**：恢复 `/quotes/daily` 后点重试，错误块消失、ribbon 重新出现。
  *
  * 断言纪律（与 `stockDetailLayout.spec.ts` / `stockDetailFinancial.spec.ts` 同）：
  * `page.route` / `page.on("request")` 必须在 `goto` 之前注册；锚点用页面上真实出现的元素，
@@ -226,4 +230,49 @@ test("一块渲染异常只坏一块：成长卡被边界换成错误卡，其�
   await expect(eventsCard(page)).toBeVisible();
   // 崩掉的块不再显示自己的卡（错误卡取代了它，不是两张卡叠在一起）
   await expect(growthCard(page)).toHaveCount(0);
+});
+
+test("K 线取数失败不是「暂无K线数据」：图块显示「加载失败 + 重试」", async ({ page }) => {
+  await page.setViewportSize(WIDE);
+  // 只打瘫日线：K 线图、52 周区间、股性行共用这一个端点（同一缓存键），这正是旧实现的坑
+  await page.route(DAILY_GLOB, (route) => route.fulfill({ status: 500, body: "boom" }));
+
+  await openDetail(page);
+
+  const card = klineCard(page);
+  await expect(card, "K 线卡本身应仍在（失败是块内错误态，不是整块消失）").toBeVisible();
+
+  const errorBlock = card.getByTestId("kline-error");
+  await expect(errorBlock, "500 时 K 线块应显示错误态").toBeVisible();
+  await expect(errorBlock).toContainText("加载失败");
+  await expect(card.getByTestId("kline-retry")).toContainText(/重\s*试/);
+
+  // 判别性断言：失败**不得**被写成"这只票没有 K 线"
+  await expect(card, "K 线失败被伪装成「暂无K线数据」").not.toContainText("暂无");
+  await expect(card.getByTestId("kline-ribbon"), "失败态不该有数据条").toHaveCount(0);
+
+  // 同一屏的矛盾：报价条（同一查询键）已经在报「加载失败」，K 线卡不能同时说"没有数据"
+  await expect(
+    page.getByTestId("quote-position-strip"),
+    "报价条与 K 线共用同一份日线，两处的失败/无记录判断必须一致",
+  ).toContainText("加载失败");
+});
+
+test("K 线恢复端点后点「重试」：错误块消失、图真的回来", async ({ page }) => {
+  await page.setViewportSize(WIDE);
+  await page.route(DAILY_GLOB, (route) => route.fulfill({ status: 500, body: "boom" }));
+
+  await openDetail(page);
+  const card = klineCard(page);
+  const errorBlock = card.getByTestId("kline-error");
+  await expect(errorBlock).toBeVisible();
+
+  // 换回真后端再点重试：证明重试是真的重取，不是只把错误块藏起来
+  await page.unroute(DAILY_GLOB);
+  await card.getByTestId("kline-retry").click();
+
+  await expect(errorBlock, "重试成功后不应再有错误块").toBeHidden();
+  // 宽屏下数据条只在**有** bar 时渲染（canvas 里的内容断言不了，ribbon 是可读的等价证据）
+  await expect(card.getByTestId("kline-ribbon"), "重试后仍没有 K 线，说明没有真的重取").toBeVisible();
+  await expect(card).not.toContainText("暂无");
 });

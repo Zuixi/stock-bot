@@ -30,6 +30,11 @@ from app.models.market_data import (  # noqa: F401
     ShareFloat,
     StockRepurchase,
 )
+from app.models.market_panorama import (
+    MarketBreadthBucketDaily,
+    MarketBreadthDaily,
+    MarketIndustryDaily,
+)
 from app.models.quote import DailyQuote
 from app.models.securities import CbDaily, FundEtfDaily
 from app.models.sse_index_snapshot import SseIndexSnapshot
@@ -75,6 +80,9 @@ __all__ = [
     "ShareFloat",
     "StockRepurchase",
     "Announcement",
+    "MarketBreadthDaily",
+    "MarketBreadthBucketDaily",
+    "MarketIndustryDaily",
     "FinancialRawRecord",
     "FinancialReportVersion",
     "IncomeStatementFacts",

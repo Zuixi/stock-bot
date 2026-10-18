@@ -48,7 +48,7 @@ export function StockTagRow({ exchange, symbol }: Props) {
   const narrow = useIsNarrowViewport();
   const [expanded, setExpanded] = useState(false);
 
-  const { data: swTags = [] } = useQuery({
+  const { data: swTags = [], isError: swTagsError } = useQuery({
     queryKey: ["stock-sw-tags", exchange, symbol],
     queryFn: () => fetchStockSwTags(exchange, symbol),
     staleTime: 5 * 60 * 1000,
@@ -110,14 +110,26 @@ export function StockTagRow({ exchange, symbol }: Props) {
         </span>
       )}
 
-      {hiddenCount > 0 && (
+      {/* 收起必须一直可见：展开后 `hiddenCount === 0`，若仍以它为渲染条件，用户就再也收不回去 */}
+      {(hiddenCount > 0 || expanded) && (
         <Tag.CheckableTag checked={expanded} onChange={() => setExpanded((prev) => !prev)}>
           {expanded ? "收起" : `+${hiddenCount}`}
         </Tag.CheckableTag>
       )}
 
+      {/*
+        失败 ≠ 没有：SW 分类取数失败时 `data` 是 `undefined`（默认值 `[]`），旧实现据此写出
+        「暂无分类标签」——把一次 500 说成"这只票没有分类"。失败态只给一句安静的人话，
+        与概念组同一套「零占位 + 不伪装成空」的契约。
+      */}
+      {swTagsError && (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }} data-testid="sw-tags-error">
+          分类标签加载失败
+        </Typography.Text>
+      )}
+
       {/* 概念为空但**成功**时才给一句人话：失败态沿用「零占位」契约（不伪装成"没有"） */}
-      {swTags.length === 0 && conceptItems.length === 0 && !conceptError && (
+      {swTags.length === 0 && !swTagsError && conceptItems.length === 0 && !conceptError && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           暂无分类标签
         </Typography.Text>

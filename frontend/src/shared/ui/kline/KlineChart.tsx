@@ -1,6 +1,6 @@
 import ReactECharts from "echarts-for-react";
 import { AimOutlined } from "@ant-design/icons";
-import { Button, Card, Empty, Segmented, Space, Spin, Tooltip as AntTooltip } from "antd";
+import { Alert, Button, Card, Empty, Segmented, Space, Spin, Tooltip as AntTooltip } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "@/app/theme-context";
@@ -77,13 +77,35 @@ export function KlineChart({
   const hoverRaf = useRef<number | null>(null);
   const pendingHover = useRef<number | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["kline", queryKey, adjust],
     queryFn: () => fetcher(3650, adjust), // 10年窗口 = 库内全量，频率切换纯前端聚合
     staleTime: STALE_TIME,
     // 复权因子后台回补中：禁用态提示"稍后自动可用"，10s 轮询直至就绪后停止
     refetchInterval: (q) => (q.state.data?.adjustAvailable === false ? 10_000 : false),
   });
+
+  /**
+   * 失败 ≠ 无记录（计划 §6 对**每一块**成立）。
+   *
+   * 旧实现只解构 `{ data, isLoading }`：`/quotes/daily` 500/断网时 `data` 仍是 `undefined`，
+   * 于是落到 `<Empty description="暂无K线数据"/>` —— 一次请求失败被页面写成"这只票没有 K 线"
+   * 这一条事实。同一屏的报价条（共用同一缓存键）此时显示「加载失败 · 重试」，两处自相矛盾。
+   *
+   * 重试在途时用本地 `retrying` 撑住错误态：React Query v5 的 `fetchState()` 在 refetch
+   * 一开始就把 `error` 清成 `null`、`status` 回落 `pending`，只看 `isError` 的话点「重试」
+   * 会立刻闪成空态（又回到"看起来像没有数据"）。与 `RelatedEvents` / `GrowthCard` 同一手法。
+   */
+  const [retrying, setRetrying] = useState(false);
+  const handleRetry = async () => {
+    setRetrying(true);
+    try {
+      await refetch();
+    } finally {
+      setRetrying(false);
+    }
+  };
+  const failed = isError || retrying;
 
   const points = useMemo(() => aggregateDaily(data?.points ?? [], freq), [data, freq]);
 
@@ -299,6 +321,37 @@ export function KlineChart({
       {isLoading ? (
         <div style={{ height: 400, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <Spin />
+        </div>
+      ) : failed ? (
+        // 高度与画布同为 400：失败态不改变卡片高度，下面的块不会因为一次 500 而搬家
+        <div
+          style={{
+            height: 400,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "0 16px",
+          }}
+        >
+          <Alert
+            type="error"
+            showIcon
+            data-testid="kline-error"
+            style={{ width: "100%" }}
+            message="加载失败 · 不代表没有K线数据"
+            description="本次请求未能完成，请重试。"
+            action={
+              <Button
+                size="small"
+                loading={retrying}
+                disabled={retrying}
+                data-testid="kline-retry"
+                onClick={() => void handleRetry()}
+              >
+                重试
+              </Button>
+            }
+          />
         </div>
       ) : points.length > 0 ? (
         <div>

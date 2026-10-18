@@ -111,6 +111,16 @@ export default function StockDetailPage() {
   });
 
   /**
+   * **唯一符号源**：后端归一后的 `stock.symbol`，只在 stock 落地前回落到 URL 参数。
+   *
+   * 为什么必须归一：下面几个 hook 的 query key 都把这个串拼进 `stock-kline-${symbol}`。
+   * 改造中曾出现「K 线读 `stock.symbol`（归一后 `000001`）、52 周区间与股性行读 URL 参数
+   * （`/company/1` 的 `1`）」—— 同一个 `/quotes/daily` 被劈成两个缓存键：图渲染出来了，
+   * 区间条与股性行却是空的，而且**不报错**。这类漂移不写注释一定会复发。
+   */
+  const normalizedSymbol = stock?.symbol ?? symbol;
+
+  /**
    * 财务摘要：概览「成长与盈利」卡与财务 tab 共用**同一个** query key
    * （`["financial-summary", exchange, symbol]`，见 useFinancialSummary）。
    * 因此切到财务 tab 时命中缓存、不二次请求。
@@ -126,15 +136,15 @@ export default function StockDetailPage() {
    * - 估值分位复用估值 tab 的 `["valuation-history", exchange, symbol, "pe_ttm", "3y"]`。
    * 同样在早退之前调用，保持 hooks 顺序。
    */
-  const range = useStockRangeStats(symbol);
-  const percentile = usePeTtmPercentile(stock?.exchange, stock?.symbol ?? symbol);
+  const range = useStockRangeStats(normalizedSymbol);
+  const percentile = usePeTtmPercentile(stock?.exchange, normalizedSymbol);
 
   /**
    * 股性事实行（P2-3）。同样在早退之前调用以保持 hooks 顺序；取数复用 K 线在 qfq 下的
    * 缓存键（`useCharacterStats` 内有 R7 注释），**不新增任何请求** ——
    * `e2e/stockDetailCompany.spec.ts` 用「`/quotes/daily` 请求数 == 1」钉住这一点。
    */
-  const character = useCharacterStats(symbol);
+  const character = useCharacterStats(normalizedSymbol);
 
   /**
    * 事件列表 + 图上事件标记（P1-2）：**同一份查询**同时供给两处。
@@ -146,13 +156,14 @@ export default function StockDetailPage() {
    */
   const [eventKind, setEventKind] = useState<EventTab>("announcements");
   const overviewActive = tab === "overview";
-  const stockEvents = useStockEvents(stock?.symbol, overviewActive ? eventKind : null);
+  const stockEvents = useStockEvents(normalizedSymbol, overviewActive ? eventKind : null);
 
   /**
    * 事件日期 → K 线下标的桥梁。复用的是 **K 线自己的缓存键**（`useKlineDates` 内有 R7 注释），
    * 所以图上的标记、列表行、K 线图永远对齐同一份 bar 序列，且 `/quotes/daily` 仍是 1 次。
+   * 符号同样取归一后的 `normalizedSymbol`（见其注释：混用两个符号源会静默劈开缓存）。
    */
-  const dates = useKlineDates(stock?.symbol);
+  const dates = useKlineDates(normalizedSymbol);
   const { colors } = useTheme();
   const markerPalette = useMemo(() => eventMarkerPalette(colors), [colors]);
   const eventMarkers = useMemo(
@@ -293,11 +304,6 @@ export default function StockDetailPage() {
                     </BlockBoundary>
                   </Col>
                 </Row>
-
-                <Divider style={{ margin: "16px 0" }} />
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  本页数据仅供参考，不构成投资建议。数据来源可能存在延迟，请以交易所实时数据为准。
-                </Typography.Text>
               </>
             ),
           },
@@ -313,6 +319,13 @@ export default function StockDetailPage() {
           },
         ]}
       />
+
+      {/* 免责声明属于**整页**，不属概览 tab：放在 `</Tabs>` 之后，估值 / 财务两个 tab 也带着它。
+          （改造时曾被挪进概览的 children，于是另外两个 tab 丢掉了这句免责声明。） */}
+      <Divider style={{ margin: "16px 0" }} />
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        本页数据仅供参考，不构成投资建议。数据来源可能存在延迟，请以交易所实时数据为准。
+      </Typography.Text>
     </div>
   );
 }
