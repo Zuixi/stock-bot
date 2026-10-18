@@ -5,11 +5,14 @@
 1. **净成本**（§S9.7.2）：``net_outcome_pct = outcome_pct - 0.12`` 逐值断言（不是"约等于"），
    ``net_excess_pct = net_outcome_pct - bench_pct``；常量 ``COST_ROUND_TRIP_BPS = 12``
    与统计产物版本成对钉死（改一个不改另一个 → 这里红），并要求源码里写清假设与日期。
-2. **基准**（§S9.7.3）：三种 ``bet_type`` 各自命中正确基准（``bench_pct`` 与**手工计算**
-   对照：行业等权 = 成员收益算术平均；沪深300 = 指数起止）；无行业 → 沪深300 且
-   ``bench_fallback = true``；``bench_basis_note`` 说人话。
-3. **`pass` 一等公民**（§S9.7.6）：``by_kind`` 合计 = ``n``；``pass`` 计入判断统计、
-   **不计入收益统计**（``avg_excess_pct`` / ``avg_net_excess_pct`` 排除它）。
+2. **基准**（§S9.7.3）：三种 ``bet_type`` **各自命中不同基准**（``bench_pct`` 与**手工计算**
+   对照：行业等权 = 成员收益算术平均；沪深300 = 指数起止）。口径修正后 ``direction`` /
+   ``market`` → 沪深300、``relative`` → 行业等权；``direction`` 与 ``relative`` 的
+   ``bench_pct`` **必须不相等**（构造数字让它们不等）；只有 ``relative`` 无行业 →
+   沪深300 且 ``bench_fallback = true``；``bench_basis_note`` 说人话。
+3. **`pass` / `none` 一等公民**（§S9.7.1/§S9.7.6）：``by_kind`` 合计 = ``n``；``pass``
+   与 ``position_size=none`` 都计入判断统计、**不计入收益统计**（``avg_excess_pct`` /
+   ``avg_net_excess_pct`` / ``avg_weighted_excess_pct`` 排除），并下发一句 ``exclusion_note``。
 4. **Wilson 区间**（§S9.7.7）：``0/0 → null`` · ``4/6 ≈ [0.30, 0.90]`` · ``5/5`` 不高估；
    ``stats.share_ci`` 给 ``n / successes / ci_low / ci_high``；``discipline_break_share``
    仍是 ``number | null``（**类型不变**）。
@@ -266,12 +269,52 @@ async def _evaluate(session: AsyncSession, entry: DecisionJournalEntry) -> dict[
 
 
 @requires_pg
-async def test_direction_bench_is_industry_equal_weight() -> None:
-    """``direction`` → 所属申万一级**成分股等权平均收益**（不是指数行情，须诚实标注）。"""
+async def test_direction_bench_is_hs300() -> None:
+    """``direction`` → **沪深300**（口径修正：赌方向不再拿行业等权当基准）。"""
 
     async def _go(session: AsyncSession) -> dict[str, Any]:
         await _seed(session)
         return await _evaluate(session, _entry(symbol=MAIN, bet_type="direction"))
+
+    result = await _with_rollback(_go)
+    assert result["bench_pct"] == pytest.approx(EXPECT_HS300_BENCH, abs=1e-4)
+    assert result["excess_pct"] == pytest.approx(EXPECT_MAIN_OUTCOME - EXPECT_HS300_BENCH, abs=1e-4)
+    assert result["bench_fallback"] is False
+    assert result["bench_basis_note"] == svc.BENCH_NOTE_HS300
+
+
+@requires_pg
+async def test_direction_and_relative_benchmarks_are_not_the_same() -> None:
+    """口径修正的核心：``direction`` = 沪深300、``relative`` = 行业等权，**两者不相等**。
+
+    构造的数字刻意让它们不等（10% 标的，沪深300 +2.5%，行业等权 +5%）：若实现回退成
+    "两者同构"，``direction["bench_pct"]`` 会等于 5.0 → 这里立刻红。
+    """
+
+    async def _go(session: AsyncSession) -> dict[str, dict[str, Any]]:
+        await _seed(session)
+        return {
+            "direction": await _evaluate(session, _entry(symbol=MAIN, bet_type="direction")),
+            "relative": await _evaluate(session, _entry(symbol=MAIN, bet_type="relative")),
+        }
+
+    results = await _with_rollback(_go)
+    direction, relative = results["direction"], results["relative"]
+    assert direction["bench_pct"] == pytest.approx(EXPECT_HS300_BENCH, abs=1e-4)
+    assert relative["bench_pct"] == pytest.approx(EXPECT_INDUSTRY_BENCH, abs=1e-4)
+    assert direction["bench_pct"] != pytest.approx(relative["bench_pct"], abs=1e-4)
+    # 同一标的 outcome 相同，基准不同 → 超额不同（不是同一个口径换个名字）
+    assert direction["outcome_pct"] == relative["outcome_pct"]
+    assert direction["excess_pct"] != pytest.approx(relative["excess_pct"], abs=1e-4)
+
+
+@requires_pg
+async def test_relative_bench_is_industry_equal_weight() -> None:
+    """``relative``（赌跑赢同行）→ 同行业等权平均（不是指数行情，须诚实标注）。"""
+
+    async def _go(session: AsyncSession) -> dict[str, Any]:
+        await _seed(session)
+        return await _evaluate(session, _entry(symbol=MAIN, bet_type="relative"))
 
     result = await _with_rollback(_go)
     assert EXPECT_INDUSTRY_BENCH == pytest.approx(5.0, abs=1e-9)  # 手工：10/5/0 的均值
@@ -286,20 +329,6 @@ async def test_direction_bench_is_industry_equal_weight() -> None:
 
 
 @requires_pg
-async def test_relative_bench_is_also_industry_equal_weight() -> None:
-    """``relative``（赌跑赢同行）→ 同行业等权平均；与 ``direction`` 数值一致但口径独立。"""
-
-    async def _go(session: AsyncSession) -> dict[str, Any]:
-        await _seed(session)
-        return await _evaluate(session, _entry(symbol=MAIN, bet_type="relative"))
-
-    result = await _with_rollback(_go)
-    assert result["bench_pct"] == pytest.approx(EXPECT_INDUSTRY_BENCH, abs=1e-4)
-    assert result["bench_fallback"] is False
-    assert result["bench_basis_note"] == svc.BENCH_NOTE_INDUSTRY
-
-
-@requires_pg
 async def test_market_bet_bench_is_hs300_even_when_industry_exists() -> None:
     """``market`` → 沪深300（**指定的**基准，不是退化）：即使标的属于申万一级也不走行业。"""
 
@@ -311,18 +340,18 @@ async def test_market_bet_bench_is_hs300_even_when_industry_exists() -> None:
     assert result["bench_pct"] == pytest.approx(EXPECT_HS300_BENCH, abs=1e-4)
     assert result["bench_pct"] != pytest.approx(EXPECT_INDUSTRY_BENCH, abs=1e-4)
     assert result["bench_fallback"] is False, "显式 market 是用户选的基准，不是退化"
-    assert result["bench_basis_note"] == svc.BENCH_NOTE_MARKET
+    assert result["bench_basis_note"] == svc.BENCH_NOTE_HS300
     # outcome 仍然看标的自己（只有基准换成沪深300）
     assert result["outcome_pct"] == pytest.approx(EXPECT_MAIN_OUTCOME, abs=1e-4)
 
 
 @requires_pg
-async def test_no_industry_falls_back_to_hs300_and_flags_it() -> None:
-    """无申万归属 → 沪深300 且 ``bench_fallback = true``（诚实标注，不假装是行业基准）。"""
+async def test_no_industry_relative_bet_falls_back_to_hs300_and_flags_it() -> None:
+    """``relative`` 无申万归属 → 沪深300 且 ``bench_fallback = true``（唯一退化情形）。"""
 
     async def _go(session: AsyncSession) -> dict[str, Any]:
         await _seed(session)
-        return await _evaluate(session, _entry(symbol=ORPHAN, bet_type="direction"))
+        return await _evaluate(session, _entry(symbol=ORPHAN, bet_type="relative"))
 
     result = await _with_rollback(_go)
     assert result["bench_pct"] == pytest.approx(EXPECT_HS300_BENCH, abs=1e-4)
@@ -331,6 +360,20 @@ async def test_no_industry_falls_back_to_hs300_and_flags_it() -> None:
     assert result["outcome_pct"] == pytest.approx(
         round((CLOSE_END[ORPHAN] / CLOSE_START[ORPHAN] - 1) * 100, 4), abs=1e-4
     )
+
+
+@requires_pg
+async def test_no_industry_direction_bet_is_hs300_without_fallback_flag() -> None:
+    """``direction`` 的沪深300 是**用户选的基准**，即使没有行业归属也不算退化。"""
+
+    async def _go(session: AsyncSession) -> dict[str, Any]:
+        await _seed(session)
+        return await _evaluate(session, _entry(symbol=ORPHAN, bet_type="direction"))
+
+    result = await _with_rollback(_go)
+    assert result["bench_pct"] == pytest.approx(EXPECT_HS300_BENCH, abs=1e-4)
+    assert result["bench_fallback"] is False
+    assert result["bench_basis_note"] == svc.BENCH_NOTE_HS300
 
 
 @requires_pg
@@ -347,16 +390,30 @@ async def test_market_level_entry_with_market_bet_is_not_a_fallback() -> None:
     assert result["bench_pct"] == pytest.approx(EXPECT_HS300_BENCH, abs=1e-4)
     assert result["excess_pct"] == pytest.approx(0.0, abs=1e-6)
     assert result["bench_fallback"] is False
-    assert result["bench_basis_note"] == svc.BENCH_NOTE_MARKET
+    assert result["bench_basis_note"] == svc.BENCH_NOTE_HS300
 
 
 @requires_pg
-async def test_market_level_entry_with_direction_bet_is_a_fallback() -> None:
-    """无 symbol 但 ``bet_type=direction``：本来要行业基准 → 只能沪深300，标 ``fallback``。"""
+async def test_market_level_entry_with_direction_bet_is_hs300_not_a_fallback() -> None:
+    """无 symbol + ``bet_type=direction``：沪深300 是**用户选的**，不标 ``fallback``。"""
 
     async def _go(session: AsyncSession) -> dict[str, Any]:
         await _seed(session)
         return await _evaluate(session, _entry(symbol=None, bet_type="direction"))
+
+    result = await _with_rollback(_go)
+    assert result["bench_pct"] == pytest.approx(EXPECT_HS300_BENCH, abs=1e-4)
+    assert result["bench_fallback"] is False
+    assert result["bench_basis_note"] == svc.BENCH_NOTE_HS300
+
+
+@requires_pg
+async def test_market_level_relative_bet_is_a_fallback() -> None:
+    """无 symbol + ``bet_type=relative``：要行业基准却拿不到行业 → 标 ``fallback``。"""
+
+    async def _go(session: AsyncSession) -> dict[str, Any]:
+        await _seed(session)
+        return await _evaluate(session, _entry(symbol=None, bet_type="relative"))
 
     result = await _with_rollback(_go)
     assert result["bench_pct"] == pytest.approx(EXPECT_HS300_BENCH, abs=1e-4)
@@ -389,7 +446,8 @@ async def test_legacy_snapshot_without_bench_spec_uses_the_column() -> None:
         return legacy_direction, legacy_market
 
     direction, market = await _with_rollback(_go)
-    assert direction["bench_pct"] == pytest.approx(EXPECT_INDUSTRY_BENCH, abs=1e-4)
+    # 口径修正后 direction 走沪深300；legacy 行按列兜底也必须遵守新口径
+    assert direction["bench_pct"] == pytest.approx(EXPECT_HS300_BENCH, abs=1e-4)
     assert direction["bench_fallback"] is False
     assert market["bench_pct"] == pytest.approx(EXPECT_HS300_BENCH, abs=1e-4)
     assert market["bench_fallback"] is False
@@ -414,11 +472,12 @@ async def test_bench_spec_is_frozen_into_the_snapshot_at_creation() -> None:
         return out
 
     specs = await _with_rollback(_go)
+    # 口径修正（2026-10-19）：direction 对齐沪深300（赌方向），relative 才是行业等权
     assert specs["direction"] == {
         "bet_type": "direction",
-        "kind": svc.BENCH_KIND_INDUSTRY,
-        "industry_code": L1,
-        "industry_name": "测试一级",
+        "kind": svc.BENCH_KIND_HS300,
+        "industry_code": None,
+        "industry_name": None,
         "fallback": False,
     }
     assert specs["relative"]["kind"] == svc.BENCH_KIND_INDUSTRY
@@ -430,8 +489,10 @@ async def test_bench_spec_is_frozen_into_the_snapshot_at_creation() -> None:
         "industry_name": None,
         "fallback": False,
     }
+    # 无行业归属的孤儿：direction 本来就选沪深300 → 不算退化；
+    # 真正会退化的是 relative（它要行业基准），单独用列值构造一行验证。
     assert specs["orphan"]["kind"] == svc.BENCH_KIND_HS300
-    assert specs["orphan"]["fallback"] is True
+    assert specs["orphan"]["fallback"] is False
 
 
 @requires_pg
@@ -477,7 +538,7 @@ async def test_net_is_gross_minus_12bp_verbatim() -> None:
     async def _go(session: AsyncSession) -> dict[str, dict[str, Any]]:
         await _seed(session)
         return {
-            "industry": await _evaluate(session, _entry(symbol=MAIN, bet_type="direction")),
+            "industry": await _evaluate(session, _entry(symbol=MAIN, bet_type="relative")),
             "hs300": await _evaluate(session, _entry(symbol=MAIN, bet_type="market")),
             "market": await _evaluate(session, _entry(symbol=None, bet_type="market")),
         }
@@ -535,7 +596,7 @@ def test_cost_constant_and_stats_version_are_pinned() -> None:
     # 改成本常量必须同时改统计产物版本（spec 的验收判据）→ 两者一起钉在这里。
     # Phase B2：``share_ci.win`` 的分母排除 pass（裁定 2）= 区间口径变了 → 从
     # ``s97.a1`` 升到 ``s97.b1``（常量注释里写明了原因）
-    assert svc.JOURNAL_STATS_VERSION == "s97.b1"
+    assert svc.JOURNAL_STATS_VERSION == "s97.b2"
     source = inspect.getsource(svc)
     assert "2026-10-19" in source, "常量必须注明假设的日期（改了要一起改）"
     for assumption in ("佣金", "印花税", "过户费", "滑点", "保守"):

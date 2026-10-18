@@ -300,13 +300,13 @@ async def test_create_returns_201_with_persisted_snapshot(
     assert snapshot["price"] == 100.0
     assert snapshot["quote_as_of"] == SNAPSHOT_DAY.isoformat()
     assert "missing_reason" in snapshot
-    # ★ spec §S9.7.3：bet_type 缺省 direction，基准口径**创建时**落进快照；
-    # 该标的没有申万归属 → 退化为沪深300 且诚实标注 fallback（不是假装行业基准）
+    # ★ spec §S9.7.3（口径修正 2026-10-19）：bet_type 缺省 direction → 基准沪深300；
+    # 这是它**自己选的**基准，不是退化（只有 relative 拿不到行业才算 fallback）
     assert body["bet_type"] == "direction"
     assert snapshot["bench_spec"]["bet_type"] == "direction"
     assert snapshot["bench_spec"]["kind"] == svc.BENCH_KIND_HS300
-    assert snapshot["bench_spec"]["fallback"] is True
-    assert snapshot["bench_basis_note"] == svc.BENCH_NOTE_FALLBACK
+    assert snapshot["bench_spec"]["fallback"] is False
+    assert snapshot["bench_basis_note"] == svc.BENCH_NOTE_HS300
     # 列表/创建响应自带"快照摘要（1 行）"（spec §S9.1；前端优先用它，缺省才自己拼）
     assert body["snapshot_summary"].startswith("价格 100.00 元")
     # 列表立刻能看到（open）
@@ -586,9 +586,9 @@ async def test_review_is_201_and_then_409(
     # ★ spec §S9.7.2：净口径随 evaluation 一起下发（毛 − 12bp，逐值可核）
     assert evaluation["net_outcome_pct"] == pytest.approx(9.88, abs=1e-4)
     assert evaluation["net_excess_pct"] == pytest.approx(8.88, abs=1e-4)
-    # ★ spec §S9.7.3：基准是沪深300（无行业 → fallback），文案由后端下发
-    assert evaluation["bench_fallback"] is True
-    assert evaluation["bench_basis_note"] == svc.BENCH_NOTE_FALLBACK
+    # ★ spec §S9.7.3：基准是沪深300（direction 自选，非退化），文案由后端下发
+    assert evaluation["bench_fallback"] is False
+    assert evaluation["bench_basis_note"] == svc.BENCH_NOTE_HS300
     assert detail["status"] == "due"
 
     first = await _post(

@@ -1,3 +1,19 @@
+## 2026-10-19 - **口径修正：bet_type 基准真正区分 + pass/none 归一**
+
+owner 批准的两处**设计缺陷**修复（不是功能新增）：
+
+- **`direction` 与 `relative` 曾数字完全同构**（都取"行业等权"）⇒ `bet_type` 对结果零影响，
+  三选一实际只有两个口径。现改为：`direction` → **沪深300**（赌方向）、`relative` → **行业等权**（赌跑赢同行）、
+  `market` → 沪深300；`bench_fallback` 因此只有 `relative` 会触发。
+- **`pass` 与 `position_size=none` 语义重叠**：两者都在说"没做"，却各排除一次收益。现归一：
+  `kind=pass` ⇒ 仓位强制 `none`（同传非 none → 422）；统计口径明确为
+  **「我决定不动」不进任何均值；「只观察」进判断均值、不进按仓位加权的收益均值**（`stats.exclusion_note` 下发，前端原样展示）。
+- 测试同步：`test_journal_*.py` 里"direction == relative"的断言改写为"direction == hs300 且 ≠ relative"；
+  `JOURNAL_STATS_VERSION` `s97.b1 → s97.b2`（样本集合变了 = 口径变了）。
+- 涉及文件：`backend/app/{services/journal_service.py,schemas/journal.py}`、`backend/tests/test_journal_{service,s97,api}.py`、
+  `frontend/src/{shared/api/journal.ts,features/journal/components/{EntryForm,JournalPanel}.tsx}`、
+  `docs/specs/S9-decision-journal.md`（§S9.7.1/§S9.7.3/§S9.7.6 回写 + 标注"已修正"）、`docs/Changelog.md`
+
 ## 2026-10-19 - **S9.6 同类历史（peer history）落地：写完那一刻就换回信息**
 
 S9.7 八个 phase 之外的最后一节（spec §S9.6 原排期"等 owner 批准口径"）。核心：**创建响应立刻带两段事实**，

@@ -363,6 +363,8 @@ export interface JournalStats {
   net_cost_bps?: number | null;
   /** 「未做多重比较校正」固定标注（spec §S9.7.7），原样展示。 */
   multiple_comparison_note?: string | null;
+  /** 后端下发的排除口径（`pass` / 只观察 各自的去处），前端原样展示、不改写 */
+  exclusion_note?: string | null;
   sample_sufficient?: boolean | null;
   min_reviewed_for_share?: number | null;
 

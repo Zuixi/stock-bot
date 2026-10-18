@@ -87,11 +87,12 @@ __all__ = [
     "BENCH_KIND_HS300",
     "BENCH_KIND_INDUSTRY",
     "BENCH_NOTE_FALLBACK",
+    "BENCH_NOTE_HS300",
     "BENCH_NOTE_INDUSTRY",
-    "BENCH_NOTE_MARKET",
     "CALIBRATION_P",
     "COST_ROUND_TRIP_BPS",
     "COST_ROUND_TRIP_PCT",
+    "EXCLUSION_NOTE",
     "EXPORT_CSV_COLUMNS",
     "EXPORT_HINT",
     "JOURNAL_STATS_VERSION",
@@ -221,18 +222,24 @@ COST_ROUND_TRIP_PCT = round(COST_ROUND_TRIP_BPS / 100.0, 4)
 #: ``s97.b1``（2026-10-19，Phase B2）：``share_ci.win`` 的分母**排除 ``pass``**（裁定 2）、
 #: 新增 ``calibration`` / ``by_size`` / ``avg_weighted_excess_pct`` / ``by_kind_median``
 #: —— 分母变了就是口径变了，所以版本必须动。
-JOURNAL_STATS_VERSION = "s97.b1"
+#:
+#: ``s97.b2``（2026-10-19，口径修正）：基准按 ``bet_type`` **真正区分**（``direction`` →
+#: 沪深300、``relative`` → 行业等权，spec §S9.7.3），且收益均值（``avg_excess_pct`` /
+#: ``avg_net_excess_pct`` / ``avg_weighted_excess_pct``）**同时排除 ``pass`` 与
+#: ``position_size=none``**（spec §S9.7.1/§S9.7.6）—— 样本集合变了 = 口径变了。
+JOURNAL_STATS_VERSION = "s97.b2"
 
 # ── spec §S9.7.3 基准口径 ───────────────────────────────────────────────────
 #: 基准种类 ①：**所属申万一级成分股的等权平均收益**。诚实标注：这**不是**申万一级
 #: 指数行情（库里没有指数日线），是"成员股等权平均"，差异写进 ``bench_basis_note``。
+#: 只有 ``bet_type=relative``（赌跑赢同行）用它；``direction`` 用的是沪深300。
 BENCH_KIND_INDUSTRY = "industry_equal_weight"
-#: 基准种类 ②：沪深300（``index_dailies`` 真实指数行情）
+#: 基准种类 ②：沪深300（``index_dailies`` 真实指数行情）。``direction`` / ``market`` 用它。
 BENCH_KIND_HS300 = "hs300"
 #: 人话文案（后端下发，前端不硬编码，避免两处措辞漂移）
+BENCH_NOTE_HS300 = "基准=沪深300"
 BENCH_NOTE_INDUSTRY = "基准=所属申万一级成分股等权平均收益（非指数行情）"
 BENCH_NOTE_FALLBACK = "基准=沪深300（无申万一级归属，已退化为市场基准）"
-BENCH_NOTE_MARKET = "基准=沪深300（市场级判断）"
 
 # ── spec §S9.7.7 区间估计 ───────────────────────────────────────────────────
 #: Wilson 95% 区间的 z 值（双侧 0.975 分位）。固定 1.96，不用 scipy（零新依赖）。
@@ -259,6 +266,11 @@ CALIBRATION_INSUFFICIENT_NOTE = "样本不足（<20 条已复盘且填了信心�
 # ── spec §S9.7.1 仓位权重（只用于 `avg_weighted_excess_pct`） ───────────────
 #: 风险单位 → 权重。``none`` = 只观察不下单 → 权重 0（**排除**，不是乘 0 后混进分母）。
 SIZE_WEIGHTS: dict[str, float] = {"none": 0.0, "light": 0.5, "normal": 1.0, "heavy": 2.0}
+
+# ── spec §S9.7.6 收益统计的排除口径（人话，后端下发） ───────────────────────
+#: 统计卡原样展示的一句话（前端不改写）：``pass`` 没有方向，不进任何均值；
+#: ``position_size=none``（只观察）仍进"判断均值"，但不进"按仓位加权的收益均值"。
+EXCLUSION_NOTE = "「我决定不动」不计入均值；「只观察」计入判断均值、不计入按仓位加权的收益均值"
 
 # ── spec §S9.7.9 导出 ───────────────────────────────────────────────────────
 #: 统计卡下发的导出地址（前端直接用，不自己拼；改路径必须同时改这里与路由）。
@@ -488,18 +500,30 @@ def bench_spec(
     ============  ==========================================  ====================
     ``bet_type``  基准                                        ``fallback``
     ============  ==========================================  ====================
-    ``direction`` 所属申万一级成分股等权平均（无行业 → 沪深300）  有行业时 ``False``
-    ``relative``  同上（赌的是跑赢同行）                        同上
+    ``direction`` 沪深300（赌"这只会涨" → 方向判断）            恒为 ``False``
+    ``relative``  所属申万一级成分股等权平均（无行业 → 沪深300）  无行业归属时 ``True``
     ``market``    沪深300（**指定的**基准，不是退化）            恒为 ``False``
     ============  ==========================================  ====================
 
+    **口径修正（2026-10-19）**：``direction`` 与 ``relative`` 曾都取行业等权（两者同构，
+    等于"赌方向"和"赌跑赢同行"用同一把尺）。现在 ``direction`` 对齐沪深300 —— 它赌的是
+    "这只/这个行业会涨"，衡量的对象是大盘；``relative`` 才是"跑赢同行"，用行业等权。
+
     ``fallback = True`` 只表示一件事：**本来要行业基准，但拿不到行业归属，退化到了
-    沪深300**。它是"诚实标注"的一部分——用户看统计时会知道这条的基准不是他选的那个。
+    沪深300**。只有 ``relative`` 会退化；``direction`` / ``market`` 的沪深300 是用户选的。
     """
     kind = bet_type if bet_type in BET_TYPES else "direction"
+    if kind != "relative":
+        return {
+            "bet_type": kind,
+            "kind": BENCH_KIND_HS300,
+            "industry_code": None,
+            "industry_name": None,
+            "fallback": False,
+        }
     code: str | None = None
     name: str | None = None
-    if symbol is not None and kind != "market" and isinstance(sector, dict):
+    if symbol is not None and isinstance(sector, dict):
         raw_code = sector.get("code")
         if raw_code:
             code = str(raw_code)
@@ -510,8 +534,8 @@ def bench_spec(
             "kind": BENCH_KIND_HS300,
             "industry_code": None,
             "industry_name": None,
-            # 显式选了 market → 沪深300 就是他要的；否则是退化的
-            "fallback": kind != "market",
+            # 要行业基准却拿不到行业归属 → 唯一的退化情形
+            "fallback": True,
         }
     return {
         "bet_type": kind,
@@ -523,13 +547,17 @@ def bench_spec(
 
 
 def bench_note(spec: dict[str, Any] | None) -> str:
-    """把 ``bench_spec`` 翻成一句人话（创建与评估共用同一函数，措辞不会漂移）。"""
+    """把 ``bench_spec`` 翻成一句人话（创建与评估共用同一函数，措辞不会漂移）。
+
+    文案随 ``kind`` 变：行业等权 → 明说"非指数行情"；沪深300 → 「基准=沪深300」。
+    只有 ``relative`` 退化时额外标注"已退化"（``fallback=True``）。
+    """
     spec = spec or {}
     if spec.get("kind") == BENCH_KIND_INDUSTRY:
         return BENCH_NOTE_INDUSTRY
-    if spec.get("bet_type") == "market":
-        return BENCH_NOTE_MARKET
-    return BENCH_NOTE_FALLBACK
+    if spec.get("fallback"):
+        return BENCH_NOTE_FALLBACK
+    return BENCH_NOTE_HS300
 
 
 @dataclass(frozen=True)
@@ -558,16 +586,16 @@ def _empty_snapshot(symbol: str | None, as_of: date) -> dict[str, Any]:
         "sector_flow_state": None,
         "events": [],
         "valuation_pct": None,
-        # 基准口径（spec §S9.7.3）：创建时固化，事后不可改；默认值 = 市场级退化口径，
+        # 基准口径（spec §S9.7.3）：创建时固化，事后不可改；默认值 = 沪深300 口径，
         # 真正的 spec 在 ``build_snapshot`` 末尾按 bet_type + 行业归属算出来覆盖
         "bench_spec": {
             "bet_type": "direction",
             "kind": BENCH_KIND_HS300,
             "industry_code": None,
             "industry_name": None,
-            "fallback": True,
+            "fallback": False,
         },
-        "bench_basis_note": BENCH_NOTE_FALLBACK,
+        "bench_basis_note": BENCH_NOTE_HS300,
         # s9.r3（spec §S9.6.4）：同类历史由 ``create_entry`` 在快照抓完之后填进来；
         # 这里先占位，保证"快照永远有这一格"（读方不用判键在不在，只判值）
         "peer_history": None,
@@ -1047,6 +1075,11 @@ class _Plan:
     threshold: float | None
     sector_code: str | None
     bet_type: str
+    #: ★ spec §S9.7.3：该条实际要用的基准种类（优先读快照里的 ``bench_spec.kind``；
+    #: 老行没有 ``bench_spec`` 时按 ``bet_type`` 推导：``relative`` → 行业，其余 → 沪深300）
+    bench_kind: str
+    #: ★ ``True`` 只表示"要行业基准却拿不到行业归属"（只有 ``relative`` 会退化）
+    bench_fallback: bool
     #: ★ spec §S9.7.8：失效条件可观测（与 ``reviewable`` 同一判据）
     observable: bool
 
@@ -1069,12 +1102,26 @@ def _plan(entry: DecisionJournalEntry) -> _Plan:
     code = sector.get("code") if isinstance(sector, dict) else None
     price = snapshot.get("price")
     # 基准口径优先读**快照里**的 bench_spec（创建时固化，历史行不会随代码变化而改口径）；
-    # 没有 bench_spec 的老行（s9.r1）退回列上的 bet_type（迁移给了默认 direction）。
+    # 没有 bench_spec 的老行（s9.r1）退回列上的 bet_type（迁移给了默认 direction），
+    # 并按**修正后**的映射推导种类：direction/market → 沪深300、relative → 行业等权。
     spec = snapshot.get("bench_spec")
-    spec_bet = spec.get("bet_type") if isinstance(spec, dict) else None
+    spec = spec if isinstance(spec, dict) else {}
+    spec_bet = spec.get("bet_type")
     bet_type = str(spec_bet or getattr(entry, "bet_type", None) or "direction")
     if bet_type not in BET_TYPES:
         bet_type = "direction"
+    spec_kind = spec.get("kind")
+    bench_kind = (
+        str(spec_kind)
+        if spec_kind in (BENCH_KIND_HS300, BENCH_KIND_INDUSTRY)
+        else (BENCH_KIND_INDUSTRY if bet_type == "relative" else BENCH_KIND_HS300)
+    )
+    spec_fallback = spec.get("fallback")
+    bench_fallback = (
+        spec_fallback
+        if isinstance(spec_fallback, bool)
+        else (bet_type == "relative" and code is None)
+    )
     return _Plan(
         entry=entry,
         start_date=start_date,
@@ -1083,6 +1130,8 @@ def _plan(entry: DecisionJournalEntry) -> _Plan:
         threshold=threshold,
         sector_code=str(code) if code else None,
         bet_type=bet_type,
+        bench_kind=bench_kind,
+        bench_fallback=bench_fallback,
         # 与 reviewable 同一判据：不可观测的失效条件算不出 invalidation_hit，也不能复盘
         observable=invalidation_observable(invalidation),
     )
@@ -1205,7 +1254,7 @@ def _index_bench(face: dict[str, Any], *, fallback: bool) -> _Bench:
         pct=pct,
         reason=None if pct is not None else "index_bench_unavailable",
         fallback=fallback,
-        note=BENCH_NOTE_FALLBACK if fallback else BENCH_NOTE_MARKET,
+        note=BENCH_NOTE_FALLBACK if fallback else BENCH_NOTE_HS300,
     )
 
 
@@ -1392,8 +1441,9 @@ async def evaluate_entries(
     ==========================  ================================================
     有 symbol 的判断           标的的期末行情/区间极值 + **首次触达失效条件的交易日**
                                （spec §S9.7.4：同一批 LATERAL 里算，不按天再查）
-    要行业基准的判断           申万一级成员等权平均（一条批 LATERAL）
-    要沪深300 的判断            指数起止收盘（一条批 LATERAL，三种情形合并）
+    要行业基准的判断           申万一级成员等权平均（一条批 LATERAL；只有 ``relative``）
+    要沪深300 的判断            指数起止收盘（一条批 LATERAL，三种情形合并：
+                                ``direction`` / ``market`` / ``relative`` 退化）
     ==========================  ================================================
     """
     plans = [_plan(entry) for entry in entries]
@@ -1401,26 +1451,28 @@ async def evaluate_entries(
         return {}
     symbol_plans = [plan for plan in plans if plan.entry.symbol]
     market_plans = [plan for plan in plans if not plan.entry.symbol]
-    # 显式 market 赌注：outcome 看标的、bench 看沪深300
-    market_bet_plans = [plan for plan in symbol_plans if plan.bet_type == "market"]
-    # 要行业基准的：标的存在 + 不是 market 赌注 + 快照里有申万一级归属
+    # 要行业基准的：``relative``（快照 bench_spec.kind = 行业）+ 快照里有申万一级归属。
+    # ``direction`` 不再走行业（spec §S9.7.3 口径修正：direction → 沪深300）。
     industry_plans = [
-        plan for plan in symbol_plans if plan.bet_type != "market" and plan.sector_code
+        plan
+        for plan in symbol_plans
+        if plan.bench_kind == BENCH_KIND_INDUSTRY and plan.sector_code
     ]
-    # 无论有没有行业归属都可能退化：没有行业的直接进沪深300 名单
-    no_sector_plans = [
-        plan for plan in symbol_plans if plan.bet_type != "market" and not plan.sector_code
+    # 有 symbol 但基准不是行业（direction / market / relative 无行业）→ 沪深300
+    industry_ids = {int(plan.entry.id) for plan in industry_plans}
+    hs300_symbol_plans = [
+        plan for plan in symbol_plans if int(plan.entry.id) not in industry_ids
     ]
 
     faces = await _symbol_faces(db, symbol_plans)
     sector_benches = await _sector_benches(db, industry_plans)
-    # 没有申万归属**或**该行业的等权平均缺数 → 退化为沪深300（spec §S9.4/§S9.7.3）
+    # 有申万归属**但**该行业的等权平均缺数 → 退化为沪深300（spec §S9.4/§S9.7.3）
     fallback_plans = [
         plan for plan in industry_plans if sector_benches.get(int(plan.entry.id)) is None
     ]
     index_faces = await _index_faces(
         db,
-        [*market_plans, *market_bet_plans, *fallback_plans, *no_sector_plans],
+        [*market_plans, *hs300_symbol_plans, *fallback_plans],
         code=HS300_TS_CODE,
     )
 
@@ -1429,15 +1481,13 @@ async def evaluate_entries(
         entry_id = int(plan.entry.id)
         market_level = not plan.entry.symbol
         if market_level:
+            # 市场级：outcome 与 bench 都用沪深300。``fallback`` 只有 ``relative``
+            # 无行业归属时才为真（其余情形沪深300 就是用户选的基准）。
             face = index_faces.get(entry_id) or _face_from_row(None)
-            bench = _index_bench(face, fallback=plan.bet_type != "market")
+            bench = _index_bench(face, fallback=plan.bench_fallback)
         else:
             face = faces.get(entry_id) or _face_from_row(None)
-            if plan.bet_type == "market":
-                bench = _index_bench(
-                    index_faces.get(entry_id) or _face_from_row(None), fallback=False
-                )
-            elif sector_benches.get(entry_id) is not None:
+            if plan.bench_kind == BENCH_KIND_INDUSTRY and sector_benches.get(entry_id) is not None:
                 bench = _Bench(
                     pct=sector_benches[entry_id],
                     reason=None,
@@ -1445,8 +1495,10 @@ async def evaluate_entries(
                     note=BENCH_NOTE_INDUSTRY,
                 )
             else:
+                # 显式 direction/market（hs300，fallback=False）或 relative 无行业归属
+                degraded = plan.bench_kind == BENCH_KIND_INDUSTRY or plan.bench_fallback
                 bench = _index_bench(
-                    index_faces.get(entry_id) or _face_from_row(None), fallback=True
+                    index_faces.get(entry_id) or _face_from_row(None), fallback=degraded
                 )
         results[entry_id] = _assemble(
             plan, face, bench=bench, market_level=market_level, as_of=as_of
@@ -1509,6 +1561,8 @@ async def create_entry(
     （不可变口径，评估时以它为准）：一处是查询用的结构，一处是"当时怎么定的"证据。
     ``position_size`` / ``confidence``（spec §S9.7.1/§S9.7.5）只落列：它们是**判断的
     属性**（风险单位 / 事前信心），不是市场状态，进快照会让"当时市场什么样"混进主观项。
+    ``kind=pass`` ⇒ ``position_size`` 只能是 ``none``（spec §S9.7.1/§S9.7.6 的口径修正）：
+    入参闸在 schema 层（非 ``none`` → 422），未传时默认值就是 ``none``——本函数不重复收口。
     """
     uid = _to_uuid(user_id)
     created_at = now or datetime.now(_SH)
@@ -1706,8 +1760,10 @@ async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
 
     - ``by_verdict`` / ``by_attribution`` 合计 = ``reviewed_n``；
     - ``by_kind`` / ``by_size`` 合计 = ``n``（都数**判断**，spec §S9.7.6/§S9.7.1）；
-    - ``avg_excess_pct`` / ``avg_net_excess_pct`` **排除 ``kind=pass``**（spec §S9.7.6：
-      放弃的判断没有收益，把它算进平均会把"没做"混进"做了"的收益）；
+    - ``avg_excess_pct`` / ``avg_net_excess_pct`` **同时排除 ``kind=pass`` 与
+      ``position_size=none``**（spec §S9.7.1/§S9.7.6：「我决定不动」与「只观察」都只有
+      判断、没有可归因的收益；把它们算进平均会把"没做"混进"做了"的收益）；
+    - ``avg_weighted_excess_pct`` 同样只收 ``pass 之外 + 非 none`` 的样本；
     - ``discipline_break_share`` 在 ``reviewed_n < 5`` 时为 ``null``（不是 0）；
     - 比例一律同时给 Wilson 95% 区间（``share_ci``，``n=0`` 时为 ``None``）；
     - ★ 裁定 2：``share_ci.win`` 的**分母排除 ``pass``**（pass = 不参与市场，
@@ -1788,16 +1844,22 @@ async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
         )
         .label("win_n"),
         # ★ spec §S9.7.1 加权超额：按仓位档的 sum/count（权重在 Python 里乘，
-        #   none 的权重是 0 → 不贡献分子也不贡献分母）
+        #   none 的权重是 0 → 不贡献分子也不贡献分母；pass 一律不进收益统计）
         *(
             func.sum(DecisionJournalReview.excess_pct)
-            .filter(DecisionJournalEntry.position_size == size)
+            .filter(
+                DecisionJournalEntry.position_size == size,
+                DecisionJournalEntry.kind != "pass",
+            )
             .label(f"size_{size}_excess_sum")
             for size in POSITION_SIZES
         ),
         *(
             func.count(DecisionJournalReview.excess_pct)
-            .filter(DecisionJournalEntry.position_size == size)
+            .filter(
+                DecisionJournalEntry.position_size == size,
+                DecisionJournalEntry.kind != "pass",
+            )
             .label(f"size_{size}_excess_n")
             for size in POSITION_SIZES
         ),
@@ -1837,8 +1899,15 @@ async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
             select(
                 DecisionJournalEntry.kind,
                 func.count(DecisionJournalReview.id),
-                func.sum(DecisionJournalReview.excess_pct),
+                # ★ 中位毛超额（不可加，必须在本条分组里算）
                 func.percentile_cont(0.5).within_group(DecisionJournalReview.excess_pct),
+                # ★ 判断口径的样本：只排除 `pass`（它没有方向）。放在同一条分组查询里，
+                #   stats 仍然是两条聚合（spec 契约 §6）。
+                #   为什么**不**在这里排除 `position_size=none`：只观察的条目依然是
+                #   "一个可被验证的判断"，把它踢出判断均值等于只奖励真金白银下过单的人；
+                #   `none` 只在**加权收益**口径里因权重 0 而退出（见 SIZE_WEIGHTS）。
+                func.count(DecisionJournalReview.id).label("revenue_n"),
+                func.sum(DecisionJournalReview.excess_pct).label("revenue_sum"),
             )
             .join(DecisionJournalEntry, DecisionJournalEntry.id == DecisionJournalReview.entry_id)
             .where(DecisionJournalEntry.user_id == uid)
@@ -1846,14 +1915,16 @@ async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
         )
     ).all()
     # ★ spec §S9.7.6：每类的中位净超额（"pass 也有一栏"——它是判断统计的一部分；
-    #   但**总体的**收益均值仍然排除 pass，见下面 revenue_n）
+    #   但**总体的**收益均值仍然排除 pass 与 none，见下面 revenue_n）
     by_kind_median: dict[str, dict[str, Any]] = {
         kind: {"count": 0, "median_net_excess_pct": None} for kind in ENTRY_KINDS
     }
-    #: 收益口径的样本：``pass`` 是"我决定不动"，没有收益可算（spec §S9.7.6）
+    #: 判断口径的样本：只排除 ``pass``（我决定不动，没有方向可判）。
+    #: ``position_size=none``（只观察）**仍计入**判断均值——它是判断而非交易；
+    #: 只有"按仓位加权的收益均值"（``avg_weighted_excess_pct``）因权重 0 排除它。
     revenue_n = 0
     revenue_sum = 0.0
-    for kind, count, excess_sum, median in grouped:
+    for kind, count, median, kind_revenue_n, kind_revenue_sum in grouped:
         key = str(kind)
         group_n = int(count or 0)
         if key in by_kind_median:
@@ -1865,9 +1936,9 @@ async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
                 )
         if key == "pass":
             continue
-        revenue_n += group_n
-        if excess_sum is not None:
-            revenue_sum += float(excess_sum)
+        revenue_n += int(kind_revenue_n or 0)
+        if kind_revenue_sum is not None:
+            revenue_sum += float(kind_revenue_sum)
 
     calibration, calibration_note = calibration_summary(
         {
@@ -1917,6 +1988,8 @@ async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
         },
         "net_cost_bps": COST_ROUND_TRIP_BPS,
         "multiple_comparison_note": MULTIPLE_COMPARISON_NOTE,
+        # ★ spec §S9.7.1/§S9.7.6 收益统计的排除口径（前端原样展示，不改写）
+        "exclusion_note": EXCLUSION_NOTE,
         # ★ spec §S9.7.9：前端直接拿它做「导出我的日志」，不自己拼路径
         "export_hint": EXPORT_HINT,
     }

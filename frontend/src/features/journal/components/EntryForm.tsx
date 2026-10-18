@@ -295,7 +295,7 @@ export function EntryForm({ onCreated }: EntryFormProps) {
           ))}
         </Radio.Group>
         <Text className="journal-form__hint">
-          方向 → 所属行业成分股等权平均收益；跑赢同行 → 同行业等权；市场级 → 沪深300。
+          方向 → 沪深300（赌这只/这个行业会涨）；跑赢同行 → 所属行业成分股等权（赌它比同行强）；市场级 → 沪深300。
           创建时选定，之后不可改。
         </Text>
       </div>
@@ -356,7 +356,7 @@ export function EntryForm({ onCreated }: EntryFormProps) {
         </Space>
         {kind === "pass" ? (
           <Text className="journal-form__pass-hint" data-testid="journal-pass-hint">
-            已标为「我决定不动」：这条计入判断统计，不计入收益统计。
+            已标为「我决定不动」：只观察、不计收益（这条计入判断统计，不计入任何收益均值）。
           </Text>
         ) : (
           <Text className="journal-form__hint">

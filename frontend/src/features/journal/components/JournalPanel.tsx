@@ -338,6 +338,12 @@ function StatsCard({ stats }: { stats: JournalStats }) {
         </div>
       )}
 
+      {stats.exclusion_note && (
+        <p className="journal-stats__note" data-testid="journal-stats-exclusion-note">
+          {stats.exclusion_note}
+        </p>
+      )}
+
       {stats.multiple_comparison_note && (
         <p className="journal-stats__note" data-testid="journal-stats-multiple-note">
           {stats.multiple_comparison_note}

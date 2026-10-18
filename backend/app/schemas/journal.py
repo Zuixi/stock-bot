@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 #: 与 ``app/models/journal.py`` 的 ``ENTRY_KINDS`` / ``HORIZON_CHOICES`` / ``VERDICTS``
 #: 逐字一致（一致性由 ``tests/test_journal_api.py`` 对拍）。
@@ -42,6 +42,8 @@ INVALIDATION_GUIDANCE = (
     "失效条件必须是可观测的形态：price_below / price_above / date_only。"
     "请给一个价格或日期，或改用备注（note）写理由。"
 )
+#: 「我决定不动」与仓位互斥的 422 文案（spec §S9.7.1/§S9.7.6 的口径修正）。
+PASS_POSITION_GUIDANCE = "我决定不动 = 只观察，不能同时选仓位"
 
 Verdict = Literal[
     "thesis_wrong",
@@ -113,6 +115,18 @@ class JournalEntryCreate(BaseModel):
         if kind not in INVALIDATION_KINDS:
             raise ValueError(f"{INVALIDATION_GUIDANCE}（收到 kind={kind!r}）")
         return value
+
+    @model_validator(mode="after")
+    def _pass_means_no_position(self) -> JournalEntryCreate:
+        """``kind=pass`` ⇒ ``position_size`` 强制 ``none``（spec §S9.7.1/§S9.7.6 修正）。
+
+        口径理由：``pass`` = "我决定不动"（只观察），它没有可归因的收益；再让它带一个
+        仓位（轻仓/标准/重仓）就是把"没做"混进"做了"的收益统计。既然 ``position_size``
+        的默认值已经是 ``none``，"未传"天然满足"自动置 none"，这里只需要拦"传了非 none"。
+        """
+        if self.kind == "pass" and self.position_size != "none":
+            raise ValueError(PASS_POSITION_GUIDANCE)
+        return self
 
 
 class JournalReviewCreate(BaseModel):
@@ -288,7 +302,7 @@ class JournalStatsOut(BaseModel):
     Phase A 新增（**既有字段类型一律不变**）：
 
     - ``by_kind``：五个 ``kind`` 各自的条数（合计 = ``n``；``pass`` 在这里有独立分栏）；
-    - ``avg_net_excess_pct``：**净口径**平均超额（毛 − 12bp，且**排除 pass**）；
+    - ``avg_net_excess_pct``：**净口径**平均超额（毛 − 12bp，且**排除 pass 与「只观察」**）；
     - ``share_ci``：``discipline_break`` 与 ``win`` 两个比例的 Wilson 95% 区间；
     - ``net_cost_bps`` / ``multiple_comparison_note``：口径常量，前端原样展示。
 
@@ -298,7 +312,9 @@ class JournalStatsOut(BaseModel):
     - ``avg_weighted_excess_pct``：按 ``size_weight`` 加权（``none`` 排除，权重 0）；
     - ``by_kind_median``：每类的 ``{count, median_net_excess_pct}``；
     - ``calibration`` / ``calibration_note``：校准曲线（总样本 < 20 → ``None`` + 原因）；
-    - ``export_hint``：导出地址，前端直接用（spec §S9.7.9）。
+    - ``export_hint``：导出地址，前端直接用（spec §S9.7.9）；
+    - ``exclusion_note``：收益统计的排除口径（``pass`` 与「只观察」都不计入），
+      前端**原样展示**，不改写（spec §S9.7.1/§S9.7.6 口径修正）。
     """
 
     n: int
@@ -336,3 +352,5 @@ class JournalStatsOut(BaseModel):
     calibration_note: str | None = None
     #: ★ spec §S9.7.9 导出地址（前端直接用，不写死路径）
     export_hint: str = ""
+    #: ★ spec §S9.7.1/§S9.7.6 收益统计的排除口径（``pass`` 与「只观察」都不计入）
+    exclusion_note: str = ""

@@ -303,6 +303,9 @@ def _entry(*, user_id: uuid.UUID | None = None, **overrides: Any) -> DecisionJou
         "user_id": user_id or uuid.uuid4(),
         "symbol": MAIN,
         "kind": "watch",
+        # 口径修正后 ``direction`` 对齐沪深300、``relative`` 才是行业等权；
+        # 本文件的基准断言全是"行业等权"，故工厂默认 ``relative``（见 spec §S9.7.3）。
+        "bet_type": "relative",
         "thesis": "猪价见底，产能去化加速",
         # 窗口 (AS_OF, DUE_ON] 内最低 110 → 阈值 111 必触发（见 AFTER 的第三根 K 线）
         "invalidation": {"kind": "price_below", "value": 111.0},

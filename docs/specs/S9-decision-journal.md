@@ -296,7 +296,9 @@ decision_journal_reviews(
   不是乘 0 后混进均值）。加权的是**毛口径 `excess_pct`**（与 `avg_excess_pct` 同一口径；净口径
   看 `avg_net_excess_pct`），复盘表只存毛超额，净口径在展示层减 12bp。`risk_note` 仍未做。
 - 统计口径：`weighted_outcome = outcome_pct × size_weight`，`size_weight = {none:0, light:0.5, normal:1, heavy:2}`。
-- **`none` 的条目依然参与"判断对错"统计**（那是决策质量），但**不参与收益统计**（`weighted_*` 与"实际盈亏"类字段一律排除）。
+- **`none`（只观察）的条目依然参与"判断均值"**（`avg_excess_pct` / `avg_net_excess_pct`）——那是决策质量；
+  只有**按仓位加权的收益均值**（`avg_weighted_excess_pct`，`none` 权重 0）把它排除。
+- **`kind=pass`（我决定不动）没有方向**，不进任何均值；创建时若同时给了非 `none` 的仓位 → `422`。
 - 不做：真实成交价/股数/手续费明细（属 Wave 6 交易执行），v1 只到粗档。
 
 **验收**：`position_size` 越界 422；`none` 条目在收益统计里被排除（用例断言 `weighted_outcome` 的 n 少 1）；`by_kind`/`by_size` 分栏自洽。
@@ -318,8 +320,13 @@ decision_journal_reviews(
 
 | `bet_type` | 用户的意思 | 基准 |
 |---|---|---|
-| `direction`（默认） | 赌这个行业/标的会涨 | 所属**申万一级等权平均收益**（无行业 → 沪深300） |
-| `relative` | 赌这只**跑赢同行** | 同行业等权平均收益 |
+| `direction`（默认） | 赌这个标的/行业**会涨**（方向判断） | **沪深300** |
+| `relative` | 赌这只**跑赢同行**（选股判断） | 所属**申万一级成分股等权平均收益**（无行业 → 沪深300，`fallback=true`） |
+
+> **口径修正（2026-10-19）**：本节初版把 `direction` 与 `relative` 都写成"行业等权"，
+> 两者**数字完全同构**（`bet_type` 对结果零影响）——等于"赌方向"和"赌跑赢同行"用同一把尺。
+> 现修正为：`direction` 对齐沪深300（衡量的对象是大盘），`relative` 才用行业等权。
+> `bench_fallback` 因此**只有 `relative`** 会触发。既有测试里"direction == relative"的断言已改写。
 | `market` | 市场级判断（无 symbol） | 沪深300 |
 
 - `bet_type` 在创建时选定并写入快照（`snapshot.bench_spec`），事后不可改。
@@ -370,7 +377,9 @@ decision_journal_reviews(
 ### S9.7.6 选择偏差（只记"做了"不记"没做"，胜率天然虚高）
 
 - `kind = pass` 升为**一等公民**：表单在"标的"旁提供「我决定不动」按钮（一键把 `kind` 设为 `pass`，仍要求 3 必填）。
-- 统计新增 `by_kind`：`watch / buy / sell / pass / hold` 各自的条数与净超额中位。
+- 统计新增 `by_kind`：`watch / buy / sell / pass / hold` 各自的条数与净超额中位（`by_kind_median`）。
+- 口径一句话（后端下发 `stats.exclusion_note`，前端原样展示）：
+  **「我决定不动」不计入均值；「只观察」计入判断均值、不计入按仓位加权的收益均值。**
 - **每周提示**（页面一行，不推送）：若近 30 天 `buy|watch` ≥ 3 且 `pass` = 0 →
   「你还没记录过放弃的判断；只记买入会让胜率偏高。」（一次性、可关闭）
 - **已落地（Phase A）**：`stats.by_kind` 只给条数（合计 = `n`）；收益统计（`avg_excess_pct` /
