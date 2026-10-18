@@ -26,7 +26,12 @@
 //   2. 复现历史 bug 形状：加 `roe?: number` → 红，点名 roe；
 //   3. 改 mapper 里任一 `item.<后端字段>` 为不存在的名字 → 红（映射跟真实代码）；
 //   4. mapper 新增一条不规则映射但不写理由 → 红；
-//   5. 让 `StockEnrichedOut` 不再继承 `StockOut` 且删掉某个继承字段 → 红（证明继承字段真的并进来了）。
+//   5. 让 `StockEnrichedOut` 不再继承 `StockOut` 且删掉某个继承字段 → 红（证明继承字段真的并进来了）；
+//   6. **静默漏解析护栏**（review 实测过两条 exit 0 的假绿，别再退回）：
+//      6a. `readonly dividendYield?: number` / 一行两个字段 / 带引号 key → 红（声明解析不静默跳过）；
+//      6b. mapper 写成跨行 `latestPrice:` + 下一行 `item.latest_price_x ?? undefined,` → 红
+//          （`item.<字段>` 必须被 pair 消费掉，不许退回 camelCase 兜底假绿）；
+//      6c. `interface StockRecord extends SomeOther { ... }` 且基接口在本文件解析不到 → 红。
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -209,37 +214,115 @@ function collectFields(models, name, seen = new Set()) {
 
 // ── 2. 前端：解析 `StockRecord` 字段 ─────────────────────────────────────────
 
-/** `export interface StockRecord { ... }` 的字段名（跳过注释行；方法 `foo(): T` 不会被 `name:` 命中） */
-function parseStockRecord(source) {
-  const head = source.match(/export\s+interface\s+StockRecord\s*(?:extends[^{]*)?\{/);
+/**
+ * 同一文件里 `(export) interface X [extends A, B] { ... }` → `{ bases, fields, bad }`。
+ *
+ * **绝不允许静默跳过任何声明**（review 实测的假绿：`readonly dividendYield?: number` 被旧的
+ * 逐行 `^name:` 正则跳过 → `exit 0`）。做法：
+ *   1. 先抹掉块注释与行注释；
+ *   2. 按 `;` **与换行**切声明 —— 因此一行写两个字段（`a: string; b?: number;`）会切成两条，
+ *      不再只收下第一个、静默丢掉后一个；
+ *   3. 行尾是 `:` / `?` / `|` / `&` / `,` / `<` / `(` 的说明类型跨行，合并下一段再判；
+ *   4. 切出来却匹配不上 `name?: type` 的声明全部进 `bad`，由主流程**逐条转红**（不静默）。
+ * @returns {{ bases: string[], fields: string[], bad: { text: string, name: string | null }[] } | null}
+ */
+function parseInterface(source, name) {
+  const head = source.match(new RegExp(`(?:export\\s+)?interface\\s+${name}\\s*(?:extends\\s+([^{]*?))?\\s*\\{`));
   if (!head) return null;
   const open = head.index + head[0].length - 1;
   const close = matchBrace(source, open);
   if (close === -1) return null;
-  const body = source.slice(open + 1, close);
-  const fields = [];
-  for (const line of body.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*")) {
+  const bases = (head[1] ?? "")
+    .split(",")
+    .map((b) => b.replace(/<[^>]*>/g, "").trim().split(".").pop().trim())
+    .filter(Boolean);
+  const body = source
+    .slice(open + 1, close)
+    .replace(/\/\*[\s\S]*?\*\//g, " ") // 块注释 / JSDoc
+    .replace(/\/\/[^\n]*/g, ""); // 行注释
+  const pieces = [];
+  let pending = "";
+  for (const raw of body.split(/[;\n]/)) {
+    const piece = raw.trim();
+    if (!piece) continue;
+    const joined = pending ? `${pending} ${piece}` : piece;
+    if (/(?:[?:]|[|&,<(])$/.test(joined)) {
+      pending = joined; // 类型跨行，等下一段拼完整
       continue;
     }
-    const m = trimmed.match(/^([A-Za-z_$][\w$]*)\s*\??\s*:/);
-    if (m) fields.push(m[1]);
+    pieces.push(joined);
+    pending = "";
   }
-  return fields;
+  if (pending) pieces.push(pending);
+  const fields = [];
+  const bad = [];
+  for (const text of pieces) {
+    const m = text.match(/^([A-Za-z_$][\w$]*)\s*\??\s*:\s*\S/);
+    if (m) {
+      fields.push(m[1]);
+      continue;
+    }
+    // 尽量把"疑似字段名"也报出来：否则 `readonly dividendYield?: number` 只会报一整行文本，
+    // 按字段名 grep 找不到。剥掉常见修饰符后再试一次。
+    const loose = text
+      .replace(/\b(readonly|static|declare|public|private|protected)\b/g, " ")
+      .trim()
+      .match(/^["']?([A-Za-z_$][\w$]*)["']?\s*\??\s*:/);
+    bad.push({ text, name: loose ? loose[1] : null });
+  }
+  return { bases, fields, bad };
+}
+
+/**
+ * `StockRecord` 的字段名，**含 `extends` 继承来的同文件接口字段**。
+ *
+ * 为什么解析 `extends`：否则 `interface StockRecord extends Foo` 就能把不存在的字段藏进父接口，
+ * 门禁只看 `StockRecord` 本体 → 假绿。同文件解析不到的基接口进 `unresolved` → 主流程转红
+ * （跨文件 import 的基接口需要扩展本脚本，不许默认"没字段"）。
+ * @returns {{ fields: string[], bad: { text: string, name: string | null, from: string }[], unresolved: string[] } | null}
+ */
+function parseStockRecord(source) {
+  if (!parseInterface(source, "StockRecord")) return null;
+  const fields = [];
+  const bad = [];
+  const unresolved = [];
+  const seen = new Set();
+  const walk = (name) => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    const iface = parseInterface(source, name);
+    if (!iface) {
+      unresolved.push(name);
+      return;
+    }
+    for (const base of iface.bases) walk(base);
+    fields.push(...iface.fields);
+    bad.push(...iface.bad.map((b) => ({ ...b, from: name })));
+  };
+  walk("StockRecord");
+  return { fields, bad, unresolved };
 }
 
 // ── 3. 权威映射：从真实 mapper 派生「前端字段 → 后端字段」 ─────────────────────
 
 /**
  * 从 `src/shared/api/stocks.ts` 的 `function <fnName>(item) { ... }` 里抽
- * `前端字段: <右侧含 item.<后端字段>>` 的行，得到 field pairs。
+ * `前端字段: <右侧含 item.<后端字段>>` 的行，得到 field pairs **以及漏解析的 `item.<字段>`**。
  *
  * 输入形态是本仓库既有写法（每条映射一行）：`latestPrice: item.latest_price ?? undefined,`
  * 与 `turnover: item.amount == null ? undefined : item.amount * 1e3,` —— 取右侧**第一个**
- * `item.<name>`。解析不到的字段会退回 camelCase 兜底（不静默放行：不规则映射会因此转红）。
- * 若整个函数解析出 0 条映射 → 调用方**响亮报错**（绝不退化成"空映射 + 全绿"）。
- * @returns {Map<string, string>}
+ * `item.<name>`（同一行重复出现同名只算一次；出现**两个不同**字段视为歧义 → 记 orphan → 红）。
+ *
+ * **orphan 护栏（review 实测的假绿）**：跨行写法
+ * ```
+ * latestPrice:
+ *     item.latest_price_x ?? undefined,
+ * ```
+ * 抽不到 pair → 该字段退回 camelCase 兜底命中 `latest_price` → 旧版 `exit 0`，而 mapper 读的
+ * 字段根本不存在，**正是 F1 的症状**。故函数体里每一处 `item.<字段>` 都必须被某条 pair 消费掉，
+ * 剩下的进 `orphans`，由主流程逐条转红 —— 绝不"解析不到就退回兜底"。
+ * 整个函数解析出 0 条映射同样由主流程**响亮报错**（不退化成"空映射 + 全绿"）。
+ * @returns {{ pairs: Map<string, string>, orphans: { fnName: string, line: string, idents: string[] }[] } | null}
  */
 function parseMapperPairs(source, fnName) {
   const head = source.match(new RegExp(`function\\s+${fnName}\\s*\\(`));
@@ -249,15 +332,26 @@ function parseMapperPairs(source, fnName) {
   const close = matchBrace(source, open);
   if (close === -1) return null;
   const pairs = new Map();
+  const orphans = [];
   for (const rawLine of source.slice(open + 1, close).split("\n")) {
     const line = rawLine.replace(/\s*\/\/.*$/, ""); // 去掉行尾注释（如 "// 手：..."）
+    const idents = [...new Set([...line.matchAll(/\bitem\.([A-Za-z_]\w*)/g)].map((m) => m[1]))];
     const m = line.match(/^\s*([A-Za-z_$][\w$]*)\s*:\s*(.+)$/);
-    if (!m) continue;
-    const rhs = m[2].replace(/,\s*$/, "");
-    const backend = rhs.match(/item\.([A-Za-z_]\w*)/);
-    if (backend) pairs.set(m[1], backend[1]);
+    let consumed = null;
+    if (m) {
+      const rhs = m[2].replace(/,\s*$/, "");
+      const backend = rhs.match(/\bitem\.([A-Za-z_]\w*)/);
+      if (backend) {
+        pairs.set(m[1], backend[1]);
+        consumed = backend[1];
+      }
+    }
+    if (idents.length === 0) continue;
+    // 该行解析出的字段消费掉它自己的 ident；同 ident 重复出现也算消费；剩下的是漏解析
+    const leftover = consumed ? idents.filter((i) => i !== consumed) : idents;
+    if (leftover.length) orphans.push({ fnName, line: rawLine.trim(), idents: leftover });
   }
-  return pairs;
+  return { pairs, orphans };
 }
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
@@ -302,20 +396,38 @@ pass(
 );
 pass(`StockEnrichedOut 继承 StockOut 的字段已并入后端字段集（继承链 ${models.get("StockEnrichedOut").bases.join(" → ")}）`);
 
-const recordFields = parseStockRecord(typesSource);
-if (!recordFields) {
+const record = parseStockRecord(typesSource);
+if (!record) {
   fail(`解析不到 ${TYPES_TS} 的 \`export interface StockRecord { ... }\` —— 请同步本脚本与类型声明`);
-} else if (recordFields.length === 0) {
-  fail("解析 StockRecord 得到 0 个字段 —— 解析器与真实类型声明形态不符（不许静默当空集）");
+} else {
+  // 静默漏解析护栏 #1（review 实测）：`readonly dividendYield?: number` 曾被逐行正则跳过 → exit 0。
+  // 现在任何切出来却匹配不上 `name?: type` 的声明都必须逐条报红，不许静默跳过。
+  for (const b of record.bad) {
+    fail(
+      `无法解析 ${b.from} 的声明「${b.text}」${b.name ? `（疑似字段 ${b.name}）` : ""}` +
+        ` — 门禁拒绝静默跳过：改成受支持的 \`name?: type\` 形态，或在 check-api-fields.mjs 里显式支持它`
+    );
+  }
+  // 静默漏解析护栏 #2：extends 的基接口若在本文件解析不到，继承字段就核对不到（等于开了后门）。
+  if (record.unresolved.length) {
+    fail(
+      `${record.unresolved.join("、")} 解析不到 —— StockRecord 的 extends 继承字段无法核对` +
+        ` （基接口须与本接口同文件声明，或扩展本脚本显式处理；禁止当作"没有字段"跳过）`
+    );
+  }
+  if (record.fields.length === 0) {
+    fail("解析 StockRecord 得到 0 个字段 —— 解析器与真实类型声明形态不符（不许静默当空集）");
+  }
 }
 if (failed) {
   console.log(`\n字段契约门禁未通过：${failed} 项`);
   process.exit(1);
 }
+const recordFields = record.fields;
 
-const basePairs = parseMapperPairs(apiSource, "mapBackendStock");
-const enrichedPairs = parseMapperPairs(apiSource, "mapBackendStockEnriched");
-if (!basePairs || basePairs.size === 0 || !enrichedPairs || enrichedPairs.size === 0) {
+const baseMap = parseMapperPairs(apiSource, "mapBackendStock");
+const enrichedMap = parseMapperPairs(apiSource, "mapBackendStockEnriched");
+if (!baseMap || baseMap.pairs.size === 0 || !enrichedMap || enrichedMap.pairs.size === 0) {
   fail(
     "mapper 解析失败：`mapBackendStock` / `mapBackendStockEnriched` 里抽不到任何 `前端字段: item.<后端字段>`" +
       " —— 字段映射的权威来源不可读，门禁无法判定（保持单行映射写法，勿静默降级）"
@@ -323,12 +435,32 @@ if (!basePairs || basePairs.size === 0 || !enrichedPairs || enrichedPairs.size =
   console.log(`\n字段契约门禁未通过：${failed} 项`);
   process.exit(1);
 }
+const basePairs = baseMap.pairs;
+const enrichedPairs = enrichedMap.pairs;
 /** 合并两个 mapper：enriched 覆盖 base（同名字段以后者为准，因为它才是最终返回给页面的值） */
 const mapperPairs = new Map([...basePairs, ...enrichedPairs]);
 pass(
   `映射来源 = src/shared/api/stocks.ts（mapBackendStock ${basePairs.size} 条 + ` +
     `mapBackendStockEnriched ${enrichedPairs.size} 条，合并 ${mapperPairs.size} 条）`
 );
+
+// 3a. `item.<后端字段>` 必须全部被解析成映射 —— 静默漏解析护栏 #3（review 实测的假绿）：
+// 跨行写法 `latestPrice:` + 下一行 `item.latest_price_x ?? undefined,` 抽不到 pair，字段退回
+// camelCase 兜底命中 `latest_price` → exit 0，而 mapper 读的字段根本不存在（正是 F1 的症状）。
+const orphans = [...baseMap.orphans, ...enrichedMap.orphans];
+if (orphans.length === 0) {
+  pass(
+    `mapper 的每个 item.<后端字段> 都解析成了映射（无静默漏解析：` +
+      `${basePairs.size + enrichedPairs.size} 处）`
+  );
+} else {
+  for (const o of orphans) {
+    fail(
+      `mapper ${o.fnName} 有 item.<字段> 没被解析成字段映射：${o.idents.join("、")}（行：${o.line}）` +
+        ` — 跨行/多字段写法会让脚本退回 camelCase 兜底而假绿，禁止静默跳过`
+    );
+  }
+}
 
 // 3b. 命名不规则的映射必须写理由；理由过期（不再成立）也必须删
 const actualIrregular = [...mapperPairs].filter(([field, backend]) => backend !== camelToSnake(field));

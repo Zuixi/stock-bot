@@ -207,6 +207,13 @@ jobs:
       - run: npm run check:design
       # 路由迁移硬门禁：旧 15 条路由/redirect 目标逐字/保留非 redirect/目标非占位页/IA 文档↔代码一致
       - run: npm run check:routes
+      # 前端字段 ⊆ 后端 schema 契约硬门禁（P0-6）：`StockRecord` 的每个字段必须在
+      #   `StockOut`/`StockEnrichedOut` 里存在，映射取自 src/shared/api/stocks.ts 的真实 mapper。
+      #   防概览页读后端不存在的字段（roe/revenueGrowth/profitGrowth）静默渲染 `--` 数月。
+      - run: npm run check:api-fields
+      # 图表主题封装硬门禁（P1-4）：`echarts-for-react` 只许出现在 shared/ui 的主题封装里，
+      #   防组件绕过 withChartTheme（暗色底上仍是默认深灰轴标签，编译/运行时都不报错）。
+      - run: npm run check:chart-theme
       - run: npx tsc --noEmit
 
   frontend-build:
