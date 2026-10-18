@@ -32,9 +32,18 @@ const VALUATION_METRICS: ValuationMetricDef[] = [
   { label: "PB", key: "pb", type: "number", tip: "市净率 = 总市值 / 净资产" },
 ];
 
+/**
+ * 三张成长/盈利卡读的 `financial-summary.metrics` 键。
+ *
+ * **写成字符串字面量联合而非 `string`**：本卡修的就是"读了一个后端不存在的字段名"
+ * （`stock.roe` / `revenueGrowth` / `profitGrowth`），宽化到 `string` 后 `metrics?.[key]`
+ * 会被 TS 当成任意索引、拼错键名照样通过类型检查。收窄后，错键名 = 编译错误。
+ */
+type GrowthMetricKey = "roe" | "revenue_yoy" | "profit_yoy";
+
 interface GrowthMetricDef {
-  /** `financial-summary` 的 metrics 键，如 `roe` / `revenue_yoy` / `profit_yoy` */
-  key: string;
+  /** `financial-summary` 的 metrics 键（三键与后端 `FinancialSummaryOut` 一致） */
+  key: GrowthMetricKey;
   label: string;
   tip?: string;
   /**
@@ -97,6 +106,21 @@ function GrowthValue({ value, signed }: { value?: number | null; signed: boolean
 
 export function FundamentalCards({ stock, summary }: Props) {
   const { colors } = useTheme();
+  // 三格的 metric 先取出来（卡片标题右侧要判断"是否至少有一个值"，见下）
+  const growth = GROWTH_METRICS.map((m) => {
+    const metric = summary?.metrics?.[m.key];
+    const value = metric?.value;
+    return {
+      def: m,
+      metric,
+      value,
+      // 有值 = 非 null 且非 NaN。`0` 是**合法值**（不能写成 `value ?` 这种 falsy 判断）
+      hasValue: value != null && !Number.isNaN(value),
+    };
+  });
+  // 报告期是**卡片级**信息（同一份财报覆盖三格），只在至少一格有值、且后端给了
+  // latest_period 时显示一次；逐格重复三遍没有信息增量，还会把每格拉高两行。
+  const showPeriod = Boolean(summary?.latest_period) && growth.some((g) => g.hasValue);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Card title="估值指标" size="small">
@@ -111,38 +135,33 @@ export function FundamentalCards({ stock, summary }: Props) {
           ))}
         </Row>
       </Card>
-      <Card title="成长与盈利" size="small">
+      <Card
+        title="成长与盈利"
+        size="small"
+        extra={
+          showPeriod ? (
+            <span style={{ fontSize: 12, color: colors.textSecondary }}>
+              报告期 {summary?.latest_period}
+            </span>
+          ) : undefined
+        }
+      >
         <Row gutter={[16, 16]}>
-          {GROWTH_METRICS.map((m) => {
-            const metric = summary?.metrics?.[m.key];
-            const value = metric?.value;
-            // 报告期与质量徽标只在**有值**时出现：`--` 旁边挂一个"财报"徽标是自相矛盾的
-            const hasValue = value != null && !Number.isNaN(value);
-            return (
-              <Col key={m.key} xs={12} sm={8}>
-                <Statistic
-                  title={<MetricLabel label={m.label} tip={m.tip} />}
-                  valueRender={() => <GrowthValue value={value} signed={m.signed} />}
-                />
-                {hasValue && (
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      flexWrap: "wrap",
-                      gap: 6,
-                      marginTop: 2,
-                      fontSize: 12,
-                      color: colors.textSecondary,
-                    }}
-                  >
-                    {summary?.latest_period ? <span>{summary.latest_period}</span> : null}
-                    <QualityTag quality={metric?.quality} source={metric?.source} />
-                  </div>
-                )}
-              </Col>
-            );
-          })}
+          {growth.map(({ def, metric, value, hasValue }) => (
+            <Col key={def.key} xs={12} sm={8}>
+              <Statistic
+                title={<MetricLabel label={def.label} tip={def.tip} />}
+                valueRender={() => <GrowthValue value={value} signed={def.signed} />}
+              />
+              {/* 质量徽标是**逐指标**的（三键的 quality/source 可以不同），故留在格内；
+                  无值时不渲染——`--` 旁边挂一个"财报"徽标是自相矛盾的 */}
+              {hasValue && (
+                <div style={{ marginTop: 2 }}>
+                  <QualityTag quality={metric?.quality} source={metric?.source} />
+                </div>
+              )}
+            </Col>
+          ))}
         </Row>
       </Card>
     </div>

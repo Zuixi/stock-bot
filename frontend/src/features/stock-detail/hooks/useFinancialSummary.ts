@@ -3,6 +3,19 @@ import { fetchFinancialSummary } from "@/shared/api/financial";
 import type { Exchange } from "@/shared/types";
 
 /**
+ * 财务摘要的新鲜度：5 分钟。
+ *
+ * 全局默认是 `App.tsx` 的 `staleTime: 30_000`（30 秒），本 hook 把它从 **30s 放宽到 5min**：
+ * 财报是季度级数据，30 秒的"新鲜度"没有信息价值，却会让页内来回切 tab 时在
+ * `refetchOnMount` 下静默重拉一次。放宽之后，"切财务 tab 命中缓存、请求数仍为 1"
+ * （`e2e/stockDetailFinancial.spec.ts` 的判据）才是稳定契约，而不是一场 30 秒竞速。
+ *
+ * 命名沿用本 feature 内其它查询模块的 `STALE_TIME` 常量写法
+ * （`CustomSwTags.tsx` / `UserTags.tsx` / `RelatedEvents.tsx`）。
+ */
+const STALE_TIME = 5 * 60 * 1000;
+
+/**
  * `GET /financial-summary` 的**唯一**查询入口（概览「成长与盈利」卡 + 财务 tab 共用）。
  *
  * 单一 query key `["financial-summary", exchange, symbol]` 是这次改造的核心契约：
@@ -18,8 +31,6 @@ export function useFinancialSummary(exchange: Exchange | undefined, symbol: stri
     queryKey: financialSummaryQueryKey(exchange, symbol),
     queryFn: () => fetchFinancialSummary(exchange as Exchange, symbol as string),
     enabled: Boolean(exchange && symbol),
-    // 财报数据变动极慢（季度级）：同一页内切 tab 命中缓存即可，避免二次请求。
-    // 全局默认 30s 已够，但这里显式钉住意图，防止将来调低全局 staleTime 时回归。
-    staleTime: 5 * 60_000,
+    staleTime: STALE_TIME,
   });
 }
