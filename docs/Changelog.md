@@ -1,3 +1,33 @@
+## 2026-10-19 - **S9.7 Phase B2 后端：路径 / 校准 / 仓位统计 / 导出**
+
+只做加法（契约 `.superpowers/sdd/journal-s97/contract-phaseB.md` §2/§4/§5；无新表、无迁移，
+既有响应字段类型一个都没变）：
+
+- **路径**（§S9.7.4）：`evaluation` 新增 `mae_pct`（区间最低价相对 `snapshot.price` 的跌幅，夹到 ≤ 0）/
+  `first_touch_invalidation`（首个满足 `price_below`/`price_above` 的交易日）/ `touched_then_reversed`
+  （有触达且到期 `net_outcome_pct > 0`）/ `days_to_invalidation`（入场后到触达日的**交易日数**）；
+  三者由评估的同一条批 SQL 逐日比较得出（查询数仍是 3 条封顶，不按天再查）；`date_only` →
+  触达三项 `null/false/null`（`mae_pct` 照算），市场级判断 → `mae_pct=null` + `missing_reason`
+- **校准**（§S9.7.5）：`stats.calibration = {n, bins[{confidence,p,n,hit_rate,sufficient}], brier}`；
+  `p` = 固定映射 `{1:0.2,2:0.35,3:0.5,4:0.65,5:0.8}`（`CALIBRATION_P`，源码注明**不可优化**）；
+  `hit_rate`/`brier` 一律按 **`net_excess_pct > 0`** 判对（`excess=0.12` 恰在成本线上不算对）；
+  每档 `sufficient = n>=10`、`n=0` 的档不出现；总 `n<20` → `calibration=null` + `calibration_note`
+- **仓位统计**（§S9.7.1）：`stats.by_size`（四档判断条数，合计 = `n`）与
+  `stats.avg_weighted_excess_pct`（按 `size_weight={none:0,light:0.5,normal:1,heavy:2}` 加权，
+  `none` **完全退出分母**）；`by_kind_median`（每类 `{count, median_net_excess_pct}`，`by_kind`
+  既有纯数字形状不变）；**裁定 2**：`share_ci.win` 的分子与分母都排除 `pass`
+  （`JOURNAL_STATS_VERSION` 随之 `s97.a1` → `s97.b1`）
+- **导出**（§S9.7.9）：`GET /api/v1/journal/export?format=json|csv` → 200 +
+  `Content-Disposition: attachment`，只含本人（entries + snapshot + review，不分页不截断）；
+  CSV = **UTF-8 BOM** + 固定 17 列；`stats.export_hint = "/api/v1/journal/export?format=csv"`
+- 统计仍**只有两条聚合查询**（第 1 条 FILTER 拿齐计数/校准/加权，第 2 条按 `kind` 分组算中位数与收益均值），
+  与用户条数无关；新增/扩展测试 `tests/test_journal_s97_b2.py`（18 条）+ `tests/test_journal_api.py`
+  （导出 2 条 + stats 形状扩展）
+- 涉及文件：`backend/app/services/journal_service.py`、`backend/app/schemas/journal.py`、
+  `backend/app/api/v1/journal.py`、`backend/tests/test_journal_s97_b2.py(新)`、
+  `backend/tests/test_journal_api.py`、`backend/tests/test_journal_s97.py`（统计产物版本 pin）、
+  `docs/specs/S9-decision-journal.md`、`.superpowers/sdd/journal-s97/backend-B2-report.md(新)`
+
 ## 2026-10-19 - **S9.7 Phase B 前端：仓位 / 信心校准 / 不可复盘 / 路径提示 / 导出与隐私**
 
 只做加法（契约 `.superpowers/sdd/journal-s97/contract-phaseB.md` §6；后端 Phase B 的统计与导出尚未上线，

@@ -151,6 +151,13 @@ class JournalEvaluationOut(BaseModel):
     - ``bench_fallback``：``True`` = 本来要行业基准但拿不到行业，已退化到沪深300。
     - ``invalidation_observable``（spec §S9.7.8）：失效条件能否被行情/日期客观判定。
       三形态 = ``True``；历史行里的不可识别形态 = ``False``（该条不可复盘）。
+
+    Phase B2（spec §S9.7.4 路径分析）**再加四个字段**（全部可选、缺省 = 不适用/缺数）：
+
+    - ``mae_pct``：入场到到期期间的最大不利偏移（%），**≤ 0**（没有不利偏移就是 0）；
+    - ``first_touch_invalidation``：首次触达失效条件的交易日；未触达/``date_only`` 为 ``None``；
+    - ``touched_then_reversed``：先触达失效条件、到期净收益反而 > 0。缺证据一律 ``False``；
+    - ``days_to_invalidation``：入场日之后到首次触达日的**交易日数**；未触达为 ``None``。
     """
 
     due_on: date
@@ -162,6 +169,11 @@ class JournalEvaluationOut(BaseModel):
     net_outcome_pct: float | None = None
     net_excess_pct: float | None = None
     invalidation_hit: bool | None = None
+    #: ★ spec §S9.7.4 路径四指标（只加，缺省 = 不适用/缺数）
+    mae_pct: float | None = None
+    first_touch_invalidation: date | None = None
+    touched_then_reversed: bool = False
+    days_to_invalidation: int | None = None
     #: ★ spec §S9.7.3：基准的人话说明 + 是否退化（``bench_pct`` 的口径附注）
     bench_basis_note: str = ""
     bench_fallback: bool = False
@@ -229,6 +241,44 @@ class WilsonIntervalOut(BaseModel):
     ci_high: float
 
 
+class JournalCalibrationBinOut(BaseModel):
+    """校准曲线的一档（spec §S9.7.5）：``n = 0`` 的档**不出现**（不是假数据点）。
+
+    ``p`` 是 :data:`app.services.journal_service.CALIBRATION_P` 里的**固定**先验
+    （``{1:0.2, 2:0.35, 3:0.5, 4:0.65, 5:0.8}``），不是按历史结果拟合出来的。
+    """
+
+    confidence: int
+    #: 该档的固定先验概率（后端算，前端不重算）
+    p: float
+    #: 该档"已复盘且填了信心"的条数
+    n: int
+    #: 实际命中率 = ``净超额 > 0`` 的比例（**不是毛收益**）
+    hit_rate: float
+    #: ``n >= 10`` 才 ``True``（该档样本不足 → 前端写"样本不足"）
+    sufficient: bool
+
+
+class JournalCalibrationOut(BaseModel):
+    """校准（spec §S9.7.5）：总样本 ``n < 20`` 时服务层给 ``None`` + ``calibration_note``。"""
+
+    n: int
+    bins: list[JournalCalibrationBinOut] = Field(default_factory=list)
+    #: ``mean((p - I[net_excess>0])**2)``；无样本时为 ``None``
+    brier: float | None = None
+
+
+class JournalKindMedianOut(BaseModel):
+    """一类归档标签的净超额中位（spec §S9.7.6）。
+
+    ``count`` 是**中位数的样本数**（已复盘的条数），与 ``by_kind`` 的"全部条数"
+    不是同一件事——``by_kind`` 的既有形状（纯数字）保持不变。
+    """
+
+    count: int
+    median_net_excess_pct: float | None = None
+
+
 class JournalStatsOut(BaseModel):
     """统计（spec §S9.4）：``by_attribution`` 合计恒等于 ``reviewed_n``。
 
@@ -238,6 +288,14 @@ class JournalStatsOut(BaseModel):
     - ``avg_net_excess_pct``：**净口径**平均超额（毛 − 12bp，且**排除 pass**）；
     - ``share_ci``：``discipline_break`` 与 ``win`` 两个比例的 Wilson 95% 区间；
     - ``net_cost_bps`` / ``multiple_comparison_note``：口径常量，前端原样展示。
+
+    Phase B2 新增（spec §S9.7.1/§S9.7.5/§S9.7.9，**只加字段**）：
+
+    - ``by_size``：四个仓位档各自的条数（合计 = ``n``）；
+    - ``avg_weighted_excess_pct``：按 ``size_weight`` 加权（``none`` 排除，权重 0）；
+    - ``by_kind_median``：每类的 ``{count, median_net_excess_pct}``；
+    - ``calibration`` / ``calibration_note``：校准曲线（总样本 < 20 → ``None`` + 原因）；
+    - ``export_hint``：导出地址，前端直接用（spec §S9.7.9）。
     """
 
     n: int
@@ -249,7 +307,7 @@ class JournalStatsOut(BaseModel):
     by_attribution: dict[str, int]
     #: ★ ``kind`` 五枚举 → 条数（合计 = ``n``，spec §S9.7.6）
     by_kind: dict[str, int] = Field(default_factory=dict)
-    #: 毛口径平均超额（排除 ``pass``）。默认展示用 ``avg_net_excess_pct``
+    #: ★ 毛口径平均超额（排除 ``pass``）。默认展示用 ``avg_net_excess_pct``
     avg_excess_pct: float | None = None
     #: ★ 净口径平均超额（= 毛 − 12bp，排除 ``pass``）
     avg_net_excess_pct: float | None = None
@@ -263,3 +321,15 @@ class JournalStatsOut(BaseModel):
     net_cost_bps: int = 0
     #: ★ 固定标注（spec §S9.7.7 逐字）：未做多重比较校正
     multiple_comparison_note: str = ""
+    #: ★ spec §S9.7.1 仓位分栏（四枚举 → 条数，合计 = ``n``）
+    by_size: dict[str, int] = Field(default_factory=dict)
+    #: ★ spec §S9.7.1 按仓位加权超额（``none`` 排除；无样本时 ``None``）
+    avg_weighted_excess_pct: float | None = None
+    #: ★ spec §S9.7.6 每类净超额中位（``by_kind`` 的既有纯数字形状不变）
+    by_kind_median: dict[str, JournalKindMedianOut] = Field(default_factory=dict)
+    #: ★ spec §S9.7.5 校准（总样本 < 20 → ``None``）
+    calibration: JournalCalibrationOut | None = None
+    #: ★ 校准样本不足时的原因（够样本时为 ``None``）
+    calibration_note: str | None = None
+    #: ★ spec §S9.7.9 导出地址（前端直接用，不写死路径）
+    export_hint: str = ""

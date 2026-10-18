@@ -21,6 +21,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import os
 import re
 import time
@@ -687,6 +689,13 @@ async def test_stats_shape_and_sample_gate(
         "multiple_comparison_note",
         "avg_excess_pct",
         "discipline_break_share",
+        # ★ Phase B2（spec §S9.7.1/§S9.7.5/§S9.7.9）
+        "by_size",
+        "avg_weighted_excess_pct",
+        "by_kind_median",
+        "calibration",
+        "calibration_note",
+        "export_hint",
     }
     assert stats["n"] == 1
     assert stats["reviewed_n"] == 1
@@ -709,3 +718,68 @@ async def test_stats_shape_and_sample_gate(
     assert stats["share_ci"]["win"]["n"] == 1
     assert stats["share_ci"]["win"]["successes"] == 1
     assert stats["share_ci"]["win"]["ci_low"] == pytest.approx(0.2065, abs=1e-4)
+    # ★ Phase B2：仓位分栏（合计 = n）、每类中位净超额、校准样本不足、导出地址
+    assert stats["by_size"] == {"none": 1, "light": 0, "normal": 0, "heavy": 0}
+    assert sum(stats["by_size"].values()) == stats["n"]
+    assert stats["avg_weighted_excess_pct"] is None, "只有 none（权重 0）→ 没有可加权样本"
+    assert stats["by_kind_median"]["watch"] == {
+        "count": 1,
+        "median_net_excess_pct": pytest.approx(8.88, abs=1e-4),
+    }
+    assert stats["calibration"] is None, "1 < 20 → 不给曲线"
+    assert "样本不足" in stats["calibration_note"]
+    assert stats["export_hint"] == "/api/v1/journal/export?format=csv"
+
+
+# ── §S9.7.9 导出：只含本人 + 固定列序 + BOM ─────────────────────────────────
+
+
+@requires_pg
+async def test_export_returns_only_the_owners_entries(
+    journal_app: tuple[FastAPI, AsyncSession],
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
+) -> None:
+    """两个用户交叉：A 的导出里有且只有 A 的条目（JSON 与 CSV 都断言）。"""
+    app, session = journal_app
+    await _seed(session)
+    alice = _token(rsa_key_pair)
+    bob = _token(rsa_key_pair)
+    mine = (await _create(app, alice, thesis="A 的判断：猪价见底")).json()
+    theirs = (await _create(app, bob, thesis="B 的判断：白酒提价")).json()
+
+    json_resp = await _get(app, "/api/v1/journal/export", token=alice, params={"format": "json"})
+    assert json_resp.status_code == 200, json_resp.text
+    assert "attachment" in json_resp.headers["content-disposition"]
+    payload = json_resp.json()
+    assert payload["count"] == 1
+    assert [entry["id"] for entry in payload["entries"]] == [mine["id"]]
+    assert payload["entries"][0]["snapshot"]["price"] == 100.0
+    assert payload["entries"][0]["thesis"] == "A 的判断：猪价见底"
+    assert theirs["id"] not in [entry["id"] for entry in payload["entries"]]
+    assert "B 的判断" not in json_resp.text
+
+    csv_resp = await _get(app, "/api/v1/journal/export", token=alice, params={"format": "csv"})
+    assert csv_resp.status_code == 200, csv_resp.text
+    assert "attachment" in csv_resp.headers["content-disposition"]
+    assert csv_resp.headers["content-type"].startswith("text/csv")
+    assert csv_resp.content.startswith(b"\xef\xbb\xbf"), "CSV 必须有 UTF-8 BOM"
+    text = csv_resp.content.decode("utf-8-sig")
+    rows = list(csv.reader(io.StringIO(text, newline="")))
+    assert rows[0] == list(svc.EXPORT_CSV_COLUMNS)
+    assert [row[0] for row in rows[1:]] == [str(mine["id"])]
+    assert "A 的判断：猪价见底" in text
+    assert "B 的判断" not in text, "导出不得含他人数据（spec §S9.7.9 的验收判据）"
+
+
+@requires_pg
+async def test_export_rejects_unknown_format(
+    journal_app: tuple[FastAPI, AsyncSession],
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
+) -> None:
+    """``format`` 只接受 ``json`` / ``csv``：越界 **422**（不静默退回 json）。"""
+    app, session = journal_app
+    await _seed(session)
+    resp = await _get(
+        app, "/api/v1/journal/export", token=_token(rsa_key_pair), params={"format": "xlsx"}
+    )
+    assert resp.status_code == 422, resp.text

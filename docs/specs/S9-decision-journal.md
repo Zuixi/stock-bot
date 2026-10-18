@@ -147,6 +147,12 @@ decision_journal_reviews(
   - `evaluation` 追加：`net_outcome_pct` / `net_excess_pct` / `bench_basis_note` / `bench_fallback`
   - Phase B1 追加（spec §S9.7.1/§S9.7.5/§S9.7.8，**只加字段**）：条目响应 `position_size` / `confidence` /
     `reviewable`；`evaluation` 再加 `invalidation_observable`（`reviewable=false` 时复盘端点 422）
+  - Phase B2 追加（spec §S9.7.1/§S9.7.4/§S9.7.5/§S9.7.9，**只加字段**）：`evaluation` 再加路径四指标
+    `mae_pct` / `first_touch_invalidation` / `touched_then_reversed` / `days_to_invalidation`；
+    `stats` 再加 `by_size` / `avg_weighted_excess_pct` / `by_kind_median` /
+    `calibration{n,bins,brier}` / `calibration_note` / `export_hint`；新增
+    `GET /api/v1/journal/export?format=json|csv`（`Content-Disposition: attachment`，只含本人，
+    CSV = UTF-8 BOM + 固定列序）
 - **不写不归因**：未选 `verdict` 不得写入（`422`）；`reviewed` 后条目移到"已复盘"，不可再评
 
 **验收判据**
@@ -276,6 +282,10 @@ decision_journal_reviews(
 - **已落地（Phase B1，2026-10-19）**：`position_size` **落列**（`NOT NULL DEFAULT 'none'` + `ck_journal_position_size`，
   迁移只加列、不搬数据），创建请求可传（越界 **422**），列表/详情响应带出；`risk_note` 与
   `by_size` / 加权超额统计留 Phase B2。
+- **已落地（Phase B2，2026-10-19）**：`stats.by_size`（四档**判断条数**，合计 = `n`）与
+  `stats.avg_weighted_excess_pct`（按上表 `size_weight` 加权，`none` 权重 0 → **完全退出分母**，
+  不是乘 0 后混进均值）。加权的是**毛口径 `excess_pct`**（与 `avg_excess_pct` 同一口径；净口径
+  看 `avg_net_excess_pct`），复盘表只存毛超额，净口径在展示层减 12bp。`risk_note` 仍未做。
 - 统计口径：`weighted_outcome = outcome_pct × size_weight`，`size_weight = {none:0, light:0.5, normal:1, heavy:2}`。
 - **`none` 的条目依然参与"判断对错"统计**（那是决策质量），但**不参与收益统计**（`weighted_*` 与"实际盈亏"类字段一律排除）。
 - 不做：真实成交价/股数/手续费明细（属 Wave 6 交易执行），v1 只到粗档。
@@ -286,7 +296,8 @@ decision_journal_reviews(
 
 - 常量 `COST_ROUND_TRIP_BPS = 12`（佣金双边 5bp + 印花税卖出 5bp + 过户费/滑点 2bp，**保守估计**），写在 registry 常量里并注明日期与假设。
 - **已落地（Phase A，2026-10-19）**：常量在 `backend/app/services/journal_service.py` 的常量区（含假设表与日期），
-  配对常量 `JOURNAL_STATS_VERSION = "s97.a1"`（改成本必须同时改它与本 spec）；净口径由
+  配对常量 `JOURNAL_STATS_VERSION`（Phase B2 起 `s97.b1`：`share_ci.win` 分母排除 `pass` 是区间口径变化；
+  改成本/口径必须同时改它与本 spec）；净口径由
   `evaluation.net_outcome_pct` / `evaluation.net_excess_pct` / `stats.avg_net_excess_pct` / `stats.net_cost_bps` 下发。
 - `net_outcome_pct = outcome_pct - COST_ROUND_TRIP_BPS / 100`；`net_excess_pct = net_outcome_pct - bench_pct`。
 - 统计与展示**默认用净口径**，毛口径只在"口径说明"里出现。
@@ -315,6 +326,18 @@ decision_journal_reviews(
 - 新增派生指标（不新表，复盘时算）：`mae_pct`（入场到到期期间的最大不利偏移）· `first_touch_invalidation`（首次触达失效条件的日期）· `touched_then_reversed`（**先触失效、到期时反而盈利**）· `days_to_invalidation`。
 - 归因辅助：若 `touched_then_reversed = true` 且 `verdict = thesis_wrong` → 在复盘弹窗里提示：「你先触发了失效条件，之后才反弹——这更像**纪律**问题」。
 - 不做：日内路径（我们只有日线）、盘中止损模拟。
+- **已落地（Phase B2，2026-10-19）**：`evaluation` 新增四字段，全部**到期时现算、不新表**：
+  - `mae_pct` = `(区间最低价 / snapshot.price − 1) × 100`，**夹到 ≤ 0**（最低价高于入场价 = 没有
+    不利偏移 → 0；正数是另一个指标 MFE，不在这里出）；
+  - `first_touch_invalidation` = 区间 `(入场交易日, due_on]` 内首个满足 `price_below`（`low ≤ 阈值`）/
+    `price_above`（`high ≥ 阈值`）的**交易日**；未触达 = `null`。该列由评估的同一条批 SQL 逐日比较
+    得出（不按天再查库）；
+  - `days_to_invalidation` = 入场日之后到首次触达日的**交易日数**（该标的的 K 线根数，不是自然日）；
+  - `touched_then_reversed` = 有触达 **且** 到期 `net_outcome_pct > 0`；缺任一证据一律 `false`
+    （不猜"发生过"）。
+  `date_only` 形态：到期即命中，不存在"先触达后反弹"→ `first_touch_invalidation` /
+  `days_to_invalidation` 为 `null`、`touched_then_reversed` 为 `false`；`mae_pct` 仍是有效的路径
+  事实（照算）。市场级判断（快照无 `price`）→ `mae_pct = null` + `missing_reason`。
 
 **验收**：四指标逐值断言（构造"先跌破后反弹"序列 → `touched_then_reversed=true`）；`first_touch_invalidation` 只落在到期日之前。
 
@@ -324,6 +347,11 @@ decision_journal_reviews(
 - **已落地（Phase B1，2026-10-19）**：`confidence` **落列**（int，**可空、无默认值** —— NULL = 当时没填，
   不参与校准，给默认值会把没填的人算进校准样本）+ `ck_journal_confidence`（1..5）；创建请求可传
   （越界 **422**），响应带出；`calibration` / `brier` 统计留 Phase B2。
+- **已落地（Phase B2，2026-10-19）**：`stats.calibration = {n, bins[{confidence,p,n,hit_rate,sufficient}],
+  brier}`。`p` 取上面的**固定**映射（`CALIBRATION_P`，源码注明不可优化）；`hit_rate` 与 `brier` 一律按
+  **`net_excess_pct > 0`** 判对（`excess = 0.12` 恰在成本线上 → 不算对）；每档 `sufficient = n >= 10`，
+  `n = 0` 的档**不出现**；总 `n` = 已复盘且填了 `confidence` 的条数，`n < 20` → `calibration = null` +
+  `calibration_note`（带当前条数）。`brier` 由每档 `(n, hits)` 闭式求和（`p` 档内恒定），不把 N 条记录搬到 Python。
 - `calibration`：按信心档分组，算**实际净超额 > 0 的比例**与样本数；`brier = mean((p - I[net_excess>0])**2)`。
 - 展示纪律：每档 `n ≥ 10` 才显示该档；总样本 `n < 20` 不给曲线，只显示"样本不足"。
 - **不把校准当作"能力评价"**：文案固定为"你的信心与实际结果的对照"，不出现"你高估自己"这类判断。
@@ -339,6 +367,11 @@ decision_journal_reviews(
 - **已落地（Phase A）**：`stats.by_kind` 只给条数（合计 = `n`）；收益统计（`avg_excess_pct` /
   `avg_net_excess_pct` / `share_ci.win` 的分母）按契约 §4 排除 `pass`。`by_kind` 的**净超额中位**未做
   （契约 §4 未定义该字段），留 Phase B。
+- **已落地（Phase B2，2026-10-19）**：新增 `stats.by_kind_median`（**不动** `by_kind` 的纯数字形状）：
+  每类 `{count, median_net_excess_pct}`，`count` 是**中位数的样本数**（已复盘的条数），中位净超额 =
+  中位毛超额 − 12bp；`pass` 有自己的一栏（它也是判断），但总体的 `avg_*` 仍排除 `pass`。
+  **裁定 2**：`share_ci.win` 的分子与分母都排除 `pass`（分母 = 已复盘且 `kind != pass`；
+  全是 `pass` 时 0/0 → `null`，不是 100%）。
 - 不做：强迫记录、扣分、社交比较。
 
 **验收**：`pass` 条目计入判断统计、不计入收益统计；提示只在条件满足时出现一次；`by_kind` 合计 = `n`。
@@ -377,6 +410,13 @@ decision_journal_reviews(
 - **删除权的取舍（明写）**：单条**不可删除**（否则"复盘记录可被篡改"，与 S9 的不可篡改哲学冲突）；账号删除时**级联删除**全部日志。
   页面必须原文告知：「日志不提供单条删除，以保证复盘记录不可篡改；如需清除请删除账号」。
 - 不做：加密存储、审计日志（v2；先靠"只有作者可读"这一条）。
+- **已落地（Phase B2，2026-10-19）**：`GET /api/v1/journal/export?format=json|csv`（`json` 默认），
+  200 + `Content-Disposition: attachment`；查询带 `user_id`、**不分页不截断**（与列表页的 `LIST_LIMIT`
+  无关）；内容 = 条目字段 + `snapshot`（原样）+ `review`（含现算的 `net_excess_pct`）。
+  CSV = **UTF-8 BOM**（Excel 中文不乱码）+ 固定列序
+  `id,symbol,kind,bet_type,position_size,confidence,thesis,invalidation,horizon_days,created_at,due_on,status,outcome_pct,bench_pct,excess_pct,net_excess_pct,verdict`，
+  缺失值是空串（不是 0）；`stats.export_hint = "/api/v1/journal/export?format=csv"`。
+  `format` 越界 → **422**（不静默退回 json）。
 
 **验收**：导出端点返回本人全部条目且**不含**他人数据（用户隔离用例）；页面有上述告知原文；`grep` 无跨用户查询路径。
 

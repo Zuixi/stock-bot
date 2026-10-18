@@ -8,16 +8,22 @@
 要求 ``research:read`` 会让普通用户读不到自己的日志。所有查询都带 ``user_id``，
 非本人条目统一 **404**（不泄露"有没有这条"）。
 
-五个端点（与计划 Task 3/5 的契约一一对应）：:
+六个端点（与计划 Task 3/5 的契约一一对应）：:
 
     POST /api/v1/journal                    → 201 创建（快照落库）
     GET  /api/v1/journal?status=            → 列表 + 三态计数
     GET  /api/v1/journal/stats              → 统计（占比无样本为 null）
+    GET  /api/v1/journal/export?format=      → 导出本人全部（json|csv，spec §S9.7.9）
     GET  /api/v1/journal/{id}               → 单条（含到期自动结果）
     POST /api/v1/journal/{id}/review        → 201 归因（二次复盘 409；不可复盘 422，spec §S9.7.8）
+
+**导出只含本人**（spec §S9.7.9）：查询里就带 ``user_id``，且没有"按 symbol/用户查全部"
+的参数——不存在跨用户聚合的路径。
 """
 
-from fastapi import APIRouter, HTTPException, Query, status
+from typing import Literal
+
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.api.deps import CurrentUserDep, DbDep
 from app.schemas.journal import (
@@ -63,13 +69,51 @@ def _entry_out(row: svc.JournalRow, evaluation: dict | None = None) -> JournalEn
     )
 
 
-# 静态路径必须声明在 `/{entry_id}` 之前：否则 "stats" 会先被路径参数吃掉（422 而不是路由）
+# 静态路径必须声明在 `/{entry_id}` 之前：否则 "stats" 会被路径参数吃掉（422 而不是路由）
 @router.get("/stats", response_model=JournalStatsOut)
 async def get_journal_stats(db: DbDep, user: CurrentUserDep) -> JournalStatsOut:
     """长期看自己最常犯的错（``reviewed_n < 5`` 时占比为 ``null``）。"""
     assert user.user_id is not None
     result = await svc.stats(db, user.user_id)
     return JournalStatsOut(**result)
+
+
+@router.get("/export")
+async def export_journal_entries(
+    db: DbDep,
+    user: CurrentUserDep,
+    format_: Literal["json", "csv"] = Query(
+        "json",
+        alias="format",
+        description="导出格式：json（默认，含完整快照）| csv（UTF-8 BOM + 固定列序）",
+    ),
+) -> Response:
+    """导出**本人全部**判断 + 快照 + 复盘（spec §S9.7.9，一次性下载）。
+
+    三条纪律：
+    ① **只有本人**：查询带 ``user_id``，没有"全部用户"的分支；
+    ② **不截断**：与列表页的 ``LIST_LIMIT`` 无关（导出被显示上限截断就不叫导出）；
+    ③ ``Content-Disposition: attachment``：浏览器直接下载，不在页面里渲染（HTML/CSV
+       注入面留在下载文件里，前端不解析它的内容）。
+
+    CSV 的列序是契约（``svc.EXPORT_CSV_COLUMNS``），BOM 在字节层（Excel 中文不乱码）；
+    非法 ``format`` 由 ``Literal`` 直接 422（不是静默退回 json）。
+    """
+    assert user.user_id is not None
+    rows = await svc.export_rows(db, user.user_id)
+    filename = f"journal-{svc.today_sh().isoformat()}.{format_}"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    if format_ == "csv":
+        return Response(
+            content=svc.export_csv(rows),
+            media_type="text/csv; charset=utf-8",
+            headers=headers,
+        )
+    return Response(
+        content=svc.export_json(rows),
+        media_type="application/json",
+        headers=headers,
+    )
 
 
 @router.get("", response_model=JournalListOut)

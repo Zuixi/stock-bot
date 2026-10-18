@@ -35,6 +35,9 @@
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -52,8 +55,10 @@ from app.models.daily_basic import DailyBasicIndicator
 from app.models.industry_research import IndustryMetric
 from app.models.journal import (
     BET_TYPES,
+    CONFIDENCE_VALUES,
     ENTRY_KINDS,
     OBSERVABLE_INVALIDATION_KINDS,
+    POSITION_SIZES,
     VERDICTS,
     DecisionJournalEntry,
     DecisionJournalReview,
@@ -83,10 +88,16 @@ __all__ = [
     "BENCH_NOTE_FALLBACK",
     "BENCH_NOTE_INDUSTRY",
     "BENCH_NOTE_MARKET",
+    "CALIBRATION_P",
     "COST_ROUND_TRIP_BPS",
     "COST_ROUND_TRIP_PCT",
+    "EXPORT_CSV_COLUMNS",
+    "EXPORT_HINT",
     "JOURNAL_STATS_VERSION",
+    "MIN_CALIBRATION_BIN_SAMPLE",
+    "MIN_CALIBRATION_SAMPLE",
     "MULTIPLE_COMPARISON_NOTE",
+    "SIZE_WEIGHTS",
     "SNAPSHOT_FIELDS",
     "SNAPSHOT_META_FIELDS",
     "SNAPSHOT_VERSION",
@@ -100,9 +111,13 @@ __all__ = [
     "bench_note",
     "bench_spec",
     "build_snapshot",
+    "calibration_summary",
     "create_entry",
     "evaluate_entry",
     "evaluate_entries",
+    "export_csv",
+    "export_json",
+    "export_rows",
     "get_entry",
     "invalidation_observable",
     "list_entries",
@@ -192,8 +207,13 @@ COST_ROUND_TRIP_BPS = 12
 #: 百分点形式的同一笔成本（= 0.12）。净口径一律由它推出，不在别处写字面量。
 COST_ROUND_TRIP_PCT = round(COST_ROUND_TRIP_BPS / 100.0, 4)
 #: **统计产物版本**（spec §S9.7.2 的"统计产物版本"）：净口径/基准/区间口径的版本戳。
-#: 改 ``COST_ROUND_TRIP_BPS``、``WILSON_Z`` 或基准口径时必须同时改这里（有钉死用例）。
-JOURNAL_STATS_VERSION = "s97.a1"
+#: 改 ``COST_ROUND_TRIP_BPS``、``WILSON_Z``、基准口径**或 ``share_ci.win`` 的样本分母
+#: 时必须同时改这里（有钉死用例）。
+#:
+#: ``s97.b1``（2026-10-19，Phase B2）：``share_ci.win`` 的分母**排除 ``pass``**（裁定 2）、
+#: 新增 ``calibration`` / ``by_size`` / ``avg_weighted_excess_pct`` / ``by_kind_median``
+#: —— 分母变了就是口径变了，所以版本必须动。
+JOURNAL_STATS_VERSION = "s97.b1"
 
 # ── spec §S9.7.3 基准口径 ───────────────────────────────────────────────────
 #: 基准种类 ①：**所属申万一级成分股的等权平均收益**。诚实标注：这**不是**申万一级
@@ -212,6 +232,49 @@ WILSON_Z = 1.96
 #: 统计页固定标注（spec §S9.7.7 逐字，前端原样展示）：
 #: 按 45 个桶（S9.6 的 5×3×3）检索时，总会有桶看起来"显著"——我们**不做**多重比较校正。
 MULTIPLE_COMPARISON_NOTE = "未做多重比较校正：按 45 个桶检索时总会有桶看起来显著"
+
+# ── spec §S9.7.5 校准：信心档 → 固定先验概率 ────────────────────────────────
+#: 信心 1..5 → 该档"判断为对"的**固定**先验概率。
+#:
+#: **不可优化**（spec §S9.7.5 逐字）：这张表是复盘反馈的锚，一旦按历史数据反向拟合，
+#: 校准曲线就会变成"自我实现的预言"（用结果解释信心，再用信心解释结果）。
+#: 改这张表 = 改了"你的信心跟结果对不对得上"这件事的含义，必须同时改 spec §S9.7.5
+#: 与 ``JOURNAL_STATS_VERSION``。
+CALIBRATION_P: dict[int, float] = {1: 0.2, 2: 0.35, 3: 0.5, 4: 0.65, 5: 0.8}
+#: 校准曲线**总样本**下限（spec §S9.7.5）：``n < 20`` 不给曲线，只给一句原因。
+MIN_CALIBRATION_SAMPLE = 20
+#: 校准**单档**样本下限（spec §S9.7.5）：``n < 10`` 的档显示"样本不足"，不给命中率。
+MIN_CALIBRATION_BIN_SAMPLE = 10
+#: 总样本不足时下发的**原因**（前端原样展示；拼上当前条数后用户才知道还差几条）。
+CALIBRATION_INSUFFICIENT_NOTE = "样本不足（<20 条已复盘且填了信心）"
+
+# ── spec §S9.7.1 仓位权重（只用于 `avg_weighted_excess_pct`） ───────────────
+#: 风险单位 → 权重。``none`` = 只观察不下单 → 权重 0（**排除**，不是乘 0 后混进分母）。
+SIZE_WEIGHTS: dict[str, float] = {"none": 0.0, "light": 0.5, "normal": 1.0, "heavy": 2.0}
+
+# ── spec §S9.7.9 导出 ───────────────────────────────────────────────────────
+#: 统计卡下发的导出地址（前端直接用，不自己拼；改路径必须同时改这里与路由）。
+EXPORT_HINT = "/api/v1/journal/export?format=csv"
+#: 导出 CSV 的**固定列序**（spec §S9.7.9 逐字；前端/脚本按位置读，不按表头猜）。
+EXPORT_CSV_COLUMNS: tuple[str, ...] = (
+    "id",
+    "symbol",
+    "kind",
+    "bet_type",
+    "position_size",
+    "confidence",
+    "thesis",
+    "invalidation",
+    "horizon_days",
+    "created_at",
+    "due_on",
+    "status",
+    "outcome_pct",
+    "bench_pct",
+    "excess_pct",
+    "net_excess_pct",
+    "verdict",
+)
 
 
 # ── 异常：服务层不抛 HTTPException，语义由路由映射（404/409/422） ────────────
@@ -305,6 +368,63 @@ def wilson_interval(successes: int, n: int, *, z: float = WILSON_Z) -> dict[str,
         "ci_low": round(max(0.0, center - half), 4),
         "ci_high": round(min(1.0, center + half), 4),
     }
+
+
+# ── §S9.7.5 校准：`hit_rate` 与 `brier` 都只看**净超额 > 0** ────────────────
+
+
+def calibration_summary(
+    samples: dict[int, tuple[int, int]],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """把"每档 ``(已复盘条数, 净超额>0 的条数)``"装配成校准曲线（纯函数）。
+
+    ``samples`` 的键是 ``confidence``（1..5），值是该档的 ``(n, hits)``；调用方只负责
+    从库里数数，**判定与算术全在这里**（前端拿不到任何"自己算"的自由度）。
+
+    =======================  ==================================================
+    输出                     口径
+    =======================  ==================================================
+    ``n``                    Σ 各档 n = **已复盘且填了信心**的条数（没填 = 不参与）
+    ``bins[].p``             :data:`CALIBRATION_P`（固定常量，不可优化）
+    ``bins[].hit_rate``      ``hits / n``（**净超额 > 0** 才算对，不是毛收益）
+    ``bins[].sufficient``    ``n >= MIN_CALIBRATION_BIN_SAMPLE``（10）
+    ``brier``                ``mean((p - I[net_excess>0])**2)``，见下
+    =======================  ==================================================
+
+    **brier 为什么能从"每档 n 与 hits"算出来**：``p`` 只取决于 confidence 档，
+    同一档内每条记录的 ``p`` 相同，所以不需要逐条求和 ——
+    ``Σ_c [(n_c - hits_c)·p_c² + hits_c·(1-p_c)²] / n`` 与"逐条 ``(p - I)²`` 再平均"
+    在数学上完全相等（误差只在最后一步的四舍五入）。这样统计仍然只用**固定条数的
+    聚合查询**，不把 N 条记录搬到 Python 里。
+
+    **总样本 < 20 时返回 ``(None, 原因)``**（不是空曲线）：19 条样本画出来的曲线只会
+    被读成"我的信心很准"，所以宁可不画（spec §S9.7.5 的展示纪律）。
+    原因串里带上当前条数：用户要知道"还差几条"才有动力继续记录。
+    """
+    bins: list[dict[str, Any]] = []
+    total = 0
+    squared_error = 0.0
+    for confidence in CONFIDENCE_VALUES:
+        count, hits = samples.get(confidence, (0, 0))
+        if count <= 0:
+            # 该档没有样本 → **不出这一档**（不是 n=0 / hit_rate=0 的假数据点）
+            continue
+        p = CALIBRATION_P[confidence]
+        total += count
+        squared_error += (count - hits) * p * p + hits * (1.0 - p) ** 2
+        bins.append(
+            {
+                "confidence": confidence,
+                "p": p,
+                "n": count,
+                "hit_rate": round(hits / count, 4),
+                "sufficient": count >= MIN_CALIBRATION_BIN_SAMPLE,
+            }
+        )
+    if total < MIN_CALIBRATION_SAMPLE:
+        # 原因串保留契约里的原话，只在末尾补"当前几条"（去掉原句的右括号再接回）
+        return None, f"{CALIBRATION_INSUFFICIENT_NOTE[:-1]}，当前 {total} 条）"
+    return {"n": total, "bins": bins, "brier": round(squared_error / total, 4)}, None
 
 
 # ── §S9.7.8 可证伪闸：失效条件可观测吗（决定"能不能复盘"） ───────────────────
@@ -737,50 +857,37 @@ async def build_snapshot(
 # ── §S9.4 到期结果（单条 / 批量共用一套口径） ───────────────────────────────
 
 
-#: 标的的期末行情 + 区间极值。列序：window_low / window_high / end_close / end_trade_date
-def _symbol_face_sql() -> str:
-    sub = """
-        (SELECT q2.{col}
-           FROM daily_quotes q2
-           JOIN stocks s2 ON s2.id = q2.stock_id
-          WHERE s2.symbol = {symbol}
-            AND q2.trade_date <= {end}
-          ORDER BY q2.trade_date DESC
-          LIMIT 1) AS {alias}"""
-    return f"""
-    SELECT
-        min(q.low)  AS window_low,
-        max(q.high) AS window_high,
-        {sub.format(col="close", symbol=":symbol", end=":due_on", alias="end_close")},
-        {sub.format(col="trade_date", symbol=":symbol", end=":due_on", alias="end_trade_date")}
-      FROM daily_quotes q
-      JOIN stocks s ON s.id = q.stock_id
-     WHERE s.symbol = :symbol
-       AND q.trade_date > :start_date
-       AND q.trade_date <= :due_on
-    """
-
-
 #: 批量版（列表页用）：一条 SQL 覆盖 N 个条目 —— 查询数与条目数**无关**（反 N+1）。
 #:
 #: 为什么用 ``CAST(:ids AS bigint[])`` 而不是 ``:ids::bigint[]``：SQLAlchemy 的 bind
 #: 正则带 ``(?!:)`` 前瞻（保护 PostgreSQL 的 ``::`` cast），写成 ``:ids::bigint[]``
 #: 时参数**根本不会被识别**，SQL 会原样带着 ``:ids`` 发到 PG 报语法错。
+#:
+#: 列序（``_face_from_row`` 逐位读，**与指数 face 的列位对齐**）：id / window_low /
+#: window_high / end_close / end_trade_date / start_close（标的不需要，恒 NULL，占位）/
+#: **first_touch / days_to**。后两列是 spec §S9.7.4 的路径指标，由 ``req`` 里带的
+#: 失效条件（``inv_kind`` + ``threshold``）在同一条 SQL 里算出来：区间极值算不出的
+#: "**哪一天**首次触达"，必须让 SQL 逐日比较，否则要按天再查一次库（N+1）。
 _SYMBOL_FACE_BATCH_SQL = text(
     """
-    WITH req(id, symbol, start_date, end_date) AS (
+    WITH req(id, symbol, start_date, end_date, inv_kind, threshold) AS (
         SELECT * FROM unnest(
             CAST(:ids AS bigint[]),
             CAST(:symbols AS text[]),
             CAST(:starts AS date[]),
-            CAST(:ends AS date[])
-        ) AS t(id, symbol, start_date, end_date)
+            CAST(:ends AS date[]),
+            CAST(:inv_kinds AS text[]),
+            CAST(:thresholds AS double precision[])
+        ) AS t(id, symbol, start_date, end_date, inv_kind, threshold)
     )
     SELECT req.id,
            w.window_low,
            w.window_high,
            e.close      AS end_close,
-           e.trade_date AS end_trade_date
+           e.trade_date AS end_trade_date,
+           CAST(NULL AS double precision) AS start_close,
+           ft.first_touch,
+           d.days_to
       FROM req
       LEFT JOIN LATERAL (
           SELECT min(q.low) AS window_low, max(q.high) AS window_high
@@ -799,6 +906,30 @@ _SYMBOL_FACE_BATCH_SQL = text(
            ORDER BY q.trade_date DESC
            LIMIT 1
       ) e ON true
+      -- ★ spec §S9.7.4：首次触达失效条件的**交易日**（阈值由 req 带进来；
+      -- date_only / 历史自由文本形态的 inv_kind 为 NULL → 条件恒不成立 → NULL）
+      LEFT JOIN LATERAL (
+          SELECT min(q.trade_date) AS first_touch
+            FROM daily_quotes q
+            JOIN stocks s ON s.id = q.stock_id
+           WHERE s.symbol = req.symbol
+             AND q.trade_date > req.start_date
+             AND q.trade_date <= req.end_date
+             AND (
+                  (req.inv_kind = 'price_below' AND q.low <= req.threshold)
+               OR (req.inv_kind = 'price_above' AND q.high >= req.threshold)
+             )
+      ) ft ON true
+      -- ★ 触达用了几个**交易日**（不是自然日）：入场日之后、首次触达日之前/当天的 K 线根数
+      LEFT JOIN LATERAL (
+          SELECT count(DISTINCT q.trade_date) AS days_to
+            FROM daily_quotes q
+            JOIN stocks s ON s.id = q.stock_id
+           WHERE ft.first_touch IS NOT NULL
+             AND s.symbol = req.symbol
+             AND q.trade_date > req.start_date
+             AND q.trade_date <= ft.first_touch
+      ) d ON true
     """
 )
 
@@ -947,6 +1078,11 @@ def _plan(entry: DecisionJournalEntry) -> _Plan:
 
 
 def _face_from_row(row: Any) -> dict[str, Any]:
+    """把一条 face 行拆成字段（按下标读：``_SYMBOL_FACE_BATCH_SQL`` 的列序是契约）。
+
+    指数 face（``_INDEX_FACE_BATCH_SQL``）只有 6 列 → ``first_touch`` / ``days_to``
+    自动为 ``None``（市场级判断没有"标的失效条件触达日"，spec §S9.7.4 的路径指标对它不适用）。
+    """
     if row is None:
         return {
             "window_low": None,
@@ -954,6 +1090,8 @@ def _face_from_row(row: Any) -> dict[str, Any]:
             "end_close": None,
             "end_trade_date": None,
             "start_close": None,
+            "first_touch": None,
+            "days_to": None,
         }
     return {
         "window_low": row[1],
@@ -961,6 +1099,9 @@ def _face_from_row(row: Any) -> dict[str, Any]:
         "end_close": row[3],
         "end_trade_date": row[4],
         "start_close": row[5] if len(row) > 5 else None,
+        # ★ spec §S9.7.4（只有标的 face 有这两列，见上面的列序契约）
+        "first_touch": row[6] if len(row) > 6 else None,
+        "days_to": row[7] if len(row) > 7 else None,
     }
 
 
@@ -979,6 +1120,15 @@ async def _symbol_faces(db: AsyncSession, plans: Sequence[_Plan]) -> dict[int, d
                 "symbols": [str(plan.entry.symbol) for plan in plans],
                 "starts": [plan.start_date for plan in plans],
                 "ends": [plan.entry.due_on for plan in plans],
+                # spec §S9.7.4：失效条件随批次带进去，SQL 直接算"首次触达日"（不新增查询）
+                "inv_kinds": [
+                    plan.kind if plan.kind in {"price_below", "price_above"} else None
+                    for plan in plans
+                ],
+                "thresholds": [
+                    plan.threshold if plan.kind in {"price_below", "price_above"} else None
+                    for plan in plans
+                ],
             },
         )
     ).all()
@@ -1048,6 +1198,67 @@ def _index_bench(face: dict[str, Any], *, fallback: bool) -> _Bench:
     )
 
 
+def _path_metrics(
+    plan: _Plan, face: dict[str, Any], *, market_level: bool
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """spec §S9.7.4 的四个路径指标（**纯函数**：全部来自快照 + 行情窗口，不查库）。
+
+    定义（入场价 = ``snapshot["price"]``；区间 = ``(入场交易日, due_on]``，
+    **只用 due_on 当天及之前的行情** —— 与 ``invalidation_hit`` 同一窗口）：
+
+    ==========================  ==================================================
+    字段                        口径
+    ==========================  ==================================================
+    ``mae_pct``                 ``(区间最低价 / 入场价 − 1) × 100``，**夹到 ≤ 0**
+    ``first_touch_invalidation`` 首个满足 ``price_below``/``price_above`` 的**交易日**
+    ``touched_then_reversed``   有触达 **且** 到期 ``net_outcome_pct > 0``
+    ``days_to_invalidation``    入场日之后到首次触达日之间的**交易日数**（K 线根数）
+    ==========================  ==================================================
+
+    为什么 ``mae_pct`` 夹到 0：MAE 是"最不利偏移"，区间最低价高于入场价时
+    **没有发生不利偏移** → 0。直接给正数会被读成"有利偏移"（那是另一个指标 MFE），
+    而 MAE 为零是一个有意义的事实（不是缺数，所以不给 ``null``）。
+
+    ``date_only``：到期即命中，不存在"先触达失效条件、之后反弹"这回事 →
+    ``first_touch_invalidation`` / ``days_to_invalidation`` 为 ``null``、
+    ``touched_then_reversed`` 为 ``false``（``mae_pct`` 仍是有效的路径事实，照算）。
+
+    ``touched_then_reversed`` 只在"**确实触达** 且 **到期结果算得出来** 且 > 0"时为
+    ``true``；任一条件缺 → ``false``（无法证明"先触后反"就不说它发生了）。
+
+    市场级判断（``symbol is None``）：快照里没有 ``price``（价格挂在标的上），
+    无从定义"相对入场价的跌幅" → ``mae_pct = null`` + 原因。
+    """
+    values: dict[str, Any] = {
+        "mae_pct": None,
+        "first_touch_invalidation": None,
+        "touched_then_reversed": False,
+        "days_to_invalidation": None,
+    }
+    missing: dict[str, str] = {}
+    if market_level:
+        missing["mae_pct"] = "market_level_no_symbol"
+        return values, missing
+    if plan.start_price is None:
+        missing["mae_pct"] = "snapshot_price_missing"
+    elif face.get("window_low") is None:
+        missing["mae_pct"] = "no_quote_window"
+    else:
+        adverse = (float(face["window_low"]) / plan.start_price - 1.0) * 100.0
+        values["mae_pct"] = round(min(0.0, adverse), 4)
+    if plan.kind in {"price_below", "price_above"}:
+        if plan.threshold is None:
+            missing["first_touch_invalidation"] = "invalidation_value_missing"
+        elif face.get("first_touch") is not None:
+            first = face["first_touch"]
+            values["first_touch_invalidation"] = (
+                first.isoformat() if isinstance(first, date) else str(first)
+            )
+            if face.get("days_to") is not None:
+                values["days_to_invalidation"] = int(face["days_to"])
+    return values, missing
+
+
 def _assemble(
     plan: _Plan,
     face: dict[str, Any],
@@ -1070,6 +1281,11 @@ def _assemble(
         "net_outcome_pct": None,
         "net_excess_pct": None,
         "invalidation_hit": None,
+        # ★ spec §S9.7.4 路径分析（终点对错之外，中途发生了什么）
+        "mae_pct": None,
+        "first_touch_invalidation": None,
+        "touched_then_reversed": False,
+        "days_to_invalidation": None,
         # ★ spec §S9.7.3：基准到底是什么（人话 + 是否退化），与 bench_pct 同时下发
         "bench_basis_note": bench.note,
         "bench_fallback": bench.fallback,
@@ -1118,6 +1334,11 @@ def _assemble(
     else:
         missing["invalidation_hit"] = "invalidation_kind_unknown"
 
+    # ★ spec §S9.7.4：路径四指标（与 invalidation_hit 同一行情窗口，不新增查询）
+    path_values, path_missing = _path_metrics(plan, face, market_level=market_level)
+    result.update(path_values)
+    missing.update(path_missing)
+
     gross_outcome = result["outcome_pct"]
     bench_pct = result["bench_pct"]
     if gross_outcome is not None and bench_pct is not None:
@@ -1134,6 +1355,11 @@ def _assemble(
         missing["net_excess_pct"] = (
             missing.get("net_outcome_pct") or missing.get("bench_pct") or "net_excess_unavailable"
         )
+
+    # ★ spec §S9.7.4「先触失效、到期反而盈利」：净收益（不是净超额）> 0。
+    # 触达与结果缺一不可 —— 无法证明就不说它发生了（false，而不是猜一个 true）。
+    if result["first_touch_invalidation"] is not None and result["net_outcome_pct"] is not None:
+        result["touched_then_reversed"] = result["net_outcome_pct"] > 0
     return result
 
 
@@ -1153,7 +1379,8 @@ async def evaluate_entries(
     ==========================  ================================================
     谁需要                     查什么
     ==========================  ================================================
-    有 symbol 的判断           标的的期末行情/区间极值（一条批 LATERAL）
+    有 symbol 的判断           标的的期末行情/区间极值 + **首次触达失效条件的交易日**
+                               （spec §S9.7.4：同一批 LATERAL 里算，不按天再查）
     要行业基准的判断           申万一级成员等权平均（一条批 LATERAL）
     要沪深300 的判断            指数起止收盘（一条批 LATERAL，三种情形合并）
     ==========================  ================================================
@@ -1449,16 +1676,20 @@ async def review_entry(
 
 
 async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
-    """统计（spec §S9.4 + §S9.7.2/§S9.7.6/§S9.7.7）：**两条聚合查询封顶**。
+    """统计（spec §S9.4 + §S9.7.1/§S9.7.2/§S9.7.5/§S9.7.6/§S9.7.7）：**仍只有两条聚合查询**。
 
     自洽约束（每一句都被 ``tests/test_journal_*.py`` 钉死）：
 
     - ``by_verdict`` / ``by_attribution`` 合计 = ``reviewed_n``；
-    - ``by_kind`` 合计 = ``n``（spec §S9.7.6：``pass`` 计入**判断**统计）；
+    - ``by_kind`` / ``by_size`` 合计 = ``n``（都数**判断**，spec §S9.7.6/§S9.7.1）；
     - ``avg_excess_pct`` / ``avg_net_excess_pct`` **排除 ``kind=pass``**（spec §S9.7.6：
       放弃的判断没有收益，把它算进平均会把"没做"混进"做了"的收益）；
     - ``discipline_break_share`` 在 ``reviewed_n < 5`` 时为 ``null``（不是 0）；
-    - 比例一律同时给 Wilson 95% 区间（``share_ci``，``n=0`` 时为 ``None``）。
+    - 比例一律同时给 Wilson 95% 区间（``share_ci``，``n=0`` 时为 ``None``）；
+    - ★ 裁定 2：``share_ci.win`` 的**分母排除 ``pass``**（pass = 不参与市场，
+      它的"超额"没有意义；分母 = 已复盘且 ``kind != pass``）；
+    - ★ ``calibration`` 的总样本 = "已复盘且填了 ``confidence``"的条数，
+      ``< 20`` 时为 ``None`` + ``calibration_note``（不画半条曲线）。
 
     为什么两个名字给**同一组计数**：spec 的验收判据是"``by_attribution`` 合计 =
     ``reviewed_n``（算术自洽）"，而前端类型（``JournalStats.by_verdict``）要的是
@@ -1467,29 +1698,89 @@ async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
 
     ``stats`` 的**产物版本**是 :data:`JOURNAL_STATS_VERSION`（口径常量一变必须一起 bump）。
 
-    查询设计（反 N+1 的延伸：与用户条数无关）：
+    查询设计（反 N+1 的延伸：与用户条数无关，**Phase B2 也没有变成 3 条**）：
 
-    ① 一条聚合拿齐 ``n / reviewed_n`` + 五个 ``by_kind`` 计数 + ``win`` 成功数
-       （``FILTER`` 子句比五次往返便宜，且保持 1 条）；
-    ② 一条聚合按 ``(verdict, kind)`` 分组拿 ``count`` 与 ``avg(excess_pct)``，
-       verdict 分栏与"排除 pass 的收益均值"都从它推导。
+    ① 一条聚合拿齐 ``n / reviewed_n`` + ``by_kind`` / ``by_size`` / ``by_verdict`` 计数 +
+       ``share_ci.win`` 的分子分母 + 校准每档的 ``(n, hits)`` + 按仓位的 ``sum/count``
+       （``FILTER`` 子句比十几次往返便宜，且保持 1 条）；
+    ② 一条聚合按 ``kind`` 分组拿 ``count`` / ``sum(excess_pct)`` /
+       ``percentile_cont(0.5)`` —— ``by_kind_median`` 与"排除 pass 的收益均值"都从它推导。
+
+    中位数为什么必须单独分组：``percentile_cont`` **不可加**（不能把子组的中位数合成
+    总中位数），所以它只能和 ``by_kind`` 的键同层；而 ``by_size`` / 校准 / verdict 分栏
+    都是可加的计数，全放进第 ① 条。
     """
     uid = _to_uuid(user_id)
     # 净超额的"赢"判据：excess_pct - 12bp > 0（与 COST_ROUND_TRIP_PCT 同一个常量）
     cost = Decimal(str(COST_ROUND_TRIP_PCT))
+    aggregates: list[Any] = [
+        func.count(DecisionJournalEntry.id).label("n"),
+        func.count(DecisionJournalReview.id).label("reviewed_n"),
+        # 判断统计（合计 = n）：归档标签分栏
+        *(
+            func.count(DecisionJournalEntry.id)
+            .filter(DecisionJournalEntry.kind == kind)
+            .label(f"kind_{kind}")
+            for kind in ENTRY_KINDS
+        ),
+        # ★ spec §S9.7.1 风险单位分栏（合计 = n；none = 只观察，仍是判断）
+        *(
+            func.count(DecisionJournalEntry.id)
+            .filter(DecisionJournalEntry.position_size == size)
+            .label(f"size_{size}")
+            for size in POSITION_SIZES
+        ),
+        # 归因分栏（合计 = reviewed_n）
+        *(
+            func.count(DecisionJournalReview.id)
+            .filter(DecisionJournalReview.verdict == verdict)
+            .label(f"verdict_{verdict}")
+            for verdict in VERDICTS
+        ),
+        # ★ spec §S9.7.5 校准：每档"已复盘且填了信心"的条数 + 净超额 > 0 的条数
+        *(
+            func.count(DecisionJournalReview.id)
+            .filter(DecisionJournalEntry.confidence == confidence)
+            .label(f"confidence_{confidence}_n")
+            for confidence in CONFIDENCE_VALUES
+        ),
+        *(
+            func.count(DecisionJournalReview.id)
+            .filter(
+                DecisionJournalEntry.confidence == confidence,
+                DecisionJournalReview.excess_pct > cost,
+            )
+            .label(f"confidence_{confidence}_hits")
+            for confidence in CONFIDENCE_VALUES
+        ),
+        # ★ 裁定 2：win 的分子与分母都排除 pass（分母放在同一查询里，免得再做减法）
+        func.count(DecisionJournalReview.id)
+        .filter(DecisionJournalEntry.kind != "pass")
+        .label("win_denominator"),
+        func.count(DecisionJournalReview.id)
+        .filter(
+            DecisionJournalEntry.kind != "pass",
+            DecisionJournalReview.excess_pct > cost,
+        )
+        .label("win_n"),
+        # ★ spec §S9.7.1 加权超额：按仓位档的 sum/count（权重在 Python 里乘，
+        #   none 的权重是 0 → 不贡献分子也不贡献分母）
+        *(
+            func.sum(DecisionJournalReview.excess_pct)
+            .filter(DecisionJournalEntry.position_size == size)
+            .label(f"size_{size}_excess_sum")
+            for size in POSITION_SIZES
+        ),
+        *(
+            func.count(DecisionJournalReview.excess_pct)
+            .filter(DecisionJournalEntry.position_size == size)
+            .label(f"size_{size}_excess_n")
+            for size in POSITION_SIZES
+        ),
+    ]
     total_row = (
         await db.execute(
-            select(
-                func.count(DecisionJournalEntry.id),
-                func.count(DecisionJournalReview.id),
-                *(
-                    func.count(DecisionJournalEntry.id).filter(DecisionJournalEntry.kind == kind)
-                    for kind in ENTRY_KINDS
-                ),
-                func.count(DecisionJournalReview.id).filter(
-                    DecisionJournalReview.excess_pct > cost
-                ),
-            )
+            select(*aggregates)
             .select_from(DecisionJournalEntry)
             .outerjoin(
                 DecisionJournalReview,
@@ -1498,38 +1789,71 @@ async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
             .where(DecisionJournalEntry.user_id == uid)
         )
     ).one()
-    n = int(total_row[0] or 0)
-    reviewed_n = int(total_row[1] or 0)
-    by_kind = {kind: int(total_row[2 + index] or 0) for index, kind in enumerate(ENTRY_KINDS)}
-    win_n = int(total_row[2 + len(ENTRY_KINDS)] or 0)
+    m = total_row._mapping
+    n = int(m["n"] or 0)
+    reviewed_n = int(m["reviewed_n"] or 0)
+    by_kind = {kind: int(m[f"kind_{kind}"] or 0) for kind in ENTRY_KINDS}
+    by_size = {size: int(m[f"size_{size}"] or 0) for size in POSITION_SIZES}
+    counts: dict[str, int] = {verdict: int(m[f"verdict_{verdict}"] or 0) for verdict in VERDICTS}
+
+    # 加权平均超额：Σ(w·excess) / Σ(w·n)，`none` 权重 0 自动退出分母
+    weighted_sum = 0.0
+    weighted_n = 0.0
+    for size in POSITION_SIZES:
+        weight = SIZE_WEIGHTS[size]
+        excess_sum = m[f"size_{size}_excess_sum"]
+        sample_n = int(m[f"size_{size}_excess_n"] or 0)
+        if weight == 0.0 or sample_n == 0 or excess_sum is None:
+            continue
+        weighted_sum += weight * float(excess_sum)
+        weighted_n += weight * sample_n
 
     grouped = (
         await db.execute(
             select(
-                DecisionJournalReview.verdict,
                 DecisionJournalEntry.kind,
                 func.count(DecisionJournalReview.id),
-                func.avg(DecisionJournalReview.excess_pct),
+                func.sum(DecisionJournalReview.excess_pct),
+                func.percentile_cont(0.5).within_group(DecisionJournalReview.excess_pct),
             )
             .join(DecisionJournalEntry, DecisionJournalEntry.id == DecisionJournalReview.entry_id)
             .where(DecisionJournalEntry.user_id == uid)
-            .group_by(DecisionJournalReview.verdict, DecisionJournalEntry.kind)
+            .group_by(DecisionJournalEntry.kind)
         )
     ).all()
-    counts: dict[str, int] = {verdict: 0 for verdict in VERDICTS}
+    # ★ spec §S9.7.6：每类的中位净超额（"pass 也有一栏"——它是判断统计的一部分；
+    #   但**总体的**收益均值仍然排除 pass，见下面 revenue_n）
+    by_kind_median: dict[str, dict[str, Any]] = {
+        kind: {"count": 0, "median_net_excess_pct": None} for kind in ENTRY_KINDS
+    }
     #: 收益口径的样本：``pass`` 是"我决定不动"，没有收益可算（spec §S9.7.6）
     revenue_n = 0
     revenue_sum = 0.0
-    for verdict, kind, count, avg in grouped:
-        key = str(verdict)
+    for kind, count, excess_sum, median in grouped:
+        key = str(kind)
         group_n = int(count or 0)
-        counts[key] = counts.get(key, 0) + group_n
-        if str(kind) == "pass":
+        if key in by_kind_median:
+            by_kind_median[key]["count"] = group_n
+            if median is not None:
+                # 中位净超额 = 中位毛超额 − 12bp（成本是常数，减在最后一步）
+                by_kind_median[key]["median_net_excess_pct"] = round(
+                    float(median) - COST_ROUND_TRIP_PCT, 4
+                )
+        if key == "pass":
             continue
         revenue_n += group_n
-        if avg is not None:
-            # 先按组四舍五入再乘条数：与"逐条求和"在 1e-4 内一致，且不丢精度口径
-            revenue_sum += round(float(avg), 4) * group_n
+        if excess_sum is not None:
+            revenue_sum += float(excess_sum)
+
+    calibration, calibration_note = calibration_summary(
+        {
+            confidence: (
+                int(m[f"confidence_{confidence}_n"] or 0),
+                int(m[f"confidence_{confidence}_hits"] or 0),
+            )
+            for confidence in CONFIDENCE_VALUES
+        }
+    )
 
     share_available = reviewed_n >= MIN_REVIEWED_FOR_SHARE
     gross_avg = revenue_sum / revenue_n if revenue_n else None
@@ -1551,11 +1875,153 @@ async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
         "sample_sufficient": share_available,
         # ★ spec §S9.7.6 选择偏差：pass 在判断统计里有独立分栏
         "by_kind": by_kind,
+        # ★ spec §S9.7.6：中位**净**超额（新增字段，既有的 by_kind 仍是纯条数）
+        "by_kind_median": by_kind_median,
+        # ★ spec §S9.7.1：风险单位分栏 + 加权超额（none 排除）
+        "by_size": by_size,
+        "avg_weighted_excess_pct": (
+            None if weighted_n == 0.0 else round(weighted_sum / weighted_n, 4)
+        ),
+        # ★ spec §S9.7.5：校准曲线（总样本 < 20 → None + 原因）
+        "calibration": calibration,
+        "calibration_note": calibration_note,
         # ★ spec §S9.7.7：比例必须带区间（n=0 → None，不是 [0,1]）
         "share_ci": {
             "discipline_break": wilson_interval(counts["discipline_break"], reviewed_n),
-            "win": wilson_interval(win_n, reviewed_n),
+            # 裁定 2：分母排除 pass（全是 pass 时 0/0 → None，而不是 100%）
+            "win": wilson_interval(int(m["win_n"] or 0), int(m["win_denominator"] or 0)),
         },
         "net_cost_bps": COST_ROUND_TRIP_BPS,
         "multiple_comparison_note": MULTIPLE_COMPARISON_NOTE,
+        # ★ spec §S9.7.9：前端直接拿它做「导出我的日志」，不自己拼路径
+        "export_hint": EXPORT_HINT,
     }
+
+
+# ── §S9.7.9 导出（只含本人：entries + snapshot + review） ────────────────────
+
+
+async def export_rows(db: AsyncSession, user_id: uuid.UUID | str) -> list[JournalRow]:
+    """导出用的读面：**本人全部**条目（不分页、不截断），一次查询 join 复盘。
+
+    与 :func:`list_entries` 的差别只有一个：没有 ``LIST_LIMIT``。"导出"是用户对自己
+    数据的完整取回（spec §S9.7.9），被列表页的显示上限截断就不再是导出。
+    排序用 ``created_at`` **升序**（导出是给人按时间读的档案，最新在最后）。
+    """
+    uid = _to_uuid(user_id)
+    today = today_sh()
+    rows = (
+        await db.execute(
+            select(DecisionJournalEntry, DecisionJournalReview)
+            .outerjoin(
+                DecisionJournalReview, DecisionJournalReview.entry_id == DecisionJournalEntry.id
+            )
+            .where(DecisionJournalEntry.user_id == uid)
+            .order_by(DecisionJournalEntry.created_at.asc(), DecisionJournalEntry.id.asc())
+        )
+    ).all()
+    return [
+        JournalRow(
+            entry=entry, review=review, status=entry_status(entry, review is not None, today)
+        )
+        for entry, review in rows
+    ]
+
+
+def export_entry(row: JournalRow) -> dict[str, Any]:
+    """一条判断的导出形状（JSON 与 CSV **共用**同一份投影，口径不会分叉）。
+
+    包含三块：条目本身的不可变字段、**创建时的快照**（原样，不裁剪）、复盘（若已复盘）。
+    ``net_excess_pct`` 在复盘里现算（复盘表只存毛超额；净 = 毛 − 12bp，与 evaluation 同式）。
+    """
+    entry = row.entry
+    review = row.review
+    return {
+        "id": int(entry.id),
+        "symbol": entry.symbol,
+        "kind": entry.kind,
+        "bet_type": entry.bet_type or "direction",
+        "position_size": entry.position_size or "none",
+        "confidence": entry.confidence,
+        "thesis": entry.thesis,
+        "invalidation": entry.invalidation or {},
+        "horizon_days": entry.horizon_days,
+        "created_at": entry.created_at.isoformat(),
+        "due_on": entry.due_on.isoformat(),
+        "status": row.status,
+        "snapshot": entry.snapshot or {},
+        "review": (
+            None
+            if review is None
+            else {
+                "id": int(review.id),
+                "entry_id": int(review.entry_id),
+                "reviewed_at": review.reviewed_at.isoformat(),
+                "outcome_pct": float(review.outcome_pct),
+                "bench_pct": float(review.bench_pct),
+                "excess_pct": float(review.excess_pct),
+                "net_excess_pct": round(float(review.excess_pct) - COST_ROUND_TRIP_PCT, 4),
+                "invalidation_hit": bool(review.invalidation_hit),
+                "verdict": review.verdict,
+                "note": review.note,
+            }
+        ),
+    }
+
+
+def export_json(rows: Sequence[JournalRow], *, now: datetime | None = None) -> str:
+    """导出为 JSON（自带 ``exported_at`` / ``count`` 元数据，条目顺序即入参顺序）。"""
+    payload = {
+        "format": "decision_journal.export.v1",
+        "exported_at": (now or datetime.now(_SH)).isoformat(),
+        "count": len(rows),
+        "entries": [export_entry(row) for row in rows],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _csv_number(value: Any) -> str:
+    """小数统一 4 位（与库里的 ``Numeric(10,4)`` 同精度）；缺失是空串，不是 0。"""
+    if value is None:
+        return ""
+    return f"{float(value):.4f}"
+
+
+def _csv_row(item: dict[str, Any]) -> list[str]:
+    """按 :data:`EXPORT_CSV_COLUMNS` 的**固定列序**取值（位置即契约，不按表头猜）。"""
+    review = item["review"] or {}
+    return [
+        str(item["id"]),
+        item["symbol"] or "",
+        item["kind"],
+        item["bet_type"],
+        item["position_size"],
+        "" if item["confidence"] is None else str(item["confidence"]),
+        item["thesis"],
+        # 失效条件是 jsonb：导出成一个字面 JSON 串（csv 模块负责转义引号/逗号/换行）
+        json.dumps(item["invalidation"], ensure_ascii=False, sort_keys=True),
+        str(item["horizon_days"]),
+        item["created_at"],
+        item["due_on"],
+        item["status"],
+        _csv_number(review.get("outcome_pct")),
+        _csv_number(review.get("bench_pct")),
+        _csv_number(review.get("excess_pct")),
+        _csv_number(review.get("net_excess_pct")),
+        str(review.get("verdict") or ""),
+    ]
+
+
+def export_csv(rows: Sequence[JournalRow]) -> bytes:
+    """导出为 CSV（**UTF-8 BOM** + 固定列序，spec §S9.7.9）。
+
+    为什么带 BOM：Excel 打开不带 BOM 的 UTF-8 会把中文 ``thesis`` 显示成乱码，而"导出
+    我的日志"的第一使用场景就是 Excel。BOM 是**字节层**的前缀（``\ufeff`` 编成 UTF-8），
+    不是表头的一部分 —— 解析方按 ``utf-8-sig`` 读即可。
+    """
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(EXPORT_CSV_COLUMNS)
+    for row in rows:
+        writer.writerow(_csv_row(export_entry(row)))
+    return ("\ufeff" + buffer.getvalue()).encode("utf-8")
