@@ -99,6 +99,45 @@ L3→L2→L1 走 `sw_industry_classes.parent_code` 两跳链（同 `market_servi
 
 **全市场口径是硬要求**：候选集合口径会把 09-08 的炸板数从 39 算成 12（~3 倍偏差），因为炸板的票不在"今日或昨日涨停"候选集里。
 
+**这 9 个数必须与日表列 1:1（2026-10-18 补齐）**：`market_sentiment_daily` 原有 8 个聚合，
+`yzt_avg_open_premium` 与 `yzt_n` 每天算出却从未落库 ⇒「今开溢价」卡没有历史、均值也无法与样本量
+一起读。现已补列并由 `persist_snapshot` 一并写入；历史行由
+`backend/scripts/backfill_sentiment_metrics.py` 只补 NULL。
+
+### 3.7 周期阶段（启发式，2026-10-19）
+
+把"今天什么水平"升级为"处在周期哪一段"。只用三个已冻结的维度：涨停家数、炸板率、最高板；
+每天先算 **PIT 250 日分位**（只用当天及之前），再按规则判阶段（完整规则与理由见
+[ADR 0022](../decisions/0022-sentiment-regime-and-sample-gate.md)）：
+
+| 条件 | 阶段 |
+|---|---|
+| 涨停 ≤ 40 家 且 涨停分位 ≤ 25 且 炸板分位 ≤ 60 | 冰点 |
+| 涨停分位 < 50 且 炸板分位 ≥ 60 | 退潮 |
+| 涨停分位 < 50 | 修复 |
+| 涨停 ≥ 80 家 且 涨停分位 ≥ 85 且 最高板 ≥ 5 且 最高板分位 ≥ 80 | 高潮 |
+| 炸板分位 < 60 | 发酵 |
+| 其余 | 分歧 |
+
+三条硬约束：**绝对水位守卫**（分位在横盘窗口会饱和到 100，不能只看分位）；**持续性 2 天**
+（但最后一天以原始判定为准）；**版本化**（`REGIME_VERSION`，改阈值必须同步本文与 ADR）。
+阶段是描述性标签，不是交易信号，UI 固定文案"启发式规则，不是交易信号"。
+
+### 3.8 小样本与区间（2026-10-19）
+
+样本型指标：晋级率（`promo_*_n`）、昨日涨停均值 / 今开溢价（`yzt_n`）、炸板率
+（分母 `zt_count + zb_count`）。
+
+- **`n < 5` 的日子**：值仍进 `series`（`low_sample=true`，图上是空心点），但**不进**
+  统计量、分位、分布、连续天数；hero 显示"样本不足"，不给分位。
+- 比值类 `n >= 5` 时给 **Wilson 95% 区间**（`latest_interval`）。
+- 趋势线只连**有效点**（`connectNulls` 跨过低样本日），低样本原始值用空心点展示：线表达趋势，点表达事实。
+
+**口径边界（[ADR 0021](../decisions/0021-sentiment-metric-tracking.md)）**：日表只由**收盘口径**
+（`daily_quotes` + `stock_price_limits`）写入；盘中口径（东财涨停池）只服务实时读面与
+`market_sentiment_intraday` 分钟级缓存，**不写日表**（盘中 `dt_count`/晋级率无独立信号源，混入会
+让"每天一个数"的历史变成两种口径）。卡片详情页在**收盘口径**下才可点，正是因为盘中不可回放。
+
 ## 四、数据落地（2 张表）
 
 ### `stock_price_limits`（权威限价，交易所口径）
@@ -109,9 +148,9 @@ L3→L2→L1 走 `sw_industry_classes.parent_code` 两跳链（同 `market_servi
 - 只落能映射到 A 股 `stocks` 的行（实测单日 5,637 行中 5,499 行可映射，其余为基金/B 股）。
 - **不额外建索引**：唯一键 `(trade_date, stock_id)` 已服务日筛，窗口侧走 hash join（实测单日 hash 2.6ms / 317kB）。82k 行（20 交易日）规模下加第二个索引是纯写放大。
 
-### `market_sentiment_daily`（情绪周期聚合，约 10 个数字/日）
+### `market_sentiment_daily`（情绪周期聚合，约 12 个数字/日）
 
-`trade_date`（唯一）/ `zt_count` / `dt_count` / `zb_count` / `broken_rate` / `yzt_avg_pct` / `promo_1to2` / `promo_1to2_n` / `promo_2to3` / `promo_2to3_n` / `max_streak` / `max_streak_symbol` / `source`。
+`trade_date`（唯一）/ `zt_count` / `dt_count` / `zb_count` / `broken_rate` / `yzt_avg_pct` / `yzt_avg_open_premium` / `yzt_n` / `promo_1to2` / `promo_1to2_n` / `promo_2to3` / `promo_2to3_n` / `max_streak` / `max_streak_symbol` / `source`。
 
 **纯派生缓存**：可随时从 `daily_quotes + stock_price_limits` 重建，绝不是真相来源。存在的唯一理由是跨月的情绪周期时序图重算昂贵。
 
@@ -126,6 +165,9 @@ GET /limit-up-ladder?date=YYYY-MM-DD&lookback=10
 GET /sector-limit-up?date=&sw_l1=
 GET /yesterday-limit-up?date=
 GET /sentiment/calendar?days=30
+GET /sentiment/trends?days=250
+GET /sentiment/metrics/{metric_key}?days=250
+GET /sentiment/pulse?days=60&benchmark=399006.SZ
 ```
 
 公共头（**契约字段，不是 UI 装饰**）：
@@ -152,6 +194,29 @@ Web 附加增强（可失败、不影响主路径）：`source` 当前只有 `lo
 
 > **可用窗口有限（2026-09-14 实测）**：该端点只服务最近约 20 个交易日，更早的日期返回 `rc=0 / pool=[]`（实测 20260825 有行，20260820、20260814、20260807、20260707 均 0 行）。因此对更早的 `as_of`，增强会静默返回空、`seal_*` 保持 `null`——这是**预期行为**（该端点不是历史源），不是故障；不要为此加重试或把空池当错误。响应里的 `qdate` 恒为当天，**不能**用来校验请求日期（实测 `date=20260908` 时 `qdate=20260914`，但 `pool` 内容与 20260908 完全一致）。
 
+### 单指标详情 `GET /sentiment/metrics/{metric_key}`（2026-10-18）
+
+- `metric_key` ∈ `SENTIMENT_METRIC_KEYS`（9 个，与温度计卡片 1:1）；未知 key → **404**（不是空图）。
+- 读 `market_sentiment_daily` 最近 `days`（默认 250、上限 500）行，**读时计算、不物化**：
+  `stats`（min/p10/p25/median/p75/p90/max/mean/std）、`distribution`（等宽 10 箱）、
+  `streak`（以窗口中位数为界的连续同向天数）、`percentile_rank`（`100 × count(v ≤ latest) / n`）、
+  `peers`（9 个指标各自的最新有效值）。
+- 有效样本 = 值非 NULL **且**（样本型指标）分母 > 0；阈值：统计 ≥5 个、分布 ≥10 个、分位 ≥60 个
+  （`MIN_PERCENTILE_SAMPLES`）。不足时对应字段为 `null`/`[]`，**不给假数字**。
+- 响应里 `metric.caliber` 是本章 §3.6 口径原文的删减；改口径须两处一起改。
+- 前端详情页 `/market/sentiment/:metric` 只做量纲渲染（`ratio ×100`），不在浏览器里重算统计。
+
+### 情绪脉搏 `GET /sentiment/pulse`（2026-10-19）
+
+- `days` ∈ 5–250（默认 60）：只影响展示与指数对比窗口；**阶段分位恒用 250 日 PIT 窗口**
+  （后端多取 250 行上下文），避免"窗口越长阶段越不同"。
+- 返回：`series`（9 个指标的逐日序列）、`regime`（`current` + `segments`）、
+  `benchmark`（`399006.SZ` 创业板指 / `000001.SH` 上证指数，5 日收益）、
+  `comparison`（情绪与指数都转 **PIT 250 日分位**再同轴）、`divergence`（连续 ≥3 日差 ≥30pp）。
+- 本地 `index_dailies` 未落中证1000，故不提供 `000852.SH`；未知 benchmark → 404。
+- 前端「情绪脉搏」：左侧阶段栏 + 4 张 small multiples（共享时间轴、hover 联动）+
+  指数对比图；详情页的背景带与 pulse 用同一套 `regime`。
+
 ### 降级矩阵
 
 | 字段 | `local_calc` | Web 增强（可失败） |
@@ -169,6 +234,13 @@ Web 附加增强（可失败、不影响主路径）：`source` 当前只有 `lo
 
 - 三大计数（涨停/炸板/跌停）大数字瓦片 + 多空力量条（家数占比，零值段隐藏）；
 - 二级瓦片：炸板率 / 昨日涨停均值（注 `n=yzt_n`）/ 今开溢价均值 / 1进2 / 2进3（`noisy` 时数值弱化并注 `n=N，样本小`）/ 最高板；
+- **卡片可点（2026-10-18）**：收盘口径下每个瓦片是 `<Link>` 到 `/market/sentiment/{metric}`（键盘可达、
+  可中键新开）；盘中口径**不可点**——盘中不落库，点进去只会看到另一种口径的旧序列。
+- **情绪脉搏（2026-10-19）**：温度计之前的一条"仪表带"（非卡片）：左侧当前阶段 + 三个输入分位，
+  右侧 4 张 small multiples（涨停家数/炸板率/最高板/1进2），底部情绪 vs 创业板指同分位轴对比；
+  `20D/60D/120D/250D` 与基准切换写进 URL（`?pulse=60&bench=399006.SZ`），不触发整页重挂。
+- **详情页窗口（2026-10-19）**：`?days=20|60|120|250`（默认 250）；统计/分位/分布随窗口重算，
+  阶段背景带恒用 250 日 PIT；低样本日空心点、不进统计。
 - 环比 chip 与涨停/跌停趋势线来自 `GET /sentiment/calendar`：取 `trade_date < as_of` 的最近一点做环比，无前值只藏 chip 不造假；趋势序列在日历滞后于 `as_of` 时以实时 KPI 补末点，保证线尾与主卡一致；`<2` 点显示"累积中"占位。日历查询失败不阻断主数据。
 
 **连板梯队**（`LimitUpLadder` 分档列版式）：

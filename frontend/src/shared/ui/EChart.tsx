@@ -1,4 +1,5 @@
 import ReactECharts from "echarts-for-react";
+import * as echarts from "echarts";
 import { useTheme } from "@/app/theme-context";
 import type { ThemePalette } from "@/app/theme";
 
@@ -9,6 +10,13 @@ interface Props {
   silent?: boolean;
   /** echarts 事件绑定（如 treemap click），透传给 echarts-for-react */
   onEvents?: Record<string, (params: unknown) => void>;
+  /**
+   * 联动组名：同一组的图（small multiples）会共享 axisPointer/tooltip。
+   * 用 `echarts.connect(group)` 实现，不靠 React 状态同步（后者每帧 setState 会掉帧）。
+   */
+  group?: string;
+  /** 图表实例就绪（需要 dispatchAction / 自定义联动时用） */
+  onChartReady?: (instance: unknown) => void;
 }
 
 /** 深合并：defaults <- option，option 恒优先；数组按元素位置逐项合并（长度以 option 为准） */
@@ -75,7 +83,7 @@ function withChartTheme(option: Record<string, unknown>, c: ThemePalette): Recor
 }
 
 /** ECharts 统一封装：统一交互默认值，避免每个图表重复 echarts.init 样板。 */
-export function EChart({ option, height = 300, silent = false, onEvents }: Props) {
+export function EChart({ option, height = 300, silent = false, onEvents, group, onChartReady }: Props) {
   const { colors } = useTheme();
   const themed = withChartTheme(option, colors);
   const finalOption = silent
@@ -87,6 +95,13 @@ export function EChart({ option, height = 300, silent = false, onEvents }: Props
       notMerge
       lazyUpdate
       onEvents={onEvents}
+      onChartReady={(instance) => {
+        if (group) {
+          (instance as { group?: string }).group = group;
+          echarts.connect(group);
+        }
+        onChartReady?.(instance);
+      }}
       style={{ height, width: "100%" }}
       opts={{ renderer: "canvas" }}
     />

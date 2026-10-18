@@ -1,3 +1,16 @@
+## 2026-10-19 - **情绪脉搏（阶段 + small multiples + 指数背离）+ 小样本治理 + 切指标零位移**
+
+三块一起落地，核心是让"一眼看出整个市场情绪变化"成立，而不是九个指标各看一遍：
+
+- **切指标残留跳动（根因修复）**：`smd-loading` 原先在正常文档流里（`height:2 + margin -6/14 = +10px`），第一次切到未缓存指标时把页面顶 10px；改为 `position:fixed` 覆盖层（零布局）。另把 Wilson 区间从"ratio 指标才多一行"改成**所有指标固定的 sub 行**、样本门槛注恒显、hero 的 rank/hint 预留 min-height：1440 实测切换前后 `scrollY=600 / bodyH=1798` 完全不变，390 窄屏 hero 高度 215→215
+- **情绪脉搏**（`/market` 温度计之前）：左侧当前阶段 + 三个输入分位，右侧 4 张 small multiples（涨停家数/炸板率/最高板/1进2，共享时间轴 + `echarts.connect` hover 联动），底部「情绪 vs 创业板指」**同分位轴**对比 + 连续背离段；`20D/60D/120D/250D` 与基准（创业板指/上证）写进 URL（`?pulse=60&bench=...`），不触发路由重挂
+- **周期阶段**（[ADR 0022](./decisions/0022-sentiment-regime-and-sample-gate.md)）：PIT 250 日分位 + 规则化 5+1 阶段（冰点/退潮/修复/发酵/高潮/分歧）；绝对水位守卫（横盘窗口分位饱和到 100 不判高潮）、持续 2 天平滑（末段以当日原始判定为准）、`REGIME_VERSION` 版本化；详情页主图同步画阶段背景带 + 色块图例
+- **小样本治理**：样本型指标 `n<5` 的日子标 `low_sample`，原始值仍展示（趋势线断开 + 空心散点），但不进统计/分位/分布/连续天数；比值类 `n≥5` 给 Wilson 95% 区间；切换器 chip 与 hero 同源（`50.00%*` 不再显示成上周的 18.18%）
+- **详情页窗口**：`?days=20|60|120|250`（默认 250）控件；统计/分位/分布随窗口重算，阶段背景带恒用 250 日 PIT；近 20 日折线低样本点空心
+- 后端新增 `GET /market/sentiment/pulse`（读时计算、Redis 900s、落库按前缀失效）与 `sentiment_regime_service`；`metrics/{key}` 追加 `low_sample / latest_interval / sample_gate / regime`；无新表、无新 Job、无迁移
+- 测试：pytest 新增 10 条（PIT 分位/绝对守卫/平滑/末段原始/Wilson/样本门槛/指数对齐/背离/pulse 端点/display_days 上下文）；相关用例 **54 passed**；`tsc` / `build` / `check:routes` / `doc_gate` / `mypy` / `ruff` 全绿。全量 pytest **1862 passed**，1 条 DB/job 用例受同工作区并行写库干扰（单条复跑全绿），不作为本任务回归
+- 涉及文件：`backend/app/services/{sentiment_regime_service.py,sentiment_pulse_service.py,sentiment_metric_service.py,limit_up_service.py}`、`backend/app/{schemas/limit_up.py,api/v1/market_data.py}`、`backend/tests/{test_sentiment_regime.py(新),test_sentiment_metric_detail.py}`、`frontend/src/{features/market/components/SentimentPulse.tsx(新)+.css,features/sentiment/{regimeStyle.ts(新),metricDetailFormat.ts},pages/market-sentiment-metric/*,pages/market/sections.tsx,shared/api/limitUp.ts,shared/ui/EChart.tsx}`、`docs/{design/limit-up-sentiment.md,features.md,decisions/0022*,Changelog.md}`、`plans/2026-10-18-sentiment-metric-tracking.md`
+
 ## 2026-10-19 - **S11 解禁日历后端：回填脚本 + triage `unlock_soon` + journal `evaluation.unlock_in_window`**
 
 零新表、零迁移、不改调度、`/market` 未动（spec `docs/specs/S11-unlock-calendar.md`）：

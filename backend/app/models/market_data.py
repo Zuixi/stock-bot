@@ -294,6 +294,10 @@ class MarketSentimentDaily(Base):
     zb_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     broken_rate: Mapped[float | None] = mapped_column(Float)
     yzt_avg_pct: Mapped[float | None] = mapped_column(Float)
+    # 今开溢价均值（%）与昨日涨停样本数：2026-10-18 补列。此前这两项只在快照里算出、
+    # 未落库 ⇒「今开溢价」卡片没有历史，均值也无法与样本量一起读（n=2 的均值不是信号）。
+    yzt_avg_open_premium: Mapped[float | None] = mapped_column(Float)
+    yzt_n: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     promo_1to2: Mapped[float | None] = mapped_column(Float)
     promo_1to2_n: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     promo_2to3: Mapped[float | None] = mapped_column(Float)

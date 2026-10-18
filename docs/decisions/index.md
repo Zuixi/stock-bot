@@ -22,6 +22,8 @@
 | [0016](./0016-derived-metrics-converge.md) | 派生指标由「对账后置收敛」日更，薄日不发布值 | accepted | 2026-10-16 | 数据口径 / 调度 |
 | [0017](./0017-no-downgrade-on-recompute.md) | 重算历史时不得把已有好值降级为 NULL | accepted | 2026-10-16 | 数据口径 |
 | [0018](./0018-hypothesis-immutability-and-pit-verdicts.md) | 研究假设写下即冻结，判定是三态且受 PIT 约束 | accepted | 2026-10-16 | 数据建模 / 数据口径 |
+| [0021](./0021-sentiment-metric-tracking.md) | 情绪指标：盘后按日冻结、盘中不落日表，历史详情读时计算 | accepted | 2026-10-18 | 数据口径 / 产品 |
+| [0022](./0022-sentiment-regime-and-sample-gate.md) | 情绪阶段是启发式描述、小样本不进统计：规则可复核，图不撒谎 | accepted | 2026-10-19 | 数据口径 / 产品 |
 
 状态取值：`accepted`（现行）· `superseded`（被新决策取代，须填 `superseded-by` 并双向引用）· `rejected`（评审未采纳，保留以阻止重复提议）
 
