@@ -473,3 +473,79 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ── 市场状态机的颜色编码（S10 §S10.3，owner 2026-10-19 批准）────────────────
+   色只编码**阶段**（冰点→修复→中性→亢奋→退潮），不编码涨跌：刻意不用 --up/--down，
+   否则"亢奋/退潮"会被读成"涨/跌"。色值全部来自 theme.css 的 --regime-* 令牌
+   （对白底 AA ≥4.5、深底 ≥7.8），组件里不写死色值。 */
+
+.triage__regime.regime--cold { border-left-color: var(--regime-cold); }
+.triage__regime.regime--warming { border-left-color: var(--regime-warming); }
+.triage__regime.regime--neutral { border-left-color: var(--regime-neutral); }
+.triage__regime.regime--hot { border-left-color: var(--regime-hot); }
+.triage__regime.regime--cooling { border-left-color: var(--regime-cooling); }
+.triage__regime.regime--unknown { border-left-color: var(--border); }
+
+/* 折叠行里的色点：形状是给色盲/打印的第二通道（只做 8px 方点，不做图标）。 */
+.triage__regime-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  flex: 0 0 8px;
+  align-self: center;
+}
+.triage__regime-dot.regime--cold { background: var(--regime-cold); }
+.triage__regime-dot.regime--warming { background: var(--regime-warming); }
+.triage__regime-dot.regime--neutral { background: var(--regime-neutral); }
+.triage__regime-dot.regime--hot { background: var(--regime-hot); }
+.triage__regime-dot.regime--cooling { background: var(--regime-cooling); }
+.triage__regime-dot.regime--unknown { background: var(--border); }
+
+/* 折叠行里的状态名着色（同一状态的文字色 = 色条色，AA 已由令牌保证）。 */
+.triage__regime-toggle.regime--cold .triage__regime-summary { color: var(--regime-cold); }
+.triage__regime-toggle.regime--warming .triage__regime-summary { color: var(--regime-warming); }
+.triage__regime-toggle.regime--neutral .triage__regime-summary { color: var(--text-primary); }
+.triage__regime-toggle.regime--hot .triage__regime-summary { color: var(--regime-hot); }
+.triage__regime-toggle.regime--cooling .triage__regime-summary { color: var(--regime-cooling); }
+
+/* 100% 堆叠条：五段宽度 = 下一日状态概率；段内只在 ≥8% 时写百分比。 */
+.triage__regime-bar {
+  display: flex;
+  width: 100%;
+  height: 22px;
+  margin: 4px 0 8px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--bg-page);
+}
+.triage__regime-seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #ffffff;
+  white-space: nowrap;
+}
+.triage__regime-seg.regime--cold { background: var(--regime-cold); }
+.triage__regime-seg.regime--warming { background: var(--regime-warming); }
+.triage__regime-seg.regime--neutral { background: var(--regime-neutral); }
+.triage__regime-seg.regime--hot { background: var(--regime-hot); }
+.triage__regime-seg.regime--cooling { background: var(--regime-cooling); }
+
+/* 图例里的色块：与段同色，旁边必须有状态名（不只靠颜色）。 */
+.triage__regime-legend { margin: 0; }
+.triage__regime-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+.triage__regime-swatch.regime--cold { background: var(--regime-cold); }
+.triage__regime-swatch.regime--warming { background: var(--regime-warming); }
+.triage__regime-swatch.regime--neutral { background: var(--regime-neutral); }
+.triage__regime-swatch.regime--hot { background: var(--regime-hot); }
+.triage__regime-swatch.regime--cooling { background: var(--regime-cooling); }

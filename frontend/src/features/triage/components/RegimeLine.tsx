@@ -7,6 +7,7 @@ import {
   type RegimeForwardBucket,
 } from "@/shared/api/regime";
 import { formatAsOfDate } from "@/shared/ui/date";
+import { REGIME_STATE_META, regimeClass } from "../regimeStates";
 
 /**
  * 市场状态一行（`/me?tab=triage` 顶部，spec §S10.3）。
@@ -101,10 +102,42 @@ function RegimeDetail({ regime }: { regime: MarketRegime }) {
             暂无可展示的转移比例（历史上该状态的出场样本不足）。
           </p>
         ) : null}
-        <dl className="triage__regime-rows">
+        {!allTransitionMissing ? (
+          // 100% 堆叠条：**一眼看出"最可能去哪"**。段内只在 ≥8% 时写百分比（窄段写不下，图例里有）。
+          <div
+            className="triage__regime-bar"
+            role="img"
+            data-testid="regime-transition-bar"
+            aria-label={`下一日状态分布：${REGIME_STATE_ORDER.map(
+              (state) => `${state} ${probabilityText(regime.transition[state])}`
+            ).join("，")}`}
+          >
+            {REGIME_STATE_ORDER.map((state) => {
+              const pct = regime.transition[state];
+              if (typeof pct !== "number" || pct <= 0) return null;
+              return (
+                <span
+                  key={state}
+                  className={`triage__regime-seg ${regimeClass(state)}`}
+                  style={{ width: `${Math.max(0, Math.min(100, pct * 100))}%` }}
+                  data-testid="regime-transition-seg"
+                >
+                  {pct >= 0.08 ? probabilityText(pct) : null}
+                </span>
+              );
+            })}
+          </div>
+        ) : null}
+        <dl className="triage__regime-legend">
           {REGIME_STATE_ORDER.map((state) => (
             <div className="triage__regime-row" key={state} data-testid="regime-transition-row">
-              <dt className="triage__regime-row-label">{state}</dt>
+              <dt className="triage__regime-row-label">
+                <span
+                  className={`triage__regime-swatch ${regimeClass(state)}`}
+                  aria-hidden="true"
+                />
+                {state}
+              </dt>
               <dd className="triage__regime-row-value num">
                 {probabilityText(regime.transition[state])}
               </dd>
@@ -167,14 +200,24 @@ export function RegimeLine() {
   );
 
   return (
-    <div className="triage__regime" data-testid="regime-line">
+    <div className={`triage__regime ${regimeClass(state)}`} data-testid="regime-line">
       <button
         type="button"
-        className="triage__regime-toggle"
+        className={`triage__regime-toggle ${regimeClass(state)}`}
         aria-expanded={open}
+        aria-label={`当前状态：${state}${
+          typeof data.duration_days === "number" && data.duration_days >= 1
+            ? `，已持续 ${data.duration_days} 个交易日`
+            : ""
+        }`}
         onClick={() => setOpen((prev) => !prev)}
         data-testid="regime-toggle"
+        data-regime-state={state}
       >
+        <span
+          className={`triage__regime-dot ${regimeClass(state)}`}
+          aria-hidden="true"
+        />
         <span className="triage__regime-summary" data-testid="regime-summary">
           {summaryParts.join("｜")}
         </span>

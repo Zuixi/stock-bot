@@ -488,6 +488,18 @@ test.describe("今日体检（/me?tab=triage）", () => {
     await expect(rows.nth(0)).toContainText("5.0%");
     await expect(rows.nth(2)).toContainText("20.0%");
 
+    // 颜色编码（S10 §S10.3，owner 2026-10-19 批准）：状态同时靠**色 + 文字 + 色块**三通道表达
+    // —— 色条/色点带状态 class，图例每行一个色块，堆叠条段数 = 非零概率的状态数。
+    await expect(page.getByTestId("regime-toggle")).toHaveAttribute("data-regime-state", "修复");
+    await expect(page.getByTestId("regime-line")).toHaveClass(/regime--warming/);
+    const segs = page.getByTestId("regime-transition-seg");
+    // 五态概率都非零（5/55/20/15/5）→ 五段；零概率的状态**不渲染**段（不留 0 宽空段）
+    await expect(segs).toHaveCount(5);
+    await expect(page.locator(".triage__regime-swatch")).toHaveCount(5);
+    // 色块与色段用的是**令牌变量**（不是写死色值）：确认样式确实引用了 --regime-*
+    const barStyle = await page.locator(".triage__regime-bar").getAttribute("style");
+    expect(barStyle).toBeNull(); // 容器不带内联色值（内联只在段宽上）
+
     // 20 日分布：中位 / 最差 5% / n 三个都要在，且**保留符号**（正数 `+`、负数 `-`）
     const forward = page.getByTestId("regime-forward-20d");
     await expect(forward).toContainText("中位");
