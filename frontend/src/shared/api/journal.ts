@@ -485,3 +485,45 @@ export function reviewJournalEntry(
 export function fetchJournalStats(): Promise<JournalStats> {
   return apiGet<JournalStats>("/api/v1/journal/stats");
 }
+
+/**
+ * 到期提醒的聚合计数（`GET /api/v1/journal/summary`，spec §S12.2）→ `{open, due, reviewed}`。
+ *
+ * 三个数都是**事实**（"待复盘 N 条"），不是未读游标：不做邮件/推送/未读态（spec §S12.2
+ * 的「不做」），故前端也**不**为它维护任何本地状态。
+ *
+ * `null` 与 `0` 严格区分：`0` 是"确实没有到期条目"，`null`/缺字段是"没取到它"。
+ * 两者在角标上都不渲染（见 `summaryCount` 的调用方），但**不能**在数据层就把前者写成后者
+ * ——一旦把缺字段兜成 0，页面上再想区分「今天没事」与「今天不知道」就没有依据了。
+ */
+export interface JournalSummary {
+  open: number;
+  due: number;
+  reviewed: number;
+}
+
+/**
+ * 取 summary（角标与 triage 顶部到期提示共用这一个读面）。
+ *
+ * `skipAuth`：它是**装饰性**读面——失败只让角标/提示消失，不该把用户踢下线、
+ * 也不该触发全局 `auth:unauthorized` 清态（同 `fetchRegime` 的口径）。主线读面（列表/
+ * 统计）仍然是普通 `apiGet`，401 的全局语义一个字不动。
+ */
+export function fetchJournalSummary(): Promise<JournalSummary> {
+  return apiGet<JournalSummary>("/api/v1/journal/summary", undefined, { skipAuth: true });
+}
+
+/**
+ * 读 summary 里的一个计数：**缺字段/非法值 → `null`（不是 0）**。
+ *
+ * 后端并行开发中时这个端点可能还没上线（404/500）或只回了形状不全的 JSON；
+ * 这里把"拿不到"如实返回成 `null`，让调用方决定"不显示"，而不是替它写一个 0。
+ */
+export function summaryCount(
+  summary: JournalSummary | null | undefined,
+  key: keyof JournalSummary
+): number | null {
+  const value = summary?.[key];
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  return Math.trunc(value);
+}

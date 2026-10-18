@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Button,
   DatePicker,
@@ -41,6 +41,12 @@ const { Text } = Typography;
  * 刻意**不给默认值**：失效条件与期限都必须由用户主动选一次。默认 `30 天` 看起来友好，
  * 实际会让"用户根本没想过多久之后复核"这件事被一个默认值悄悄盖掉——而 S9 的全部价值
  * 就在"到期时被迫面对结果"，期限是用户自己定的契约。
+ *
+ * **唯一的例外**（S12 §S12.1）：从「今日体检」带入（`from=triage`）时 `horizon_days`
+ * 默认 30 天（仍可改）。理由不是"默认值变好用了"，而是**语境变了**——用户是看着某只
+ * 股票的当日事实点进来的，"30 天后回来看这条事实"就是这次判断的自然期限；此时仍要求他
+ * 先选一次期限，只是把点进来的那一步又推回去。没有语境的「记一笔」照旧不预选。
+ * 同一条带入**只带标的与期限**：thesis / invalidation 是判断本身，预填等于替他思考。
  *
  * 选填项（不带默认值之外的风险）：
  * - `symbol`：留空 = 市场级判断（后端按沪深 300 对比，页面显示"市场"）；
@@ -117,23 +123,47 @@ const MISSING_LABEL = {
 interface EntryFormProps {
   /** 创建成功后的回调（面板据此刷新三份列表与统计）。 */
   onCreated: () => void;
+  /**
+   * 「从今日体检带入」的标的（spec §S12.1，来自 `/me?tab=journal&symbol=<code>&from=triage`）。
+   * 只预填**标的**，thesis / invalidation 一个字都不填（三必填照旧由用户写）。
+   */
+  prefillSymbol?: string;
+  /** 是否来自「今日体检」（`from=triage`）：决定带入提示行与 `horizon_days` 的默认 30 天。 */
+  fromTriage?: boolean;
 }
 
-export function EntryForm({ onCreated }: EntryFormProps) {
+export function EntryForm({ onCreated, prefillSymbol = "", fromTriage = false }: EntryFormProps) {
+  const prefill = prefillSymbol.trim();
   const [thesis, setThesis] = useState("");
-  const [symbol, setSymbol] = useState("");
+  const [symbol, setSymbol] = useState(prefill);
   const [kind, setKind] = useState<JournalKind>("watch");
   const [betType, setBetType] = useState<JournalBetType>("direction");
   const [invKind, setInvKind] = useState<JournalInvalidationKind | undefined>(undefined);
   const [priceValue, setPriceValue] = useState<number | null>(null);
   const [dateValue, setDateValue] = useState<Dayjs | null>(null);
-  const [horizon, setHorizon] = useState<JournalHorizon | undefined>(undefined);
+  // 期限：**只有**从「今日体检」带入时才默认 30 天（spec §S12.1 的"默认 30，仍可改"）。
+  // 没有语境的「记一笔」仍刻意不预选——理由见组件头注释（默认值会把"用户从没想过多久
+  // 之后复核"这件事悄悄盖掉，而那正是 S9 的价值所在）。
+  const [horizon, setHorizon] = useState<JournalHorizon | undefined>(fromTriage ? 30 : undefined);
   // 仓位默认「只观察」（spec §S9.7.1 的默认值）；信心**刻意留空**（见 `CONFIDENCE_OPTIONS`）。
   const [positionSize, setPositionSize] = useState<JournalPositionSize>("none");
   const [confidence, setConfidence] = useState<number | undefined>(undefined);
   // 刚创建的那一条（spec §S9.6.5：创建成功后**立刻**把"同类情形"还给用户）。
   // 不下发到列表面板，是因为这段只在"刚写完"这一刻有意义，刷新后由快照里那份承载。
   const [created, setCreated] = useState<JournalEntry | null>(null);
+
+  // 面板**不会**随 tab 切换卸载（AntD Tabs 默认保留非活动 pane），所以"从体检再带一次
+  // 标的进来"必须能被已挂载的表单接住：只有**带入语境变化**时才重新落值，
+  // 用户正在写的 thesis / 已选的失效条件一个字都不动。
+  const prefillToken = prefill ? `${prefill}|${fromTriage ? "1" : "0"}` : "";
+  const appliedPrefill = useRef(prefillToken);
+  useEffect(() => {
+    if (!prefillToken || prefillToken === appliedPrefill.current) return;
+    appliedPrefill.current = prefillToken;
+    setSymbol(prefill);
+    // 新的带入语境 = 新的观察期限语境，故期限回到默认 30（仍可改）；thesis 不碰。
+    if (fromTriage) setHorizon(30);
+  }, [prefillToken, prefill, fromTriage]);
 
   const mutation = useMutation({
     mutationFn: (payload: JournalEntryCreate) => createJournalEntry(payload),
@@ -210,6 +240,14 @@ export function EntryForm({ onCreated }: EntryFormProps) {
         submit();
       }}
     >
+      {/* 带入提示（spec §S12.1）：**只说明"标的从哪来"与"快照不用你填"**，
+          不写任何判断类文案，也不暗示该买该卖。标的为空时不渲染这一行。 */}
+      {fromTriage && prefill && (
+        <p className="journal-form__prefill" data-testid="journal-prefill-hint">
+          {`从今日体检带入：${prefill}（快照在提交时自动生成）`}
+        </p>
+      )}
+
       <div className="journal-form__row">
         <Text className="journal-form__label">判断依据（必填）</Text>
         <Input.TextArea

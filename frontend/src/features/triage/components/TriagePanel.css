@@ -364,7 +364,7 @@
   font-size: 12px;
 }
 
-/* ── 卡片脚：数据截至 + 复核 ─────────────────────────── */
+/* ── 卡片脚：数据截至 + 记一笔 / 复核 ────────────────── */
 .triage__card-foot {
   display: flex;
   flex-wrap: wrap;
@@ -377,6 +377,28 @@
   color: var(--text-secondary);
 }
 
+/* 两个入口并排，但**视觉权重不同**：`记一笔` 是写操作（accent + 实底描边），
+ * `复核` 是读操作（同色文字链接）。两者都是链接而不是按钮——都是导航，不是提交。 */
+.triage__actions {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.triage__journal {
+  padding: 1px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.triage__journal:hover {
+  background: var(--hover);
+}
+
 .triage__verify {
   font-size: 12.5px;
   font-weight: 600;
@@ -386,6 +408,27 @@
 
 .triage__verify:hover {
   text-decoration: underline;
+}
+
+/* ── 到期提醒一行（S12 §S12.2）────────────────────────────
+ * 形态：整行可点的一行字（不是卡片、不是按钮）——它只回答"有没有到期条目、去哪看"。
+ * 左侧 accent 竖条与体检卡片的分级色条区分开：那是"这条事实多急"，这是"该去做一件事"。 */
+.triage__due-hint {
+  display: block;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.triage__due-hint:hover {
+  background: var(--hover);
 }
 
 /* ── 空态与页脚 ───────────────────────────────────────── */
