@@ -439,6 +439,14 @@ decision_journal_reviews(
 
 **验收**：自由文本失效条件 422；`reviewable=false` 的条目在到期列表里**没有**"复盘"按钮（e2e 断言）。
 
+> **`missing_reason` 的两类键（2026-10-19 澄清，避免"降级也判未就绪"）**：同一个字典里既有
+> **阻塞键**（`outcome_pct` / `bench_pct` / `excess_pct` / `invalidation_hit` / `net_outcome_pct` /
+> `net_excess_pct`——缺了就没法复盘，后端 422 也只看这几项），也有**降级键**
+> （`mae_pct` / `earnings` 等——只说明某一块降级了，**不阻塞**复盘）。
+> 前端"复盘是否可点"必须只认阻塞键（`RESULT_CRITICAL_MISSING_KEYS`），
+> **不得**把"`missing_reason` 非空"整体当作未就绪——否则市场级判断（`mae_pct: market_level_no_symbol`）
+> 与无财报数据的个股会被永久禁用复盘（实测这两类在真实数据里占比很高）。
+
 ### S9.7.9 隐私底线（日志是"投资体检报告"，泄露=灾难）
 
 - 只有作者可见（沿用）；**不做**任何跨用户聚合/排行/分享。
