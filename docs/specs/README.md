@@ -34,6 +34,7 @@
 | S9 | [S9-decision-journal.md](./S9-decision-journal.md) | 决策日志与归因（3 行必填 + 自动快照 + 五类归因 + 个人「最常犯的错」统计）| detailed |
 | S10 | [S10-market-regime.md](./S10-market-regime.md) | 市场状态机（五态 + 迟滞 + 转移矩阵 + 同态后续分布；零新表零新源）| detailed |
 | S11 | [S11-unlock-calendar.md](./S11-unlock-calendar.md) | 解禁日历（补 `share_floats` 写入方 + triage 探测器 + 日志窗口标记；零新表）| detailed |
+| S12 | [S12-closed-loop.md](./S12-closed-loop.md) | 闭环三件（一键记一笔 / 到期站内提醒 / 离线产物自愈；零新表零新 cron）| detailed |
 
 > **渐进明细**：只有 S0–S3 写详细契约——S4 起的 spec 在**启动前一周**才细化。理由：Wave 1 的数据事实底座没落地前，Wave 5 的因子契约一定会返工，提前细化是浪费。
 
