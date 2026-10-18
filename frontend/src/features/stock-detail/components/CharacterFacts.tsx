@@ -1,7 +1,7 @@
 import { Tooltip } from "antd";
 import { useTheme } from "@/app/theme-context";
 import { formatCnDate } from "@/shared/ui";
-import type { CharacterStats } from "../lib/characterStats";
+import { CHARACTER_WINDOW_BARS, type CharacterStats } from "../lib/characterStats";
 import type { CharacterStatsState } from "../hooks/useCharacterStats";
 import "./CharacterFacts.css";
 
@@ -15,9 +15,9 @@ import "./CharacterFacts.css";
  * 为什么整行可以消失（与全站"失败 ≠ 空"的纪律不冲突）：
  * - `characterStats` 返回 `null` = 样本不足/价格不可用 ⇒ 没有可陈述的事实，整行不渲染
  *   （设计稿与 brief 都要求"新股不足 60 根时股性行不出现"，**不显示 0**）；
- * - 取数失败时本行同样不渲染，但**失败不会被藏起来**：同一份 qfq 日线还被报价条行 4
- *   消费，那里会显示「加载失败 · 重试」（`PositionStrip`，设计稿 §3）。同一个查询在
- *   同一屏上只需要一枚重试入口，这里再放一枚就是两个按钮抢同一个 refetch。
+ * - **加载中**不是"没有事实"：这一行照常占位，六个 chip 显示 `--` 骨架（见组件内三态注释）；
+ * - **取数失败**也不是"没有事实"：行内直接给「加载失败 · 重试」（理由与"同一查询在报价条
+ *   行 4 已有一枚重试"的关系见组件内注释：两枚按钮打同一个缓存键，不会多取一次）。
  *
  * 颜色纪律：只有**收益**跟随涨跌色（`--up` / `--down` / `--flat`，A 股口径红涨绿跌）；
  * 波动/回撤/R²/量能一律中性文本色 —— 它们不是涨跌，上色会被读成方向。
@@ -83,20 +83,117 @@ function plainReading(stats: CharacterStats): string {
   else parts.push("走势有一定方向性");
   parts.push(stats.maBullish ? "均线呈多头排列" : "均线未成多头排列");
 
-  // 5) 量能
-  if (stats.volumeRatio >= 1.5) parts.push("最近 5 日量能明显放大");
-  else if (stats.volumeRatio >= 1.1) parts.push("最近 5 日量能温和放大");
-  else if (stats.volumeRatio <= 0.7) parts.push("最近 5 日量能萎缩");
-  else parts.push("最近 5 日量能与窗口平均相当");
+  // 5) 量能。`volumeRatio === null` = 成交量不可用 ⇒ **整句省略**：既不写"萎缩"
+  //    也不写"平稳"（review round 1：过去 0/0 被记成 0，于是这一句会写"量能萎缩"，
+  //    而真相是"没有成交量这回事"，等于用一句人话把缺失说成了一个事实）。
+  if (stats.volumeRatio !== null) {
+    if (stats.volumeRatio >= 1.5) parts.push("最近 5 日量能明显放大");
+    else if (stats.volumeRatio >= 1.1) parts.push("最近 5 日量能温和放大");
+    else if (stats.volumeRatio <= 0.7) parts.push("最近 5 日量能萎缩");
+    else parts.push("最近 5 日量能与窗口平均相当");
+  }
 
   return `${parts.join("，")}。`;
 }
 
+/**
+ * 骨架用的六个 chip 标签：与正式行**一一对应**（第 5 格是纯文字事实「均线…」，无标签）。
+ *
+ * 骨架必须复用同一套标签与同一个容器类，否则"加载中 → 有数据"会换一套排版，
+ * 高度和位置都会跳。顺序 / 文案与下面 `chips` 数组逐字一致。
+ */
+const SKELETON_CHIP_LABELS: Array<string | null> = [
+  windowLabel(CHARACTER_WINDOW_BARS),
+  "年化波动",
+  "最大回撤",
+  "趋势 R²",
+  null,
+  "量能",
+];
+
+/**
+ * 本块的**实测自然高度**（1440×900 侧栏，P2-1 用 Playwright `boundingBox().height` 量得）：
+ * `padding-top 10` + 1px 上边框 + chip 行 40（六枚在 1/3 页宽里折两行）+ 6 gap + 一句人话 36。
+ *
+ * 只用在**骨架**上（`min-height`）：加载中 chip 值是短 `--`，折行数与正式行可能不同 ——
+ * 不钉住的话，日线一到这一行会从 ~50px 长到 93px，把下面的公司概况与事件卡整体下推。
+ */
+const CHARACTER_ROW_MIN_HEIGHT = 93;
+
+/**
+ * 股性事实行的**三态**（P2-1）：
+ * - **加载中** → 六个 chip 的 `--` 骨架（高度由页面那层 `BlockBoundary` 的 `minHeight`
+ *   钉在实测自然高度 93px）。不写「暂无…」：还没到 ≠ 没有；
+ * - **成功但样本不足** → `stats === null` ⇒ 整行不渲染（设计稿与 P2-3 brief 都要求
+ *   "新股不足 60 根时股性行不出现"，**不显示 0**）；
+ * - **失败** → 行内「加载失败 · 重试」。**这里为什么可以再放一枚重试**：同一份 qfq 日线
+ *   还被报价条行 4（`PositionStrip`）消费，那里也有一枚「重试」；两枚按钮打的是**同一个**
+ *   React Query 缓存键，`refetch()` 由查询层去重，不会多取一次。反过来若失败时本行直接
+ *   消失，读者就无法判断"这一块是还没加载、还是取数失败了"——那正是本任务要消灭的含混。
+ */
 export function CharacterFacts({ stats: state }: { stats: CharacterStatsState }) {
   const { colors } = useTheme();
   const stats = state.stats;
-  // null = 样本不足（或价格不可用）：一行事实都不成立，整块不渲染。
-  if (!stats) return null;
+
+  if (state.isError) {
+    return (
+      <div
+        className="character-facts"
+        data-testid="character-facts-error"
+        // 失败也占本块的自然高度：错误卡比正式行矮，不钉住就会把下面两块往上抽
+        style={{ minHeight: CHARACTER_ROW_MIN_HEIGHT }}
+      >
+        <div className="character-facts__chips">
+          <span className="character-facts__chip" style={{ color: colors.textSecondary }}>
+            加载失败
+          </span>
+          <button
+            type="button"
+            data-testid="character-facts-retry"
+            onClick={state.retry}
+            style={{
+              padding: 0,
+              border: 0,
+              background: "none",
+              fontSize: 12,
+              lineHeight: "18px",
+              color: colors.accent,
+              cursor: "pointer",
+            }}
+          >
+            重试
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // null = 样本不足（或价格不可用）：一行事实都不成立，整块不渲染；
+  // 但"还在加载"不是"没有事实"，那是有骨架的（见下）。
+  if (!stats) {
+    if (!state.isLoading) return null;
+    return (
+      <div
+        className="character-facts"
+        data-testid="character-facts-loading"
+        aria-busy="true"
+        style={{ minHeight: CHARACTER_ROW_MIN_HEIGHT }}
+      >
+        <div className="character-facts__chips">
+          {SKELETON_CHIP_LABELS.map((label, index) => (
+            <span className="character-facts__chip" key={label ?? `chip-${index}`}>
+              {label && <span className="character-facts__label">{label}</span>}
+              <span className="character-facts__value num" style={{ color: colors.flat }}>
+                --
+              </span>
+            </span>
+          ))}
+        </div>
+        {/* 一句人话的位置也要占住（它和 chip 行一样是数据落地后才有的内容） */}
+        <p className="character-facts__reading">--</p>
+      </div>
+    );
+  }
 
   const trendColor =
     Math.abs(stats.totalReturn) < 1e-9
@@ -139,13 +236,19 @@ export function CharacterFacts({ stats: state }: { stats: CharacterStatsState })
       value: stats.maBullish ? "均线多头" : "均线未成多头",
       tip: "MA5 > MA10 > MA20（窗口末尾 20 根收盘价的简单移动平均）",
     },
-    {
+  ];
+
+  // 量能这一格**按可用性出现**（review round 1）：`volumeRatio === null` = 成交量不可用，
+  // 这一格整项不渲染 —— 不渲染 `0.0×`、也不渲染 `--`（`--` 仍是在断言"有个值，只是没取到"）。
+  // 少一格后 chip 行会自己收窄（flex-wrap），读者看到的是"没有这一项"，而不是"它是 0"。
+  if (stats.volumeRatio !== null) {
+    chips.push({
       key: "volumeRatio",
       label: "量能",
       value: formatRatio(stats.volumeRatio),
       tip: "最近 5 日均量 ÷ 整窗口均量：1.0× = 与窗口平均持平，>1 放量，<1 缩量",
-    },
-  ];
+    });
+  }
 
   return (
     <div className="character-facts" data-testid="character-facts">

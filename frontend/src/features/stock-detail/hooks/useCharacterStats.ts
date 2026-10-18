@@ -7,6 +7,13 @@ import { characterStats, type CharacterStats } from "../lib/characterStats";
 export interface CharacterStatsState {
   /** `null` = 样本不足/价格不可用（整行不渲染）；**不是** 0 */
   stats: CharacterStats | null;
+  /**
+   * 首屏加载中（React Query 的 `isLoading`，不是 `isFetching`）。
+   *
+   * 必须与"样本不足"分开：加载中要占住这一行的**自然高度**（否则日线一到、下面整列
+   * 往下掉），样本不足则整行不渲染。两者过去都表现为"行不存在"，正是本任务要分开的三态。
+   */
+  isLoading: boolean;
   /** 取数失败（与"样本不足"是两件事，见组件内的失败态说明） */
   isError: boolean;
   retry: () => void;
@@ -45,5 +52,10 @@ export function useCharacterStats(symbol: string | undefined): CharacterStatsSta
 
   const stats = useMemo(() => characterStats(query.data?.points ?? []), [query.data]);
 
-  return { stats, isError: query.isError, retry: () => void query.refetch() };
+  return {
+    stats,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    retry: () => void query.refetch(),
+  };
 }

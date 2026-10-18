@@ -170,3 +170,62 @@ test("公司概况只有部分字段为 null → 只少那两行，另外两行�
   await expect(card).not.toContainText("实控人");
   await expect(card).not.toContainText("--");
 });
+
+test("成交量全为 0 → 量能那一格整项不出现，人话也不提量能（不渲染 0.0×）", async ({ page }) => {
+  /**
+   * review round 1 的回归用例：`volumeRatio` 曾经在 `0/0` 时返回 `0`，于是零成交的窗口
+   * 会印出「量能 0.0×」，人话还写「最近 5 日量能萎缩」—— 用两个断言把缺失说成了事实。
+   *
+   * 造数：把日线端点整段换成 60 根"收盘价每天 +1、成交量恒 0"的 bar。
+   * 60 根满窗 ⇒ 其余五项照常算得出来（这条同时证明"没有把整行藏掉"）。
+   */
+  const dates = Array.from({ length: 60 }, (_, i) => {
+    const day = new Date(Date.UTC(2026, 0, 1 + i));
+    return day.toISOString().slice(0, 10);
+  });
+  const bars = dates.map((trade_date, i) => ({
+    trade_date,
+    open: 100 + i,
+    high: 100 + i,
+    low: 100 + i,
+    close: 100 + i,
+    volume: 0,
+    amount: 0,
+  }));
+
+  await page.route("**/quotes/daily*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        symbol: "600519",
+        name: "贵州茅台",
+        exchange: "Shanghai_Stocks",
+        data: bars,
+        adjust_available: true,
+      }),
+    })
+  );
+
+  await openDetail(page);
+
+  const facts = page.getByTestId("character-facts");
+  await expect(facts).toBeVisible();
+
+  // 其余五项仍在（不是"整行不渲染"）
+  await expect(facts).toContainText(/近60日\s*[+-]?\d+\.\d%/);
+  await expect(facts).toContainText(/年化波动/);
+  await expect(facts).toContainText(/最大回撤/);
+  await expect(facts).toContainText(/趋势 R²/);
+  await expect(facts).toContainText(/均线/);
+
+  // 量能这一格**整项缺席**：既没有 0.0×，也没有 `--` 占位
+  await expect(facts.locator('[data-fact="volumeRatio"]')).toHaveCount(0);
+  await expect(facts).not.toContainText("量能");
+  await expect(facts).not.toContainText("0.0×");
+  // 人话里也不许出现量能那句话（"萎缩/放大/相当"都是对一个不存在的量的断言）
+  await expect(facts.locator(".character-facts__reading")).not.toContainText(/量能|放量|缩量/);
+
+  // chip 数从 6 降到 5，且没有空值格
+  await expect(facts.locator(".character-facts__value")).toHaveCount(5);
+});

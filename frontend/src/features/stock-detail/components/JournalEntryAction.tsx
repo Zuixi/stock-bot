@@ -45,8 +45,31 @@ interface Props {
 export function JournalEntryAction({ symbol }: Props) {
   const { isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const [recorded, setRecorded] = useState(false);
+  const [recordedSymbol, setRecordedSymbol] = useState<string | null>(null);
+  const [openSymbol, setOpenSymbol] = useState<string | null>(null);
+  /**
+   * 状态**按标的绑定**（review round 1 的 Important 项）。
+   *
+   * 原来存的是"是否记过一笔"（`recorded: boolean`）与"是否打开"（`open: boolean`）。
+   * 但 symbol 变化时**这一层不会重挂**：`/company/:symbol` 是同一个路由元素，
+   * `<StockHeader>` / `<QuoteBar>` 在两只股票之间是同一个位置、同一个类型 —— React 按位置
+   * 复用子树，`recorded` 于是跟着用户漂到下一只股票上：在 600519 记完一笔切到 600000，
+   * 动作区仍显示「已记录 · 查看」，页面在一只**没有任何记录**的标的上说了假话。
+   *
+   * 修法不是"symbol 变化时用 `useEffect` 清零"，而是**把标的存进 state**，让"记过没有"
+   * 变成一次**渲染期派生**（`recordedSymbol === symbol`）：
+   * - 不需要 effect ⇒ 没有"effect 跑之前先画一帧假状态"的窗口（清零是同步的）；
+   * - 不依赖祖先是否重挂 ⇒ 将来即使有人给 `<StockHeader>` 加 memo/key，语义也不变；
+   * - `open` 同理：切标的时弹窗自动关掉，不会把 A 的草稿留在 B 的弹窗里。
+   *
+   * `QuoteBar` 那层另加了 `key={stock.symbol}`（结构性第二道保险，随 P2-1 那批一起提交）；
+   * 两者不冲突：key 让实例换新，这里的派生保证即使实例被复用也不会说错话。
+   */
+  /** 当前标的记过一笔（只有**本标的**记过才算） */
+  const recorded = recordedSymbol === symbol;
+  /** 弹窗只对**打开它的那只标的**开着 */
+  const open = openSymbol === symbol;
+  const setOpen = (next: boolean) => setOpenSymbol(next ? symbol : null);
 
   // 未登录（或登录态未探测完）→ 只给登录入口，不挂表单。
   if (!isAuthenticated) {
@@ -87,8 +110,9 @@ export function JournalEntryAction({ symbol }: Props) {
             onCreated={() => {
               // 与 JournalPanel.refreshAll 同一族 key：列表（open/due/reviewed）+ 统计
               void queryClient.invalidateQueries({ queryKey: ["journal"] });
-              setRecorded(true);
-              setOpen(false);
+              // 记的是**这只标的**：把标的写进 state，而不是写一个布尔 —— 换股票即失效
+              setRecordedSymbol(symbol);
+              setOpenSymbol(null);
             }}
           />
         )}

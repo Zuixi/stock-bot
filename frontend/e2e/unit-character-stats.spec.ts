@@ -85,7 +85,7 @@ test("只看最后 60 根：更早的 bar 不参与任何一项（含「截至�
   expect(stats!.asOf).toBe(bars[bars.length - 1].date);
 });
 
-test("横盘序列（零方差 + 零成交量）：除零守卫给出 0，不是 NaN/Infinity", () => {
+test("横盘序列（零方差 + 零成交量）：除零守卫给出 0 / null，不是 NaN/Infinity", () => {
   // 收 100 全等、量 0 全等 —— 年化波动的方差分母、量能比的分母同时为 0
   const stats = characterStats(flat(60, 100, 0));
   expect(stats).not.toBeNull();
@@ -96,13 +96,37 @@ test("横盘序列（零方差 + 零成交量）：除零守卫给出 0，不是
   // 横盘 SStot = 0：按约定记 0（不是 1 —— R²=1 会被读成"趋势完美"，恰好是事实的反面）
   expect(stats!.trendR2).toBe(0);
   expect(stats!.maBullish).toBe(false);
-  // 整窗均量为 0 ⇒ 量能比分母为 0 ⇒ 记 0（"窗口内没有成交"），其余指标照常上屏
-  expect(stats!.volumeRatio).toBe(0);
+  // 整窗均量为 0 ⇒ 分母为 0 ⇒ **null，不是 0**（review round 1 的修正）：
+  // 零成交时"量能倍数"这个量不存在，0 会让 UI 印出「量能 0.0×」并把缺失说成事实。
+  expect(stats!.volumeRatio).toBeNull();
 
   // 每一项都必须是有限数：任何 NaN 都会让 UI 把 "NaN%" 印到屏幕上
   for (const [key, value] of Object.entries(stats!)) {
     if (typeof value === "number") expect(Number.isFinite(value), `${key} 不是有限数`).toBe(true);
   }
+});
+
+test("成交量不可用（NaN / 负值 / 整窗零成交）→ volumeRatio 为 null，其余五项照常", () => {
+  // 1) 单根 NaN 成交量：**不许**把它当 0 掺进均量（那会压低分母 → 量能比被放大）
+  const nanVolume = [...flat(59, 100, 100), { ...bar(100, 0), volume: Number.NaN }];
+  const nanStats = characterStats(nanVolume);
+  expect(nanStats).not.toBeNull();
+  expect(nanStats!.volumeRatio).toBeNull();
+  // 其余指标不受影响：收益/波动/回撤/趋势/R² 仍然算得出来
+  expect(nanStats!.totalReturn).toBe(0);
+  expect(Number.isFinite(nanStats!.annualVol)).toBe(true);
+
+  // 2) 负成交量（脏数据，没有物理意义）
+  const negative = [...flat(59, 100, 100), bar(100, -5)];
+  expect(characterStats(negative)!.volumeRatio).toBeNull();
+
+  // 3) 整窗零成交（0/0）
+  expect(characterStats(flat(60, 100, 0))!.volumeRatio).toBeNull();
+
+  // 4) **反向**：整窗有量、最近 5 日归零 → 这是**合法**的 0.0×（"最近 5 日没有成交"是一句真话），
+  //    不是 null。这条防"为了消掉 0/0 把所有 0 都当缺失"的过度修正。
+  const driedUp = Array.from({ length: 60 }, (_, i) => bar(100, i >= 55 ? 0 : 100));
+  expect(characterStats(driedUp)!.volumeRatio).toBe(0);
 });
 
 test("样本不足 60 根 → null（缺失 ≠ 0，整行不渲染）", () => {

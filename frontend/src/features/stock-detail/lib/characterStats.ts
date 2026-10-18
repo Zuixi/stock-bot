@@ -46,8 +46,14 @@ export interface CharacterStats {
   trendR2: number;
   /** 均线多头：MA5 > MA10 > MA20（末尾 20 根收盘价的简单均值） */
   maBullish: boolean;
-  /** 量能倍数：`mean(volume, 最近 5 根) / mean(volume, 整个窗口)` */
-  volumeRatio: number;
+  /**
+   * 量能倍数：`mean(volume, 最近 5 根) / mean(volume, 整个窗口)`。
+   *
+   * `null` = **成交量不可用**（整窗均量为 0，或窗口里有非有限/负的 volume）⇒ 这一项
+   * 无从谈起，渲染层整格不出现、人话里也不提量能（缺失 ≠ 0，**不渲染 `0.0×`**）。
+   * 详见 `computeVolumeRatio` 的注释。
+   */
+  volumeRatio: number | null;
   /** 实际参与计算的 bar 数（= 传入的 `windowBars`） */
   windowBars: number;
   /** 窗口最后一根 bar 的交易日（`YYYY-MM-DD`），供 UI 写「截至」 */
@@ -86,6 +92,31 @@ function movingAverage(values: number[], n: number): number {
 }
 
 /**
+ * 量能倍数，**不可用时返回 `null`**（review round 1 的修正：这里曾经返回 `0`）。
+ *
+ * 为什么 `0` 是错的（实测后果）：窗口零成交时 `mean(window) === 0`，`0/0` 被记成 `0`，
+ * 于是 UI 印出「量能 0.0×」，而人话那一段还会写「最近 5 日量能萎缩」—— 一边是"没成交"，
+ * 一边是"缩量"，两个都不成立：**分母为 0 时"量能倍数"这个量根本不存在**。
+ * 只把数字改成 `--` 也不够（那仍然在断言"有一个值，只是没取到"），正确做法是整项缺席：
+ * 渲染层不渲染这一格、人话不提量能（`CharacterFacts` 里逐条对应）。
+ *
+ * 三条守卫：
+ * 1. 任一 volume 非有限或为负 ⇒ `null`（脏数据不该被当成 0 掺进均值 —— 那会把均量压低，
+ *    于是量能比被**放大**，比"少一个数"更糟）；
+ * 2. 整窗均量 `<= 0`（零成交）⇒ `null`（分母为 0）；
+ * 3. 其余情况：`mean(末尾 5 根) / mean(整窗)`。**分子为 0 是合法的**：整窗有量、最近 5 日
+ *    突然没成交，`0.0×` 是一句真话（"最近 5 日没有成交"），故只有分母退化才返回 `null`。
+ */
+function computeVolumeRatio(volumes: number[]): number | null {
+  for (const volume of volumes) {
+    if (!Number.isFinite(volume) || volume < 0) return null;
+  }
+  const windowMeanVolume = mean(volumes);
+  if (windowMeanVolume <= 0) return null;
+  return mean(volumes.slice(Math.max(0, volumes.length - VOLUME_SHORT_BARS))) / windowMeanVolume;
+}
+
+/**
  * 从日线序列算「股性事实」。
  *
  * @param bars 日线序列，**按时间升序**（与 `fetchKlineBySymbol` 返回的 `points` 同序）。
@@ -114,10 +145,11 @@ function movingAverage(values: number[], n: number): number {
  *   **返回 `0`**。不返回 1：横盘时"拟合完美"在数学上成立（SSres 也是 0），但用户读到
  *   R²=1 会理解成"趋势非常明确"，恰好是事实的反面。R²=0 才是"这条水平线解释不了什么"
  *   的正确读法。回归本身的分母 `Sxx = Σ(x - x̄)²` 在 `n >= 2` 时恒 `> 0`（x 是 0..n-1）。
- * - `volumeRatio = mean(last5) / mean(window)`：`mean(window) <= 0`（整窗零成交量，
- *   或脏数据给了负数）时分母为 0，**返回 `0`**，且**只有这一个字段受影响**——
- *   收益率/波动/回撤/趋势都还能算，不因为一个量能指标缺失把整行藏掉（那会让"这只股票
- *   最近 60 天什么脾气"整块消失）。`0` 在这里读作"窗口内没有成交"，不是"量能萎缩到 0"。
+ * - `volumeRatio = mean(last5) / mean(window)`：**成交量不可用时返回 `null`**（不是 0）——
+ *   整窗均量为 0（零成交）或窗口里有非有限/负的 volume 时，这个量不存在；`null` 由渲染层
+ *   表达为"这一格整项不出现 + 人话不提量能"（见 `computeVolumeRatio`）。注意**其余五项照常**
+ *   返回：收益率/波动/回撤/趋势都还能算，不因为一个量能指标缺席把整行藏掉。
+ *   分子为 0 而分母 > 0 时返回 `0`（"最近 5 日没有成交"是一句真话）。
  * - `movingAverage`：窗口长度恒 `>= 20`（情况 1 已拦），不会出现空数组除零。
  */
 export function characterStats(
@@ -139,9 +171,9 @@ export function characterStats(
     // 情况 2：价格必须可用于做分母（收益率/回撤/均线都要求正数收盘价）。
     if (!Number.isFinite(bar.close) || bar.close <= 0) return null;
     closes.push(bar.close);
-    // 成交量缺失/脏数据按 0 计（它只影响 volumeRatio 一个字段，不该毒化整行）；
-    // 负数没有物理意义，同样按 0 处理，避免"负量能比"这种读不懂的数。
-    volumes.push(Number.isFinite(bar.volume) && bar.volume > 0 ? bar.volume : 0);
+    // 成交量**原样**收集：合法性由 `computeVolumeRatio` 统一判定。此前这里把脏值改成 0，
+    // 既污染了均量（分母被压低 → 量能比被放大），又让"不可用"伪装成一个合法的 0。
+    volumes.push(bar.volume);
   }
 
   const first = closes[0];
@@ -197,10 +229,9 @@ export function characterStats(
   const ma20 = movingAverage(closes, MA_LONGEST_BARS);
   const maBullish = ma5 > ma10 && ma10 > ma20;
 
-  // 6) 量能倍数：最近 5 日均量 / 整窗均量；整窗均量 <= 0 时分母为 0 → 记 0（见头注释）
-  const windowMeanVolume = mean(volumes);
-  const shortMeanVolume = mean(volumes.slice(Math.max(0, volumes.length - VOLUME_SHORT_BARS)));
-  const volumeRatio = windowMeanVolume > 0 ? shortMeanVolume / windowMeanVolume : 0;
+  // 6) 量能倍数：最近 5 日均量 / 整窗均量。**不可用时是 `null`，不是 0**
+  //    （零成交时 0/0 没有意义，渲染层据此整项不出现，见 `computeVolumeRatio`）。
+  const volumeRatio = computeVolumeRatio(volumes);
 
   return {
     totalReturn,
