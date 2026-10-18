@@ -22,7 +22,7 @@ const TAG_COLORS: Record<number, string> = { 2: "blue", 3: "purple" };
  * 一键展开，且概念详情本身还有入口。
  */
 const MAX_VISIBLE_NARROW = 2;
-/** 宽屏 8 枚 = 改造前 `ConceptTags` 的默认展示数，不减少既有信息量；1440 下正好一行。 */
+/** 宽屏 8 枚 = 改造前 `ConceptTags`（P1-3 已并入本组件并删除）的默认展示数，不减少既有信息量；1440 下正好一行。 */
 const MAX_VISIBLE_WIDE = 8;
 
 interface Props {
@@ -36,7 +36,7 @@ interface Props {
  *
  * 数据来源与旧版**逐个对齐**（同一个 query key，命中缓存 ⇒ 零新增请求）：
  * - SW 分类：`["stock-sw-tags", exchange, symbol]`（`CustomSwTags` 同键）
- * - 概念：`["stock-concepts", symbol]`（`ConceptTags` 同键）
+ * - 概念：`["stock-concepts", symbol]`（改造前 `ConceptTags` 用的同一个键，缓存命中）
  * - 个人标签：整块交给 `UserTags`（它自带增删/登录态分支，是可编辑控件组，作为一个原子块
  *   参与这一行；匿名态下它只是一枚「登录后添加标签」。）
  *

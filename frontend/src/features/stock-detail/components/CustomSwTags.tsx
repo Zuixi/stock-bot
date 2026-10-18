@@ -26,11 +26,20 @@ export function CustomSwTags({ exchange, symbol, variant = "full" }: Props) {
   const [open, setOpen] = useState(false);
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
 
-  const { data: tags = [], isLoading } = useQuery({
+  const { data: tags = [], isLoading, isError } = useQuery({
     queryKey: ["stock-sw-tags", exchange, symbol],
     queryFn: () => fetchStockSwTags(exchange, symbol),
     staleTime: STALE_TIME,
   });
+
+  /**
+   * 当前选中项是否可信（= 后端真的回了一份"现有标签"）。
+   *
+   * 加载中与**失败**都不可信：两者的 `tags` 都是默认值 `[]`，拿它当弹窗初始值再提交，
+   * PUT 出去的 `industry_codes: []` 会把用户已有的申万分类清空（全量覆盖语义）。
+   * 失败态不是"额外发挥"：它和加载中是同一条数据销毁路径，只堵一半等于没堵。
+   */
+  const tagsReady = !isLoading && !isError;
 
   const { data: l2Options = [] } = useQuery({
     queryKey: ["sw-options", 2],
@@ -64,7 +73,17 @@ export function CustomSwTags({ exchange, symbol, variant = "full" }: Props) {
     },
   });
 
+  /**
+   * ⚠️ 选中项不可信时**不得**开弹窗（否则会清空用户标签）。
+   *
+   * 弹窗的初始选中项来自 `tags` 的快照。查询还没落地（或已失败）时 `tags` 是默认值 `[]`，
+   * 于是弹窗以"一个都没选"打开，用户点确定就 PUT `industry_codes: []`
+   * （`updateStockSwTags` 是全量覆盖）—— 一次误点就把这个人手动挂的申万分类抹掉。
+   * 旧的全量形态靠 `if (isLoading) return <Spin/>` 把这条路径挡住；`controls` 形态只剩按钮，
+   * 没有那层兜底，所以这里显式早退，按钮侧同时置 `disabled`（双保险：键盘/程序化触发也进不来）。
+   */
   const handleOpen = () => {
+    if (!tagsReady) return;
     setSelectedCodes(tags.map((t) => t.industryCode));
     setOpen(true);
   };
@@ -102,11 +121,18 @@ export function CustomSwTags({ exchange, symbol, variant = "full" }: Props) {
     setSelectedCodes([...l2Values, ...codes]);
   };
 
-  // `controls` 形态下加载中不需要骨架：chips 由 StockTagRow 渲染，这里只关心按钮
+  // `controls` 形态下加载中不需要骨架：chips 由 StockTagRow 渲染，这里只关心按钮。
+  // 但按钮必须**禁用**（见 handleOpen 的注释：选中项不可信时开弹窗会以空选中覆盖用户标签）。
   if (isLoading && variant === "full") return <Spin size="small" />;
 
   const editButton = (
-    <Button type="link" size="small" icon={<EditOutlined />} onClick={handleOpen}>
+    <Button
+      type="link"
+      size="small"
+      icon={<EditOutlined />}
+      disabled={!tagsReady}
+      onClick={handleOpen}
+    >
       编辑
     </Button>
   );

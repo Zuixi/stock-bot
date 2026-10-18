@@ -201,3 +201,38 @@ test("取数失败：行 4 出现「重试」，不退化成「无数据」形�
   await retry.click();
   await expect(page.getByTestId("range-ribbon")).toBeVisible();
 });
+
+/**
+ * 数据安全回归：**SW 标签查询未落地时，「编辑」必须是禁用的**。
+ *
+ * 弹窗以 `tags` 快照作为初始选中项，而加载中 / 失败的 `tags` 是默认值 `[]`：
+ * 这时点开弹窗看到"一个都没选"，点确定就 PUT `industry_codes: []`（全量覆盖），
+ * 把用户手动挂的申万分类**清空**。这条用例用「闸门 promise」把加载窗口钉住，
+ * 不靠固定 sleep —— 关闸 → 断言禁用 → 开闸 → 断言可用。
+ */
+test("SW 标签加载中「编辑」禁用，数据落地后恢复（避免以空选中覆盖用户标签）", async ({ page }) => {
+  await page.setViewportSize(WIDE);
+
+  // 闸门：请求先进 route 但**不放行**，直到测试主动 release（比 sleep 稳定）
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/sw-tags*", async (route) => {
+    await gate;
+    await route.continue();
+  });
+
+  await page.goto(STOCK);
+  const edit = page.getByTestId("stock-tag-row").getByRole("button", { name: /编\s*辑/ });
+  await expect(edit).toBeVisible();
+
+  // 加载中：禁用（+ handler 内早退，双保险）
+  await expect(edit).toBeDisabled();
+
+  release();
+  // 数据落地后恢复可用：禁用只是"选中项不可信"的临时态
+  await expect(edit).toBeEnabled();
+  await edit.click();
+  await expect(page.locator(".ant-modal").filter({ hasText: "编辑自定义申万分类" })).toBeVisible();
+});

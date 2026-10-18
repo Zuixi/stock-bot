@@ -141,6 +141,15 @@
   color: var(--text-primary);
 }
 
+/*
+ * `--` = 缺失/加载中 → 次级色（设计稿 §3：只有真数字才用主文本色）。
+ * 与上面分成两条规则而不是内联：颜色是主题变量，`--text-primary` / `--text-secondary`
+ * 都要随 data-theme 走，内联写死会丢主题。
+ */
+.quote-bar__strip-value--empty {
+  color: var(--text-secondary);
+}
+
 .quote-bar__strip-tail {
   display: flex;
   align-items: center;

@@ -20,16 +20,21 @@ export function RangeRibbon({ stats }: { stats: StockRangeStats }) {
     `距高点 ${Math.abs(stats.distanceToHigh).toFixed(1)}%，` +
     `距低点 ${Math.abs(stats.distanceToLow).toFixed(1)}%`;
 
+  /**
+   * 游标 3px 宽，`calc(p% - 1.5px)` 只是"以 p 为中心"的写法；p≈0 / p≈100 时它会有一半
+   * 探出轨道（压到「距高」文字上，或越过右端悬空）。CSS `clamp()` 把它夹在
+   * `[0, 100% - 3px]`：两端贴边、中间仍居中，且不依赖轨道的具体 px 宽度
+   * （宽度是 QuoteBar.css 的事，这里不再复制一份常量）。
+   */
+  const cursorLeft = `clamp(0px, calc(${stats.positionPct}% - 1.5px), calc(100% - 3px))`;
+
   return (
     <div className="range-ribbon" role="img" aria-label={label} data-testid="range-ribbon">
       <div className="range-ribbon__track" />
       {[25, 50, 75].map((tick) => (
         <div key={tick} className="range-ribbon__tick" style={{ left: `${tick}%` }} />
       ))}
-      <div
-        className="range-ribbon__cursor"
-        style={{ left: `calc(${stats.positionPct}% - 1.5px)` }}
-      />
+      <div className="range-ribbon__cursor" style={{ left: cursorLeft }} />
     </div>
   );
 }

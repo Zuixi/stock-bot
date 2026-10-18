@@ -12,9 +12,9 @@ interface Props {
   latestQuoteDate?: string;
 }
 
-/** 距高/距低是**距离**不是涨跌：带符号、单小数，缺失渲染 `--`（不渲染成 0.0%）。 */
-function formatDistance(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "--";
+/** 距高/距低是**距离**不是涨跌：带符号、单小数；不可算时返回 `null`（由渲染层写成 `--`）。 */
+function formatDistance(value: number | null | undefined): string | null {
+  if (value == null || !Number.isFinite(value)) return null;
   const sign = value > 0 ? "+" : "";
   return `${sign}${value.toFixed(1)}%`;
 }
@@ -23,9 +23,23 @@ function formatDistance(value: number | null | undefined): string {
  * 3 年分位文案与估值 tab 的 `SummaryStat` **逐字一致**（同一份数据、同一个格式化：
  * `toLocaleString` 最多两位小数），否则同一页两处数字对不上会被读成"两个指标"。
  */
-function formatPercentile(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "--";
+function formatPercentile(value: number | null | undefined): string | null {
+  if (value == null || Number.isNaN(value)) return null;
   return `${value.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}%`;
+}
+
+/**
+ * 行 4 的读数格：**只有真数字**用主文本色，`--`（缺失/加载中）用次级色。
+ *
+ * 设计稿 §3 的三态里，"没有数字"和"有数字"必须在颜色上也分开 —— 否则 `--` 会和真实读数
+ * 一样重，扫一眼分不出"这格是 62%"还是"这格没有值"。故空值走 `--empty` 修饰类。
+ */
+function StripValue({ text }: { text: string | null }) {
+  return (
+    <span className={`num quote-bar__strip-value${text == null ? " quote-bar__strip-value--empty" : ""}`}>
+      {text ?? "--"}
+    </span>
+  );
 }
 
 /**
@@ -47,20 +61,16 @@ export function PositionStrip({ range, percentile, latestQuoteDate }: Props) {
     <div className="quote-bar__strip" data-testid="quote-position-strip">
       <span className="quote-bar__strip-item">
         距高
-        <span className="num quote-bar__strip-value">
-          {formatDistance(range.stats?.distanceToHigh)}
-        </span>
+        <StripValue text={formatDistance(range.stats?.distanceToHigh)} />
       </span>
       {range.stats && <RangeRibbon stats={range.stats} />}
       <span className="quote-bar__strip-item">
         距低
-        <span className="num quote-bar__strip-value">
-          {formatDistance(range.stats?.distanceToLow)}
-        </span>
+        <StripValue text={formatDistance(range.stats?.distanceToLow)} />
       </span>
       <span className="quote-bar__strip-item">
         PE_TTM 3年分位
-        <span className="num quote-bar__strip-value">{formatPercentile(percentile.value)}</span>
+        <StripValue text={formatPercentile(percentile.value)} />
       </span>
       <div className="quote-bar__strip-tail">
         {failed && (
