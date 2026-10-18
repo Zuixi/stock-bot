@@ -1454,15 +1454,11 @@ async def evaluate_entries(
     # 要行业基准的：``relative``（快照 bench_spec.kind = 行业）+ 快照里有申万一级归属。
     # ``direction`` 不再走行业（spec §S9.7.3 口径修正：direction → 沪深300）。
     industry_plans = [
-        plan
-        for plan in symbol_plans
-        if plan.bench_kind == BENCH_KIND_INDUSTRY and plan.sector_code
+        plan for plan in symbol_plans if plan.bench_kind == BENCH_KIND_INDUSTRY and plan.sector_code
     ]
     # 有 symbol 但基准不是行业（direction / market / relative 无行业）→ 沪深300
     industry_ids = {int(plan.entry.id) for plan in industry_plans}
-    hs300_symbol_plans = [
-        plan for plan in symbol_plans if int(plan.entry.id) not in industry_ids
-    ]
+    hs300_symbol_plans = [plan for plan in symbol_plans if int(plan.entry.id) not in industry_ids]
 
     faces = await _symbol_faces(db, symbol_plans)
     sector_benches = await _sector_benches(db, industry_plans)
