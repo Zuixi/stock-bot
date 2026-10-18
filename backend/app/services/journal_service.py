@@ -39,6 +39,8 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
+from math import sqrt
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -49,6 +51,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.daily_basic import DailyBasicIndicator
 from app.models.industry_research import IndustryMetric
 from app.models.journal import (
+    BET_TYPES,
+    ENTRY_KINDS,
     VERDICTS,
     DecisionJournalEntry,
     DecisionJournalReview,
@@ -73,30 +77,48 @@ from app.services.triage_service import (
 )
 
 __all__ = [
+    "BENCH_KIND_HS300",
+    "BENCH_KIND_INDUSTRY",
+    "BENCH_NOTE_FALLBACK",
+    "BENCH_NOTE_INDUSTRY",
+    "BENCH_NOTE_MARKET",
+    "COST_ROUND_TRIP_BPS",
+    "COST_ROUND_TRIP_PCT",
+    "JOURNAL_STATS_VERSION",
+    "MULTIPLE_COMPARISON_NOTE",
     "SNAPSHOT_FIELDS",
     "SNAPSHOT_META_FIELDS",
     "SNAPSHOT_VERSION",
+    "WILSON_Z",
     "AlreadyReviewed",
     "EntryNotFound",
     "EvaluationNotReady",
     "JournalRow",
     "NotDueYet",
+    "bench_note",
+    "bench_spec",
     "build_snapshot",
     "create_entry",
     "evaluate_entry",
+    "evaluate_entries",
     "get_entry",
     "list_entries",
     "review_entry",
     "snapshot_line",
     "stats",
     "status_counts",
+    "wilson_interval",
 ]
 
 _SH = ZoneInfo("Asia/Shanghai")
 
 #: 快照 schema 版本。**新增/改名字段必须同时改 spec §S9.3 与本文件**（快照是落库的
 #: jsonb，历史行不会自动补字段，所以版本号是"这行是哪种形状"的唯一判据）。
-SNAPSHOT_VERSION = "s9.r1"
+#:
+#: ``s9.r2``（2026-10-19，S9.7 Phase A）：新增 ``bench_spec`` / ``bench_basis_note``
+#: 两个元数据键（基准口径在**创建时**固化，spec §S9.7.3）。``s9.r1`` 的行没有这两个键，
+#: 读取方按 ``bet_type=entry.bet_type`` + 当场可得的数据重算（不得改写历史快照）。
+SNAPSHOT_VERSION = "s9.r2"
 
 #: 快照固定字段（顺序即上屏顺序）。``tests/test_journal_service.py`` 逐字对拍。
 SNAPSHOT_FIELDS: tuple[str, ...] = (
@@ -117,6 +139,9 @@ SNAPSHOT_META_FIELDS: tuple[str, ...] = (
     "quote_as_of",
     "symbol",
     "missing_reason",
+    # ★ s9.r2（spec §S9.7.3）：基准口径与它的人话说明，创建时固化、事后不可改
+    "bench_spec",
+    "bench_basis_note",
 )
 
 #: 行情窗口的自然日下界：≈130 个交易日 —— 同时覆盖 MA20（20 行）、探测器（61 行）
@@ -139,6 +164,50 @@ LIST_LIMIT = 200
 #: 三态（spec §S9.1）：``open`` 未到期 / ``due`` 到期待复盘 / ``reviewed`` 已复盘。
 #: 状态**不落库**（由 ``due_on`` 与 reviews 行派生），避免"两处状态漂移"。
 STATUSES: tuple[str, ...] = ("open", "due", "reviewed")
+
+# ── spec §S9.7.2 净成本（本模块是决策日志口径的唯一常量登记处） ─────────────
+#
+# 为什么需要一个成本常量：毛收益会让所有统计虚高（outcome/bench/excess 都是"毛"的）。
+# 12bp 的构成（**2026-10-19 定的保守估计**，不是精确逐笔费用）：
+#
+# ==========  ======  ==========================================================
+# 项目         bp      假设
+# ==========  ======  ==========================================================
+# 佣金（双边）  5       万 2.5 × 2 边（含最低 5 元佣金被摊平后的保守值）
+# 印花税（卖侧） 5      0.05%（2023-08-28 起减半后的现行税率）
+# 过户费+滑点   2       过户费 0.001%×2 边 + 被动成交滑点 ~0.2bp 的取整余量
+# ==========  ======  ==========================================================
+#
+# 不做（spec 明写 v2）：按持有天数分档的成本、税费身份差异、融资成本。
+#
+# **改动纪律**：改这个常量必须同时改 ①spec §S9.7.2 ②``JOURNAL_STATS_VERSION``
+# ③``tests/test_journal_s97.py`` 的钉死用例 —— 三者一起变，历史统计才不会
+# 被一个静默的常量改动整体改写口径（``tests/test_journal_s97.py`` 有红/绿对照：
+# 改常量 → 净口径逐值断言立刻变）。
+COST_ROUND_TRIP_BPS = 12
+#: 百分点形式的同一笔成本（= 0.12）。净口径一律由它推出，不在别处写字面量。
+COST_ROUND_TRIP_PCT = round(COST_ROUND_TRIP_BPS / 100.0, 4)
+#: **统计产物版本**（spec §S9.7.2 的"统计产物版本"）：净口径/基准/区间口径的版本戳。
+#: 改 ``COST_ROUND_TRIP_BPS``、``WILSON_Z`` 或基准口径时必须同时改这里（有钉死用例）。
+JOURNAL_STATS_VERSION = "s97.a1"
+
+# ── spec §S9.7.3 基准口径 ───────────────────────────────────────────────────
+#: 基准种类 ①：**所属申万一级成分股的等权平均收益**。诚实标注：这**不是**申万一级
+#: 指数行情（库里没有指数日线），是"成员股等权平均"，差异写进 ``bench_basis_note``。
+BENCH_KIND_INDUSTRY = "industry_equal_weight"
+#: 基准种类 ②：沪深300（``index_dailies`` 真实指数行情）
+BENCH_KIND_HS300 = "hs300"
+#: 人话文案（后端下发，前端不硬编码，避免两处措辞漂移）
+BENCH_NOTE_INDUSTRY = "基准=所属申万一级成分股等权平均收益（非指数行情）"
+BENCH_NOTE_FALLBACK = "基准=沪深300（无申万一级归属，已退化为市场基准）"
+BENCH_NOTE_MARKET = "基准=沪深300（市场级判断）"
+
+# ── spec §S9.7.7 区间估计 ───────────────────────────────────────────────────
+#: Wilson 95% 区间的 z 值（双侧 0.975 分位）。固定 1.96，不用 scipy（零新依赖）。
+WILSON_Z = 1.96
+#: 统计页固定标注（spec §S9.7.7 逐字，前端原样展示）：
+#: 按 45 个桶（S9.6 的 5×3×3）检索时，总会有桶看起来"显著"——我们**不做**多重比较校正。
+MULTIPLE_COMPARISON_NOTE = "未做多重比较校正：按 45 个桶检索时总会有桶看起来显著"
 
 
 # ── 异常：服务层不抛 HTTPException，语义由路由映射（404/409/422） ────────────
@@ -200,6 +269,91 @@ def entry_status(entry: DecisionJournalEntry, reviewed: bool, today: date) -> st
     return "due" if entry.due_on <= today else "open"
 
 
+def wilson_interval(successes: int, n: int, *, z: float = WILSON_Z) -> dict[str, Any] | None:
+    """Wilson 95% 区间（spec §S9.7.7）：**比例必须带区间**，``n = 0`` 时返回 ``None``。
+
+    为什么不用 ``p ± 1.96·sqrt(p(1-p)/n)``（Wald）：小样本 + p 接近 0/1 时 Wald 会给出
+    ``[1.0, 1.0]`` 这种"5/5 一定全对"的假精确；Wilson 的区间宽度随样本缩小而张开，
+    5/5 给的是 ``[0.58, 1.00]`` —— 那才是"5 次里 5 次对"能支撑的结论。
+
+    ``n = 0`` 返回 ``None``（不是 ``[0, 1]`` 也不是 ``[0, 0]``）：没有样本时任何区间
+    都是编造的，前端显示"样本不足"用 ``None`` 作判据。
+
+    返回值固定四个键（与契约 §4 ``share_ci`` 逐字一致）：
+    ``{"n", "successes", "ci_low", "ci_high"}``，比例保留 4 位、边界夹到 ``[0, 1]``。
+    """
+    if n <= 0:
+        return None
+    k = min(max(int(successes), 0), int(n))
+    p = k / n
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    center = (p + z2 / (2.0 * n)) / denom
+    # p(1-p) 用 k/n 计算；n=1 且 k=0/1 时 half 也不会退化为 0（Wilson 的关键性质）
+    half = z * sqrt(p * (1.0 - p) / n + z2 / (4.0 * n * n)) / denom
+    return {
+        "n": int(n),
+        "successes": k,
+        "ci_low": round(max(0.0, center - half), 4),
+        "ci_high": round(min(1.0, center + half), 4),
+    }
+
+
+# ── §S9.7.3 基准口径（创建时固化进快照，评估时按快照选基准） ────────────────
+
+
+def bench_spec(
+    *, symbol: str | None, bet_type: str, sector: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """算一条判断的 ``bench_spec``（spec §S9.7.3 的三种 ``bet_type``）。
+
+    ============  ==========================================  ====================
+    ``bet_type``  基准                                        ``fallback``
+    ============  ==========================================  ====================
+    ``direction`` 所属申万一级成分股等权平均（无行业 → 沪深300）  有行业时 ``False``
+    ``relative``  同上（赌的是跑赢同行）                        同上
+    ``market``    沪深300（**指定的**基准，不是退化）            恒为 ``False``
+    ============  ==========================================  ====================
+
+    ``fallback = True`` 只表示一件事：**本来要行业基准，但拿不到行业归属，退化到了
+    沪深300**。它是"诚实标注"的一部分——用户看统计时会知道这条的基准不是他选的那个。
+    """
+    kind = bet_type if bet_type in BET_TYPES else "direction"
+    code: str | None = None
+    name: str | None = None
+    if symbol is not None and kind != "market" and isinstance(sector, dict):
+        raw_code = sector.get("code")
+        if raw_code:
+            code = str(raw_code)
+            name = str(sector.get("name") or raw_code)
+    if code is None:
+        return {
+            "bet_type": kind,
+            "kind": BENCH_KIND_HS300,
+            "industry_code": None,
+            "industry_name": None,
+            # 显式选了 market → 沪深300 就是他要的；否则是退化的
+            "fallback": kind != "market",
+        }
+    return {
+        "bet_type": kind,
+        "kind": BENCH_KIND_INDUSTRY,
+        "industry_code": code,
+        "industry_name": name,
+        "fallback": False,
+    }
+
+
+def bench_note(spec: dict[str, Any] | None) -> str:
+    """把 ``bench_spec`` 翻成一句人话（创建与评估共用同一函数，措辞不会漂移）。"""
+    spec = spec or {}
+    if spec.get("kind") == BENCH_KIND_INDUSTRY:
+        return BENCH_NOTE_INDUSTRY
+    if spec.get("bet_type") == "market":
+        return BENCH_NOTE_MARKET
+    return BENCH_NOTE_FALLBACK
+
+
 @dataclass(frozen=True)
 class JournalRow:
     """一条判断 + 它的复盘（``None`` = 还没复盘） + 派生状态。"""
@@ -226,6 +380,16 @@ def _empty_snapshot(symbol: str | None, as_of: date) -> dict[str, Any]:
         "sector_flow_state": None,
         "events": [],
         "valuation_pct": None,
+        # 基准口径（spec §S9.7.3）：创建时固化，事后不可改；默认值 = 市场级退化口径，
+        # 真正的 spec 在 ``build_snapshot`` 末尾按 bet_type + 行业归属算出来覆盖
+        "bench_spec": {
+            "bet_type": "direction",
+            "kind": BENCH_KIND_HS300,
+            "industry_code": None,
+            "industry_name": None,
+            "fallback": True,
+        },
+        "bench_basis_note": BENCH_NOTE_FALLBACK,
         "missing_reason": {},
     }
 
@@ -382,11 +546,21 @@ def _events(ctx: td.TriageContext, symbol: str) -> list[dict[str, str]]:
     return [{"detector": item.detector, "headline": item.headline} for item in items[:EVENT_LIMIT]]
 
 
-async def build_snapshot(db: AsyncSession, *, symbol: str | None, as_of: date) -> dict[str, Any]:
+async def build_snapshot(
+    db: AsyncSession,
+    *,
+    symbol: str | None,
+    as_of: date,
+    bet_type: str = "direction",
+) -> dict[str, Any]:
     """抓一次"当时的市场状态"（**只读 + ≤5 条查询**，spec §S9.3）。
 
     市场级判断（``symbol is None``）只有情绪一项可算：价格/均线/估值/板块都
     挂在标的身上 → 全部 ``null`` + ``missing_reason``，``events = []``。
+
+    ``bet_type``（spec §S9.7.3）只影响快照末尾的两个元数据键（``bench_spec`` /
+    ``bench_basis_note``），**不新增查询**：行业归属复用第 ③ 条已经取到的
+    ``sector_flow_state``，绝不为了基准再查一次库。
     """
     snap = _empty_snapshot(symbol, as_of)
     missing: dict[str, str] = snap["missing_reason"]
@@ -499,6 +673,14 @@ async def build_snapshot(db: AsyncSession, *, symbol: str | None, as_of: date) -
     if percentile is None:
         missing["sentiment_percentile"] = reason or "no_market_sentiment_row"
     snap["sentiment_percentile"] = percentile
+    # ★ spec §S9.7.3：基准口径在**创建时**固化（不查库：复用上面的行业状态）
+    spec = bench_spec(
+        symbol=symbol,
+        bet_type=bet_type,
+        sector=snap["sector_flow_state"] if isinstance(snap["sector_flow_state"], dict) else None,
+    )
+    snap["bench_spec"] = spec
+    snap["bench_basis_note"] = bench_note(spec)
     return snap
 
 
@@ -672,6 +854,7 @@ class _Plan:
     kind: str
     threshold: float | None
     sector_code: str | None
+    bet_type: str
 
 
 def _plan(entry: DecisionJournalEntry) -> _Plan:
@@ -691,6 +874,13 @@ def _plan(entry: DecisionJournalEntry) -> _Plan:
     sector = snapshot.get("sector_flow_state") or {}
     code = sector.get("code") if isinstance(sector, dict) else None
     price = snapshot.get("price")
+    # 基准口径优先读**快照里**的 bench_spec（创建时固化，历史行不会随代码变化而改口径）；
+    # 没有 bench_spec 的老行（s9.r1）退回列上的 bet_type（迁移给了默认 direction）。
+    spec = snapshot.get("bench_spec")
+    spec_bet = spec.get("bet_type") if isinstance(spec, dict) else None
+    bet_type = str(spec_bet or getattr(entry, "bet_type", None) or "direction")
+    if bet_type not in BET_TYPES:
+        bet_type = "direction"
     return _Plan(
         entry=entry,
         start_date=start_date,
@@ -698,6 +888,7 @@ def _plan(entry: DecisionJournalEntry) -> _Plan:
         kind=kind,
         threshold=threshold,
         sector_code=str(code) if code else None,
+        bet_type=bet_type,
     )
 
 
@@ -776,12 +967,38 @@ async def _sector_benches(db: AsyncSession, plans: Sequence[_Plan]) -> dict[int,
     return {int(row[0]): (None if row[1] is None else round(float(row[1]), 4)) for row in rows}
 
 
+@dataclass(frozen=True)
+class _Bench:
+    """一条判断实际用到的基准（**算完之后**的样子：值 + 退化标记 + 人话说明）。"""
+
+    pct: float | None
+    reason: str | None
+    fallback: bool
+    note: str
+
+
+def _index_bench(face: dict[str, Any], *, fallback: bool) -> _Bench:
+    """沪深300 基准：用 ``index_dailies`` 的起止收盘（真实指数行情）。"""
+    start_close = face.get("start_close")
+    end_close = face.get("end_close")
+    pct = (
+        None
+        if start_close is None or end_close is None
+        else _pct(float(end_close), float(start_close))
+    )
+    return _Bench(
+        pct=pct,
+        reason=None if pct is not None else "index_bench_unavailable",
+        fallback=fallback,
+        note=BENCH_NOTE_FALLBACK if fallback else BENCH_NOTE_MARKET,
+    )
+
+
 def _assemble(
     plan: _Plan,
     face: dict[str, Any],
     *,
-    bench_pct: float | None,
-    bench_reason: str | None,
+    bench: _Bench,
     market_level: bool,
     as_of: date | None,
 ) -> dict[str, Any]:
@@ -795,7 +1012,13 @@ def _assemble(
         "outcome_pct": None,
         "bench_pct": None,
         "excess_pct": None,
+        # ★ spec §S9.7.2 净口径（毛 − 12bp 往返成本）；既有字段类型一个都不变
+        "net_outcome_pct": None,
+        "net_excess_pct": None,
         "invalidation_hit": None,
+        # ★ spec §S9.7.3：基准到底是什么（人话 + 是否退化），与 bench_pct 同时下发
+        "bench_basis_note": bench.note,
+        "bench_fallback": bench.fallback,
         "missing_reason": {},
     }
     missing: dict[str, str] = result["missing_reason"]
@@ -803,18 +1026,12 @@ def _assemble(
 
     if market_level:
         # 市场级：outcome 与 bench 都用沪深300（"市场有没有按我说的走"）
-        start_close = face.get("start_close")
-        pct = (
-            None
-            if start_close is None or end_close is None
-            else _pct(float(end_close), float(start_close))
-        )
-        if pct is None:
-            missing["outcome_pct"] = "index_bench_unavailable"
-            missing["bench_pct"] = "index_bench_unavailable"
+        if bench.pct is None:
+            missing["outcome_pct"] = bench.reason or "index_bench_unavailable"
+            missing["bench_pct"] = bench.reason or "index_bench_unavailable"
         else:
-            result["outcome_pct"] = pct
-            result["bench_pct"] = pct
+            result["outcome_pct"] = bench.pct
+            result["bench_pct"] = bench.pct
     else:
         if plan.start_price is None:
             missing["outcome_pct"] = "snapshot_price_missing"
@@ -826,10 +1043,10 @@ def _assemble(
                 missing["outcome_pct"] = "start_price_is_zero"
             else:
                 result["outcome_pct"] = pct
-        if bench_pct is None:
-            missing["bench_pct"] = bench_reason or "bench_unavailable"
+        if bench.pct is None:
+            missing["bench_pct"] = bench.reason or "bench_unavailable"
         else:
-            result["bench_pct"] = bench_pct
+            result["bench_pct"] = bench.pct
 
     if plan.kind == "date_only":
         result["invalidation_hit"] = (as_of or today_sh()) >= entry.due_on
@@ -845,8 +1062,22 @@ def _assemble(
     else:
         missing["invalidation_hit"] = "invalidation_kind_unknown"
 
-    if result["outcome_pct"] is not None and result["bench_pct"] is not None:
-        result["excess_pct"] = round(result["outcome_pct"] - result["bench_pct"], 4)
+    gross_outcome = result["outcome_pct"]
+    bench_pct = result["bench_pct"]
+    if gross_outcome is not None and bench_pct is not None:
+        result["excess_pct"] = round(gross_outcome - bench_pct, 4)
+
+    # 净口径 = 毛口径 − 12bp（spec §S9.7.2）。缺数时**不补 0**：null + 同一原因
+    if gross_outcome is not None:
+        result["net_outcome_pct"] = round(gross_outcome - COST_ROUND_TRIP_PCT, 4)
+    else:
+        missing["net_outcome_pct"] = missing.get("outcome_pct") or "outcome_pct_unavailable"
+    if result["net_outcome_pct"] is not None and bench_pct is not None:
+        result["net_excess_pct"] = round(result["net_outcome_pct"] - bench_pct, 4)
+    else:
+        missing["net_excess_pct"] = (
+            missing.get("net_outcome_pct") or missing.get("bench_pct") or "net_excess_unavailable"
+        )
     return result
 
 
@@ -860,45 +1091,71 @@ async def evaluate_entries(
 
     PIT：起始价**只**取 ``snapshot["price"]``（市场级取沪深300 在快照日的收盘）；
     区间统计严格取 ``(快照日, due_on]``，不使用快照日及之前的数据。
+
+    基准（spec §S9.7.3）按 ``bet_type`` 选，**查询数仍然是 3 条封顶**：
+
+    ==========================  ================================================
+    谁需要                     查什么
+    ==========================  ================================================
+    有 symbol 的判断           标的的期末行情/区间极值（一条批 LATERAL）
+    要行业基准的判断           申万一级成员等权平均（一条批 LATERAL）
+    要沪深300 的判断            指数起止收盘（一条批 LATERAL，三种情形合并）
+    ==========================  ================================================
     """
     plans = [_plan(entry) for entry in entries]
     if not plans:
         return {}
     symbol_plans = [plan for plan in plans if plan.entry.symbol]
     market_plans = [plan for plan in plans if not plan.entry.symbol]
+    # 显式 market 赌注：outcome 看标的、bench 看沪深300
+    market_bet_plans = [plan for plan in symbol_plans if plan.bet_type == "market"]
+    # 要行业基准的：标的存在 + 不是 market 赌注 + 快照里有申万一级归属
+    industry_plans = [
+        plan for plan in symbol_plans if plan.bet_type != "market" and plan.sector_code
+    ]
+    # 无论有没有行业归属都可能退化：没有行业的直接进沪深300 名单
+    no_sector_plans = [
+        plan for plan in symbol_plans if plan.bet_type != "market" and not plan.sector_code
+    ]
 
     faces = await _symbol_faces(db, symbol_plans)
-    faces.update(await _index_faces(db, market_plans, code=HS300_TS_CODE))
-    sector_benches = await _sector_benches(db, [plan for plan in symbol_plans if plan.sector_code])
-    # 没有申万归属（或行业基准缺数）→ 退化为沪深300（spec §S9.4）
-    fallback = [plan for plan in symbol_plans if sector_benches.get(int(plan.entry.id)) is None]
-    index_faces = await _index_faces(db, fallback, code=HS300_TS_CODE)
+    sector_benches = await _sector_benches(db, industry_plans)
+    # 没有申万归属**或**该行业的等权平均缺数 → 退化为沪深300（spec §S9.4/§S9.7.3）
+    fallback_plans = [
+        plan for plan in industry_plans if sector_benches.get(int(plan.entry.id)) is None
+    ]
+    index_faces = await _index_faces(
+        db,
+        [*market_plans, *market_bet_plans, *fallback_plans, *no_sector_plans],
+        code=HS300_TS_CODE,
+    )
 
     results: dict[int, dict[str, Any]] = {}
     for plan in plans:
         entry_id = int(plan.entry.id)
-        face = faces.get(entry_id) or _face_from_row(None)
         market_level = not plan.entry.symbol
         if market_level:
-            bench_pct, bench_reason = None, None
-        elif sector_benches.get(entry_id) is not None:
-            bench_pct, bench_reason = sector_benches[entry_id], None
+            face = index_faces.get(entry_id) or _face_from_row(None)
+            bench = _index_bench(face, fallback=plan.bet_type != "market")
         else:
-            index_face = index_faces.get(entry_id) or _face_from_row(None)
-            start_close = index_face.get("start_close")
-            end_close = index_face.get("end_close")
-            if start_close is None or end_close is None:
-                bench_pct, bench_reason = None, "index_bench_unavailable"
+            face = faces.get(entry_id) or _face_from_row(None)
+            if plan.bet_type == "market":
+                bench = _index_bench(
+                    index_faces.get(entry_id) or _face_from_row(None), fallback=False
+                )
+            elif sector_benches.get(entry_id) is not None:
+                bench = _Bench(
+                    pct=sector_benches[entry_id],
+                    reason=None,
+                    fallback=False,
+                    note=BENCH_NOTE_INDUSTRY,
+                )
             else:
-                bench_pct = _pct(float(end_close), float(start_close))
-                bench_reason = None
+                bench = _index_bench(
+                    index_faces.get(entry_id) or _face_from_row(None), fallback=True
+                )
         results[entry_id] = _assemble(
-            plan,
-            face,
-            bench_pct=bench_pct,
-            bench_reason=bench_reason,
-            market_level=market_level,
-            as_of=as_of,
+            plan, face, bench=bench, market_level=market_level, as_of=as_of
         )
     return results
 
@@ -950,17 +1207,22 @@ async def create_entry(
     """写入一条判断（快照在**创建时**抓，``due_on`` 在**写入时**固化）。
 
     ``payload`` 是 ``app/schemas/journal.py`` 的 ``JournalEntryCreate``，字段：
-    ``symbol/kind/thesis/invalidation/horizon_days``。``invalidation`` 的 DB 形状
-    由 schema 的 ``to_json()`` 产出（``{"kind":..., "value":...}``）。
+    ``symbol/kind/bet_type/thesis/invalidation/horizon_days``。``invalidation`` 的 DB
+    形状由 schema 的 ``to_json()`` 产出（``{"kind":..., "value":...}``）。
+
+    ``bet_type``（spec §S9.7.3）同时落**列**（聚合用）与``snapshot.bench_spec``
+    （不可变口径，评估时以它为准）：一处是查询用的结构，一处是"当时怎么定的"证据。
     """
     uid = _to_uuid(user_id)
     created_at = now or datetime.now(_SH)
     as_of = created_at.date()
-    snapshot = await build_snapshot(db, symbol=payload.symbol, as_of=as_of)
+    bet_type = payload.bet_type
+    snapshot = await build_snapshot(db, symbol=payload.symbol, as_of=as_of, bet_type=bet_type)
     entry = DecisionJournalEntry(
         user_id=uid,
         symbol=payload.symbol,
         kind=payload.kind,
+        bet_type=bet_type,
         thesis=payload.thesis,
         invalidation=payload.invalidation.to_json(),
         horizon_days=payload.horizon_days,
@@ -1116,22 +1378,46 @@ async def review_entry(
 
 
 async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
-    """统计（spec §S9.4）：``by_verdict`` / ``by_attribution`` 合计都等于 ``reviewed_n``。
+    """统计（spec §S9.4 + §S9.7.2/§S9.7.6/§S9.7.7）：**两条聚合查询封顶**。
+
+    自洽约束（每一句都被 ``tests/test_journal_*.py`` 钉死）：
+
+    - ``by_verdict`` / ``by_attribution`` 合计 = ``reviewed_n``；
+    - ``by_kind`` 合计 = ``n``（spec §S9.7.6：``pass`` 计入**判断**统计）；
+    - ``avg_excess_pct`` / ``avg_net_excess_pct`` **排除 ``kind=pass``**（spec §S9.7.6：
+      放弃的判断没有收益，把它算进平均会把"没做"混进"做了"的收益）；
+    - ``discipline_break_share`` 在 ``reviewed_n < 5`` 时为 ``null``（不是 0）；
+    - 比例一律同时给 Wilson 95% 区间（``share_ci``，``n=0`` 时为 ``None``）。
 
     为什么两个名字给**同一组计数**：spec 的验收判据是"``by_attribution`` 合计 =
     ``reviewed_n``（算术自洽）"，而前端类型（``JournalStats.by_verdict``）要的是
     "五枚举 → 条数"的纯数字映射（占比由前端用 ``count / reviewed_n`` 自己算）。
     两处都必须是**数值**，不能是 ``{n, share}`` 对象——否则前端把对象当子节点渲染会崩。
 
-    ``discipline_break_share`` 在 ``reviewed_n < 5`` 时为 ``null``——不是 0
-    （0 意味着"样本足够且没人破纪律"）。
+    ``stats`` 的**产物版本**是 :data:`JOURNAL_STATS_VERSION`（口径常量一变必须一起 bump）。
+
+    查询设计（反 N+1 的延伸：与用户条数无关）：
+
+    ① 一条聚合拿齐 ``n / reviewed_n`` + 五个 ``by_kind`` 计数 + ``win`` 成功数
+       （``FILTER`` 子句比五次往返便宜，且保持 1 条）；
+    ② 一条聚合按 ``(verdict, kind)`` 分组拿 ``count`` 与 ``avg(excess_pct)``，
+       verdict 分栏与"排除 pass 的收益均值"都从它推导。
     """
     uid = _to_uuid(user_id)
+    # 净超额的"赢"判据：excess_pct - 12bp > 0（与 COST_ROUND_TRIP_PCT 同一个常量）
+    cost = Decimal(str(COST_ROUND_TRIP_PCT))
     total_row = (
         await db.execute(
             select(
                 func.count(DecisionJournalEntry.id),
                 func.count(DecisionJournalReview.id),
+                *(
+                    func.count(DecisionJournalEntry.id).filter(DecisionJournalEntry.kind == kind)
+                    for kind in ENTRY_KINDS
+                ),
+                func.count(DecisionJournalReview.id).filter(
+                    DecisionJournalReview.excess_pct > cost
+                ),
             )
             .select_from(DecisionJournalEntry)
             .outerjoin(
@@ -1143,44 +1429,62 @@ async def stats(db: AsyncSession, user_id: uuid.UUID | str) -> dict[str, Any]:
     ).one()
     n = int(total_row[0] or 0)
     reviewed_n = int(total_row[1] or 0)
+    by_kind = {kind: int(total_row[2 + index] or 0) for index, kind in enumerate(ENTRY_KINDS)}
+    win_n = int(total_row[2 + len(ENTRY_KINDS)] or 0)
 
     grouped = (
         await db.execute(
             select(
                 DecisionJournalReview.verdict,
+                DecisionJournalEntry.kind,
                 func.count(DecisionJournalReview.id),
                 func.avg(DecisionJournalReview.excess_pct),
             )
             .join(DecisionJournalEntry, DecisionJournalEntry.id == DecisionJournalReview.entry_id)
             .where(DecisionJournalEntry.user_id == uid)
-            .group_by(DecisionJournalReview.verdict)
+            .group_by(DecisionJournalReview.verdict, DecisionJournalEntry.kind)
         )
     ).all()
     counts: dict[str, int] = {verdict: 0 for verdict in VERDICTS}
-    avg_excess: dict[str, float | None] = {verdict: None for verdict in VERDICTS}
-    for verdict, count, avg in grouped:
+    #: 收益口径的样本：``pass`` 是"我决定不动"，没有收益可算（spec §S9.7.6）
+    revenue_n = 0
+    revenue_sum = 0.0
+    for verdict, kind, count, avg in grouped:
         key = str(verdict)
-        counts[key] = counts.get(key, 0) + int(count or 0)
-        avg_excess[key] = None if avg is None else round(float(avg), 4)
+        group_n = int(count or 0)
+        counts[key] = counts.get(key, 0) + group_n
+        if str(kind) == "pass":
+            continue
+        revenue_n += group_n
+        if avg is not None:
+            # 先按组四舍五入再乘条数：与"逐条求和"在 1e-4 内一致，且不丢精度口径
+            revenue_sum += round(float(avg), 4) * group_n
 
     share_available = reviewed_n >= MIN_REVIEWED_FOR_SHARE
-    # 总平均超额 = Σ(每类平均 × 该类条数) / reviewed_n（避免再发一条 SQL）
-    weighted: list[float] = []
-    for verdict in VERDICTS:
-        avg = avg_excess[verdict]
-        if avg is not None and counts[verdict] > 0:
-            weighted.append(avg * counts[verdict])
-    avg_overall = round(sum(weighted) / reviewed_n, 4) if weighted and reviewed_n else None
+    gross_avg = revenue_sum / revenue_n if revenue_n else None
     return {
         "n": n,
         "reviewed_n": reviewed_n,
         "pending_n": n - reviewed_n,
         "by_verdict": dict(counts),
         "by_attribution": dict(counts),
-        "avg_excess_pct": avg_overall,
+        # ★ 净口径是默认口径（spec §S9.7.2）：毛口径只在这里出现一次，供"口径说明"用
+        "avg_excess_pct": None if gross_avg is None else round(gross_avg, 4),
+        "avg_net_excess_pct": (
+            None if gross_avg is None else round(gross_avg - COST_ROUND_TRIP_PCT, 4)
+        ),
         "discipline_break_share": (
             round(counts["discipline_break"] / reviewed_n, 4) if share_available else None
         ),
         "min_reviewed_for_share": MIN_REVIEWED_FOR_SHARE,
         "sample_sufficient": share_available,
+        # ★ spec §S9.7.6 选择偏差：pass 在判断统计里有独立分栏
+        "by_kind": by_kind,
+        # ★ spec §S9.7.7：比例必须带区间（n=0 → None，不是 [0,1]）
+        "share_ci": {
+            "discipline_break": wilson_interval(counts["discipline_break"], reviewed_n),
+            "win": wilson_interval(win_n, reviewed_n),
+        },
+        "net_cost_bps": COST_ROUND_TRIP_BPS,
+        "multiple_comparison_note": MULTIPLE_COMPARISON_NOTE,
     }

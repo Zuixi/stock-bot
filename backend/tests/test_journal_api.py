@@ -296,6 +296,13 @@ async def test_create_returns_201_with_persisted_snapshot(
     assert snapshot["price"] == 100.0
     assert snapshot["quote_as_of"] == SNAPSHOT_DAY.isoformat()
     assert "missing_reason" in snapshot
+    # ★ spec §S9.7.3：bet_type 缺省 direction，基准口径**创建时**落进快照；
+    # 该标的没有申万归属 → 退化为沪深300 且诚实标注 fallback（不是假装行业基准）
+    assert body["bet_type"] == "direction"
+    assert snapshot["bench_spec"]["bet_type"] == "direction"
+    assert snapshot["bench_spec"]["kind"] == svc.BENCH_KIND_HS300
+    assert snapshot["bench_spec"]["fallback"] is True
+    assert snapshot["bench_basis_note"] == svc.BENCH_NOTE_FALLBACK
     # 列表/创建响应自带"快照摘要（1 行）"（spec §S9.1；前端优先用它，缺省才自己拼）
     assert body["snapshot_summary"].startswith("价格 100.00 元")
     # 列表立刻能看到（open）
@@ -322,6 +329,7 @@ async def test_create_returns_201_with_persisted_snapshot(
         {"invalidation": {"kind": "price_below", "value": -1}},
         {"invalidation": {"kind": "someday", "value": "2026-12-31"}},
         {"kind": "hunch"},
+        {"bet_type": "hunch"},
         {"symbol": "X" * 17},
     ],
 )
@@ -410,6 +418,12 @@ async def test_review_is_201_and_then_409(
     assert evaluation["outcome_pct"] == pytest.approx(10.0, abs=1e-4)
     assert evaluation["bench_pct"] == pytest.approx(1.0, abs=1e-4)  # 沪深300 4000→4040
     assert evaluation["excess_pct"] == pytest.approx(9.0, abs=1e-4)
+    # ★ spec §S9.7.2：净口径随 evaluation 一起下发（毛 − 12bp，逐值可核）
+    assert evaluation["net_outcome_pct"] == pytest.approx(9.88, abs=1e-4)
+    assert evaluation["net_excess_pct"] == pytest.approx(8.88, abs=1e-4)
+    # ★ spec §S9.7.3：基准是沪深300（无行业 → fallback），文案由后端下发
+    assert evaluation["bench_fallback"] is True
+    assert evaluation["bench_basis_note"] == svc.BENCH_NOTE_FALLBACK
     assert detail["status"] == "due"
 
     first = await _post(
@@ -502,6 +516,12 @@ async def test_stats_shape_and_sample_gate(
         "reviewed_n",
         "by_verdict",
         "by_attribution",
+        # ★ Phase A（spec §S9.7.6/§S9.7.2/§S9.7.7）
+        "by_kind",
+        "avg_net_excess_pct",
+        "share_ci",
+        "net_cost_bps",
+        "multiple_comparison_note",
         "avg_excess_pct",
         "discipline_break_share",
     }
@@ -515,3 +535,14 @@ async def test_stats_shape_and_sample_gate(
     assert stats["sample_sufficient"] is False
     assert stats["discipline_break_share"] is None
     assert set(stats["by_verdict"]) >= set(svc.VERDICTS)
+    # ★ pass 分栏在（合计 = n），净口径与成本常量在（一条 watch：excess 9.0 → 净 8.88）
+    assert stats["by_kind"] == {"watch": 1, "buy": 0, "sell": 0, "pass": 0, "hold": 0}
+    assert sum(stats["by_kind"].values()) == stats["n"]
+    assert stats["avg_excess_pct"] == pytest.approx(9.0, abs=1e-4)
+    assert stats["avg_net_excess_pct"] == pytest.approx(8.88, abs=1e-4)
+    assert stats["net_cost_bps"] == 12
+    assert stats["multiple_comparison_note"] == svc.MULTIPLE_COMPARISON_NOTE
+    # ★ 比例带区间（n=1 → 区间很宽，但绝不是 [1,1]）
+    assert stats["share_ci"]["win"]["n"] == 1
+    assert stats["share_ci"]["win"]["successes"] == 1
+    assert stats["share_ci"]["win"]["ci_low"] == pytest.approx(0.2065, abs=1e-4)

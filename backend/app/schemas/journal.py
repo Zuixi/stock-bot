@@ -23,6 +23,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 #: 逐字一致（一致性由 ``tests/test_journal_api.py`` 对拍）。
 JournalKind = Literal["watch", "buy", "sell", "pass", "hold"]
 HorizonDays = Literal[7, 30, 90]
+#: 赌的是什么（spec §S9.7.3）：决定基准口径，创建时选定、事后不可改。
+#: 与 ``app/models/journal.py`` 的 ``BET_TYPES`` 逐字一致（测试对拍）。
+BetType = Literal["direction", "relative", "market"]
 Verdict = Literal[
     "thesis_wrong",
     "timing_wrong",
@@ -63,8 +66,10 @@ class JournalEntryCreate(BaseModel):
 
     #: 留空 = 市场级判断（结果基准退化为沪深300）
     symbol: str | None = Field(default=None, max_length=16)
-    #: 只作归档标签，**不参与任何计算**
+    #: 只作归档标签（``pass`` = "我决定不动"：计入判断统计、不计入收益统计）
     kind: JournalKind = "watch"
+    #: 赌的是什么（spec §S9.7.3）：``direction`` 默认；``market`` = 市场级判断（基准沪深300）
+    bet_type: BetType = "direction"
     thesis: str = Field(min_length=1, max_length=200)
     invalidation: Invalidation
     horizon_days: HorizonDays
@@ -101,14 +106,28 @@ class JournalReviewOut(BaseModel):
 
 
 class JournalEvaluationOut(BaseModel):
-    """到期自动结果（**不写库**）：缺数时为 ``None`` 并在 ``missing_reason`` 说明原因。"""
+    """到期自动结果（**不写库**）：缺数时为 ``None`` 并在 ``missing_reason`` 说明原因。
+
+    Phase A（spec §S9.7.2/§S9.7.3）**只加字段**：
+
+    - ``net_outcome_pct`` = ``outcome_pct - 0.12``（12bp 往返成本，净口径默认展示）；
+    - ``net_excess_pct`` = ``net_outcome_pct - bench_pct``；
+    - ``bench_basis_note``：基准到底是什么（**人话**，后端下发，前端不硬编码）；
+    - ``bench_fallback``：``True`` = 本来要行业基准但拿不到行业，已退化到沪深300。
+    """
 
     due_on: date
     price_as_of: date
     outcome_pct: float | None = None
     bench_pct: float | None = None
     excess_pct: float | None = None
+    #: ★ spec §S9.7.2：净口径（毛 − 12bp）。既有字段类型一个都没动
+    net_outcome_pct: float | None = None
+    net_excess_pct: float | None = None
     invalidation_hit: bool | None = None
+    #: ★ spec §S9.7.3：基准的人话说明 + 是否退化（``bench_pct`` 的口径附注）
+    bench_basis_note: str = ""
+    bench_fallback: bool = False
     missing_reason: dict[str, str] = Field(default_factory=dict)
 
 
@@ -118,6 +137,8 @@ class JournalEntryOut(BaseModel):
     id: int
     symbol: str | None
     kind: str
+    #: ★ spec §S9.7.3：``direction`` / ``relative`` / ``market``（同时也在 snapshot.bench_spec）
+    bet_type: str = "direction"
     thesis: str
     invalidation: dict[str, Any]
     horizon_days: int
@@ -144,8 +165,28 @@ class JournalListOut(BaseModel):
     disclaimer: str
 
 
+class WilsonIntervalOut(BaseModel):
+    """一个比例的 **Wilson 95% 区间**（spec §S9.7.7）：点估计永远和区间一起出现。
+
+    ``n = 0`` 时服务层返回 ``None``（整个对象缺省），不是 ``successes=0`` 的零区间。
+    """
+
+    n: int
+    successes: int
+    ci_low: float
+    ci_high: float
+
+
 class JournalStatsOut(BaseModel):
-    """统计（spec §S9.4）：``by_attribution`` 合计恒等于 ``reviewed_n``。"""
+    """统计（spec §S9.4）：``by_attribution`` 合计恒等于 ``reviewed_n``。
+
+    Phase A 新增（**既有字段类型一律不变**）：
+
+    - ``by_kind``：五个 ``kind`` 各自的条数（合计 = ``n``；``pass`` 在这里有独立分栏）；
+    - ``avg_net_excess_pct``：**净口径**平均超额（毛 − 12bp，且**排除 pass**）；
+    - ``share_ci``：``discipline_break`` 与 ``win`` 两个比例的 Wilson 95% 区间；
+    - ``net_cost_bps`` / ``multiple_comparison_note``：口径常量，前端原样展示。
+    """
 
     n: int
     reviewed_n: int
@@ -154,8 +195,19 @@ class JournalStatsOut(BaseModel):
     by_verdict: dict[str, int]
     #: 同一组计数的另一个名字（spec 的"合计 = reviewed_n"断言用它）
     by_attribution: dict[str, int]
+    #: ★ ``kind`` 五枚举 → 条数（合计 = ``n``，spec §S9.7.6）
+    by_kind: dict[str, int] = Field(default_factory=dict)
+    #: 毛口径平均超额（排除 ``pass``）。默认展示用 ``avg_net_excess_pct``
     avg_excess_pct: float | None = None
+    #: ★ 净口径平均超额（= 毛 − 12bp，排除 ``pass``）
+    avg_net_excess_pct: float | None = None
     #: ``reviewed_n < 5`` 时为 ``None``（**不是 0**：0 意味着"样本够且没人破纪律"）
     discipline_break_share: float | None = None
     min_reviewed_for_share: int
     sample_sufficient: bool
+    #: ★ 比例 → Wilson 95% 区间（``n = 0`` 时为 ``None``）
+    share_ci: dict[str, WilsonIntervalOut | None] = Field(default_factory=dict)
+    #: ★ 单边往返成本 bps（前端文案「已扣 12bp 往返成本」用它，不写死 12）
+    net_cost_bps: int = 0
+    #: ★ 固定标注（spec §S9.7.7 逐字）：未做多重比较校正
+    multiple_comparison_note: str = ""

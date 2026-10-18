@@ -30,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.models.journal import (
+    BET_TYPES,
     ENTRY_KINDS,
     HORIZON_CHOICES,
     VERDICTS,
@@ -110,6 +111,8 @@ def test_orm_matches_migration_table_names() -> None:
         "ck_journal_horizon",
         "ck_journal_invalidation_keys",
         "ck_journal_kind",
+        # ★ spec §S9.7.3：bet_type 三枚举（迁移 a7d3e9f1b2c4 加列时同时加）
+        "ck_journal_bet_type",
     } <= entry_checks
     review_checks = {
         constraint.name
@@ -124,6 +127,8 @@ def test_enums_are_single_source() -> None:
     """三枚举只在这一处定义；schema/服务/迁移都引用它（漂移 = 库里出现第五种值）。"""
     assert HORIZON_CHOICES == (7, 30, 90)
     assert ENTRY_KINDS == ("watch", "buy", "sell", "pass", "hold")
+    # ★ spec §S9.7.3：基准口径三枚举（schema 的 BetType 与它逐字一致）
+    assert BET_TYPES == ("direction", "relative", "market")
     assert VERDICTS == (
         "thesis_wrong",
         "timing_wrong",
@@ -212,6 +217,31 @@ async def test_kind_outside_choices_is_rejected() -> None:
 
     message = await _with_rollback(_go)
     assert "ck_journal_kind" in message
+
+
+@requires_pg
+async def test_bet_type_outside_choices_is_rejected() -> None:
+    """spec §S9.7.3：``bet_type`` 越界 → API 422，DB 也拒绝（库是最后一道闸）。"""
+
+    async def _go(session: AsyncSession) -> str:
+        return await _rejects(session, _entry(bet_type="hunch"))
+
+    message = await _with_rollback(_go)
+    assert "ck_journal_bet_type" in message
+
+
+@requires_pg
+async def test_bet_type_defaults_to_direction() -> None:
+    """冒烟：不传 ``bet_type`` 时由 ``server_default`` 回填 ``direction``（不是 NULL）。"""
+
+    async def _go(session: AsyncSession) -> str:
+        entry = _entry()
+        session.add(entry)
+        await session.flush()
+        await session.refresh(entry)
+        return entry.bet_type
+
+    assert await _with_rollback(_go) == "direction"
 
 
 @requires_pg

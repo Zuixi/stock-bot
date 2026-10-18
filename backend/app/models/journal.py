@@ -1,7 +1,9 @@
 """决策日志（spec §S9.2）：**两张表、append-only、创建后不可篡改**。
 
 - ``decision_journal_entries``：一次判断（3 行必填）+ **创建时固化的市场快照**
-  （``snapshot`` jsonb）+ **固化的到期日**（``due_on``，写入时算好，便于索引）。
+  （``snapshot`` jsonb，内含 ``bench_spec``：基准口径，spec §S9.7.3）+ **固化的到期日**
+  （``due_on``，写入时算好，便于索引）+ ``bet_type``（``direction|relative|market``，
+  决定基准，落成列而非只存 jsonb：聚合与过滤要能走索引/约束）。
 - ``decision_journal_reviews``：一次复盘（结果四数 + 五类归因），``unique(entry_id)``
   保证**一条判断只有一次复盘**——第二次写入报冲突，而不是静默覆盖。
 
@@ -48,8 +50,13 @@ from app.core.database import Base
 
 #: ``horizon_days`` 的三枚举（spec §S9.2）；与 ``app/schemas/journal.py`` 由测试对拍。
 HORIZON_CHOICES: tuple[int, ...] = (7, 30, 90)
-#: ``kind`` 的五枚举 —— **只作归档标签，不参与任何计算**（spec §S9.1）。
+#: ``kind`` 的五枚举（spec §S9.1）。Phase A 起 ``pass`` 是**一等公民**：
+#: 它**计入判断统计**（``stats.n`` / ``by_kind``）、**不计入收益统计**
+#: （``avg_excess_pct`` / ``avg_net_excess_pct``），见 ``journal_service.stats``。
 ENTRY_KINDS: tuple[str, ...] = ("watch", "buy", "sell", "pass", "hold")
+#: ``bet_type`` 的三枚举（spec §S9.7.3）：决定基准口径，创建时选定后**不可改**。
+#: 与 ``app/schemas/journal.py`` 的 ``BetType`` 由测试对拍。
+BET_TYPES: tuple[str, ...] = ("direction", "relative", "market")
 #: ``verdict`` 的五枚举（spec §S9.2）。``right_for_wrong_reason`` 单列：
 #: 避免"赚了就是对的"，让"运气"与"逻辑对但结论错"分开计。
 VERDICTS: tuple[str, ...] = (
@@ -71,6 +78,10 @@ _INVALIDATION_CHECK = CheckConstraint(
 _KIND_CHECK = CheckConstraint(
     "kind in ('watch','buy','sell','pass','hold')", name="ck_journal_kind"
 )
+#: spec §S9.7.3：``bet_type`` 越界由 API 422 拦（pydantic Literal），DB 再兜一道
+_BET_TYPE_CHECK = CheckConstraint(
+    "bet_type in ('direction','relative','market')", name="ck_journal_bet_type"
+)
 _VERDICT_CHECK = CheckConstraint(
     "verdict in ('thesis_wrong','timing_wrong','discipline_break','right_for_wrong_reason','luck')",
     name="ck_journal_verdict",
@@ -86,6 +97,7 @@ class DecisionJournalEntry(Base):
         _HORIZON_CHECK,
         _INVALIDATION_CHECK,
         _KIND_CHECK,
+        _BET_TYPE_CHECK,
         # "待复盘 N 条"与 `status=due` 列表都走这条：user_id + due_on
         Index("idx_journal_entries_user_due", "user_id", "due_on"),
         # 列表默认序（最近写的在前）；spec 要求 created_at 降序
@@ -97,6 +109,11 @@ class DecisionJournalEntry(Base):
     #: NULL = 市场级判断（结果基准退化为沪深300，见 ``journal_service.evaluate_entry``）
     symbol: Mapped[str | None] = mapped_column(String(16), nullable=True)
     kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default="watch")
+    #: 赌的是什么（spec §S9.7.3）：``direction``（默认）/ ``relative`` / ``market``。
+    #: 决定基准口径，创建时写入快照 ``bench_spec``，**事后不可改**。
+    bet_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="direction", default="direction"
+    )
     thesis: Mapped[str] = mapped_column(Text, nullable=False)
     invalidation: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     horizon_days: Mapped[int] = mapped_column(Integer, nullable=False)

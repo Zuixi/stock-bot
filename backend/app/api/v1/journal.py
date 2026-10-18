@@ -43,6 +43,8 @@ def _entry_out(row: svc.JournalRow, evaluation: dict | None = None) -> JournalEn
         id=entry.id,
         symbol=entry.symbol,
         kind=entry.kind,
+        # spec §S9.7.3：基准口径（同时也在 snapshot.bench_spec 里，这里给平铺的一份）
+        bet_type=entry.bet_type,
         thesis=entry.thesis,
         invalidation=entry.invalidation or {},
         horizon_days=entry.horizon_days,

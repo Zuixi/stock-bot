@@ -346,7 +346,7 @@ async def _count_queries(
 
 
 def test_snapshot_schema_is_fixed() -> None:
-    """快照的七个字段 + 五个元数据键逐字固定（多一个少一个都必须过这里和 spec）。"""
+    """快照的七个字段 + 七个元数据键逐字固定（多一个少一个都必须过这里和 spec）。"""
     assert svc.SNAPSHOT_FIELDS == (
         "price",
         "pct_chg",
@@ -362,8 +362,11 @@ def test_snapshot_schema_is_fixed() -> None:
         "quote_as_of",
         "symbol",
         "missing_reason",
+        # spec §S9.7.3（s9.r2）：基准口径在创建时固化
+        "bench_spec",
+        "bench_basis_note",
     )
-    assert svc.SNAPSHOT_VERSION == "s9.r1"
+    assert svc.SNAPSHOT_VERSION == "s9.r2"
 
 
 def test_snapshot_line_joins_only_the_fields_that_have_values() -> None:
