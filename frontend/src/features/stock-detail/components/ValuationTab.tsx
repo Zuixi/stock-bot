@@ -1,10 +1,10 @@
 import { Card, Row, Col, Segmented, Empty, Spin, Typography, Tooltip, Alert } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import ReactECharts from "echarts-for-react";
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchValuationHistory } from "@/shared/api/financial";
 import type { ValuationMetric, ValuationRange } from "@/shared/api/financial";
+import { EChart } from "@/shared/ui/EChart";
 import type { Exchange } from "@/shared/types";
 
 interface Props {
@@ -112,7 +112,10 @@ export function ValuationTab({ exchange, symbol }: Props) {
         {
           name: METRIC_LABELS[metric] ?? metric,
           type: "line" as const,
-          smooth: true,
+          // 日频估值序列不做平滑：插值会在交易日之间编造并不存在的过渡（同 P1-4 F12 口径）
+          smooth: false,
+          // 缺值（含后端给 null 的交易日）画成断口，不许跨空档连线（缺失 ≠ 0）
+          connectNulls: false,
           showSymbol: false,
           data: series,
         },
@@ -178,7 +181,8 @@ export function ValuationTab({ exchange, symbol }: Props) {
           </div>
         ) : data && series.length ? (
           <>
-            <ReactECharts option={option} style={{ height: 340 }} />
+            {/* 走统一封装：轴/图例色由 withChartTheme 按当前明暗模式注入（裸 ReactECharts 在暗色下不可读） */}
+            <EChart option={option} height={340} />
             {currentPct != null && (
               <Alert
                 type="info"
