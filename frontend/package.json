@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "test:e2e": "playwright test",
     "check:design": "node scripts/check-design-tokens.mjs && node scripts/check-no-raw-iso.mjs && node scripts/check-signal-diff.mjs",
-    "check:routes": "node scripts/check-routes.mjs"
+    "check:routes": "node scripts/check-routes.mjs",
+    "check:api-fields": "node scripts/check-api-fields.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",
