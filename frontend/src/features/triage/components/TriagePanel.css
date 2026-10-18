@@ -29,6 +29,147 @@
   --triage-background-tint: rgba(152, 163, 179, 0.16);
 }
 
+/* ── 顶部市场状态一行（S10 §S10.3）─────────────────────────
+ *
+ * 形态刻意做成"一行字 + 可展开"，而不是一张卡：它是**背景信息**（现在市场处在哪个阶段），
+ * 不是"今天你该做什么"。故字号/颜色都比体检卡片弱一档，展开区才升到正文色。
+ * 整行是一个 `<button>`（不是 `div + onClick`）：键盘可聚焦、读屏能读到 `aria-expanded`，
+ * 这行的全部价值就是"点开能看到更多"，不可键盘触达等于没有。 */
+.triage__regime {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-panel);
+}
+
+.triage__regime-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text-primary);
+}
+
+.triage__regime-summary {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.triage__regime-cue {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-decoration: underline dotted;
+}
+
+.triage__regime-toggle:hover .triage__regime-cue,
+.triage__regime-toggle:focus-visible .triage__regime-cue {
+  color: var(--text-primary);
+}
+
+.triage__regime-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.triage__regime-detail {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.triage__regime-current {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.triage__regime-section + .triage__regime-section {
+  margin-top: 10px;
+}
+
+.triage__regime-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* 五态各一行：flex 而不是等宽网格——网格会把 `冰点` 与它的 `5.0%` 拉开 250px，
+   读者要在两个数之间"找配对"；这里让"标签 + 数值"始终贴在一起，行间只留一点间隙。 */
+.triage__regime-rows {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 30px;
+}
+
+.triage__regime-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 92px;
+  font-size: 12.5px;
+  padding: 1px 0;
+}
+
+.triage__regime-row-label {
+  color: var(--text-secondary);
+}
+
+.triage__regime-row-value {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+/* 20 日分布三格：中位 / 最差 5% / 样本 */
+.triage__regime-cells {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+}
+
+.triage__regime-cell {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.triage__regime-cell-label {
+  color: var(--text-secondary);
+}
+
+.triage__regime-cell-value {
+  margin: 0;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.triage__regime-muted {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* 口径脚注：与「历史统计不代表未来表现」同一档（最小、次要色），但**必须**在 */
+.triage__regime-foot {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
 /* ── 顶部口径行：数据截至 · 平静只数 · 折叠条数 ─────────────── */
 .triage__meta {
   display: flex;

@@ -37,6 +37,10 @@ const { Text } = Typography;
  * 3b. **财报窗口**（深度优化契约 §4）：`earnings_in_window === true` 时在归因选择**上方**
  *    原样展示后端给的 `earnings_note`（"窗口内含 1 次财报披露…结果可能被财报事件主导"）。
  *    中性陈述，**不预选**任何归因、不因为"有财报"就替用户认定某类归因。
+ * 3c. **解禁窗口**（spec §S11.3）：与 3b **同构**——`unlock_in_window === true` 时同一位置、
+ *    同一样式展示 `unlock_note`（"窗口内含 1 次解禁…结果可能被解禁冲击主导"）。同样中性、
+ *    同样不预选归因；`false` / `null` 不渲染（有记录但不在窗口内 / 没有解禁记录都不是
+ *    "不会解禁"）。用词跟随后端：解禁 = 可流通，与减持是两件事，前端不改写。
  * 4. **用户选的**（必选）：五个归因之一。未选时「确认复盘」**禁用**（不是点了再报错）；
  *    归因是用户自己的，产品不替他分类，也不给倾向性结论。
  *
@@ -121,6 +125,13 @@ export function ReviewModal({ entry, onClose }: ReviewModalProps) {
   // 窗口内、`null`/缺省 = 该股没有财报数据（缺数据不猜，两种情况都**不**渲染）。
   const earningsNote =
     evaluation?.earnings_in_window === true ? (evaluation.earnings_note ?? "").trim() : "";
+
+  // 解禁窗口（spec §S11.3）：与财报窗口**同款位置、同样式、同一条三态判据**。只在后端明确
+  // `true` 时把 `unlock_note` 原样上屏；`false`（有记录但窗口内没有 ≥3% 的解禁）与
+  // `null`（该股没有任何解禁记录）都**不**渲染——缺数据不是"不会解禁"。
+  // 用词由后端下发（「解禁」= 可流通），前端不改写成"减持"：那是另一件事。
+  const unlockNote =
+    evaluation?.unlock_in_window === true ? (evaluation.unlock_note ?? "").trim() : "";
 
   // 净/毛口径：默认净；净字段缺省时回退毛（`basis = "gross"`）并明确标注。
   const outcome = netOutcomeOf(evaluation);
@@ -257,6 +268,15 @@ export function ReviewModal({ entry, onClose }: ReviewModalProps) {
           {earningsNote && (
             <p className="journal-review__earnings" data-testid="journal-earnings-note">
               {earningsNote}
+            </p>
+          )}
+
+          {/* 解禁窗口（spec §S11.3）：与财报提示同款位置、同样式（共用 CSS 规则）——
+              两件事都是"结果可能被事件主导"的中性事实，谁也不该比谁显眼。
+              仍**不预选**归因：有解禁 ≠ 一定归因到某类。 */}
+          {unlockNote && (
+            <p className="journal-review__earnings" data-testid="journal-unlock-note">
+              {unlockNote}
             </p>
           )}
 

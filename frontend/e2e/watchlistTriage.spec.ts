@@ -166,6 +166,27 @@ const RULES_FIXTURE = {
 // 下面这行必须**逐字**列出禁用词才有断言对象，故给它行级豁免（扫描器会打印豁免行，评审可见）
 const FORBIDDEN = ["买入", "卖出", "推荐", "看好", "建议关注", "目标价", "机会", "布局"]; // compliance-allow: 断言清单本身必须包含禁用词
 
+/**
+ * 市场状态一行（S10 §S10.3）的响应，**逐字照抄** spec 的 JSON 示例。
+ *
+ * 两个数刻意挑成"能证明没被补 0 / 没被取整"的形态：`median_pct: 0.8` 必须渲染成
+ * `+0.8%`（带正号、一位小数）、`p05_pct: -3.1` 必须带负号；`duration_days: 7` 对应
+ * 摘要里的「已 7 天」。`notes` 一并给上：它是契约字段，但**不上屏**（页面只写结论与口径）。
+ */
+const REGIME_FIXTURE = {
+  state: "修复",
+  since: "2026-10-08",
+  duration_days: 7,
+  transition: { 修复: 0.55, 亢奋: 0.2, 中性: 0.15, 冰点: 0.05, 退潮: 0.05 },
+  forward: {
+    "5d": { n: 37, median_pct: 0.8, p05_pct: -3.1 },
+    "20d": { n: 36, median_pct: 1.4, p05_pct: -6.2 },
+  },
+  notes: ["状态由固定规则判定，只描述已发生的事实", "每态样本 <30 不给分布"],
+  as_of: "2026-10-17",
+  version: "v1",
+};
+
 /** 登录态 + triage 读面（含规则说明）的最小完整 mock（见文件头"假登录"一节）。 */
 async function mockAuthedTriage(page: Page, payload: unknown) {
   await page.route("**/auth/session", (route) =>
@@ -181,6 +202,12 @@ async function mockAuthedTriage(page: Page, payload: unknown) {
   // 但一旦打开就必须有确定响应，否则会掉进真接口 401 → 全局清态的连锁（见文件头）。
   await page.route("**/api/v1/watchlists/triage/rules", (route) =>
     route.fulfill({ status: 200, json: RULES_FIXTURE })
+  );
+  // 顶部「市场状态一行」（S10 §S10.3）也是本页的读面：不 mock 就会打真接口，
+  // 断言会随当天真实状态漂移（写死"修复"就假红、只断言"存在"就假绿）。
+  // 需要 500 的用例在调用本函数**之后**再注册一条（Playwright 后注册的先命中）。
+  await page.route("**/api/v1/market/regime", (route) =>
+    route.fulfill({ status: 200, json: REGIME_FIXTURE })
   );
 }
 
@@ -409,6 +436,179 @@ test.describe("今日体检（/me?tab=triage）", () => {
     await expect(drawer).not.toContainText("超额中位");
     await expect(drawer).not.toContainText("%");
     await expect(drawer).not.toContainText("历史统计不代表未来表现");
+  });
+
+  /**
+   * 市场状态一行（S10，spec §S10.3）：`/me?tab=triage` **顶部**一行 + 点击展开。
+   *
+   * 逐字钉住 spec 给的形态 `市场状态：修复（已 7 天）｜历史同态 5 日中位 +0.8%（n=37）`，
+   * 以及展开后的两块内容：**转移比例五态各一行**（按 spec §S10.2 的判定次序，不按概率
+   * 重排）与 **20 日分布**（中位 / 最差 5% / n）。
+   *
+   * 三条负向判据同样重要：
+   * - **不预测**（§S10.5）：文案里不得出现"即将/预测/建议"这类前瞻/建议措辞；
+   * - **不出现机器串**：`forward` 的键是 `5d`/`20d`（后端 `dict[str, ...]`），它们是数据
+   *   键而不是文案，页面上一个都不许有；
+   * - **不给"未知"占位**：本用例证明的是"有数据时长什么样"，空态见下一条用例。
+   */
+  test("市场状态一行：摘要逐字可读，展开后能看到转移比例与 20 日分布", async ({ page }) => {
+    await mockAuthedTriage(page, FIXTURE);
+    await page.goto("/me?tab=triage");
+
+    const summary = page.getByTestId("regime-summary");
+    await expect(summary).toHaveText(
+      "市场状态：修复（已 7 天）｜历史同态 5 日中位 +0.8%（n=37）"
+    );
+
+    // 位置：面板**顶部**——在「数据截至」之前（比坐标稳）
+    const panelText = await page.locator(".triage").innerText();
+    const regimeAt = panelText.indexOf("市场状态");
+    const metaAt = panelText.indexOf("数据截至");
+    expect(regimeAt).toBeGreaterThan(-1);
+    expect(metaAt).toBeGreaterThan(-1);
+    expect(regimeAt).toBeLessThan(metaAt);
+
+    // 默认折叠：展开区不存在，`aria-expanded` 为 false（键盘/读屏可达）
+    await expect(page.getByTestId("regime-detail")).toHaveCount(0);
+    await expect(page.getByTestId("regime-toggle")).toHaveAttribute("aria-expanded", "false");
+
+    await page.getByTestId("regime-toggle").click();
+    await expect(page.getByTestId("regime-detail")).toBeVisible();
+    await expect(page.getByTestId("regime-toggle")).toHaveAttribute("aria-expanded", "true");
+
+    // 转移比例：五态各一行，次序 = spec §S10.2 的判定表
+    const rows = page.getByTestId("regime-transition-row");
+    await expect(rows).toHaveCount(5);
+    const order = ["冰点", "修复", "亢奋", "退潮", "中性"];
+    for (let i = 0; i < order.length; i += 1) {
+      await expect(rows.nth(i)).toContainText(order[i]);
+    }
+    // 概率是 0–1 → 百分数（`0.55` → `55.0%`，`0.05` → `5.0%`）
+    await expect(rows.nth(1)).toContainText("55.0%");
+    await expect(rows.nth(0)).toContainText("5.0%");
+    await expect(rows.nth(2)).toContainText("20.0%");
+
+    // 20 日分布：中位 / 最差 5% / n 三个都要在，且**保留符号**（正数 `+`、负数 `-`）
+    const forward = page.getByTestId("regime-forward-20d");
+    await expect(forward).toContainText("中位");
+    await expect(forward).toContainText("+1.4%");
+    await expect(forward).toContainText("最差 5%");
+    await expect(forward).toContainText("-6.2%");
+    await expect(forward).toContainText("n=36");
+
+    // 机器串不得上屏：horizon 键（`5d`/`20d`）与 ISO 日期都不许直出
+    const detail = page.getByTestId("regime-detail");
+    await expect(detail).not.toContainText("5d");
+    await expect(detail).not.toContainText("20d");
+    await expect(detail).not.toContainText(/T\d{2}:\d{2}/);
+
+    // §S10.5：不预测、不建议、不给"未知"占位。
+    // 作用域**只到这一行**：整块体检面板的免责原文里有「不构成投资建议」，
+    // 对全面板做子串判定会把那句合规原文误判成"前瞻措辞"（假红）。
+    const regimeText = await page.getByTestId("regime-line").innerText();
+    for (const word of ["即将", "预测", "建议", "未知"]) {
+      expect(regimeText, `市场状态一行出现禁用措辞：${word}`).not.toContain(word);
+    }
+  });
+
+  /**
+   * 市场状态接口失败（500）：**整行不渲染**，页面其余部分照常。
+   *
+   * 为什么"不渲染"比"显示未知"更难写对：很容易顺手写一个 `state ?? "未知"` 的占位，
+   * 于是"这次没读到"被读成"市场状态是未知"——那是一个不存在的判定结果。契约要的是
+   * "没有这一行"（spec §S10.3 + 后端 `state=null` 的空态设计）。
+   *
+   * 同时钉住一条**边界**：这条装饰性读面失败**不得**把用户踢下线。前端对它的 401/失败
+   * 做了"不清态"处理（`fetchRegime` 的 `skipAuth`），故 500 之后体检清单、免责原文、
+   * 复核入口必须一个不少地还在。
+   */
+  test("市场状态接口 500：整行不渲染（不留「未知」占位），页面其余部分正常", async ({ page }) => {
+    await mockAuthedTriage(page, FIXTURE);
+    // 后注册先命中：覆盖 mockAuthedTriage 里的 200
+    await page.route("**/api/v1/market/regime", (route) =>
+      route.fulfill({
+        status: 500,
+        json: { code: "INTERNAL_ERROR", message: "regime unavailable", trace_id: "e2e" },
+      })
+    );
+    await page.goto("/me?tab=triage");
+
+    await expect(page.getByTestId("regime-line")).toHaveCount(0);
+    await expect(page.getByTestId("regime-summary")).toHaveCount(0);
+    // 不留"未知"占位：面板里连"市场状态"四个字都不该出现
+    await expect(page.locator(".triage")).not.toContainText("市场状态");
+
+    // 页面其余部分照常：条目数 = 响应条目数、免责原文、每条都有复核入口
+    await expect(page.getByTestId("triage-item")).toHaveCount(FIXTURE.items.length);
+    await expect(page.locator(".triage__disclaimer")).toHaveText(FIXTURE.disclaimer);
+    await expect(page.getByRole("link", { name: "复核" })).toHaveCount(FIXTURE.items.length);
+    // 没有被踢去登录页（装饰性读面的失败不得触发全局清态）
+    await expect(page).toHaveURL(/\/me\?tab=triage/);
+    await expect(page.getByRole("tab", { name: /今日体检/ })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+  });
+
+  /**
+   * `state` 为空（产物缺失/损坏/落后 → 后端 `state=null`）：**整行不渲染**。
+   *
+   * 与上一条分工：500 是"没读到"，`state=null` 是"读到了、但结论是空"。两种都要隐身，
+   * 因为对用户来说"这里没有这一行"是唯一诚实的呈现——`state` 为空**不是**"中性"。
+   */
+  test("市场状态为空（产物缺失）：整行不渲染，也不写「中性/未知」", async ({ page }) => {
+    await mockAuthedTriage(page, FIXTURE);
+    await page.route("**/api/v1/market/regime", (route) =>
+      route.fulfill({
+        status: 200,
+        json: {
+          ...REGIME_FIXTURE,
+          state: null,
+          since: null,
+          duration_days: 0,
+          transition: {},
+          forward: {},
+          notes: ["状态产物尚未生成"],
+        },
+      })
+    );
+    await page.goto("/me?tab=triage");
+
+    await expect(page.getByTestId("regime-line")).toHaveCount(0);
+    const panelText = await page.locator(".triage").innerText();
+    expect(panelText).not.toContain("市场状态");
+    expect(panelText).not.toContain("中性");
+    expect(panelText).not.toContain("未知");
+    // 体检清单照常在
+    await expect(page.getByTestId("triage-item")).toHaveCount(FIXTURE.items.length);
+  });
+
+  /**
+   * 半截 payload（后端并行开发中 / 降级）：`{state}` 之外字段全缺省。
+   *
+   * 契约外的健壮性判据——一行字**不许**因为"缺 `forward`/`transition`"就把页面打崩
+   * （那是本末倒置），也**不许**把缺的样本补成 `0%`：五个去向逐行写 `—`，20 日分布写
+   * "暂无同态样本"。这是"`null` 与 0 必须区分"在本页的落点。
+   */
+  test("半截 payload（只有 state）：一行照常渲染，缺的样本写「—」而不是 0", async ({ page }) => {
+    await mockAuthedTriage(page, FIXTURE);
+    await page.route("**/api/v1/market/regime", (route) =>
+      route.fulfill({ status: 200, json: { state: "修复" } })
+    );
+    await page.goto("/me?tab=triage");
+
+    // 只有 state 可写：摘要就只写 state（不补"（已 0 天）"，也不编样本量）
+    await expect(page.getByTestId("regime-summary")).toHaveText("市场状态：修复");
+
+    await page.getByTestId("regime-toggle").click();
+    const rows = page.getByTestId("regime-transition-row");
+    await expect(rows).toHaveCount(5);
+    for (let i = 0; i < 5; i += 1) {
+      await expect(rows.nth(i)).toContainText("—");
+    }
+    // 没有样本 ≠ 样本是 0
+    await expect(page.getByTestId("regime-forward-missing")).toBeVisible();
+    await expect(page.getByTestId("regime-detail")).not.toContainText("0.0%");
   });
 
   test("防回归：/me?tab=watchlist 仍是自选清单", async ({ page }) => {

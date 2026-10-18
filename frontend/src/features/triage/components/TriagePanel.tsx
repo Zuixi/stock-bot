@@ -12,6 +12,7 @@ import {
   type TriageSeverity,
 } from "@/shared/api/triage";
 import { formatAsOfDate } from "@/shared/ui/date";
+import { RegimeLine } from "./RegimeLine";
 import "./TriagePanel.css";
 
 /**
@@ -34,6 +35,11 @@ import "./TriagePanel.css";
  * 它是**出处**，不是结论；想知道"这条规则怎么算、什么时候会算错、历史统计如何"，
  * 点「规则说明」进抽屉。抽屉内容全部来自后端（`GET /api/v1/watchlists/triage/rules`），
  * 前端不改写、不补算、不把 `stats=null` 显成 0（"没有样本"必须与"样本是 0"分开说）。
+ *
+ * **市场状态一行（S10，spec §S10.3）**：页面**最顶部**先给一行「当前市场状态 + 历史同态
+ * 5 日中位」（`RegimeLine`），点开是转移比例与 20 日分布。它是独立的读面（自己的请求、
+ * 自己的失败降级）：接口挂了或 `state` 为空就**整行不渲染**，既不影响下面的体检清单，
+ * 也不留"未知"占位（"这次没有这一行" ≠ "市场状态未知"）。`/market` 一概不动。
  */
 
 /** 百分比口径的统计值：**保留符号**（可为负），取不到时用 `—` 而不是 0。 */
@@ -302,7 +308,7 @@ function TriageView({ data }: { data: TriageResponse }) {
   const [ruleItem, setRuleItem] = useState<TriageItem | null>(null);
 
   return (
-    <div className="triage">
+    <>
       {hasData && (
         <div className="triage__meta">
           <span>数据截至 {formatAsOfDate(data.as_of)}</span>
@@ -356,11 +362,12 @@ function TriageView({ data }: { data: TriageResponse }) {
       {data.disclaimer && <p className="triage__disclaimer">{data.disclaimer}</p>}
 
       <TriageRuleDrawer item={ruleItem} onClose={() => setRuleItem(null)} />
-    </div>
+    </>
   );
 }
 
-export function TriagePanel() {
+/** 体检本体（triage 读面的加载/失败/内容三态）。 */
+function TriageBody() {
   const { data, isLoading, isError } = useQuery({
     queryKey: ["triage"],
     queryFn: fetchTriage,
@@ -385,4 +392,21 @@ export function TriagePanel() {
   }
 
   return <TriageView data={data} />;
+}
+
+/**
+ * `/me?tab=triage` 的根：**顶部一行市场状态**（S10 §S10.3）+ 体检本体。
+ *
+ * 为什么把 `RegimeLine` 提到三态之外（而不是塞进 `TriageView`）：
+ * 两者是**两个独立读面**——市场状态是背景信息，体检清单是"今天你的自选有没有事"。
+ * 体检还在加载、或体检接口挂了，都不该把这一行一起带走；反过来，这一行失败也
+ * 只影响它自己（`RegimeLine` 内部失败即隐身）。二者互不影响才是契约要的形状。
+ */
+export function TriagePanel() {
+  return (
+    <div className="triage">
+      <RegimeLine />
+      <TriageBody />
+    </div>
+  );
 }

@@ -163,6 +163,10 @@ interface FixtureEvaluation {
   earnings_in_window?: boolean | null;
   /** 深度优化契约 §1：财报窗口的人话说明（后端下发，页面原样展示）。 */
   earnings_note?: string | null;
+  /** spec §S11.3：窗口内是否有解禁（三态，与财报窗口同构；`null` = 该股没有解禁记录）。 */
+  unlock_in_window?: boolean | null;
+  /** spec §S11.3：解禁窗口的人话说明（后端下发，页面原样展示）。 */
+  unlock_note?: string | null;
   /** 深度优化契约 §3：结果未就绪的缺数原因（非空 → 复盘入口禁用）。 */
   missing_reason?: Record<string, string> | null;
 }
@@ -649,6 +653,24 @@ const EARNINGS_DUE_ENTRY: FixtureEntry = {
     ...(NET_DUE_ENTRY.evaluation as FixtureEvaluation),
     earnings_in_window: true,
     earnings_note: "窗口内含 1 次财报披露（10-15），结果可能被财报事件主导",
+  },
+};
+
+/**
+ * 解禁窗口（spec §S11.3）：`unlock_in_window = true` + 后端那句人话。
+ *
+ * 与财报窗口**同构**：弹窗要在归因**上方**用它、样式一致、同样**不预选**归因。
+ * 注意用词——解禁 = 可流通，与减持是两件事，断言里也钉住"不许写成减持"。
+ */
+const UNLOCK_DUE_ENTRY: FixtureEntry = {
+  ...NET_DUE_ENTRY,
+  id: 115,
+  symbol: "600276",
+  thesis: "窗口内有解禁，结果可能被解禁冲击主导",
+  evaluation: {
+    ...(NET_DUE_ENTRY.evaluation as FixtureEvaluation),
+    unlock_in_window: true,
+    unlock_note: "窗口内含 1 次解禁（11-02，占流通 4.2%），结果可能被解禁冲击主导",
   },
 };
 
@@ -1382,6 +1404,52 @@ test.describe("决策日志（/me?tab=journal）", () => {
     await page.getByTestId("journal-review-open").nth(1).click();
     await expect(page.getByTestId("journal-review-modal")).toBeVisible();
     await expect(page.getByTestId("journal-earnings-note")).toHaveCount(0);
+  });
+
+  /**
+   * 解禁窗口（spec §S11.3）：`unlock_in_window === true` → 弹窗原样展示 `unlock_note`。
+   *
+   * 四条判据（与财报窗口对齐，因为它是同一套三态口径的第二个消费点）：
+   * 1. **原文上屏**：逐字等于后端那句，不由前端改写数字/日期；
+   * 2. **位置**：在「归因（必选…）」**上方**——它是读结果时要先知道的事实，不是归因选项；
+   * 3. **中性**：不预选任何归因、确认仍禁用（有解禁 ≠ 一定是某类归因）；
+   * 4. **用词**：只说「解禁」，不得写成「减持」（解禁 = 可流通，是两件事）；
+   *    并且 `unlock_in_window` 缺省的条目不显示（缺数据不是"不会解禁"）。
+   */
+  test("解禁窗口：unlock_in_window=true 时展示后端 unlock_note，且不预选归因", async ({
+    page,
+  }) => {
+    await openJournal(page, { entries: [UNLOCK_DUE_ENTRY, DUE_ENTRY] });
+
+    await page.getByTestId("journal-review-open").first().click();
+    const modal = page.getByTestId("journal-review-modal");
+    await expect(modal).toBeVisible();
+
+    const note = modal.getByTestId("journal-unlock-note");
+    await expect(note).toBeVisible();
+    await expect(note).toHaveText("窗口内含 1 次解禁（11-02，占流通 4.2%），结果可能被解禁冲击主导");
+
+    // 位置在「归因」选择**上方**（与财报提示同款位置，同屏顺序比坐标稳）
+    const modalText = await modal.innerText();
+    const noteAt = modalText.indexOf("解禁（11-02");
+    const verdictAt = modalText.indexOf("归因（必选");
+    expect(noteAt).toBeGreaterThan(-1);
+    expect(verdictAt).toBeGreaterThan(-1);
+    expect(noteAt).toBeLessThan(verdictAt);
+
+    // 用词纪律：解禁不许写成减持
+    expect(modalText).not.toContain("减持");
+
+    // 中性提示：不预选任何归因，确认仍禁用
+    await expect(modal.locator("input[type=radio]:checked")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "确认复盘" })).toBeDisabled();
+
+    // `unlock_in_window` 缺省的条目（第二条）不显示这条提示
+    await page.getByRole("button", { name: /取\s*消/ }).click();
+    await expect(modal).toHaveCount(0);
+    await page.getByTestId("journal-review-open").nth(1).click();
+    await expect(page.getByTestId("journal-review-modal")).toBeVisible();
+    await expect(page.getByTestId("journal-unlock-note")).toHaveCount(0);
   });
 
   test("统计：by_size 分栏 + 加权超额，校准每档 n>=10 才给命中率", async ({ page }) => {

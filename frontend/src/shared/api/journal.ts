@@ -218,13 +218,30 @@ export interface JournalEvaluation {
   earnings_in_window?: boolean | null;
   /** 财报窗口的人话说明（后端下发，**原样**展示；无则空串）。 */
   earnings_note?: string | null;
+
+  // ── 解禁窗口（spec §S11.3；与财报窗口**同构**） ─────────────────────────
+  /**
+   * 判断窗口 `(快照日, due_on]` 内有没有"占流通 ≥3%"的解禁（`share_floats` 的
+   * `float_date` 落在窗口内）。
+   *
+   * 三态而不是布尔：`true` 窗口内有解禁（结果可能被解禁冲击主导）/ `false` 有解禁记录
+   * 但窗口内没有 ≥3% 的 / `null` = 该股**没有任何解禁记录**（缺数据，不猜）。前端只在
+   * `=== true` 时给提示，`false` / `null` 都不渲染——缺数据不是"不会解禁"。
+   *
+   * 注意用词：解禁 = 可流通，与减持是两件事，页面文案一律用后端下发的 `unlock_note`
+   * （「解禁」），不由前端改写。
+   */
+  unlock_in_window?: boolean | null;
+  /** 解禁窗口的人话说明（后端下发，**原样**展示；无则空串）。 */
+  unlock_note?: string | null;
   /**
    * 缺数原因（字段名 → 原因；`{}`/缺省 = 没有缺数记录）。
    *
-   * 注意它**不只是**"结果算不出来"：后端的 `evaluate_entry` 把路径/财报这类**降级**也记在
+   * 注意它**不只是**"结果算不出来"：后端的 `evaluate_entry` 把路径/财报/解禁这类**降级**也记在
    * 同一个字典里（市场级判断恒有 `mae_pct: market_level_no_symbol`、没有财报数据的个股有
-   * `earnings: no_financial_reports`）。判断"结果未就绪"只看结果键（`metrics.ts` 的
-   * `hasUnreadyMissingReason`），否则绝大多数真实条目会永远点不了「复盘」。
+   * `earnings: no_financial_reports`、没有解禁数据的个股有 `unlock: no_share_float_rows`）。
+   * 判断"结果未就绪"只看结果键（`metrics.ts` 的 `hasUnreadyMissingReason`），否则绝大多数
+   * 真实条目会永远点不了「复盘」。
    */
   missing_reason?: Record<string, string> | string | null;
 }
