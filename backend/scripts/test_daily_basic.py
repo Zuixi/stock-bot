@@ -3,7 +3,6 @@
 
 Run: cd backend && uv run python scripts/test_daily_basic.py
 """
-
 from __future__ import annotations
 
 import os
@@ -84,18 +83,10 @@ try:
 
         # Basic stats
         print(f"\n  📊 统计摘要:")
-        print(
-            f"     pe       : count={df['pe'].count()},   min={df['pe'].min():.2f}, max={df['pe'].max():.2f}, median={df['pe'].median():.2f}"
-        )
-        print(
-            f"     pb       : count={df['pb'].count()},   min={df['pb'].min():.2f}, max={df['pb'].max():.2f}, median={df['pb'].median():.2f}"
-        )
-        print(
-            f"     total_mv : count={df['total_mv'].count()}, min={df['total_mv'].min() / 1e8:.0f}亿, max={df['total_mv'].max() / 1e8:.0f}亿"
-        )
-        print(
-            f"     turnover : count={df['turnover_rate'].count()}, min={df['turnover_rate'].min():.4f}, max={df['turnover_rate'].max():.2f}"
-        )
+        print(f"     pe       : count={df['pe'].count()},   min={df['pe'].min():.2f}, max={df['pe'].max():.2f}, median={df['pe'].median():.2f}")
+        print(f"     pb       : count={df['pb'].count()},   min={df['pb'].min():.2f}, max={df['pb'].max():.2f}, median={df['pb'].median():.2f}")
+        print(f"     total_mv : count={df['total_mv'].count()}, min={df['total_mv'].min()/1e8:.0f}亿, max={df['total_mv'].max()/1e8:.0f}亿")
+        print(f"     turnover : count={df['turnover_rate'].count()}, min={df['turnover_rate'].min():.4f}, max={df['turnover_rate'].max():.2f}")
     else:
         print("  ⚠️  Empty result (maybe non-trading day or weekend?)")
 except Exception as e:
@@ -117,31 +108,19 @@ try:
         if {"SH", "SZ", "BJ"}.issubset(suffixes):
             print("  ✅ 三交易所数据齐全")
         else:
-            print(f"  ⚠️  缺失: {set(['SH', 'SZ', 'BJ']) - suffixes}")
+            print(f"  ⚠️  缺失: {set(['SH','SZ','BJ']) - suffixes}")
 except Exception as e:
     print(f"  ❌ Error: {e}")
 
 # ── Test 5: Verify fields we care about are present ────────────
 print("\n── Test 5: 验证所有目标字段存在 ──")
 EXPECTED_FIELDS = {
-    "ts_code",
-    "trade_date",
-    "close",
-    "turnover_rate",
-    "turnover_rate_f",
-    "volume_ratio",
-    "pe",
-    "pe_ttm",
-    "pb",
-    "ps",
-    "ps_ttm",
-    "dv_ratio",
-    "dv_ttm",
-    "total_share",
-    "float_share",
-    "free_share",
-    "total_mv",
-    "circ_mv",
+    "ts_code", "trade_date", "close",
+    "turnover_rate", "turnover_rate_f", "volume_ratio",
+    "pe", "pe_ttm", "pb", "ps", "ps_ttm",
+    "dv_ratio", "dv_ttm",
+    "total_share", "float_share", "free_share",
+    "total_mv", "circ_mv",
 }
 try:
     df = pro.daily_basic(trade_date="20250507")
