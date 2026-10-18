@@ -1,4 +1,5 @@
 import { ApiError, apiGet } from "./client";
+import { exchangeOrder } from "@/shared/config/exchange";
 import type { Exchange, StockRecord, SwChainNode } from "@/shared/types";
 
 interface BackendPagedResponse<T> {
@@ -28,8 +29,6 @@ export interface BackendStock {
   detail?: Record<string, unknown> | null;
   asof: string;
 }
-
-const EXCHANGES: Exchange[] = ["Shanghai_Stocks", "Shenzen_Stocks", "Beijing_Stocks"];
 
 export function mapBackendStock(item: BackendStock): StockRecord {
   return {
@@ -182,7 +181,8 @@ export async function fetchStocksMergedEnriched(params: {
 }
 
 export async function fetchStockBySymbol(symbol: string): Promise<StockRecord | null> {
-  for (const exchange of EXCHANGES) {
+  // 按代码前缀直连最可能的交易所，候选落空再按原顺序兜底（P0-4 / R9）
+  for (const exchange of exchangeOrder(symbol)) {
     try {
       const item = await apiGet<BackendStock>(`/api/v1/exchanges/${exchange}/stocks/${symbol}`);
       return mapBackendStock(item);
@@ -197,7 +197,7 @@ export async function fetchStockBySymbol(symbol: string): Promise<StockRecord | 
 }
 
 export async function fetchStockEnrichedBySymbol(symbol: string): Promise<StockRecord | null> {
-  for (const exchange of EXCHANGES) {
+  for (const exchange of exchangeOrder(symbol)) {
     try {
       const item = await apiGet<BackendStockEnriched>(
         `/api/v1/exchanges/${exchange}/stocks/${symbol}/enriched`
