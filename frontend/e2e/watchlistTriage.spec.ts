@@ -643,3 +643,194 @@ test.describe("今日体检（/me?tab=triage）", () => {
     await expect(page.getByTestId("triage-item")).toHaveCount(0);
   });
 });
+
+/**
+ * ── S12.1 / S12.2：体检 → 记一笔 → 到期提醒 ────────────────────────────────
+ *
+ * 这个 `describe` 覆盖的是一条**跨 tab 的链路**（体检卡片 → 决策日志表单 → 提交），
+ * 所以两边的读面都得 mock：triage 由 `mockAuthedTriage` 钉住，journal 由
+ * `mockJournalTab` 钉住。少 mock 一边，用例就会因为"真接口 401 → 全局清态"而假红
+ * （见文件头的"假登录"一节），而不是因为被测行为错了。
+ *
+ * 判据刻意按**整条链**写，而不是三个孤立事实：
+ * - 只断言 href 会漏掉"点进去没预填"；
+ * - 只断言预填会漏掉"提交后参数没清、刷新又带一次同一个标的"；
+ * - 只断言提示出现会漏掉"0 条 / 取不到时也画一行"。
+ */
+
+/** 「记一笔」表单要用的最小 journal mock（列表/统计/汇总/创建四条读面）。 */
+async function mockJournalTab(page: Page, opts: { due?: number } = {}) {
+  const store: {
+    entries: Record<string, unknown>[];
+    lastCreate: Record<string, unknown> | null;
+  } = { entries: [], lastCreate: null };
+
+  // 只注册**一条** `**/api/v1/journal**`，在 handler 里按 pathname + method 分派：
+  // 多条正则容易因为"后注册的先命中"把 `/summary` 吞进 `/journal` 那条（同 decisionJournal 的教训）。
+  await page.route("**/api/v1/journal**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/\/+$/, "");
+    const method = request.method();
+
+    if (path.endsWith("/summary")) {
+      // spec §S12.2：`{open, due, reviewed}`；`due` 是三角标里唯一会显示的那个数
+      return route.fulfill({
+        status: 200,
+        json: { open: 0, due: opts.due ?? 0, reviewed: 0 },
+      });
+    }
+
+    if (path.endsWith("/stats")) {
+      // 样本不足：只写"样本不足"，与角标/带入无关，但要有个确定形状（否则统计卡报错）
+      return route.fulfill({
+        status: 200,
+        json: { n: 0, reviewed_n: 0, avg_excess_pct: null, discipline_break_share: null },
+      });
+    }
+
+    if (method === "POST" && path === "/api/v1/journal") {
+      const body = JSON.parse(request.postData() ?? "{}");
+      store.lastCreate = body;
+      const created = {
+        id: 900,
+        symbol: body.symbol ?? null,
+        kind: body.kind ?? "watch",
+        thesis: body.thesis,
+        invalidation: body.invalidation,
+        horizon_days: body.horizon_days,
+        snapshot_summary: "价格 1588.00 元 · 当日 +0.40%",
+        created_at: "2026-10-18T09:00:00Z",
+        due_on: "2026-11-17",
+        status: "open",
+        reviewable: true,
+        evaluation: null,
+        review: null,
+      };
+      store.entries.unshift(created);
+      return route.fulfill({ status: 201, json: created });
+    }
+
+    if (method === "GET" && path === "/api/v1/journal") {
+      const status = url.searchParams.get("status");
+      return route.fulfill({
+        status: 200,
+        json: { items: store.entries.filter((item) => !status || item.status === status) },
+      });
+    }
+
+    return route.fulfill({
+      status: 404,
+      json: { code: "NOT_FOUND", message: `e2e mock 未覆盖：${method} ${path}`, trace_id: "e2e" },
+    });
+  });
+
+  return store;
+}
+
+test.describe("一键记一笔（S12.1：体检 → 决策日志）", () => {
+  test("卡片「记一笔」→ 表单已预填标的 + 带入提示；提交后 query 被清", async ({ page }) => {
+    await mockAuthedTriage(page, FIXTURE);
+    const journal = await mockJournalTab(page);
+    await page.goto("/me?tab=triage");
+
+    // ① 每张卡片都有「记一笔」，href 逐字是契约里的那条（不新增路由，只带 query）
+    const links = page.getByTestId("triage-journal");
+    await expect(links).toHaveCount(FIXTURE.items.length);
+    await expect(links.nth(0)).toHaveAttribute(
+      "href",
+      "/me?tab=journal&symbol=600519&from=triage"
+    );
+    await expect(links.nth(1)).toHaveAttribute(
+      "href",
+      "/me?tab=journal&symbol=000001&from=triage"
+    );
+
+    await links.nth(0).click();
+
+    // ② 落点：仍在 `/me`（只换 tab），带入参数在 URL 里
+    await expect(page).toHaveURL(/\/me\?tab=journal&symbol=600519&from=triage$/);
+    await expect(page.getByTestId("journal-panel")).toBeVisible();
+
+    // ③ 预填：标的已带过来 + 一行「从今日体检带入」（说明从哪来、快照不用你填）
+    await expect(page.getByTestId("journal-symbol")).toHaveValue("600519");
+    await expect(page.getByTestId("journal-prefill-hint")).toHaveText(
+      "从今日体检带入：600519（快照在提交时自动生成）"
+    );
+    // 期限默认 30 天（spec §S12.1「仍可改」）
+    await expect(
+      page.getByTestId("journal-horizon").locator(".ant-radio-button-wrapper-checked")
+    ).toHaveText("30 天");
+
+    // ④ **三必填照旧**：预填只带标的，thesis / invalidation 一个字都没替用户写
+    await expect(page.getByTestId("journal-thesis")).toHaveValue("");
+    await expect(page.getByTestId("journal-submit")).toBeDisabled();
+    await expect(page.getByTestId("journal-missing")).toContainText("判断依据");
+    await expect(page.getByTestId("journal-missing")).toContainText("失效条件");
+    await expect(page.getByTestId("journal-missing")).not.toContainText("观察期限");
+
+    // ⑤ 填完提交：载荷带带入的标的 + 默认 30 天
+    await page.getByTestId("journal-thesis").fill("体检看到跌破 20 日线，想看能不能修复");
+    await page.getByTestId("journal-inv-kind").click();
+    await page.locator(".ant-select-item-option", { hasText: "跌破某价格" }).first().click();
+    await page.getByTestId("journal-inv-price").fill("1500");
+    await page.getByTestId("journal-submit").click();
+
+    await expect(page.getByTestId("journal-open-item")).toHaveCount(1);
+    expect(journal.lastCreate).toMatchObject({ symbol: "600519", horizon_days: 30 });
+
+    // ⑥ 提交成功后清掉 `symbol` / `from`：刷新不会再带一次同一个标的；`tab` 必须保住
+    await expect(page).toHaveURL(/\/me\?tab=journal$/);
+    await expect(page.getByTestId("journal-prefill-hint")).toHaveCount(0);
+
+    // ⑦ 刷新后仍是空表单（参数真的没了，不是只把提示藏起来）
+    await page.reload();
+    await expect(page.getByTestId("journal-panel")).toBeVisible();
+    await expect(page.getByTestId("journal-prefill-hint")).toHaveCount(0);
+    await expect(page.getByTestId("journal-symbol")).toHaveValue("");
+  });
+});
+
+test.describe("到期提醒（S12.2：站内，无推送）", () => {
+  test("due > 0：面板顶部一行「有 N 条判断今日到期 → 去复盘」", async ({ page }) => {
+    await mockAuthedTriage(page, FIXTURE);
+    await mockJournalTab(page, { due: 3 });
+    await page.goto("/me?tab=triage");
+
+    const hint = page.getByTestId("triage-due-hint");
+    await expect(hint).toBeVisible();
+    await expect(hint).toHaveText("有 3 条判断今日到期 → 去复盘");
+    // 去处：日志 tab 的 due 视图（不新增路由）
+    await expect(hint).toHaveAttribute("href", "/me?tab=journal&status=due");
+
+    // 位置：面板**顶部**——在「数据截至」之前（按文本顺序断言，比坐标稳）
+    const panelText = await page.locator(".triage").innerText();
+    expect(panelText.indexOf("今日到期")).toBeGreaterThan(-1);
+    expect(panelText.indexOf("今日到期")).toBeLessThan(panelText.indexOf("数据截至"));
+  });
+
+  test("due = 0 与 summary 失败：都不渲染这一行（不显示 0）", async ({ page }) => {
+    await mockAuthedTriage(page, FIXTURE);
+    await mockJournalTab(page, { due: 0 });
+    await page.goto("/me?tab=triage");
+
+    // 0 条到期时不写"0 条到期"：那行字会被读成"今天没事"，而它只是"没有到期条目"
+    await expect(page.getByTestId("triage-due-hint")).toHaveCount(0);
+    await expect(page.locator(".triage")).not.toContainText("条判断今日到期");
+    // 体检清单本身照常
+    await expect(page.getByTestId("triage-item")).toHaveCount(FIXTURE.items.length);
+
+    // summary 挂了：同为"不知道"，同样不渲染（把"不知道"画成"0 条"正是最坏的一种假话）
+    await page.route("**/api/v1/journal/summary", (route) =>
+      route.fulfill({
+        status: 500,
+        json: { code: "INTERNAL_ERROR", message: "summary unavailable", trace_id: "e2e" },
+      })
+    );
+    await page.goto("/me?tab=triage");
+    await expect(page.getByTestId("triage-due-hint")).toHaveCount(0);
+    // 两个读面互不牵连：体检清单仍在，页面也没被踢去登录
+    await expect(page.getByTestId("triage-item")).toHaveCount(FIXTURE.items.length);
+    await expect(page).toHaveURL(/\/me\?tab=triage/);
+  });
+});

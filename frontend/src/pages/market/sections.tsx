@@ -25,6 +25,7 @@ import {
   MarketSection,
   SwIndustryGrid,
   SentimentThermometer,
+  SentimentPulse,
   SentimentIntradayChart,
   LimitUpLadder,
   SwL3LimitUpBoard,
@@ -305,12 +306,19 @@ export function SentimentSection() {
             ]}
           />
           <span className="sentiment-mode-switch__hint">
-            {isIntraday ? "盘中口径（今日涨停池 · 30 秒刷新）" : "收盘口径（本地自算 · 可回放）"}
+            {isIntraday
+              ? "盘中口径（今日涨停池 · 30 秒刷新 · 不落库）"
+              : "收盘口径（本地自算 · 可回放 · 点任一指标看历史）"}
           </span>
         </div>
       }
     >
       <Row gutter={[16, 16]}>
+        <Col span={24}>
+          <ErrorBoundary fallback={cardFallback("情绪脉搏")}>
+            <SentimentPulse />
+          </ErrorBoundary>
+        </Col>
         <Col span={24}>
           <SectionCard
             title="情绪温度计"
@@ -327,6 +335,9 @@ export function SentimentSection() {
                   history={calendar.data ?? []}
                   asOf={ladder.data?.asOf}
                   trends={trends.data}
+                  // 收盘口径才有可回放的历史（`market_sentiment_daily` 由盘后任务写入）；
+                  // 盘中口径不落库，点进去只会看到另一套口径的旧序列，故不可点。
+                  metricHref={isIntraday ? undefined : (key) => `/market/sentiment/${key}`}
                 />
               </ErrorBoundary>
             )}

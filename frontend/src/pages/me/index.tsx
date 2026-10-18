@@ -1,4 +1,5 @@
 import { Tabs, Typography } from "antd";
+import { type ReactNode } from "react";
 import {
   StarOutlined,
   TagsOutlined,
@@ -7,10 +8,14 @@ import {
   BookOutlined,
 } from "@ant-design/icons";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { PlaceholderPage } from "@/shared/ui/PlaceholderPage";
+import { fetchJournalSummary, summaryCount } from "@/shared/api/journal";
+import { fetchTriageBadge, triageHitCount } from "@/shared/api/triage";
 import { TagsOverview, TagsPanel, WatchlistPanel } from "@/features/watchlist/components";
 import { TriagePanel } from "@/features/triage/components/TriagePanel";
 import { JournalPanel } from "@/features/journal/components/JournalPanel";
+import "./index.css";
 
 /**
  * `/me`：我的（顶栏全局工具的目标页，IA 文档 §3；权限 = 登录即可，沿用既有 `RequireAuth`）。
@@ -40,6 +45,42 @@ const TAB_KEYS: MeTab[] = ["triage", "watchlist", "tags", "journal", "industry"]
 
 const DEFAULT_TAB: MeTab = "triage";
 
+/**
+ * Tab 标题 + 角标（spec §S12.2）。
+ *
+ * 角标的数字是**事实**（今天有几条判断到期 / 今日体检命中几条），不是未读：没有"点过就
+ * 消失"的语义，故不带已读状态，也不靠颜色/动画说话——数字本身就是全部信息。
+ *
+ * 渲染规则只有一条：**`null`（取不到）与 `0`（确实没有）都不显示数字**。
+ * 两者在视觉上合并，但在数据层绝不合并（`summaryCount` / `triageHitCount` 把"取不到"
+ * 返回成 `null`）——否则一旦兜成 0，页面就再也没法区分"今天没事"与"今天不知道"，
+ * 而这正是 spec §S12.5 要求守住的那条线。
+ */
+function TabLabel({
+  icon,
+  text,
+  count,
+  testId,
+  title,
+}: {
+  icon: ReactNode;
+  text: string;
+  count: number | null;
+  testId: string;
+  title: string;
+}) {
+  return (
+    <span className="me-tab">
+      {icon} {text}
+      {count !== null && count > 0 && (
+        <span className="me-tab__badge num" data-testid={testId} title={`${title} ${count}`}>
+          {count}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export default function MePage() {
   const [searchParams] = useSearchParams();
   const location = useLocation();
@@ -50,6 +91,35 @@ export default function MePage() {
     ? (tabParam as MeTab)
     : DEFAULT_TAB;
   const tagName = searchParams.get("name") ?? "";
+
+  // 到期数（「决策日志」角标 + triage 顶部那行的同一个读面）：`fetchJournalSummary` 自带
+  // `skipAuth`，故后端这个新端点还没上线 / 失败时只是**不显示角标**，不影响登录态。
+  const summaryQuery = useQuery({
+    queryKey: ["journal", "summary"],
+    queryFn: fetchJournalSummary,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const dueCount = summaryCount(summaryQuery.data, "due");
+
+  /**
+   * 今日体检命中数（「今日体检」角标）。
+   *
+   * 与 `TriagePanel` **共用 `["triage"]` 这个 cache key**（同一个读面、同一份数据），
+   * 但只在**不在**体检 tab 时自己发请求：体检 tab 上 `TriagePanel` 已经在取，
+   * 再发一次就是同一个聚合接口打两遍。反过来在日志 tab 上没人取，角标就自己取一份。
+   *
+   * `fetchTriageBadge` 是带 `skipAuth` 的同一接口：角标是装饰性读面，它失败不该触发全局
+   * 清态（`decisionJournal` 这类只 mock journal 的用例里，triage 走的是真接口）。
+   */
+  const triageBadgeQuery = useQuery({
+    queryKey: ["triage"],
+    queryFn: fetchTriageBadge,
+    enabled: activeTab !== "triage",
+    staleTime: 30_000,
+    retry: false,
+  });
+  const triageHits = triageHitCount(triageBadgeQuery.data);
 
   const onTabChange = (key: string) => {
     const next = key as MeTab;
@@ -71,9 +141,13 @@ export default function MePage() {
           {
             key: "triage",
             label: (
-              <span>
-                <SafetyCertificateOutlined /> 今日体检
-              </span>
+              <TabLabel
+                icon={<SafetyCertificateOutlined />}
+                text="今日体检"
+                count={triageHits}
+                testId="me-tab-badge-triage"
+                title="今日命中"
+              />
             ),
             children: <TriagePanel />,
           },
@@ -105,9 +179,13 @@ export default function MePage() {
           {
             key: "journal",
             label: (
-              <span>
-                <BookOutlined /> 决策日志
-              </span>
+              <TabLabel
+                icon={<BookOutlined />}
+                text="决策日志"
+                count={dueCount}
+                testId="me-tab-badge-journal"
+                title="待复盘"
+              />
             ),
             children: <JournalPanel />,
           },

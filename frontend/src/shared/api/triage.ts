@@ -149,3 +149,35 @@ export function fetchTriage(): Promise<TriageResponse> {
 export function fetchTriageRules(): Promise<TriageRulesResponse> {
   return apiGet<TriageRulesResponse>("/api/v1/watchlists/triage/rules");
 }
+
+/**
+ * 今日**命中数**（`/me` 的「今日体检」Tab 角标，spec §S12.2）：**展示条目数 + 折叠条数**。
+ *
+ * 为什么把 `folded` 算进来：`folded` 是"因单页上限没展示、但确实命中了"的条数
+ * （spec §S8.4 的 `另有 N 项未展示`）。角标若只数 `items.length`，页面会同时出现
+ * 「角标 8」与「另有 5 项未展示」——一个自称在数命中、却漏数命中自身的东西。
+ *
+ * `state` 不是 `ok`（`no_data` / `no_watchlist`）时 `items` 本来就是空、`folded` 为 0，
+ * 故不需要额外分支：算出来就是 0（= 不显示角标），不会把"今天查不了"伪装成"有 0 条命中"。
+ * 缺字段（后端半截 payload）按 0 处理即可——**这里**的 0 不是假话，它只是"没有可数的条目"。
+ */
+export function triageHitCount(data: TriageResponse | null | undefined): number | null {
+  if (!data) return null;
+  const items = Array.isArray(data.items) ? data.items.length : 0;
+  const folded =
+    typeof data.folded === "number" && Number.isFinite(data.folded)
+      ? Math.max(0, Math.trunc(data.folded))
+      : 0;
+  return items + folded;
+}
+
+/**
+ * 与 `fetchTriage` **同一读面**，但传 `skipAuth`：只给角标用。
+ *
+ * 角标是装饰性读面（`/me` 在「决策日志」tab 上时也要知道体检命中数），它 401 时不该
+ * 触发全局清态把用户踢下线——同 `fetchRegime`/`fetchJournalSummary` 的口径。
+ * `TriagePanel` 自己的请求仍走 `fetchTriage`（普通 `apiGet`），主线的 401 语义不动。
+ */
+export function fetchTriageBadge(): Promise<TriageResponse> {
+  return apiGet<TriageResponse>("/api/v1/watchlists/triage", undefined, { skipAuth: true });
+}

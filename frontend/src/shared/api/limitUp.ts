@@ -118,6 +118,8 @@ interface BackendSentimentCalendarPoint {
   zb_count: number;
   broken_rate: number | null;
   yzt_avg_pct: number | null;
+  yzt_avg_open_premium?: number | null;
+  yzt_n?: number;
   promo_1to2: number | null;
   promo_2to3: number | null;
   max_streak: number;
@@ -130,7 +132,13 @@ interface BackendSentimentTrendPoint {
   zb_count: number;
   /** 分母为 0 的日子为 NULL（**缺失 ≠ 0**），那些日子不进分位样本。 */
   broken_rate: number | null;
+  yzt_avg_pct?: number | null;
+  yzt_avg_open_premium?: number | null;
+  yzt_n?: number;
   promo_1to2: number | null;
+  promo_1to2_n?: number;
+  promo_2to3?: number | null;
+  promo_2to3_n?: number;
   max_streak: number;
 }
 
@@ -304,6 +312,8 @@ export interface SentimentCalendarPoint {
   zbCount: number;
   brokenRate: number | null;
   yztAvgPct: number | null;
+  yztAvgOpenPremium: number | null;
+  yztN: number;
   promo1to2: number | null;
   promo2to3: number | null;
   maxStreak: number;
@@ -330,7 +340,13 @@ export interface SentimentTrendPoint {
   dtCount: number;
   zbCount: number;
   brokenRate: number | null;
+  yztAvgPct: number | null;
+  yztAvgOpenPremium: number | null;
+  yztN: number;
   promo1to2: number | null;
+  promo1to2N: number;
+  promo2to3: number | null;
+  promo2to3N: number;
   maxStreak: number;
 }
 
@@ -442,6 +458,8 @@ const mapCalendarPoint = (p: BackendSentimentCalendarPoint): SentimentCalendarPo
   zbCount: p.zb_count,
   brokenRate: p.broken_rate,
   yztAvgPct: p.yzt_avg_pct,
+  yztAvgOpenPremium: p.yzt_avg_open_premium ?? null,
+  yztN: p.yzt_n ?? 0,
   promo1to2: p.promo_1to2,
   promo2to3: p.promo_2to3,
   maxStreak: p.max_streak,
@@ -463,7 +481,13 @@ const mapTrendPoint = (p: BackendSentimentTrendPoint): SentimentTrendPoint => ({
   dtCount: p.dt_count,
   zbCount: p.zb_count,
   brokenRate: p.broken_rate,
+  yztAvgPct: p.yzt_avg_pct ?? null,
+  yztAvgOpenPremium: p.yzt_avg_open_premium ?? null,
+  yztN: p.yzt_n ?? 0,
   promo1to2: p.promo_1to2,
+  promo1to2N: p.promo_1to2_n ?? 0,
+  promo2to3: p.promo_2to3 ?? null,
+  promo2to3N: p.promo_2to3_n ?? 0,
   maxStreak: p.max_streak,
 });
 
@@ -606,4 +630,581 @@ export function fetchSentimentTrends(days = 250): Promise<SentimentTrends> {
   return apiGet<BackendSentimentTrends>("/api/v1/market/sentiment/trends", { days }).then(
     mapSentimentTrends,
   );
+}
+
+// ---------------------------------------------------------------------------
+// 情绪指标详情（2026-10-18）：`GET /market/sentiment/metrics/{metric_key}`
+//
+// 温度计的 9 张卡各有一个"历史追踪"页。统计量/分位/分布**全部由后端算**——
+// 前端只做量纲渲染（ratio ×100），不在浏览器里重算统计（与 /sentiment/trends 同一纪律）。
+// ---------------------------------------------------------------------------
+
+/** 9 张卡与后端 `SENTIMENT_METRIC_KEYS` 1:1（顺序即详情页切换器顺序）。 */
+export const SENTIMENT_METRIC_KEYS = [
+  "zt_count",
+  "zb_count",
+  "dt_count",
+  "broken_rate",
+  "yzt_avg_pct",
+  "yzt_avg_open_premium",
+  "promo_1to2",
+  "promo_2to3",
+  "max_streak",
+] as const;
+
+export type SentimentMetricKey = (typeof SENTIMENT_METRIC_KEYS)[number];
+
+export function isSentimentMetricKey(value: string | undefined): value is SentimentMetricKey {
+  return !!value && (SENTIMENT_METRIC_KEYS as readonly string[]).includes(value);
+}
+
+/** `count` 家 / `board` 板 / `ratio` 0–1（渲染 ×100%）/ `pct` 已是百分数。 */
+export type SentimentMetricUnit = "count" | "board" | "ratio" | "pct";
+
+/** 高值代表情绪更热（`high`）还是更冷（`low`）；由后端下发，前端不按 key 硬编码。 */
+export type SentimentMetricHotterWhen = "high" | "low";
+
+export type SentimentMetricGroup = "breadth" | "money" | "promotion" | "space";
+
+interface BackendSentimentMetricMeta {
+  key: string;
+  label: string;
+  unit: SentimentMetricUnit;
+  group: SentimentMetricGroup;
+  hotter_when: SentimentMetricHotterWhen;
+  caliber: string;
+}
+
+interface BackendSentimentMetricPoint {
+  trade_date: string;
+  value: number | null;
+  n?: number | null;
+  low_sample?: boolean;
+}
+
+interface BackendSentimentMetricInterval {
+  low: number;
+  high: number;
+  level: number;
+  n: number;
+  method: "wilson";
+}
+
+interface BackendSentimentMetricSampleGate {
+  field: string | null;
+  min_n: number;
+  excluded_days: number;
+}
+
+interface BackendSentimentRegimeInput {
+  key: string;
+  label: string;
+  value: number | null;
+  percentile: number | null;
+  unit: SentimentMetricUnit;
+}
+
+interface BackendSentimentRegimeCurrent {
+  stage: string;
+  label: string;
+  tone: "cold" | "neutral" | "hot" | "extreme" | "muted";
+  since: string;
+  days: number;
+  inputs: BackendSentimentRegimeInput[];
+}
+
+interface BackendSentimentRegimeSegment {
+  stage: string;
+  label: string;
+  tone: "cold" | "neutral" | "hot" | "extreme" | "muted";
+  from: string;
+  to: string;
+  days: number;
+}
+
+interface BackendSentimentRegime {
+  version: string;
+  current: BackendSentimentRegimeCurrent | null;
+  segments: BackendSentimentRegimeSegment[];
+}
+
+interface BackendSentimentMetricStats {
+  sample_count: number;
+  min: number | null;
+  max: number | null;
+  mean: number | null;
+  median: number | null;
+  p10: number | null;
+  p25: number | null;
+  p75: number | null;
+  p90: number | null;
+  std: number | null;
+}
+
+interface BackendSentimentMetricBin {
+  from: number;
+  to: number;
+  count: number;
+}
+
+interface BackendSentimentMetricStreak {
+  side: "above" | "below" | null;
+  days: number;
+  median: number | null;
+}
+
+interface BackendSentimentMetricPeer {
+  key: string;
+  label: string;
+  unit: SentimentMetricUnit;
+  latest_value: number | null;
+  latest_date: string | null;
+  low_sample?: boolean;
+}
+
+interface BackendSentimentMetricDetail {
+  metric: BackendSentimentMetricMeta;
+  as_of: string | null;
+  as_of_quality?: AsOfQuality;
+  window: BackendSentimentTrendWindow;
+  latest: BackendSentimentMetricPoint | null;
+  previous: BackendSentimentMetricPoint | null;
+  delta: number | null;
+  percentile_rank: number | null;
+  stats: BackendSentimentMetricStats | null;
+  distribution: BackendSentimentMetricBin[];
+  streak: BackendSentimentMetricStreak;
+  series: BackendSentimentMetricPoint[];
+  peers: BackendSentimentMetricPeer[];
+  insufficient_history: boolean;
+  latest_interval?: BackendSentimentMetricInterval | null;
+  sample_gate?: BackendSentimentMetricSampleGate | null;
+  regime?: BackendSentimentRegime | null;
+}
+
+export interface SentimentMetricMeta {
+  key: SentimentMetricKey;
+  label: string;
+  unit: SentimentMetricUnit;
+  group: SentimentMetricGroup;
+  hotterWhen: SentimentMetricHotterWhen;
+  caliber: string;
+}
+
+export interface SentimentMetricPoint {
+  tradeDate: string;
+  value: number | null;
+  /** 当日样本数；非样本型指标为 `null`（缺失 ≠ 0）。 */
+  n: number | null;
+  /** 样本不足（n < 5）：值仍展示，但不进统计量/分位/分布。 */
+  lowSample: boolean;
+}
+
+export interface SentimentMetricInterval {
+  low: number;
+  high: number;
+  level: number;
+  n: number;
+  method: "wilson";
+}
+
+export interface SentimentMetricSampleGate {
+  field: string | null;
+  minN: number;
+  excludedDays: number;
+}
+
+export type SentimentRegimeTone = "cold" | "neutral" | "hot" | "extreme" | "muted";
+
+export interface SentimentRegimeInput {
+  key: string;
+  label: string;
+  value: number | null;
+  percentile: number | null;
+  unit: SentimentMetricUnit;
+}
+
+export interface SentimentRegimeCurrent {
+  stage: string;
+  label: string;
+  tone: SentimentRegimeTone;
+  since: string;
+  days: number;
+  inputs: SentimentRegimeInput[];
+}
+
+export interface SentimentRegimeSegment {
+  stage: string;
+  label: string;
+  tone: SentimentRegimeTone;
+  from: string;
+  to: string;
+  days: number;
+}
+
+export interface SentimentRegime {
+  version: string;
+  current: SentimentRegimeCurrent | null;
+  segments: SentimentRegimeSegment[];
+}
+
+export interface SentimentMetricStats {
+  sampleCount: number;
+  min: number | null;
+  max: number | null;
+  mean: number | null;
+  median: number | null;
+  p10: number | null;
+  p25: number | null;
+  p75: number | null;
+  p90: number | null;
+  std: number | null;
+}
+
+export interface SentimentMetricBin {
+  from: number;
+  to: number;
+  count: number;
+}
+
+export interface SentimentMetricStreak {
+  side: "above" | "below" | null;
+  days: number;
+  median: number | null;
+}
+
+export interface SentimentMetricPeer {
+  key: SentimentMetricKey;
+  label: string;
+  unit: SentimentMetricUnit;
+  latestValue: number | null;
+  latestDate: string | null;
+  lowSample: boolean;
+}
+
+export interface SentimentMetricDetail {
+  metric: SentimentMetricMeta;
+  asOf: string | null;
+  asOfQuality: AsOfQuality;
+  window: SentimentTrendWindow;
+  latest: SentimentMetricPoint | null;
+  previous: SentimentMetricPoint | null;
+  delta: number | null;
+  percentileRank: number | null;
+  stats: SentimentMetricStats | null;
+  distribution: SentimentMetricBin[];
+  streak: SentimentMetricStreak;
+  series: SentimentMetricPoint[];
+  peers: SentimentMetricPeer[];
+  insufficientHistory: boolean;
+  latestInterval: SentimentMetricInterval | null;
+  sampleGate: SentimentMetricSampleGate | null;
+  regime: SentimentRegime | null;
+}
+
+const mapMetricPoint = (p: BackendSentimentMetricPoint): SentimentMetricPoint => ({
+  tradeDate: p.trade_date,
+  value: p.value,
+  n: p.n ?? null,
+  lowSample: p.low_sample ?? false,
+});
+
+const mapRegime = (r: BackendSentimentRegime | null | undefined): SentimentRegime | null =>
+  r
+    ? {
+        version: r.version,
+        current: r.current
+          ? {
+              stage: r.current.stage,
+              label: r.current.label,
+              tone: r.current.tone,
+              since: r.current.since,
+              days: r.current.days,
+              inputs: r.current.inputs.map((i) => ({
+                key: i.key,
+                label: i.label,
+                value: i.value,
+                percentile: i.percentile,
+                unit: i.unit,
+              })),
+            }
+          : null,
+        segments: r.segments.map((s) => ({
+          stage: s.stage,
+          label: s.label,
+          tone: s.tone,
+          from: s.from,
+          to: s.to,
+          days: s.days,
+        })),
+      }
+    : null;
+
+const mapMetricStats = (s: BackendSentimentMetricStats | null): SentimentMetricStats | null =>
+  s
+    ? {
+        sampleCount: s.sample_count,
+        min: s.min,
+        max: s.max,
+        mean: s.mean,
+        median: s.median,
+        p10: s.p10,
+        p25: s.p25,
+        p75: s.p75,
+        p90: s.p90,
+        std: s.std,
+      }
+    : null;
+
+/** `metric_key` 未知 → 后端 404；调用方不要拿"空图"兜底。 */
+export function fetchSentimentMetric(
+  metricKey: SentimentMetricKey,
+  days = 250,
+): Promise<SentimentMetricDetail> {
+  return apiGet<BackendSentimentMetricDetail>(
+    `/api/v1/market/sentiment/metrics/${metricKey}`,
+    { days },
+  ).then((b) => ({
+    metric: {
+      key: b.metric.key as SentimentMetricKey,
+      label: b.metric.label,
+      unit: b.metric.unit,
+      group: b.metric.group,
+      hotterWhen: b.metric.hotter_when,
+      caliber: b.metric.caliber,
+    },
+    asOf: b.as_of,
+    asOfQuality: b.as_of_quality ?? "partial",
+    window: {
+      days: b.window.days,
+      from: b.window.from,
+      to: b.window.to,
+      samples: b.window.samples,
+    },
+    latest: b.latest ? mapMetricPoint(b.latest) : null,
+    previous: b.previous ? mapMetricPoint(b.previous) : null,
+    delta: b.delta,
+    percentileRank: b.percentile_rank,
+    stats: mapMetricStats(b.stats),
+    distribution: b.distribution.map((bin) => ({ from: bin.from, to: bin.to, count: bin.count })),
+    streak: { side: b.streak.side, days: b.streak.days, median: b.streak.median },
+    series: b.series.map(mapMetricPoint),
+    peers: b.peers.map((p) => ({
+      key: p.key as SentimentMetricKey,
+      label: p.label,
+      unit: p.unit,
+      latestValue: p.latest_value,
+      latestDate: p.latest_date,
+      lowSample: p.low_sample ?? false,
+    })),
+    insufficientHistory: b.insufficient_history,
+    latestInterval: b.latest_interval
+      ? {
+          low: b.latest_interval.low,
+          high: b.latest_interval.high,
+          level: b.latest_interval.level,
+          n: b.latest_interval.n,
+          method: b.latest_interval.method,
+        }
+      : null,
+    sampleGate: b.sample_gate
+      ? {
+          field: b.sample_gate.field,
+          minN: b.sample_gate.min_n,
+          excludedDays: b.sample_gate.excluded_days,
+        }
+      : null,
+    regime: mapRegime(b.regime),
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// 情绪脉搏（2026-10-19）：small multiples + 周期阶段 + 指数对比
+//
+// 一次读面拿全：9 个指标逐日序列、阶段区段、基准指数 5 日收益分位、背离段。
+// 阶段/分位都由后端算（与 /sentiment/trends、/sentiment/metrics 同一口径）。
+// ---------------------------------------------------------------------------
+
+/** 允许的对比基准（后端白名单；本地只落了这两个指数）。 */
+export const SENTIMENT_BENCHMARKS = [
+  { code: "399006.SZ", label: "创业板指" },
+  { code: "000001.SH", label: "上证指数" },
+] as const;
+
+export type SentimentBenchmarkCode = (typeof SENTIMENT_BENCHMARKS)[number]["code"];
+
+interface BackendSentimentPulsePoint {
+  trade_date: string;
+  zt_count: number;
+  dt_count: number;
+  zb_count: number;
+  broken_rate: number | null;
+  yzt_avg_pct: number | null;
+  yzt_avg_open_premium: number | null;
+  yzt_n: number;
+  promo_1to2: number | null;
+  promo_1to2_n: number;
+  promo_2to3: number | null;
+  promo_2to3_n: number;
+  max_streak: number;
+}
+
+interface BackendSentimentBenchmarkPoint {
+  trade_date: string;
+  close: number | null;
+  pct_5d: number | null;
+}
+
+interface BackendSentimentComparisonPoint {
+  trade_date: string;
+  sentiment_pct: number | null;
+  index_pct: number | null;
+  index_pct_5d: number | null;
+}
+
+interface BackendSentimentDivergence {
+  from: string;
+  to: string;
+  days: number;
+  kind: "sentiment_stronger" | "index_stronger";
+  label: string;
+}
+
+interface BackendSentimentPulse {
+  as_of: string | null;
+  as_of_quality?: AsOfQuality;
+  window: BackendSentimentTrendWindow;
+  series: BackendSentimentPulsePoint[];
+  regime: BackendSentimentRegime;
+  benchmark: {
+    ts_code: string;
+    name: string;
+    points: BackendSentimentBenchmarkPoint[];
+  };
+  comparison: BackendSentimentComparisonPoint[];
+  divergence: BackendSentimentDivergence[];
+  current_divergence: BackendSentimentDivergence | null;
+}
+
+export interface SentimentPulsePoint {
+  tradeDate: string;
+  ztCount: number;
+  dtCount: number;
+  zbCount: number;
+  brokenRate: number | null;
+  yztAvgPct: number | null;
+  yztAvgOpenPremium: number | null;
+  yztN: number;
+  promo1to2: number | null;
+  promo1to2N: number;
+  promo2to3: number | null;
+  promo2to3N: number;
+  maxStreak: number;
+}
+
+export interface SentimentBenchmarkPoint {
+  tradeDate: string;
+  close: number | null;
+  pct5d: number | null;
+}
+
+export interface SentimentComparisonPoint {
+  tradeDate: string;
+  sentimentPct: number | null;
+  indexPct: number | null;
+  indexPct5d: number | null;
+}
+
+export interface SentimentDivergence {
+  from: string;
+  to: string;
+  days: number;
+  kind: "sentiment_stronger" | "index_stronger";
+  label: string;
+}
+
+export interface SentimentPulse {
+  asOf: string | null;
+  asOfQuality: AsOfQuality;
+  window: SentimentTrendWindow;
+  series: SentimentPulsePoint[];
+  regime: SentimentRegime;
+  benchmark: {
+    tsCode: string;
+    name: string;
+    points: SentimentBenchmarkPoint[];
+  };
+  comparison: SentimentComparisonPoint[];
+  divergence: SentimentDivergence[];
+  currentDivergence: SentimentDivergence | null;
+}
+
+/**
+ * 情绪脉搏。`days` 只影响展示/对比窗口；阶段分位恒用 250 日 PIT 窗口（后端保证）。
+ * `benchmark` 未知 → 404；调用方从 `SENTIMENT_BENCHMARKS` 取值，不手写字符串。
+ */
+export function fetchSentimentPulse(
+  days = 60,
+  benchmark: SentimentBenchmarkCode = "399006.SZ",
+): Promise<SentimentPulse> {
+  return apiGet<BackendSentimentPulse>("/api/v1/market/sentiment/pulse", {
+    days,
+    benchmark,
+  }).then((b) => ({
+    asOf: b.as_of,
+    asOfQuality: b.as_of_quality ?? "partial",
+    window: {
+      days: b.window.days,
+      from: b.window.from,
+      to: b.window.to,
+      samples: b.window.samples,
+    },
+    series: b.series.map((p) => ({
+      tradeDate: p.trade_date,
+      ztCount: p.zt_count,
+      dtCount: p.dt_count,
+      zbCount: p.zb_count,
+      brokenRate: p.broken_rate,
+      yztAvgPct: p.yzt_avg_pct,
+      yztAvgOpenPremium: p.yzt_avg_open_premium,
+      yztN: p.yzt_n,
+      promo1to2: p.promo_1to2,
+      promo1to2N: p.promo_1to2_n,
+      promo2to3: p.promo_2to3,
+      promo2to3N: p.promo_2to3_n,
+      maxStreak: p.max_streak,
+    })),
+    regime: mapRegime(b.regime)!,
+    benchmark: {
+      tsCode: b.benchmark.ts_code,
+      name: b.benchmark.name,
+      points: b.benchmark.points.map((p) => ({
+        tradeDate: p.trade_date,
+        close: p.close,
+        pct5d: p.pct_5d,
+      })),
+    },
+    comparison: b.comparison.map((p) => ({
+      tradeDate: p.trade_date,
+      sentimentPct: p.sentiment_pct,
+      indexPct: p.index_pct,
+      indexPct5d: p.index_pct_5d,
+    })),
+    divergence: b.divergence.map((d) => ({
+      from: d.from,
+      to: d.to,
+      days: d.days,
+      kind: d.kind,
+      label: d.label,
+    })),
+    currentDivergence: b.current_divergence
+      ? {
+          from: b.current_divergence.from,
+          to: b.current_divergence.to,
+          days: b.current_divergence.days,
+          kind: b.current_divergence.kind,
+          label: b.current_divergence.label,
+        }
+      : null,
+  }));
 }

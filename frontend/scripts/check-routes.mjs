@@ -21,7 +21,7 @@
 //   9. **ARCHITECTURE（前端当前态权威）§6 路由一览 ↔ 清单 双向比对**（表尾「为准」指针句 + 每行路径唯一 +
 //      路径集合 + `kind` + 页面目录/组件 + redirect 去向 + 鉴权口径；详见文件尾断言 9 的注释）。
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -96,6 +96,7 @@ const NEW_S1_ROUTES = [
   "/market/industry/:level1Code/:level2Code/:level3Code", // S1.4 申万末级成分股
   "/market/heatmap", // S1.5 板块热力图（Ruling 30：不是任何 redirect 的目标）
   "/market/data-sources", // Phase 1 §W2.1 数据版图独立页（前端设计整改 §0-E 裁定：市场域内）
+  "/market/sentiment/:metric", // 情绪指标详情（温度计 9 张卡的历史追踪，2026-10-18）
   "/market/rankings/:key", // S1.6 A股排行 7 榜
   "/admin/users", // PR #15 管理员控制台（入口在账户菜单，不在顶栏 NAV_ROOTS）
   "/change-password", // PR #15 强制首登改密页（只要"已登录"、不加权限）
@@ -643,6 +644,24 @@ if (!sec6) {
   } else {
     fail(`ARCHITECTURE §6 逐行字段与清单不一致：\n      ${docDrift.join("\n      ")}`);
   }
+}
+
+// 10：错误边界的 key 不许用具体 pathname（2026-10-18 实测回归）。
+// 为什么会坏：`/market/sentiment/zt_count` → `/market/sentiment/broken_rate` 时 pathname 变了，
+// `key={pathname}` 会把整棵树（含 MainLayout）卸载重挂 —— 切指标整页闪骨架、丢滚动位置。
+// 正确做法是 `routePatternKey(pathname)`（按清单模式归一）。本断言防它被"顺手改回去"。
+const appSource = readFileSync(join(root, "src/App.tsx"), "utf8");
+if (/<ErrorBoundary\s+key=\{pathname\}/.test(appSource)) {
+  fail(
+    "App.tsx 的 RouteErrorBoundary 又用 `key={pathname}` 了：参数化路由换参数会整树重挂" +
+      "（症状：切指标整页抖动/丢滚动）。改用 `routePatternKey(pathname)`"
+  );
+} else if (!appSource.includes("routePatternKey")) {
+  fail("App.tsx 未引用 routePatternKey：错误边界无法在「同页换参数」时保持挂载");
+} else if (!existsSync(join(root, "src/app/router/routeKey.ts"))) {
+  fail("缺少 src/app/router/routeKey.ts（路由模式键的实现文件）");
+} else {
+  pass("错误边界按路由模式重置（同页换参数不整树重挂）");
 }
 
 if (failed) {

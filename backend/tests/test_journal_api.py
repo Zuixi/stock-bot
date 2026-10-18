@@ -28,7 +28,7 @@ import re
 import time
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -270,6 +270,7 @@ async def test_every_endpoint_requires_login(journal_app: tuple[FastAPI, AsyncSe
     await _seed(session)
     assert (await _get(app, "/api/v1/journal", token=None)).status_code == 401
     assert (await _get(app, "/api/v1/journal/stats", token=None)).status_code == 401
+    assert (await _get(app, "/api/v1/journal/summary", token=None)).status_code == 401
     assert (await _get(app, "/api/v1/journal/1", token=None)).status_code == 401
     assert (await _post(app, "/api/v1/journal", token=None, json=_payload())).status_code == 401
     assert (
@@ -528,6 +529,108 @@ async def test_list_rejects_unknown_status(
         params={"status": "archived"},
     )
     assert resp.status_code == 422, resp.text
+
+
+# ── §S12.2 到期待复盘角标：形状 / 三态计数 / 1 条聚合查询 ──────────────────
+
+
+async def _set_due_on(session: AsyncSession, entry_id: int, day: date = REVIEW_DAY) -> None:
+    """只改到期日（不补 K 线）：角标计数不需要行情，不需要 `_make_due` 的期末价。"""
+    await session.execute(
+        text("UPDATE decision_journal_entries SET due_on = :due WHERE id = :entry_id"),
+        {"due": day, "entry_id": entry_id},
+    )
+    await session.flush()
+
+
+@requires_pg
+async def test_summary_is_shape_and_three_state_counts(
+    journal_app: tuple[FastAPI, AsyncSession],
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
+) -> None:
+    """spec §S12.2：``{open, due, reviewed}`` 三态计数，且 ``due`` 只数**可复盘**的条目。
+
+    三态派生规则与列表完全同源（``reviewed`` > ``due`` > ``open``）：
+    这里逐个造一条，第四条是**到期但不可复盘**的历史条目 —— 它必须**不算**进 ``due``
+    （没有复盘入口 ⇒ 角标会永远消不掉）。
+    """
+    app, session = journal_app
+    await _seed(session)
+    user_id = uuid.uuid4()
+    token = _token(rsa_key_pair, user_id)
+
+    open_entry = (await _create(app, token)).json()  # horizon 7 → 未到期
+    due_entry = (await _create(app, token)).json()
+    await _set_due_on(session, due_entry["id"])
+    reviewed_entry = (await _create(app, token)).json()
+    await _make_due(session, reviewed_entry["id"])  # 到期 + 补当天 K 线（复盘要算结果）
+    review = await _post(
+        app,
+        f"/api/v1/journal/{reviewed_entry['id']}/review",
+        token=token,
+        json={"verdict": "luck"},
+    )
+    assert review.status_code == 201, review.text
+    unobservable_id = await _insert_unobservable_due_entry(session, user_id)
+
+    summary = (await _get(app, "/api/v1/journal/summary", token=token)).json()
+    assert set(summary) == {"open", "due", "reviewed"}, "形状是契约（只有这三个键）"
+    assert summary == {"open": 1, "due": 1, "reviewed": 1}
+    # 不可复盘的那条确实在"到期未复盘"集合里，只是被 reviewable 闸挡在角标外
+    assert (await _get(app, "/api/v1/journal", token=token, params={"status": "due"})).json()[
+        "snapshot_summary"
+    ]["due"] == 2
+    detail = (await _get(app, f"/api/v1/journal/{unobservable_id}", token=token)).json()
+    assert (detail["status"], detail["reviewable"]) == ("due", False)
+
+    # 别人的角标不受影响（查询里必须带 user_id）
+    other = (
+        await _get(app, "/api/v1/journal/summary", token=_token(rsa_key_pair, uuid.uuid4()))
+    ).json()
+    assert other == {"open": 0, "due": 0, "reviewed": 0}
+    assert open_entry["status"] == "open"
+
+
+@requires_pg
+async def test_summary_is_single_aggregate_query(
+    journal_app: tuple[FastAPI, AsyncSession],
+    rsa_key_pair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey, str],
+) -> None:
+    """spec §S12.2：**1 条聚合查询**（角标在 `/me` 与 triage 顶部都用，不能变成 N 次查库）。
+
+    监听同一个连接上的 ``after_cursor_execute``，数"碰 ``decision_journal_entries`` 的
+    SELECT"——只允许 1 条，且它必须带 ``count(``（聚合，而不是把 N 条搬回 Python）。
+    """
+    from sqlalchemy import event
+
+    app, session = journal_app
+    await _seed(session)
+    user_id = uuid.uuid4()
+    token = _token(rsa_key_pair, user_id)
+    await _insert_unobservable_due_entry(session, user_id)  # 有行才不会被空表短路
+    await _create(app, token)
+
+    statements: list[str] = []
+
+    def _capture(*args: Any) -> None:
+        statements.append(str(args[2]))
+
+    sync_connection = session.bind.sync_connection  # type: ignore[union-attr]
+    event.listen(sync_connection, "after_cursor_execute", _capture)
+    try:
+        resp = await _get(app, "/api/v1/journal/summary", token=token)
+    finally:
+        event.remove(sync_connection, "after_cursor_execute", _capture)
+
+    assert resp.status_code == 200, resp.text
+    touched = [
+        statement
+        for statement in statements
+        if statement.lstrip().upper().startswith("SELECT")
+        and "decision_journal_entries" in statement
+    ]
+    assert len(touched) == 1, f"summary 必须是 1 条聚合查询：{touched}"
+    assert "count(" in touched[0].lower()
 
 
 # ── 复盘：PIT / 409 / 404 / 422 ────────────────────────────────────────────

@@ -147,23 +147,34 @@ def _print_distribution(document: dict[str, Any]) -> None:
     print(_pad("合计", 10) + _pad(str(total), 8) + "100.0%")
 
 
-async def _build() -> tuple[dict[str, Any], str]:
-    async with async_session_factory() as session:
-        # 只读会话：这条纪律是结构性的，不靠"我们只写了 SELECT"的自觉
-        await session.execute(text("SET TRANSACTION READ ONLY"))
-        dailies, returns = await _load(session)
+async def build(session: AsyncSession) -> dict[str, Any]:
+    """读库 → 产物文档（**纯**：只用传入的会话读，不改事务属性、不写文件）。
+
+    会话由调用方给：脚本自建并显式 ``SET TRANSACTION READ ONLY``；reconcile 尾步
+    （``artifacts_service``）**复用对账会话**，那边同一事务里还有写操作，
+    因此"只读"只能是脚本这条轨道的纪律，不能塞进本函数（否则会打断对账事务）。
+    """
+    dailies, returns = await _load(session)
     if not dailies:
         raise RuntimeError("daily_quotes 为空：先入库行情再跑本脚本")
-    document = svc.build_document(dailies, returns)
-    return document, svc.dump_document(document)
+    return svc.build_document(dailies, returns)
+
+
+def write_document(document: dict[str, Any], path: Path = OUT_PATH) -> Path:
+    """把文档写成产物文件（复用 ``svc.dump_document`` 的确定性序列化）。"""
+    path.write_text(svc.dump_document(document), encoding="utf-8")
+    return path
 
 
 async def main() -> int:
     try:
-        document, payload = await _build()
+        async with async_session_factory() as session:
+            # 只读会话：这条纪律是结构性的，不靠"我们只写了 SELECT"的自觉
+            await session.execute(text("SET TRANSACTION READ ONLY"))
+            document = await build(session)
     finally:
         await engine.dispose()
-    OUT_PATH.write_text(payload, encoding="utf-8")
+    written = write_document(document)
     series = document["series"]
     print(f"版本：{document['version']}（阈值快照见产物 thresholds）")
     print(
@@ -175,7 +186,7 @@ async def main() -> int:
     print()
     _print_distribution(document)
     print()
-    print(f"已写入 {OUT_PATH}（{len(payload.encode('utf-8'))} 字节）")
+    print(f"已写入 {written}（{written.stat().st_size} 字节）")
     return 0
 
 

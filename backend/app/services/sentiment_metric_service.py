@@ -450,6 +450,7 @@ async def get_metric_detail(
         raise KeyError(metric_key)
 
     from app.services import market_day_service  # noqa: PLC0415
+    from app.services import sentiment_regime_service as regime_svc  # noqa: PLC0415
 
     key = metric_cache_key(metric_key, days)
     if cache is not None:
@@ -460,11 +461,21 @@ async def get_metric_detail(
     db: AsyncSession
     async with async_session_factory() as db:
         as_of = await limit_up_repo.latest_sentiment_day(db)
-        rows = await limit_up_repo.list_sentiment_days(db, days)
+        # 多取 250 行给阶段分位做 PIT 上下文；展示/统计仍只取最后 `days` 行。
+        rows = await limit_up_repo.list_sentiment_days(
+            db, min(500, days + regime_svc.REGIME_WINDOW)
+        )
         market = await market_day_service.resolve_latest_complete_day(db)
     quality = market.quality if market is not None else "partial"
 
-    payload = metric_payload(rows, metric_key, as_of=as_of, as_of_quality=quality, days=days)
+    payload = metric_payload(
+        rows,
+        metric_key,
+        as_of=as_of,
+        as_of_quality=quality,
+        days=days,
+        display_days=days,
+    )
     if cache is not None and payload["window"]["samples"]:
         await cache.set(key, payload, ttl=METRIC_TTL)
     return payload

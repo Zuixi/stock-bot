@@ -1,0 +1,573 @@
+/*
+ * 情绪指标详情页（/market/sentiment/:metric）。
+ *
+ * 版式语言与 `/market` 的短线情绪分区一致：发丝分隔的平面面板 + 大数字 +
+ * 数字一律 `--font-num`（`num` 类）。页面内只有三种"卡片"：hero、图卡、口径注，
+ * 避免把 9 个指标详情做成九宫格仪表盘。
+ */
+
+.smd {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 8px 4px 48px;
+}
+
+.smd-crumb {
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+
+.smd-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+/* 返回：可点的"胶囊按钮"，不是一行裸文字。hover/focus 都有明确反馈，触屏也有足够命中区。 */
+.smd-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 7px 13px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.smd-back:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--hover);
+}
+
+.smd-back:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.smd-head__main {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+
+.smd-head__title {
+  margin: 0 !important;
+}
+
+.smd-head__tail {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+/* 指标元信息：chip + 分隔线 + 关键日期/样本，比一串 `·` 拼接更易扫读。 */
+.smd-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.smd-meta__chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.smd-meta__sep {
+  width: 1px;
+  height: 12px;
+  background: var(--border);
+}
+
+.smd-meta__item b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.smd-meta__quality {
+  margin: 0 !important;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+/* 切换指标时的 2px 进度条：数据保留，只给"正在换"这一条线索，不闪骨架、不改变布局高度。 */
+/* 进度条是**覆盖层**：absolute/fixed 都不参与文档流。
+   此前 `height:2px + margin -6/14` 净 +10px，第一次切指标会把页面顶 10px（2026-10-18 实测）。 */
+.smd-loading {
+  position: fixed;
+  top: 64px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  margin: 0;
+  overflow: hidden;
+  z-index: 30;
+  pointer-events: none;
+  background: transparent;
+}
+
+.smd-loading::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 38%;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: smd-loading-slide 0.9s ease-in-out infinite;
+}
+
+@keyframes smd-loading-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(360%);
+  }
+}
+
+.smd-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+/* 窗口选择：与标题同一行下方，窄屏换行；不改变任何卡片高度 */
+.smd-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: -2px 0 14px;
+}
+
+.smd-range__label {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.smd-range__hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.smd-hero__sub {
+  margin: 4px 0 0;
+  height: 18px;
+  line-height: 18px;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.smd-low-sample {
+  margin: 0 !important;
+  font-size: 11px;
+  color: var(--sent-extreme-hot);
+  background: var(--hover);
+}
+
+/* ── hero：今日读数 + 历史位置 ─────────────────────────────────────── */
+
+.smd-hero {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 20px 16px;
+  margin-bottom: 16px;
+}
+
+.smd-hero__value {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.smd-value {
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+.smd-value--hot {
+  color: var(--up);
+}
+
+.smd-value--cold {
+  color: var(--down);
+}
+
+.smd-value--muted {
+  color: var(--text-secondary);
+}
+
+.smd-value__unit {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.smd-delta {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--hover);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.smd-delta--hot {
+  color: var(--up);
+}
+
+.smd-delta--cold {
+  color: var(--down);
+}
+
+.smd-delta--flat {
+  color: var(--text-secondary);
+}
+
+.smd-delta__cap {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.smd-hero__rank {
+  margin: 12px 0 0;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-primary);
+  /* 不同指标的分位句/样本不足句长度不同：预留一行，避免首次切换把下方内容顶走 */
+  min-height: 1.7em;
+}
+
+.smd-hero__hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-height: 1.5em;
+}
+
+.smd-warn {
+  color: var(--sent-extreme-hot);
+}
+
+/* ── 指标切换器（横向 chips，窄屏可横滚）─────────────────────────── */
+
+.smd-switch {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 0 10px;
+  margin-bottom: 12px;
+  scrollbar-width: thin;
+  /* 吸在顶栏（64px）下：读到长图/表格中段时仍能直接切指标，不必滚回顶部。
+     背景必须不透明，否则下方图表会从 chip 缝隙里透出来。 */
+  position: sticky;
+  top: 64px;
+  z-index: 6;
+  background: var(--bg-page);
+  /* 吸附时与下方内容之间加一条发丝线，避免"白色横带盖住图表"的错觉 */
+  box-shadow: 0 1px 0 var(--border);
+}
+
+.smd-switch__item {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 96px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  text-decoration: none;
+  color: var(--text-primary);
+}
+
+.smd-switch__item:hover {
+  border-color: var(--accent);
+  background: var(--hover);
+}
+
+.smd-switch__item--active {
+  border-color: var(--accent);
+  background: var(--hover);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.smd-switch__label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.smd-switch__value {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.smd-switch__item--active .smd-switch__value {
+  color: var(--accent);
+}
+
+.smd-switch__warn {
+  margin-left: 2px;
+  color: var(--sent-extreme-hot);
+  font-weight: 700;
+}
+
+/* ── 图卡 ─────────────────────────────────────────────────────────── */
+
+.smd-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px 12px;
+  margin-bottom: 16px;
+}
+
+.smd-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.smd-card__head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.smd-card__note {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.smd-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.smd-grid > .smd-card {
+  margin-bottom: 16px;
+}
+
+/* ── 统计 ─────────────────────────────────────────────────────────── */
+
+.smd-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 10px;
+  margin: 8px 0 4px;
+}
+
+.smd-stats__item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--bg-elevated);
+}
+
+.smd-stats__item dt {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.smd-stats__item dd {
+  margin: 4px 0 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.smd-stats__item small {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.smd-legend {
+  font-weight: 600;
+}
+
+.smd-legend--hot {
+  color: var(--up);
+}
+
+.smd-legend--cold {
+  color: var(--down);
+}
+
+.smd-details {
+  margin-top: 2px;
+}
+
+.smd-details .ant-collapse-header {
+  padding: 4px 0 !important;
+}
+
+.smd-details__label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.smd-card__footrow {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px 18px;
+  flex-wrap: wrap;
+}
+
+.smd-card__refs {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-num);
+}
+
+.smd-regime-key {
+  font-family: var(--font-ui);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.smd-key {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  display: inline-block;
+  margin-left: 6px;
+}
+
+.smd-key--cold {
+  background: var(--sent-extreme-cold);
+  opacity: 0.35;
+}
+
+.smd-key--neutral {
+  background: var(--text-secondary);
+  opacity: 0.3;
+}
+
+.smd-key--hot {
+  background: var(--sent-extreme-hot);
+  opacity: 0.35;
+}
+
+.smd-key--extreme {
+  background: var(--up);
+  opacity: 0.35;
+}
+
+.smd-card__foot {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.smd-muted {
+  color: var(--text-secondary);
+}
+
+/* 表格单元格不换行：日期折成两行会把行高翻倍（390px 实测） */
+.smd-card .ant-table-cell {
+  white-space: nowrap;
+}
+
+/* ── 口径注 ───────────────────────────────────────────────────────── */
+
+.smd-caliber {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--text-secondary);
+}
+
+.smd-caliber h2 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.smd-caliber p {
+  margin: 0 0 6px;
+}
+
+.smd-caliber strong {
+  color: var(--text-primary);
+}
+
+/* 窄屏：图卡与统计单列（不强行并排，避免图表被压到 300px 以下） */
+@media (max-width: 900px) {
+  .smd-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .smd-value {
+    font-size: 32px;
+  }
+}
+
+@media (max-width: 767px) {
+  /* 窄屏上分位句/警告句通常是 2–3 行；预留固定高度，切指标时不让 hero 长高/缩短 */
+  .smd-hero__rank {
+    min-height: 4.2em;
+  }
+
+  .smd-hero__hint {
+    min-height: 2.8em;
+  }
+
+  .smd-head {
+    gap: 10px;
+  }
+
+  .smd-head__main {
+    flex-basis: 100%;
+  }
+
+  .smd-back {
+    padding: 6px 11px;
+  }
+
+  .smd-meta__sep {
+    display: none;
+  }
+
+  /* 9 个指标在 390px 下超出一屏：右缘渐隐提示"还能往左滑"，比裁掉半张卡更可读。 */
+  .smd-switch {
+    mask-image: linear-gradient(to right, #000 90%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, #000 90%, transparent 100%);
+  }
+}

@@ -710,6 +710,17 @@ async function mockJournal(page: Page, store: JournalStore) {
     const path = url.pathname.replace(/\/+$/, "");
     const method = request.method();
 
+    if (path.endsWith("/summary")) {
+      // spec §S12.2：`{open, due, reviewed}`。mock 从**同一份 store** 推出来（后端也只是
+      // 按状态数这三类），这样「Tab 角标 = due」的断言与列表断言看的是同一份事实。
+      const countBy = (status: string) =>
+        store.entries.filter((item) => item.status === status).length;
+      return route.fulfill({
+        status: 200,
+        json: { open: countBy("open"), due: countBy("due"), reviewed: countBy("reviewed") },
+      });
+    }
+
     if (path.endsWith("/stats")) {
       return route.fulfill({ status: 200, json: store.stats });
     }
@@ -1693,5 +1704,134 @@ test.describe("决策日志（/me?tab=journal）", () => {
     // 切回自选 tab：URL 契约不变
     await page.getByRole("tab", { name: /自选/ }).click();
     await expect(page).toHaveURL(/\/me\?tab=watchlist$/);
+  });
+});
+
+/**
+ * ── S12.2：`/me` 的 Tab 角标（spec §S12.2）─────────────────────────────────
+ *
+ * 角标的数字全部来自后端：`决策日志` 跟 `GET /api/v1/journal/summary` 的 `due`，
+ * `今日体检` 跟 triage 的命中数。三条用例分别钉住三件事：
+ *
+ * 1. **数字对**：`due` 与「条目数 + 折叠数」都要对（只数 `items.length` 会漏掉折叠的那些，
+ *    页面上就会出现「角标 8」与「另有 5 项未展示」并存的怪相）；
+ * 2. **`0` 不显示**：没有到期条目 / 没有命中时不给一个"0"（那会被读成"今天没事"）；
+ * 3. **取不到也不显示**（spec §S12.5）：summary 挂了的时候**绝不能**兜成 0——
+ *    那会把"不知道"画成"今天没有到期"，是本功能最坏的一种假话。
+ *
+ * `mockJournal` 的 summary 从同一份 store 推出来（见其 `/summary` 分支），
+ * 所以这里只造条目、不另写一份数字。
+ */
+
+/** 角标用例用的一条最小 triage 命中（`triageHitCount` 只数条数，但体检面板会真渲染）。 */
+function triageItem(symbol: string, name: string, severity: string, detector: string) {
+  return {
+    symbol,
+    name,
+    detector,
+    severity,
+    headline: "跌破 20 日线",
+    facts: [{ label: "收盘价", value: 10.5, unit: "元" }],
+    as_of: "2026-10-17",
+    source: "daily_quotes",
+    verify: "kline",
+    rule_text: "收盘价 ≤ 20 日均线",
+    rule_version: "r1",
+    source_table: "daily_quotes",
+  };
+}
+
+const TRIAGE_BADGE_FIXTURE = {
+  as_of: "2026-10-17",
+  state: "ok",
+  quiet_count: 1,
+  folded: 2,
+  items: [
+    triageItem("600519", "贵州茅台", "risk", "break_ma20"),
+    triageItem("000001", "平安银行", "event", "announcement"),
+    triageItem("300750", "宁德时代", "attention", "new_high_low"),
+  ],
+  unavailable: [],
+  unavailable_keys: [],
+  disclaimer: "本产品只展示已发生的数据事实，不构成投资建议；历史数据不代表未来表现。",
+};
+
+test.describe("Tab 角标（S12.2：due / triage 命中数）", () => {
+  test("决策日志角标 = summary.due；今日体检角标 = 条目数 + 折叠数", async ({ page }) => {
+    // 1 条 due + 1 条 reviewed → 决策日志角标应为 1
+    const store: JournalStore = {
+      entries: [{ ...DUE_ENTRY }, { ...REVIEWED_ENTRY }],
+      stats: STATS_INSUFFICIENT,
+      lastCreate: null,
+      listGets: 0,
+    };
+    await mockJournal(page, store);
+    // 3 条展示 + 2 条折叠 → 今日体检角标应为 5（不是 3）
+    await page.route("**/api/v1/watchlists/triage", (route) =>
+      route.fulfill({ status: 200, json: TRIAGE_BADGE_FIXTURE })
+    );
+    await page.goto("/me?tab=journal");
+    await expect(page.getByTestId("journal-panel")).toBeVisible();
+
+    await expect(page.getByTestId("me-tab-badge-journal")).toHaveText("1");
+    await expect(page.getByTestId("me-tab-badge-triage")).toHaveText("5");
+
+    // 切到体检 tab：两个角标照旧（此时 triage 数据来自面板自己的请求，共用同一份 cache）
+    await page.getByRole("tab", { name: /今日体检/ }).click();
+    await expect(page.getByTestId("triage-item")).toHaveCount(3);
+    await expect(page.getByTestId("me-tab-badge-triage")).toHaveText("5");
+    await expect(page.getByTestId("me-tab-badge-journal")).toHaveText("1");
+  });
+
+  test("角标为 0 时不显示数字（没有到期 / 没有命中）", async ({ page }) => {
+    const store: JournalStore = {
+      entries: [],
+      stats: STATS_INSUFFICIENT,
+      lastCreate: null,
+      listGets: 0,
+    };
+    await mockJournal(page, store);
+    await page.route("**/api/v1/watchlists/triage", (route) =>
+      route.fulfill({
+        status: 200,
+        json: { ...TRIAGE_BADGE_FIXTURE, items: [], quiet_count: 4, folded: 0 },
+      })
+    );
+    await page.goto("/me?tab=journal");
+    await expect(page.getByTestId("journal-panel")).toBeVisible();
+
+    // 0 不是"一个要显示的数字"：两个角标都不渲染（否则会读成"今天有 0 件要处理"）
+    await expect(page.getByTestId("me-tab-badge-journal")).toHaveCount(0);
+    await expect(page.getByTestId("me-tab-badge-triage")).toHaveCount(0);
+    // tab 本身还在（不显示角标 ≠ 少了一个 tab）
+    await expect(page.getByRole("tab", { name: /决策日志/ })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /今日体检/ })).toBeVisible();
+  });
+
+  test("summary 失败：决策日志角标消失（不显示 0），体检角标不受影响", async ({ page }) => {
+    const store: JournalStore = {
+      entries: [{ ...DUE_ENTRY }],
+      stats: STATS_INSUFFICIENT,
+      lastCreate: null,
+      listGets: 0,
+    };
+    await mockJournal(page, store);
+    // 后注册先命中：把 `/summary` 覆盖成 500（`due` 其实不是 0，但页面"不知道"，故也不许写 0）
+    await page.route("**/api/v1/journal/summary", (route) =>
+      route.fulfill({
+        status: 500,
+        json: { code: "INTERNAL_ERROR", message: "summary unavailable", trace_id: "e2e" },
+      })
+    );
+    await page.route("**/api/v1/watchlists/triage", (route) =>
+      route.fulfill({ status: 200, json: TRIAGE_BADGE_FIXTURE })
+    );
+    await page.goto("/me?tab=journal");
+    await expect(page.getByTestId("journal-panel")).toBeVisible();
+
+    await expect(page.getByTestId("me-tab-badge-journal")).toHaveCount(0);
+    // 两个读面互不牵连：summary 挂了不影响体检角标，也没把用户踢下线
+    await expect(page.getByTestId("me-tab-badge-triage")).toHaveText("5");
+    await expect(page).toHaveURL(/\/me\?tab=journal/);
   });
 });

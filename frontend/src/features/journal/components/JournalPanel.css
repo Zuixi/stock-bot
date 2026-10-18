@@ -253,6 +253,19 @@
   border-radius: 8px;
 }
 
+/* 「从今日体检带入」一行（S12 §S12.1）：它不是警告，也不是提示卡，只是一句**出处说明**
+ * （标的从哪来、快照不用你填），故用中性底色 + 左侧细线，不抢 3 个必填的注意力。 */
+.journal-form__prefill {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
 .journal-form__row {
   display: grid;
   gap: 6px;

@@ -1,0 +1,28 @@
+/* `/me` 的 Tab 角标（S12 §S12.2）。
+ *
+ * 为什么角标自己做一个小圆点而不是 AntD `Badge`：`Badge` 会把数字渲染成 `<sup>` 并带
+ * 动画/描边，塞进 Tab 标题里会顶高整行、也会在 `0` 时按它自己的规则隐身（我们要的规则
+ * 由组件层显式表达：`null` 与 `0` 都不渲染）。这里只要一个**可读的数字**。
+ *
+ * 颜色只走全局令牌（`--accent` / `--text-secondary`），不引入新的全局变量——
+ * 设计门禁 `check-design-tokens.mjs` 要求每个 `var(--x)` 都有定义。 */
+.me-tab {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.me-tab__badge {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  /* 圆点是 accent 实心，数字用页面底色保证对比度（深浅色主题下都成立）。 */
+  color: var(--bg-page);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+  vertical-align: baseline;
+}

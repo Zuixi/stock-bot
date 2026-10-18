@@ -136,6 +136,7 @@ __all__ = [
     "snapshot_line",
     "stats",
     "status_counts",
+    "summary",
     "wilson_interval",
 ]
 
@@ -1969,6 +1970,71 @@ async def status_counts(
     ).one()
     total, reviewed_n, due_n, open_n = (int(value or 0) for value in row)
     return {"total": total, "open": open_n, "due": due_n, "reviewed": reviewed_n}
+
+
+def _jsonb_list(raw: Any) -> list[Any]:
+    """把 ``json_agg`` 的返回值还原成列表（asyncpg 对聚合出的 json 给字符串）。"""
+    if not isinstance(raw, str):
+        return raw if isinstance(raw, list) else []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:  # 理论上不会：json_agg 的输出一定是合法 JSON
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+async def summary(
+    db: AsyncSession, user_id: uuid.UUID | str, *, today: date | None = None
+) -> dict[str, int]:
+    """``{open, due, reviewed}`` 角标（spec §S12.2）：**1 条聚合查询**。
+
+    派生规则与 :func:`list_entries` / :func:`status_counts` **逐字相同**（状态不落库，
+    由 ``due_on`` 与 reviews 行现算）：``reviewed`` = 有复盘行；``open`` = 无复盘行且
+    ``due_on > today``；``due`` = 无复盘行且 ``due_on <= today``。
+
+    ``due`` **额外要求 ``reviewable``**（失效条件可观测，spec §S9.7.8），理由：
+
+    1. 角标的用途是"点进去能做什么"。不可复盘的历史条目（自由文本失效条件）到期后
+       **没有复盘入口**（``POST /journal/{id}/review`` 直接 422），把它算进"待复盘"
+       等于给用户一个永远消不掉的角标（它永远不会变成 ``reviewed``）；
+    2. 与前端"待复盘"的操作口径一致：列表里这类条目的按钮区渲染的是
+       "无法自动判定、不提供归因"，不是"去复盘"。
+
+    为什么仍是**一条**查询：``due`` 的过滤依赖 jsonb 里的 ``kind``/``value``，在 SQL 里
+    重写一遍 :func:`invalidation_observable` 会变成"两套可观测性判据"（历史数据的
+    边角形态一定对不齐）。所以同一条聚合里用 ``json_agg`` 把**到期未复盘条目的
+    invalidation** 带回来，在 Python 里复用同一个纯函数计数——查询数与条目数无关。
+    """
+    uid = _to_uuid(user_id)
+    today = today or today_sh()
+    row = (
+        await db.execute(
+            select(
+                func.count(DecisionJournalEntry.id)
+                .filter(
+                    DecisionJournalReview.id.is_(None),
+                    DecisionJournalEntry.due_on > today,
+                )
+                .label("open_n"),
+                func.count(DecisionJournalReview.id).label("reviewed_n"),
+                func.coalesce(
+                    func.json_agg(DecisionJournalEntry.invalidation).filter(
+                        DecisionJournalReview.id.is_(None),
+                        DecisionJournalEntry.due_on <= today,
+                    ),
+                    text("'[]'::json"),
+                ).label("due_invalidations"),
+            )
+            .select_from(DecisionJournalEntry)
+            .outerjoin(
+                DecisionJournalReview,
+                DecisionJournalReview.entry_id == DecisionJournalEntry.id,
+            )
+            .where(DecisionJournalEntry.user_id == uid)
+        )
+    ).one()
+    due_n = sum(1 for value in _jsonb_list(row.due_invalidations) if invalidation_observable(value))
+    return {"open": int(row.open_n or 0), "due": due_n, "reviewed": int(row.reviewed_n or 0)}
 
 
 async def get_entry(

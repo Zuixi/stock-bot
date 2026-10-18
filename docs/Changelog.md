@@ -1,3 +1,50 @@
+## 2026-10-19 - **S12 闭环三件：一键记一笔 / 到期提醒 / 离线产物自愈**
+
+目标不是加功能，而是把 triage / journal / regime 接成一条回路：
+
+- **一键记一笔**：体检卡片「记一笔」→ `/me?tab=journal&symbol=&from=triage`，预填标的（**不预填 thesis/invalidation**，三必填不变）、
+  `horizon` 默认 30、提交后清 query；表单上方显示「从今日体检带入」。
+- **到期提醒**：新端点 `GET /api/v1/journal/summary`（1 条聚合查询，`due` = 已到期未复盘**且可复盘**的条数，避免"永远消不掉的角标"）；
+  `/me` 两个 Tab 带角标（0 与失败都不显示数字）；体检页顶部 `due>0` 时提示「有 N 条判断今日到期 → 去复盘」。
+- **离线产物自愈**：`artifacts_service.refresh_stale_artifacts` 接进 reconcile **尾步**（不新开 cron）——三个产物
+  `market_regime_history` / `peer_history_stats` / `triage_rule_stats` 只在**过期时**重建（`as_of` 落后**或版本不一致**），
+  单产物失败只告警并保留旧文件；实测重建耗时合计 **85.95s**（regime 29.3 / peer 21.6 / triage 35.1）。
+- **修掉两个真 bug**：① `backend/.dockerignore` 整体忽略了 `scripts/`，而 `artifacts_service` 直接 import `scripts.build_*`
+  ⇒ 测试全绿、**容器里 `ModuleNotFoundError`**（只有 reconcile 会炸）；已把 `scripts/` 纳入镜像并加"可导入"测试。
+  ② `build_triage_rule_stats` 的 `DATE_COLUMN` 漏 `share_floats` ⇒ 自 S11 起该脚本在真库上 `KeyError`；已补 `float_date`。
+- 涉及文件：`backend/app/services/artifacts_service.py(新)`、`backend/app/services/reconciliation_service.py`、
+  `backend/app/api/v1/journal.py`、`backend/scripts/build_{market_regime,peer_history_stats,triage_rule_stats}.py`、
+  `backend/.dockerignore`、`frontend/src/features/{triage,journal}/**`、`frontend/src/pages/me/index.tsx`、
+  `docs/{features.md,specs/S12-closed-loop.md(新),Changelog.md}`
+
+## 2026-10-20 - **S12 后端：决策日志角标 `GET /journal/summary` + 离线产物自愈（接 reconcile 尾步）**
+
+零新表、零新 cron、`/market` 前端未动（spec `docs/specs/S12-closed-loop.md` §S12.2/§S12.3）：
+
+- **`GET /api/v1/journal/summary`**（登录即可）：`{open, due, reviewed}`，**1 条聚合查询**
+  （`count FILTER` + `json_agg` 只带回"到期未复盘"的 `invalidation`；`due` 在 Python 里复用
+  既有 `invalidation_observable`，不在 SQL 里重写第二套可观测性判据）。`due` = 到期 + 未复盘
+  + `reviewable`（不可复盘的历史条目没有复盘入口，算进去角标永远消不掉）
+- **`app/services/artifacts_service.py(新)`**：`refresh_stale_artifacts(db, day)` 读三个产物
+  `as_of`，**只在 `< day` 时重建**；`build_{market_regime,peer_history_stats,triage_rule_stats}.py`
+  重构为「`build(session)` 纯函数 + `write_document` + `__main__` 薄壳」（禁止两处实现）。
+  单产物失败 → 告警 `artifacts_refresh:<产物>` + **旧文件逐字节保留**（同目录 tmp + `os.replace`）
+  + 继续其它产物；重建出更旧的 `as_of` 时不写文件
+- **接 reconcile 尾步**：`_refresh_stale_artifacts()` 在 converge 与涨停事实上游之后跑，
+  目标日 = 对账算出的 `expected_latest`（不新开 cron、不另算交易日历）；对账失败/无过门禁日 → 跳过
+- **顺带修 S11 留下的产物缺口**：`build_triage_rule_stats` 的 `DATE_COLUMN` 漏了 `share_floats`
+  ⇒ 真库上直接 `KeyError`（S12.3 接进 reconcile 后会变成每轮告警）；补 `float_date`，并把
+  未纳入标定 SQL 的 `unlock_soon` 显式写成「尚未纳入」而不是「窗口内无信号」
+- 测试：`tests/test_artifacts_service.py(新)` 6 条（新鲜零重建 / 过期各一次且 `as_of` 前进 /
+  单产物失败不扩散 + 旧文件不变 + 1 条告警 / 缺失重建 / 未前进不写）+ journal API 4 条
+  （401 / 形状 / 三态 + reviewable 闸 / **1 条聚合查询**）
+- 实测重建耗时（真库 2026-10-16 数据）：regime **29.29s** / peer **21.56s** / triage **35.10s**，
+  合计 **85.95s**（只在产物过期的那一轮付这笔钱）
+- 涉及文件：`backend/app/services/{artifacts_service.py(新),journal_service.py}`、
+  `backend/app/{schemas/journal.py,api/v1/journal.py,scheduler/jobs.py}`、
+  `backend/scripts/build_{market_regime,peer_history_stats,triage_rule_stats}.py`、
+  `backend/tests/{test_artifacts_service.py(新),test_journal_api.py}`、`docs/Changelog.md`
+
 ## 2026-10-19 - 计划登记：标的详情页整改（**自审后改版为 P0/P1/P2**：5 处假数据 · 联动 · 防复发契约测试 · 图内事件标记）
 
 - **触发**：owner 实测反馈「K 线虚线与成交量不跨区联动」，全量审计 `features/stock-detail`（1175 行）+ 后端读面后，联动只是表层——更严重的是**页面在说假话**
@@ -57,6 +104,19 @@
 - **测试** `backend/tests/test_market_regime.py(新，43 条)`：五态表驱动 / 三处优先级 / 边界（闭区间端点、中位恰 0）/ 缺特征不判中性 / 迟滞（1 天抖动不切、连续 3 天切在第 3 天、中断后重计数、天数读 registry）/ 转移矩阵行和=1 与"无出边不出行" / `n<30` 不给数字 / 无前视（塞未来收益结果不变、入场日当天收益不参与）/ winsorize ±50% / 产物确定性 / 读面四种降级 / 路由注册 + **入库产物与 registry 版本·阈值对拍**（并机械校验每态 ≥5%）
 - **对账**：随机 5 个交易日（2023-11-28 / 2025-07-11 / 2025-09-16 / 2026-03-02 / 2026-06-08）用独立 Python 实现从原始 `daily_quotes` 重算日级原语，与脚本 SQL 的六项（成交额/涨跌家数/中位涨跌幅/新高数/新高分母）逐项一致
 - **门禁**：改动文件 `ruff check` + `ruff format --check` ✓、`mypy`（4 个文件）✓、`pytest tests/test_market_regime.py -q` **43 passed**、全量 `pytest -q` **1851 passed / 1 failed**（`test_derived_metrics_job` 的顺序依赖失败，隔离运行通过，与本次改动无关）、`bash scripts/build_market_regime.py` ✓、`bash scripts/self_review.sh` ✓（doc_gate 16 项 + check:routes 89 项）
+
+## 2026-10-19 - **情绪脉搏（阶段 + small multiples + 指数背离）+ 小样本治理 + 切指标零位移**
+
+三块一起落地，核心是让"一眼看出整个市场情绪变化"成立，而不是九个指标各看一遍：
+
+- **切指标残留跳动（根因修复）**：`smd-loading` 原先在正常文档流里（`height:2 + margin -6/14 = +10px`），第一次切到未缓存指标时把页面顶 10px；改为 `position:fixed` 覆盖层（零布局）。另把 Wilson 区间从"ratio 指标才多一行"改成**所有指标固定的 sub 行**、样本门槛注恒显、hero 的 rank/hint 预留 min-height：1440 实测切换前后 `scrollY=600 / bodyH=1798` 完全不变，390 窄屏 hero 高度 215→215
+- **情绪脉搏**（`/market` 温度计之前）：左侧当前阶段 + 三个输入分位，右侧 4 张 small multiples（涨停家数/炸板率/最高板/1进2，共享时间轴 + `echarts.connect` hover 联动），底部「情绪 vs 创业板指」**同分位轴**对比 + 连续背离段；`20D/60D/120D/250D` 与基准（创业板指/上证）写进 URL（`?pulse=60&bench=...`），不触发路由重挂
+- **周期阶段**（[ADR 0022](./decisions/0022-sentiment-regime-and-sample-gate.md)）：PIT 250 日分位 + 规则化 5+1 阶段（冰点/退潮/修复/发酵/高潮/分歧）；绝对水位守卫（横盘窗口分位饱和到 100 不判高潮）、持续 2 天平滑（末段以当日原始判定为准）、`REGIME_VERSION` 版本化；详情页主图同步画阶段背景带 + 色块图例
+- **小样本治理**：样本型指标 `n<5` 的日子标 `low_sample`，原始值仍展示（趋势线断开 + 空心散点），但不进统计/分位/分布/连续天数；比值类 `n≥5` 给 Wilson 95% 区间；切换器 chip 与 hero 同源（`50.00%*` 不再显示成上周的 18.18%）
+- **详情页窗口**：`?days=20|60|120|250`（默认 250）控件；统计/分位/分布随窗口重算，阶段背景带恒用 250 日 PIT；近 20 日折线低样本点空心
+- 后端新增 `GET /market/sentiment/pulse`（读时计算、Redis 900s、落库按前缀失效）与 `sentiment_regime_service`；`metrics/{key}` 追加 `low_sample / latest_interval / sample_gate / regime`；无新表、无新 Job、无迁移
+- 测试：pytest 新增 10 条（PIT 分位/绝对守卫/平滑/末段原始/Wilson/样本门槛/指数对齐/背离/pulse 端点/display_days 上下文）；相关用例 **54 passed**；`tsc` / `build` / `check:routes` / `doc_gate` / `mypy` / `ruff` 全绿。全量 pytest **1862 passed**，1 条 DB/job 用例受同工作区并行写库干扰（单条复跑全绿），不作为本任务回归
+- 涉及文件：`backend/app/services/{sentiment_regime_service.py,sentiment_pulse_service.py,sentiment_metric_service.py,limit_up_service.py}`、`backend/app/{schemas/limit_up.py,api/v1/market_data.py}`、`backend/tests/{test_sentiment_regime.py(新),test_sentiment_metric_detail.py}`、`frontend/src/{features/market/components/SentimentPulse.tsx(新)+.css,features/sentiment/{regimeStyle.ts(新),metricDetailFormat.ts},pages/market-sentiment-metric/*,pages/market/sections.tsx,shared/api/limitUp.ts,shared/ui/EChart.tsx}`、`docs/{design/limit-up-sentiment.md,features.md,decisions/0022*,Changelog.md}`、`plans/2026-10-18-sentiment-metric-tracking.md`
 
 ## 2026-10-19 - **S9 深度优化后端：`evaluation.earnings_in_window` / `stats.consistency`**
 

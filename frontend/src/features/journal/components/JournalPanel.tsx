@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Alert, Button, Empty, Skeleton, Tag, Typography } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import {
   fetchJournalEntries,
   fetchJournalStats,
@@ -75,6 +76,12 @@ const { Text } = Typography;
  * - 「待复盘」= `due`（每条带"复盘"按钮）+ 其下的「未到期（M）」= `open`；
  * - 「已复盘」= `reviewed`（每条带归因标签、没有编辑/删除入口）+ 统计卡 + 校准卡；
  * - 页脚：导出链接、隐私告知（S9.7.9）、固定免责（逐字照 spec §S9.5）。
+ *
+ * S12.1 的「从今日体检带入」（只做加法，不新增路由，query 是唯一真相）：
+ * - 读 `?symbol=<code>&from=triage`：`symbol` 预填标的、`from=triage` 时表单顶部多一行
+ *   「从今日体检带入：<code>（快照在提交时自动生成）」、`horizon_days` 默认 30（仍可改）；
+ * - **不预填** thesis / invalidation：三必填照旧由用户写（§S9.1 的纪律不因入口变近而松）；
+ * - 提交成功后清掉这两个参数（`replace`），避免刷新时又带一次同一个标的。
  */
 
 /** thesis 的第一行（列表行只展示一行，全文留在条目里）。 */
@@ -521,6 +528,12 @@ function JournalSection({
 export function JournalPanel() {
   const queryClient = useQueryClient();
   const [reviewing, setReviewing] = useState<JournalEntry | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // 「从今日体检带入」（spec §S12.1）：query 是**唯一真相**（刷新/后退都还在），
+  // 表单不自己另存一份带入状态。只认这两个参数，其余（`status` 等）原样透传。
+  const prefillSymbol = searchParams.get("symbol") ?? "";
+  const fromTriage = searchParams.get("from") === "triage";
 
   const openQuery = useQuery({
     queryKey: ["journal", "list", "open"],
@@ -546,6 +559,29 @@ export function JournalPanel() {
     queryClient.invalidateQueries({ queryKey: ["journal"] });
   };
 
+  /**
+   * 提交成功后清掉带入参数（spec §S12.1：避免刷新时**又**带一次同一个标的）。
+   *
+   * 两个细节：
+   * - `replace: true`：这只是一次清理，不该在历史里多一条"清理后"的记录（否则用户按
+   *   后退会回到带着旧标的的表单）；
+   * - 保住 `tab`：`setSearchParams` 是**整串替换**，把 `tab` 一起删掉会让页面掉回默认
+   *   tab（今日体检），用户刚记完就看不见自己那一条。
+   */
+  const clearPrefillParams = () => {
+    if (!searchParams.has("symbol") && !searchParams.has("from")) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("symbol");
+    next.delete("from");
+    if (!next.has("tab")) next.set("tab", "journal");
+    setSearchParams(next, { replace: true });
+  };
+
+  const handleCreated = () => {
+    refreshAll();
+    clearPrefillParams();
+  };
+
   // 「重新检查」（契约 §3）：结果未就绪时**只重拉数据**，不替用户补任何东西。
   // 拉的是列表查询（到期/未到期两份都在用同一条读面）；后端把行情/基准补齐后，
   // `evaluation` 自然带上，按钮随之可用。
@@ -566,7 +602,11 @@ export function JournalPanel() {
 
       <section className="journal-section" data-testid="journal-form-section">
         <h2 className="journal-section__title">记一笔</h2>
-        <EntryForm onCreated={refreshAll} />
+        <EntryForm
+          onCreated={handleCreated}
+          prefillSymbol={prefillSymbol}
+          fromTriage={fromTriage}
+        />
       </section>
 
       <JournalSection

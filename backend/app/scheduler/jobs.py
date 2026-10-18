@@ -166,6 +166,14 @@ async def reconcile_market_data_job() -> None:
     对账失败（返回 `None`）时**仍然**尝试收敛：底座可能只是部分域失败（例如
     `daily_basic` 的洞不影响宽度腿），而收敛器自带前置闸门（底座没齐就跳过），
     所以这里不需要替它再判一次。
+
+    ## 2026-10-20（S12.3）：最后一环是离线产物自愈
+
+    `_refresh_stale_artifacts()` —— regime / peer_history / triage 标定三个 JSON 产物
+    过去**只**由手工脚本更新，页面上的"同类历史/规则标定"会一直停在人工回补那天。
+    它挂在同一条链的尾巴（**不新开 cron**）：用对账算出的 `expected_latest` 当目标日，
+    判据幂等（产物 `as_of < day` 才重建，新鲜时零查询）。失败只登记
+    `artifacts_refresh:<产物名>` 告警，不反噬对账。
     """
     logger.info("Full reconcile job triggered")
     # 同一 callable 挂在 3 个触发点（启动 +2min / 17:45 兜底 / 非交易日 10:00）上
@@ -174,6 +182,55 @@ async def reconcile_market_data_job() -> None:
         job_ids=("startup_reconcile", "reconcile_post_chain", "reconcile_weekend_catchup"),
     )
     await _converge_derived_metrics(result)
+    await _refresh_stale_artifacts(result)
+
+
+async def _refresh_stale_artifacts(reconcile_result: dict[str, Any] | None) -> None:
+    """对账尾巴最后一环：离线产物（regime / peer_history / triage 标定）自愈.
+
+    目标日取对账算出的 `expected_latest`（过了齐备门禁的交易日）——与收敛器同源，
+    不自己另算一份交易日历。三种情形：
+
+    - 对账**失败**（`None`）/ 窗口内没有过门禁的日子（`expected_latest` 为空）⇒ 跳过并
+      告警。不回退到"`daily_quotes` 最近一天"：那正是没过门禁的那天，在它上面重建
+      等于把半截底座写进产物（与 `_converge_derived_metrics` 同一纪律）。
+    - 正常 ⇒ `artifacts_service.refresh_stale_artifacts(db, day)`；它对**单个产物**的
+      失败内部已经 catch + 告警 + 保留旧文件（spec §S12.3），不会抛到这里。
+    - 产物全部新鲜（绝大多数轮次）⇒ **连数据库会话都不开**（`stale_artifacts` 只读文件）：
+      自愈机制不该在无事可做的日子里多占一条连接（job 层测试也因此保持密闭）。
+    - 万一抛到这里（例如 session 建不起来）⇒ **不得反噬对账**：告警挂在
+      `artifacts_refresh` 上，reconcile job 仍然算成功。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import artifacts_service  # noqa: PLC0415
+
+    raw = (reconcile_result or {}).get("expected_latest")
+    if not raw:
+        logger.warning(
+            "Artifacts refresh skipped: no gated trading day "
+            "(source=%s, calendar_expected_latest=%s)",
+            (reconcile_result or {}).get("expected_latest_source"),
+            (reconcile_result or {}).get("calendar_expected_latest"),
+        )
+        return
+    day = date.fromisoformat(str(raw))
+    if not artifacts_service.stale_artifacts(day):
+        logger.debug("Artifacts refresh skipped: all fresh (day=%s)", day)
+        return
+    try:
+        async with async_session_factory() as db:
+            payload = await artifacts_service.refresh_stale_artifacts(db, day)
+    except Exception as exc:  # noqa: BLE001 — 产物自愈失败不得反噬对账 job 的成败
+        logger.exception("Artifacts refresh failed (day=%s)", day)
+        await _alert_job_failure("artifacts_refresh", exc)
+        return
+    logger.info(
+        "Artifacts refresh done (day=%s): refreshed=%s skipped=%s failed=%s",
+        day,
+        payload["refreshed"],
+        payload["skipped"],
+        payload["failed"],
+    )
 
 
 async def _converge_derived_metrics(reconcile_result: dict[str, Any] | None) -> None:

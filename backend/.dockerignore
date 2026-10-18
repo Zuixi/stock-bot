@@ -10,7 +10,9 @@ venv
 data/*
 !data/sw_seed.sql
 tests/
-scripts/
+# `scripts/` **必须进镜像**：`app/services/artifacts_service.py` 在 reconcile 尾步重建
+# 三个离线产物时直接 import `scripts.build_*`（单一实现，禁止两处）。曾整体忽略，
+# 导致镜像里 `ModuleNotFoundError: scripts` —— 只有容器内 reconcile 才会炸，测试发现不了。
 docs/
 !data/sw_custom_tags_seed.sql
 # 本地工具缓存（不该进 COPY . . 的层，否则每次跑测试/lint 都让镜像层失效）

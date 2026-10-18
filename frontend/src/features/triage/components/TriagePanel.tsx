@@ -11,6 +11,7 @@ import {
   type TriageRuleStats,
   type TriageSeverity,
 } from "@/shared/api/triage";
+import { fetchJournalSummary, summaryCount } from "@/shared/api/journal";
 import { formatAsOfDate } from "@/shared/ui/date";
 import { RegimeLine } from "./RegimeLine";
 import "./TriagePanel.css";
@@ -40,6 +41,12 @@ import "./TriagePanel.css";
  * 5 日中位」（`RegimeLine`），点开是转移比例与 20 日分布。它是独立的读面（自己的请求、
  * 自己的失败降级）：接口挂了或 `state` 为空就**整行不渲染**，既不影响下面的体检清单，
  * 也不留"未知"占位（"这次没有这一行" ≠ "市场状态未知"）。`/market` 一概不动。
+ *
+ * **S12 的两处接入**（spec §S12.1/§S12.2，都只做加法）：
+ * - 每张卡片脚上一个「记一笔」（`data-testid="triage-journal"`）→
+ *   `/me?tab=journal&symbol=<code>&from=triage`，**不新增路由**；只带标的，判断类字段不填；
+ * - 面板**最顶部**一行到期提醒（`data-testid="triage-due-hint"`）：`due > 0` 才渲染，
+ *   链到 `/me?tab=journal&status=due`；`0` 与"取不到"都不渲染（见 `TriageDueHint`）。
  */
 
 /** 百分比口径的统计值：**保留符号**（可为负），取不到时用 `—` 而不是 0。 */
@@ -69,6 +76,17 @@ const SEVERITY_LABEL: Record<TriageSeverity, string> = {
 function verifyHref(item: TriageItem): string {
   if (item.verify === "announcement") return "/news";
   return `/stock/${encodeURIComponent(item.symbol)}`;
+}
+
+/**
+ * 「记一笔」去处（spec §S12.1）：**不新增路由**，把标的带进 `/me` 的决策日志 tab。
+ *
+ * `from=triage` 是给日志页的语义标记（带入提示 + `horizon_days` 默认 30），
+ * `symbol` 只带代码、不带名字：日志页没有个股字典，凭空补一个名字就是在猜。
+ */
+function journalHref(item: TriageItem): string {
+  const params = new URLSearchParams({ tab: "journal", symbol: item.symbol, from: "triage" });
+  return `/me?${params.toString()}`;
 }
 
 function TriageCard({ item, onOpenRule }: { item: TriageItem; onOpenRule: () => void }) {
@@ -114,9 +132,15 @@ function TriageCard({ item, onOpenRule }: { item: TriageItem; onOpenRule: () => 
 
       <div className="triage__card-foot">
         <span className="triage__asof">数据截至 {formatAsOfDate(item.as_of)}</span>
-        <Link className="triage__verify" to={verifyHref(item)}>
-          复核
-        </Link>
+        <span className="triage__actions">
+          {/* 一键记一笔（spec §S12.1）：只带标的过去，判断类字段（thesis/invalidation）一个字不填 */}
+          <Link className="triage__journal" data-testid="triage-journal" to={journalHref(item)}>
+            记一笔
+          </Link>
+          <Link className="triage__verify" to={verifyHref(item)}>
+            复核
+          </Link>
+        </span>
       </div>
     </li>
   );
@@ -395,16 +419,54 @@ function TriageBody() {
 }
 
 /**
- * `/me?tab=triage` 的根：**顶部一行市场状态**（S10 §S10.3）+ 体检本体。
+ * 到期提醒一行（spec §S12.2）：`due > 0` 时「有 N 条判断今日到期 → 去复盘」。
+ *
+ * 三条纪律，缺一条这行就变成假话：
+ * 1. **`0` 不渲染**：没有到期条目时不写"0 条到期"——那行字会被读成"今天没事"，
+ *    而它其实只是"没有到期条目"，是一句无信息量的噪声；
+ * 2. **取不到不渲染**：接口失败/字段缺省时整行不出现，**不显示 0**（把"不知道"画成
+ *    "0 条到期"正是 spec §S12.5 点名要避免的那种假话）；
+ * 3. **独立读面**：它有自己的请求与失败降级，不影响下面的体检清单，也不被体检的
+ *    加载/失败带走（与 `RegimeLine` 同一种"互不牵连"的形状）。
+ *
+ * `skipAuth` 在 `fetchJournalSummary` 内：这个端点是装饰性的，失败不该清登录态。
+ */
+function TriageDueHint() {
+  const { data } = useQuery({
+    queryKey: ["journal", "summary"],
+    queryFn: fetchJournalSummary,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const due = summaryCount(data, "due");
+  if (due === null || due <= 0) return null;
+  return (
+    <Link
+      className="triage__due-hint"
+      data-testid="triage-due-hint"
+      to="/me?tab=journal&status=due"
+    >
+      {`有 ${due} 条判断今日到期 → 去复盘`}
+    </Link>
+  );
+}
+
+/**
+ * `/me?tab=triage` 的根：**顶部到期提醒**（S12 §S12.2）+ **顶部一行市场状态**
+ * （S10 §S10.3）+ 体检本体。
  *
  * 为什么把 `RegimeLine` 提到三态之外（而不是塞进 `TriageView`）：
  * 两者是**两个独立读面**——市场状态是背景信息，体检清单是"今天你的自选有没有事"。
  * 体检还在加载、或体检接口挂了，都不该把这一行一起带走；反过来，这一行失败也
  * 只影响它自己（`RegimeLine` 内部失败即隐身）。二者互不影响才是契约要的形状。
+ *
+ * 到期提醒排在最前面：它是"今天有一件**要做的事**"（去复盘），比背景信息更该先被看见；
+ * 而它自己失败时只是消失，不占位、不降级成"0 条"。
  */
 export function TriagePanel() {
   return (
     <div className="triage">
+      <TriageDueHint />
       <RegimeLine />
       <TriageBody />
     </div>

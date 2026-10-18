@@ -1,0 +1,571 @@
+/*
+ * 情绪脉搏：一条"纸带"，不是九宫格卡片。
+ *
+ * 设计规则：
+ *  - 只用发丝线切分（border-top / border-right），零圆角、零阴影；
+ *  - 阶段色是唯一的强调色（冷=紫、热=棕、极热=红、中性=文字色），其余线一律中性；
+ *  - 图内背景带（阶段）用 10% 透明度，读者先读"阶段"，再读"数值"。
+ */
+
+.pulse {
+  position: relative;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 16px 0 14px;
+  margin: 0 0 18px;
+}
+
+.pulse__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.pulse__heading {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pulse__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.pulse__sub {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.pulse__mode {
+  margin-left: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--hover);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.pulse__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 进度条：绝对定位覆盖层，**不参与布局**（2026-10-18 的 10px 跳动教训）。 */
+.pulse__loading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.pulse__loading::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 34%;
+  background: var(--accent);
+  animation: pulse-loading-slide 0.9s ease-in-out infinite;
+}
+
+@keyframes pulse-loading-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(380%);
+  }
+}
+
+.pulse__body {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  gap: 24px;
+  min-height: 320px; /* 首载骨架与正文同高，避免加载完成后整块下推 */
+}
+
+/* ── 左栏：阶段是主角 ─────────────────────────────────────────────── */
+
+.pulse__rail {
+  border-right: 1px solid var(--border);
+  padding-right: 22px;
+  min-width: 0;
+}
+
+.pulse__stage-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 14px;
+}
+
+.pulse__stage {
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: 0.02em;
+}
+
+.pulse__stage--cold {
+  color: var(--sent-extreme-cold);
+}
+
+.pulse__stage--hot {
+  color: var(--sent-extreme-hot);
+}
+
+.pulse__stage--extreme {
+  color: var(--up);
+}
+
+.pulse__stage--neutral {
+  color: var(--text-primary);
+}
+
+.pulse__stage--muted {
+  color: var(--text-secondary);
+}
+
+.pulse__stage-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.pulse__inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0 0 12px;
+}
+
+.pulse__input {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  column-gap: 8px;
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+}
+
+.pulse__input dt {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.pulse__input dd {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.pulse__pct {
+  grid-column: 1 / -1;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  margin-top: 1px;
+}
+
+.pulse__diverge {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+}
+
+.pulse__diverge--warn {
+  color: var(--sent-extreme-hot);
+  font-weight: 600;
+}
+
+.pulse__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+}
+
+.pulse__legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pulse__swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  display: inline-block;
+}
+
+.pulse__swatch--cold {
+  background: var(--sent-extreme-cold);
+  opacity: 0.45;
+}
+
+.pulse__swatch--neutral {
+  background: var(--text-secondary);
+  opacity: 0.35;
+}
+
+.pulse__swatch--hot {
+  background: var(--sent-extreme-hot);
+  opacity: 0.45;
+}
+
+.pulse__swatch--extreme {
+  background: var(--up);
+  opacity: 0.45;
+}
+
+.pulse__asof {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.pulse__quality {
+  margin-left: 6px;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.pulse__disclaimer {
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
+/* ── 右侧：small multiples ───────────────────────────────────────── */
+
+.pulse__charts {
+  min-width: 0;
+}
+
+.pulse__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 22px;
+  row-gap: 10px;
+}
+
+.pulse-cell {
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 7px;
+}
+
+.pulse-cell__head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  text-decoration: none;
+  color: var(--text-primary);
+  min-width: 0;
+}
+
+.pulse-cell__label {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.pulse-cell__value {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.pulse-cell__pct {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+
+.pulse-cell__n {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.pulse-cell__n--warn {
+  color: var(--sent-extreme-hot);
+}
+
+.pulse-cell__hint {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.pulse-cell__head:hover .pulse-cell__hint,
+.pulse-cell__head:focus-visible .pulse-cell__hint {
+  opacity: 1;
+}
+
+.pulse-cell__head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── 对比图（情绪 vs 指数）───────────────────────────────────────── */
+
+.pulse-compare {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.pulse-compare__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pulse-compare__title {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.pulse-compare__axis {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.pulse-compare__legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  min-width: 0;
+}
+
+.pulse-compare__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.pulse-compare__dot--hot {
+  background: var(--accent);
+}
+
+.pulse-compare__dot--muted {
+  background: var(--text-secondary);
+}
+
+.pulse-compare__note {
+  margin: 0;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+
+.pulse-compare__note--warn {
+  color: var(--sent-extreme-hot);
+  font-weight: 600;
+}
+
+/* ── 空/错/骨架 ─────────────────────────────────────────────────── */
+
+.pulse__skeleton {
+  min-height: 320px;
+}
+
+.pulse__empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  min-height: 120px;
+}
+
+/* ── 响应式 ─────────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .pulse__body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .pulse__rail {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding-right: 0;
+    padding-bottom: 12px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 20px;
+    align-items: start;
+  }
+
+  .pulse__stage-wrap {
+    grid-column: 1;
+    margin-bottom: 8px;
+  }
+
+  .pulse__inputs {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    margin-bottom: 0;
+  }
+
+  .pulse__diverge,
+  .pulse__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+}
+
+.pulse__legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pulse__swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  display: inline-block;
+}
+
+.pulse__swatch--cold {
+  background: var(--sent-extreme-cold);
+  opacity: 0.45;
+}
+
+.pulse__swatch--neutral {
+  background: var(--text-secondary);
+  opacity: 0.35;
+}
+
+.pulse__swatch--hot {
+  background: var(--sent-extreme-hot);
+  opacity: 0.45;
+}
+
+.pulse__swatch--extreme {
+  background: var(--up);
+  opacity: 0.45;
+}
+
+.pulse__asof {
+    grid-column: 1;
+  }
+
+  .pulse__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+}
+
+.pulse__legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pulse__swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  display: inline-block;
+}
+
+.pulse__swatch--cold {
+  background: var(--sent-extreme-cold);
+  opacity: 0.45;
+}
+
+.pulse__swatch--neutral {
+  background: var(--text-secondary);
+  opacity: 0.35;
+}
+
+.pulse__swatch--hot {
+  background: var(--sent-extreme-hot);
+  opacity: 0.45;
+}
+
+.pulse__swatch--extreme {
+  background: var(--up);
+  opacity: 0.45;
+}
+
+.pulse__asof {
+    margin-top: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .pulse__rail {
+    display: block;
+  }
+
+  .pulse__inputs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .pulse__input {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    border-top: 0;
+    padding: 0;
+  }
+
+  .pulse__input dd,
+  .pulse__pct {
+    text-align: left;
+  }
+
+  .pulse__stage {
+    font-size: 26px;
+  }
+
+  .pulse-compare__legend {
+    width: 100%;
+  }
+}
+
+
+/* 只有极窄屏（<380）才退化成单列；390 上仍用 2×2，保证「一眼看到 4 个指标」。 */
+@media (max-width: 380px) {
+  .pulse__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

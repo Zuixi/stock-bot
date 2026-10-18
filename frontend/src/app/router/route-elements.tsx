@@ -35,6 +35,8 @@ const PAGES: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
   IndustryLevel4Page: lazy(() => import("@/pages/market-industry-level4")),
   // 保留路由（Ruling 30）：今天就有数据的真页面，不 redirect 到占位页
   MarketHotSectorsPage: lazy(() => import("@/pages/market-hot-sectors")),
+  // 情绪指标详情（温度计 9 张卡的历史追踪）：`/market/sentiment/:metric`
+  MarketSentimentMetricPage: lazy(() => import("@/pages/market-sentiment-metric")),
   ConceptBoardPage: lazy(() => import("@/pages/market-concept")),
   // 注：`/tags/:tagName` 是 **redirect**（→ `/me?tab=tags&name=`），故没有 `TagsDetailPage` 注册项；
   // 标签个股列表由 `TagsPanel` 渲染（`pages/tags-detail` 已按 Ruling 33 删除：无人渲染 = 死代码）

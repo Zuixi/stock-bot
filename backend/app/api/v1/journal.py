@@ -8,10 +8,11 @@
 要求 ``research:read`` 会让普通用户读不到自己的日志。所有查询都带 ``user_id``，
 非本人条目统一 **404**（不泄露"有没有这条"）。
 
-六个端点（与计划 Task 3/5 的契约一一对应）：:
+七个端点（与计划 Task 3/5/S12 的契约一一对应）：:
 
     POST /api/v1/journal                    → 201 创建（快照落库）
     GET  /api/v1/journal?status=            → 列表 + 三态计数
+    GET  /api/v1/journal/summary            → 三态角标（1 条聚合，spec §S12.2）
     GET  /api/v1/journal/stats              → 统计（占比无样本为 null）
     GET  /api/v1/journal/export?format=      → 导出本人全部（json|csv，spec §S9.7.9）
     GET  /api/v1/journal/{id}               → 单条（含到期自动结果）
@@ -34,6 +35,7 @@ from app.schemas.journal import (
     JournalReviewCreate,
     JournalReviewOut,
     JournalStatsOut,
+    JournalSummaryOut,
 )
 from app.services import journal_service as svc
 
@@ -72,6 +74,19 @@ def _entry_out(row: svc.JournalRow, evaluation: dict | None = None) -> JournalEn
 
 
 # 静态路径必须声明在 `/{entry_id}` 之前：否则 "stats" 会被路径参数吃掉（422 而不是路由）
+@router.get("/summary", response_model=JournalSummaryOut)
+async def get_journal_summary(db: DbDep, user: CurrentUserDep) -> JournalSummaryOut:
+    """到期角标（spec §S12.2）：``{open, due, reviewed}``，**1 条聚合查询**。
+
+    ``due`` = 到期 + 未复盘 + 失效条件可观测（与列表"待复盘"的操作口径一致）；
+    定义与理由见 :func:`app.services.journal_service.summary`。角标失败时前端**不显示**
+    （而不是显示 0）——0 是"确实没有到期"，与"没算出来"必须是两种事实。
+    """
+    assert user.user_id is not None
+    result = await svc.summary(db, user.user_id)
+    return JournalSummaryOut(**result)
+
+
 @router.get("/stats", response_model=JournalStatsOut)
 async def get_journal_stats(db: DbDep, user: CurrentUserDep) -> JournalStatsOut:
     """长期看自己最常犯的错（``reviewed_n < 5`` 时占比为 ``null``）。"""
