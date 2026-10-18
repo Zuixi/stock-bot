@@ -1,3 +1,4 @@
+import { useMemo, useRef, useState } from "react";
 import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import { Typography, Result, Button, Divider, Row, Col, Spin, Breadcrumb, Tabs } from "antd";
 import type { BreadcrumbProps } from "antd";
@@ -13,7 +14,15 @@ import {
 import { useFinancialSummary } from "@/features/stock-detail/hooks/useFinancialSummary";
 import { useStockRangeStats } from "@/features/stock-detail/hooks/useStockRangeStats";
 import { usePeTtmPercentile } from "@/features/stock-detail/hooks/usePeTtmPercentile";
-import { KlineChart } from "@/shared/ui/kline";
+import { useStockEvents, type EventTab } from "@/features/stock-detail/hooks/useStockEvents";
+import { useKlineDates } from "@/features/stock-detail/hooks/useKlineDates";
+import {
+  eventMarkerPalette,
+  indexOfDate,
+  toEventMarkers,
+} from "@/features/stock-detail/lib/eventMarkers";
+import { useTheme } from "@/app/theme-context";
+import { KlineChart, type KlineFocusRequest } from "@/shared/ui/kline";
 import { fetchKlineBySymbol } from "@/shared/api/quotes";
 import { fetchStockEnrichedBySymbol } from "@/shared/api/stocks";
 import type { StockRecord } from "@/shared/types";
@@ -100,6 +109,43 @@ export default function StockDetailPage() {
   const range = useStockRangeStats(symbol);
   const percentile = usePeTtmPercentile(stock?.exchange, stock?.symbol ?? symbol);
 
+  /**
+   * 事件列表 + 图上事件标记（P1-2）：**同一份查询**同时供给两处。
+   *
+   * tab 状态由页面持有（`eventKind`），而不是留在 `RelatedEvents` 里：K 线的标记
+   * 需要知道"哪一类已加载"，而五个查询沿用原来的 `enabled: activeKind === ...` 懒加载
+   * 语义（既有 e2e 钉住"打开详情页时还不该有龙虎榜请求"）。`null` = 非概览 tab，
+   * 一个事件请求都不发（与改造前 RelatedEvents 未挂载时一致）。
+   */
+  const [eventKind, setEventKind] = useState<EventTab>("announcements");
+  const overviewActive = tab === "overview";
+  const stockEvents = useStockEvents(stock?.symbol, overviewActive ? eventKind : null);
+
+  /**
+   * 事件日期 → K 线下标的桥梁。复用的是 **K 线自己的缓存键**（`useKlineDates` 内有 R7 注释），
+   * 所以图上的标记、列表行、K 线图永远对齐同一份 bar 序列，且 `/quotes/daily` 仍是 1 次。
+   */
+  const dates = useKlineDates(stock?.symbol);
+  const { colors } = useTheme();
+  const markerPalette = useMemo(() => eventMarkerPalette(colors), [colors]);
+  const eventMarkers = useMemo(
+    () => toEventMarkers(stockEvents.events, dates, markerPalette),
+    [stockEvents.events, dates, markerPalette],
+  );
+
+  /**
+   * 「点列表行 → 图定位」：日期不在已加载 bar 区间（上市前/停牌/周月聚合）时**no-op**，
+   * 不崩、不跳到别的日子。`nonce` 让"同一根连点两次"也各算一次新请求。
+   */
+  const [focusRequest, setFocusRequest] = useState<KlineFocusRequest | undefined>(undefined);
+  const focusNonce = useRef(0);
+  const handleSelectDate = (date: string) => {
+    const index = indexOfDate(dates, date);
+    if (index < 0) return;
+    focusNonce.current += 1;
+    setFocusRequest({ index, nonce: focusNonce.current });
+  };
+
   if (isLoading) {
     return (
       <div style={{ display: "flex", justifyContent: "center", padding: "64px 0" }}>
@@ -173,6 +219,8 @@ export default function StockDetailPage() {
                       queryKey={`stock-kline-${stock.symbol}`}
                       fetcher={(days, adjust) => fetchKlineBySymbol(stock.symbol, days, adjust)}
                       showAdjust
+                      eventMarkers={eventMarkers}
+                      focusRequest={focusRequest}
                     />
                   </Col>
                   <Col xs={24} lg={8}>
@@ -182,7 +230,12 @@ export default function StockDetailPage() {
 
                 <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
                   <Col span={24}>
-                    <RelatedEvents symbol={stock.symbol} />
+                    <RelatedEvents
+                      events={stockEvents}
+                      kind={eventKind}
+                      onKindChange={setEventKind}
+                      onSelectDate={handleSelectDate}
+                    />
                   </Col>
                 </Row>
 

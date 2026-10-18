@@ -1,41 +1,30 @@
 import { Alert, Button, Card, Segmented, Table, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useRef, useState } from "react";
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import {
-  fetchAnnouncements, fetchBlockTrades, fetchDragonTiger,
-  fetchRepurchases, fetchShareFloats,
-  type AnnouncementItem, type BlockTradeItem, type DragonTigerItem,
-  type RepurchaseItem, type ShareFloatItem,
+import type { UseQueryResult } from "@tanstack/react-query";
+import type {
+  AnnouncementItem, BlockTradeItem, DragonTigerItem, RepurchaseItem, ShareFloatItem,
 } from "@/shared/api/marketData";
 import { useTheme } from "@/app/theme-context";
 import { fmtSignedYi, fmtWanGu, fmtYi, fmtYiGu, fmtWanYi } from "@/features/market/components/format";
+import { UnfilteredResultError, type EventTab, type StockEventsResult } from "../hooks/useStockEvents";
 
-const STALE_TIME = 5 * 60 * 1000;
-type Kind = "announcements" | "dragon-tiger" | "block-trades" | "share-floats" | "repurchases";
-
-const KIND_OPTIONS = [
+const KIND_OPTIONS: { label: string; value: EventTab }[] = [
   { label: "公告", value: "announcements" },
   { label: "龙虎榜", value: "dragon-tiger" },
   { label: "大宗", value: "block-trades" },
   { label: "解禁", value: "share-floats" },
   { label: "回购", value: "repurchases" },
-] as const;
+];
 
-/**
- * 「接口有返回，但没有本股的行」——这必须当**错误**，不能当空态。
- *
- * 唯一可能的成因是后端没按 `symbol` 过滤（= 旧的「全市场榜单 + 前端筛」形状）。
- * 若把它静默渲染成「暂无上榜记录」，用户看到的是「本股没上榜」这条**假事实**，
- * 与真的没有记录无从区分 —— 正是本任务修的那类谎言，只是下沉了一层。
- * 已知它现在会命中：运行中的后端可能还没部署 `symbol` 参数。
- */
-class UnfilteredResultError extends Error {
-  constructor() {
-    super("返回结果未按本股过滤");
-    this.name = "UnfilteredResultError";
-  }
-}
+/** 一行 → 可定位到 K 线的日期（与 `eventMarkers` 用的日期串同形，`YYYY-MM-DD`）。 */
+const dateOf = {
+  announcement: (r: AnnouncementItem) => r.announceTime.slice(0, 10),
+  dragon: (r: DragonTigerItem) => r.tradeDate,
+  block: (r: BlockTradeItem) => r.tradeDate,
+  float: (r: ShareFloatItem) => r.floatDate,
+  repo: (r: RepurchaseItem) => r.annDate,
+};
 
 /** 错误文案按错误种类分开：网络/HTTP 失败 ≠ 服务端没按标的上送过滤。 */
 function errorCopy(error: unknown): { message: string; description: string } {
@@ -60,14 +49,20 @@ function errorCopy(error: unknown): { message: string; description: string } {
  * - 错误（含重试在途）→ 行内错误块 + 「重试」（调本 query 的 `refetch()`），**绝不复用** `emptyText`；
  * - 成功且为空 → 原有 `emptyText`（暂无…），语义不变；
  * - 其余（loading / 有数据）→ 表格，loading 仍交给 Table 的骨架。
+ *
+ * 行点击（P1-2）：给了 `dateOf` + `onSelectDate` 时整行可点，把该行日期交给上层去定位
+ * K 线；公告行里的标题仍是普通 `<a>`（外链 PDF 不变），点链接会连带触发行点击 ——
+ * 两件事互不冲突（打开原文 + 图上定位到公告日）。
  */
 function EventsTable<T extends object>({
-  query, emptyText, columns, rowKey,
+  query, emptyText, columns, rowKey, dateOf, onSelectDate,
 }: {
   query: UseQueryResult<T[]>;
   emptyText: string;
   columns: ColumnsType<T>;
   rowKey: string | ((record: T) => string);
+  dateOf?: (record: T) => string;
+  onSelectDate?: (date: string) => void;
 }) {
   /**
    * 重试在途时**保留**错误块。React Query v5 在 refetch 开始时就把 `error` 清成 `null`、
@@ -113,50 +108,32 @@ function EventsTable<T extends object>({
       </div>
     );
   }
+  const clickable = Boolean(dateOf && onSelectDate);
   return (
     <Table<T>
       rowKey={rowKey} size="small" loading={query.isLoading} pagination={false}
       dataSource={query.data ?? []} columns={columns} locale={{ emptyText }}
+      onRow={clickable ? (record) => ({
+        onClick: () => onSelectDate?.(dateOf?.(record) ?? ""),
+        style: { cursor: "pointer" },
+      }) : undefined}
     />
   );
 }
 
-export function RelatedEvents({ symbol }: { symbol: string }) {
-  const { colors } = useTheme();
-  const [kind, setKind] = useState<Kind>("announcements");
+export interface RelatedEventsProps {
+  /** `useStockEvents` 的返回值（页面与 K 线标记共用同一份查询，见该 hook 的注释） */
+  events: StockEventsResult;
+  /** 当前 tab 由页面持有：K 线标记需要知道「哪一类已经加载」 */
+  kind: EventTab;
+  onKindChange: (kind: EventTab) => void;
+  /** 点击某行 → 请求把 K 线定位到该行日期；日期不在已加载区间时由上层 no-op */
+  onSelectDate?: (date: string) => void;
+}
 
-  const ann = useQuery({
-    queryKey: ["related-events", symbol, "announcements"],
-    queryFn: () => fetchAnnouncements(symbol, 10),
-    staleTime: STALE_TIME, enabled: kind === "announcements",
-  });
-  const dragon = useQuery({
-    queryKey: ["related-events", symbol, "dragon-tiger"],
-    // symbol 上送服务端（该股跨交易日）；客户端 filter 是**护栏**，不再是唯一过滤手段。
-    // 有返回却筛不出本股 = 后端没按 symbol 过滤 → 抛错走错误态，绝不静默成「暂无上榜记录」。
-    queryFn: async () => {
-      const rows = await fetchDragonTiger(50, symbol);
-      const mine = rows.filter((r) => r.symbol === symbol);
-      if (rows.length > 0 && mine.length === 0) throw new UnfilteredResultError();
-      return mine;
-    },
-    staleTime: STALE_TIME, enabled: kind === "dragon-tiger",
-  });
-  const block = useQuery({
-    queryKey: ["related-events", symbol, "block-trades"],
-    queryFn: () => fetchBlockTrades(symbol, 15),
-    staleTime: STALE_TIME, enabled: kind === "block-trades",
-  });
-  const floats = useQuery({
-    queryKey: ["related-events", symbol, "share-floats"],
-    queryFn: () => fetchShareFloats(symbol, 15),
-    staleTime: STALE_TIME, enabled: kind === "share-floats",
-  });
-  const repo = useQuery({
-    queryKey: ["related-events", symbol, "repurchases"],
-    queryFn: () => fetchRepurchases(symbol, 15),
-    staleTime: STALE_TIME, enabled: kind === "repurchases",
-  });
+export function RelatedEvents({ events, kind, onKindChange, onSelectDate }: RelatedEventsProps) {
+  const { colors } = useTheme();
+  const { announcement: ann, dragon, block, floats, repo } = events;
 
   const annCols: ColumnsType<AnnouncementItem> = [
     { title: "时间", dataIndex: "announceTime", width: 130, render: (v: string) => <span className="num">{v.slice(0, 16).replace("T", " ")}</span> },
@@ -193,38 +170,41 @@ export function RelatedEvents({ symbol }: { symbol: string }) {
       title="相关数据"
       size="small"
       extra={
-        <Segmented size="small" value={kind} onChange={(v) => setKind(v as Kind)} options={[...KIND_OPTIONS]} />
+        <Segmented size="small" value={kind} onChange={(v) => onKindChange(v as EventTab)} options={KIND_OPTIONS} />
       }
     >
       {kind === "announcements" && (
         <EventsTable<AnnouncementItem>
           query={ann} rowKey="announcementId" columns={annCols} emptyText="暂无相关公告"
+          dateOf={dateOf.announcement} onSelectDate={onSelectDate}
         />
       )}
       {kind === "dragon-tiger" && (
         <EventsTable<DragonTigerItem>
           query={dragon} rowKey={(r) => `${r.tradeDate}-${r.reason}`} columns={dragonCols} emptyText="暂无上榜记录"
+          dateOf={dateOf.dragon} onSelectDate={onSelectDate}
         />
       )}
       {kind === "block-trades" && (
         <EventsTable<BlockTradeItem>
           query={block} rowKey={(r) => `${r.tradeDate}-${r.buyer}-${r.price}-${r.volume}`} columns={blockCols}
-          emptyText="暂无大宗交易记录"
+          emptyText="暂无大宗交易记录" dateOf={dateOf.block} onSelectDate={onSelectDate}
         />
       )}
       {kind === "share-floats" && (
         <EventsTable<ShareFloatItem>
           query={floats} rowKey={(r) => `${r.floatDate}-${r.shareType}-${r.holderName}`} columns={floatCols}
-          emptyText="暂无解禁记录"
+          emptyText="暂无解禁记录" dateOf={dateOf.float} onSelectDate={onSelectDate}
         />
       )}
       {kind === "repurchases" && (
         <EventsTable<RepurchaseItem>
           query={repo} rowKey={(r) => `${r.annDate}-${r.proc}`} columns={repoCols} emptyText="暂无回购记录"
+          dateOf={dateOf.repo} onSelectDate={onSelectDate}
         />
       )}
       <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
-        龙虎榜按本股代码查询，最多展示最近 50 条
+        龙虎榜按本股代码查询，最多展示最近 50 条；点击任一行可在 K 线上定位到该日期
       </Typography.Text>
     </Card>
   );

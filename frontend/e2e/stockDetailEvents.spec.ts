@@ -243,3 +243,233 @@ test("数据面「龙虎榜」不带 symbol（另一调用点 `fetchDragonTiger(
     `全市场榜单调用点不该带 symbol（实际：${JSON.stringify(dragonTigerUrls)}）`,
   ).toEqual([]);
 });
+
+/**
+ * ── P1-2：事件标记 + 列表定位联动 ──────────────────────────────────────────────
+ *
+ * 三条用例，各钉一个可被机械否证的事实：
+ *
+ * 1. **同一份数据只取一次**：K 线标记要消费公告/龙虎榜等事件，列表也要渲染它们。
+ *    两边必须命中**同一组 React Query 键**（`useStockEvents` 是唯一取数点），
+ *    否则同一个端点会被请求两次、且图与列表可能来自不同时刻的响应。
+ * 2. **点行真的移动了视窗**：断言不是"按钮响了"，而是 ECharts 实例上
+ *    `dataZoom` 的真实 `startValue/endValue` 变成了该日 ±20 根（读实例 option），
+ *    外加用户可见的 ribbon 日期变成该事件日。
+ * 3. **气泡真的进了 option**：`series[0].markPoint.data` 里有该日、且坐标落在该日
+ *    （不是"最近一根"——那正是要修的"缺失 ≠ 0"式谎言）。
+ *
+ * 读实例的通道：`KlineChart` 在 **dev 下**把实例挂到 `window.__klineEchartsInstance`
+ * （生产构建 no-op，见组件内注释）。气泡与缩放窗口都画在 canvas 里，DOM 没有对应
+ * 节点；echarts 的实例注册表是模块私有的，`page.evaluate` 里拿不到 `echarts` 模块
+ * ⇒ 不挂这个 dev 句柄就只能写"断言 DOM 里有个 canvas"这种同义反复。
+ * 因此本组用例要求 e2e 跑在 Vite dev server 上（`E2E_BASE_URL=...:3010`）。
+ */
+
+/**
+ * 「公告日期必须落在 K 线区间内」的确定性造数：先按**与前端同一条查询**取回 bar 日期，
+ * 再用其中某个真实交易日构造公告。比猜"最近某个交易日"稳，也比依赖线上公告数据稳
+ * （线上公告的日期未必是 bar 日期，上市前/周末都会被正确地丢掉，测不出标记）。
+ */
+async function fetchBarDates(page: Page): Promise<string[]> {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(end.getDate() - 3650);
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const resp = await page.request.get(
+    `/api/v1/exchanges/Shanghai_Stocks/stocks/600519/quotes/daily?start=${iso(start)}&end=${iso(end)}&adjust=qfq`,
+  );
+  expect(resp.ok(), "K 线端点不可用，无法构造落在 bar 区间内的事件").toBeTruthy();
+  const body = (await resp.json()) as { data?: Array<{ trade_date: string }> };
+  return (body.data ?? []).map((row) => row.trade_date);
+}
+
+/** 契约形状的公告行（键集与后端 `AnnouncementOut` 一致，见 `mapAnnouncement`）。 */
+function announcementRow(symbol: string, date: string) {
+  return {
+    announcement_id: `e2e-${date}`,
+    sec_code: symbol,
+    sec_name: "贵州茅台",
+    title: "关于2026年第三季度报告的公告",
+    announce_time: `${date}T16:00:00`,
+    category: "event",
+    pdf_url: null,
+  };
+}
+
+interface ChartSnapshot {
+  /** 已加载的 bar 日期（xAxis[0].data） */
+  dates: string[];
+  /** dataZoom[0] 的真实起止（dataIndex，非百分比） */
+  start: number | null;
+  end: number | null;
+  markers: Array<{ name: string | null; date: string | null }>;
+}
+
+/**
+ * 读 ECharts 实例上的真实状态（dev 句柄）。返回 `null` = 句柄还没挂上（图未 ready）。
+ * 只回传原始值，不回传整个 option：option 里含 formatter 函数，无法结构化克隆。
+ */
+async function readChart(page: Page): Promise<ChartSnapshot | null> {
+  return page.evaluate(() => {
+    const win = window as unknown as {
+      __klineEchartsInstance?: { getOption: () => any };
+    };
+    const instance = win.__klineEchartsInstance;
+    if (!instance) return null;
+    const option = instance.getOption();
+    const zoom = (option.dataZoom ?? [])[0] ?? {};
+    const dates = ((option.xAxis ?? [])[0]?.data ?? []) as string[];
+    const markPoint = (option.series ?? [])[0]?.markPoint;
+    const markers = ((markPoint?.data ?? []) as Array<{ name?: string; coord?: unknown[] }>).map((item) => ({
+      name: item.name ?? null,
+      date: Array.isArray(item.coord) ? String(item.coord[0]) : null,
+    }));
+    return {
+      dates,
+      start: typeof zoom.startValue === "number" ? zoom.startValue : null,
+      end: typeof zoom.endValue === "number" ? zoom.endValue : null,
+      markers,
+    };
+  });
+}
+
+/** 等图真的画出数据（ribbon 有日期）且 dev 句柄可用。 */
+async function waitForChart(page: Page): Promise<ChartSnapshot> {
+  const card = page.locator(".ant-card").filter({ hasText: "历史行情" });
+  await expect(card.getByTestId("kline-ribbon-date")).toBeVisible();
+  await expect
+    .poll(async () => Boolean(await readChart(page)), { message: "K 线实例未就绪（dev 句柄缺失）" })
+    .toBe(true);
+  const chart = await readChart(page);
+  expect(chart, "K 线实例未就绪").not.toBeNull();
+  return chart as ChartSnapshot;
+}
+
+test("页面与列表共用同一份查询：/announcements 与 /dragon-tiger 各恰好 1 次", async ({ page }) => {
+  const annUrls: string[] = [];
+  const dragonUrls: string[] = [];
+  // 必须先注册再 goto：announcements 在挂载时立刻发出
+  page.on("request", (request) => {
+    const url = request.url();
+    if (url.includes("/announcements")) annUrls.push(url);
+    if (url.includes("/dragon-tiger")) dragonUrls.push(url);
+  });
+
+  // 两个端点都 mock 成「成功且有本股行」：把请求数从**失败重试**里隔离出来
+  // （QueryClient 默认 `retry: failureCount < 1`，一次 500 会让计数变 2，与本用例无关）。
+  const row = await dragonTigerRow(page, "600519");
+  await page.route("**/announcements**", (route) => fulfillJson(route, [announcementRow("600519", "2026-10-16")]));
+  await page.route(DRAGON_TIGER_GLOB, (route) => fulfillJson(route, [row]));
+
+  const card = await openRelatedEvents(page);
+  await expect(card.locator("tbody tr.ant-table-row")).toHaveCount(1);
+  await expect.poll(() => annUrls.length, { message: "首屏应发出 1 次 /announcements" }).toBe(1);
+  expect(dragonUrls, "打开详情页时还不该有龙虎榜请求（该 tab 用 enabled 懒加载）").toEqual([]);
+
+  await card.locator(".ant-segmented-item").filter({ hasText: "龙虎榜" }).click();
+  await expect.poll(() => dragonUrls.length, { message: "点开龙虎榜应发出 1 次请求" }).toBe(1);
+  await expect(card.locator("tbody tr.ant-table-row")).toHaveCount(1);
+
+  // 切回公告：两个查询都有缓存（staleTime 5min），不该再有任何一次网络请求
+  await card.locator(".ant-segmented-item").filter({ hasText: "公告" }).click();
+  await expect(card.locator("tbody tr.ant-table-row")).toHaveCount(1);
+  await page.waitForLoadState("networkidle").catch(() => {});
+
+  expect(annUrls, `切回公告 tab 不应重复请求（实际：${JSON.stringify(annUrls)}）`).toHaveLength(1);
+  expect(
+    dragonUrls,
+    `页面（K 线标记）与列表必须共用同一查询键，不应重复请求（实际：${JSON.stringify(dragonUrls)}）`,
+  ).toHaveLength(1);
+});
+
+test("点击事件行 → K 线视窗移到该日 ±20 根并高亮该日", async ({ page }) => {
+  const bars = await fetchBarDates(page);
+  // 取一个「既在默认视窗之外（最近 120 根）又至少有 20 根左侧邻居」的交易日：
+  // 前者让"视窗移动"可判定，后者让 idx±20 不被左边界截断（否则窗口宽度不是 41）。
+  test.skip(bars.length < 240, "K 线样本不足 240 根，无法构造两侧都够 20 根的定位目标");
+  const target = bars[100];
+  test.skip(!target, "K 线样本不足，无法构造落在区间内的公告日期");
+  await page.route("**/announcements**", (route) => fulfillJson(route, [announcementRow("600519", target)]));
+
+  await page.goto("/stock/600519");
+  const card = await openRelatedEvents(page);
+  await expect(card.locator("tbody tr.ant-table-row")).toHaveCount(1);
+  const before = await waitForChart(page);
+
+  // 目标日在图上的真实下标：用它算期望视窗，而不是猜
+  const idx = before.dates.indexOf(target);
+  expect(idx, `mock 的公告日 ${target} 不在已加载 bar 内（图上第一根 ${before.dates[0]}）`).toBeGreaterThan(-1);
+  expect(before.start, "初始视窗的 startValue 读不到（dataZoom 形状变了？）").not.toBeNull();
+  expect(before.end, "初始视窗的 endValue 读不到").not.toBeNull();
+  // 前提检查：目标日在默认视窗之外，否则"视窗移动"无从判定
+  expect(idx, "目标日落在默认视窗内，构造失效").toBeLessThan(before.start as number);
+
+  // 点「时间」单元格而不是标题链接：标题是外链 <a>，点了会开新标签页
+  await card.locator("tbody tr.ant-table-row").first().locator("td").first().click();
+
+  await expect
+    .poll(async () => (await readChart(page))?.start ?? null, { message: "点击后 dataZoom 未变化" })
+    .not.toBe(before.start);
+
+  const after = await readChart(page);
+  expect(after).not.toBeNull();
+  const zoom = after as ChartSnapshot;
+  // 视窗包含该日（ECharts 可能对类目轴做吸附，故用区间而不是逐字相等）
+  expect(zoom.start as number, `视窗起点 ${zoom.start} 应 ≤ ${idx}`).toBeLessThanOrEqual(idx);
+  expect(zoom.end as number, `视窗终点 ${zoom.end} 应 ≥ ${idx}`).toBeGreaterThanOrEqual(idx);
+  // ±20 根：窗口宽度应约 41 根（允许 1 根吸附误差）
+  const width = (zoom.end as number) - (zoom.start as number) + 1;
+  expect(width, `定位后窗口为 ${width} 根，期望约 41 根`).toBeGreaterThanOrEqual(40);
+  expect(width, `定位后窗口为 ${width} 根，期望约 41 根`).toBeLessThanOrEqual(42);
+
+  // 用户可见的高亮：ribbon 日期变成该事件日（canvas 上的高亮看不见，读数行看得见）。
+  // ribbon 在「历史行情」卡里，不在「相关数据」卡里，故用页面级 testid（全页唯一）。
+  await expect(page.getByTestId("kline-ribbon-date")).toHaveText(target);
+});
+
+test("事件日画出 markPoint 气泡：坐标落在该日，不是最近一根", async ({ page }) => {
+  const bars = await fetchBarDates(page);
+  // 取靠后的交易日：落在默认视窗内，气泡可见
+  const target = bars[bars.length - 3];
+  test.skip(!target, "K 线样本不足，无法构造落在区间内的公告日期");
+  await page.route("**/announcements**", (route) => fulfillJson(route, [announcementRow("600519", target)]));
+
+  await page.goto("/stock/600519");
+  const card = await openRelatedEvents(page);
+  await expect(card.locator("tbody tr.ant-table-row")).toHaveCount(1);
+  await waitForChart(page);
+
+  await expect
+    .poll(async () => (await readChart(page))?.markers.length ?? 0, { message: "K 线上没有出现事件气泡" })
+    .toBe(1);
+
+  const chart = (await readChart(page)) as ChartSnapshot;
+  expect(chart.markers, `气泡应只有该公告日一枚（实际：${JSON.stringify(chart.markers)}）`).toEqual([
+    { name: "公告", date: target },
+  ]);
+  // 判别性：气泡日期必须真的在已加载的 bar 里（否则它会被画到错误位置/被丢掉）
+  expect(chart.dates).toContain(target);
+
+  /**
+   * 点开另一个 tab：同一批查询里多了一类**已加载**数据 ⇒ 图上多一枚气泡，
+   * 但不会为此多发一个请求（那一次请求本来就是列表的，页面的标记只是消费它的结果）。
+   * 这是"五类事件共用一份查询"在图上的可见证据。
+   */
+  const dragonDate = bars[bars.length - 5];
+  const dragon = { ...(await dragonTigerRow(page, "600519")), trade_date: dragonDate };
+  await page.route(DRAGON_TIGER_GLOB, (route) => fulfillJson(route, [dragon]));
+  const dragonRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/dragon-tiger")) dragonRequests.push(request.url());
+  });
+
+  await card.locator(".ant-segmented-item").filter({ hasText: "龙虎榜" }).click();
+  await expect
+    .poll(async () => (await readChart(page))?.markers.length ?? 0, { message: "龙虎榜加载后图上没多出气泡" })
+    .toBe(2);
+
+  const both = (await readChart(page)) as ChartSnapshot;
+  expect(both.markers.map((m) => m.name)).toEqual(expect.arrayContaining(["公告", "龙虎榜"]));
+  expect(both.markers.map((m) => m.date)).toEqual(expect.arrayContaining([target, dragonDate]));
+  expect(dragonRequests, "图上多一枚气泡不应额外请求事件数据").toHaveLength(1);
+});

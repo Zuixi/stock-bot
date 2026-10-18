@@ -11,12 +11,35 @@ import {
   type MaKey,
 } from "./klineMath";
 
+/**
+ * 图上一枚事件气泡（P1-2）。**领域无关**：`shared/ui/kline` 不认识公告/龙虎榜，
+ * 只知道"某一天有一条带颜色和标签的事件"；映射由 stock-detail 层完成。
+ */
+export interface KlineEventMarker {
+  /** 必须与某个 bar 的 `date` **精确**相等；不在已加载区间的不画 */
+  date: string;
+  label: string;
+  /** 由调用方按当前主题取色（本层不 import 业务色板） */
+  color: string;
+}
+
+/** 「把图定位到第 index 根」的请求；`nonce` 变化才算一次新请求（同一根可重复点击）。 */
+export interface KlineFocusRequest {
+  index: number;
+  nonce: number;
+}
+
 export interface KlineOptionInput {
   points: KLinePoint[]; // 聚合后的全量序列
   maSeries: Partial<Record<MaKey, (number | null)[]>>;
   visibleMas: MaKey[];
   /** 当前主题色板（KlineChart 绕过 EChart 封装直连 ReactECharts，需自带主题色） */
   colors?: ThemePalette;
+  /**
+   * 事件气泡（可选）。日期不在 `points` 里的一律丢弃 —— 上市前/停牌/周月聚合后
+   * 不存在的日子在 x 轴上没有位置，硬画只会落到错误的蜡烛上。
+   */
+  eventMarkers?: KlineEventMarker[];
   /**
    * 窄屏形态（Phase 3 §4.4，`<768` 由调用方按视口断点判定）。
    *
@@ -57,7 +80,9 @@ const AXIS_POINTER_PER_AXIS = {
   triggerOn: "mousemove|click",
 } as const;
 
-export function buildKlineOption({ points, maSeries, visibleMas, colors, narrow = false }: KlineOptionInput) {
+export function buildKlineOption({
+  points, maSeries, visibleMas, colors, narrow = false, eventMarkers,
+}: KlineOptionInput) {
   const c = colors ?? THEME_COLORS.light;
   const dates = points.map((p) => p.date); // 原始 ISO 日期串（tooltip 直接消费）
   const ohlc = points.map((p) => [p.open, p.close, p.low, p.high]);
@@ -67,6 +92,32 @@ export function buildKlineOption({ points, maSeries, visibleMas, colors, narrow 
   const tailStart = Math.max(0, points.length - tailBars);
   // 窄屏左轴留白收窄：308px 画布下 60px 是 1/5 宽度，K 线区被压得太窄
   const axisLeft = narrow ? 46 : 60;
+
+  /**
+   * 事件 → markPoint 数据（P1-2）。
+   *
+   * 为什么是 `markPoint` 而不是独立的 scatter series：气泡与蜡烛必须**同 pane 同坐标**，
+   * scatter 需要自己的 x/y 轴映射，很容易在 dataZoom / 双 pane 下与蜡烛错位。
+   *
+   * 默认**不显示文字标签**（`label.show: false`）：8 个气泡在 120 根视窗里，`公告+1`
+   * 这类 3–4 个汉字的标签必然互相压住（brief 的"不重叠"验收）。标签放到悬停
+   * emphasis 上；列表里本来就能看到完整标题。
+   */
+  const markPointAt = (marker: KlineEventMarker) => {
+    const index = dates.indexOf(marker.date);
+    if (index < 0) return null; // 不在已加载 bar 区间：不产生标记
+    const p = points[index];
+    const y = Number.isFinite(p.high) ? p.high : Math.max(p.open, p.close);
+    return {
+      name: marker.label,
+      // 类目轴用日期串定位（与 xAxis.data 同源），y 取当日最高价：气泡落在 K 线上方
+      coord: [marker.date, y] as [string, number],
+      value: marker.label,
+      itemStyle: { color: marker.color, borderColor: c.bgPanel, borderWidth: 1 },
+      label: { show: false },
+    };
+  };
+  const markPointData = (eventMarkers ?? []).flatMap((m) => markPointAt(m) ?? []);
 
   const tooltipFormatter = (params: unknown): string => {
     const list = params as Array<{ dataIndex: number; seriesType: string; seriesName?: string; value?: unknown }>;
@@ -200,6 +251,28 @@ export function buildKlineOption({ points, maSeries, visibleMas, colors, narrow 
         xAxisIndex: 0,
         yAxisIndex: 0,
         itemStyle: { color: c.up, color0: c.down, borderColor: c.up, borderColor0: c.down },
+        // 事件气泡：一根 K 线最多一个（同日合并由调用方保证）；空数组时保持结构稳定
+        markPoint: {
+          symbol: "circle",
+          symbolSize: 6,
+          animation: false,
+          data: markPointData,
+          label: { show: false },
+          // 文字只在悬停该气泡时出现，避免 8 个标签互相压住（见上方注释）
+          emphasis: {
+            label: {
+              show: true,
+              formatter: "{b}",
+              position: "top",
+              fontSize: 10,
+              color: c.textPrimary,
+              backgroundColor: c.bgPanel,
+              padding: [2, 4],
+              borderRadius: 2,
+            },
+            itemStyle: { borderColor: c.textPrimary, borderWidth: 1 },
+          },
+        },
         markLine: {
           symbol: "none",
           silent: true,

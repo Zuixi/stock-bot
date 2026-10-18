@@ -176,5 +176,43 @@ test("KlineChart：hover 索引只驱动 DOM，不进 buildKlineOption 的 useMe
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
-  ).toEqual(["points", "maSeries", "visibleMas", "colors", "narrow"]);
+  ).toEqual(["points", "maSeries", "visibleMas", "colors", "narrow", "eventMarkers"]);
+});
+
+/** `series[0]` 是异构数组里唯一带 markPoint 的一条，读它之前先收窄。 */
+interface MarkPointLike {
+  symbolSize?: number;
+  data?: Array<{
+    name?: string;
+    coord?: [string, number];
+    value?: string;
+    itemStyle?: { color?: string };
+    label?: { show?: boolean };
+  }>;
+}
+
+const candlestickMarkPoint = (input: Parameters<typeof buildKlineOption>[0]) => {
+  const built = buildKlineOption(input);
+  return (built.series[0] as unknown as { markPoint?: MarkPointLike }).markPoint;
+};
+
+test("buildKlineOption：事件标记只在日期命中 bar 时生成 markPoint（气泡小而无声）", () => {
+  // 默认（无事件）：结构仍在、数据为空 —— 调用方不必区分 "undefined" 与 "空数组"
+  const empty = candlestickMarkPoint({ points, maSeries, visibleMas: [] });
+  expect(empty?.data).toEqual([]);
+
+  const marker = { date: points[5].date, label: "公告+1", color: "#123456" };
+  const outOfRange = { date: "1990-01-01", label: "解禁", color: "#654321" };
+  const markPoint = candlestickMarkPoint({
+    points, maSeries, visibleMas: [], eventMarkers: [marker, outOfRange],
+  });
+
+  // 区间外（上市前/停牌）不产生标记：x 轴上没有这一天，硬画会落到错误的蜡烛上
+  expect(markPoint?.data).toHaveLength(1);
+  expect(markPoint?.data?.[0].coord).toEqual([points[5].date, points[5].high]);
+  expect(markPoint?.data?.[0].name).toBe("公告+1");
+  expect(markPoint?.data?.[0].itemStyle?.color).toBe("#123456");
+  // 小圆点 + 默认不出文字：8 个 "公告+1" 的标签在 120 根视窗里必然互相压住
+  expect(markPoint?.symbolSize).toBe(6);
+  expect(markPoint?.data?.[0].label?.show).toBe(false);
 });

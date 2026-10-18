@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "@/app/theme-context";
 import { useIsNarrowViewport } from "@/shared/ui";
 import type { AdjustMode, KLinePoint } from "@/shared/types";
-import { buildKlineOption } from "./klineOption";
+import { buildKlineOption, type KlineEventMarker, type KlineFocusRequest } from "./klineOption";
 import { maValuesAt, ribbonRow } from "./ribbon";
 import {
   MA_DEFS,
@@ -18,6 +18,8 @@ import {
 
 const STALE_TIME = 5 * 60 * 1000;
 const DEFAULT_VISIBLE_MAS: MaKey[] = ["MA5", "MA10", "MA20"];
+/** 「定位到某日」时左右各留 20 根（brief 指定 `idx-20 … idx+20`）。 */
+const FOCUS_HALF_WINDOW = 20;
 
 /**
  * `updateAxisPointer` 的事件体只承诺"轴上有值"，不承诺形态。
@@ -35,9 +37,15 @@ export interface KlineChartProps {
   queryKey: string;
   fetcher: (days: number, adjust: AdjustMode) => Promise<{ points: KLinePoint[]; adjustAvailable: boolean }>;
   showAdjust?: boolean;
+  /** 事件气泡（领域无关；stock-detail 层负责把公告/龙虎榜等映射到这里） */
+  eventMarkers?: KlineEventMarker[];
+  /** 定位请求：`nonce` 变化时把视窗移到第 `index` 根并高亮（不重新取数） */
+  focusRequest?: KlineFocusRequest;
 }
 
-export function KlineChart({ title, queryKey, fetcher, showAdjust = false }: KlineChartProps) {
+export function KlineChart({
+  title, queryKey, fetcher, showAdjust = false, eventMarkers, focusRequest,
+}: KlineChartProps) {
   const { colors } = useTheme();
   // 契约 §5.1 的 `<768`：窄屏形态 = 最近 30 根 + 手势缩放（**不隐藏**，见 §4.4）
   const narrow = useIsNarrowViewport();
@@ -86,10 +94,12 @@ export function KlineChart({ title, queryKey, fetcher, showAdjust = false }: Kli
     return out;
   }, [points]);
 
-  // ⚠️ 依赖里**没有** hoveredIndex：option 与光标解耦（hover 只驱动下面的 DOM 行）。
+  // ⚠️ 依赖里**没有** hoveredIndex：option 与光标解耦（光标只驱动下面的 DOM 行）。
+  // `eventMarkers` 是"画什么"的一部分（数据结构化后由上层 memo 稳定引用），
+  // 因此它进依赖；每次光标移动都不会重建 option。
   const option = useMemo(
-    () => buildKlineOption({ points, maSeries, visibleMas, colors, narrow }),
-    [points, maSeries, visibleMas, colors, narrow],
+    () => buildKlineOption({ points, maSeries, visibleMas, colors, narrow, eventMarkers }),
+    [points, maSeries, visibleMas, colors, narrow, eventMarkers],
   );
 
   /**
@@ -143,6 +153,19 @@ export function KlineChart({ title, queryKey, fetcher, showAdjust = false }: Kli
 
     instance.on("updateAxisPointer", onAxisPointer);
     instance.on("globalout", onLeave);
+
+    /**
+     * 仅 dev：把实例挂到 `window`，供 e2e 读**真实**的 option / dataZoom 状态。
+     *
+     * 为什么必须这样：事件气泡与缩放窗口都画在 canvas 里，DOM 没有任何对应节点；
+     * 而 echarts 的实例注册表（`getInstanceByDom`）是模块私有的，`page.evaluate`
+     * 里拿不到 `echarts` 模块，也就没法断言 `markPoint` 与 `startValue/endValue`。
+     * 生产构建下 `import.meta.env.DEV === false`，整段是 no-op（与
+     * `features/market/heatmapPerfProbe.ts` 同一手法，不污染线上 window）。
+     */
+    if (import.meta.env.DEV) {
+      (window as unknown as { __klineEchartsInstance?: unknown }).__klineEchartsInstance = instance;
+    }
     return () => {
       instance.off("updateAxisPointer", onAxisPointer);
       instance.off("globalout", onLeave);
@@ -151,8 +174,45 @@ export function KlineChart({ title, queryKey, fetcher, showAdjust = false }: Kli
         hoverRaf.current = null;
       }
       pendingHover.current = null;
+      if (import.meta.env.DEV) {
+        const devWindow = window as unknown as { __klineEchartsInstance?: unknown };
+        if (devWindow.__klineEchartsInstance === instance) delete devWindow.__klineEchartsInstance;
+      }
     };
   }, [points, chartEpoch]);
+
+  /**
+   * 「点列表某行 → 图定位到该日」（P1-2）。
+   *
+   * 只做两件事：`dataZoom`（把视窗移到 `idx±20` 根）+ `showTip`（该日蜡烛高亮/出 tooltip），
+   * **不重新取数**（数据早已在）。`nonce` 是"这次点击"的代数：同一根 K 线连点两次
+   * 也要重新执行（否则第二次点击毫无反馈）。
+   *
+   * 索引来自上层（`indexOfDate(dates, date)`），越界在此收敛；`points` 用 ref 读，
+   * 是为了**不把 points 放进依赖**——否则数据刷新（复权因子回补触发的 10s 轮询）
+   * 会把用户刚定位的视窗又拽回去。
+   */
+  const pointsRef = useRef(points);
+  pointsRef.current = points;
+  const focusIndex = focusRequest?.index ?? null;
+  const focusNonce = focusRequest?.nonce ?? null;
+
+  useEffect(() => {
+    if (focusIndex == null) return;
+    const instance = chartRef.current?.getEchartsInstance();
+    if (!instance) return;
+    const total = pointsRef.current.length;
+    if (total === 0) return;
+    const idx = Math.min(Math.max(focusIndex, 0), total - 1);
+    instance.dispatchAction({
+      type: "dataZoom",
+      startValue: Math.max(0, idx - FOCUS_HALF_WINDOW),
+      endValue: Math.min(total - 1, idx + FOCUS_HALF_WINDOW),
+    });
+    instance.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: idx });
+    // ribbon / MA 行跟到该日：canvas 上的高亮肉眼可见，但读数是 DOM，这里让两处同源
+    setHoveredIndex(idx);
+  }, [focusIndex, focusNonce, chartEpoch]);
 
   // 当前展示哪一根：悬停优先，否则最后一根（越界一律收敛，避免 fraction 索引）
   const dataIndex =
