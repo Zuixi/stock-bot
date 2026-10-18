@@ -292,7 +292,12 @@ async def _read_as_of(session: AsyncSession) -> date | None:
     return None if row is None else row[0]
 
 
-async def _build(session: AsyncSession) -> dict[str, Any]:
+async def build(session: AsyncSession) -> dict[str, Any]:
+    """读库 → 同类历史统计文档（**纯**：只用传入的会话读，不改事务属性、不写文件）。
+
+    会话由调用方给：脚本自建并显式 ``SET TRANSACTION READ ONLY``；reconcile 尾步
+    （``artifacts_service``）复用对账会话（同一事务里还有写操作，故只读不在此处设置）。
+    """
     as_of = await _read_as_of(session)
     if as_of is None:
         return {
@@ -364,7 +369,7 @@ async def _amain() -> int:
     try:
         async with async_session_factory() as session:
             await session.execute(text("SET TRANSACTION READ ONLY"))
-            doc = await _build(session)
+            doc = await build(session)
     finally:
         await engine.dispose()
     path = write_document(doc)

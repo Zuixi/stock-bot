@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""生成「自选体检」8 条规则的标定统计（``app/services/triage_rule_stats.json``）。
+"""生成「自选体检」规则的标定统计（``app/services/triage_rule_stats.json``）。
+
+当前 ``TRIAGE_DETECTORS`` 有 9 条规则，其中 8 条的判定式已复刻进 ``_sql()``；
+``unlock_soon``（S11 新增）尚未纳入 → 产物里写明确的"未纳入"原因（见 :data:`UNCALIBRATED`），
+**不**落成"窗口内无信号"。
 
 **可复跑、只读**：只对真实 PG 发 ``SELECT``（会话显式 ``SET TRANSACTION READ ONLY``），
 产出随仓库入库（它不是缓存：规则口径的"历史上长什么样"必须可评审、可 diff）。
@@ -66,13 +70,28 @@ BASIS = (
     "tN 仅含已有 T+N 行情的信号日"
 )
 
-#: 各来源表的日期列（用于覆盖度判断）；``None`` = 快照表（没有历史口径）
+#: 各来源表的日期列（用于覆盖度判断）；空串 = 快照表（没有历史口径）
+#:
+#: **新增探测器必须同时在这里登记来源表**，否则 ``build()`` 会 KeyError（S12.3 把
+#: 本脚本接进 reconcile 尾步后，这个缺口会变成每轮一条告警而不是"没人跑就没人发现"）。
+#: ``share_floats`` 是 S11 的 ``unlock_soon`` 带来的：日期列是**解禁日** ``float_date``
+#: （不是公告日；覆盖度要按"未来解禁计划能覆盖多久"判）。
 DATE_COLUMN: dict[str, str] = {
     "daily_quotes": "trade_date",
     "stock_price_limits": "trade_date",
     "announcements": "announce_time",
     "dragon_tiger_entries": "trade_date",
     "sw_industry_members": "",
+    "share_floats": "float_date",
+}
+
+#: 尚未纳入 ``_sql()`` 的探测器 → 必须写进产物的**原因**（``stats=null`` 的语义）。
+#:
+#: ``unlock_soon``（S11 新增，第 9 条规则）的判定式还没有在下面的标定 SQL 里复刻。
+#: 不登记在这里的话它会落进 ``NO_SIGNAL_NOTE``（"窗口内无信号"）—— 那是**假话**：
+#: 有信号，只是没统计。产物是给人看的证据，宁可写"未纳入"也不能写"没有"。
+UNCALIBRATED: dict[str, str] = {
+    "unlock_soon": "该规则（S11 unlock_soon）尚未纳入标定 SQL，stats=null 不代表窗口内无信号",
 }
 
 #: 没有信号时的兜底说明（统计口径本身没问题，是样本为空）
@@ -408,35 +427,37 @@ def _coverage_note(table: str, start: date | None, window_start: date, as_of: da
     return None
 
 
-async def _build() -> dict[str, Any]:
-    async with async_session_factory() as session:
-        # 只读会话：这条纪律是结构性的，不靠"我们只写了 SELECT"的自觉
-        await session.execute(text("SET TRANSACTION READ ONLY"))
-        as_of = (await session.execute(text("SELECT max(trade_date) FROM daily_quotes"))).scalar()
-        if as_of is None:
-            raise RuntimeError("daily_quotes 为空：先入库行情再跑本脚本")
-        window_start = _minus_months(as_of, WINDOW_MONTHS)
-        lookback_start = window_start - timedelta(days=LOOKBACK_NATURAL_DAYS)
+async def build(session: AsyncSession) -> dict[str, Any]:
+    """读库 → 规则标定统计文档（**纯**：只用传入的会话读，不改事务属性、不写文件）。
 
-        spans: dict[str, tuple[date | None, date | None]] = {}
-        for table in DATE_COLUMN:
-            spans[table] = await _read_source_span(session, table)
+    会话由调用方给：脚本自建并显式 ``SET TRANSACTION READ ONLY``；reconcile 尾步
+    （``artifacts_service``）复用对账会话（同一事务里还有写操作，故只读不在此处设置）。
+    """
+    as_of = (await session.execute(text("SELECT max(trade_date) FROM daily_quotes"))).scalar()
+    if as_of is None:
+        raise RuntimeError("daily_quotes 为空：先入库行情再跑本脚本")
+    window_start = _minus_months(as_of, WINDOW_MONTHS)
+    lookback_start = window_start - timedelta(days=LOOKBACK_NATURAL_DAYS)
 
-        ann_start, ann_end = spans["announcements"]
-        if ann_start is None:
-            ann_lo, ann_hi = as_of + timedelta(days=1), as_of  # 空区间：一条都不判
-        else:
-            ann_lo = min(max(ann_start - timedelta(days=1), lookback_start), as_of)
-            ann_hi = min(ann_end + timedelta(days=1), as_of) if ann_end else as_of
+    spans: dict[str, tuple[date | None, date | None]] = {}
+    for table in DATE_COLUMN:
+        spans[table] = await _read_source_span(session, table)
 
-        params = _params(
-            as_of=as_of,
-            window_start=window_start,
-            lookback_start=lookback_start,
-            ann_lo=ann_lo,
-            ann_hi=ann_hi,
-        )
-        rows = (await session.execute(text(_sql()), params)).all()
+    ann_start, ann_end = spans["announcements"]
+    if ann_start is None:
+        ann_lo, ann_hi = as_of + timedelta(days=1), as_of  # 空区间：一条都不判
+    else:
+        ann_lo = min(max(ann_start - timedelta(days=1), lookback_start), as_of)
+        ann_hi = min(ann_end + timedelta(days=1), as_of) if ann_end else as_of
+
+    params = _params(
+        as_of=as_of,
+        window_start=window_start,
+        lookback_start=lookback_start,
+        ann_lo=ann_lo,
+        ann_hi=ann_hi,
+    )
+    rows = (await session.execute(text(_sql()), params)).all()
 
     by_rule: dict[str, dict[str, Any]] = {}
     for rule, signals, days, per_day, t1, t5, t20, t5_p05 in rows:
@@ -457,6 +478,9 @@ async def _build() -> dict[str, Any]:
             note = _coverage_note(table, spans[table][0], window_start, as_of)
             if note is not None:
                 break
+        if note is None:
+            # 覆盖度够但判定式没进 SQL：写"未纳入"，不能伪装成"窗口内无信号"
+            note = UNCALIBRATED.get(spec.key)
         stats = by_rule.get(spec.key)
         if note is None and not stats:
             note = NO_SIGNAL_NOTE
@@ -514,12 +538,21 @@ def _print_table(doc: dict[str, Any]) -> None:
         )
 
 
+def write_document(doc: dict[str, Any], path: Path = OUT_PATH) -> Path:
+    """写产物（**确定性**：固定缩进、结尾一个换行；两次运行逐字节一致）。"""
+    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
 async def main() -> int:
     try:
-        doc = await _build()
+        async with async_session_factory() as session:
+            # 只读会话：这条纪律是结构性的，不靠"我们只写了 SELECT"的自觉
+            await session.execute(text("SET TRANSACTION READ ONLY"))
+            doc = await build(session)
     finally:
         await engine.dispose()
-    OUT_PATH.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_document(doc)
     start = _minus_months(date.fromisoformat(doc["as_of"]), WINDOW_MONTHS)
     print(
         f"窗口：{start.isoformat()} → {doc['as_of']}"

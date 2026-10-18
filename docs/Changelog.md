@@ -1,3 +1,31 @@
+## 2026-10-20 - **S12 后端：决策日志角标 `GET /journal/summary` + 离线产物自愈（接 reconcile 尾步）**
+
+零新表、零新 cron、`/market` 前端未动（spec `docs/specs/S12-closed-loop.md` §S12.2/§S12.3）：
+
+- **`GET /api/v1/journal/summary`**（登录即可）：`{open, due, reviewed}`，**1 条聚合查询**
+  （`count FILTER` + `json_agg` 只带回"到期未复盘"的 `invalidation`；`due` 在 Python 里复用
+  既有 `invalidation_observable`，不在 SQL 里重写第二套可观测性判据）。`due` = 到期 + 未复盘
+  + `reviewable`（不可复盘的历史条目没有复盘入口，算进去角标永远消不掉）
+- **`app/services/artifacts_service.py(新)`**：`refresh_stale_artifacts(db, day)` 读三个产物
+  `as_of`，**只在 `< day` 时重建**；`build_{market_regime,peer_history_stats,triage_rule_stats}.py`
+  重构为「`build(session)` 纯函数 + `write_document` + `__main__` 薄壳」（禁止两处实现）。
+  单产物失败 → 告警 `artifacts_refresh:<产物>` + **旧文件逐字节保留**（同目录 tmp + `os.replace`）
+  + 继续其它产物；重建出更旧的 `as_of` 时不写文件
+- **接 reconcile 尾步**：`_refresh_stale_artifacts()` 在 converge 与涨停事实上游之后跑，
+  目标日 = 对账算出的 `expected_latest`（不新开 cron、不另算交易日历）；对账失败/无过门禁日 → 跳过
+- **顺带修 S11 留下的产物缺口**：`build_triage_rule_stats` 的 `DATE_COLUMN` 漏了 `share_floats`
+  ⇒ 真库上直接 `KeyError`（S12.3 接进 reconcile 后会变成每轮告警）；补 `float_date`，并把
+  未纳入标定 SQL 的 `unlock_soon` 显式写成「尚未纳入」而不是「窗口内无信号」
+- 测试：`tests/test_artifacts_service.py(新)` 6 条（新鲜零重建 / 过期各一次且 `as_of` 前进 /
+  单产物失败不扩散 + 旧文件不变 + 1 条告警 / 缺失重建 / 未前进不写）+ journal API 4 条
+  （401 / 形状 / 三态 + reviewable 闸 / **1 条聚合查询**）
+- 实测重建耗时（真库 2026-10-16 数据）：regime **29.29s** / peer **21.56s** / triage **35.10s**，
+  合计 **85.95s**（只在产物过期的那一轮付这笔钱）
+- 涉及文件：`backend/app/services/{artifacts_service.py(新),journal_service.py}`、
+  `backend/app/{schemas/journal.py,api/v1/journal.py,scheduler/jobs.py}`、
+  `backend/scripts/build_{market_regime,peer_history_stats,triage_rule_stats}.py`、
+  `backend/tests/{test_artifacts_service.py(新),test_journal_api.py}`、`docs/Changelog.md`
+
 ## 2026-10-19 - **情绪脉搏（阶段 + small multiples + 指数背离）+ 小样本治理 + 切指标零位移**
 
 三块一起落地，核心是让"一眼看出整个市场情绪变化"成立，而不是九个指标各看一遍：

@@ -272,6 +272,19 @@ class JournalListOut(BaseModel):
     disclaimer: str
 
 
+class JournalSummaryOut(BaseModel):
+    """三态角标（spec §S12.2）：``{open, due, reviewed}``，服务层 1 条聚合查询算出。
+
+    ``due`` 只数**到期 + 未复盘 + ``reviewable``** 的条目（见
+    :func:`app.services.journal_service.summary`）：不可复盘的历史条目没有复盘入口，
+    算进角标会得到一个永远消不掉的数字。
+    """
+
+    open: int
+    due: int
+    reviewed: int
+
+
 class WilsonIntervalOut(BaseModel):
     """一个比例的 **Wilson 95% 区间**（spec §S9.7.7）：点估计永远和区间一起出现。
 

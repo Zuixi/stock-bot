@@ -654,8 +654,8 @@ async def test_builder_is_deterministic_byte_for_byte(tmp_path: Path) -> None:
     engine = create_async_engine(ASYNC_URL)
     try:
         async with AsyncSession(bind=engine) as session:
-            first = await builder._build(session)
-            second = await builder._build(session)
+            first = await builder.build(session)
+            second = await builder.build(session)
     finally:
         await engine.dispose()
     out_a = builder.write_document(first, tmp_path / "a.json")
