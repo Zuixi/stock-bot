@@ -1,0 +1,408 @@
+/* 决策日志（`/me?tab=journal`）：记一笔 / 待复盘 / 已复盘 + 统计卡的排版。
+ *
+ * 口径（与 `TriagePanel.css` 同一套纪律）：
+ * - 颜色只走全局令牌（`--text-primary` / `--border` / `--bg-panel` …）与**组件级**
+ *   变量；设计门禁 `check-design-tokens.mjs` 要求 `var(--x)` 必须有定义，故不凭空
+ *   引入全局令牌；
+ * - 归因标签一族用组件级变量（`--journal-verdict`），深浅色各一套；
+ * - 正文一律 `--text-primary`，状态不只靠颜色区分（标签上都带文字）。 */
+
+.journal {
+  --journal-due: #a15c00;
+  --journal-due-tint: rgba(161, 92, 0, 0.12);
+  --journal-open: #566072;
+  --journal-open-tint: rgba(86, 96, 114, 0.1);
+  --journal-verdict: #1f4ed8;
+  --journal-verdict-tint: rgba(31, 78, 216, 0.1);
+}
+
+:root[data-theme="dark"] .journal {
+  --journal-due: #f0a93c;
+  --journal-due-tint: rgba(240, 169, 60, 0.16);
+  --journal-open: #98a3b3;
+  --journal-open-tint: rgba(152, 163, 179, 0.16);
+  --journal-verdict: #7ea6ff;
+  --journal-verdict-tint: rgba(126, 166, 255, 0.16);
+}
+
+/* ── 顶部角标行：待复盘 N 条 + 一句话说明 ───────────────── */
+.journal__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 16px;
+  margin-bottom: 18px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.journal__due-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ── 分块外壳 ─────────────────────────────────────────── */
+.journal-section {
+  margin-bottom: 22px;
+}
+
+.journal-section__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.journal-section__count {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* ── 列表与单条记录 ───────────────────────────────────── */
+.journal__list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.journal-entry {
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.journal-entry:hover {
+  background: var(--hover);
+}
+
+.journal-entry__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin-bottom: 6px;
+}
+
+.journal-entry__verdict,
+.journal-entry__status--due,
+.journal-entry__status--open {
+  margin-inline-end: 0;
+  border: none;
+  font-size: 11.5px;
+  line-height: 18px;
+  padding-inline: 8px;
+}
+
+.journal-entry__verdict {
+  color: var(--journal-verdict);
+  background: var(--journal-verdict-tint);
+}
+
+.journal-entry__status--due {
+  color: var(--journal-due);
+  background: var(--journal-due-tint);
+}
+
+.journal-entry__status--open {
+  color: var(--journal-open);
+  background: var(--journal-open-tint);
+}
+
+.journal-entry__symbol {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.journal-entry__due-on,
+.journal-entry__excess {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.journal-entry__excess {
+  color: var(--text-primary);
+}
+
+/* thesis 只显示第一行：全文太长会把列表读成文章 */
+.journal-entry__thesis {
+  margin: 0 0 4px;
+  overflow: hidden;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.journal-entry__snapshot,
+.journal-entry__note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.journal-entry__note {
+  margin-top: 4px;
+  color: var(--text-primary);
+}
+
+.journal-entry__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.journal__open {
+  margin-top: 14px;
+}
+
+.journal__open-title {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.journal__empty {
+  margin: 12px 0;
+}
+
+.journal__disclaimer {
+  margin: 20px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* ── 记一笔表单 ───────────────────────────────────────── */
+.journal-form {
+  display: grid;
+  gap: 14px;
+  max-width: 720px;
+  padding: 14px 16px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.journal-form__row {
+  display: grid;
+  gap: 6px;
+}
+
+.journal-form__label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.journal-form__hint {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.journal-form__thesis {
+  resize: vertical;
+}
+
+.journal-form__inv-kind {
+  min-width: 200px;
+}
+
+.journal-form__inv-price {
+  width: 160px;
+}
+
+.journal-form__symbol,
+.journal-form__kind {
+  max-width: 220px;
+}
+
+.journal-form__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+/* 缺项提示：不靠红色吓人，但要能一眼看到"还差什么" */
+.journal-form__missing {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--journal-due);
+}
+
+/* ── 统计卡 ───────────────────────────────────────────── */
+.journal-stats {
+  max-width: 620px;
+  padding: 12px 16px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.journal-stats__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-bottom: 8px;
+}
+
+.journal-stats__total {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.journal-stats__insufficient {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.journal-stats__list {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.journal-stats__row {
+  display: grid;
+  grid-template-columns: 1fr 32px 64px;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.journal-stats__count,
+.journal-stats__share {
+  text-align: right;
+}
+
+.journal-stats__share {
+  color: var(--text-secondary);
+}
+
+.journal-stats__foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+/* ── 复盘弹窗 ─────────────────────────────────────────── */
+.journal-review__lead {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.journal-review__result {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.journal-review__cell {
+  min-width: 0;
+}
+
+.journal-review__cell dt {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.journal-review__cell dd {
+  margin: 2px 0 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.journal-review__no-result {
+  margin-bottom: 14px;
+}
+
+.journal-review__section {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.journal-review__label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.journal-review__verdicts .ant-radio-wrapper {
+  align-items: flex-start;
+}
+
+/* 一行一个归因：标签 + 解释（解释只用来说明这类错是什么，不做评价） */
+.journal-review__verdict-label {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.journal-review__verdict-hint {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.journal-review__warn {
+  font-size: 12px;
+  color: var(--journal-due);
+}
+
+@media (max-width: 720px) {
+  .journal-review__result {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .journal-form {
+    max-width: none;
+  }
+}
