@@ -206,6 +206,27 @@ export interface JournalEvaluation {
   days_to_invalidation?: number | null;
   /** 失效条件是否可观测（`false` = 该条不可复盘，spec §S9.7.8 的闸）。 */
   invalidation_observable?: boolean | null;
+
+  // ── 财报窗口（`.superpowers/sdd/journal-deep/contract.md` §1） ─────────────
+  /**
+   * 该股在 **(快照日, due_on]** 窗口内是否有财报披露日。
+   *
+   * 三态而不是布尔：`true` 窗口内有财报（结果可能被事件主导）/ `false` 有财报数据但
+   * 不在窗口内 / `null` = 该股没有任何财报记录（缺数据，不猜）。前端只在 `=== true`
+   * 时给提示，`null` 不渲染（缺数据不是"没有财报"）。
+   */
+  earnings_in_window?: boolean | null;
+  /** 财报窗口的人话说明（后端下发，**原样**展示；无则空串）。 */
+  earnings_note?: string | null;
+  /**
+   * 缺数原因（字段名 → 原因；`{}`/缺省 = 没有缺数记录）。
+   *
+   * 注意它**不只是**"结果算不出来"：后端的 `evaluate_entry` 把路径/财报这类**降级**也记在
+   * 同一个字典里（市场级判断恒有 `mae_pct: market_level_no_symbol`、没有财报数据的个股有
+   * `earnings: no_financial_reports`）。判断"结果未就绪"只看结果键（`metrics.ts` 的
+   * `hasUnreadyMissingReason`），否则绝大多数真实条目会永远点不了「复盘」。
+   */
+  missing_reason?: Record<string, string> | string | null;
 }
 
 /** 一条复盘（append-only，`unique(entry_id)`：一个条目至多一条）。 */
@@ -346,6 +367,35 @@ export interface JournalCalibration {
   brier?: number | null;
 }
 
+/**
+ * 一类归档标签的净超额中位（`stats.by_kind_median[kind]`，契约 §3）。
+ *
+ * `count` 是中位数的样本数（已复盘条数），与 `by_kind[kind]` 的"全部条数"不是同一件事。
+ * `median_net_excess_pct` **可为 `null`**（该类没有可算净超额的复盘）→ 页面显示 `—`，
+ * **不是** 0：0 是"中位净超额正好是 0"，是另一种假话。
+ */
+export interface JournalKindMedian {
+  count?: number | null;
+  median_net_excess_pct?: number | null;
+}
+
+/**
+ * 归因自洽率（`stats.consistency`，契约 §2）。
+ *
+ * 自洽 = "我归类的原因"与"净超额的符号"方向一致（`discipline_break` 恒自洽：纪律问题
+ * 与盈亏独立）。`n` = 已复盘且净超额可算的条数；`n < 5` 时 `share` / `ci_low` /
+ * `ci_high` 为 `null`（只给 `n`）——此时页面只写"样本不足"，不给任何百分比。
+ * `note` 由后端下发（"不自洽不代表你说谎…"），页面**原样**展示，不改写。
+ */
+export interface JournalConsistency {
+  n: number;
+  consistent: number;
+  share?: number | null;
+  ci_low?: number | null;
+  ci_high?: number | null;
+  note?: string | null;
+}
+
 export interface JournalStats {
   n: number;
   reviewed_n: number;
@@ -379,6 +429,12 @@ export interface JournalStats {
   calibration_note?: string | null;
   /** 导出端点（spec §S9.7.9），前端直接用；缺省时拼固定路径。 */
   export_hint?: string | null;
+
+  // ── 深度优化追加（契约 §2/§3；全部可选，缺省时整块不渲染） ──────────────
+  /** 每类归档标签的净超额中位（`{count, median_net_excess_pct}`）；缺省时只显示条数。 */
+  by_kind_median?: Partial<Record<JournalKind, JournalKindMedian>> | null;
+  /** 归因自洽率（`{n, consistent, share, ci_low, ci_high, note}`）；缺省时整行不渲染。 */
+  consistency?: JournalConsistency | null;
 }
 
 /** 导出端点的退化路径（后端未给 `export_hint` 时用它）。 */

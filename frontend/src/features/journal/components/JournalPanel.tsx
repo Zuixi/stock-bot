@@ -18,10 +18,12 @@ import {
   GROSS_FALLBACK_LABEL,
   formatBrier,
   formatCalibrationRate,
+  formatConsistency,
   formatShare,
   formatShareOrSample,
   formatSignedPct,
   hasCalibrationCurve,
+  isEvaluationReady,
   netBasisLabel,
   netExcessOf,
   pickBasisValue,
@@ -59,6 +61,13 @@ const { Text } = Typography;
  *   `calibration_note`；
  * - **不可复盘**（§S9.7.8）：`reviewable === false` 的到期条目**没有**「复盘」按钮；
  * - **导出/隐私**（§S9.7.9）：页底「导出我的日志」链接 + 「不提供单条删除」原文告知。
+ *
+ * S9 深度优化（契约 §3，同样只做加法，字段缺省时整块退化）：
+ * - **`by_kind_median`**：统计卡的归档标签格在条数旁给该类净超额中位（`null` → `—`）；
+ * - **归因自洽**：统计卡新增一行（`n < 5` 只写「样本不足」，末尾原样展示后端 `note`）；
+ * - **结果未就绪**：`evaluation` 为空 / 结果三要素缺数 / `missing_reason` 记着结果缺数时
+ *   「复盘」**禁用** +
+ *   「重新检查」（重拉列表查询），不给"先记归因"的绕过入口。
  *
  * 分块（不新增路由，挂在 `/me` 的 tab 内）：
  * - 顶部一行：「待复盘 N 条」（N = `due` 条数，页面角标语义，v1 不做推送）；
@@ -146,18 +155,28 @@ function EntryOutcome({ entry }: { entry: JournalEntry }) {
  *   「只观察」（那会把"没记录"说成"没下单"）；
  * - **不可复盘**（§S9.7.8）：`reviewable === false` 时**没有**「复盘」按钮，改成一句
  *   「不可复盘（失效条件不可观测）」。缺字段（`undefined`）按可复盘处理，旧条目照旧能复盘。
+ *
+ * 深度优化的第三处（契约 §3）：到期的条目如果**结果未就绪**（`evaluation` 为空、
+ * 结果三要素缺数、或 `missing_reason` 记着结果缺数），「复盘」按钮**禁用**并说明原因，
+ * 旁边给一个「重新检查」（重新拉列表/详情）。这里**不给**"先记归因"这种绕过入口：
+ * 归因必须建立在看得见的结果上，否则记录的就是一句没依据的自我评价。
  */
 function EntryRow({
   entry,
   onReview,
+  onRecheck,
 }: {
   entry: JournalEntry;
   onReview?: (entry: JournalEntry) => void;
+  /** 「重新检查」：重新触发列表/详情查询（父级给，行内不自己造数据源）。 */
+  onRecheck?: () => void;
 }) {
   const reviewed = entry.status === "reviewed";
   const review = entry.review;
   const size = positionSizeOf(entry.position_size);
   const reviewable = entry.reviewable !== false;
+  // 结果未就绪（契约 §3）：缺 `evaluation` / 带 `missing_reason` / 结果三要素缺数。
+  const ready = isEvaluationReady(entry.evaluation);
   const testId =
     entry.status === "reviewed"
       ? "journal-reviewed-item"
@@ -201,14 +220,27 @@ function EntryRow({
       {onReview && entry.status === "due" && (
         <div className="journal-entry__actions">
           {reviewable ? (
-            <Button
-              type="primary"
-              size="small"
-              data-testid="journal-review-open"
-              onClick={() => onReview(entry)}
-            >
-              复盘
-            </Button>
+            <>
+              <Button
+                type="primary"
+                size="small"
+                data-testid="journal-review-open"
+                disabled={!ready}
+                onClick={() => onReview(entry)}
+              >
+                复盘
+              </Button>
+              {!ready && (
+                <>
+                  <span className="journal-entry__not-ready" data-testid="journal-review-not-ready">
+                    结果未就绪（缺行情/基准），数据到位后即可复盘
+                  </span>
+                  <Button size="small" data-testid="journal-recheck" onClick={onRecheck}>
+                    重新检查
+                  </Button>
+                </>
+              )}
+            </>
           ) : (
             <span className="journal-entry__not-reviewable" data-testid="journal-not-reviewable">
               不可复盘（失效条件不可观测）
@@ -229,12 +261,21 @@ function EntryRow({
  *   该比例 `n < 5` 时写"样本不足"（不给点估计）；
  * - 底部原样展示 `multiple_comparison_note`（后端给的那句话，前端不改写）；
  * - 任何 `null` → `—`（"没有数据"不是"0"）。
+ *
+ * 深度优化追加（契约 §3，全部只做加法）：
+ * - `by_kind` 每格在条数旁显示该类 `by_kind_median[kind].median_net_excess_pct`
+ *   （`null`/缺省 → `—`；`0.00%` 与 `—` 是两件事）；
+ * - 「归因自洽」一行：`8/13（95% 区间 36%–82%）`，`consistency.n < 5` 只写「样本不足」，
+ *   末尾**原样**展示 `consistency.note`。
  */
 function StatsCard({ stats }: { stats: JournalStats }) {
   const insufficient = stats.reviewed_n < 5;
   const counts = stats.by_verdict ?? {};
   const reviewedN = stats.reviewed_n;
   const byKind = stats.by_kind ?? null;
+  const byKindMedian = stats.by_kind_median ?? null;
+  const consistency = stats.consistency ?? null;
+  const consistencyText = formatConsistency(consistency);
   const bySize = stats.by_size ?? null;
   const shareCi = stats.share_ci ?? null;
   // 平均超额默认净口径；Phase A 未上线（缺 `avg_net_excess_pct`）时回退毛并标注。
@@ -310,15 +351,47 @@ function StatsCard({ stats }: { stats: JournalStats }) {
 
       {byKind && (
         <div className="journal-stats__kinds" data-testid="journal-stats-by-kind">
-          {KIND_ORDER.map((key) => (
-            <span className="journal-stats__kind" key={key}>
-              <span className="journal-stats__kind-label">{KIND_META[key].label}</span>
-              <span className="journal-stats__kind-count num">{byKind[key] ?? 0}</span>
-            </span>
-          ))}
+          {KIND_ORDER.map((key) => {
+            // 中位净超额（契约 §3）：`by_kind_median` 整块缺省（旧后端）时**不渲染**这一列，
+            // 有这块时每类都要占位——`null`/缺省显示 `—`，绝不补 0。
+            const median = byKindMedian?.[key]?.median_net_excess_pct;
+            return (
+              <span className="journal-stats__kind" key={key}>
+                <span className="journal-stats__kind-label">{KIND_META[key].label}</span>
+                <span className="journal-stats__kind-count num">{byKind[key] ?? 0}</span>
+                {byKindMedian && (
+                  <span
+                    className="journal-stats__kind-median num"
+                    data-testid="journal-stats-kind-median"
+                  >
+                    {formatSignedPct(median)}
+                  </span>
+                )}
+              </span>
+            );
+          })}
           <span className="journal-stats__kind-hint">
             「放弃」= 我决定不动：计入判断，不计入收益
           </span>
+        </div>
+      )}
+
+      {/* 归因自洽率（契约 §2）：自己一条 n，故不受 `reviewed_n < 5` 的整块隐藏影响——
+          它的 `n < 5` 时只写「样本不足」（不给比例、不给区间）。 */}
+      {consistency && consistencyText && (
+        <div className="journal-stats__consistency" data-testid="journal-stats-consistency">
+          <span className="journal-stats__label">归因自洽</span>
+          <span className="journal-stats__count num" data-testid="journal-stats-consistency-value">
+            {consistencyText}
+          </span>
+          {consistency.note ? (
+            <span
+              className="journal-stats__consistency-note"
+              data-testid="journal-stats-consistency-note"
+            >
+              {consistency.note}
+            </span>
+          ) : null}
         </div>
       )}
 
@@ -473,6 +546,13 @@ export function JournalPanel() {
     queryClient.invalidateQueries({ queryKey: ["journal"] });
   };
 
+  // 「重新检查」（契约 §3）：结果未就绪时**只重拉数据**，不替用户补任何东西。
+  // 拉的是列表查询（到期/未到期两份都在用同一条读面）；后端把行情/基准补齐后，
+  // `evaluation` 自然带上，按钮随之可用。
+  const recheckEntries = () => {
+    void Promise.all([dueQuery.refetch(), openQuery.refetch()]);
+  };
+
   return (
     <div className="journal" data-testid="journal-panel">
       <div className="journal__meta">
@@ -504,7 +584,12 @@ export function JournalPanel() {
         ) : (
           <ul className="journal__list">
             {dueItems.map((entry) => (
-              <EntryRow key={entry.id} entry={entry} onReview={setReviewing} />
+              <EntryRow
+                key={entry.id}
+                entry={entry}
+                onReview={setReviewing}
+                onRecheck={recheckEntries}
+              />
             ))}
           </ul>
         )}

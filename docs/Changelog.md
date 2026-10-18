@@ -1,3 +1,25 @@
+## 2026-10-19 - **S9 深度优化前端：`by_kind_median` / 归因自洽 / 复盘受阻 / 财报窗口**
+
+四项全部**只做加法**（契约 `.superpowers/sdd/journal-deep/contract.md` §3；新字段一律可选、`undefined` 容错；
+`null` 与 `0` 严格区分；无新路由，`/market`、route-manifest、`check-routes`、`ARCHITECTURE §6` 均未动）：
+
+- **`by_kind_median` 上屏**：统计卡 `by_kind` 每格在条数旁显示该类 `median_net_excess_pct`
+  （`null`/整键缺省 → `—`；`0` → `0.00%`，两者不是一回事）
+- **归因自洽率**：统计卡新增一行「归因自洽 8/13（95% 区间 36%–82%）」；`consistency.n < 5` 只写
+  「样本不足」（不给比例也不给区间）；末尾**原样**展示 `consistency.note`（前端不改写）
+- **复盘受阻 UX**：`evaluation` 为空 / 结果三要素缺数 / `missing_reason` 里记着**结果缺数**（缺行情/基准）
+  → 「复盘」**禁用**并显示「结果未就绪（缺行情/基准），数据到位后即可复盘」+「重新检查」
+  （重拉列表查询，数据到位后按钮自动恢复）；**不提供**"先记归因"的绕过入口。
+  口径边界：`missing_reason` 里的**路径/财报降级**（市场级恒缺 `mae_pct`、无财报数据的 `earnings`）
+  **不**算未就绪——后端复盘端点照收，若按"字典非空即拦"，绝大多数真实条目会永远点不了「复盘」
+- **财报窗口提示**：复盘弹窗 `earnings_in_window === true` 时在归因选择**上方**原样展示 `earnings_note`
+  （中性陈述、不预选归因；`false` / `null` 不渲染）
+- 测试：e2e 新增 5 条（`by_kind_median` 展示与 `null`/`0` 区分、自洽 n<5 与 n≥5、复盘受阻 +「重新检查」
+  真重拉、财报窗口提示且不预选）；`npx tsc --noEmit` ✓ / `decisionJournal` **29 passed** /
+  回归 `watchlistTriage + userIsolation` **11 passed**
+- 涉及文件：`frontend/src/{shared/api/journal.ts,features/journal/{metrics.ts,components/{JournalPanel.tsx,ReviewModal.tsx,JournalPanel.css}}}`、
+  `frontend/e2e/decisionJournal.spec.ts`、`docs/Changelog.md`
+
 ## 2026-10-19 - **口径修正：bet_type 基准真正区分 + pass/none 归一**
 
 owner 批准的两处**设计缺陷**修复（不是功能新增）：

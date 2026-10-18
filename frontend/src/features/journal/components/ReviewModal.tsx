@@ -34,6 +34,9 @@ const { Text } = Typography;
  *    `days_to_invalidation` 有就展示；`touched_then_reversed = true` 时在归因选择**上方**
  *    给一句「你先触发了失效条件，之后才反弹——这更像纪律问题」——
  *    这是**提示**，不预选归因、不强制选择（归因仍是用户自己的）。
+ * 3b. **财报窗口**（深度优化契约 §4）：`earnings_in_window === true` 时在归因选择**上方**
+ *    原样展示后端给的 `earnings_note`（"窗口内含 1 次财报披露…结果可能被财报事件主导"）。
+ *    中性陈述，**不预选**任何归因、不因为"有财报"就替用户认定某类归因。
  * 4. **用户选的**（必选）：五个归因之一。未选时「确认复盘」**禁用**（不是点了再报错）；
  *    归因是用户自己的，产品不替他分类，也不给倾向性结论。
  *
@@ -113,6 +116,11 @@ export function ReviewModal({ entry, onClose }: ReviewModalProps) {
   const hasPath = mae !== null || !!firstTouch || daysTo !== null;
   // 先触发失效、到期反而盈利 → 显示"更像纪律问题"的提示（**不预选**归因、不强制选择）。
   const touchedThenReversed = evaluation?.touched_then_reversed === true;
+
+  // 财报窗口（深度优化契约 §4）：只在后端明确 `true` 时提示；`false` = 有财报记录但不在
+  // 窗口内、`null`/缺省 = 该股没有财报数据（缺数据不猜，两种情况都**不**渲染）。
+  const earningsNote =
+    evaluation?.earnings_in_window === true ? (evaluation.earnings_note ?? "").trim() : "";
 
   // 净/毛口径：默认净；净字段缺省时回退毛（`basis = "gross"`）并明确标注。
   const outcome = netOutcomeOf(evaluation);
@@ -242,6 +250,13 @@ export function ReviewModal({ entry, onClose }: ReviewModalProps) {
           {touchedThenReversed && (
             <p className="journal-review__path-hint" data-testid="journal-path-hint">
               你先触发了失效条件，之后才反弹——这更像<strong>纪律</strong>问题
+            </p>
+          )}
+
+          {/* 财报窗口（深度优化契约 §4）：结果可能被事件主导——中性提示，不预选归因。 */}
+          {earningsNote && (
+            <p className="journal-review__earnings" data-testid="journal-earnings-note">
+              {earningsNote}
             </p>
           )}
 

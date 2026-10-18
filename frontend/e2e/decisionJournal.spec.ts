@@ -159,6 +159,12 @@ interface FixtureEvaluation {
   days_to_invalidation?: number | null;
   /** S9.7.8：失效条件是否可观测。 */
   invalidation_observable?: boolean | null;
+  /** 深度优化契约 §1：窗口内是否有财报披露日（三态，`null` = 无财报数据）。 */
+  earnings_in_window?: boolean | null;
+  /** 深度优化契约 §1：财报窗口的人话说明（后端下发，页面原样展示）。 */
+  earnings_note?: string | null;
+  /** 深度优化契约 §3：结果未就绪的缺数原因（非空 → 复盘入口禁用）。 */
+  missing_reason?: Record<string, string> | null;
 }
 
 interface FixtureEntry {
@@ -231,6 +237,17 @@ interface FixtureStats {
   calibration_note?: string | null;
   /** S9.7.9：导出端点（缺省时页面拼固定路径）。 */
   export_hint?: string | null;
+  /** 深度优化契约 §3：每类归档标签的净超额中位（`{count, median_net_excess_pct}`）。 */
+  by_kind_median?: Record<string, { count: number; median_net_excess_pct: number | null }> | null;
+  /** 深度优化契约 §2：归因自洽率（`n < 5` 时以 `null` 给 share/区间）。 */
+  consistency?: {
+    n: number;
+    consistent: number;
+    share?: number | null;
+    ci_low?: number | null;
+    ci_high?: number | null;
+    note?: string | null;
+  } | null;
 }
 
 /**
@@ -509,11 +526,142 @@ const STATS_CALIBRATION_INSUFFICIENT: FixtureStats = {
   calibration_note: "样本不足（<20 条已复盘且填了信心）",
 };
 
+/**
+ * 每类净超额中位（深度优化契约 §3）：`by_kind` 仍是纯条数，`by_kind_median` 是另一块。
+ *
+ * 刻意三种形态同屏：`观察` 有数（+1.25%）、`买` 是 **`null`**（该类的复盘净超额算不出来）、
+ * `卖` 是 **`0`**（正好 0，必须显示 `0.00%` 而不是 `—`）、`放弃`/`持有` **整键缺省**。
+ * 这就是"`null` 与 0 必须区分"这条纪律的判据：`0.00%` 与 `—` 同时出现且位置不串。
+ */
+const STATS_WITH_KIND_MEDIAN: FixtureStats = {
+  ...STATS_WITH_CI,
+  by_kind: { watch: 3, buy: 2, sell: 1, pass: 1, hold: 0 },
+  by_kind_median: {
+    watch: { count: 2, median_net_excess_pct: 1.25 },
+    buy: { count: 1, median_net_excess_pct: null },
+    sell: { count: 1, median_net_excess_pct: 0 },
+    pass: { count: 1, median_net_excess_pct: null },
+  },
+};
+
+/** 自洽率的后端原话（契约 §2 的示例 note；页面必须**原样**展示，不改写）。 */
+const CONSISTENCY_NOTE =
+  "不自洽不代表你说谎：按过程评价自己本来就会与收益符号不一致";
+
+/** 归因自洽率 `n >= 5`（契约 §2）：`8/13（95% 区间 36%–82%）` + 原话 note。 */
+const STATS_CONSISTENCY_ENOUGH: FixtureStats = {
+  n: 13,
+  reviewed_n: 13,
+  by_verdict: {
+    thesis_wrong: 4,
+    timing_wrong: 3,
+    discipline_break: 3,
+    right_for_wrong_reason: 2,
+    luck: 1,
+  },
+  avg_excess_pct: -0.8,
+  avg_net_excess_pct: -0.92,
+  discipline_break_share: 0.2308,
+  consistency: {
+    n: 13,
+    consistent: 8,
+    share: 0.6154,
+    ci_low: 0.3555,
+    ci_high: 0.8222,
+    note: CONSISTENCY_NOTE,
+  },
+};
+
+/** 归因自洽率 `n < 5`（契约 §2）：后端只给 n，`share` / 区间是 `null` → 只许写「样本不足」。 */
+const STATS_CONSISTENCY_SMALL: FixtureStats = {
+  n: 3,
+  reviewed_n: 3,
+  by_verdict: { thesis_wrong: 2, luck: 1 },
+  avg_excess_pct: 0.5,
+  discipline_break_share: 0.333,
+  consistency: {
+    n: 3,
+    consistent: 2,
+    share: null,
+    ci_low: null,
+    ci_high: null,
+    note: "样本还不够，先不看比例",
+  },
+};
+
+/**
+ * 结果未就绪（深度优化契约 §3）：到期了但 `evaluation` 还没算出来。
+ * 页面**禁用**「复盘」+ 说明原因 + 「重新检查」；不给"先记归因"的绕过入口。
+ */
+const NO_EVALUATION_DUE_ENTRY: FixtureEntry = {
+  ...DUE_ENTRY,
+  id: 111,
+  symbol: "300750",
+  thesis: "到期了但行情还没到位",
+  evaluation: null,
+};
+
+/** 结果未就绪的另一种形态：`evaluation` 在，但 `missing_reason` 记着**基准**缺数（缺行情/基准）。 */
+const MISSING_REASON_DUE_ENTRY: FixtureEntry = {
+  ...DUE_ENTRY,
+  id: 112,
+  symbol: "601318",
+  thesis: "超额算不出来：基准序列缺失",
+  evaluation: {
+    outcome_pct: -2,
+    bench_pct: null,
+    excess_pct: null,
+    invalidation_hit: true,
+    missing_reason: { bench_pct: "bench_series_missing" },
+  },
+};
+
+/**
+ * 只有**路径/财报降级**、结果本身齐全的条目：`missing_reason` 非空但**不是**结果缺数。
+ *
+ * 这是"结果未就绪"口径的边界判据：后端把 `mae_pct`（市场级恒缺）与 `earnings`
+ * （无财报数据）也记进同一字典，但 `outcome_pct / bench_pct / invalidation_hit` 都在，
+ * 复盘端点照收 —— 页面必须**照旧给可点的「复盘」**，不能因为字典非空就永久禁用。
+ */
+const PATH_DEGRADED_DUE_ENTRY: FixtureEntry = {
+  ...FALLBACK_DUE_ENTRY,
+  id: 114,
+  thesis: "路径与财报降级，但结果本身齐全",
+  evaluation: {
+    ...(FALLBACK_DUE_ENTRY.evaluation as FixtureEvaluation),
+    missing_reason: {
+      mae_pct: "market_level_no_symbol",
+      earnings: "no_financial_reports",
+    },
+  },
+};
+
+/**
+ * 财报窗口（深度优化契约 §4）：`earnings_in_window = true` + 后端那句人话。
+ * 弹窗要在归因**上方**展示它，且**不预选**任何归因（有财报 ≠ 一定是纪律问题）。
+ */
+const EARNINGS_DUE_ENTRY: FixtureEntry = {
+  ...NET_DUE_ENTRY,
+  id: 113,
+  symbol: "002714",
+  thesis: "窗口内有财报，结果可能被事件主导",
+  evaluation: {
+    ...(NET_DUE_ENTRY.evaluation as FixtureEvaluation),
+    earnings_in_window: true,
+    earnings_note: "窗口内含 1 次财报披露（10-15），结果可能被财报事件主导",
+  },
+};
+
 interface JournalStore {
   entries: FixtureEntry[];
   stats: FixtureStats;
   /** 断言用：最后一次「记一笔」的请求载荷（表单到底发了什么）。 */
   lastCreate: Record<string, unknown> | null;
+  /**
+   * 断言用：`GET /api/v1/journal?status=` 的命中次数。
+   * 「重新检查」的判据是"**真的又拉了一次**"，不是"按钮点得动"。
+   */
+  listGets: number;
   /**
    * 创建响应里挂哪种同类历史：`full`（样本够）/ `insufficient`（两行都不足）/
    * `absent`（老条目/后端未上线 → 整卡不渲染，不补 0）。
@@ -613,6 +761,7 @@ async function mockJournal(page: Page, store: JournalStore) {
     }
 
     if (method === "GET" && path === "/api/v1/journal") {
+      store.listGets += 1;
       const status = url.searchParams.get("status");
       const items = store.entries.filter((item) => !status || item.status === status);
       return route.fulfill({ status: 200, json: { items } });
@@ -634,6 +783,7 @@ async function openJournal(page: Page, store?: Partial<JournalStore>): Promise<J
   const state: JournalStore = {
     stats: STATS_INSUFFICIENT,
     lastCreate: null,
+    listGets: 0,
     ...store,
     entries,
   };
@@ -1104,6 +1254,134 @@ test.describe("决策日志（/me?tab=journal）", () => {
     await page.getByTestId("journal-review-open").nth(1).click();
     await expect(page.getByTestId("journal-review-modal")).toBeVisible();
     await expect(page.getByTestId("journal-path-hint")).toHaveCount(0);
+  });
+
+  test("统计：by_kind 每格在条数旁给该类净超额中位，null 显示 — 而 0 显示 0.00%", async ({
+    page,
+  }) => {
+    await openJournal(page, { stats: STATS_WITH_KIND_MEDIAN });
+    const card = page.getByTestId("journal-stats");
+    const byKind = card.getByTestId("journal-stats-by-kind");
+
+    // 五格各有一个中位（KIND_ORDER：观察 / 买 / 卖 / 放弃 / 持有）
+    const medians = byKind.getByTestId("journal-stats-kind-median");
+    await expect(medians).toHaveCount(5);
+
+    // 有数 → 带符号百分比；`null` → `—`；`0` → `0.00%`（三者严格区分）
+    await expect(medians.nth(0)).toHaveText("+1.25%");
+    await expect(medians.nth(1)).toHaveText("—");
+    await expect(medians.nth(2)).toHaveText("0.00%");
+    await expect(medians.nth(3)).toHaveText("—");
+    // 整键缺省（持有）与 `null` 一样是 `—`，绝不补 0
+    await expect(medians.nth(4)).toHaveText("—");
+
+    // 条数仍照旧（`by_kind` 的既有形状没被动过）
+    await expect(byKind).toContainText("观察");
+    await expect(byKind).toContainText("3");
+  });
+
+  test("统计：归因自洽 n>=5 显示 N/M（95% 区间），末尾原样展示后端 note", async ({ page }) => {
+    await openJournal(page, { stats: STATS_CONSISTENCY_ENOUGH });
+    const card = page.getByTestId("journal-stats");
+
+    const row = card.getByTestId("journal-stats-consistency");
+    await expect(row).toBeVisible();
+    await expect(row).toContainText("归因自洽");
+    // 8/13 + Wilson 区间，逐字（36%–82% 由 0.3555/0.8222 四舍五入）
+    await expect(card.getByTestId("journal-stats-consistency-value")).toHaveText(
+      "8/13（95% 区间 36%–82%）"
+    );
+    // note 原样（后端那句话，前端不改写）
+    await expect(card.getByTestId("journal-stats-consistency-note")).toHaveText(CONSISTENCY_NOTE);
+  });
+
+  test("统计：归因自洽 n<5 只写「样本不足」，不给比例也不给区间", async ({ page }) => {
+    await openJournal(page, { stats: STATS_CONSISTENCY_SMALL });
+    const card = page.getByTestId("journal-stats");
+
+    const row = card.getByTestId("journal-stats-consistency");
+    await expect(row).toBeVisible();
+    await expect(card.getByTestId("journal-stats-consistency-value")).toHaveText("样本不足");
+    // 3 条里 2 条自洽 = 66.7%——这种数字看起来像结论，必须不出现；区间同样不给
+    await expect(row).not.toContainText("%");
+    await expect(row).not.toContainText("95% 区间");
+    await expect(row).not.toContainText("2/3");
+    // note 仍原样展示（它不依赖样本量）
+    await expect(card.getByTestId("journal-stats-consistency-note")).toHaveText(
+      "样本还不够，先不看比例"
+    );
+  });
+
+  test("复盘受阻：结果未就绪时「复盘」禁用，说明原因且「重新检查」能重拉数据", async ({
+    page,
+  }) => {
+    const store = await openJournal(page, {
+      entries: [NO_EVALUATION_DUE_ENTRY, MISSING_REASON_DUE_ENTRY, DUE_ENTRY, PATH_DEGRADED_DUE_ENTRY],
+    });
+
+    await expect(page.getByTestId("journal-due-item")).toHaveCount(4);
+    const openButtons = page.getByTestId("journal-review-open");
+    await expect(openButtons).toHaveCount(4);
+
+    // 两种"未就绪"（缺 evaluation / 缺基准的 missing_reason）都禁用
+    await expect(openButtons.nth(0)).toBeDisabled();
+    await expect(openButtons.nth(1)).toBeDisabled();
+    // 结果齐全的两条照旧可点：路径/财报类降级**不**算未就绪（与后端 422 判据同一组）
+    await expect(openButtons.nth(2)).toBeEnabled();
+    await expect(openButtons.nth(3)).toBeEnabled();
+
+    const hints = page.getByTestId("journal-review-not-ready");
+    await expect(hints).toHaveCount(2);
+    await expect(hints.first()).toHaveText("结果未就绪（缺行情/基准），数据到位后即可复盘");
+
+    // 「重新检查」可点，并且真的又打了一次列表读面（不是只换了文案）
+    const recheck = page.getByTestId("journal-recheck");
+    await expect(recheck).toHaveCount(2);
+    await expect(recheck.first()).toBeEnabled();
+    const before = store.listGets;
+    await recheck.first().click();
+    await expect.poll(() => store.listGets).toBeGreaterThan(before);
+
+    // 后端把结果补齐后，同一条的「复盘」恢复可用、原因不再显示
+    const repaired = store.entries.find((item) => item.id === NO_EVALUATION_DUE_ENTRY.id);
+    expect(repaired).toBeTruthy();
+    if (repaired) repaired.evaluation = NET_DUE_ENTRY.evaluation;
+    await recheck.first().click();
+    await expect(page.getByTestId("journal-review-open").first()).toBeEnabled();
+    await expect(page.getByTestId("journal-review-not-ready")).toHaveCount(1);
+  });
+
+  test("财报窗口：earnings_in_window=true 时在归因上方展示后端 note，且不预选归因", async ({
+    page,
+  }) => {
+    await openJournal(page, { entries: [EARNINGS_DUE_ENTRY, DUE_ENTRY] });
+
+    await page.getByTestId("journal-review-open").first().click();
+    const modal = page.getByTestId("journal-review-modal");
+    await expect(modal).toBeVisible();
+
+    const note = modal.getByTestId("journal-earnings-note");
+    await expect(note).toBeVisible();
+    await expect(note).toHaveText("窗口内含 1 次财报披露（10-15），结果可能被财报事件主导");
+
+    // 位置在「归因」选择**上方**（同屏顺序，比坐标稳）
+    const modalText = await modal.innerText();
+    const noteAt = modalText.indexOf("财报披露");
+    const verdictAt = modalText.indexOf("归因（必选");
+    expect(noteAt).toBeGreaterThan(-1);
+    expect(verdictAt).toBeGreaterThan(-1);
+    expect(noteAt).toBeLessThan(verdictAt);
+
+    // 中性提示：不预选任何归因，确认仍禁用
+    await expect(modal.locator("input[type=radio]:checked")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "确认复盘" })).toBeDisabled();
+
+    // 没有财报窗口的条目（earnings_in_window 缺省）不显示这条提示
+    await page.getByRole("button", { name: /取\s*消/ }).click();
+    await expect(modal).toHaveCount(0);
+    await page.getByTestId("journal-review-open").nth(1).click();
+    await expect(page.getByTestId("journal-review-modal")).toBeVisible();
+    await expect(page.getByTestId("journal-earnings-note")).toHaveCount(0);
   });
 
   test("统计：by_size 分栏 + 加权超额，校准每档 n>=10 才给命中率", async ({ page }) => {

@@ -141,6 +141,14 @@
   color: var(--text-secondary);
 }
 
+/* 结果未就绪（深度优化契约 §3）：与"不可复盘"相反，**按钮还在但禁用**——
+   数据到位后这条就能复盘，禁用的按钮 + 原因 + 「重新检查」正是这个语义。 */
+.journal-entry__not-ready {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
 .journal-entry__symbol {
   font-size: 13px;
   font-weight: 600;
@@ -197,10 +205,18 @@
 
 .journal-entry__actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
+  gap: 8px;
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px dashed var(--border);
+}
+
+/* 未就绪的说明贴左、按钮贴右（原因比按钮长，正文优先占位） */
+.journal-entry__not-ready {
+  margin-right: auto;
 }
 
 .journal__open {
@@ -408,6 +424,31 @@
   color: var(--text-secondary);
 }
 
+/* 每类的净超额中位（深度优化契约 §3）：紧跟条数，`null` 由 JS 渲染成 `—` */
+.journal-stats__kind-median {
+  font-size: 11.5px;
+  color: var(--text-primary);
+}
+
+/* 归因自洽率（深度优化契约 §2）：一行，末尾是后端给的原话 note */
+.journal-stats__consistency {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.journal-stats__consistency-note {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
 /* 底部固定标注：未做多重比较校正（后端给的原话，原样展示） */
 .journal-stats__note {
   margin: 10px 0 0;
@@ -588,6 +629,20 @@
 
 .journal-review__path-hint strong {
   font-weight: 600;
+}
+
+/* 财报窗口提示（深度优化契约 §4）：中性陈述——"结果可能被财报事件主导"，
+   不是判断、不预选归因。故用中性描边而不是警示色（警示色会被读成"该选纪律问题"）。 */
+.journal-review__earnings {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: var(--bg-panel);
+  border: 1px dashed var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 4px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-primary);
 }
 
 .journal-review__no-result {
