@@ -44,6 +44,74 @@ export interface TriageItem {
   source: string;
   /** 复核去处：`kline` | `announcement` | `dragon_tiger` | `sector`（映射见 `TriagePanel`）。 */
   verify: string;
+  /**
+   * 规则出处（provenance，契约见 `.superpowers/sdd/triage-provenance/contract.md`）：
+   * - `rule_text` 人话阈值（`5 日跌幅 ≥ 12%`），**后端产出**，前端不改写；
+   * - `rule_version` 规则版本（`r1`），阈值改口径必须换版本，故要和 `rule_text` 一起上屏；
+   * - `source_table` 主要数据表（`daily_quotes`），回答"这条事实是从哪张表算的"。
+   *
+   * 三者是**卡片行**的必需字段（与 `rules[]` 的 `rule_text` / `version` / `source_tables`
+   * 同源）；`detector` 才是 `rules[].key`，前端只拿它做 `find`，永不上屏。
+   */
+  rule_text: string;
+  rule_version: string;
+  source_table: string;
+}
+
+/** 一条规则的历史统计（`rules[].stats`；`null` 时看 `stats_note`）。 */
+export interface TriageRuleStats {
+  as_of: string;
+  window_months: number;
+  signals: number;
+  days: number;
+  /** 每日约几条信号（可为小数，如 `5.1`）。 */
+  per_day: number;
+  /**
+   * `tN_excess_med` = 各信号日"信号组中位收益 − 当日全市场中位收益"的跨日中位数（%）。
+   * **可能为负**：展示必须保留符号（`-1.02%`），不要取绝对值、不要丢掉 `-`。
+   * 后端若因样本不足给不出某一档，这里允许 `null`（页面显示 `—`，不显示 0）。
+   */
+  t1_excess_med: number | null;
+  t5_excess_med: number | null;
+  t20_excess_med: number | null;
+  /** 信号组 5 日收益的 5% 分位（%，通常为负）。 */
+  t5_p05: number | null;
+  /** 统计口径一句话说明（页面原样展示，不二次解释）。 */
+  basis: string;
+}
+
+/**
+ * 一条规则的**说明面**（`GET /api/v1/watchlists/triage/rules` 的 `rules[]`）。
+ *
+ * 这份数据只服务「规则说明」抽屉：定义、阈值、数据来源、已知失效场景、历史统计。
+ * 与 `TriageItem` 的分工是刻意的——卡片只说"发生了什么"，"这条规则怎么算、
+ * 什么时候会算错、历史上是什么样"都在抽屉里，避免卡片变成长文。
+ */
+export interface TriageRule {
+  /** 规则 key = `TriageItem.detector`（抽屉用它 `find` 当前规则）。 */
+  key: string;
+  /** 人话规则名（`跌得急`），抽屉标题用。 */
+  label: string;
+  severity: TriageSeverity;
+  /** 规则版本（`r1`），与卡片上的 `rule_version` 同源。 */
+  version: string;
+  rule_text: string;
+  definition: string;
+  /** 阈值表：key 是口径字段名（`day_pct`），value 可能为负，原样展示。 */
+  thresholds: Record<string, number>;
+  source_tables: string[];
+  /** 数据更新时间/口径说明（如「盘后 15:30 起可由 daily_quotes 计算」）。 */
+  update_note: string;
+  /** 已知失效场景（人话，中性陈述）。 */
+  failure_modes: string[];
+  /** `null` = 样本不足/数据不足，**页面不得显示 0 或空表**，改显示 `stats_note`。 */
+  stats: TriageRuleStats | null;
+  /** `stats` 为 `null` 时的原因说明（契约要求此时必填）。 */
+  stats_note: string | null;
+}
+
+export interface TriageRulesResponse {
+  rules: TriageRule[];
 }
 
 export interface TriageResponse {
@@ -70,4 +138,14 @@ export interface TriageResponse {
 
 export function fetchTriage(): Promise<TriageResponse> {
   return apiGet<TriageResponse>("/api/v1/watchlists/triage");
+}
+
+/**
+ * 规则说明（`GET /api/v1/watchlists/triage/rules`，登录即可）。
+ *
+ * 只在「规则说明」抽屉打开时取（`useQuery({ enabled: open })`）：卡片本身不需要它，
+ * 每次进页面都拉一份规则说明是白给首屏增加一个请求。
+ */
+export function fetchTriageRules(): Promise<TriageRulesResponse> {
+  return apiGet<TriageRulesResponse>("/api/v1/watchlists/triage/rules");
 }

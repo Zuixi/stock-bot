@@ -6,8 +6,9 @@ import { test, expect as baseExpect, type Page } from "@playwright/test";
  * ## 为什么全部 mock
  *
  * 本文件的每条判据都只依赖**响应 → 渲染**这一段：条目数、分级分组、`folded` 折叠行、
- * `state` 的三态（全静默 / 无数据日 / 无自选）+ error、免责与禁用词。
- * 把 `GET /api/v1/watchlists/triage` 用 `page.route` 钉住之后，
+ * `state` 的三态（全静默 / 无数据日 / 无自选）+ error、免责与禁用词、规则出处与规则说明
+ * 抽屉（`GET /api/v1/watchlists/triage/rules`，抽屉打开才请求）。
+ * 把 `GET /api/v1/watchlists/triage` 与 `/triage/rules` 用 `page.route` 钉住之后，
  * 判据**不随当天行情变化**，也不依赖后端新端点是否已上线/本机是否有自选（否则
  * "今天恰好没命中"会让"有条目"那条假红，"自选恰好为空"又会让它假绿）。
  *
@@ -63,6 +64,10 @@ const FIXTURE = {
       as_of: "2026-10-17",
       source: "daily_quotes",
       verify: "kline",
+      // 规则出处（provenance）：卡片脚上方那行「规则 · 版本 · 数据表」的数据源
+      rule_text: "收盘价 ≤ 20 日均线",
+      rule_version: "r1",
+      source_table: "daily_quotes",
     },
     {
       symbol: "000001",
@@ -74,6 +79,9 @@ const FIXTURE = {
       as_of: "2026-10-17",
       source: "announcements",
       verify: "announcement",
+      rule_text: "当日新增公告 ≥ 1 条",
+      rule_version: "r1",
+      source_table: "announcements",
     },
     {
       symbol: "300750",
@@ -85,6 +93,9 @@ const FIXTURE = {
       as_of: "2026-10-17",
       source: "daily_quotes",
       verify: "kline",
+      rule_text: "收盘价 = 近 60 交易日最高价",
+      rule_version: "r1",
+      source_table: "daily_quotes",
     },
   ],
   unavailable: [],
@@ -92,11 +103,70 @@ const FIXTURE = {
   disclaimer: "本产品只展示已发生的数据事实，不构成投资建议；历史数据不代表未来表现。",
 };
 
+/**
+ * `GET /api/v1/watchlists/triage/rules` 的响应（逐字照 `contract.md` 的 `rules[]`）。
+ *
+ * 两条规则刻意覆盖「规则说明」抽屉的两种形态：
+ * - `break_ma20`：`stats` 非空 → 展示信号/天数/每日条数/超额中位（**含正负号**）/最差分位；
+ * - `new_high_low`：`stats=null` + `stats_note` → **只显示原因，不显示 0/空表**。
+ *
+ * `t1_excess_med: 0.30` 与 `t5_excess_med: -1.02` 一起出现，是为了同时钉住"正数补 +、
+ * 负数带 -"——只放负值的话，"前端悄悄取了绝对值"这种回归也能绿。
+ */
+const RULES_FIXTURE = {
+  rules: [
+    {
+      key: "break_ma20",
+      label: "跌破 20 日线",
+      severity: "risk",
+      version: "r1",
+      rule_text: "收盘价 ≤ 20 日均线（前复权）",
+      definition: "收盘价落到 20 日均线下方，近一个月的平均成本已被跌破。",
+      thresholds: { day_pct: -7.0, five_day_pct: -12.0 },
+      source_tables: ["daily_quotes"],
+      update_note: "盘后 15:30 起可由 daily_quotes 计算",
+      failure_modes: [
+        "跳空缺口时当日涨跌幅会失真",
+        "停牌复牌首日的均线含缺失交易日",
+        "除权当日未复权价会误判",
+        "次新（上市不足 60 交易日）均线不稳",
+      ],
+      stats: {
+        as_of: "2026-10-16",
+        window_months: 12,
+        signals: 1234,
+        days: 240,
+        per_day: 5.1,
+        t1_excess_med: 0.3,
+        t5_excess_med: -1.02,
+        t20_excess_med: -1.23,
+        t5_p05: -9.81,
+        basis: "超额=信号组中位收益−当日全市场中位收益（5 日复权）",
+      },
+      stats_note: null,
+    },
+    {
+      key: "new_high_low",
+      label: "创 60 日新高/新低",
+      severity: "attention",
+      version: "r1",
+      rule_text: "收盘价 = 近 60 交易日最高价",
+      definition: "收盘价创 60 个交易日新高或新低。",
+      thresholds: { window: 60 },
+      source_tables: ["daily_quotes"],
+      update_note: "盘后 15:30 起可由 daily_quotes 计算",
+      failure_modes: ["停牌复牌首日的前高含缺失交易日"],
+      stats: null,
+      stats_note: "该规则依赖的数据不足 12 个月，暂不统计",
+    },
+  ],
+};
+
 /** 本页可见文本里**一个都不许出现**的判断词（spec §S8.5 禁用词表中与本页文案相关的子集）。 */
 // 下面这行必须**逐字**列出禁用词才有断言对象，故给它行级豁免（扫描器会打印豁免行，评审可见）
 const FORBIDDEN = ["买入", "卖出", "推荐", "看好", "建议关注", "目标价", "机会", "布局"]; // compliance-allow: 断言清单本身必须包含禁用词
 
-/** 登录态 + triage 读面的最小完整 mock（见文件头"假登录"一节）。 */
+/** 登录态 + triage 读面（含规则说明）的最小完整 mock（见文件头"假登录"一节）。 */
 async function mockAuthedTriage(page: Page, payload: unknown) {
   await page.route("**/auth/session", (route) =>
     route.fulfill({ status: 200, json: USER })
@@ -106,6 +176,11 @@ async function mockAuthedTriage(page: Page, payload: unknown) {
   );
   await page.route("**/api/v1/watchlists/triage*", (route) =>
     route.fulfill({ status: 200, json: payload })
+  );
+  // 规则说明是**懒取**的（抽屉打开才请求）：卡片测试不点抽屉就不会打到这里，
+  // 但一旦打开就必须有确定响应，否则会掉进真接口 401 → 全局清态的连锁（见文件头）。
+  await page.route("**/api/v1/watchlists/triage/rules", (route) =>
+    route.fulfill({ status: 200, json: RULES_FIXTURE })
   );
 }
 
@@ -240,6 +315,100 @@ test.describe("今日体检（/me?tab=triage）", () => {
     // （漏一个 key 就命中；同时不会误伤中文文案与「10月17日」这类日期）
     const panelText = await page.locator(".triage").innerText();
     expect(panelText, `体检面板出现机器串：${panelText}`).not.toMatch(/[a-z]+_[a-z_]+/);
+  });
+
+  /**
+   * 规则出处（provenance）第一条：卡片脚上方必须有一行「规则：人话阈值 · 版本 · 数据表」。
+   *
+   * 两个判据：
+   * 1. 三个字段都真的上屏（不是只写了"规则"两个字）；`rule_version`/`source_table` 与
+   *    `rules[]` 的 `version`/`source_tables` 同源，这里只钉卡片侧。
+   * 2. **不得泄露探测器代码**：`detector`（`break_ma20`）是内部标识，卡片只该出现人话。
+   *    断言按「数据 xxx」切成两段：`source_table` 是契约**要求**上屏的表名（`daily_quotes`），
+   *    它本身就是 `单词_单词` 形态；探测器代码只可能出现在前一段（规则正文/版本）里，
+   *    故对前一段做 `_[a-z]` 扫描，等价于"规则行里没有探测器代码"，又不会把表名误判成泄漏。
+   */
+  test("卡片有「规则：」出处行，且不泄露探测器代码", async ({ page }) => {
+    await mockAuthedTriage(page, FIXTURE);
+    await page.goto("/me?tab=triage");
+
+    const ruleLines = page.getByTestId("triage-rule");
+    await expect(ruleLines).toHaveCount(FIXTURE.items.length);
+
+    const first = ruleLines.first();
+    await expect(first).toContainText("规则：收盘价 ≤ 20 日均线");
+    await expect(first).toContainText("· r1 ·");
+    await expect(first).toContainText("数据 daily_quotes");
+
+    // 探测器代码只可能落在「数据 」之前那一段：那里必须一个人话之外的机器串都没有
+    const head = (await first.innerText()).split("数据 ")[0];
+    expect(head, `规则行出现探测器代码形态的机器串：${head}`).not.toMatch(/_[a-z]/);
+
+    // 更强的一条：整块体检区域不得出现任何一条 fixture 里的探测器 key。
+    // 用标识符边界而不是 `toContain`：`announcement` 是 `announcements`（表名）的前缀，
+    // 子串判定会把"合法的数据表名"误报成"泄漏了探测器 key"——宁可判得准，也不引入假红。
+    const panelText = await page.locator(".triage").innerText();
+    for (const detector of FIXTURE.items.map((item) => item.detector)) {
+      // detector 只含 `[a-z0-9_]`，可直接拼进正则（无元字符）
+      const leaked = new RegExp(`(?<![a-z0-9_])${detector}(?![a-z0-9_])`).test(panelText);
+      expect(leaked, `体检面板出现探测器 key：${detector}\n${panelText}`).toBe(false);
+    }
+  });
+
+  /**
+   * 规则出处第二条：「规则说明」抽屉。
+   *
+   * 一条用例覆盖抽屉的两种形态（契约 `stats` 可为 null）：
+   * - `break_ma20`：`stats` 非空 → 正文/失效场景/统计口径/「历史统计不代表未来表现」都要在，
+   *   且超额中位**带 % 与正负号**（正数 `+0.30%`、负数 `-1.02%`）；
+   * - `new_high_low`：`stats=null` → 只显示 `stats_note`，**不显示 0/空表/统计脚注**。
+   */
+  test("规则说明 Drawer：正文、失效场景、统计口径可见；stats=null 只显示原因", async ({ page }) => {
+    await mockAuthedTriage(page, FIXTURE);
+    await page.goto("/me?tab=triage");
+
+    await page.getByTestId("triage-rule-open").first().click();
+    const drawer = page.getByTestId("triage-rule-drawer");
+    await expect(drawer).toBeVisible();
+
+    // 标题带规则 label 与 version（不然用户不知道自己在看哪条规则的说明）
+    const title = page.locator(".ant-drawer-title");
+    await expect(title).toContainText("跌破 20 日线");
+    await expect(title).toContainText("r1");
+
+    // 定义 + rule_text
+    await expect(drawer).toContainText("收盘价落到 20 日均线下方");
+    await expect(drawer).toContainText("收盘价 ≤ 20 日均线（前复权）");
+    // 数据来源
+    await expect(drawer).toContainText("daily_quotes");
+    await expect(drawer).toContainText("盘后 15:30 起可由 daily_quotes 计算");
+    // 已知失效场景（第一条逐字）
+    await expect(drawer).toContainText("跳空缺口时当日涨跌幅会失真");
+    // 历史统计：正负号必须都在（各自钉一种符号，取绝对值/丢号的回归会红）
+    await expect(drawer).toContainText("每日约 5.1 条");
+    await expect(drawer).toContainText("+0.30%");
+    await expect(drawer).toContainText("-1.02%");
+    await expect(drawer).toContainText("-9.81%");
+    // 统计脚注（硬要求）
+    await expect(drawer).toContainText("历史统计不代表未来表现");
+    await expect(drawer).toContainText("样本 1234 次");
+    // 有 stats 时不该出现原因说明
+    await expect(page.getByTestId("triage-rule-stats-note")).toHaveCount(0);
+
+    // 换到 `stats=null` 的那条规则
+    await page.keyboard.press("Escape");
+    await expect(drawer).toBeHidden();
+
+    await page.getByTestId("triage-rule-open").nth(2).click();
+    await expect(drawer).toBeVisible();
+    await expect(page.getByTestId("triage-rule-stats-note")).toHaveText(
+      "该规则依赖的数据不足 12 个月，暂不统计"
+    );
+    // 不显示 0、空表或统计脚注：stats=null 是"没有样本"，不是"样本是 0"
+    await expect(drawer).not.toContainText("每日约");
+    await expect(drawer).not.toContainText("超额中位");
+    await expect(drawer).not.toContainText("%");
+    await expect(drawer).not.toContainText("历史统计不代表未来表现");
   });
 
   test("防回归：/me?tab=watchlist 仍是自选清单", async ({ page }) => {
