@@ -93,10 +93,12 @@ async def get_northbound(
 async def get_dragon_tiger_endpoint(
     cache: CacheDep,
     date: str | None = Query(default=None, description="ISO 日期，缺省=表内最新交易日"),
+    symbol: str | None = Query(default=None, description="6 位股票代码，如 000488"),
     limit: int = Query(default=15, ge=1, le=100),
 ) -> list[DragonTigerOut]:
+    """龙虎榜：``symbol`` 缺省=某交易日全市场榜；给出时=该股跨交易日记录（最新在前）。"""
     try:
-        rows = await market_data_service.get_dragon_tiger(cache, date, limit)
+        rows = await market_data_service.get_dragon_tiger(cache, date, limit, symbol)
     except ValueError:
         raise HTTPException(
             status_code=400, detail="date must be ISO format, e.g. 2026-09-02"

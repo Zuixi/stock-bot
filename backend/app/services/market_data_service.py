@@ -1903,15 +1903,27 @@ async def ingest_block_trades(db: AsyncSession, trade_date: date | None = None) 
     return {"upserted": upserted, "days": len(days)}
 
 
-DRAGON_TIGER_CACHE_KEY = "market:dragon-tiger:{date}"
+#: ``v2`` + ``symbol``：旧键 ``market:dragon-tiger:{date}`` 里缓存的是**全市场**行，
+#: 复用它会把 A 股的榜当成 B 股返回（本功能唯一的静默错误风险点）→ 换键，不兼容旧键。
+DRAGON_TIGER_CACHE_KEY = "market:dragon-tiger:v2:{symbol}:{date}"
 DRAGON_TIGER_TTL = 300
 DRAGON_TIGER_CACHE_LIMIT = 100  # 端点 limit 上限（le=100）：缓存全量再按请求切片
 
 
 async def get_dragon_tiger(
-    cache: CacheClient | None, date_iso: str | None = None, limit: int = 15
+    cache: CacheClient | None,
+    date_iso: str | None = None,
+    limit: int = 15,
+    symbol: str | None = None,
 ) -> list[dict[str, Any]]:
-    """某交易日龙虎榜明细（date 缺省取表内最新 trade_date；Redis 300s 共享缓存）。"""
+    """龙虎榜明细（Redis 300s 共享缓存）。
+
+    - ``symbol`` 缺省：某交易日**全市场**榜（``date`` 缺省取表内最新 trade_date），
+      按净买入额降序 —— 与加 symbol 参数之前逐字一致。
+    - ``symbol`` 给出且无 ``date``：该标的**跨交易日**记录，最新在前（个股上榜稀疏，
+      逐日榜对绝大多数个股为空，个股详情页要的是历史榜单）。
+    - ``symbol`` + 显式 ``date``：逐日榜内按标的过滤。
+    """
     day = datetime.fromisoformat(date_iso).date() if date_iso else None
 
     from app.core.database import async_session_factory  # noqa: PLC0415
@@ -1921,13 +1933,21 @@ async def get_dragon_tiger(
         effective = day or await market_data_repo.max_dragon_tiger_date(db)
         if effective is None:
             return []
-        key = DRAGON_TIGER_CACHE_KEY.format(date=effective.isoformat())
+        key = DRAGON_TIGER_CACHE_KEY.format(symbol=symbol or "all", date=effective.isoformat())
         if cache is not None:
             cached = await cache.get(key)
             if cached:
                 rows_cached: list[dict[str, Any]] = cached
                 return rows_cached[:limit]
-        for t in await market_data_repo.list_dragon_tiger(db, effective, DRAGON_TIGER_CACHE_LIMIT):
+        if symbol and day is None:
+            entries = await market_data_repo.list_dragon_tiger_by_symbol(
+                db, symbol, DRAGON_TIGER_CACHE_LIMIT
+            )
+        else:
+            entries = await market_data_repo.list_dragon_tiger(
+                db, effective, DRAGON_TIGER_CACHE_LIMIT, symbol
+            )
+        for t in entries:
             rows.append(
                 {
                     "trade_date": t.trade_date.isoformat(),
