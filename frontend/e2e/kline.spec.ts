@@ -91,6 +91,41 @@ test("个股K线：悬停成交量 pane 仍出完整 tooltip（跨 pane 联动�
   await expect(tooltip.getByText(/^收盘$/)).toBeVisible();
 });
 
+test("个股K线：ribbon 日期随悬停变化，移出画布回落最后一根", async ({ page }) => {
+  await page.goto("/stock/600519");
+  const card = page.locator(".ant-card").filter({ hasText: "历史行情" });
+  await expect(card).toBeVisible();
+  // 与 tooltip 用例同一个等待信号：MA 行带数值 = ECharts 已拿到数据（否则悬停空 canvas）
+  await expect(card.getByText(/MA5 \d/)).toBeVisible();
+  const ribbon = card.getByTestId("kline-ribbon");
+  await expect(ribbon).toBeVisible();
+  const ribbonDate = card.getByTestId("kline-ribbon-date");
+  // 未悬停时 ribbon 显示**最后一根**：先把这个日期记下来当对照
+  const lastDate = (await ribbonDate.innerText()).trim();
+  expect(lastDate.length).toBeGreaterThan(0);
+
+  const canvas = card.locator("canvas").first();
+  // 同前两个用例：先滚进视口再算坐标，否则 mouse.move 的 y 落在视口之外
+  await canvas.scrollIntoViewIfNeeded();
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error("canvas not visible");
+  // 70% 宽落在默认视窗（最近 120 根）的中后段，不可能是最后一根
+  await page.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.35);
+  // web-first 断言自带重试：rAF 节流 + 事件派发完成后 ribbon 才会换文本
+  await expect(ribbonDate).not.toHaveText(lastDate);
+
+  // 验收项「鼠标移出恢复最后一根」：`globalout` / axisPointer leave 两条路都写回 null
+  await page.mouse.move(10, 10);
+  await expect(ribbonDate).toHaveText(lastDate);
+
+  // `<768` 不渲染 ribbon（计划 §5：两行 DOM 会吃掉 320px 画布里的 60px，
+  // 窄屏的悬停信息回落到 tooltip）——同一份卡片，改变视口后 ribbon 必须消失
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(card.getByTestId("kline-ribbon")).toHaveCount(0);
+  // MA 行在窄屏仍然保留（窄屏不是"藏图"，§4.4）
+  await expect(card.getByTestId("kline-ma-legend")).toBeVisible();
+});
+
 test("指数K线：频率Tab可用，无复权控件", async ({ page }) => {
   await page.goto("/index/000001.SH");
   const card = page.locator(".ant-card").filter({ hasText: "指数历史行情" });

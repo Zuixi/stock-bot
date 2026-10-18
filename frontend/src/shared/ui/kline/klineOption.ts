@@ -5,6 +5,8 @@ import {
   MA_DEFS,
   NARROW_TAIL_BARS,
   fmtAmount,
+  fmtChangePct,
+  fmtSignedDiff,
   fmtVolume,
   type MaKey,
 } from "./klineMath";
@@ -25,11 +27,6 @@ export interface KlineOptionInput {
    */
   narrow?: boolean;
 }
-
-const pct = (cur: number, prev: number | undefined) =>
-  prev == null || prev === 0 ? "--" : `${(((cur - prev) / prev) * 100).toFixed(2)}%`;
-
-const signed = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
 
 /** tooltip 列式行：灰标签左、语义色数值右（tabular 对齐） */
 const row = (label: string, value: string, flat: string, color?: string) =>
@@ -85,8 +82,8 @@ export function buildKlineOption({ points, maSeries, visibleMas, colors, narrow 
     const prev = i > 0 ? points[i - 1].close : undefined;
     // A股习惯：开/收/高/低/涨跌额/涨跌幅 随当日涨跌着色（首日中性）
     const color = prev == null ? c.flat : close >= prev ? c.up : c.down;
-    const change = pct(close, prev);
-    const diff = prev == null ? "--" : signed(close - prev);
+    const change = fmtChangePct(close, prev);
+    const diff = fmtSignedDiff(close, prev);
     const maRow = (name: MaKey) => {
       const def = MA_DEFS.find((d) => d.key === name);
       const v = maSeries[name]?.[i];
@@ -122,6 +119,10 @@ export function buildKlineOption({ points, maSeries, visibleMas, colors, narrow 
       trigger: "axis",
       axisPointer: { type: "cross" as const },
       formatter: tooltipFormatter,
+      // 给 tooltip 一个稳定类名：图上方 ribbon 与 tooltip 现在**同时**展示
+      // 成交量/涨跌幅等同名标签，e2e 若不 scope 到 tooltip 会在两个 DOM 分支间撞
+      // strict-mode（多个匹配）。类名也让"读 tooltip"的断言与版式解耦。
+      className: "kline-tooltip",
       // 窄屏（308px）下 tooltip 默认会溢出视口被裁掉；confine 关进画布内（§5.1）
       ...(narrow ? { confine: true } : {}),
     },
@@ -161,7 +162,19 @@ export function buildKlineOption({ points, maSeries, visibleMas, colors, narrow 
         scale: true,
         gridIndex: 1,
         splitNumber: 2,
-        axisLabel: { show: false },
+        // F9：成交量此前**没有任何刻度**（`show: false`），量能只能靠 hover 读。
+        // 单位口径与 tooltip 一致（`fmtVolume`：手 / 万手）—— 两个入口两套单位
+        // 会让"轴上 3.2万手"与"tooltip 32000手"看起来像两个数（同 F5 那类口径病）。
+        // 两个 pane 的 y 轴标签列**纵向不相交**（grid 0 top:28 / grid 1 top:68%），
+        // 故窄屏收窄左轴到 46px 也不会压到价格标签；窄屏再降一档字号 + margin，
+        // 保证「1234.57万手」这类最长标签仍落在 46px 留白内（400px 画布实测见报告）。
+        axisLabel: {
+          show: true,
+          color: c.textSecondary,
+          fontSize: narrow ? 9 : 10,
+          margin: narrow ? 2 : 4,
+          formatter: (v: number) => fmtVolume(v),
+        },
         splitLine: { show: false },
       },
     ],

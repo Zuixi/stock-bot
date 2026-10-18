@@ -8,8 +8,10 @@
  * TypeScript 转译 + tsconfig `paths` 解析，`@/` 别名可直接用 —— 零新依赖。
  */
 import { test, expect } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { buildKlineOption } from "@/shared/ui/kline/klineOption";
-import { MA_DEFS, movingAverage, type MaKey } from "@/shared/ui/kline/klineMath";
+import { MA_DEFS, fmtVolume, movingAverage, type MaKey } from "@/shared/ui/kline/klineMath";
 import type { KLinePoint } from "@/shared/types";
 
 /**
@@ -117,4 +119,62 @@ test("buildKlineOption：tooltip.confine 只在窄屏开启", () => {
     confine?: boolean;
   };
   expect(narrow.confine).toBe(true);
+});
+
+/** `yAxis[i]` 在返回值里是异构对象数组，访问可选字段前先收窄（避免每处断言都写类型体操）。 */
+interface AxisLike {
+  gridIndex?: number;
+  splitNumber?: number;
+  axisLabel?: { show?: boolean; formatter?: (v: number) => string };
+}
+
+test("buildKlineOption：成交量轴有可读刻度（fmtVolume 口径，splitNumber 仍为 2）", () => {
+  // F9：`axisLabel.show:false` 时量能只能靠 hover 读，图上完全没有"多大"的参照
+  const volumeAxis = option.yAxis[1] as unknown as AxisLike;
+  expect(volumeAxis.axisLabel?.show).toBe(true);
+  // 刻度数量不变：成交量 pane 只有 16% 高，再多的刻度会挤成一串
+  expect(volumeAxis.splitNumber).toBe(2);
+  // 单位与 tooltip 同源（手 / 万手），不是自己另起一套"亿股"
+  expect(volumeAxis.axisLabel?.formatter?.(12_345)).toBe(fmtVolume(12_345));
+  expect(volumeAxis.axisLabel?.formatter?.(9_999)).toBe("9999手");
+
+  // 窄屏同样开刻度，且版式（左轴 46px）不变
+  const narrowOption = buildKlineOption({ points, maSeries, visibleMas: ["MA5"], narrow: true });
+  const narrowAxis = narrowOption.yAxis[1] as unknown as AxisLike;
+  expect(narrowAxis.axisLabel?.show).toBe(true);
+  expect(narrowAxis.axisLabel?.formatter?.(12_345)).toBe(fmtVolume(12_345));
+  expect((narrowOption.grid as Array<{ left: number }>)[1].left).toBe(46);
+
+  // 价格 pane 与成交量 pane 的 y 轴标签列**纵向不相交**：grid[0] 从 28px 起、高 50%；
+  // grid[1] 从 68% 才开始 ⇒ 两列同处左侧也不会互相压住（400px 画布实测见 P1-1 报告）。
+  const grids = option.grid as Array<{ top?: number | string; height?: number | string }>;
+  expect(grids[0].height).toBe("50%");
+  expect(grids[1].top).toBe("68%");
+});
+
+test("KlineChart：hover 索引只驱动 DOM，不进 buildKlineOption 的 useMemo 依赖", () => {
+  // 机械门禁（brief 要求）：option 是 2400+ 点的大对象，hover 若成为 useMemo 依赖，
+  // 鼠标每动一像素都要重建 + `notMerge` 重画 ⇒ 图明显掉帧（且 hover 状态在
+  // `e2e/kline.spec.ts` 里只表现为 ribbon 日期变化，掉帧本身没人拦得住）。
+  // 这里直接读源码断言依赖数组，而不是渲染 React 组件：仓库没有 RTL/vitest，
+  // 而 option 的引用稳定恰好是"依赖数组里有什么"这一条静态事实。
+  const source = readFileSync(join(process.cwd(), "src/shared/ui/kline/KlineChart.tsx"), "utf8");
+  const callAt = source.indexOf("buildKlineOption({");
+  expect(callAt, "KlineChart 必须调用 buildKlineOption").toBeGreaterThan(-1);
+  const memoAt = source.lastIndexOf("useMemo(", callAt);
+  expect(memoAt, "buildKlineOption 必须包在 useMemo 里").toBeGreaterThan(-1);
+  const memoEnd = source.indexOf(");", callAt);
+  const memoBlock = source.slice(memoAt, memoEnd);
+  // 参数与依赖数组里都不许出现 hover（hoveredIndex 只喂 ribbon / MA 行）
+  expect(memoBlock).not.toMatch(/hover/i);
+  const depsStart = memoBlock.lastIndexOf("[");
+  const depsEnd = memoBlock.indexOf("]", depsStart);
+  expect(depsStart, "找不到 useMemo 的依赖数组").toBeGreaterThan(-1);
+  expect(
+    memoBlock
+      .slice(depsStart + 1, depsEnd)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  ).toEqual(["points", "maSeries", "visibleMas", "colors", "narrow"]);
 });
