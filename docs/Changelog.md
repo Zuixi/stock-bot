@@ -1,3 +1,16 @@
+## 2026-10-19 - A股全景：市场结构脉搏（日表 + 罗盘 + 卡片变化层）
+
+把 `/market`「A股全景」从五张今日快照升级为可回看、能解释变化的结构面板：
+
+- **三张日表**（迁移 `e3f1a7c9d2b4`）：`market_breadth_daily`（一天一行）/ `market_breadth_bucket_daily`（11 桶/日）/ `market_industry_daily`（31 行/日）；B 类可回算 + C 类归属 `current_sw_snapshot`。回补脚本 `backend/scripts/backfill_market_panorama.py` 幂等，本地 244 天 / 2,684 桶 / 7,564 行业行；日终 `market_panorama_daily`（17:25，纯本地）调同一 ingest service 续写。广度口径与 `/market/distribution` 11 桶逐字对齐（上涨 ≥1%、平/微涨 0~1%、下跌 <0），实测 10-16 = 2,105 / 1,333 / 2,125，与卡片一致
+- **`GET /market/panorama`**：广度序列/11 桶/31 行业排名变化/结构四态/资金流/新鲜度；结构聚合在 SQL 内算 Top3/HHI/离散度，不把 7,750 行读进 Python；Redis 120s、不轮询。冷请求 20D 19ms / 60D 21ms / 120D 24ms / 250D 31ms（250D 99KB），缓存 4–6ms
+- **结构四态**（普涨/结构/普跌/抱团）：广度 + Top3 集中度 + **中位涨跌幅**；10-16 上涨占比 37.8% 但中位 +0.47% ⇒ 结构，不是普跌。规则见 [ADR 0023](./decisions/0023-market-panorama-daily-snapshots.md)
+- **仪表带**：广度×集中度罗盘（60 日轨迹 + 今日点）+ 4 个带 5 日 SVG sparkline 的 KPI；`20D/60D/120D/250D` 写 `?pano=`，`keepPreviousData` 切范围不闪骨架
+- **卡片变化层**：涨跌分布"较昨日/5 日上涨占比"；行业网格今日涨跌角标 + 方向发丝线；热力图"今日/昨日"（`GET /market/sectors?date=`，非交易日 404）；资金流端点只认 `eod_full`，与脉搏同 `as_of`（10-13，不再把 10-15 的 poll 子集当末完整日）
+- **E2E**：阶段 1 后 `marketLayout/Trust/Polling` 27 passed；阶段 2 后加 `DataFace/Trends/Panorama` **48 passed**，全量 e2e **253 passed / 13 skipped**；`marketLayout` 的 `rowBottoms` 改文档坐标（脉搏让页面变长，折叠点击会滚动，原视口坐标会把滚动误判成变矮）
+- 测试：后端相关 131 passed；全量 1885 passed，1 条既有 `derived_metrics` job 用例受同工作区并行写库事件循环污染（单跑通过）。
+- 未做：跨卡行业筛选、热门板块"新进/掉出"、热力图 5D/20D；热力图卡内是 CSRC 行业，分区维度条已从"申万一级"改为"行业板块"
+
 ## 2026-10-19 - **标的详情页整改落地（P0/P1/P2）**：5 处「页面说假话」+ K 线跨 pane 联动/数据条/事件标记 + 报价条 + 分块边界；两条新机械门禁
 
 计划 [plans/2026-10-19-stock-detail-overhaul.md](../plans/2026-10-19-stock-detail-overhaul.md)（31 提交 / 73+ 文件）。

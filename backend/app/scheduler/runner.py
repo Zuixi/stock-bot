@@ -27,6 +27,7 @@ from app.scheduler.jobs import (
     intraday_sentiment_poll_job,
     limit_up_stock_facts_job,
     market_moneyflow_daily_job,
+    market_panorama_daily_job,
     northbound_daily_job,
     price_limits_daily_job,
     reconcile_market_data_job,
@@ -355,6 +356,16 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(day_of_week="mon-fri", hour=17, minute=20, timezone="Asia/Shanghai"),
         id="limit_up_stock_facts",
         name="Limit-up stock facts + EOD enrichment",
+        replace_existing=True,
+    )
+
+    # A股全景日表（B 类本地派生）：17:25 Mon-Fri，晚于 16:30 行情 / 16:50 限价。
+    # 不调外部源，纯 SQL 聚合；幂等 upsert。停摆后迟到也补跑（job_defaults 无宽限）。
+    scheduler.add_job(
+        market_panorama_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute=25, timezone="Asia/Shanghai"),
+        id="market_panorama_daily",
+        name="Market panorama daily",
         replace_existing=True,
     )
 

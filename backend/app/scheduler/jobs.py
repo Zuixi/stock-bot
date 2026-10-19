@@ -413,6 +413,40 @@ async def board_snapshot_eod_job() -> None:
         await _alert_job_failure("board_snapshot_eod", RuntimeError("; ".join(shortfalls)))
 
 
+async def market_panorama_daily_job() -> None:
+    """A股全景三张日表写入（交易日 17:25，晚于 16:30 行情/16:50 限价）。
+
+    纯本地派生（B 类），不调外部源；幂等 upsert。`resolve_latest_complete_day` 拿
+    判据日（不拿"今天"硬查），行情尚未齐时早退/写 0 行，由次日 job 或回补脚本补。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_day_service, market_panorama_ingest_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            md = await market_day_service.resolve_latest_complete_day(db)
+            if md is None:
+                logger.warning("Panorama daily: no resolved market day")
+                return
+            breadth_n, industry_n = await market_panorama_ingest_service.refresh_day(db, md.day)
+            await db.commit()
+        logger.info(
+            "Panorama daily done: day=%s breadth=%s industry=%s",
+            md.day,
+            breadth_n,
+            industry_n,
+        )
+        if breadth_n == 0:
+            await _alert_job_failure(
+                "market_panorama_daily",
+                RuntimeError(f"{md.day} 没有可写的广度行（行情未齐/非交易日）"),
+            )
+    except Exception as exc:
+        logger.exception("Panorama daily job failed")
+        await _alert_job_failure("market_panorama_daily", exc)
+
 async def board_snapshot_rewrite_job() -> None:
     """当日**没有全量捕获**才补做收盘全量（交易日 15:35；容器重启错过 15:05 的兜底）。
 
