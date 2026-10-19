@@ -2217,11 +2217,22 @@ async def _main() -> None:
             result = await announcement_service.ingest_announcements(
                 db, days=int(args[1]) if len(args) > 1 else 3
             )
+        elif job == "insider_change":
+            from app.services import insider_change_service  # noqa: PLC0415
+
+            # 手动触发口径：insider_change [days]，与脚本共用同一 ingest（不写第二套）
+            from app.services.insider_change_service import INSIDER_LOOKBACK_DAYS  # noqa: PLC0415
+
+            days = int(args[1]) if len(args) > 1 else INSIDER_LOOKBACK_DAYS
+            day_hi = _today_sh()
+            result = await insider_change_service.ingest_insider_range(
+                db, day_hi - timedelta(days=days), day_hi
+            )
         else:
             raise SystemExit(
                 f"unknown job: {job}; available: global_index_daily, "
                 "backfill_global_index, sector_moneyflow, northbound, dragon_tiger, "
-                "block_trades, share_floats, repurchases, announcements"
+                "block_trades, share_floats, repurchases, announcements, insider_change"
             )
         await db.commit()
     print(job, "->", result)

@@ -35,7 +35,7 @@
 | 改鉴权 / 受保护接口 | `architecture/authentication-and-gateway.md` · [ADR 0002](./decisions/0002-split-auth-service-and-forward-auth.md) | 不信未签名 Header；非幂等需 CSRF |
 | 排查数据缺失 | `deployment/operations.md` · `best-practices/data-source.md` | 逐日 count + 关键列非空率，勿只看 `max(trade_date)` |
 | 写测试 / 加门禁 | `testing/index.md` | 改 CI job 必须同步矩阵（doc_gate #4） |
-| 上线 / 数据迁移 | `deployment/production.md` · `deployment/data-migration.md` | 先数据后应用；勿复制 override 到服务器 |
+| 上线 / 数据迁移 | `deployment/production.md` · `deployment/data-migration.md` · `scripts/deploy_prod.sh` | 先数据后应用；升级只跑脚本，勿手工；勿复制 override 到服务器 |
 | 加文档 / 新计划 | 本文件 · `plans/README.md` | 新计划登记 `plans/index.md`；决策写新 ADR |
 | 查某模块的契约与验收判据 | [`specs/README.md`](./specs/README.md) | 契约在 `specs/`，排期在 `plans/`，别混写 |
 

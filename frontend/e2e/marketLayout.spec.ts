@@ -195,11 +195,20 @@ test.describe("P1-1：A股全景第一行三面板（并排 / 堆叠 / 各自口
         `面板「${title}」缺口径徽标`
       ).toBeVisible();
     }
+    // ②c 「板块主力资金流」卡的徽标来自它**自己的行业涨跌子请求**
+    // （`/market/sw-industry/performance`，CSRC 回退时是 `/market/sectors`），不是
+    // `sector-moneyflow`。这两个端点**现在都返回 `as_of_quality`**（实测 "complete"）⇒
+    // 正确的判据不是"一律不得印"，而是**与 payload 自洽**：payload 有该字段 ⇔ 卡上有徽标。
+    // （原断言基于"该端点不返回 as_of_quality"的旧前提，已被后端补齐 ⇒ 会假红。）
+    const perfResp = await page.request.get("/api/v1/market/sw-industry/performance?limit=31");
+    expect(perfResp.ok(), "行业涨跌端点不可用，本用例无法判定徽标口径").toBeTruthy();
+    const perf = (await perfResp.json()) as { as_of_quality?: string | null };
+    const expectQualityBadge = perf.as_of_quality ? 1 : 0;
     await expect(
       page.locator(`${PANORAMA_SECTION} .ant-card`).filter({ hasText: "板块主力资金流" })
         .locator(".section-card__quality"),
-      "板块主力资金流卡印了口径徽标 —— 该端点不返回 as_of_quality，印出来就是无来源的口径声明"
-    ).toHaveCount(0);
+      `板块主力资金流卡的徽标必须与 payload 自洽（as_of_quality=${String(perf.as_of_quality)}）`
+    ).toHaveCount(expectQualityBadge);
 
     // ③ 几何：三块同一 y（并排）、x 严格递增（顺序 = 涨跌分布 → 热力图 → 资金流）、宽度相近
     const boxes = await Promise.all(

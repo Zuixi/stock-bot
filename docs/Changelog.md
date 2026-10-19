@@ -10,7 +10,6 @@
 - **E2E**：阶段 1 后 `marketLayout/Trust/Polling` 27 passed；阶段 2 后加 `DataFace/Trends/Panorama` **48 passed**，全量 e2e **253 passed / 13 skipped**；`marketLayout` 的 `rowBottoms` 改文档坐标（脉搏让页面变长，折叠点击会滚动，原视口坐标会把滚动误判成变矮）
 - 测试：后端相关 131 passed；全量 1885 passed，1 条既有 `derived_metrics` job 用例受同工作区并行写库事件循环污染（单跑通过）。
 - 未做：跨卡行业筛选、热门板块"新进/掉出"、热力图 5D/20D；热力图卡内是 CSRC 行业，分区维度条已从"申万一级"改为"行业板块"
-
 ## 2026-10-19 - **标的详情页整改落地（P0/P1/P2）**：5 处「页面说假话」+ K 线跨 pane 联动/数据条/事件标记 + 报价条 + 分块边界；两条新机械门禁
 
 计划 [plans/2026-10-19-stock-detail-overhaul.md](../plans/2026-10-19-stock-detail-overhaul.md)（31 提交 / 73+ 文件）。
