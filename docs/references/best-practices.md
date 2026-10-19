@@ -10,9 +10,9 @@
 |---|---|---|
 | 一、数据源与采集 | [`best-practices/data-source.md`](./best-practices/data-source.md) | 47 |
 | 二、数据库与性能 | [`best-practices/database-performance.md`](./best-practices/database-performance.md) | 18 |
-| 三、Docker 与部署 | [`best-practices/docker-deploy.md`](./best-practices/docker-deploy.md) | 11 |
+| 三、Docker 与部署 | [`best-practices/docker-deploy.md`](./best-practices/docker-deploy.md) | 12 |
 | 四、前端（React / antd / ECharts） | [`best-practices/frontend.md`](./best-practices/frontend.md) | 66 |
-| 五、测试与 E2E | [`best-practices/testing.md`](./best-practices/testing.md) | 27 |
+| 五、测试与 E2E | [`best-practices/testing.md`](./best-practices/testing.md) | 28 |
 | 六、架构与分层 | [`best-practices/architecture.md`](./best-practices/architecture.md) | 12 |
 | 七、指标建模与规则引擎 | [`best-practices/metrics-rule-engine.md`](./best-practices/metrics-rule-engine.md) | 5 |
 | 八、工程流程与文档（元经验） | [`best-practices/process-docs.md`](./best-practices/process-docs.md) | 27 |
