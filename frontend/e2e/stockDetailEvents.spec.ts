@@ -1,6 +1,18 @@
 import { test, expect as baseExpect, type Page, type Route } from "@playwright/test";
 
 /**
+ * 生产构建里 `import.meta.env.DEV` 被替换为 false ⇒ `KlineChart` 不注入
+ * `window.__klineEchartsInstance`，读 ECharts 实例的三条用例在部署栈上必然失败。
+ *
+ * 这不是缺陷，是本文件头写明的约束（本组用例要求跑在 Vite dev server 上）。为了避免
+ * 有人在 `E2E_BASE_URL=http://127.0.0.1`（部署栈）上跑到三条红就以为产品坏了，把这件事
+ * 做成**显式声明**：只有在明确"我在测构建产物"（`E2E_PROD_STACK=1`）时才跳过，
+ * 其余情况仍然硬失败——正常路径（dev server）不会因为这条降级而放过真回归。
+ */
+const PROD_STACK = process.env.E2E_PROD_STACK === "1";
+const DEV_HANDLE_SKIP = "读 ECharts 实例需要 dev 句柄；生产构建不注入。改用 E2E_BASE_URL=…:3010（见文件头）";
+
+/**
  * P0-3 E2E：个股详情「相关数据」的两条硬约束 + 三个回归护栏。
  *
  * 1. **失败 ≠ 空**（F3）：五个 tab 过去统一 `dataSource={q.data ?? []} + loading={q.isLoading}`，
@@ -383,6 +395,7 @@ test("页面与列表共用同一份查询：/announcements 与 /dragon-tiger �
 });
 
 test("点击事件行 → K 线视窗移到该日 ±20 根并高亮该日", async ({ page }) => {
+  test.skip(PROD_STACK, DEV_HANDLE_SKIP);
   const bars = await fetchBarDates(page);
   // 取一个「既在默认视窗之外（最近 120 根）又至少有 20 根左侧邻居」的交易日：
   // 前者让"视窗移动"可判定，后者让 idx±20 不被左边界截断（否则窗口宽度不是 41）。
@@ -428,6 +441,7 @@ test("点击事件行 → K 线视窗移到该日 ±20 根并高亮该日", asyn
 });
 
 test("周K 下点事件行**不跳**（日线下标不得套到聚合序列），切回日K 才定位", async ({ page }) => {
+  test.skip(PROD_STACK, DEV_HANDLE_SKIP);
   const bars = await fetchBarDates(page);
   test.skip(bars.length < 240, "K 线样本不足 240 根，无法构造有效的日线下标");
   const target = bars[100];
@@ -484,6 +498,7 @@ test("周K 下点事件行**不跳**（日线下标不得套到聚合序列）�
 });
 
 test("事件日画出 markPoint 气泡：坐标落在该日，不是最近一根", async ({ page }) => {
+  test.skip(PROD_STACK, DEV_HANDLE_SKIP);
   const bars = await fetchBarDates(page);
   // 取靠后的交易日：落在默认视窗内，气泡可见
   const target = bars[bars.length - 3];
