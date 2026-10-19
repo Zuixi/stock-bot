@@ -26,7 +26,6 @@
 | [0020](./0020-t0-after-close-expected-day.md) | 当日盘后（T+0）纳入期望集：期望日看日历时钟，齐备性另设门禁 | accepted | 2026-10-17 | 数据口径 / 调度 |
 | [0021](./0021-sentiment-metric-tracking.md) | 情绪指标：盘后按日冻结、盘中不落日表，历史详情读时计算 | accepted | 2026-10-18 | 数据口径 / 产品 |
 | [0022](./0022-sentiment-regime-and-sample-gate.md) | 情绪阶段是启发式描述、小样本不进统计：规则可复核，图不撒谎 | accepted | 2026-10-19 | 数据口径 / 产品 |
-| [0023](./0023-market-panorama-daily-snapshots.md) | A股全景日级快照：广度/行业可回算，资金流只认完整日 | accepted | 2026-10-19 | 数据建模 / 产品 |
 
 状态取值：`accepted`（现行）· `superseded`（被新决策取代，须填 `superseded-by` 并双向引用）· `rejected`（评审未采纳，保留以阻止重复提议）
 

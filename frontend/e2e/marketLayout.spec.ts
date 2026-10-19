@@ -312,7 +312,7 @@ async function rowBottoms(page: import("@playwright/test").Page): Promise<number
         const card = Array.from(scope.querySelectorAll(".ant-card")).find((el) =>
           (el.querySelector(".ant-card-head-title")?.textContent ?? "").includes(title)
         );
-        return card ? Math.round(card.getBoundingClientRect().bottom + window.scrollY) : -1;
+        return card ? Math.round(card.getBoundingClientRect().bottom) : -1;
       });
     },
     [...PANORAMA_PANEL_TITLES]

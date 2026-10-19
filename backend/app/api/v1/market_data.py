@@ -176,17 +176,14 @@ async def get_announcements_endpoint(
     from app.services import announcement_service  # noqa: PLC0415
 
     # 类目白名单在端点层判定：**未知类目必须 400**（不得静默退化为「全部」）—— ADR 0019 硬纪律。
-    # 过滤也在端点层做：本分支合入的服务实现尚无 `category` 形参（它在并行会话的未提交工作里），
-    # 而服务返回的行已带 `category` 字段，故过滤语义等价。代价：先按 `limit` 切片再过滤，
-    # 单个类目的返回条数可能少于 `limit`。
+    # 过滤下推到服务/仓库层：`limit` 只对目标类目生效（端点层过滤会先按 limit 切片再丢行，
+    # 单类目返回条数可能少于 limit）。
     if category is not None and category not in ANNOUNCEMENT_CATEGORIES:
         raise HTTPException(
             status_code=400,
-            detail=f"unknown category: {category}（可选 {sorted(ANNOUNCEMENT_CATEGORIES)}）",
+            detail=f"未知公告类目：{category}（可选 {sorted(ANNOUNCEMENT_CATEGORIES)}）",
         )
-    rows = await announcement_service.get_announcements(cache, symbol, limit)
-    if category is not None:
-        rows = [r for r in rows if r.get("category") == category]
+    rows = await announcement_service.get_announcements(cache, symbol, limit, category)
     return [AnnouncementOut(**r) for r in rows]
 
 

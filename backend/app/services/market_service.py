@@ -417,36 +417,22 @@ def _sector_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return items[:30]
 
 
-async def get_sectors(
-    cache: CacheClient | None = None, *, day: date | None = None
-) -> dict[str, Any] | None:
+async def get_sectors(cache: CacheClient | None = None) -> dict[str, Any]:
     """Return industry sector performance as ``{as_of, as_of_quality, items}``.
 
-    ``day`` 缺省 = 最近完整日；显式传入可回看历史（非交易日/未来日返回 ``None``，
-    API 转 404）。历史日按行情现算，不补 0、不冒充"当天"。
+    Cache key carries the resolved day (``market:sectors:{as_of}``).
     """
     async with async_session_factory() as db:
         md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
-        if day is not None and (md is None or day > md.day):
-            return None
-        target = day if day is not None else (md.day if md is not None else None)
-        cache_key = f"market:sectors:{target.isoformat() if target else 'none'}"
-        if target is not None and cache:
+        cache_key = _day_cache_key("market:sectors", md)
+        if md is not None and cache:
             cached = await cache.get(cache_key)
             if isinstance(cached, dict):  # bare-list payloads from before this change = miss
                 return cast(dict[str, Any], cached)
-        rows = await load_day_rows(db, target, cache=cache) if target is not None else []
+        rows = await load_day_rows(db, md.day, cache=cache) if md is not None else []
 
-    if day is not None and not rows:
-        return None
-    quality = md.quality if md is not None and target == md.day else "complete"
-    payload = {
-        "as_of": target.isoformat() if target is not None else None,
-        "as_of_quality": quality if target is not None else "partial",
-        "as_of_reason": md.reason if md is not None and target == md.day else None,
-        "items": _sector_items(rows),
-    }
-    if cache and target is not None:
+    payload = _envelope(md, _sector_items(rows))
+    if cache and md is not None:
         await cache.set(cache_key, payload, _MARKET_CACHE_TTL)
     return payload
 

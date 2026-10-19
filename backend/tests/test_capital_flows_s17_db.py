@@ -39,7 +39,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.models.industry_research import IndustryMetric
 from app.services import capital_flows_service as svc
 from app.services import industry_metric_service as metric_service
-from app.services.industry_registry import CAPITAL_FLOWS_CALIBER_VERSION
 
 #: **只**认 `TEST_DATABASE_URL`。没有就 skip —— **绝不**回落到写死的 dev 库名。
 ASYNC_URL = os.environ.get("TEST_DATABASE_URL", "")
@@ -173,7 +172,7 @@ def test_write_path_shape_pit_and_caliber() -> None:
     for row in stored:
         assert row.industry_key == "market" and row.stock_id == 0
         assert row.freq == "daily"
-        assert row.caliber_version == CAPITAL_FLOWS_CALIBER_VERSION
+        assert row.caliber_version == svc.CALIBER_VERSIONS[row.metric_key]
         assert row.unit == svc.UNITS[row.metric_key]
         # PIT 是可空列：漏带会**静默**落 NULL（Ruling 59 的原始事故形态）
         assert row.published_at is not None

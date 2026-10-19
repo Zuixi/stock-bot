@@ -10,7 +10,6 @@ from app.api.deps import CacheDep, DbDep, require_permissions
 from app.core.exceptions import not_found_response
 from app.schemas.heatmap import ConceptBoardRef, HeatmapTreemapOut
 from app.schemas.market import BoardStockOut, HotBoardsOut, MarketListOut
-from app.schemas.panorama import MarketPanoramaOut
 from app.schemas.quote import IndexDailyOut, IndexKlineResponse
 from app.schemas.ranking import RankingResponseOut, RankingType
 from app.schemas.ranking_board import RankingBoardResponseOut
@@ -30,7 +29,6 @@ from app.schemas.sw_drilldown import (
 from app.schemas.sw_performance import SwPerformanceResponseOut
 from app.services import (
     heatmap_service,
-    market_panorama_service,
     market_service,
     ranking_board_service,
     stock_tag_service,
@@ -43,20 +41,6 @@ router = APIRouter()
 @router.get("/indices", response_model=list[dict])
 async def list_market_indices(cache: CacheDep) -> list[dict]:
     return await market_service.list_market_indices(cache=cache)
-
-
-@router.get("/panorama", response_model=MarketPanoramaOut)
-async def get_market_panorama(
-    cache: CacheDep,
-    days: int = Query(default=60, ge=5, le=250, description="展示交易日数（读日表，不现算）"),
-) -> MarketPanoramaOut:
-    """A股全景：广度 + 结构 + 资金（读 `market_breadth_daily` / `market_industry_daily`）。
-
-    一次请求 4 组范围查询（无 N+1），Redis 120s；响应自带 `as_of/expected_as_of/stale`
-    与 `flow_available_from`，缺失不补 0。
-    """
-    payload = await market_panorama_service.get_panorama(cache, days)
-    return MarketPanoramaOut.model_validate(payload)
 
 
 @router.get("/distribution", response_model=MarketListOut)
@@ -111,18 +95,8 @@ async def get_ranking_board(
 
 
 @router.get("/sectors", response_model=MarketListOut)
-async def get_sectors(
-    cache: CacheDep,
-    day: date | None = Query(
-        default=None,
-        alias="date",
-        description="回看交易日（缺省=最近完整日；非交易日/未来日 404）",
-    ),
-) -> MarketListOut:
-    payload = await market_service.get_sectors(cache=cache, day=day)
-    if payload is None:
-        raise HTTPException(status_code=404, detail="该日没有完整行情")
-    return MarketListOut.model_validate(payload)
+async def get_sectors(cache: CacheDep) -> MarketListOut:
+    return MarketListOut.model_validate(await market_service.get_sectors(cache=cache))
 
 
 @router.get("/capital-flow", response_model=MarketListOut)
@@ -229,25 +203,14 @@ async def get_sw_industry_performance(
 
 
 @router.get("/heatmap/treemap", response_model=HeatmapTreemapOut)
-async def get_heatmap_treemap(
-    cache: CacheDep,
-    db: DbDep,
-    day: date | None = Query(
-        default=None,
-        alias="date",
-        description="回看交易日（缺省=最近完整日；非交易日/未来日 404）",
-    ),
-) -> HeatmapTreemapOut:
+async def get_heatmap_treemap(cache: CacheDep, db: DbDep) -> HeatmapTreemapOut:
     """全市场热力图批量读路：判据日一行一票，≈5500 行 × 5 字段 + 2 个分组码。
 
     四个分组维度（全市场 / 申万一级 / 概念板块 / 自选）共用这一批 items，
     分组在前端完成——分组形态随用户切换而变，数据不该重新传输。
     单位见响应 `amount_unit`（千元）/ `mv_unit`（万元），前端标注直接消费。
     """
-    out = await heatmap_service.get_treemap(db, cache, day)
-    if out is None:
-        raise HTTPException(status_code=404, detail="该日没有完整行情")
-    return out
+    return await heatmap_service.get_treemap(db, cache)
 
 
 @router.get("/heatmap/concept-boards", response_model=list[ConceptBoardRef])

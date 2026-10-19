@@ -1648,9 +1648,12 @@ _assert_volatility_derivatives_keys()
 #   · 南向 `southbound_net_buy` —— 落库（`moneyflow_hsgt.south_money` 的**一阶差分**）。
 #   · ETF 份额变化 `etf_share_change` —— 落库（六只宽基 ETF 的份额日变化之和）。
 #   · 产业资本增减持 `industrial_capital_net_change` —— **只登记、不落行**：
-#     原料是公告（S3.2），S3.2 未完成；spec 原话「标记为待接，**不得用假数据填充**」。
+#     **原料已于 2026-10-16 可采**（D3：cninfo `equity_change` 类目 = 5%+ 股东增减持与权益变动，
+#     见 `announcements.category`），**缺的是公告正文的金额抽取**（S3.4）；spec 原话
+#     「不得用假数据填充」⇒ 在抽取落地前本 key 仍**没有任何行**
+#     （阻塞点已从「没有原料」改为「没有抽取」）。
 # 另有一条**同批次的登记**（不是四件套之一）：`northbound_holding_quarterly`
-# （陆股通持仓（季度））—— 只落口径与滞后说明，ingest 与页面待后续批次。
+# （陆股通持仓（季度））—— **ingest 已落地（per-stock）但 dormant**：无消费方 ⇒ 不进收敛器。
 #
 # 计算与落库在 `app/services/capital_flows_service.py`；Step-0 实机结论见
 # `docs/design/data-source.md` 附.9。
@@ -1667,6 +1670,16 @@ _assert_volatility_derivatives_keys()
 # 两版的行**不可混用**（ADR 0011 第 4 条），故 v2 起 v1 的南向行必须重灌。
 CAPITAL_FLOWS_CALIBER_VERSION = "s1.7-v2"
 
+#: **ETF 份额变化自己的口径版本**（与 `southbound_net_buy` 解耦：改篮子不该把南向的行也标新版本）。
+#: v3（2026-10-17）：篮子 **6 → 8 只** —— 补上沪深300 族里此前漏掉的两只大 ETF
+#: （`510310.SH` / `159919.SZ`，2024 年汇金增持品种之一）。改篮子会改变历史值的含义，
+#: 故旧的 6 只行（`s1.7-v2`）与新行**不可混用**（ADR 0011 第 4 条），须整段重灌。
+ETF_SHARE_CALIBER_VERSION = "s1.7-etf-v3"
+
+#: **陆股通持仓（季度）**自己的口径版本（产地 = `hk_hold` 逐交易所取，见
+#: `northbound_holding_service`；改产地或改发布日规则都必须 bump）。
+NORTHBOUND_HOLDING_CALIBER_VERSION = "s1.7-northbound-quarterly-v1"
+
 #: 南向 `south_money` 的**口径断点**（同日切换：日频净买入/百万元 → 历史累计净买额/亿元）。
 #:
 #: 实证（`scripts/spike_s17_capital_flows_sources.py` 的 PROBE 3c）：把每一天的
@@ -1680,8 +1693,9 @@ SOUTHBOUND_CUMULATIVE_FROM = date(2023, 11, 24)
 ETF_SHARE_SOURCE = "tushare_fund_share"
 #: 南向资金的产地（TuShare `moneyflow_hsgt` 的 `south_money` = **历史累计净买额/亿元**）。
 SOUTHBOUND_SOURCE = "tushare_moneyflow_hsgt"
-#: 产业资本增减持的**计划**产地（公告采集，S3.2）。⚠️ S3.2 未完成 ⇒ 本 key **无行**。
-INDUSTRIAL_CAPITAL_SOURCE = "s3.2_announcement_ingest"
+#: 产业资本增减持的产地：巨潮公告**股本变动类目**（`announcements.category='equity_change'`，
+#: 2026-10-16 D3 已接入）。⚠️ 金额抽取（S3.4）未落地 ⇒ 本 key **仍无行**。
+INDUSTRIAL_CAPITAL_SOURCE = "cninfo_announcement_equity_change"
 #: 陆股通持仓（季度）的产地（TuShare `hk_hold`，含 `exchange ∈ {SH,SZ}` 的陆股通持股行）。
 NORTHBOUND_HOLDING_SOURCE = "tushare_hk_hold"
 
@@ -1703,8 +1717,8 @@ CAPITAL_FLOWS_MISSING_REASONS: dict[str, str] = {
         "不回退到更早的行（那会把跨多日的累计变化记成「一天」，或把旧口径的值混算进来）"
     ),
     "upstream_dependency_pending": (
-        "**待接**：原料来自公告采集（spec §S3.2），S3.2 未完成 ⇒ 本指标**没有任何行**"
-        "（spec 原话：不得用假数据填充）"
+        "**待接**：公告**原料已可采**（cninfo `equity_change` 类目，2026-10-16 D3 接入），"
+        "**缺公告正文的金额抽取**（S3.4）⇒ 本指标**没有任何行**（spec 原话：不得用假数据填充）"
     ),
     "not_ingested_page_pending": (
         "**只登记口径**：陆股通持仓（季度）本轮只落口径与滞后说明，ingest 与页面待后续批次"
@@ -1713,11 +1727,12 @@ CAPITAL_FLOWS_MISSING_REASONS: dict[str, str] = {
 
 #: ETF 份额变化的口径说明（写进 registry `description`，字典只转录 registry）。
 ETF_BASKET_CALIBER = (
-    "口径 = 六只宽基 ETF（沪深300 510300 · 上证50 510050 · 中证500 510500 · "
-    "中证1000 512100 · 科创50 588000 · 创业板指 159915）的 `fd_share` **日变化之和**，"
-    "单位**亿份**（上游原生单位万份，÷1e4）。篮子按「每个宽基指数族里**规模**"
-    "（份额×收盘价）最大的一只」选定（实机排名与原文证据见 data-source.md 附.9）；"
-    "⚠️ 已知收窄：沪深300 族的 510310 / 159919 未纳入。"
+    "口径 = **八只**宽基 ETF（沪深300 族三只：510300 · **510310** · **159919**；"
+    "上证50 510050 · 中证500 510500 · 中证1000 512100 · 科创50 588000 · 创业板指 159915）"
+    "的 `fd_share` **日变化之和**，单位**亿份**（上游原生单位万份，÷1e4）。"
+    "**为什么沪深300 族三只**：该族是「国家队」主战场，只取一只会系统性低估净申购 —— "
+    "v2 只含 510300（口径收窄已登记），v3 起补上 510310 / 159919（2024 年汇金增持品种）。"
+    "其余五族仍「一族一只（规模最大者）」（实机排名与原文证据见 data-source.md 附.9）。"
     "**为什么是「份额变化」而非份额水平**：净申购赎回才是「国家队」护盘痕迹。"
     "任一成员缺当日或前一日份额 → 整日 NULL + `missing_reason='partial_basket_coverage'`。"
 )
@@ -1734,6 +1749,7 @@ def _capital_flow_def(
     note: str,
     *,
     higher_is_better: bool | None = None,
+    caliber_version: str | None = None,
 ) -> MetricDef:
     """§S1.7 各指标的共同形状（口径文案统一点，避免复制会腐烂）。"""
     return MetricDef(
@@ -1745,7 +1761,7 @@ def _capital_flow_def(
         sources=sources,
         group=group,
         higher_is_better=higher_is_better,
-        caliber_version=CAPITAL_FLOWS_CALIBER_VERSION,
+        caliber_version=caliber_version or CAPITAL_FLOWS_CALIBER_VERSION,
         description=note,
     )
 
@@ -1762,6 +1778,7 @@ CAPITAL_FLOWS_METRICS: list[MetricDef] = [
         "capital_flow",
         ETF_BASKET_CALIBER,
         higher_is_better=True,
+        caliber_version=ETF_SHARE_CALIBER_VERSION,
     ),
     # ── ② 南向资金（spec §S1.7「南向资金」，日频）──────────────────────
     _capital_flow_def(
@@ -1794,8 +1811,9 @@ CAPITAL_FLOWS_METRICS: list[MetricDef] = [
         [INDUSTRIAL_CAPITAL_SOURCE],
         "capital_flow",
         (
-            "**待接（blocked-on-verification）**：原料是上市公司**公告**（spec §S3.2"
-            "「原料/视图分离」的直接体现），而 S3.2 未完成 ⇒ 本指标**没有任何行**"
+            "**待接**：原料是上市公司**公告**（「原料/视图分离」的直接体现），"
+            "**2026-10-16 起该类目已在采**（cninfo `equity_change`，见 `announcements.category`），"
+            "**缺的是公告正文的金额抽取**（S3.4）⇒ 本指标**没有任何行**"
             "（spec 原话：标记为待接、不得用假数据填充）。"
             "已登记的目的：①让读面显式返回「已登记但无数据」而不是 404；"
             "②把「缺什么」写进口径字典。"
@@ -1814,7 +1832,11 @@ CAPITAL_FLOWS_METRICS: list[MetricDef] = [
         "capital_flow",
         (
             "**陆股通持仓（季度）**：`hk_hold` 的 `exchange ∈ {SH,SZ}` 行（沪深股通持有"
-            "A 股明细）。⚠️ **命名禁令（Ruling 19）**：香港中央結算（HKSCC）是**名义持有人"
+            "A 股明细），**per-stock 落库**（`stock_id>0`）。"
+            "⚠️ **dormant（2026-10-17 裁定）**：数据可采（`scripts/backfill_northbound_holding.py`，"
+            "实测 3 个季末 11,634 行），但**暂无消费方**（市场读面只取 `stock_id=0`，"
+            "前端也没有 per-stock 消费位）⇒ **不进收敛器**；消费方出现后再决定聚合口径并挂腿。"
+            "⚠️ **命名禁令（Ruling 19）**：香港中央結算（HKSCC）是**名义持有人"
             "汇总账户**，持仓主体不可拆分 ⇒ 只说「陆股通持仓」，**不得**称「外资」。"
             "**滞后说明（UI 必须明示）**：2024-08-19 起沪深港通持股**改为按季度披露**"
             "（北向每日净买入同期取消），故本指标落后当季最多约一个季度 + 源侧发布滞后；"
@@ -1874,6 +1896,97 @@ def _assert_capital_flows_keys() -> None:
 
 
 _assert_capital_flows_keys()
+
+# ══════════════════════════════════════════════════════════════════════════
+# §S1.7 董监高及关联人持股变动（**官方一手**，日频，按股聚合）
+# ══════════════════════════════════════════════════════════════════════════
+#
+# 与 `industrial_capital_net_change`（5%+ 股东 / 实控人，**事件驱动**，来源于巨潮公告类目）
+# **是两个 key**：主体不同（内部人 vs 产业资本）、频率不同（日频 vs 事件）、单位不同
+# （万股 vs 亿元）、PIT 能力也不同（沪有披露日、深无）—— 混装即口径混装（ADR 0019 硬纪律）。
+#
+# 产地（2026-10-17 实机验证，`scripts/spike_official_sources.py --probe holder-change`）：
+#   · 沪：`query.sse.com.cn/commonQuery.do`（`sqlId=COMMON_SSE_XXPL_CXJL_SSGSGFBDQK_S`，
+#         `BEGIN_DATE`/`END_DATE` 窗口；实测 2026-10-12~16 = 69 行 / 1 页，
+#         全历史 71,512 行 / 716 页）——**带 `FORM_DATE`（填报/披露日）**，
+#         故 `published_at` 可填真值。
+#   · 深：`www.szse.cn/api/report/ShowReport/data`（`CATALOGID=1801_cxda` + `txtStart/txtEnd`；
+#         实测同窗口 73 行 / 4 页，全历史 124,057 行 / 6203 页）——**没有披露日字段**
+#         ⇒ `published_at` 只能为 NULL（**显式**打 `extra.disclosure_date_unavailable`），
+#         且该行的数据**不得**进回测/信号链路（ADR 0019 判据 ③）。
+#
+# 单位：沪 `CHANGE_NUM` 原生**股**、深 `bdgs` 原生**万股** ⇒ 落库统一 **万股**（本 key 的 unit）。
+# 值 = 当日该股「增持 − 减持」的**净变动股数（万股）**；金额（万元）放 `extra`。
+INSIDER_CALIBER_VERSION = "s1.7-insider-v1"
+INSIDER_SOURCE = "sse_szse_insider_change"
+
+#: 缺数语义（与 S1.7 同纪律：缺数恒 NULL，绝不填 0）。
+INSIDER_MISSING_REASONS: dict[str, str] = {
+    "no_event_in_window": "该窗口内该股没有任何董监高持股变动行（不是 0 变动，而是没有事件）",
+    "unresolved_symbol": "交易所给出的证券代码在 `stocks` 里解析不到 ⇒ 该行**不落库**（不猜）",
+}
+
+INSIDER_METRICS: list[MetricDef] = [
+    MetricDef(
+        key="insider_net_change_daily",
+        name="董监高及关联人净增减持",
+        unit="万股",
+        freq="daily",
+        tier=TIER_OFFICIAL,
+        sources=[INSIDER_SOURCE],
+        group="capital_flow",
+        higher_is_better=True,
+        caliber_version=INSIDER_CALIBER_VERSION,
+        description=(
+            "**仅董监高及关联人**（内部人）的持股变动，按「证券 × 披露日」聚合："
+            "值 = 当日增持 − 减持的**净变动股数（万股）**（沪原生股、深原生万股，已归一）。"
+            "**为什么与 `industrial_capital_net_change` 分开**："
+            "后者是 5%+ 股东/实控人（产业资本），"
+            "事件驱动、单位亿元 —— 主体/频率/单位/PIT 全不同，混装即口径混装。"
+            "**PIT**：沪用 `FORM_DATE`（填报=披露日）填 `published_at`；"
+            "深交所该表**无披露日字段** ⇒ 深市行 `published_at=NULL` + "
+            "`extra.disclosure_date_unavailable=true`，**不得进回测/信号链路**。"
+            "金额（万元）在 `extra.amount_wan`；成员明细在 `extra.members`（可复核到人）。"
+            "⚠️ 沪市窗口过滤的是**变动日**（实测：变动日 2024-03-05、填报日 2026-09-20 的补报"
+            "只在变动日窗口内可取）⇒ 变动日远早于窗口的长滞后补报**不会被日更拾取**，"
+            "靠回补脚本重跑更长区间（不得把窗口放到全历史，那会被限流）。"
+            "实测（2026-10-17）：沪 2026-10-12~16 共 69 行、深同窗口 73 行；"
+            "无效窗口/上游异常必须响亮失败，不得落一片 NULL。"
+            "⚠️ **dormant（2026-10-17 裁定）**：数据可采（`scripts/backfill_insider_change.py`），"
+            "但**暂无消费方**（前端 0 引用；市场读面只取 `stock_id=0` 而本指标是 per-stock）"
+            "⇒ **不进收敛器**，避免每天两次无效外呼；消费方出现后再挂腿。"
+        ),
+    ),
+]
+
+#: 本段声明的 key（只允许这一个；少/多都在导入期失败）。
+INSIDER_METRIC_KEYS: tuple[str, ...] = ("insider_net_change_daily",)
+
+
+def _assert_insider_metrics() -> None:
+    """登记面无漂移：恰好一个 key、单位/频率/tier 固定、时间轴声明必须写清 PIT 的不对称。"""
+    registered = tuple(m.key for m in INSIDER_METRICS)
+    if registered != INSIDER_METRIC_KEYS:
+        raise RuntimeError(f"INSIDER_METRICS 与声明的 key 集不一致：{registered}")
+    by_key = {m.key: m for m in INSIDER_METRICS}
+    metric = by_key["insider_net_change_daily"]
+    if (metric.unit, metric.freq, metric.tier) != ("万股", "daily", TIER_OFFICIAL):
+        raise RuntimeError(
+            f"insider_net_change_daily 的 unit/freq/tier 必须是 (万股, daily, official)，"
+            f"实际 {(metric.unit, metric.freq, metric.tier)}"
+        )
+    for needle in ("FORM_DATE", "published_at=NULL", "不得进回测"):
+        if needle not in metric.description:
+            raise RuntimeError(
+                f"insider_net_change_daily 的口径描述缺 {needle!r}（PIT 不对称必须写明）"
+            )
+    if metric.key in tuple(m.key for m in CAPITAL_FLOWS_METRICS):
+        raise RuntimeError(
+            "insider_net_change_daily 不得混进 CAPITAL_FLOWS_METRICS（那会共用 S1.7 的断言）"
+        )
+
+
+_assert_insider_metrics()
 
 # ══════════════════════════════════════════════════════════════════════════
 # §S1.12 情绪 · 投资者行为（增量资金的入场行为）
@@ -2203,6 +2316,12 @@ class CompositeConstituent:
 
     `direction` 是**风险偏好方向**（+1 = 原始值越高情绪越乐观；-1 = 反向，先取相反数
     再算分位）。它把"这条腿怎么读"写死成机读字段，而不是留在某处的注释里。
+
+    `late_arrival`（2026-10-17 新增）：该成分的**上游是 T+1 披露**（或已知系统性迟到），
+    所以"当日盘后"读到的综合指数里它必然缺席，而它的值会在上游披露后被收敛器重算改写。
+    读面据此把当期值标成 `provisional`（见 `market_sentiment_composite_service`）。
+    **它不参与任何计算**（不改权重、不改参与集），只是把"这条腿天生会迟到"落成机读事实
+    —— 否则读面只能靠猜（按权重阈值猜会把 QVIX 那种偶发滞后误标）。
     """
 
     metric_key: str
@@ -2210,6 +2329,7 @@ class CompositeConstituent:
     direction: int  # +1 / -1
     group: str
     rationale: str
+    late_arrival: bool = False
 
 
 #: 成分的**归属组权重**（组内权重之和 == 组权重；`_assert_composite_spec` 机械校验）。
@@ -2269,6 +2389,8 @@ COMPOSITE_CONSTITUENTS: tuple[CompositeConstituent, ...] = (
         1,
         "activity_leverage",
         "融资余额 = 杠杆多头的存量意愿（交易所三所汇总，2023-05 起）",
+        # 交易所融资融券数据 T+1 披露（实测：周五盘后到周六 00:2x 仍未出，周三/周四的却已有）
+        late_arrival=True,
     ),
     CompositeConstituent(
         "margin_financing_buy_ratio",
@@ -2276,6 +2398,7 @@ COMPOSITE_CONSTITUENTS: tuple[CompositeConstituent, ...] = (
         1,
         "activity_leverage",
         "融资买入额占全市场成交额比 = 当日杠杆买入强度（快变量，与存量互补）",
+        late_arrival=True,
     ),
     # ── 组 3：市场宽度与动量（§S1.8，0.40；2025-09 起，故只在近期参与）──
     CompositeConstituent(
@@ -2312,12 +2435,22 @@ COMPOSITE_CONSTITUENTS: tuple[CompositeConstituent, ...] = (
 #: spec §S1.12 写死的"仅作背景展示、不进信号链路"，把它当成分等于绕过该禁令。
 COMPOSITE_FORBIDDEN_CONSTITUENT_KEYS: tuple[str, ...] = ("public_fund_equity_position",)
 
+#: **T+1 披露（或已知系统性迟到）的成分**，由 `CompositeConstituent.late_arrival` 派生 ——
+#: 单一真源在成分表里，这里只是给读面用的索引。读面据此判"当期值是临时的（provisional）"：
+#: 当日盘后读到的合成值里这些成分必然缺席，而它们会在上游披露后被收敛器重算改写。
+COMPOSITE_LATE_ARRIVAL_KEYS: frozenset[str] = frozenset(
+    c.metric_key for c in COMPOSITE_CONSTITUENTS if c.late_arrival
+)
+
 #: 被**刻意排除**、且理由必须公开可查的 key（不注册成成分，但留痕"为什么没有它"）。
 #: 这里是**短因由**（机读、可查）；展开的逐条论证见字典 §4.2「市场情绪综合指数」小节。
 COMPOSITE_EXCLUDED_KEYS: dict[str, str] = {
     "public_fund_equity_position": "spec §S1.12 明令不进信号链路；且实测周度",
     "new_fund_share": "月频；日频合成必须前向填充 = 制造数据",
     "etf_share_change": "方向不唯一（抄底/追涨两读皆通）",
+    "insider_net_change_daily": (
+        "内部人增减持**稀疏且事件驱动**（多数股票当日无事件）⇒ 日频合成要前向填充 = 制造数据"
+    ),
     "southbound_net_buy": "方向有争议（离开 A 股 / 全球风险偏好上升）",
     "margin_short_balance": "与融资余额同属杠杆存量组且量级极小",
     "market_turnover_amount": "与沪深300换手率同组且含长期抬升趋势",
@@ -2352,6 +2485,7 @@ MARKET_SENTIMENT_METRICS_ALL: list[MetricDef] = [
     *MARKET_ACTIVITY_METRICS,
     *VOLATILITY_DERIVATIVES_METRICS,
     *CAPITAL_FLOWS_METRICS,
+    *INSIDER_METRICS,
     *INVESTOR_BEHAVIOR_METRICS,
 ]
 
@@ -2511,7 +2645,9 @@ MARKET_SENTIMENT = IndustryConfig(
         " + 交易活跃度与杠杆资金（spec §S1.9） + 估值与风险溢价（spec §S1.11）"
         " + 波动率与衍生品（spec §S1.10）"
         " + 资金流四件套（spec §S1.7：宽基 ETF 份额变化 / 南向净买入 / "
-        "两融（引用 §S1.9）/ 产业资本增减持（待接 S3.2）"
+        "两融（引用 §S1.9）/ 产业资本增减持（原料已采，金额抽取待接）"
+        " + 董监高及关联人持股变动（§S1.7，官方一手、日频、单位万股；"
+        "沪带披露日、深无披露日 ⇒ 深市行不进回测/信号链路）"
         " + 陆股通持仓（季度）只登记口径）"
         " + 投资者行为（spec §S1.12：新成立基金募集份额（月频，部分成员缺值时为**下界**）/ "
         "公募基金仓位（实测**周度**、口径不可复算，仅背景展示且不进信号链路）；"

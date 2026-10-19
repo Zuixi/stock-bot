@@ -3,9 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchDistribution } from "@/shared/api/market";
 import { fetchMarketMoneyflow } from "@/shared/api/marketData";
 import { DegradedNotice, FreshnessNote } from "@/shared/ui";
-import { Sparkline } from "@/shared/ui/Sparkline";
-import type { MarketPanorama } from "@/shared/api/panorama";
-import "./DistributionChart.css";
 import { EChart } from "@/shared/ui/EChart";
 import { useTheme } from "@/app/theme-context";
 import type { ThemePalette } from "@/app/theme";
@@ -66,50 +63,7 @@ function BalanceBar({ up, flat, down }: { up: number; flat: number; down: number
   );
 }
 
-function DistributionChange({ panorama }: { panorama?: MarketPanorama | null }) {
-  const latest = panorama?.breadth.latest ?? null;
-  const prev = panorama?.breadth.previous ?? null;
-  const series = panorama?.breadth.series ?? [];
-  if (!latest) {
-    return (
-      <div className="dist-change" aria-label="较昨日变化">
-        <span className="dist-change__label">较昨日</span>
-        <span className="dist-change__none">等待日表回补</span>
-      </div>
-    );
-  }
-  const upDelta = prev ? latest.upCount - prev.upCount : null;
-  const downDelta = prev ? latest.downCount - prev.downCount : null;
-  const fmt = (v: number | null) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v}`);
-  return (
-    <div className="dist-change" aria-label="较昨日变化">
-      <span className="dist-change__label">较昨日</span>
-      <span>
-        上涨 <b className={upDelta != null && upDelta >= 0 ? "up" : "down"}>{fmt(upDelta)}</b>
-      </span>
-      <span>
-        下跌 <b className={downDelta != null && downDelta <= 0 ? "down" : "up"}>{fmt(downDelta)}</b>
-      </span>
-      <span className="dist-change__spark" title="近 5 个交易日上涨占比">
-        <Sparkline
-          values={series.slice(-5).map((p) => p.upRatio)}
-          color="var(--text-secondary)"
-          width={48}
-          height={14}
-          showEndDot={false}
-        />
-        <span>5日上涨占比</span>
-      </span>
-    </div>
-  );
-}
-
-export interface DistributionChartProps {
-  /** 全景日表（与脉搏同一份 query）：有值才显示"较昨日/5 日"变化；无值不伪造。 */
-  panorama?: MarketPanorama | null;
-}
-
-export function DistributionChart({ panorama }: DistributionChartProps) {
+export function DistributionChart() {
   const { colors } = useTheme();
   const { refetchInterval } = useMarketPolling();
   const {
@@ -207,7 +161,6 @@ export function DistributionChart({ panorama }: DistributionChartProps) {
           <>
             <EChart option={option} height={220} />
             <BalanceBar up={up} flat={flat} down={down} />
-            <DistributionChange panorama={panorama} />
           </>
         ) : error ? (
           <DegradedNotice reason={`涨跌分布读取失败：${(error as Error).message}`} />

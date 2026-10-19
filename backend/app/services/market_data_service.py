@@ -894,14 +894,10 @@ async def get_sector_moneyflow(
     from app.models.market_data import SectorMoneyflowSnapshot  # noqa: PLC0415
 
     async with async_session_factory() as db:
-        # 只认 `eod_full`：本卡对外写的是"末完整日净流入 Top10"。此前取 max(任意产地)，
-        # 会在只有盘中 poll 的 10-15 返回 Top-100 子集，与"完整日"字面不符；且与
-        # 情绪脉搏的完整日资金流出现两个 as_of。缺完整日 → 空（不拿子集冒充）。
         as_of = await _latest_snapshot_day(
             db,
             SectorMoneyflowSnapshot.trade_date,
             SectorMoneyflowSnapshot.dimension == dimension,
-            SectorMoneyflowSnapshot.capture_kind == market_data_repo.EOD_FULL_CAPTURE,
         )
         key = SECTOR_MONEYFLOW_CACHE_KEY.format(
             dimension=dimension, as_of=as_of.isoformat() if as_of is not None else "none"

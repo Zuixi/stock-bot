@@ -171,6 +171,34 @@ def _shares(
     }
 
 
+def test_etf_basket_shape_and_caliber_versions() -> None:
+    """篮子形状是**口径的一部分**：沪深300 族三只、其余一族一只，且 ETF 版本独立。
+
+    v3（2026-10-17）把沪深300 族从 1 只补到 3 只（510310 / 159919）：只取一只会
+    系统性低估该族净申购 —— 而沪深300 族正是「国家队」主战场。
+    """
+    by_family: dict[str, list[str]] = {}
+    for member in svc.ETF_BASKET:
+        by_family.setdefault(member.family, []).append(member.ts_code)
+    assert len(svc.ETF_BASKET) == 8
+    assert sorted(by_family["沪深300"]) == ["159919.SZ", "510300.SH", "510310.SH"]
+    assert {k: len(v) for k, v in by_family.items() if k != "沪深300"} == {
+        "上证50": 1,
+        "中证500": 1,
+        "中证1000": 1,
+        "科创50": 1,
+        "创业板指": 1,
+    }
+    # 版本必须解耦：改篮子不该把南向的行也标新版本
+    assert registry.ETF_SHARE_CALIBER_VERSION != registry.CAPITAL_FLOWS_CALIBER_VERSION
+    assert svc.CALIBER_VERSIONS["etf_share_change"] == registry.ETF_SHARE_CALIBER_VERSION
+    assert svc.CALIBER_VERSIONS["southbound_net_buy"] == registry.CAPITAL_FLOWS_CALIBER_VERSION
+    # 口径文案必须写出八只（文案与常量不得漂移）
+    assert "八只" in registry.ETF_BASKET_CALIBER
+    for code in ("510310", "159919"):
+        assert code in registry.ETF_BASKET_CALIBER
+
+
 def test_etf_change_is_sum_of_member_deltas_in_yi() -> None:
     """值 = Σ 成员份额日变化 ÷ 1e4（万份 → 亿份）；逐成员的原始量必须留痕可复核。"""
     shares = _shares()
@@ -325,7 +353,8 @@ def test_row_carries_pit_caliber_and_missing_reason() -> None:
     assert row["source_tier"] == "derived"
     assert row["unit"] == "亿份"
     assert row["freq"] == "daily"
-    assert row["caliber_version"] == registry.CAPITAL_FLOWS_CALIBER_VERSION
+    # ETF 篮子变更（6 → 8）有自己的口径版本，与南向解耦
+    assert row["caliber_version"] == registry.ETF_SHARE_CALIBER_VERSION
     assert row["published_at"].tzinfo is not None, "PIT 必须带时区（Ruling 35 的反面）"
     assert row["published_at"].date() == day
     assert row["published_at"].utcoffset() is not None

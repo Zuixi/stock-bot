@@ -32,7 +32,6 @@ DAILY_JOB_IDS = (
     "global_index_daily",
     "market_moneyflow_daily",
     "concept_members_refresh",
-    "market_panorama_daily",
 )
 
 
@@ -165,23 +164,5 @@ async def test_market_moneyflow_daily_registered_post_close() -> None:
         assert fields["hour"] == "16"
         assert fields["minute"] == "20"
         assert _job_misfire(scheduler, "market_moneyflow_daily") is None
-    finally:
-        scheduler.shutdown(wait=False)
-
-
-async def test_market_panorama_daily_registered_post_close() -> None:
-    """A股全景三表必须真日更：17:25，晚于行情/限价，且迟到不丢。"""
-    scheduler = create_scheduler()
-    scheduler.start()
-    try:
-        job = scheduler.get_job("market_panorama_daily")
-        assert job is not None, "market_panorama_daily job not registered"
-        assert isinstance(job.trigger, CronTrigger)
-        assert str(job.trigger.timezone) == "Asia/Shanghai"
-        fields = {f.name: str(f) for f in job.trigger.fields}
-        assert fields["day_of_week"] == "mon-fri"
-        assert fields["hour"] == "17"
-        assert fields["minute"] == "25"
-        assert _job_misfire(scheduler, "market_panorama_daily") is None
     finally:
         scheduler.shutdown(wait=False)

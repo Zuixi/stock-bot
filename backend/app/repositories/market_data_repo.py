@@ -860,12 +860,14 @@ async def upsert_announcements(db: AsyncSession, rows: list[dict[str, Any]]) -> 
 
 
 async def list_announcements(
-    db: AsyncSession, symbol: str | None, limit: int
+    db: AsyncSession, symbol: str | None, limit: int, category: str | None = None
 ) -> list[Announcement]:
-    """公告按披露时间倒序（symbol 可选过滤 6 位代码）。"""
+    """公告按披露时间倒序（symbol 6 位代码 / category 类目，均可选过滤）。"""
     stmt = select(Announcement)
     if symbol:
         stmt = stmt.where(Announcement.sec_code == symbol)
+    if category:
+        stmt = stmt.where(Announcement.category == category)
     stmt = stmt.order_by(desc(Announcement.announce_time)).limit(limit)
     return list((await db.execute(stmt)).scalars().all())
 

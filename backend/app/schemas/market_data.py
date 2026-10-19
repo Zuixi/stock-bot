@@ -314,7 +314,7 @@ class AnnouncementOut(BaseModel):
     sec_name: str | None = None
     title: str
     announce_time: str  # ISO datetime str
-    category: str  # report | event
+    category: str  # report | event | equity_change（股本变动：5%+ 股东增减持与权益变动）
     pdf_url: str | None = None
 
 
@@ -422,6 +422,15 @@ class DataFreshnessOut(BaseModel):
     expected_latest: str | None
     expected_days: int
     universe: int
+    # 2026-10-17（T+0）加：期望日拆成**两个口径**暴露，否则"该到哪天"与"真到哪天"
+    # 混成一个数，就分不清"上游还没到"与"当天卡住了"。
+    # - `calendar_expected_latest`：按交易日历 + 时钟，现在**应该**出到哪天
+    #   （交易日 17:30 CST 之后即当日）；
+    # - `expected_latest`：上界里最新一个**过齐备门禁**的交易日（收敛器就用它）；
+    # - `expected_latest_source`：`gated`（上界本身齐备）/ `fallback`（上界不齐备、
+    #   已逐日回退）/ `none`（窗口内一个都不过门禁）。
+    calendar_expected_latest: str | None = None
+    expected_latest_source: str | None = None
     # 最新期望日 daily_quotes 的实际行数（= 有行情的股票数）。与 universe 并排看即可
     # 发现名录滞后——universe 取自 stocks 表，该表冻结时 threshold 分母本身就偏小。
     quotes_symbols_latest: int | None

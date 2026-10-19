@@ -145,15 +145,8 @@ def rows_to_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [row_to_item(r) for r in rows]
 
 
-async def get_treemap(
-    db: AsyncSession, cache: CacheClient | None, day: date | None = None
-) -> HeatmapTreemapOut | None:
+async def get_treemap(db: AsyncSession, cache: CacheClient | None) -> HeatmapTreemapOut:
     """热力图批量读路：判据日全市场行（含两个分组码）一次回齐。
-
-    ``day`` 缺省 = 最近完整日；显式传入可回看历史（只允许 <= 最近完整日且有行情的
-    交易日，否则返回 ``None``，由 API 转 404）。历史日的市值仍按当日优先/回看，
-    行业归属仍是**当前**申万快照（C 类，响应不承诺当时成分）。
-
 
     四个分组维度共用这一批行：
     - ``all``：平铺 items 本身；
@@ -165,22 +158,16 @@ async def get_treemap(
     """
     md = await market_day_service.resolve_latest_complete_day(db, cache=cache)
     if md is None:
-        if day is None:
-            return HeatmapTreemapOut(
-                as_of=None,
-                as_of_quality="partial",
-                count=0,
-                amount_unit="千元",
-                mv_unit="万元",
-                items=[],
-            )
-        return None
+        return HeatmapTreemapOut(
+            as_of=None,
+            as_of_quality="partial",
+            count=0,
+            amount_unit="千元",
+            mv_unit="万元",
+            items=[],
+        )
 
-    if day is not None and day > md.day:
-        return None
-    target = day if day is not None else md.day
-    quality = md.quality if target == md.day else "complete"
-    cache_key = _CACHE_KEY.format(day=target.isoformat())
+    cache_key = _CACHE_KEY.format(day=md.day.isoformat())
     if cache:
         cached = await cache.get(cache_key)
         if isinstance(cached, dict) and isinstance(cached.get("items"), list):
@@ -188,13 +175,11 @@ async def get_treemap(
             cached.setdefault("as_of_quality", "partial")
             return HeatmapTreemapOut.model_validate(cached)
 
-    rows = await _fetch_rows(db, target)
-    if day is not None and not rows:
-        return None  # 非交易日/无行情：不要返回"空热力图"冒充那一天
+    rows = await _fetch_rows(db, md.day)
     items = rows_to_items(rows)
     out = HeatmapTreemapOut(
-        as_of=target,
-        as_of_quality=quality,
+        as_of=md.day,
+        as_of_quality=md.quality,
         count=len(items),
         amount_unit="千元",
         mv_unit="万元",

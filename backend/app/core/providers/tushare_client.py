@@ -690,6 +690,34 @@ class TuShareClient(RateLimitedSyncProvider):
             end_date=end_date,
         )
 
+    async def fetch_hk_hold(
+        self,
+        trade_date: str,
+        *,
+        exchange: str | None = None,
+        ts_code: str | None = None,
+    ) -> pd.DataFrame:
+        """沪深港通持股明细（TuShare ``hk_hold``，季度末快照；**必须按交易所分批**）.
+
+        已验证 2026-10-17（`scripts/backfill_northbound_holding.py` 的实跑）：
+        返回列 = ``code, trade_date, ts_code, name, vol(股), ratio(%), exchange``。
+
+        ⚠️ **单次 4200 行上限**（实测：不带 ``exchange`` 时 2026-09-30 返回
+        ``SH 2089 + SZ 1097 + HK 1014 = 4200``，即 **SZ 被截断**；按 ``exchange`` 分两次取
+        得到 ``SH 2089 + SZ 2320 = 4409`` 才完整）⇒ 调用方**必须**逐交易所取并断言未撞上限。
+        """
+        # `exchange` **必须**作为上游参数传下去：上游单次 4200 行上限是**过滤前**生效的，
+        # 先取全量再本地过滤会把 SZ 截掉一半（实测 1097 vs 2320）。
+        kwargs: dict[str, Any] = {"trade_date": trade_date}
+        if exchange is not None:
+            kwargs["exchange"] = exchange
+        df = await self._query("hk_hold", **kwargs)
+        if exchange is not None:
+            df = df[df["exchange"] == exchange]
+        if ts_code is not None:
+            df = df[df["ts_code"] == ts_code]
+        return df
+
     async def fetch_moneyflow_hsgt(self, start_date: str, end_date: str) -> pd.DataFrame:
         """沪深港通资金（north_money 为字符串、单位万元，映射层处理）。"""
         return await self._query("moneyflow_hsgt", start_date=start_date, end_date=end_date)

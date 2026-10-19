@@ -543,13 +543,56 @@ _ANNOUNCEMENT_QUERY_URL = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
 _ANNOUNCEMENT_PDF_BASE = "http://static.cninfo.com.cn/"
 _ANNOUNCEMENT_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
+#: 公告类目（**管道取数面的唯一真相**：client 与 service 都从这里迭代，禁止各写一份）。
+AnnouncementCategory = Literal["report", "event", "equity_change"]
+
+ANNOUNCEMENT_CATEGORIES: tuple[AnnouncementCategory, ...] = ("report", "event", "equity_change")
+
 ANNOUNCEMENT_CATEGORY_QUERY: dict[str, str] = {
     "report": (
         "category_yjdbg_szsh;category_bndbg_szsh;category_sjdbg_szsh;category_ndbg_szsh;"
         "category_yjygjxz_szsh;category_yjkb_szsh"
     ),
     "event": "category_zf_szsh;category_pgjz_szsh;category_gqfpxzcs_szsh;category_lr_gqbl_szsh",
+    # 股本变动：5%+ 股东 / 实控人 / 机构的**权益变动报告书、减持计划（含届满）、增持**
+    # ——spec §S1.7 的 `industrial_capital_net_change` 原料（ADR 0019 的 L1 官方一手）。
+    # 实测（2026-10-16，spike_official_sources.py）：2026-10-08~16 共 **1102 条**，
+    # 其中回购类噪音占多数 ⇒ 消费侧必须按标题/主体过滤，不得整类当"增减持"。
+    "equity_change": "category_gqbd_szsh",
 }
+
+#: 每类目的 `(page_size, max_pages)`。**为什么分档**：类目体量差异极大 ——
+#: 实测`equity_change` ≈ **157 条/交易日**（1102 条 / 7 个交易日），3 天窗口约 470 条，
+#: 而 `report` 6 周才 ~190 条。用同一档会让前者**静默截断**（分页只回最新页，
+#: 被截掉的更早页永久不回补）。
+ANNOUNCEMENT_FETCH_LIMITS: dict[str, tuple[int, int]] = {
+    "report": (30, 10),
+    "event": (30, 10),
+    "equity_change": (50, 25),  # 50 × 25 = 1250 条/窗口
+}
+
+
+def _assert_announcement_categories() -> None:
+    """类目配置面必须**导入期自洽**（少一处登记 = 静默漏采一个类目）。"""
+    if set(ANNOUNCEMENT_CATEGORY_QUERY) != set(ANNOUNCEMENT_CATEGORIES):
+        raise RuntimeError(
+            "ANNOUNCEMENT_CATEGORY_QUERY 与 ANNOUNCEMENT_CATEGORIES 不一致："
+            f"{sorted(set(ANNOUNCEMENT_CATEGORY_QUERY) ^ set(ANNOUNCEMENT_CATEGORIES))}"
+        )
+    if set(ANNOUNCEMENT_FETCH_LIMITS) != set(ANNOUNCEMENT_CATEGORIES):
+        raise RuntimeError(
+            "ANNOUNCEMENT_FETCH_LIMITS 未覆盖全部类目："
+            f"{sorted(set(ANNOUNCEMENT_FETCH_LIMITS) ^ set(ANNOUNCEMENT_CATEGORIES))}"
+        )
+    codes = list(ANNOUNCEMENT_CATEGORY_QUERY.values())
+    if len(set(codes)) != len(codes):
+        raise RuntimeError("两个类目用了同一个 cninfo category code —— 取数面会互相污染")
+    for key, code in ANNOUNCEMENT_CATEGORY_QUERY.items():
+        if not code.startswith("category_"):
+            raise RuntimeError(f"类目 {key} 的 category code 形态不对：{code!r}")
+
+
+_assert_announcement_categories()
 
 _ANNOUNCEMENT_TAG_RE = re.compile(r"<[^>]+>")
 
@@ -595,36 +638,58 @@ class CninfoClient:
         resp.raise_for_status()
         return cast("dict[str, Any]", resp.json())
 
+    async def _fetch_announcement_page(
+        self, se_date: str, category_key: AnnouncementCategory, page: int, page_size: int
+    ) -> list[dict[str, Any]]:
+        data = await self._post_json(
+            _ANNOUNCEMENT_QUERY_URL,
+            {
+                "pageNum": page,
+                "pageSize": page_size,
+                "column": "szse",
+                "tabName": "fulltext",
+                "seDate": se_date,
+                "category": ANNOUNCEMENT_CATEGORY_QUERY[category_key],
+                "isHLtitle": "true",
+            },
+        )
+        return list(data.get("announcements") or [])
+
     async def fetch_announcements(
         self,
         se_date: str,
-        category_key: Literal["report", "event"],
-        page_size: int = 30,
-        max_pages: int = 10,
+        category_key: AnnouncementCategory,
+        page_size: int | None = None,
+        max_pages: int | None = None,
     ) -> list[dict[str, Any]]:
         """按日期区间（``YYYY-MM-DD~YYYY-MM-DD``）+ 类目分页拉取公告并映射为行。
 
-        max_pages=10 × 30 = 300 条/类目：3 天窗口的"重大事项"类实测可达 ~190 条，
-        5 页（150）会静默截断且轮询永远只取最新页、更早的永不回补。
+        分页上限按类目取 ``ANNOUNCEMENT_FETCH_LIMITS``；跑满上限时**不静默截断** ——
+        用一页探针区分「恰好整除」与「真的还有更多」，后者**响亮失败**（原因：
+        cninfo 分页只回最新页，静默截断会让更早的公告永久不回补，而轮询每 10 分钟
+        只覆盖近 3 日窗口，谁也发现不了）。
         """
+        limit_pages = (
+            max_pages if max_pages is not None else ANNOUNCEMENT_FETCH_LIMITS[category_key][1]
+        )
+        limit_size = (
+            page_size if page_size is not None else ANNOUNCEMENT_FETCH_LIMITS[category_key][0]
+        )
         rows: list[dict[str, Any]] = []
-        for page in range(1, max_pages + 1):
-            data = await self._post_json(
-                _ANNOUNCEMENT_QUERY_URL,
-                {
-                    "pageNum": page,
-                    "pageSize": page_size,
-                    "column": "szse",
-                    "tabName": "fulltext",
-                    "seDate": se_date,
-                    "category": ANNOUNCEMENT_CATEGORY_QUERY[category_key],
-                    "isHLtitle": "true",
-                },
-            )
-            anns = data.get("announcements") or []
+        for page in range(1, limit_pages + 1):
+            anns = await self._fetch_announcement_page(se_date, category_key, page, limit_size)
             rows.extend(_map_announcement_record(a, category_key) for a in anns)
-            if len(anns) < page_size:
-                break
+            if len(anns) < limit_size:
+                return rows
+        probe = await self._fetch_announcement_page(
+            se_date, category_key, limit_pages + 1, limit_size
+        )
+        if probe:
+            raise RuntimeError(
+                f"公告类目 {category_key} 在窗口 {se_date} 的条数超出分页上限 "
+                f"（{limit_size} × {limit_pages}）—— 拒绝静默截断；请调大 "
+                f"ANNOUNCEMENT_FETCH_LIMITS[{category_key!r}] 或缩小取数窗口"
+            )
         return rows
 
 

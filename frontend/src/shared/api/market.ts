@@ -132,11 +132,8 @@ export function fetchDistribution(): Promise<MarketListEnvelope<DistributionItem
 }
 
 /** 板块涨跌（CSRC 口径）。同 {@link fetchDistribution}：返回 `{items, 口径元数据}` 信封。 */
-export function fetchSectors(date?: string): Promise<MarketListEnvelope<SectorSummary>> {
-  return apiGet<BackendMarketListOut<SectorSummary>>(
-    "/api/v1/market/sectors",
-    date ? { date } : undefined,
-  ).then(mapMarketList);
+export function fetchSectors(): Promise<MarketListEnvelope<SectorSummary>> {
+  return apiGet<BackendMarketListOut<SectorSummary>>("/api/v1/market/sectors").then(mapMarketList);
 }
 
 // ---------------------------------------------------------------------------

@@ -1219,7 +1219,8 @@ async def _upsert_batched(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
     """分批 upsert（asyncpg 参数上限 32767，见 :data:`UPSERT_BATCH_ROWS`）。
 
     **落库前先验两列 PIT 元数据**（Ruling 59 的机械守卫）：本模块的**每一行**都必须带
-    非空、**带时区**的 `published_at` 与非空 `caliber_version`。
+    非空、**带时区**的 `published_at` 与非空 `caliber_version`；唯一豁免是**产地结构性
+    没有披露日**的行，它们必须显式带 `extra.disclosure_date_unavailable=True`。
 
     为什么必须在这里挡：这两列在 `industry_metrics` 里是**可空列**，写入路径漏带它们
     会**静默**落 NULL —— 实测 dev 库 12036 行 S1.9/S1.11 全部 `published_at IS NULL`
@@ -1232,11 +1233,19 @@ async def _upsert_batched(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
     """
     if not rows:
         return 0
-    bad_pit = [
-        str(r.get("metric_key"))
-        for r in rows
-        if not isinstance(r.get("published_at"), datetime) or r["published_at"].tzinfo is None
-    ]
+
+    def _has_pit(row: dict[str, Any]) -> bool:
+        published = row.get("published_at")
+        if isinstance(published, datetime) and published.tzinfo is not None:
+            return True
+        # **唯一的豁免**：产地结构性没有披露日（如深交所董监高持股变动表），
+        # 必须由行自己**显式声明** `extra.disclosure_date_unavailable=True`。
+        # 这样"漏带 PIT 元数据"仍会响亮失败，而"产地确实没有"不会被冒充成 bug，
+        # 也不会变成静默 NULL（消费侧按此标记把这些行排除在回测/信号之外）。
+        extra = row.get("extra") or {}
+        return isinstance(extra, dict) and extra.get("disclosure_date_unavailable") is True
+
+    bad_pit = [str(r.get("metric_key")) for r in rows if not _has_pit(r)]
     bad_caliber = [str(r.get("metric_key")) for r in rows if not r.get("caliber_version")]
     if bad_pit or bad_caliber:
         raise RuntimeError(
@@ -1245,7 +1254,8 @@ async def _upsert_batched(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
             f"（前几个 key：{sorted(set(bad_pit))[:5]}）、缺 caliber_version 的 "
             f"{len(bad_caliber)} 条（前几个 key：{sorted(set(bad_caliber))[:5]}）—— "
             "PIT 是可空列，漏带会**静默**落 NULL；请修行构造器（`_row` / `ingest_erp_pe`），"
-            "**不得**靠删行重插掩盖。"
+            "**不得**靠删行重插掩盖。产地结构性没有披露日的行必须显式带 "
+            "`extra.disclosure_date_unavailable=True`。"
         )
     total = 0
     for start in range(0, len(rows), UPSERT_BATCH_ROWS):
