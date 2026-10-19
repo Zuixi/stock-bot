@@ -107,11 +107,21 @@ test("限价缺失时显示原因而非空态", async ({ page }) => {
   await page.route("**/market/yesterday-limit-up*", (r) => r.fulfill({ json: {
     as_of: null, as_of_prev: null, source: "local_calc",
     degraded_reason: "price_limits_missing", kpis: {}, items: [] } }));
+  // 分区内**还有第五块**面板（次新股情绪，`/api/v1/new-stocks`）。不 mock 它 = 它打活栈；
+  // 活栈无数据时它会渲染通用空态 → 下面的"本分区无「暂无数据」"断言**假红**
+  // （实测：单跑绿、全量并发下红两次）。第四节面板全部给定降级原因，用例才真正确定性。
+  await page.route("**/api/v1/new-stocks*", (r) => r.fulfill({ json: {
+    as_of: null, degraded_reason: "price_limits_missing",
+    unclassified_count: 0, items: [] } }));
   await routeCalendar(page, []);
 
   await page.goto("/market");
   await page.getByRole("tab", { name: "短线情绪" }).click();
-  await expect(page.getByText(/涨跌停价尚未回补/)).toBeVisible();
+  // **必须收进具体卡片**：给第五块面板也 mock 降级后，本分区里会有**两处**同款文案
+  // （情绪温度计 + 次新股情绪）→ 裸 `getByText` 会 strict mode 崩（实测）。
+  await expect(
+    page.getByTestId("section-情绪温度计").getByText(/涨跌停价尚未回补/)
+  ).toBeVisible();
   // P1-1 第二轮：本行**收进短线情绪分区**再数（断言没收窄语义，只是变精确）。
   // 页级 Tab 时代这里是全页 `getByText("暂无数据")` —— 当时除"指数总览"外只有本 Tab 的
   // 面板挂载在 DOM 里，全页 ≈ 本 Tab。第二轮改成**五个分区堆叠同屏**后，另外四个分区的

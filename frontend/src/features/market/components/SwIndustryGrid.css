@@ -98,3 +98,34 @@
     background-position: -200% 0;
   }
 }
+
+/* 全景日表：行业格的今日涨跌角标 + 方向发丝线。 */
+.sw-cell {
+  position: relative;
+}
+
+.sw-cell .sw-name {
+  padding-right: 44px;
+}
+
+.sw-pct {
+  position: absolute;
+  top: 6px;
+  right: 7px;
+  font-family: var(--font-num);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  opacity: 0.95;
+}
+
+.sw-pct.up { color: var(--up); }
+.sw-pct.down { color: var(--down); }
+
+.sw-cell:has(.sw-pct.up) {
+  box-shadow: inset 2px 0 0 var(--up);
+}
+
+.sw-cell:has(.sw-pct.down) {
+  box-shadow: inset 2px 0 0 var(--down);
+}

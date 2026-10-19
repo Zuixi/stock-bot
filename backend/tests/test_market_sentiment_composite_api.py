@@ -17,10 +17,11 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -29,6 +30,7 @@ from httpx import ASGITransport
 from app.main import app
 from app.repositories import industry_metric_repo
 from app.schemas.limit_up import MIN_PERCENTILE_SAMPLES
+from app.services import market_day_service as mds
 from app.services import market_sentiment_composite_service as mscs
 
 # 契约冻结的窗口（交易日）
@@ -49,6 +51,7 @@ CONTRACT_KEYS = {
     "expected_as_of",
     "lag_trading_days",
     "stale",
+    "provisional",
 }
 
 #: 11 条腿的 key（`_healthy_row` 的默认参与集，形状与齐备日一致）。
@@ -350,8 +353,8 @@ def _patch_composite_read(
 ) -> list[tuple]:
     """把 hero 的读路径换成桩，并记录 `(industry_key, metric_key)` 供断言。
 
-    `expected_as_of` 默认 `None` ⇒ 模拟"本地判不出最新完整交易日"（`market_day_service`
-    返回 None），此时新鲜度三字段必须留 `None` 而**不是**假装新鲜。
+    `expected_as_of` 默认 `None` ⇒ 模拟"日历判不出期望日"（缓存未命中 / 覆盖不到今天），
+    此时新鲜度三字段必须留 `None` 而**不是**假装新鲜。
     """
     calls: list[tuple] = []
 
@@ -361,26 +364,19 @@ def _patch_composite_read(
 
     from app.services import market_day_service
 
-    async def _fake_day(db: Any, *, cache: Any = None):
-        if expected_as_of is None:
-            return None
-        return market_day_service.MarketDay(
-            day=expected_as_of,
-            quality="complete",
-            reason=None,
-            rows=5562,
-            universe=5563,
-            pct_chg_ratio=1.0,
-            limits_present=True,
-        )
+    async def _fake_details(cache: Any, *, as_of: date | None, now: Any = None):
+        """新鲜度接缝（2026-10-17 换锚）：日历口径的期望日 + **日历计数**的落后天数.
 
-    async def _fake_lag(db: Any, *, after: date, upto: date) -> int:
-        return 0 if lag is None else lag
+        换锚的理由：旧实现用 `max(daily_quotes)` 当"应该到哪天"，与滞后的数据链同源
+        ⇒ "今天整天没采"时期望日跟着退回昨天、`stale` 恒为 `false`（自指）。
+        """
+        if expected_as_of is None:
+            return None, None, "calendar_cache_miss"
+        return expected_as_of, (None if lag is None else lag), None
 
     monkeypatch.setattr(mscs, "async_session_factory", lambda: _FakeSessionFactory(object()))
     monkeypatch.setattr(industry_metric_repo, "get_metric_history", _fake_history)
-    monkeypatch.setattr(market_day_service, "resolve_latest_complete_day", _fake_day)
-    monkeypatch.setattr(mscs, "trading_days_between", _fake_lag)
+    monkeypatch.setattr(market_day_service, "resolve_expected_day_details", _fake_details)
     return calls
 
 
@@ -399,7 +395,9 @@ async def test_composite_endpoint_anonymous_200_contract_shape(
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert set(body) == CONTRACT_KEYS
+    # 端点响应比 hero payload 多一个 `provisional`（`schemas/limit_up.py` 的 `bool | None`）：
+    # 合并基线后 schema 已带该键而用例未跟上。仍是**全等**断言，只把已知新增键显式列出。
+    assert set(body) == CONTRACT_KEYS | {"provisional"}
     assert body["as_of"] == "2026-10-12"
     assert body["value"] == 32.8157
     assert body["window"] == CONTRACT_WINDOW
@@ -477,25 +475,27 @@ async def test_composite_endpoint_freshness_unknown_is_not_fresh(
     assert body["as_of"] == _days(30)[-1].isoformat()
 
 
-async def test_trading_days_between_skips_query_when_range_empty() -> None:
-    """`upto <= after` ⇒ 直接回 0，**不发查询**（新鲜度判定不得白跑一次全表范围扫描）."""
+async def test_count_trading_days_between_is_calendar_based() -> None:
+    """落后交易日数**必须由日历算**，不得由 `daily_quotes` 实际持有日算.
 
-    class _ExplodingSession:
-        async def execute(self, *_a: Any, **_k: Any) -> Any:  # pragma: no cover
-            raise AssertionError("范围为空时不得发查询")
+    这条是"自指 bug 不许复活"的守卫：修 bug 的场景正是"今天整天没采"——行情表里
+    根本没有今天，用持有日计数会得到 0 天 ⇒ 读面报 `stale=false`。
+    """
+    from app.services import market_day_service as mds
 
+    cal = [date(2026, 10, 13), date(2026, 10, 14), date(2026, 10, 15), date(2026, 10, 16)]
+    # 选中行 10-15、期望日 10-16 ⇒ 落后 1 个交易日（即便行情表里一行 10-16 都没有）
     assert (
-        await mscs.trading_days_between(
-            _ExplodingSession(), after=date(2026, 10, 12), upto=date(2026, 10, 12)
-        )
-        == 0
+        mds.count_trading_days_between(cal, after=date(2026, 10, 15), upto=date(2026, 10, 16)) == 1
     )
     assert (
-        await mscs.trading_days_between(
-            _ExplodingSession(), after=date(2026, 10, 12), upto=date(2026, 10, 9)
-        )
-        == 0
+        mds.count_trading_days_between(cal, after=date(2026, 10, 13), upto=date(2026, 10, 16)) == 3
     )
+    # 空区间 ⇒ 0（`after == upto` 是追平，不是落后一天）
+    assert (
+        mds.count_trading_days_between(cal, after=date(2026, 10, 16), upto=date(2026, 10, 16)) == 0
+    )
+    assert mds.count_trading_days_between([], after=date(2026, 10, 1), upto=date(2026, 10, 16)) == 0
 
 
 async def test_composite_endpoint_insufficient_history(
@@ -541,3 +541,139 @@ async def test_composite_endpoint_real_db_consistency() -> None:
         assert 0.0 <= payload["percentile"] <= 100.0
     if payload["legs"] is not None:
         assert payload["leg_count"] == len(payload["legs"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-10-17：`provisional`（临时值三态）+ 新鲜度换锚
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: 缺 T+1 融资融券两条腿的参与集（真实形态：盘后读到的当期值就长这样，权重 0.84）。
+LEGS_WITHOUT_LATE_ARRIVAL = [
+    leg for leg in ALL_LEGS if leg not in mscs.registry.COMPOSITE_LATE_ARRIVAL_KEYS
+]
+
+
+def test_provisional_window_matches_converge_window() -> None:
+    """读面的"仍会被改写"窗口必须与收敛器的重算窗口同值（跨模块单一真源）。
+
+    两个数一旦分叉：窗口更宽 ⇒ 历史行自称"临时"；更窄 ⇒ 当期值自称"终值"，
+    而它下一轮就会被改写 —— 两种都是对读者的谎。故用测试钉住。
+    """
+    from app.services import derived_metrics_service
+
+    assert (
+        mscs.COMPOSITE_PROVISIONAL_WINDOW_TRADING_DAYS
+        == derived_metrics_service.CONVERGE_WINDOW_TRADING_DAYS
+    )
+
+
+def test_late_arrival_keys_are_declared_in_the_registry() -> None:
+    """T+1 成分必须来自**登记**（不是按权重猜）：融资融券两条腿。"""
+    assert mscs.registry.COMPOSITE_LATE_ARRIVAL_KEYS == frozenset(
+        {"margin_financing_balance", "margin_financing_buy_ratio"}
+    )
+
+
+@pytest.mark.parametrize(
+    ("participants", "lag", "expected"),
+    [
+        # 缺 T+1 腿 + 仍在窗口内 ⇒ 值会被改写
+        (LEGS_WITHOUT_LATE_ARRIVAL, 0, True),
+        (LEGS_WITHOUT_LATE_ARRIVAL, 9, True),
+        # 窗口之外 ⇒ 收敛器再也不会碰它 ⇒ 终值
+        (LEGS_WITHOUT_LATE_ARRIVAL, 10, False),
+        # 腿齐 ⇒ 终值
+        (ALL_LEGS, 0, False),
+        # 判不出：没登记参与集 / 没有日历
+        (None, 0, None),
+        (LEGS_WITHOUT_LATE_ARRIVAL, None, None),
+    ],
+)
+def test_composite_is_provisional_tristate(
+    participants: list[str] | None, lag: int | None, expected: bool | None
+) -> None:
+    assert mscs.composite_is_provisional(participants, lag_trading_days=lag) is expected
+
+
+def test_hero_payload_marks_provisional_for_late_arrival_row() -> None:
+    """当期值缺融资融券且刚发 ⇒ `provisional=True`（页面据此明写"会被重算"）。"""
+    rows = [
+        _full_row(_days(30)[0]),
+        _row(_days(30)[1], 27.5, participants=LEGS_WITHOUT_LATE_ARRIVAL, effective_weight_sum=0.84),
+    ]
+
+    payload = mscs.composite_hero_payload(rows, expected_as_of=_days(30)[1], lag_trading_days=0)
+
+    assert payload["provisional"] is True
+    assert payload["leg_count"] == 9
+
+
+def test_hero_payload_provisional_false_when_outside_window() -> None:
+    """落后超过改写窗口 ⇒ 那行再也不会被重算 ⇒ `provisional=False`（是终值）。"""
+    rows = [
+        _row(_days(30)[0], 27.5, participants=LEGS_WITHOUT_LATE_ARRIVAL, effective_weight_sum=0.84)
+    ]
+
+    payload = mscs.composite_hero_payload(rows, expected_as_of=_days(30)[0], lag_trading_days=30)
+
+    assert payload["provisional"] is False
+
+
+def test_hero_payload_provisional_none_is_not_false() -> None:
+    """判不出必须是 `None`，**不得**塌成 `False`（那会把"不知道"说成"是终值"）。"""
+    rows = [_full_row(_days(30)[0])]
+
+    payload = mscs.composite_hero_payload(rows)  # 没有 expected_as_of / lag
+
+    assert payload["provisional"] is None
+    assert payload["stale"] is None
+
+
+class _CalendarCache:
+    """只放交易日历的缓存替身（键与载荷形状与 `market_day_service` 契约一致）。"""
+
+    def __init__(self, days: list[date], covered_through: date) -> None:
+        self.store = {mds.CALENDAR_CACHE_KEY: mds.calendar_cache_payload(days, covered_through)}
+
+    async def get(self, key: str) -> Any:
+        return self.store.get(key)
+
+    async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
+        self.store[key] = value
+
+
+async def test_hero_reports_stale_when_today_was_never_ingested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**旗舰回归**：今天整天没采 ⇒ `stale=true`、`lag_trading_days=1`。
+
+    这就是 2026-10-16 用户看到的现象（16 号晚页面显示 15 号）在旧实现下的伴随症状：
+    旧锚取自 `max(daily_quotes)`，与"没采到"同源 ⇒ 期望日跟着退回 15 号 ⇒ `stale=false`，
+    页面于是**既显示旧数据又声称新鲜**。新锚走外部日历：行情表里没有 16 号也照样
+    给出 `expected_as_of=16`、`lag=1`。
+    """
+    from app.services import market_day_service as mds_mod
+
+    cal = [date(2026, 10, 13), date(2026, 10, 14), date(2026, 10, 15), date(2026, 10, 16)]
+    cache = _CalendarCache(cal, covered_through=date(2026, 10, 16))
+    # 库里最新只到 10-15；10-16 一行都没有（真实事故形态）
+    rows = [_full_row(date(2026, 10, 14)), _full_row(date(2026, 10, 15))]
+
+    async def _fake_history(db: Any, industry_key: str, metric_key: str, limit: int = 240):
+        return list(rows)
+
+    monkeypatch.setattr(mscs, "async_session_factory", lambda: _FakeSessionFactory(object()))
+    monkeypatch.setattr(industry_metric_repo, "get_metric_history", _fake_history)
+    # 时钟：10-16 晚 22:30（已过 cutoff）⇒ 期望日就是 10-16
+    monkeypatch.setattr(
+        mds_mod,
+        "now_sh",
+        lambda now=None: datetime(2026, 10, 16, 22, 30, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    payload = await mscs.get_composite_hero(cache=cache)
+
+    assert payload["as_of"] == date(2026, 10, 15)
+    assert payload["expected_as_of"] == date(2026, 10, 16)
+    assert payload["lag_trading_days"] == 1
+    assert payload["stale"] is True

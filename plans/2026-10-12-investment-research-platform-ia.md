@@ -1,9 +1,9 @@
 ---
 status:      active
-scope:       投研工作台的信息架构与数据模型主线——10 个一级导航、5 个横切地基（原料/视图分离 · 信号与因子【复用既有基建】 · PIT · 多态关注池 · 传导图）+ 1 个推迟（事件日历→Wave 3）、原料→视图映射、8 个 Wave 的分期路线图与 **57 个 spec** 的拆分（评审后由 59 收缩：S2 由 6 个并为 4 个）
+scope:       投研工作台的信息架构与数据模型主线——10 个一级导航、5 个横切地基（原料/视图分离 · 信号与因子【复用既有基建】 · PIT · 多态关注池 · 传导图）+ 1 个推迟（事件日历→Wave 3）、原料→视图映射、8 个 Wave 的分期路线图与 **58 个 spec** 的拆分（评审后由 59 收缩：S2 由 6 个并为 4 个；2026-10-16 owner 裁定把 S2.5 用户假设提前交付，S2 回增为 5 个）
 touches:     plans/, docs/specs/, docs/design/, docs/decisions/, docs/Changelog.md, backend/app/models/, backend/app/migrations/versions/, backend/app/api/v1/, backend/app/services/, backend/app/schemas/, backend/app/workers/, backend/app/scheduler/, backend/tests/, frontend/src/app/router/, frontend/src/app/layouts/, frontend/src/pages/, frontend/src/features/, frontend/src/shared/
-updated:     2026-10-12
-next-action: Wave 0 已关门（5 任务 / 16 提交）。Wave 1 进行中：S1.1 导航骨架与路由迁移 ✅ · S1.2 `industry_metrics` 加 2 列 + 统一读面 ✅ · S1.3 全球市场与跨市场标的 ✅ · **S1.4 行业分类钻取（实现完成，修复收口中）**。下一步 S1.5 热力图 → S1.6 排行 7 榜（两份 brief 已就绪，见 §13 Wave 1 段）。执行到第 10 轮时进度：**52 提交 / 约 51 条 Ruling**，剩约 18 个 spec
+updated:     2026-10-16
+next-action: Wave 0 已关门（5 任务 / 16 提交）。Wave 1 进行中：S1.1 导航骨架与路由迁移 ✅ · S1.2 `industry_metrics` 加 2 列 + 统一读面 ✅ · S1.3 全球市场与跨市场标的 ✅ · S1.4 行业分类钻取 ✅ · S1.5 热力图 ✅ · S1.6 排行 7 榜 ✅ · 派生指标日更收敛（ADR 0016/0017）✅。**2026-10-16 owner 裁定偏离：先把 S2.5 用户研究假设与自动判定落地（投研闭环缺口），再回补 S1.7–S1.14**（见 §13 末尾条目）
 ---
 
 # 投研工作台：信息架构与数据模型主线 实施计划
@@ -14,7 +14,7 @@ next-action: Wave 0 已关门（5 任务 / 16 提交）。Wave 1 进行中：S1.
 
 **本计划的输入**：10 张 owner 手绘思维导图（市场 / 资讯 / 行业分析 / 公司分析 / 宏观分析 / 情绪分析 / 价值网图谱 / 策略引擎 / 风险管理 / 交易执行）+ 6 轮对齐讨论。原始截图不在仓库内，其结构已在 §3–§6 逐条转录，是本计划的事实来源。
 
-**规格拆分（spec）**：本计划只回答"做什么、按什么顺序"。**每个模块的契约与验收判据在 [`docs/specs/`](../docs/specs/README.md)**——共 **57 个 spec**（S0 4 + S1 14 + S2 4 + S3 7 + S4 12 + S5 4 + S6 5 + S7 7），其中 S0–S3（Wave 0 · 1 · 1.5 · 2）已写详细契约，S4–S7（Wave 3–6）为 `catalog-only`，**启动前一周才细化**（渐进明细：Wave 1 的数据事实底座没落地前，Wave 5 的因子契约必然返工）。
+**规格拆分（spec）**：本计划只回答"做什么、按什么顺序"。**每个模块的契约与验收判据在 [`docs/specs/`](../docs/specs/README.md)**——共 **58 个 spec**（S0 4 + S1 14 + S2 5 + S3 7 + S4 12 + S5 4 + S6 5 + S7 7），其中 S0–S3（Wave 0 · 1 · 1.5 · 2）已写详细契约，S4–S7（Wave 3–6）为 `catalog-only`，**启动前一周才细化**（渐进明细：Wave 1 的数据事实底座没落地前，Wave 5 的因子契约必然返工）。
 
 | 规格文件 | 对应 Wave | 状态 |
 |---|---|---|
@@ -376,21 +376,31 @@ graph_edges(
 - [ ] 情绪 5 组指标有 ≥3 年历史序列，分位计算与 UI 一致
 - [ ] **不含任何"北向资金每日净买入"字段**（`grep` 可验），替代口径已在 UI 标注频率
 
-### Wave 1.5 — 信号 · 因子 · 回测 · 提醒（F2，**复用既有基建，4 个 spec**）
+### Wave 1.5 — 信号 · 因子 · 回测 · 提醒（F2，**复用既有基建，5 个 spec**）
 
 > 契约见 [docs/specs/S2-signal-engine.md](../docs/specs/S2-signal-engine.md)。**本 Wave 只交付骨架 + 打通第一个消费方**（情绪分位越界 → 站内提醒），其余按消费方落地顺序增长。
+>
+> **2026-10-16 owner 裁定（偏离路线图）**：**S2.5 用户研究假设与自动判定先于本 Wave 的 T1.5.1–T1.5.4 交付**，
+> 且在 **S1.7–S1.14 未完成时**开工。理由：owner 判断"当前产品还不能很好支持投研"，
+> 实测根因是研究过程**无处沉淀**（全库只有 `user_watchlist_items.notes` 一个自由文本字段，
+> 假设/结论/证据链/导出/复盘全部零代码），而路线图把「研究 → 决策」回路排在 Wave 5/6。
+> 代价如实记录：本 Wave 的"新增表 = 3 张"判据随之改为 **6 张**（S2.3 1 + S2.4 2 + S2.5 3），
+> 且 S2.5 依赖的 S2.4 提醒表**尚未实现**（先落最小形态的未读游标，S2.4 落地时泛化 `alerts`，见 S2.5 契约）。
 
 - [ ] T1.5.1 因子：复用 `stock_features` 物化模式 + 纯函数（**不建 `factor_defs` 表**）
 - [ ] T1.5.2 规则与信号：规则为纯函数（与 `cycle_engine.py` 同构，阈值进 registry）+ `industry_signals` **加 4 列**（`rule_key` / `rule_version` / `confidence` / `severity`）（**删 DSL、不建 `signal_rules`/`signals` 表**）
 - [ ] T1.5.3 事件研究回测（**最小版**：`backtest_runs` 一表，无 `backtest_events`；PIT 强制 + 样本切分强制；参数优化/walk-forward 留 Wave 5）
 - [ ] T1.5.4 `alert_subscriptions` + `alerts` + 站内触达（订阅管理 UI 推迟到消费方 #2）
+- [ ] **T1.5.5（提前执行）** S2.5 用户研究假设：`research_hypotheses` + `research_hypothesis_events` + `user_alert_cursors`；判定三态 + PIT；`research:write` 权限；站内铃铛
 
 **Acceptance criteria**
-- [ ] **新增表 = 3 张**；`industry_signals` 加 4 列、`industry_metrics` 加 2 列；**无 `factor_defs` / `signal_rules` / `signals` / `backtest_events` / action 表**
+- [ ] **新增表 = 6 张**（`backtest_runs` / `alert_subscriptions` / `alerts` / `research_hypotheses` / `research_hypothesis_events` / `user_alert_cursors`）；`industry_signals` 加 4 列、`industry_metrics` 加 2 列；**无 `factor_defs` / `signal_rules` / `signals` / `backtest_events` / action 表**
 - [ ] **无规则 DSL**：`grep -rn "eval(\|ast.parse" backend/app/services/signal_rules.py` 无命中；阈值全部来自 registry（改阈值不改代码）
 - [ ] 情绪"历史分位 >90% / <10% 触发预警"端到端跑通：规则 → 信号 → 提醒 → 站内可查
+- [ ] **用户假设端到端跑通**：建假设 → 数据落库 → 自动判定 → 铃铛可查 → 证据链可展开（S2.5）
 - [ ] 每个信号可展开证据链（`basis`），含来源与 `published_at`
 - [ ] **PIT 护栏测试 + PIT 对照实验双双通过**（构造"用报告期而非披露日"的对照，结果必须有显著差异 —— 证明 PIT 生效）
+- [ ] `bash scripts/check_hypothesis_metrics.py` 全绿（S2.5 的条件可选指标集合门禁）
 - [ ] `bash scripts/bench.sh` + `bash scripts/self_review.sh --full` 全绿
 
 ### Wave 2 — 资讯（地基）
@@ -621,3 +631,125 @@ graph_edges(
 **✅ 合并期待办 —— 已解决（同上，见 Ruling 11 落地）**：对方 ADR 已改号为 **0014**，本分支 0009–0013 不动；本分支已把 `origin/main` 合并进来并解除全部冲突（详见 §13 Wave 0 段的 ✅ 条目）。
 
 **下一步**：Task 8（S1.4）修复收口 → **S1.5 热力图**（brief 已就绪；关键风险：**现有行情端点上限均 ≤200，"≥3000 标的"必须新建批量读路**）→ **S1.6 排行 7 榜**（brief 已就绪；关键：**既有 5 个榜与 spec 的 7 个榜没有交集**，且财务类榜必须 **PIT 正确**——按交易日已公告可得的那一期排序，不得取"最新一期"）→ S1.7–S1.14。
+
+> **执行记录（2026-10-16 复核）**：上段"下一步"所列的 S1.5 热力图与 S1.6 排行 7 榜**均已落地**（`/market/heatmap` 与 `/market/rankings/:key`，见 `frontend/src/app/router/route-manifest.ts`），派生指标日更收敛亦已交付（[ADR 0016](../docs/decisions/0016-derived-metrics-converge.md) / [ADR 0017](../docs/decisions/0017-no-downgrade-on-recompute.md)，PR #18）。**S1.7–S1.14 仍未开工。**
+
+---
+
+### 偏离裁定 —— S2.5 用户研究假设先于 S1.7–S1.14（2026-10-16 · owner）
+
+**触发**：owner 在 PR #18 合并后判断"当前 stock bot 还不能很好支持投研工作"。
+
+**代码实测的根因（不是数据源，也不是页面形态）**：读面已建成约 21 个实页面（行情 / 行业钻取 / 热力图 / 7 榜 / 情绪读出台 / 生猪工作台），
+但**研究工作流侧只有「自选 + 标签」两件资产** —— 全库唯一的用户自由文本是 `user_watchlist_items.notes`；
+**假设、结论、证据链、导出、复盘全部零代码**。产品因此停在"看板"，而 §4 认定的两条回路排在 Wave 5/6。
+
+**裁定**：**先把 S2.5 落地**（用户研究假设 + 自动判定 + 站内铃铛），再回补 S1.7–S1.14。
+
+**如实记录的代价**：
+1. 本 Wave 完成判据里的"新增表 = 3 张"改为 **6 张**（S2.5 新增 3 张，逐张理由见 S2 spec）。
+2. spec 总数 **57 → 58**（S2 由 4 → 5 条），已同步 `docs/specs/README.md`、本文件头部与 §7。
+3. S2.5 依赖 S2.4 的提醒表，而 S2.4 **尚未实现** → S2.5 先落**最小形态的未读游标**（`user_alert_cursors`），
+   并在 S2.5 契约里写明 S2.4 落地时必须泛化 `alerts.signal_id → (source_kind, source_id)`，
+   **不得静默并存两套"已读"模型**。
+4. 偏离期间 Wave 1 未关门（S1.7–S1.14 缺），本计划 `status` 保持 `active`。
+
+**已确认的四个待裁定项**（不假装已解决，执行时逐条落）：
+① `evaluate` 是否纳入 Tier 1 基准（与 `cycle_engine` 同构，AGENTS.md 把"规则引擎"列为 Tier 1 热点）；
+② `notifications` 与 S2.4 `alerts` 的命名/迁移关系；③ `research:write` 的迁移与角色授予面；
+④ **证伪线（"若 X 则本轮判断失效"）= v2 第一优先项**（真实研报最常写的一句，本批刻意不做）。
+
+**契约**：[S2.5](../docs/specs/S2-signal-engine.md) · **决策**：[ADR 0018](../docs/decisions/0018-hypothesis-immutability-and-pit-verdicts.md)（写下即冻结 / 三态 / PIT）
+
+---
+
+### 官方一手优先（2026-10-16 · owner 裁定）—— Wave 1 剩余三条腿的源策略
+
+**裁定**：「**官方第一手数据源优先**」。落点见 [ADR 0019](../docs/decisions/0019-official-first-source-layer.md)（例外门 5 条 + L1/L2/L3 分层；
+**不改** 0001 的默认主源与工程纪律）与 [data-source.md 附.11](../docs/design/data-source.md)（7 项出口三态 + 8 条实机记录 + 5 条裁定）。
+
+**对 Wave 1 的直接后果**：
+
+| 原计划 | 现在 | 依据 |
+|---|---|---|
+| S1.7 `industrial_capital_net_change` 等 S3.2 公告抽取（"待接"） | **拆两个 key**：`insider_net_change_daily`（董监高，日频，交易所官网官方一手）+ `industrial_capital_net_change`（5%+ 股东，事件，**巨潮类目 `category_gqbd_szsh`**，既有管道加类目即可） | 附.11.1 #D1–D3 |
+| `etf_share_change` 6 只宽基篮子（TuShare `fund_share` 逐代码 + 2000 行上限） | 可升级为**沪深官网全市场日频份额**（沪 922 / 深 756 只，实测可回补到 2015/2020） | 附.11.1 #A |
+| `northbound_holding_quarterly` 0 行、页面待建 | 官方出口已定位（港交所，季度、季末后第 5 个北向交易日发布）**但只留最近几季** ⇒ 官方取**当期快照**、历史仍走 `hk_hold` | 附.11.1 #F |
+| S1.14 散户舆情「可选、排末位」 | spec 落 **`superseded`**（无官方出口） | 附.11.1 #G |
+
+**实现顺序（已裁定）**：**D3（巨潮类目）→ A（ETF 份额官方化）→ D1/D2（insider key）→ F（陆股通季度快照）**；
+B（两融）/ C（中证指数估值）只做**对拍**、不替换主源；E（开户数）/ G（搜索热度）不做。
+
+**证据可复现**：`uv run --project backend python backend/scripts/spike_official_sources.py`（7 probe、带反证断言、只读；2026-10-16 实跑 exit 0）。
+
+**本 Wave 状态**：契约与权威文档已收口（ADR 0019 · 附.11 · spec §S1.7 拆 key · §S1.14 superseded · metric-dictionary 提案表）；
+**实现尚未开工** —— 上面的顺序即下一步，逐条落地时按既有纪律补齐 client/ingest/registry/调度/对账/测试/文档。
+
+### 官方一手腿 D3 / A / D1‑D2 / F —— **实现完成**（2026-10-17）
+
+同一裁定的实现段。四条腿都按「**先对拍、再决定接不接**」执行，口径与证据全部落在
+[data-source.md 附.11.5](../docs/design/data-source.md)（每个数字都能用
+`backend/scripts/spike_official_sources.py` 复跑）。
+
+| 腿 | 结论 | 落库实机 |
+|---|---|---|
+| **D3** 巨潮股本变动类目 | `announcements.category='equity_change'`（5%+ 股东/实控人/机构的权益变动、减持计划、增持）；分页截断改**响亮失败**；读面 `?category=`（未知类目 **400**）；回补脚本 | `equity_change` **30 行**（2026-10-16 单日），重跑 0 行 |
+| **A** ETF 份额 | **对拍后不切换源**（沪市官方与 TuShare 同日 0 差异；深市值一致但日期标签差 1 个交易日）；**篮子 6 → 8**（补沪深300 族 510310/159919），口径 **`s1.7-etf-v3`** | `etf_share_change` **932 行 / 单一 v3** |
+| **D1/D2** 董监高持股变动 | 新 key **`insider_net_change_daily`**（万股·日频·official）：沪带 `FORM_DATE`、深**无披露日** ⇒ `published_at=NULL` + 显式豁免（**不进回测/信号链路**）；已接进收敛器第 5 条腿 | **392 行**（189 行无 PIT = 深市） |
+| **F** 陆股通季度持仓 | **历史走 `hk_hold` 逐交易所取**（避开 4200 行截断），官方港交所页只作当期快照（对齐未证实）；`published_at` = 季末后第 5 个交易日 21:00；已接进收敛器第 6 条腿（季度快照纪律） | **11,634 行**（3 个季末） |
+| **B/C** 对拍 | 两融：主源与官方**逐日一致**；沪深300 PE：**系统性口径差**（中位 −0.44%、最大 −0.94%）已登记 | `spike --probe primary-compare` ✔ |
+
+**门禁**：`self_review --full` ✔（ruff / mypy / pytest **1498 passed** / tsc / doc_gate）·
+`check_metric_dictionary.py` ✔（49 行 MISMATCH 0）·
+**Playwright e2e** `E2E_BASE_URL=http://localhost` → **200 passed / 13 skipped / 0 failed**。
+
+**尚未完成（明确）**：`industrial_capital_net_change` 仍 0 行（缺公告正文金额抽取 S3.4）；
+港交所季度页与 `hk_hold` 的发布日对齐、深市 ETF 日期标签语义、PE 口径差三条登记为未验证余项。
+
+### 止损裁定：D1‑D2 / F 转 **dormant**（2026-10-17 · owner 采纳方案 B）
+
+**触发**：owner 质问「这块有价值吗」。**代码实测的答案是：近乎零用户可见收益** ——
+
+| 本轮落地 | 落库 | 谁能看到 |
+|---|---|---|
+| `etf_share_change` 篮子 6→8（v3） | 932 行 | ✅ `/sentiment` 的「宽基 ETF 份额变化」数值变准（**唯一可见**） |
+| `announcements.category='equity_change'` | 30 行 | ❌ `/news` 仍占位（Wave 2），只有没人调的 API 参数 |
+| `insider_net_change_daily` | 392 行 | ❌ 前端 **0 引用** |
+| `northbound_holding_quarterly` | 11,634 行 | ❌ 前端列了该项但**读不到**：市场读面 `stock_id=0`，数据是 per-stock |
+
+**裁定（方案 B：止损）**：
+1. **两条腿脱离收敛器**（`derived_metrics_service` 移除 `insider` / `northbound` LegSpec 与 runner），
+   改列 `CONVERGE_EXCLUDED_KEYS`，理由是 **dormant：数据可采但无消费方**（机械可查，单测钉住）；
+2. **不删数据、不删脚本**：`backfill_insider_change.py` / `backfill_northbound_holding.py` 保留可手工回补；
+3. registry / 字典 / 附.11.5 同步标注 dormant（避免下次被当成"已完成能力"）；
+4. 收益：每天少 2 次交易所外呼、每季少 2 次上游取数。
+
+**教训（本计划级）**：这是**同一错误的镜像** —— F5 事件日历因「Wave 1 零消费方」被推迟，
+本轮却先建数据、后想消费者。**以后判据前置**：一条数据腿在动手前必须能指出**具体的消费方**（页面/端点/下游 spec），
+否则只允许留在"可采但 dormant"，不得挂进收敛器。
+
+**下一步：转 S2.5（研究假设）** —— 任务分解见下节。
+
+### 下一步：S2.5 任务分解（2026-10-17，契约见 [S2.5](../docs/specs/S2-signal-engine.md) · 决策见 [ADR 0018](../docs/decisions/0018-hypothesis-immutability-and-pit-verdicts.md)）
+
+**目标**：让人能在行业工作台上写下**可验证假设**，系统每个交易日自动判定（三态 + PIT），结论与证据链留痕、站内铃铛提醒。
+**这一条才是 owner 认定的投研缺口**（"研究过程无处沉淀"）——此前所有数据腿都为它服务过，但**它才是主线**。
+
+| # | 任务 | 交付物 | 依赖 | 关键判据（可机械核对） |
+|---|---|---|---|---|
+| **T1** | 权限与门禁面 | auth-service 迁移新增 `research:write` + forward-auth 透传 + 角色授予面；`scripts/check_hypothesis_metrics.py`（条件可选指标集合 == registry `pig` scope 且**有真实 writer**，**双向**核对）并接进 `self_review` | — | 无 `research:write` → 写路由 403；脚本双向无死条目 |
+| **T2** | 数据层 | Alembic 迁移（**仅 3 表**：`research_hypotheses` / `research_hypothesis_events` / `user_alert_cursors`）+ 模型 + repo（批量取数） | — | `unique(hypothesis_id, kind, as_of)` 生效；越界 `conditions`/`status` 被 DB 拒；**无其它新表** |
+| **T3** | 判定引擎（纯函数） | `hypothesis_engine.py`：逐条件三态、`sustained_periods` **按各指标 freq**（交易日历锚定，不用"最后 N 行"）、到期次日结算、最多等 10 交易日 + `data_lag`、`mock` 源不产出结论 | T2（模型） | 三态矩阵（恰好 N / N−1 / 中间缺期 / 跨月频）；**PIT 对照实验**：摘掉 `period >= created_at::date` 必须变红 |
+| **T4** | 服务与 API | `hypothesis_service.py`（建/列/详情/证据链/撤回，读时算进展）+ `api/v1/hypotheses.py` + `api/v1/notifications.py`（summary/list/read 游标） | T2 · T3 | 校验边界一律 422（claim ≤200、deadline > 创建日、同 scope open ≤50、metric_key 白名单）；**反 N+1** 配"断言查询次数"测试；`grep` 无 PATCH/PUT/DELETE |
+| **T5** | 执行挂载 | `reconcile_market_data_job` 尾步（**必须排在 `derived_metrics_converge` 之后**）+ advisory lock + 幂等；`MarketDataJobType.hypothesis_evaluate` 手动轨道 | T4 | 挂载顺序测试（早于收敛器必须红）；同日重跑新增事件 = 0；无 open 假设零查询 |
+| **T6** | 前端 | `/industry/:key` 工作台首个区块「行情调研追踪」（假设墙 + 建假设表单 + 条件进展）+ 顶栏铃铛（复用 `features/nav/CountBadge.tsx`）+ 投资看板页头入口 | T4 | Playwright：**三态视觉可分**（`数据不足` 不得渲染成"未满足"）+ 铃铛角标 |
+| **T7** | 收尾 | `features.md` 入口 / `ARCHITECTURE §6` 鉴权列 / `check:routes` / 本计划 §13 | 全部 | `self_review --full` + `doc_gate` + Playwright 全绿 |
+
+**已识别的坑（spec 已点明，实现时逐条钉住）**：混合频率的"最近 N 期"最易错；registry 里有**已登记但全仓无写入**的三条指标
+（`company.hogs_sold_monthly` / `company.cost_complete` / `mcap_per_head`）必须被门禁脚本机械排除；挂载顺序早于收敛器会拿薄行误判；
+列表 N+1 必须用"查询次数断言"而不是自觉。
+
+**需要 owner 先裁定的三件（不裁定可先按建议默认走）**：
+1. `research:write` **授予哪些角色**（建议：`专业投研员`/`分析师`/`系统管理员`，与 `research:read` 同族）；
+2. v1 的 `scope_key` **是否只开放 `pig`**（建议：是 —— 其它行业在 registry 里没有指标，条件下拉会是空的）；
+3. 假设墙**是否允许跨用户可见**（建议：同 `research:read` 组内互相可见；"团队假设墙"是 ADR 0018 的原始表述）。

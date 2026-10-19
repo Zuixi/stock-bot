@@ -35,6 +35,10 @@ INTRADAY_TTL = 60  # 盘中缓存：与 30s 轮询半衰期对齐（Task 11）
 # 派生表（market_sentiment_daily）写入后须失效的读缓存键模式：失效内聚在
 # persist_snapshot 内，任何调用方（定时/手动/对账）都不依赖"记得清缓存"。
 _CALENDAR_CACHE_PATTERN = "market:limit-up:calendar:*"
+#: 指标详情读面缓存（`sentiment_metric_service.metric_cache_key` 的前缀）。与日历同点失效。
+_METRIC_CACHE_PATTERN = "market:limit-up:metric:*"
+#: 情绪脉搏读面缓存（`sentiment_pulse_service.cache_key` 的前缀）。与日历同点失效。
+_PULSE_CACHE_PATTERN = "market:limit-up:pulse:*"
 _WINDOW_BUFFER = 6  # gaps-and-islands 需要的前置上下文（lookback 之外多取的交易日）
 
 # 模式（Task 11）。`close` = 既有本地口径；`intraday` = 盘中口径（今日东财池）。
@@ -392,15 +396,21 @@ def yesterday_payload(snap: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _invalidate_calendar_cache() -> int:
-    """失效情绪周期读缓存（Redis 不可用时 delete_pattern 内部静默返回 0）。
+    """失效情绪读缓存（Redis 不可用时 delete_pattern 内部静默返回 0）。
 
     calendar 缓存"非空即缓存"会把旧结果集固化（TTL 900s 内补数也不可见），
     实测 9/17 补完两日数据后日历端点仍只返回 1 点——失效必须与落库同点发生。
+
+    2026-10-18 起一并失效指标详情缓存（`market:limit-up:metric:*`）：详情页与温度计
+    讲的是同一天，只失效日历会让「卡片已更新、详情页还是昨天」。
     """
     from app.core.redis import CacheClient, get_redis_pool  # noqa: PLC0415
 
     cache = CacheClient(await get_redis_pool())
-    return await cache.delete_pattern(_CALENDAR_CACHE_PATTERN)
+    deleted = await cache.delete_pattern(_CALENDAR_CACHE_PATTERN)
+    deleted += await cache.delete_pattern(_METRIC_CACHE_PATTERN)
+    deleted += await cache.delete_pattern(_PULSE_CACHE_PATTERN)
+    return deleted
 
 
 async def persist_snapshot(
@@ -446,6 +456,10 @@ async def persist_snapshot(
         "zb_count": k["zb_count"],
         "broken_rate": k["broken_rate"],
         "yzt_avg_pct": k["yzt_avg_pct"],
+        # `.get` 而非 `[]`：Redis 里可能还躺着本字段上线前写入的旧快照（TTL 300s），
+        # 部署瞬间命中旧缓存不应让盘后任务 KeyError 从而整天不落库。
+        "yzt_avg_open_premium": k.get("yzt_avg_open_premium"),
+        "yzt_n": k.get("yzt_n", 0),
         "promo_1to2": k["promo_1to2"],
         "promo_1to2_n": k["promo_1to2_n"],
         "promo_2to3": k["promo_2to3"],
@@ -748,8 +762,10 @@ _PERCENTILE_POINTS: tuple[int, ...] = (0, 10, 25, 50, 75, 90, 100)
 def sentiment_series_row(row: Any) -> dict[str, Any]:
     """`market_sentiment_daily` 行 → 趋势序列行（**直读属性**：列改名即 AttributeError）。
 
-    只投影 brief 6a 列出的 7 个字段 + `promo_1to2_n`（分位的有效样本判据，见
-    `_PERCENTILE_VALIDITY`）。缺值恒 `None`（前端 `--`），**绝不** 0。
+    投影趋势端点与指标详情页共同消费的全部列：老三样之外补上 `yzt_avg_pct` /
+    `yzt_avg_open_premium` / `yzt_n` / `promo_2to3` / `promo_2to3_n`（2026-10-18）。
+    此前趋势序列只回 7 个字段，库里明明冻结了今开溢价与 2进3 晋级率，前端却读不到 ⇒
+    这两张卡在详情页没有历史。缺值恒 `None`（前端 `--`），**绝不** 0。
     """
     return {
         "trade_date": _as_date(row.trade_date),
@@ -757,8 +773,13 @@ def sentiment_series_row(row: Any) -> dict[str, Any]:
         "dt_count": row.dt_count,
         "zb_count": row.zb_count,
         "broken_rate": row.broken_rate,
+        "yzt_avg_pct": row.yzt_avg_pct,
+        "yzt_avg_open_premium": row.yzt_avg_open_premium,
+        "yzt_n": row.yzt_n,
         "promo_1to2": row.promo_1to2,
         "promo_1to2_n": row.promo_1to2_n,
+        "promo_2to3": row.promo_2to3,
+        "promo_2to3_n": row.promo_2to3_n,
         "max_streak": row.max_streak,
     }
 

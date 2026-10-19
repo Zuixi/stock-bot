@@ -253,6 +253,25 @@ def _stub_legs(monkeypatch: pytest.MonkeyPatch, state: dict[str, Any]) -> None:
     monkeypatch.setitem(dms._LEG_RUNNERS, "capital_flows", _make("capital_flows"))
 
 
+def test_dormant_metrics_are_explained_not_converged() -> None:
+    """**dormant（2026-10-17 裁定）**：数据可采但无消费方 ⇒ 不进收敛器，但有书面理由。
+
+    为什么用断言钉住：这两条腿曾被接进收敛器（每天两次无效外呼），撤掉时若只删代码
+    不留理由，下一个人会以为「漏接调度」又挂回去（或反之）。
+    """
+    dormant = ("insider_net_change_daily", "northbound_holding_quarterly")
+    leg_keys: set[str] = set()
+    for spec in dms.leg_specs():
+        leg_keys |= set(spec.metric_keys)
+    for key in dormant:
+        assert key not in leg_keys, f"{key} 不该在收敛器里（dormant）"
+        reason = dms.CONVERGE_EXCLUDED_KEYS.get(key, "")
+        assert "dormant" in reason, f"{key} 的豁免理由必须写明 dormant（实际：{reason!r}）"
+        assert "消费" in reason, "理由必须说清「为什么现在不收敛」（无消费方）"
+    # 断言不空转：豁免清单本身仍然让整体守卫通过
+    dms.assert_market_keys_covered()
+
+
 async def test_converge_gated_when_prerequisites_not_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -326,12 +345,8 @@ async def test_converge_runs_all_legs_and_composite_when_ready(
     result = await dms._converge_inner(_FakeSession(), target=TARGET, legs_filter=None, window=10)
 
     assert result.status == "ok"
-    assert [name for name, _lo, _hi in state["runs"]] == [
-        "breadth",
-        "activity",
-        "volatility",
-        "capital_flows",
-    ]
+    # 腿的**顺序**是契约（依赖序）；条目数不写死 —— 加腿不该回来改断言
+    assert [name for name, _lo, _hi in state["runs"]] == [spec.key for spec in dms.leg_specs()]
     # 窗口右端恒为 target（这正是"不再长出薄行"的保证）
     assert seen["window"][1] == TARGET
     assert result.composite is not None
@@ -384,9 +399,10 @@ async def test_downgrade_blocked_is_surfaced_as_alert(
 
     by_key = {leg.key: leg for leg in result.legs}
     assert by_key["breadth"].detail.get("value_downgrade_blocked") == 1
-    # 四条腿 + composite 各被调一次；告警逐腿出现
+    # 每条腿 + composite 各被调一次；告警逐腿出现
     assert "value_downgrade_blocked:breadth=1" in result.alerts
-    assert state["restore_calls"] == 5
+    # 不写死数字：腿的条数是 `leg_specs()` 的事，加腿不该回来改断言
+    assert state["restore_calls"] == len(dms.leg_specs()) + 1
     # 快照必须是**重算前**读的（load 的窗口 = 腿自己的窗口）
     assert any(lo == date(2026, 9, 25) and hi == TARGET for _keys, lo, hi in state["loads"])
 

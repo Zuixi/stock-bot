@@ -394,7 +394,11 @@ async def upsert_sentiment_daily(
 
 
 async def list_sentiment_calendar(db: AsyncSession, days: int) -> list[dict[str, Any]]:
-    """近 N 个交易日情绪时序（升序），供周期图消费。"""
+    """近 N 个交易日情绪时序（升序），供周期图消费。
+
+    2026-10-18 起多回 `yzt_avg_open_premium` / `yzt_n`：情绪温度计的「今开溢价」卡
+    此前在图上有位置、却没有历史数据。新增列对老调用方是**追加**，不改既有字段。
+    """
     stmt = select(MarketSentimentDaily).order_by(MarketSentimentDaily.trade_date.desc()).limit(days)
     rows = list((await db.execute(stmt)).scalars().all())
     return [
@@ -405,6 +409,8 @@ async def list_sentiment_calendar(db: AsyncSession, days: int) -> list[dict[str,
             "zb_count": r.zb_count,
             "broken_rate": r.broken_rate,
             "yzt_avg_pct": r.yzt_avg_pct,
+            "yzt_avg_open_premium": r.yzt_avg_open_premium,
+            "yzt_n": r.yzt_n,
             "promo_1to2": r.promo_1to2,
             "promo_2to3": r.promo_2to3,
             "max_streak": r.max_streak,

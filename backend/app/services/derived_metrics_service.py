@@ -414,8 +414,20 @@ CONVERGE_EXCLUDED_KEYS: dict[str, str] = {
     "public_fund_equity_position": (
         "实测**周度**且口径不可复算（第三方编制）⇒ 仅背景展示、禁入信号链路"
     ),
-    "northbound_holding_quarterly": "季度披露（§S1.7 只登记口径，上游无日频序列）",
-    "industrial_capital_net_change": "S3.2 未完成 —— 服务明确**不落任何行**（待接）",
+    "industrial_capital_net_change": (
+        "金额抽取未落地（公告原料已采）—— 服务明确**不落任何行**（待接）"
+    ),
+    # ── dormant（2026-10-17 裁定）：数据可采、但**无消费方** ⇒ 不进收敛器 ──────────
+    "insider_net_change_daily": (
+        "**dormant（2026-10-17）**：官方一手可采（`scripts/backfill_insider_change.py`），"
+        "但**暂无任何消费方**（前端 0 引用；市场读面按 `stock_id=0` 取数而本指标是 per-stock）"
+        "⇒ 不进收敛器，避免每天两次无效外呼。消费方出现后再挂腿"
+    ),
+    "northbound_holding_quarterly": (
+        "**dormant（2026-10-17）**：主源可采（`scripts/backfill_northbound_holding.py`，"
+        "实测 3 个季末共 11,634 行），但 per-stock 行**不在**市场读面（`stock_id=0`）里、"
+        "前端也无消费位 ⇒ 不进收敛器；消费方出现后再挂腿（届时同时决定聚合口径）"
+    ),
 }
 
 

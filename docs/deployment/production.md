@@ -118,6 +118,8 @@ curl -s "https://<生产域名>/api/v1/concepts?limit=1" | head -c 120
 
 ## 拉取与启动（prod override）
 
+**升级 / 回滚只跑 [`scripts/deploy_prod.sh`](../../scripts/deploy_prod.sh)**（本地投喂：`cd 仓库 && C=$(git rev-parse vX.Y.Z^{commit}) && ssh ss "bash -s -- X.Y.Z $C" < scripts/deploy_prod.sh`；`--check` 为只读巡检）：预检 → 备份 → 拉取 → OCI label/commit 校验 → `up` → 断言。本机另有全局 skill `~/.agents/skills/deploying-stock-bot/` 指路（不入库）。本文档仍是端口 / 镜像 / 内存事实的唯一权威。
+
 ```bash
 IMAGE_TAG=0.0.1 docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
 IMAGE_TAG=0.0.1 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build

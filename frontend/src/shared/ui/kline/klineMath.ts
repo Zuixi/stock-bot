@@ -74,3 +74,18 @@ export function fmtVolume(v: number): string {
 export function fmtAmount(a: number | undefined): string {
   return a == null ? "--" : `${(a / 100000).toFixed(2)}亿`;
 }
+
+/**
+ * 涨跌幅（%）：首根 / 缺前收（含前收 0）一律 `--`，**不是** `0.00%`。
+ *
+ * tooltip 与图上方 ribbon 共用这一个实现 —— 两处若各写一份 `pct`，迟早在
+ * 「前收为 0 该显示什么」上分叉（缺失 ≠ 0 是全局约束）。
+ */
+export function fmtChangePct(cur: number, prev: number | undefined): string {
+  return prev == null || prev === 0 ? "--" : `${(((cur - prev) / prev) * 100).toFixed(2)}%`;
+}
+
+/** 涨跌额：带正负号；首根 / 缺前收 `--`（同上，缺失不回落 `+0.00`）。 */
+export function fmtSignedDiff(cur: number, prev: number | undefined): string {
+  return prev == null ? "--" : `${cur - prev >= 0 ? "+" : ""}${(cur - prev).toFixed(2)}`;
+}

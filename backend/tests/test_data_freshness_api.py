@@ -87,8 +87,9 @@ _STUB_MARKET_METRICS: dict[str, Any] = {
 
 
 async def test_data_freshness_is_dry_run(_env: dict[str, Any]) -> None:
-    out = await api.get_data_freshness()
-    assert _env["calls"] == [{"apply": False}]
+    out = await api.get_data_freshness(cache=None)
+    # 端点的 `cache` 依赖由调用方注入（此处 None）；服务层不带 cache 形参。
+    assert _env["calls"] == [{"apply": False, "cache": None}]
     assert out.apply is False
     assert out.domains["daily_quotes"].status == "ok"
     assert out.domains["daily_quotes"].latest_in_db == "2026-09-16"
@@ -101,7 +102,7 @@ async def test_data_freshness_exposes_universe_lag(_env: dict[str, Any]) -> None
     实测 5513(名录) vs 5485(当日实际有行情的股票数)：缺 65 只（1.2%）远够不着
     0.8 容差，只看 universe/status 永远发现不了名录滞后。
     """
-    out = await api.get_data_freshness()
+    out = await api.get_data_freshness(cache=None)
     assert out.universe == 5546
     assert out.quotes_symbols_latest == 5485
     assert out.universe - out.quotes_symbols_latest == 61
@@ -113,7 +114,7 @@ async def test_data_freshness_exposes_market_metrics_lag(_env: dict[str, Any]) -
     这一族此前只由手工脚本写：行情天天更新、它却停在人工回补的最后一天，
     而巡检端点看不见它。现在"哪条腿停在哪天"直接可读。
     """
-    out = await api.get_data_freshness()
+    out = await api.get_data_freshness(cache=None)
     assert out.market_metrics is not None
     assert out.market_metrics.target == "2026-10-14"
     assert [leg.key for leg in out.market_metrics.legs] == ["breadth", "capital_flows"]
@@ -133,7 +134,7 @@ async def test_market_metrics_failure_is_additive_not_500(
 
     monkeypatch.setattr("app.services.derived_metrics_service.leg_lag_report", _boom)
 
-    out = await api.get_data_freshness()
+    out = await api.get_data_freshness(cache=None)
     assert out.market_metrics is None
     assert out.domains["daily_quotes"].status == "ok", "加法失败不得反噬对账侧契约"
 

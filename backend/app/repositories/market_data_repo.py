@@ -585,14 +585,53 @@ async def max_dragon_tiger_date(db: AsyncSession) -> date | None:
     return scalar
 
 
+#: 沪深京三市的 ``ts_code`` 后缀（6 位代码 → 候选 ts_code 的三档）。
+TS_CODE_EXCHANGES = ("SZ", "SH", "BJ")
+
+
+def ts_code_candidates(symbol: str) -> list[str]:
+    """股票代码 → 候选 ``ts_code`` 列表（给 ``ts_code IN (...)`` 用，索引友好）。
+
+    入参既可以是 6 位代码（``000488`` → ``000488.SZ`` / ``.SH`` / ``.BJ``），
+    也可以已是 ``000488.SZ`` 形态（原样返回，大小写归一）。
+
+    **绝不退化到 ``LIKE '%000488%'``**：S11 实测这种通配前缀把 50 条龙虎榜查询
+    从 0.015s 拉到 4.9s（``ts_code`` 索引用不上）；三档等值候选是同一语义的裸列写法
+    —— 将来补 ``ts_code`` 索引即可直接受益，函数/通配写法则永远无法索引。
+    """
+    sym = symbol.strip().upper()
+    if "." in sym:
+        return [sym]
+    return [f"{sym}.{ex}" for ex in TS_CODE_EXCHANGES]
+
+
 async def list_dragon_tiger(
-    db: AsyncSession, trade_date: date, limit: int = 15
+    db: AsyncSession, trade_date: date, limit: int = 15, symbol: str | None = None
 ) -> list[DragonTigerEntry]:
-    """某交易日龙虎榜按净买入额降序（NULL 最后）。"""
+    """某交易日龙虎榜按净买入额降序（NULL 最后）；``symbol`` 给出时只取该标的的行。"""
+    stmt = select(DragonTigerEntry).where(DragonTigerEntry.trade_date == trade_date)
+    if symbol:
+        stmt = stmt.where(DragonTigerEntry.ts_code.in_(ts_code_candidates(symbol)))
+    stmt = stmt.order_by(nullslast(desc(DragonTigerEntry.net_amount))).limit(limit)
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def list_dragon_tiger_by_symbol(
+    db: AsyncSession, symbol: str, limit: int = 15
+) -> list[DragonTigerEntry]:
+    """某只标的的龙虎榜记录（**跨交易日**，最新在前；同日按净买入额降序 NULL 最后）。
+
+    个股上榜是稀疏事件：逐日榜（``list_dragon_tiger``）对绝大多数个股必空，个股详情页
+    需要的是"这只股票历史上过的榜"。谓词用裸列 ``ts_code IN (...)``（见
+    ``ts_code_candidates``），不用 ``split_part``/``LIKE``——函数与通配让列不可索引。
+    """
     stmt = (
         select(DragonTigerEntry)
-        .where(DragonTigerEntry.trade_date == trade_date)
-        .order_by(nullslast(desc(DragonTigerEntry.net_amount)))
+        .where(DragonTigerEntry.ts_code.in_(ts_code_candidates(symbol)))
+        .order_by(
+            DragonTigerEntry.trade_date.desc(),
+            nullslast(desc(DragonTigerEntry.net_amount)),
+        )
         .limit(limit)
     )
     return list((await db.execute(stmt)).scalars().all())
@@ -821,12 +860,14 @@ async def upsert_announcements(db: AsyncSession, rows: list[dict[str, Any]]) -> 
 
 
 async def list_announcements(
-    db: AsyncSession, symbol: str | None, limit: int
+    db: AsyncSession, symbol: str | None, limit: int, category: str | None = None
 ) -> list[Announcement]:
-    """公告按披露时间倒序（symbol 可选过滤 6 位代码）。"""
+    """公告按披露时间倒序（symbol 6 位代码 / category 类目，均可选过滤）。"""
     stmt = select(Announcement)
     if symbol:
         stmt = stmt.where(Announcement.sec_code == symbol)
+    if category:
+        stmt = stmt.where(Announcement.category == category)
     stmt = stmt.order_by(desc(Announcement.announce_time)).limit(limit)
     return list((await db.execute(stmt)).scalars().all())
 

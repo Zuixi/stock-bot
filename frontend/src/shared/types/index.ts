@@ -51,6 +51,18 @@ export interface StockRecord {
   category: string;
   industry?: string;
   swChain?: SwChainNode[];
+  /**
+   * 名录级身份字段（F17）：后端 `StockOut` 一直有，前端此前连类型都没映射，
+   * 于是「公司概况」这块既有信息白丢。四个字段 `null` 都合法（缺失 ≠ 0），
+   * 消费方必须**整项不渲染**而不是画 `--`（见 `CompanyProfile`）。
+   */
+  fullName?: string;
+  /** 上市日期（`YYYY-MM-DD`，TuShare `stock_basic.list_date` 口径） */
+  listDate?: string;
+  /** 地区（TuShare `area`，通常是省份） */
+  area?: string;
+  /** 实控人（TuShare `act_name`）；国企多为机构名，民企可能是自然人 */
+  actName?: string;
   latestPrice?: number;
   change?: number;
   changePercent?: number;
@@ -60,9 +72,6 @@ export interface StockRecord {
   circulatingCap?: number;
   pe?: number;
   pb?: number;
-  roe?: number;
-  revenueGrowth?: number;
-  profitGrowth?: number;
   open?: number;
   high?: number;
   low?: number;

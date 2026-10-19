@@ -1,3 +1,719 @@
+## 2026-10-19 - A股全景：市场结构脉搏（日表 + 罗盘 + 卡片变化层）
+
+把 `/market`「A股全景」从五张今日快照升级为可回看、能解释变化的结构面板：
+
+- **三张日表**（迁移 `e3f1a7c9d2b4`）：`market_breadth_daily`（一天一行）/ `market_breadth_bucket_daily`（11 桶/日）/ `market_industry_daily`（31 行/日）；B 类可回算 + C 类归属 `current_sw_snapshot`。回补脚本 `backend/scripts/backfill_market_panorama.py` 幂等，本地 244 天 / 2,684 桶 / 7,564 行业行；日终 `market_panorama_daily`（17:25，纯本地）调同一 ingest service 续写。广度口径与 `/market/distribution` 11 桶逐字对齐（上涨 ≥1%、平/微涨 0~1%、下跌 <0），实测 10-16 = 2,105 / 1,333 / 2,125，与卡片一致
+- **`GET /market/panorama`**：广度序列/11 桶/31 行业排名变化/结构四态/资金流/新鲜度；结构聚合在 SQL 内算 Top3/HHI/离散度，不把 7,750 行读进 Python；Redis 120s、不轮询。冷请求 20D 19ms / 60D 21ms / 120D 24ms / 250D 31ms（250D 99KB），缓存 4–6ms
+- **结构四态**（普涨/结构/普跌/抱团）：广度 + Top3 集中度 + **中位涨跌幅**；10-16 上涨占比 37.8% 但中位 +0.47% ⇒ 结构，不是普跌。规则见 [ADR 0023](./decisions/0023-market-panorama-daily-snapshots.md)
+- **仪表带**：广度×集中度罗盘（60 日轨迹 + 今日点）+ 4 个带 5 日 SVG sparkline 的 KPI；`20D/60D/120D/250D` 写 `?pano=`，`keepPreviousData` 切范围不闪骨架
+- **卡片变化层**：涨跌分布"较昨日/5 日上涨占比"；行业网格今日涨跌角标 + 方向发丝线；热力图"今日/昨日"（`GET /market/sectors?date=`，非交易日 404）；资金流端点只认 `eod_full`，与脉搏同 `as_of`（10-13，不再把 10-15 的 poll 子集当末完整日）
+- **E2E**：阶段 1 后 `marketLayout/Trust/Polling` 27 passed；阶段 2 后加 `DataFace/Trends/Panorama` **48 passed**，全量 e2e **253 passed / 13 skipped**；`marketLayout` 的 `rowBottoms` 改文档坐标（脉搏让页面变长，折叠点击会滚动，原视口坐标会把滚动误判成变矮）
+- 测试：后端相关 131 passed；全量 1885 passed，1 条既有 `derived_metrics` job 用例受同工作区并行写库事件循环污染（单跑通过）。
+- 未做：跨卡行业筛选、热门板块"新进/掉出"、热力图 5D/20D；热力图卡内是 CSRC 行业，分区维度条已从"申万一级"改为"行业板块"
+## 2026-10-19 - **标的详情页整改落地（P0/P1/P2）**：5 处「页面说假话」+ K 线跨 pane 联动/数据条/事件标记 + 报价条 + 分块边界；两条新机械门禁
+
+计划 [plans/2026-10-19-stock-detail-overhaul.md](../plans/2026-10-19-stock-detail-overhaul.md)（31 提交 / 73+ 文件）。
+零新表、零新 cron；新增 1 个迁移之外的**零**表改动（唯一新增迁移来自基线合并，非本计划）。
+
+**P0 · 不再撒谎**
+- 「成长与盈利」三张卡恒 `--` 的根因是 `StockRecord` 声明了 `roe/revenueGrowth/profitGrowth` 三个**后端不存在**的字段（可选 ⇒ `tsc` 永不报错）。改接 `financial-summary`（`roe`/`revenue_yoy`/`profit_yoy`），与财务 tab **共用 query key**（`useFinancialSummary`，`staleTime 5min`），并删除那三个死字段及其写端 stub
+- 龙虎榜 `symbol`：`/market/dragon-tiger` 新增 `symbol`，仓储层用 `ts_code IN (…)` 精确匹配（不用 `split_part`/`LIKE`），**缓存键按查询形态分段** `market:dragon-tiger:v2:{scope}:{symbol}:{date}`（评审抓到的缺陷：跨日查询与「标的+日期」查询曾共用一个键，谁先缓存谁污染对方 300s）
+- 失败不再伪装成「无记录」：`RelatedEvents` 五张表接 `isError` → 行内「加载失败 + 重试」；龙虎榜「有返回却筛不出本股」单独报「返回结果未按本股过滤」。**实现细节**：React Query v5 的 `fetchState()` 在 refetch 开始就把 `error` 清空，故错误态由本地 `retrying` 维持，否则错误块在请求发出前就卸载
+- 交易所直连：`exchangeCandidates/exchangeOrder` 按代码前缀定位，深市/北交所不再先试上交所（实测 `000001` 改前 4 次探活里 2 次打错所 → 改后 0 次）
+
+**K 线（用户反馈的主体）**
+- 跨 pane 联动：顶层 `axisPointer.link: [{xAxisIndex:"all"}]` + 两个 xAxis `snap`。**实测修正**：轴级写 `type:"cross"` 会让 ECharts 5.6.0 抛 `pointerShapeBuilder[...] is not a function` 导致整图崩，故 `cross` 只放 `tooltip.axisPointer`，轴级用 `line`
+- 空 tooltip：formatter 改为按 `list[0].dataIndex` 回查，成交量区不再「有框无内容」
+- 数据条 ribbon 随光标联动（`updateAxisPointer` + rAF 节流），**option 不随 hover 重建**（源码门禁钉 `useMemo` 依赖 + 运行时探针：50 次 mousemove 下 `setOption` 调用 0 次）；成交量 y 轴刻度
+- 事件标记：`markPoint` 只标最近 8 个、同日多类合并为 `公告+1`；点事件行 → `dataZoom` 到该日 ±20 根并高亮。**频率感知**（评审抓到的缺陷：索引按日线解析却施加到聚合序列 ⇒ 周/月会跳到错日期，现为日K 才定位并披露）
+- 已知边界：图上气泡只覆盖**已加载**的事件类型（首屏只有公告类）。要全覆盖必须放弃懒加载并接受首屏 5 个事件请求
+
+**概览与侧栏**
+- 三段式：报价条（四行：身份/现价/八项事实/区间与分位）+ K 线 `lg=16` + 侧栏 `lg=8`
+- 52 周区间条（唯一「大胆处」）+ `PE(TTM)` 3 年分位；**零新增请求**（复用 K 线缓存键，钉 `qfq`；e2e 断言 `/quotes/daily` 恰 1 次）
+- Tab 进 URL `?tab=overview|valuation|financial`；**修了 redirect 丢 query** 的真 bug（`/stock/<code>?tab=…` 深链在入口处原本不成立），新增 `mergeSearch()`（目标参数优先）
+- 股性事实行（`characterStats` 纯函数：60 日收益/年化波动/最大回撤/趋势 R²/均线多头/量能比，样本不足返回 `null` 且整行不渲染）；公司概况四字段（NULL 不渲染）；「记一笔」（公开路由 ⇒ 未登录给 `/login` 链接而非必 401 的表单；`recorded` 按标的派生）
+- 分块错误边界 `BlockBoundary` + 固定高度占位：单块失败不拖垮整页，加载→落地事件卡 y 位移实测 **0px**
+
+**两条新机械门禁（都进了 `self_review.sh` 与 CI `frontend-lint`）**
+- `check-api-fields.mjs`：前端 `StockRecord` 字段 ⊆ 后端 `StockOut ∪ StockEnrichedOut`（**单向**），映射权威来源是运行时解析 `stocks.ts` 的 mapper（不手抄）。**解析不出的行必须红**——评审证明过「静默跳过」会让它假绿；现以 `readonly`/引号 key/一行两字段/跨行 mapper/`extends` 六种注入逐条验红
+- `check-chart-theme.mjs`：`echarts-for-react` 只许出现在 `EChart.tsx` 与 `kline/KlineChart.tsx`（估值/财务两张图曾裸用 ⇒ 暗色下轴与图例不可读）
+
+**顺带修好的（评审发现、不在原计划）**
+- `CustomSwTags` 编辑按钮在标签查询未就绪时可点，`handleOpen` 抓空快照 ⇒ 确认即 PUT `industry_codes: []` **清空用户标签**；现 `!isLoading && !isError` 双保险 + 闸门 e2e
+- 财务指标趋势图期间错位（`histories[0]` 当时间轴）+ `smooth` 伪造连续性 → 并集对齐 + 断点保留
+
+**门禁**：`self_review.sh --full` 全绿（ruff / **mypy 220 文件** / **pytest 1818 passed** / tsc / doc_gate 16 项 / check:routes 89 / check:api-fields 37 / check:chart-theme 4）；`npm run build` ✓；详情页 e2e **107 passed / 1 skipped**（skip = 无凭据的已登录记一笔分支）、邻域回归 **84 passed**。
+
+**基线自洽（merge 的代价，已处理）**：合并 `feat/hypothesis-verification` 后基线处于「半个特性」状态——API 已按新签名调用而服务实现仍在对方未提交的工作里。处置是**让本分支自洽、不搬对方的在途实现**：公告类目改在端点层按白名单判定并过滤、`reconcile_market_data` 只传已合入形参、龙虎榜 `scope=="range"` 加不变量断言收窄类型；并采纳基线文档已承诺却未提交的 5 个文件（`backfill_announcements.py`/`spike_official_sources.py`/`deploy_prod.sh`/ADR 0019/ADR 0020）+ 缺失迁移 `e3f1a7c9d2b4`。`doc_gate` 由 7 项红转全绿。
+- **补审收口**（P1-1/P2-1 逐任务评审在收尾时补做，`ae4a8dd`）：ribbon 与光标映射改为 e2e 断言「ribbon 日期 == tooltip 日期」并把轴身份收紧到 `axisDim==="x" && axisIndex===0`；K 线加载态按 `RIBBON_HEIGHT` 预留 419px（实测 1440/820 加载=落地 482、390 窄屏 463，位移归零）；窄屏量轴改整数万手（原来 `100.00万手` 在 44px 可用宽里会被裁）；股性成功态补 `minHeight`；删掉 `BlockBoundary` 里无效的 `key={attempt}`。
+- 涉及文件：`frontend/src/shared/ui/kline/**`、`frontend/src/shared/ui/{EChart,BlockBoundary,index}.ts(x)`、`frontend/src/features/stock-detail/**`、`frontend/src/pages/stock-detail/index.tsx`、`frontend/src/shared/{api,config,types}/**`、`frontend/src/app/router/route-elements.tsx`、`frontend/src/features/journal/components/{EntryForm,JournalEntryAction}.tsx`、`frontend/scripts/{check-api-fields,check-chart-theme}.mjs`、`frontend/e2e/{kline,stockDetail*,unit-*}.spec.ts`、`backend/app/{api/v1,services,repositories}/market_data*.py`、`backend/tests/test_dragon_tiger_symbol.py`、`scripts/self_review.sh`、`.github/workflows/ci.yml`、`docs/{features.md,testing/index.md,decisions/*}`、`docs/Changelog.md`
+
+## 2026-10-19 - **S12 闭环三件：一键记一笔 / 到期提醒 / 离线产物自愈**
+
+零新表、零新 cron、`/market` 前端未动（spec `docs/specs/S12-closed-loop.md` §S12.2/§S12.3）。目标不是加功能，
+而是把 triage / journal / regime 接成一条回路：
+
+- **一键记一笔**：体检卡片「记一笔」→ `/me?tab=journal&symbol=&from=triage`，预填标的（**不预填 thesis/invalidation**，
+  三必填不变）、`horizon` 默认 30、提交后清 query；表单上方显示「从今日体检带入」。
+- **到期提醒**：新端点 `GET /api/v1/journal/summary`（登录即可）：`{open, due, reviewed}`，**1 条聚合查询**
+  （`count FILTER` + `json_agg` 只带回"到期未复盘"的 `invalidation`；`due` 在 Python 里复用既有
+  `invalidation_observable`，不在 SQL 里重写第二套可观测性判据）。`due` = 到期 + 未复盘 + `reviewable`
+  （不可复盘的历史条目没有复盘入口，算进去角标永远消不掉）。`/me` 两个 Tab 带角标（0 与失败都不显示数字）；
+  体检页顶部 `due>0` 时提示「有 N 条判断今日到期 → 去复盘」。
+- **离线产物自愈**：`app/services/artifacts_service.py(新)` 的 `refresh_stale_artifacts(db, day)` 读三个产物
+  `as_of`，**只在过期时重建**（`as_of` 落后**或版本不一致**）；`build_{market_regime,peer_history_stats,triage_rule_stats}.py`
+  重构为「`build(session)` 纯函数 + `write_document` + `__main__` 薄壳」（禁止两处实现）。接进 reconcile **尾步**：
+  `_refresh_stale_artifacts()` 在 converge 与涨停事实上游之后跑，目标日 = 对账算出的 `expected_latest`
+  （不新开 cron、不另算交易日历；对账失败/无过门禁日 → 跳过）。单产物失败 → 告警 `artifacts_refresh:<产物>`
+  + **旧文件逐字节保留**（同目录 tmp + `os.replace`）+ 继续其它产物；重建出更旧的 `as_of` 时不写文件。
+  实测重建耗时合计 **85.95s**（真库 2026-10-16 数据：regime **29.29s** / peer **21.56s** / triage **35.10s**，
+  只在产物过期的那一轮付这笔钱）。
+- **修掉三个真 bug**：① `backend/.dockerignore` 整体忽略了 `scripts/`，而 `artifacts_service` 直接 import
+  `scripts.build_*` ⇒ 测试全绿、**容器里 `ModuleNotFoundError`**（只有 reconcile 会炸）；已把 `scripts/` 纳入镜像
+  并加"可导入"测试。② `build_triage_rule_stats` 的 `DATE_COLUMN` 漏 `share_floats` ⇒ 自 S11 起该脚本在真库上
+  `KeyError`（S12.3 接进 reconcile 后会变成每轮告警）；已补 `float_date`。③ 顺带把未纳入标定 SQL 的
+  `unlock_soon` 显式写成「尚未纳入」而不是「窗口内无信号」。
+- 测试：`tests/test_artifacts_service.py(新)` 6 条（新鲜零重建 / 过期各一次且 `as_of` 前进 / 单产物失败不扩散
+  + 旧文件不变 + 1 条告警 / 缺失重建 / 未前进不写）+ journal API 4 条（401 / 形状 / 三态 + reviewable 闸 /
+  **1 条聚合查询**）
+- 涉及文件：`backend/app/services/{artifacts_service.py(新),reconciliation_service.py,journal_service.py}`、
+  `backend/app/{schemas/journal.py,api/v1/journal.py,scheduler/jobs.py}`、
+  `backend/scripts/build_{market_regime,peer_history_stats,triage_rule_stats}.py`、`backend/.dockerignore`、
+  `backend/tests/{test_artifacts_service.py(新),test_journal_api.py}`、`frontend/src/features/{triage,journal}/**`、
+  `frontend/src/pages/me/index.tsx`、`docs/{features.md,specs/S12-closed-loop.md(新),Changelog.md}`
+
+## 2026-10-19 - 计划登记：标的详情页整改（**自审后改版为 P0/P1/P2**：5 处假数据 · 联动 · 防复发契约测试 · 图内事件标记）
+
+- **触发**：owner 实测反馈「K 线虚线与成交量不跨区联动」，全量审计 `features/stock-detail`（1175 行）+ 后端读面后，联动只是表层——更严重的是**页面在说假话**
+- **5 处页面输出错误信息（P0 假数据）**：①「成长与盈利」三张卡恒 `--`，因为 `StockEnrichedOut`/`StockOut` 根本没有 `roe`/`revenue_growth`/`profit_growth`，而 `FundamentalCards` 在读它们（数据其实在 `/financials/{symbol}/financial-summary`）②龙虎榜 tab 对绝大多数股票恒为空，因为 `/market/dragon-tiger` **无 `symbol` 参数**，前端只能取全市场最新日 top50 再 filter ③**查询失败时 5 张表都显示「暂无相关公告」**——`dataSource={x.data ?? []}` 且无 `isError` 分支，网络故障被伪装成「这只票没公告」
+- **能力已建、页面未接**：估值 3 年分位（`/valuation-history` 已返回 `percentiles`）、公司概况 4 字段（`StockOut` 已返回，前端连类型都没映射）、决策日志（`POST /journal` 带 `symbol`，详情页无入口）
+- **对上一轮口头判断的更正**：特征雷达端点存在但**全仓没有任何代码写 `stock_features`**，且 `RadarAxis.percentile` 恒 `None` ⇒「有端点、无数据、无分位」；北向持股/高管增减持**只有 ingest 侧**，读面三件套不存在
+- **对本计划第一版的四处自我更正（owner 要求以"审别人计划"的标准自审）**：①**10 个 Task 平铺 6 人日是错的**——价值集中在 P0，改为三档（P0 2 人日 ≈70% 价值 / P1 2.5 人日 / P2 1.5 人日 / 砍掉一批）②**漏掉了两件更值钱的事**：图内事件标记 + 列表定位联动（回答「那天为什么涨」，复用同批数据几乎零额外请求）、`check-api-fields.mjs` 契约测试（F1 的根因是 `StockRecord.roe?: number` 是可选字段所以 TS 永不报错，只删字段不建护栏 ⇒ 下一个人加 `dividendYield?` 会一模一样复发）③**编造了验收阈值**（首屏 ≤8 请求 / P95 <16ms / K 线 ≥800px 全是估的），改为「改前测基线、改后不劣化」④**编号自相矛盾**：第一版让 `A1`–`A18` 同时表示"审计事实"与"Task 编号"，同一串字母两种含义；本版改为 `F*`（事实）/ `P0-*` `P1-*` `P2-*`（任务），并把每档覆盖哪些 `F` 写进 §2 范围裁定
+- **两项判断被降级**：D1「事件时间轴取代 5 tab」——同花顺/东财/雪球都用 tabs，我把偏好写成了行业标准，改为「角标计数 + 图内标记」；D2 雷达措辞「用图形撒谎」过重，真实原因是分位需全市场特征生产管道，**是取舍不是不可能**
+- **产出**：`plans/2026-10-19-stock-detail-overhaul.md`（改写）+ `plans/index.md` 登记（`status: draft`），审计事实表 **18 条**逐条带落点与档位，§2「范围裁定」给出三档与累计价值，§5 移动端专章，§6 验收改为基线对照
+- **新增机械门禁**：`check-api-fields.mjs`（前端 `StockRecord` 字段 ⊆ 后端 `StockOut ∪ StockEnrichedOut`，单向 + 显式允许清单，注入假字段必红）、`check-chart-theme.mjs`（`echarts-for-react` 只允许出现在 `EChart.tsx` 与 `kline/KlineChart.tsx`）
+- **明确不做（附理由）**：事件时间轴取代 tab · 右轴涨跌幅 · 股性雷达 · 北向/增减持 · 个股资金流 · 新闻聚合 · 分时线 · 叠加对比 · 拖选区间统计 · 实时轮询
+- **计划上限已写入文档**：做完是「不丢人的通用行情页」，不碰投研差异化层（猪周期/成本曲线/行业位置）
+- 涉及文件：plans/2026-10-19-stock-detail-overhaul.md、plans/index.md、docs/Changelog.md
+
+## 2026-10-19 - **S11 解禁日历后端：回填脚本 + triage `unlock_soon` + journal `evaluation.unlock_in_window`**
+
+零新表、零迁移、不改调度、`/market` 未动（spec `docs/specs/S11-unlock-calendar.md`）：
+
+- **写入口** `backend/scripts/backfill_share_floats.py`（新）：按**解禁日**窗口分批（≤90 天/批，默认 30 天）
+  分页回填 `share_floats`，默认窗口**近 24 个月 + 未来 6 个月**。实测两个上游硬限制（写进模块 docstring
+  与 spec §S11.5.1）：`share_float(start,end)` 过滤的是 **`float_date`** 而不是 `ann_date`；单次只回
+  **6000 行**且 **`offset ≤ 100000`** ⇒ 逐页取 + 触上限时**对半拆窗**重取（单日仍超限则**响亮失败**：
+  非零退出 + 逐条 stderr，绝不静默丢行）。`ON CONFLICT DO NOTHING` 幂等（重跑新增 **0** 行）；
+  `--coverage` 只读打印「有解禁记录的股票数 / 全市场 / 占比 / 未来 30·90 天覆盖 / 最近成功窗口」
+- **覆盖（真跑）**：162 只（2.90%）→ **2,353 只（42.12%）**，2,103,957 行（未来 334,355 行），
+  未来 30 天有解禁的 144 只、未来 90 天 348 只；31 批 / 454 页 / 5 次拆窗 / **0 失败**
+- **triage 探测器** `unlock_soon`（registry 8 → **9**，导入期断言与计数用例同步）：未来 30 自然日内解禁
+  且当日合计**占总股本** ≥1%；`≥3%` → risk、`1%–3%` → attention；facts = 解禁股数(万股)/占总股本比(%)/解禁日；
+  `source_table="share_floats"`；**该股无记录 → 不输出**（不猜"没有解禁"），只有**整表零行**才进 `unavailable`。
+  装载层一条 SQL 先按持有人取**最新公告**（同一笔会被多次公告，否则同一笔加两次：实测 119% vs 真实 59.6%）
+  再按解禁日合计；查询预算 6 → 7（仍与自选数无关）。文案按实测口径写「占总股本」而非 spec 示例的「占流通」
+  （源 `float_ratio` 分母是总股本），`float_share` 源单位是**股**（卡片 ÷10000 上屏）
+- **journal** `evaluation.unlock_in_window` + `unlock_note`（与 `earnings_in_window` 同构）：`true` =
+  `(快照日, due_on]` 内有 ≥3% 解禁、`false` = 有记录但窗口内没有、`null` = 该股无 PIT 可见的解禁记录
+  （写**降级键** `missing_reason["unlock"]`，**不阻塞复盘**——有真实写入复盘的用例）；PIT 只用
+  `ann_date <= due_on`；解禁面并进标的 face 的**同一条批 SQL**（仍 3 条封顶）。第一版按 `split_part(ts_code)`
+  过滤实测 **50 条判断 4.9 s**，改 `ts_code =`（索引）后 **0.015 s**
+- 测试（+56 条）：探测器 +30/+31 天、1%/3% 边界、同日持有人合计、占比缺失跳过、无记录不输出；
+  装载层合计 / 最新公告 / 整表零行 → `unavailable` / 查询数 ≤7；journal 三态 + 窗口左开右闭 + 事后公告
+  PIT + 降级键不阻塞复盘 + 不新增查询；回填分窗 / 月份平移 / **幂等重跑 0 行** / 拆窗 / 单日超限响亮失败 /
+  覆盖率（`fetch` 注入，**零真网**）
+- 门禁：改动文件 `ruff check` + `format --check` ✔ / `mypy` ✔ / 目标用例 **291 passed** / 全量
+  **1852 passed, 1 failed**（唯一失败是并行 limit-up 分支的告警用例，与解禁无关）/ `--coverage` 已贴数
+- 涉及文件：`backend/scripts/backfill_share_floats.py(新)`、`backend/app/services/{triage_detectors,triage_service,
+  journal_service}.py`、`backend/app/schemas/journal.py`、`backend/tests/{test_triage_detectors,test_triage_service,
+  test_watchlist_triage_api,test_journal_api}.py`、`backend/tests/{test_journal_unlock,test_backfill_share_floats}.py(新)`、
+  `docs/specs/S11-unlock-calendar.md`（§S11.5.1 实测口径修正）、`docs/features.md`、`docs/Changelog.md`
+
+## 2026-10-19 - **S10 市场状态机：五态（迟滞 3 日）+ 转移矩阵 + 同态后续分布**
+
+零新表、零迁移、零新 cron，`/market` 前端未动（spec `docs/specs/S10-market-regime.md`）：
+
+- **服务层** `backend/app/services/market_regime_service.py(新)`：`compute_features`（纯函数，输入是按日聚合的行，**不查库**）/ `classify`（五态 + 优先级 亢奋>冰点>退潮>修复>中性，特征未就绪返回 `None` 而不是"中性"）/ `classify_series`（迟滞 3 日，**切换日 = 连续满足的第 3 天**）/ `build_series` / `transition_matrix`（行和=1；从未作为起点的态不出行，不编造均匀先验）/ `forward_stats`（同态后续 5/20 日：逐日复合、winsorize ±50%、`n<30` 不给数字、**入场日当天收益不参与**）。阈值唯一真相 `REGIME_THRESHOLDS` + `REGIME_VERSION`，import 期断言 key 齐全、窗口常量与 `DayFeatures` 滞后字段一致
+- **标定（spec §S10.5 先标定再上线）**：真库 834 个交易日（60 天特征预热 → 774 天可判定）跑出 spec 原始阈值下 **亢奋 0.4% / 冰点 16.1% / 退潮 1.2% / 修复 2.7% / 中性 79.6%**——三态 <5%，故 `REGIME_VERSION` `s10.1 → s10.2` 只调 4 个数字：`frenzy_new_high_above` 0.30→0.08（`new_high_ratio` 实测中位 3.3%、p90 9.1%）、`retreat_amount_pctile_drop` 0.20→0.05（20 日回落 p75=0.167）、`repair_amount_pctile` [0.30,0.70]→[0.20,0.80]；冰点三条件与迟滞**未动**。调整后 **亢奋 60(7.8%) / 冰点 146(18.9%) / 退潮 54(7.0%) / 修复 40(5.2%) / 中性 474(61.2%)**，五态均 ≥5%（新旧对照、扫描过程与逐年分布见 `.superpowers/sdd/regime-unlock/regime-report.md`）
+- **离线产物** `backend/scripts/build_market_regime.py(新)` → `backend/app/services/market_regime_history.json(新，52966 字节)`：一条 `SET TRANSACTION READ ONLY` 会话里的只读 SQL 按日聚合；涨跌幅 `close/前收-1`，`pre_close` 缺失退化到**该股上一行收盘**（`pct_chg` 列 308 万行 NULL，不能当唯一来源）；**不用**涨停/连板族（`stock_price_limits` 只有 259 天）。产物自带 `version`/`as_of`/`basis`/`thresholds` 快照、无时间戳 → **两次运行逐字节一致**（30s，`cmp` 通过）
+- **读面** `GET /api/v1/market/regime`（登录即可；`backend/app/api/v1/market_regime.py(新)` + `app/schemas/market_regime.py(新)`，注册进 `api/v1/__init__.py`）：`{state, since, duration_days, transition:{下一态:概率}, forward:{5d:{n,median_pct,p05_pct},20d:…}, notes, as_of, version}`；产物缺失/损坏 → **200 + `state=null` + 原因 note**（spec 允许 503 或空态，选空态：一行文案的降级不该让前端走异常分支），产物落后最新交易日 / 产物版本与 registry 不一致 → 写进 `notes`
+- **测试** `backend/tests/test_market_regime.py(新，43 条)`：五态表驱动 / 三处优先级 / 边界（闭区间端点、中位恰 0）/ 缺特征不判中性 / 迟滞（1 天抖动不切、连续 3 天切在第 3 天、中断后重计数、天数读 registry）/ 转移矩阵行和=1 与"无出边不出行" / `n<30` 不给数字 / 无前视（塞未来收益结果不变、入场日当天收益不参与）/ winsorize ±50% / 产物确定性 / 读面四种降级 / 路由注册 + **入库产物与 registry 版本·阈值对拍**（并机械校验每态 ≥5%）
+- **对账**：随机 5 个交易日（2023-11-28 / 2025-07-11 / 2025-09-16 / 2026-03-02 / 2026-06-08）用独立 Python 实现从原始 `daily_quotes` 重算日级原语，与脚本 SQL 的六项（成交额/涨跌家数/中位涨跌幅/新高数/新高分母）逐项一致
+- **门禁**：改动文件 `ruff check` + `ruff format --check` ✓、`mypy`（4 个文件）✓、`pytest tests/test_market_regime.py -q` **43 passed**、全量 `pytest -q` **1851 passed / 1 failed**（`test_derived_metrics_job` 的顺序依赖失败，隔离运行通过，与本次改动无关）、`bash scripts/build_market_regime.py` ✓、`bash scripts/self_review.sh` ✓（doc_gate 16 项 + check:routes 89 项）
+
+## 2026-10-19 - **情绪脉搏（阶段 + small multiples + 指数背离）+ 小样本治理 + 切指标零位移**
+
+三块一起落地，核心是让"一眼看出整个市场情绪变化"成立，而不是九个指标各看一遍：
+
+- **切指标残留跳动（根因修复）**：`smd-loading` 原先在正常文档流里（`height:2 + margin -6/14 = +10px`），第一次切到未缓存指标时把页面顶 10px；改为 `position:fixed` 覆盖层（零布局）。另把 Wilson 区间从"ratio 指标才多一行"改成**所有指标固定的 sub 行**、样本门槛注恒显、hero 的 rank/hint 预留 min-height：1440 实测切换前后 `scrollY=600 / bodyH=1798` 完全不变，390 窄屏 hero 高度 215→215
+- **情绪脉搏**（`/market` 温度计之前）：左侧当前阶段 + 三个输入分位，右侧 4 张 small multiples（涨停家数/炸板率/最高板/1进2，共享时间轴 + `echarts.connect` hover 联动），底部「情绪 vs 创业板指」**同分位轴**对比 + 连续背离段；`20D/60D/120D/250D` 与基准（创业板指/上证）写进 URL（`?pulse=60&bench=...`），不触发路由重挂
+- **周期阶段**（[ADR 0022](./decisions/0022-sentiment-regime-and-sample-gate.md)）：PIT 250 日分位 + 规则化 5+1 阶段（冰点/退潮/修复/发酵/高潮/分歧）；绝对水位守卫（横盘窗口分位饱和到 100 不判高潮）、持续 2 天平滑（末段以当日原始判定为准）、`REGIME_VERSION` 版本化；详情页主图同步画阶段背景带 + 色块图例
+- **小样本治理**：样本型指标 `n<5` 的日子标 `low_sample`，原始值仍展示（趋势线断开 + 空心散点），但不进统计/分位/分布/连续天数；比值类 `n≥5` 给 Wilson 95% 区间；切换器 chip 与 hero 同源（`50.00%*` 不再显示成上周的 18.18%）
+- **详情页窗口**：`?days=20|60|120|250`（默认 250）控件；统计/分位/分布随窗口重算，阶段背景带恒用 250 日 PIT；近 20 日折线低样本点空心
+- 后端新增 `GET /market/sentiment/pulse`（读时计算、Redis 900s、落库按前缀失效）与 `sentiment_regime_service`；`metrics/{key}` 追加 `low_sample / latest_interval / sample_gate / regime`；无新表、无新 Job、无迁移
+- 测试：pytest 新增 10 条（PIT 分位/绝对守卫/平滑/末段原始/Wilson/样本门槛/指数对齐/背离/pulse 端点/display_days 上下文）；相关用例 **54 passed**；`tsc` / `build` / `check:routes` / `doc_gate` / `mypy` / `ruff` 全绿。全量 pytest **1862 passed**，1 条 DB/job 用例受同工作区并行写库干扰（单条复跑全绿），不作为本任务回归
+- 涉及文件：`backend/app/services/{sentiment_regime_service.py,sentiment_pulse_service.py,sentiment_metric_service.py,limit_up_service.py}`、`backend/app/{schemas/limit_up.py,api/v1/market_data.py}`、`backend/tests/{test_sentiment_regime.py(新),test_sentiment_metric_detail.py}`、`frontend/src/{features/market/components/SentimentPulse.tsx(新)+.css,features/sentiment/{regimeStyle.ts(新),metricDetailFormat.ts},pages/market-sentiment-metric/*,pages/market/sections.tsx,shared/api/limitUp.ts,shared/ui/EChart.tsx}`、`docs/{design/limit-up-sentiment.md,features.md,decisions/0022*,Changelog.md}`、`plans/2026-10-18-sentiment-metric-tracking.md`
+
+## 2026-10-19 - **S9 深度优化后端：`evaluation.earnings_in_window` / `stats.consistency`**
+
+两块新能力，全部**只加字段**（契约 `.superpowers/sdd/journal-deep/contract.md` §1/§2；无新表、无迁移、
+既有响应类型一个都没动；`/market` 未动）：
+
+- **财报窗口三态**（契约 §1）：`evaluation` 新增 `earnings_in_window`（`true` = 窗口 `(快照日, due_on]`
+  内有**财报披露日** `financial_report_versions.ann_date` / `false` = 有财报数据但不在窗口内 / `null` =
+  该股没有任何带公告日的财报记录，缺数据不猜）+ `earnings_note`（「窗口内含 N 次财报披露（MM-DD），
+  结果可能被财报事件主导」；`false`/`null` = 空串）。PIT：**只**用 `ann_date <= due_on` 的记录判断；
+  「N 次」按 **distinct 公告日** 数（同日多份报表算一次）。缺数原因进 `missing_reason["earnings"]`
+  （`no_financial_reports` / 市场级 `market_level_no_symbol`）。数据源直连 `financial_report_versions`
+  的 `stock_id` + `ann_date`（该表自带 `stock_id`，无需绕 `income_statement_facts`），并**进**标的 face
+  的同一条批 SQL —— 评估查询数仍 **3 条封顶**，不随条目数增长（有 SQL 计数用例）
+- **归因自洽率**（契约 §2）：`stats.consistency = {n, consistent, share, ci_low, ci_high, note}`。
+  `thesis_wrong`/`timing_wrong` 自洽当且仅当净超额 < 0；`discipline_break` **恒自洽**（纪律与盈亏独立）；
+  `right_for_wrong_reason`/`luck` 自洽当且仅当净超额 > 0（恰在成本线上 = 0 不算赚）。`n` = 已复盘且
+  净超额可算的条数，`n < 5` → `share`/`ci_low`/`ci_high` 一律 `null`（只给 `n`）；区间**复用**
+  `wilson_interval`（不新造算法）。分子/分母并进**既有聚合**（统计仍 **≤2 条查询**），
+  `JOURNAL_STATS_VERSION` `s97.b2` → `s97.b3`
+- 测试：新增 `tests/test_journal_deep.py`（24 条：真 PG 的财报三态/窗口左右边界/事后公告 PIT/市场级/
+  无财报数据/SQL 计数 + 自洽五类逐类/n<5/边界 12bp/未复盘不进分母）；API 层补 `evaluation` 新字段与
+  `stats.consistency` 序列化断言
+- 涉及文件：`backend/app/services/journal_service.py`、`backend/app/schemas/journal.py`、
+  `backend/tests/test_journal_deep.py`（新增）、`backend/tests/test_journal_api.py`、
+  `backend/tests/test_journal_s97.py`（统计产物版本 pin）、`docs/specs/S9-decision-journal.md`、
+  `docs/Changelog.md`
+
+## 2026-10-19 - **S9 深度优化前端：`by_kind_median` / 归因自洽 / 复盘受阻 / 财报窗口**
+
+四项全部**只做加法**（契约 `.superpowers/sdd/journal-deep/contract.md` §3；新字段一律可选、`undefined` 容错；
+`null` 与 `0` 严格区分；无新路由，`/market`、route-manifest、`check-routes`、`ARCHITECTURE §6` 均未动）：
+
+- **`by_kind_median` 上屏**：统计卡 `by_kind` 每格在条数旁显示该类 `median_net_excess_pct`
+  （`null`/整键缺省 → `—`；`0` → `0.00%`，两者不是一回事）
+- **归因自洽率**：统计卡新增一行「归因自洽 8/13（95% 区间 36%–82%）」；`consistency.n < 5` 只写
+  「样本不足」（不给比例也不给区间）；末尾**原样**展示 `consistency.note`（前端不改写）
+- **复盘受阻 UX**：`evaluation` 为空 / 结果三要素缺数 / `missing_reason` 里记着**结果缺数**（缺行情/基准）
+  → 「复盘」**禁用**并显示「结果未就绪（缺行情/基准），数据到位后即可复盘」+「重新检查」
+  （重拉列表查询，数据到位后按钮自动恢复）；**不提供**"先记归因"的绕过入口。
+  口径边界：`missing_reason` 里的**路径/财报降级**（市场级恒缺 `mae_pct`、无财报数据的 `earnings`）
+  **不**算未就绪——后端复盘端点照收，若按"字典非空即拦"，绝大多数真实条目会永远点不了「复盘」
+- **财报窗口提示**：复盘弹窗 `earnings_in_window === true` 时在归因选择**上方**原样展示 `earnings_note`
+  （中性陈述、不预选归因；`false` / `null` 不渲染）
+- 测试：e2e 新增 5 条（`by_kind_median` 展示与 `null`/`0` 区分、自洽 n<5 与 n≥5、复盘受阻 +「重新检查」
+  真重拉、财报窗口提示且不预选）；`npx tsc --noEmit` ✓ / `decisionJournal` **29 passed** /
+  回归 `watchlistTriage + userIsolation` **11 passed**
+- 涉及文件：`frontend/src/{shared/api/journal.ts,features/journal/{metrics.ts,components/{JournalPanel.tsx,ReviewModal.tsx,JournalPanel.css}}}`、
+  `frontend/e2e/decisionJournal.spec.ts`、`docs/Changelog.md`
+
+## 2026-10-19 - **口径修正：bet_type 基准真正区分 + pass/none 归一**
+
+owner 批准的两处**设计缺陷**修复（不是功能新增）：
+
+- **`direction` 与 `relative` 曾数字完全同构**（都取"行业等权"）⇒ `bet_type` 对结果零影响，
+  三选一实际只有两个口径。现改为：`direction` → **沪深300**（赌方向）、`relative` → **行业等权**（赌跑赢同行）、
+  `market` → 沪深300；`bench_fallback` 因此只有 `relative` 会触发。
+- **`pass` 与 `position_size=none` 语义重叠**：两者都在说"没做"，却各排除一次收益。现归一：
+  `kind=pass` ⇒ 仓位强制 `none`（同传非 none → 422）；统计口径明确为
+  **「我决定不动」不进任何均值；「只观察」进判断均值、不进按仓位加权的收益均值**（`stats.exclusion_note` 下发，前端原样展示）。
+- 测试同步：`test_journal_*.py` 里"direction == relative"的断言改写为"direction == hs300 且 ≠ relative"；
+  `JOURNAL_STATS_VERSION` `s97.b1 → s97.b2`（样本集合变了 = 口径变了）。
+- 涉及文件：`backend/app/{services/journal_service.py,schemas/journal.py}`、`backend/tests/test_journal_{service,s97,api}.py`、
+  `frontend/src/{shared/api/journal.ts,features/journal/components/{EntryForm,JournalPanel}.tsx}`、
+  `docs/specs/S9-decision-journal.md`（§S9.7.1/§S9.7.3/§S9.7.6 回写 + 标注"已修正"）、`docs/Changelog.md`
+
+## 2026-10-19 - **S9.6 同类历史（peer history）落地：写完那一刻就换回信息**
+
+S9.7 八个 phase 之外的最后一节（spec §S9.6 原排期"等 owner 批准口径"）。核心：**创建响应立刻带两段事实**，
+不再"写完等到期、什么也没换回来"（计划里叫留存杀手）。
+
+- **L1 你自己的历史**（`self_history`）：只查**本人**已复盘日志，按「同标的 / 同桶」两层分别给
+  `n / right / wrong / wrong_by`（三类错因单列构成）；`n<5` 标 `insufficient`，页面只写"样本不足"。
+  **PIT**：`created_at < 本条 created_at`（把未来塞进候选集 → 用例必须变红）
+- **L2 全市场同桶**（离线产物 `app/services/peer_history_stats.json` + `scripts/build_peer_history_stats.py`）：
+  12 个月、45 桶（情绪分位 × 板块当日涨跌 × 距 MA20，`unknown` 单列）、交易日历对齐 + winsorize ±50%、
+  超额 = 个股 T+N − 当日全市场中位（与 `triage_rule_stats` 同口径）；**只用行情/行业/情绪三张表，
+  不含任何用户日志**（§S9.7.9 不做跨用户聚合）；两次运行**逐字节一致**（有用例）
+- **PIT 闸**：产物 `as_of >= 快照日` → `stale_guard` 且 `market=null`；缺产物 → `no_stats_product`；
+  算不出来 → `pipeline_error`（**创建照旧 201**，`notes` 写原因）
+- **落快照**：`snapshot.peer_history`（快照版本 `s9.r2 → s9.r3`），响应原样下发；老行没有它 → `null`
+- **前端**：`PeerHistoryCard`（创建成功后出现）——「同类情形（情绪 35% 分位 · 板块 -1.80% · 距 MA20 -3.20%）」/
+  「你自己：N 条 → X 对 / Y 错，错的 N 次是 时机错了×N」/「全市场同桶（截至 X，N 条）：5 日超额中位 …」/
+  notes 原样；字段缺省 → **整卡不渲染**（不补 0）
+- 测试：`tests/test_journal_s96.py` 37 条（分桶边界逐值 / L1 只用本人且只用过去 / 两层分开 / n=4 vs 5 /
+  L2 n=29 vs 30 / stale_guard / 降级不阻断 / 产物自描述 / 产物两次逐字节一致）；e2e 新增 3 条（三段上屏、
+  样本不足不给比例、字段缺省不渲染）
+- 顺带修 **e2e/nav.spec.ts 的 mock 路由**（pre-existing：`page.route("**/auth/**")` 会把 dev server 的
+  `src/features/auth/*` 模块请求也吞掉 → 模块 MIME 错 → 整页不挂载；改为"只拦根级 `/auth/` 接口"）
+- 门禁：`pytest -q` 1739 passed / `mypy app` 0 错 / ruff ✓ / `pytest tests/test_journal_*.py` 166 passed /
+  Playwright 全量 **233 passed** / `self_review` ✓
+- 涉及文件：`backend/app/services/{peer_history_service.py(新),peer_history_stats.json(新),journal_service.py}`、
+  `backend/scripts/build_peer_history_stats.py(新)`、`backend/{app/schemas/journal.py,app/api/v1/journal.py}`、
+  `backend/tests/{test_journal_s96.py(新),test_journal_service.py}`、
+  `frontend/src/{shared/api/journal.ts,features/journal/components/{PeerHistoryCard.tsx(新),EntryForm.tsx,JournalPanel.css}}`、
+  `frontend/e2e/{decisionJournal.spec.ts,nav.spec.ts}`、`docs/{specs/S9-decision-journal.md,Changelog.md}`
+
+## 2026-10-19 - **S9.7 Phase B2 后端：路径 / 校准 / 仓位统计 / 导出**
+
+只做加法（契约 `.superpowers/sdd/journal-s97/contract-phaseB.md` §2/§4/§5；无新表、无迁移，
+既有响应字段类型一个都没变）：
+
+- **路径**（§S9.7.4）：`evaluation` 新增 `mae_pct`（区间最低价相对 `snapshot.price` 的跌幅，夹到 ≤ 0）/
+  `first_touch_invalidation`（首个满足 `price_below`/`price_above` 的交易日）/ `touched_then_reversed`
+  （有触达且到期 `net_outcome_pct > 0`）/ `days_to_invalidation`（入场后到触达日的**交易日数**）；
+  三者由评估的同一条批 SQL 逐日比较得出（查询数仍是 3 条封顶，不按天再查）；`date_only` →
+  触达三项 `null/false/null`（`mae_pct` 照算），市场级判断 → `mae_pct=null` + `missing_reason`
+- **校准**（§S9.7.5）：`stats.calibration = {n, bins[{confidence,p,n,hit_rate,sufficient}], brier}`；
+  `p` = 固定映射 `{1:0.2,2:0.35,3:0.5,4:0.65,5:0.8}`（`CALIBRATION_P`，源码注明**不可优化**）；
+  `hit_rate`/`brier` 一律按 **`net_excess_pct > 0`** 判对（`excess=0.12` 恰在成本线上不算对）；
+  每档 `sufficient = n>=10`、`n=0` 的档不出现；总 `n<20` → `calibration=null` + `calibration_note`
+- **仓位统计**（§S9.7.1）：`stats.by_size`（四档判断条数，合计 = `n`）与
+  `stats.avg_weighted_excess_pct`（按 `size_weight={none:0,light:0.5,normal:1,heavy:2}` 加权，
+  `none` **完全退出分母**）；`by_kind_median`（每类 `{count, median_net_excess_pct}`，`by_kind`
+  既有纯数字形状不变）；**裁定 2**：`share_ci.win` 的分子与分母都排除 `pass`
+  （`JOURNAL_STATS_VERSION` 随之 `s97.a1` → `s97.b1`）
+- **导出**（§S9.7.9）：`GET /api/v1/journal/export?format=json|csv` → 200 +
+  `Content-Disposition: attachment`，只含本人（entries + snapshot + review，不分页不截断）；
+  CSV = **UTF-8 BOM** + 固定 17 列；`stats.export_hint = "/api/v1/journal/export?format=csv"`
+- 统计仍**只有两条聚合查询**（第 1 条 FILTER 拿齐计数/校准/加权，第 2 条按 `kind` 分组算中位数与收益均值），
+  与用户条数无关；新增/扩展测试 `tests/test_journal_s97_b2.py`（18 条）+ `tests/test_journal_api.py`
+  （导出 2 条 + stats 形状扩展）
+- 涉及文件：`backend/app/services/journal_service.py`、`backend/app/schemas/journal.py`、
+  `backend/app/api/v1/journal.py`、`backend/tests/test_journal_s97_b2.py(新)`、
+  `backend/tests/test_journal_api.py`、`backend/tests/test_journal_s97.py`（统计产物版本 pin）、
+  `docs/specs/S9-decision-journal.md`、`.superpowers/sdd/journal-s97/backend-B2-report.md(新)`
+
+## 2026-10-19 - **S9.7 Phase B 前端：仓位 / 信心校准 / 不可复盘 / 路径提示 / 导出与隐私**
+
+只做加法（契约 `.superpowers/sdd/journal-s97/contract-phaseB.md` §6；后端 Phase B 的统计与导出尚未上线，
+前端按契约字段写，**任一字段缺省即优雅退化**：不崩、不显示 0、不拿默认值补数据）：
+
+- **仓位**（§S9.7.1）：`EntryForm` 四选一（只观察/轻仓/标准/重仓，默认「只观察」）→ 载荷 `position_size`；
+  列表行显示「仓位：X」标签（缺字段**不显示**——缺字段 ≠ 只观察）；统计卡加 `by_size` 分栏与
+  `avg_weighted_excess_pct`（缺省不显示；「只观察不计收益」的说明随分栏上屏）
+- **信心与校准**（§S9.7.5）：`EntryForm` 1–5 档、**可清空**（留空 = 不参与校准，载荷**不带**
+  `confidence` 键）；新增独立校准卡「你的信心与实际结果的对照」：每档 `n>=10` 才给命中率、否则
+  「样本不足（n=X）」，总 `n<20` 只显示 `calibration_note`，`brier` 有才显示
+- **不可复盘**（§S9.7.8）：`reviewable === false` 的到期条目**不渲染**「复盘」按钮，改显示
+  「不可复盘（失效条件不可观测）」；字段缺省按可复盘处理（旧条目行为不变）
+- **路径提示**（§S9.7.4）：复盘弹窗新增路径三格（`mae_pct` / `first_touch_invalidation` /
+  `days_to_invalidation`）；`touched_then_reversed === true` 时在归因选择**上方**提示
+  「你先触发了失效条件，之后才反弹——这更像纪律问题」（是提示：不预选归因、不强制选择）
+- **导出与隐私**（§S9.7.9）：页底「导出我的日志」链接（优先 `stats.export_hint`，缺省
+  `/api/v1/journal/export?format=csv`）+ 隐私原文告知（逐字，与 spec 一致）
+- e2e：`decisionJournal.spec.ts` 14 → **21 条**（新增 7 条，全 mock）：仓位/信心提交后出现与载荷、
+  不可复盘无复盘按钮、路径提示出现在归因上方且不预选、`by_size` + 加权 + 校准 n<10 与 n≥10 两种、
+  总样本不足只给 `calibration_note`、导出链接与隐私原文、Phase B 字段全缺省不崩；顺带修掉 mock
+  **就地修改共享 fixture** 造成的跨用例顺序依赖（不复用同一对象就不会互相污染）
+- 涉及文件：`frontend/src/shared/api/journal.ts`、`frontend/src/features/journal/sizes.ts(新)`、
+  `frontend/src/features/journal/metrics.ts`、`frontend/src/features/journal/components/`
+  `{EntryForm,JournalPanel,ReviewModal}.tsx` 与 `JournalPanel.css`、`frontend/e2e/decisionJournal.spec.ts`、
+  `.superpowers/sdd/journal-s97/frontend-B-report.md(新)`
+
+## 2026-10-19 - **S9.7 Phase B1 后端：仓位 / 信心 / 可证伪闸（只做字段与闸）**
+
+只做加法（契约 `.superpowers/sdd/journal-s97/contract-phaseB.md` §1–§3；统计与导出**不在本阶段**）：
+
+- **仓位**（§S9.7.1）：`position_size ∈ {none, light, normal, heavy}` **落列**（迁移 `b1c8d4e7f2a9`：
+  `NOT NULL DEFAULT 'none'` + `ck_journal_position_size`，只加列、PG 回填默认值不改既有值）；创建请求可传
+  （越界 **422**），列表/详情响应带出；`risk_note` 与 `by_size`/加权统计留 B2
+- **信心**（§S9.7.5）：`confidence` **落列**（int，**可空无默认值** = 没填不参与校准 + `ck_journal_confidence`
+  1..5）；创建可传（越界 **422**），响应带出；`calibration`/`brier` 留 B2
+- **可证伪闸**（§S9.7.8）：`invalidation` 白名单三形态（`price_below`/`price_above`/`date_only`），自由文本
+  → **422 + 指导文案**（`INVALIDATION_GUIDANCE`：给价格/日期或改用备注）；条目响应新增 `reviewable`，
+  `evaluation` 新增 `invalidation_observable`（三形态 true，历史不可识别形态 false）；
+  `reviewable=false` → 复盘端点 **422**（`NotReviewable`，明确文案），结果仍照常展示；历史行不改写
+- 测试：`tests/test_journal_s97_b1.py`（23 条：三形态可观测/不可观测真值表、库 check 拒绝、默认值、
+  evaluation 集成、历史自由文本复盘拒绝、迁移只加列、schema 边界）；`tests/test_journal_api.py` 新增 5 组
+  （`position_size` 越界 422 / `confidence` 越界 422 / 自由文本 422 + 文案 / 创建带出与缺省 / `reviewable=false` 复盘 422）
+- 涉及文件：`backend/app/{models/journal.py,services/journal_service.py,schemas/journal.py,api/v1/journal.py}`、
+  `backend/app/migrations/versions/b1c8d4e7f2a9_add_journal_position_size_confidence.py(新)`、
+  `backend/tests/{test_journal_s97_b1.py(新),test_journal_api.py}`、`docs/specs/S9-decision-journal.md`
+  （§S9.4/§S9.7.1/§S9.7.5/§S9.7.8 落地注记）、`.superpowers/sdd/journal-s97/backend-B1-report.md(新)`
+
+## 2026-10-19 - **S9.7 Phase A 后端：净成本 / 基准三选一 / pass 一等公民 / Wilson 区间**
+
+只做加法（契约 `.superpowers/sdd/journal-s97/contract-phaseA.md`；既有响应字段**类型一个没改**）：
+
+- **净成本**（§S9.7.2）：`COST_ROUND_TRIP_BPS = 12`（佣金双边 5 + 印花税卖出 5 + 过户费/滑点 2，
+  假设与日期写在常量区）+ 配对常量 `JOURNAL_STATS_VERSION`；`evaluation` 新增 `net_outcome_pct`
+  （= 毛 − 0.12）/ `net_excess_pct`；`stats` 新增 `avg_net_excess_pct` / `net_cost_bps`
+- **基准**（§S9.7.3）：`bet_type ∈ {direction, relative, market}` **落列**（迁移 `a7d3e9f1b2c4`：
+  `NOT NULL DEFAULT 'direction'` + `ck_journal_bet_type`，只加列不动既有数据），同时写 `snapshot.bench_spec` /
+  `bench_basis_note`（s9.r2）；`direction`/`relative` → 申万一级**成分股等权平均收益**（诚实标注"非指数行情"），
+  `market` → 沪深300；无行业 → 退化沪深300 且 `bench_fallback=true`（显式计算了 `market` 不算退化）
+- **pass 一等公民**（§S9.7.6）：`stats.by_kind` 五栏（合计 = `n`）；`avg_excess_pct` / `avg_net_excess_pct`
+  **排除 `pass`**（放弃的判断不计收益）；`discipline_break_share` 仍是 `number|null`
+- **Wilson 区间**（§S9.7.7）：`wilson_interval(successes, n)`（z=1.96，`n=0 → null`，4/6 → [0.30, 0.90]，
+  5/5 → [0.566, 1.0] 不高估）；`stats.share_ci = {discipline_break, win}`（`win` = 净超额 > 0）+ 固定文案
+  `multiple_comparison_note`
+- **反 N+1 保持**：batch evaluation 仍是 3 条查询封顶（三种沪深300 需求合并成一条），`stats` 恰好 2 条聚合
+  （用例逐条数 SQL 并断言只读）
+- 测试：`tests/test_journal_s97.py`（23 条：净口径逐值 / 三种基准手工对照 / fallback / pass 排除 / Wilson 边界 /
+  迁移只加列 / stats 查询数）；`test_journal_{api,service,model_db}.py` 同步更新（快照 s9.r2、新字段、422、DB check）
+- 涉及文件：`backend/app/{models/journal.py,services/journal_service.py,schemas/journal.py,api/v1/journal.py}`、
+  `backend/app/migrations/versions/a7d3e9f1b2c4_add_journal_bet_type.py(新)`、`backend/tests/test_journal_*.py`、
+  `docs/specs/S9-decision-journal.md`（§S9.3 快照新键 + §S9.7 落地注记）、`.superpowers/sdd/journal-s97/backend-A-report.md(新)`
+
+## 2026-10-18 - **情绪指标详情页体验修复：切指标不再整页重挂 / 头部与分布重做 / 近 20 日改折线**
+
+用户实测反馈的四个问题，逐条定位到根因并修复（不是调样式）：
+
+- **切指标整页抖动**：根因不在页面，而在 `App.tsx` 的 `RouteErrorBoundary` 用 `key={pathname}` 做"换页重置错误态"——`/market/sentiment/zt_count → /broken_rate` 的 pathname 变化会把整棵树（含 `MainLayout`）卸载重挂：骨架闪一下、图表重建、滚动位置丢失。改为 `routePatternKey(pathname)`（按路由清单归一成 `/market/sentiment/:metric`），同页换参数不再重挂；再给 query 加 `keepPreviousData` + 顶部 2px 进度条，数据保留到新值到达才整体切换（实测切指标 scroll 600→600、skeleton 0）。新增 `check-routes` 断言防回归（`<ErrorBoundary key={pathname}>` 直接转红）
+- **返回入口过于草率**：裸文字 `← 返回短线情绪` 改为带 `ArrowLeftOutlined` 的胶囊按钮（hover/focus 态、触屏命中区）；标题旁的 `·` 长句改为「情绪温度计 / 模块」chip + 分隔线 + 数据截至/收盘/有效样本的 meta 行
+- **历史分布文字没落在中线上方**：`当前` 标签改 `position:"end"` + 水平居中 + 底色描边（不再被 y 轴名"天数"压住）；窄屏隐藏 y 轴名、`top` 收窄，标签落在第 1~2 箱时也不重叠；标签值改为完整精度（`44.74%` 而非 `44.7%`）
+- **最近 20 日应看折线**：表格改为 20 日折线（点色=较前一交易日：红增/绿减/灰缺前值，末点带数值标签）；精确数字放进默认收起的「逐日明细（表格）」，不抢主叙事
+- 附带：主图三条分位线的标签在数值接近时会互相压字（炸板率实测）→ 图内不再贴标签，图下给 `分位参考：P25 23.89% · P50 29.21% · P75 35.45%`；指标切换器吸附在顶栏下（读长图时也能换指标）；窄屏 switcher 右缘渐隐提示可横滑；20 日图纵轴补 `%` 单位、`showMaxLabel` 保证最新日期可读
+- 涉及文件：`frontend/src/{App.tsx,app/router/routeKey.ts(新),pages/market-sentiment-metric/*,features/sentiment/metricDetailFormat.ts}`、`frontend/scripts/check-routes.mjs`、`docs/{features.md,Changelog.md}`、`plans/2026-10-18-sentiment-metric-tracking.md`
+- 验证：Playwright 实测切指标无骨架/滚动保持/加载条出现；桌面 1440 + 窄屏 390 截图；`tsc` / `build` / `check:routes` ✓
+
+## 2026-10-18 - **短线情绪指标持久化补齐 + 单指标历史追踪详情页**
+
+用户实测「温度计能读今天、但每张卡进不去历史」。核对源码后确认缺的不是事实表（`market_sentiment_daily` 已有 244 天），而是**两张卡的列**与**单指标读面**：
+
+- **持久化补齐**：迁移 `c1a4e7b9d2f6` 给 `market_sentiment_daily` 加 `yzt_avg_open_premium`（今开溢价）与 `yzt_n`（昨日涨停样本数）；`persist_snapshot` 一并写；`list_sentiment_calendar` 回两列。历史行由 `backend/scripts/backfill_sentiment_metrics.py` 只补 NULL（一条 CTE，不覆写既有事实）——真库实测 244/244 行，`2026-10-16` 的 `1.4038` / `36` 与 `get_snapshot` KPI 逐字一致
+- **趋势序列补列**：`sentiment_series_row` 追加 `yzt_avg_pct` / `yzt_avg_open_premium` / `yzt_n` / `promo_2to3` / `promo_2to3_n`（此前库里冻结、端点却丢弃）；`/sentiment/trends` 的 3 个分位指标不变
+- **新端点** `GET /market/sentiment/metrics/{metric_key}?days=250`（公开、读时计算）：9 个指标各自的统计量 / 分位位置 / 直方图 / 连续同向天数 / peers；NULL 不进样本、样本 <60 不给分位、<5 不给均值、<10 不画分布、未知 key 404
+- **新页面** `/market/sentiment/:metric`：hero（值/较前值/分位/连续天数/样本）+ 9 指标切换器 + 250 日 ECharts（P25/P50/P75 参考线 + 全窗 dataZoom）+ 分布（当前值落箱）+ 窗口统计 + 最近 20 日表 + 口径注；温度计 9 张卡在**收盘口径**下改为 `<Link>`（键盘可达/可中键新开），**盘中不可点**（盘中不落库）
+- 路由同步 IA §4（S1.x 8 条）/ ARCHITECTURE §6 / `check-routes.mjs`；ADR 0021 记录「盘后冻结、盘中不落日表、详情读时计算」
+- 门禁：后端 ruff ✓ / mypy ✓ / 相关 pytest **89 passed**（新增 16 条指标详情用例）；前端 `tsc --noEmit` ✓ / `npm run build` ✓ / `npm run check:routes` ✓；1440×2320 真渲染截图核对两个代表指标
+
+## 2026-10-18 - **S9.7 Phase A 前端：pass 一键 / 净成本口径 / 基准三选一 / 比例 Wilson 区间**
+
+- **「我决定不动」**：`/me?tab=journal` 表单在「标的」旁一键把 `kind` 设为 `pass`（**仍要求 3 必填**）；
+  列表收益列对 `pass` 显示 `—（不计收益）`（不是 0），统计新增 `by_kind` 分栏
+- **净口径**（`net_outcome_pct` / `net_excess_pct`）：列表与复盘弹窗默认净，毛只作括注并标「毛/净（成本 12bp）」；
+  净字段缺省（后端 Phase A 未上线）时回退毛口径并标「净字段缺失，显示毛口径」
+- **基准**（`bet_type`）：表单三选一（方向/跑赢同行/市场级，**默认方向**）；复盘弹窗展示 `bench_basis_note`，
+  `bench_fallback=true` 时补「无行业归属，基准退化为沪深300」
+- **比例带区间**（`stats.share_ci`）：`4/6（95% 区间 30%–90%）`；`reviewed_n < 5` 仍只显示"样本不足"；
+  统计卡底部**原样**展示 `multiple_comparison_note`
+- 契约只做加法（`shared/api/journal.ts` 既有字段一个不删不改）；无新路由、`/market` 未动
+- e2e：`decisionJournal.spec.ts` 14 条（新增 5 条，全 mock）；回归 `watchlistTriage.spec.ts` 9 条 + `userIsolation.spec.ts` 2 条全绿
+- 涉及文件：`frontend/src/shared/api/journal.ts`、`frontend/src/features/journal/{kinds.ts(新),metrics.ts(新),components/{EntryForm,JournalPanel,ReviewModal}.tsx,components/JournalPanel.css}`、`frontend/e2e/decisionJournal.spec.ts`
+
+## 2026-10-18 - **S9 决策日志与归因（P1）落地：3 行必填 + 自动快照 + 五类归因**
+
+owner 判断「用户最需要的是把历史经验沉淀出来、优化个人交易系统」——此前全库唯一的用户自由文本是
+`user_watchlist_items.notes`，「经验沉淀」零代码。本轮把它做成可用的最小闭环：
+
+- **2 张表**（`decision_journal_entries` / `decision_journal_reviews`，append-only、`unique(entry_id)`）：
+  创建后 thesis/invalidation/horizon/symbol **不可改**（路由无 PATCH/PUT/DELETE，测试用 grep + 真实路由表双断言）
+- **3 行必填**（thesis ≤200 / invalidation 价格或日期 / horizon ∈ {7,30,90}），缺一 422
+- **自动快照**（`build_snapshot`，**恰好 5 条查询**）：价格、MA20 距离、情绪分位、申万一级状态、当日事件（复用 S8 探测器）、PE 区间位置；
+  缺数一律 `null + missing_reason`，**不用 0 兜底**
+- **到期 → 结果 → 归因**：自动算 `outcome/bench/excess/invalidation_hit`；归因五选一（判断错/时机错/纪律/赚错因/运气）必选；
+  `stats` 里 `reviewed_n < 5` 时占比为 `null`（样本不足不装作有结论）
+- **PIT 硬证据**：把 `snapshot.price` 换成复盘日价格，`outcome_pct` 从 +7.17% 变 0 → 测试必须红（API 层同款对照）
+- 入口 `/me?tab=journal`（**无新路由**）；合规扫描面扩到 journal 三路径 + 两个后端文件（`TARGETS` 10 个目标）
+- 实机闭环（真库）：创建 → 快照（as_of 2026-10-18, price 171.01）→ 到期列表 → 归因 `timing_wrong`（outcome −14.28% / bench −4.91% / excess −9.38% / 未触及失效）→ stats（`reviewed_n=1`，占比 `null`）
+- 门禁：`self_review --full` ✔ · Playwright 全量 ✔（含 journal 9 条 e2e）
+- 涉及文件：`backend/app/{models/journal.py,services/journal_service.py,schemas/journal.py,api/v1/journal.py}(新)`、
+  `backend/app/migrations/versions/c64df59c0e86_*`、`backend/tests/test_journal_*.py(新)`、
+  `frontend/src/{features/journal/**,shared/api/journal.ts}(新)`、`frontend/src/pages/me/index.tsx`、
+  `frontend/e2e/decisionJournal.spec.ts(新)`、`docs/{features.md,specs/S9-decision-journal.md(新),Changelog.md}`、`plans/2026-10-18-decision-journal.md(新)`
+
+## 2026-10-17 - **自选体检补「规则来源」（provenance）：spec 来源字段 + 卡片三字段 + `/triage/rules` + 12 个月标定统计**
+
+- **后端**：`DetectorSpec` 新增 `version`/`rule_text`/`definition`/`source_tables`/`update_note`/`failure_modes`（8 条 spec 全填，
+  `failure_modes` 4–5 条/条；导入期断言拒绝空值、<3 条、重复项、未知来源表）· `TriageItem`/`TriageItemOut` 新增
+  `rule_text`/`rule_version`/`source_table`（只从 `spec` 单向填充，`triage_service` 在**合并之前**补齐，卡片可回答"依据哪条规则哪个版本、来自哪张表"）·
+  新端点 `GET /api/v1/watchlists/triage/rules`（**登录即可、零 DB 查询**，`stats` 读随仓库入库的静态产物；产物缺失/损坏/源表不足 →
+  `stats=null` + `stats_note` 写原因，**不给"没算"画成"0 信号"**）
+- **统计**：`backend/scripts/build_triage_rule_stats.py`（只读 PG、12 个月窗口、`close/pre_close` 连乘 + 交易日历对齐 + winsorize ±50%、
+  阈值全部从 registry 读、SQL 无阈值字面量）→ `backend/app/services/triage_rule_stats.json` **入库**（同库重跑逐字节确定）；
+  6 条可算（`break_ma20` T+5 超额中位 −0.26% / `drop_sharp` −1.24% / `limit_up_state` −0.74% / `volume_spike` −1.55% /
+  `new_high_low` −0.19% / `sector_move` −0.81%），`new_announcement`（公告仅 1.5 个月）与 `dragon_tiger`（龙虎榜仅 1.7 个月）按纪律写 `null` + 原因
+- 涉及文件：`backend/app/services/{triage_detectors,triage_service,triage_rules(新)}.py`、`backend/app/schemas/triage.py`、
+  `backend/app/api/v1/watchlist_triage.py`、`backend/app/services/triage_rule_stats.json(新)`、
+  `backend/scripts/build_triage_rule_stats.py(新)`、`backend/tests/test_{triage_detectors,triage_service,watchlist_triage_api}.py`、
+  `.superpowers/sdd/triage-provenance/backend-report.md`
+
+## 2026-10-17 - **自选体检上线：`/me?tab=triage`（默认 Tab）+ 8 事实型探测器 + 合规门禁**
+
+- **后端**（`c2cadca`）：`app/services/triage_detectors.py`（8 个纯函数探测器 + registry，导入期校验 8 个/key 唯一/阈值集中/`required_fields` 在 ORM 元数据里真实存在）·
+  `triage_service.py`（固定 6 条批量查询装载上下文，查询数不随自选数增长；单股合并 / severity 排序 / ≤8 折叠）·
+  `GET /api/v1/watchlists/triage`（**登录即可**、>50 只 422 不静默截断、`limit` 1..8）
+- **前端**（`d6acf3d`）：`/me` 新增「今日体检」并设为**默认 Tab**（`/me?tab=triage`，**零新增路由**；独立 `/today` 推迟，
+  需登记 IA §4 + `route-manifest.ts` + `check:routes`）；卡片只给「发生了什么 / 数据截至 / 复核」，分级只用风险/事件/关注/背景
+- **集成收尾（本次）修掉三个契约缺口**：
+  1. `unavailable` 原本下发探测器 key（`['sector_move']`）会被前端 `join` 上屏 → 改为**人话 label**（「所属板块在动」），
+     机器 key 另开 `unavailable_keys`（**仅排查，前端禁止渲染**）；
+  2. 新增 `state = ok | no_data | no_watchlist`：此前"有自选但最近完整交易日不存在"与"没有自选"在前端不可区分，
+     后者被渲染成「还没有自选股」（把"今天查不了"说成"你没加自选"）；现在三态各有文案，`no_data` 还不显示 `as_of`（那是当天兜底值）
+  3. 合规门禁落地：`backend/scripts/triage_compliance.py`（`BANNED_WORDS` 24 个，≥20 下限在导入期断言）+
+     `backend/scripts/check_triage_compliance.py`（扫前端体检测试/页面/API 常量/探测器 headline，命中即非零退出；目标缺失也失败，
+     防"扫 0 个文件 → 0 命中 → 通过"）+ `tests/test_triage_compliance.py` 让 `pytest` 就是那道门禁
+- 涉及文件：`backend/app/services/{triage_detectors,triage_service}.py`、`backend/app/schemas/triage.py`、
+  `backend/app/api/v1/watchlist_triage.py`、`backend/scripts/{triage_compliance,check_triage_compliance}.py`(新)、
+  `backend/tests/test_{triage_detectors,triage_service,watchlist_triage_api,triage_compliance}.py`、
+  `frontend/src/{shared/api/triage.ts,features/triage/components/TriagePanel.tsx,pages/me/index.tsx}`、`frontend/e2e/watchlistTriage.spec.ts`、
+  `docs/{features.md,specs/S8-watchlist-triage.md}`、`plans/2026-10-17-watchlist-triage-impl.md`
+
+## 2026-10-17 - **规则标定证伪预测型清单 → 转向「自选体检」（spec S8 改写）**
+
+- **标定**（只读、可复跑）：把"每日信号清单"的 5 条规则按**复权收益 + 交易日历对齐 + winsorize + 每日 n≥10 + 按日超额中位数**重跑，
+  结果 **放量新高 −0.922% / 首板 −0.275% / PE 低位 +0.123%**（5 日超额中位数），候选的"缩量新高 +1.031%""急跌未破位 +1.004%"**仅 in-sample 且样本日少**。
+  证据台账：[docs/design/signal-rule-calibration.md](../docs/design/signal-rule-calibration.md)（含可复跑 SQL）
+- **标定顺带查出 4 个数据面错误**：`turnover_rate_f` **全列 NULL**（0/133,308）· `market_limit_up_stock_daily` **仅 2 个交易日**（247 行）·
+  **无个股融资余额表**（只有市场级 `margin`）· `daily_basic` 仅自 2025-04-01（做不了 PE 三年分位）· `adj_factor` 仅 1.3% 非空（不能判除权）
+- **第一次跑的 +3.9%/+4.9% 超额是假的**（未复权 + 停牌跨期 + 小样本日）；改口径后回落到 +1.0% —— 这条写进了标定口径，防后人重犯
+- **结论（owner 采纳 A）**：砍掉预测型信号清单，改为**自选体检**（事实型、零新表、8 探测器、噪声控制当门禁）
+- **文档改判**：`docs/specs/S8-decision-digest.md` → [`S8-watchlist-triage.md`](../docs/specs/S8-watchlist-triage.md)（S8.1–S8.5 重写）；
+  `plans/2026-10-17-retail-decision-digest.md` → [`2026-10-17-watchlist-triage.md`](../plans/2026-10-17-watchlist-triage.md)（M0–M3）
+- 涉及文件：`docs/design/signal-rule-calibration.md(新)`、`docs/specs/{S8-watchlist-triage.md(改名+重写),README.md}`、
+  `plans/{2026-10-17-watchlist-triage.md(改名+重写),index.md}`、`docs/Changelog.md`
+
+## 2026-10-17 - **产品转向：散户工具型「决策筛子」立项（spec S8 + 计划）+ 四轮 owner 裁定**
+
+owner 判「上述功能有很多无用的地方，要把实用价值提上去」。四轮对话后定案，**先把产品定位与契约钉死**（本条目仍无业务代码）：
+
+- **目标用户 = 泛散户**（要选股/抄作业）；**合规定位 = 工具型**（只给「符合规则的标的 + 客观理由 + 风险 + 失效条件」，**不出买卖指令、不承诺收益**）；**不做社区/关注人/跟单**
+- **形态 = 每日清单（A）+ 自选体检（B）合体**，规则战绩作为副产品；新增 [spec S8](../docs/specs/S8-watchlist-triage.md)（当时名 `S8-decision-digest.md`，同日已改判为自选体检）与 [计划](../plans/2026-10-17-watchlist-triage.md)（当时名 `retail-decision-digest.md`）
+- **owner 修正两条**：`/market` 的 5 个 tab **零改动**；6 个一级导航**不隐藏**（占位页保持"规划中"）⇒ `/today` 只做**筛选/解释/提醒**，不复刻行情图表
+- **契约要点**：仅 1 张信号表 `daily_signal_items`（`reasons` 恰 3 条 check、`invalidation` **机器可判定**）+ 提醒 2 表；
+  5 条规则登记在 `SIGNAL_RULE_SPECS`（阈值即配置、改阈值 bump `rule_version`、`required_fields` 导入期核对）；
+  **PIT 三条硬约束**（只用 `published_at ≤ as_of 21:00`、财务只用已公告期、**对照实验必须变红**）；
+  **战绩只展示检验期**（训练 ≤2024-12-31、样本 <30 不给数字、必展示最差 5%）；**禁用词清单在代码**、文档只写"≥20 词"的下限
+- **kill criteria（先写死）**：规则不过后验不上线；`/today` 连续 5 个交易日没被打开 → 改设计；铃铛 2 周内"点开→加自选"<10% → 改文案不加规则
+- 登记：[docs/specs/README.md](../docs/specs/README.md)（交付序 S8 · detailed）· [plans/index.md](../plans/index.md)
+- 涉及文件：`docs/specs/{S8-watchlist-triage.md(当时名 S8-decision-digest.md),README.md}`、`plans/{2026-10-17-watchlist-triage.md(当时名 retail-decision-digest.md),index.md}`、`docs/Changelog.md`
+
+## 2026-10-17 - **止损：D1‑D2 / F 两条腿转 dormant（无消费方）——并给 S2.5 出任务分解**
+
+owner 追问「这块有价值吗」，代码实测的答案是**近乎零用户可见收益**：本轮四条腿里只有 **ETF 篮子 6→8** 改了页面上一个数字；
+`equity_change`（`/news` 仍占位）、`insider_net_change_daily`（前端 0 引用）、`northbound_holding_quarterly`（前端列了但**读不到**：
+市场读面按 `stock_id=0` 取数，数据是 per-stock）**都没有消费方**。
+
+- **撤腿**：`derived_metrics_service` 移除 `insider` / `northbound` 的 LegSpec 与 runner（`LEG_KEYS` 回到 4 条），
+  改列 `CONVERGE_EXCLUDED_KEYS` 并写明 **dormant（2026-10-17）** 理由；新增单测
+  `test_dormant_metrics_are_explained_not_converged` 钉住「不在腿上 + 理由含 dormant + 理由说清无消费方」
+- **不删数据/脚本**：`backfill_insider_change.py` / `backfill_northbound_holding.py` 保留（手工回补仍可用）；
+  库里 392 / 11,634 行保留（消费方出现后可直接用）
+- **收益**：每天少 2 次交易所外呼、每季少 2 次上游取数
+- **同步标注**：registry（两条 MetricDef 的描述）、[metric-dictionary](./design/metric-dictionary.md)、
+  [data-source 附.11.5](./design/data-source.md)；计划 §13 记录裁定与本计划级教训
+  （**同一错误的镜像**：F5 事件日历因「零消费方」被推迟，本轮却先建数据后想消费者 ⇒
+  以后一条数据腿动手前必须指出具体消费方，否则只允许 dormant）
+- **下一步**：转 S2.5（用户研究假设）—— 任务分解写在计划 §13（T1 权限与门禁 / T2 数据层 / T3 判定引擎 / T4 服务与 API / T5 执行挂载 / T6 前端 / T7 收尾）
+- **e2e 收尾（按要求跑）**：`E2E_BASE_URL=http://localhost npx playwright test` → **200 passed / 13 skipped / 0 failed**。
+  期间把一条**长期假红**的用例修成确定性：`limitUpSentiment.spec.ts › 限价缺失时显示原因而非空态` ——
+  该分区里其实有**第五块**面板（次新股情绪 `/api/v1/new-stocks`）没被 mock、打活栈，活栈无数据时渲染通用空态 ⇒ 分区级「无「暂无数据」」断言假红
+  （实测单跑绿、全量红过两次）；补齐该 mock 后又暴露**第二个问题**：分区里出现**两处**同款降级文案 ⇒ 裸 `getByText` 触发 strict mode 失败，
+  已把正向断言**收进具体卡片**（`getByTestId("section-情绪温度计")`）。修完单 spec 连跑 3 次全绿、全量 200 passed。
+- 涉及文件：`backend/app/services/{derived_metrics_service,industry_registry}.py`、`backend/tests/test_derived_metrics_converge.py`、
+  `docs/{Changelog.md,design/{data-source,metric-dictionary}.md}`、`plans/2026-10-12-investment-research-platform-ia.md`
+
+## 2026-10-17 - **官方一手腿 A/D1‑D2/F 收口 + B/C 对拍：ETF 篮子 6→8（v3）、董监高日频 key、陆股通季度 11.6k 行**
+
+按 [ADR 0019](../docs/decisions/0019-official-first-source-layer.md) 的排期把剩余四条腿做完（D3 已于同日先行落地）。**关键不是"接了官网"，而是每条腿都先对拍再决定接不接**。
+
+- **A · ETF 份额：对拍后裁定「不切换源」+ 篮子 6→8**
+  - 对拍（新 probe `spike --probe etf-share-compare`）：**沪市官方与 TuShare `fund_share` 同日逐点一致**（30 点 0 差异；单位差 10000 被当场识别：官方=**份**、`fd_share`=万份）；
+    **深市逐值一致但日期标签差 1 个交易日**（8 个值匹配点 0 未匹配，日期差 {1,3} 天 = 下一个交易日）。因沪市官方只有**按单日**查询（回补 = N 次请求，判据 ② 不过）⇒ **保持 L2**，官方只作对拍
+  - **篮子 6 → 8**（沪深300 族补 `510310.SH` / `159919.SZ` —— 此前"已知收窄"会系统性低估该族净申购）；口径版本 `s1.7-v2` → **`s1.7-etf-v3`**（与南向**解耦**：新增 `ETF_SHARE_CALIBER_VERSION` + 每 key 的 `CALIBER_VERSIONS`），已整段重灌：**932 行 / 单一 v3 口径 / 0 混用**
+- **D1/D2 · 董监高及关联人持股变动（新 key `insider_net_change_daily`）**
+  - 沪 `COMMON_SSE_XXPL_CXJL_SSGSGFBDQK_S`（**带 `FORM_DATE` 披露日**）+ 深 `1801_cxda`（**无披露日**）；单位归一（沪原生**股**、深原生**万股** → **万股**）
+  - **共享 PIT 守卫新增唯一豁免**：只有显式带 `extra.disclosure_date_unavailable=True` 的 NULL 才被放过（漏带仍响亮失败）；深市行因此**不进回测/信号链路**
+  - **实测新坑**：沪市窗口过滤的是**变动日**而非披露日（取证：变动 2024-03-05 / 填报 2026-09-20 的补报只在变动日窗口内可取）⇒ 日更回看 30 天，长滞后补报靠回补脚本；已写进 registry 描述与字典
+  - 实机：2026-09-21~10-16 → **606 事件 / 394 行**（189 行无 PIT = 深市）；新增 `backfill_insider_change.py` + worker 手动触发 `insider_change`；**7 个单测**（含"翻满页必红"、"PIT 豁免只认显式标记"）
+- **F · 陆股通持仓（季度）：历史走 `hk_hold` 逐交易所取**
+  - 港交所页面只作当期快照/校验：**更早季末返回 0 行**，且 2026-10-16 查 09-30 仍回上一季数据 ⇒ **对齐未证实**（未验证余项）
+  - `hk_hold` 单次 **4200 行上限**实测会**截断 SZ**（不带 `exchange` 时 SH 2089 + SZ 1097 + HK 1014 = 4200）；**必须把 `exchange` 传到上游**（本地过滤救不了截断）→ SH 2089 + SZ 2320 = 4409 才完整
+  - `published_at` = 季末后**第 5 个交易日** 21:00（用库内 `daily_quotes` 交易日算，规则可复算；不足则响亮失败）
+  - 实机：3 个季末 → **11,634 行**（3750/3932/3952）；ETF 伪代码（`ETF300`…）计入 `non_stock`，`unresolved=0`；新增 `backfill_northbound_holding.py`
+- **B/C · 对拍（不换源）**：**两融**沪市官方 vs TuShare `margin` **逐日一致**（0 差异）；**沪深300 PE** 官方 `市盈率1` vs TuShare `index_dailybasic.pe` 存在**系统性口径差**（14 天：中位 **−0.44%**、最大 **−0.94%**）——有界、已登记为已知口径差（不是 bug），官网只有近 20 行故不切换
+- **语义化改动**：`akshare_client` 新增 4 个**官方出口**薄封装（沪/深 ETF 份额、沪两融汇总、中证指数估值）；`tushare_client` 新增 `fetch_hk_hold`（`exchange` **必须**作为上游参数）
+- **文档**：data-source 附.11.5 新增 4 行实现记录 + 3 条新未验证余项；字典把 `insider_net_change_daily` 移入**已注册表**（核对 49 行 MISMATCH 0）、ETF 口径改 8 只/v3、新增 insider 口径段；研究报告标记 A/D 已落地
+- **Playwright e2e（收尾必跑）**：`E2E_BASE_URL=http://localhost npx playwright test` → **200 passed / 13 skipped / 0 failed**（1.2m）。
+  首轮 2 红，逐条定性后修的是**测试的陈旧前提**而不是放宽断言：`marketLayout.spec.ts` 原本断言「板块主力资金流卡**不得**印口径徽标，因为该端点不返回 `as_of_quality`」——
+  但该卡的徽标来自它**自己的**行业涨跌子请求（`/market/sw-industry/performance`，实测**返回** `as_of_quality: "complete"`）⇒ 改为**与 payload 自洽**（`as_of_quality` 有 ⇒ 徽标必须有，无 ⇒ 不得凭空印），比原断言更强且不会因后端补齐字段而假红；
+  另一条 `limitUpSentiment.spec.ts` 首轮红、复跑绿（数据态相关，非本批改动）。
+- **环境发现（未处置，交 owner 裁定）**：本机存在 **`docker-compose.override.yml`**（未入库），它把 `postgres_data` 指向 **`stock-bot_postgres_data`**，而主文件锚定的是 `stock_bot_wt_p7_postgres_data` ——
+  `docker compose config` 实测**以 override 为准**（运行中的 postgres 挂的正是前者）。两个 5.0G 卷**内容已分叉**：本批的实机数据已在运行卷上**重灌并核对**（`etf v3 / insider 392 / northbound 11634 / equity_change 30`）；
+  **风险**：任何不带 override 的 `docker compose up`（或把 override 删掉）会让 postgres 切到另一个卷、看起来像数据全丢。处理方式需 owner 选：①把 override 的卷名写进主文件；②把数据并进锚定卷；③保持现状并在部署文档写明"必须带 override"。
+- 涉及文件：`backend/app/services/{insider_change_service,northbound_holding_service}.py(新)`、`backend/app/core/providers/{tushare_client,akshare_client}.py`、`backend/app/services/{industry_registry,capital_flows_service,market_activity_service,market_data_service}.py`、`backend/scripts/{backfill_insider_change,backfill_northbound_holding}.py(新)`、`backend/scripts/spike_official_sources.py`、`backend/tests/{test_insider_change_s17,test_northbound_holding_s17}.py(新)`、`backend/tests/test_capital_flows_s17*.py`、`docs/{Changelog.md,design/{data-source,metric-dictionary,official-data-sources-verification}.md}`、`frontend/e2e/{marketLayout,limitUpSentiment}.spec.ts`
+
+## 2026-10-17 - **当日盘后（T+0）纳入期望集：交易日收盘后页面显示当日数据，数据没到如实报滞后**
+
+[ADR 0020](../docs/decisions/0020-t0-after-close-expected-day.md) · 计划 [plans/2026-10-16-t0-after-close-expected-latest.md](../plans/2026-10-16-t0-after-close-expected-latest.md) 的 P0.5–P7 全部落地。
+
+**用户报的现象**：2026-10-16（周五）22:30，`/sentiment` 的 hero 还显示 15 号，且后端声称"不滞后"。
+根因两条叠加：① 期望集硬编码"截止昨日"（`end = today - 1`）⇒ 当日行情**永远**不被拉，
+页面"数据截至"天天不动；② 新鲜度锚取自 `max(daily_quotes)`，**与被判据的对象同源** ⇒
+"今天整天没采"时反而报 `stale=false`（判据永远自洽、永远不报警）。
+
+- **期望日与齐备性拆成两个判据**：`market_day_service.calendar_expected_latest_day`（纯函数：
+  交易日 + 时钟 ≥ `T0_CUTOFF`=17:30 CST ⇒ 当日；**不探库不看行数**）负责"该到哪天"；
+  `reconciliation_service._gated_expected_latest`（对账补齐底座后，按 `is_day_complete`
+  三元组门禁逐日回退）负责"真到没到"。**不拆开就会两头死锁**（拉取前当日必然无数据；
+  读面若看齐备性则"没采"时退回昨天而自称新鲜）——见 ADR 0020 §决策 1。
+- **cutoff=17:30 使既有的 17:45 全量对账自动成为 T+0 收敛点**（不新开 cron）：晚于 16:50 限价
+  入库、早于 17:45 兜底对账；当日数据未出全时拉取会写 partial（2026-09-16 事故），故不得前移。
+- **修掉 0.8/0.9 阈值分叉的死锁**：对账原先按 `COMPLETENESS_RATIO=0.8` 行数判"要不要重拉"，
+  读面按 0.9 + 列级 + 限价；两数之间的日子"无需重拉却永远过不了门禁"⇒ 当天卡在 T-1 且
+  **永不自愈**。现统一到 `is_day_complete`，并让过不了门禁的日子重新进重拉队列。
+- **落后天数改由日历计数**（`count_trading_days_between`）：旧实现数 `daily_quotes` 的持有日，
+  而"今天整天没采"时行情表里没有今天 ⇒ 数出 0 ⇒ `stale=false`（自指换个形式复活）。
+  同时**删掉** `trading_days_between`（那个自指 helper 留着就是下一个坑）。
+- **交易日历进 Redis**（`market:day:trade_calendar`，含 `covered_through`，TTL 7 天，对账在
+  非降级时写）：读面判新鲜度**不外呼 TuShare**；覆盖不到今天一律返回 `None`（判不出，不许猜）；
+  两侧显式 ISO（orjson 不认 `date`，写 date 读回 str 会让比较抛 `TypeError`）。
+- **`provisional` 三态（读时推导，不写库）**：交易所融资融券是 T+1 披露 ⇒ 当日盘后读到的合成值
+  必然缺这两条腿（合计权重 0.16），会在上游披露后被重算改写。registry 给成分加 `late_arrival`
+  声明，读面据此判 `True`（会被改写）/ `False`（终值，含已落到改写窗口之外的）/
+  `None`（判不出，**不得**塌成 False）。文案写"待上游披露后重算"，**不写"次日"**（实测 10-15
+  的两融到 10-16 21:32 仍未披露，承诺时点会失实）。
+- **编排串联 + 条件重试 tick**：个股级涨停事实（`limit_up_stock_daily` 在巡检域、对账永不自愈）
+  改为对账尾步 `_refresh_limit_up_facts`（**顺序由代码保证，不靠把 cron 挪到 17:55 的时间差**）；
+  新增 `reconcile_retry_1830` / `reconcile_retry_2000`，先做**零外呼**判定（期望日是不是今天、
+  今天是否已过门禁）再决定是否跑整条链 —— 收敛器的波动率腿 `always_rescan=True` 每轮真外呼。
+- **前端**：三个 query 全部 `refetchOnWindowFocus:true`；只在 `stale===true` 时 5 分钟探测
+  （追平即停；**不**因 `provisional=true` 轮询——它能持续一天以上）；`asOf` 变化时联动失效
+  metrics/trends（否则 hero 是今天、下方模块是昨天）；hero 与页头补 provisional 两档披露。
+- **术语统一（用户可见文案）**：「N/11 条腿」→「成分指标」（代码字段 `legs`/`legCount`/`totalLegs`
+  与 queryKey/testid 一律未动）。
+- **P0.5 实测**（决定方案可行性）：距周五收盘 9.4 小时探测上游 —— `daily`/`daily_basic`/
+  `stk_limit`/`fut_daily`/`index_daily`/QVIX 均含当日，**只有融资融券是 0 行**（T+1）；
+  QVIX CSV `Last-Modified`=16:53 CST，早于 cutoff 37 分钟。⇒ 当日 9/11 条腿、权重 0.84 > 闸门
+  0.80，**发布闸门维持不变**（曾担心 QVIX 迟到会掉到 0.72 而被闸门挡死）。
+- **真库实证**（2026-10-17 11:12–11:30 CST，真实 docker 栈，`docker compose -p stock-bot -f docker-compose.yml
+  up -d --no-deps api scheduler worker frontend`，postgres 全程未触碰）：周六启动对账
+  `RECONCILE all domains ok (expected_latest=2026-10-16)` ⇒ `daily_quotes` 的 10-16 从 **0 行变 5567 行**；
+  收敛 `status=ok target=2026-10-16`；hero `as_of=expected_as_of=2026-10-16`、`lag=0`、`stale=false`、
+  `value=32.2336`、**11/11 条成分 / 权重 1.0**；`/market/data-freshness` 给出
+  `calendar_expected_latest=2026-10-16` / `expected_latest=2026-10-16` / `expected_latest_source=gated`。
+  **顺带证实"临时值会被改写"**：10-15 由 9 条腿/0.84/27.546 改写为 **11 条腿/1.0/24.2180**（周五两融在周六上午到位）。
+- **门禁**：ruff ✓ · mypy（199 文件）✓ · **pytest 1489 passed / 46 skipped**（4 个失败**全部**来自并行工作流的
+  `insider_net_change_daily` 未接入任何腿，与本任务无关）· `npx tsc --noEmit` ✓ · `doc_gate` ✓。
+  关键用例做过**变异验证**（把 cutoff 比较改成 `>`、把 `covered_through` 守卫改成 `<=`、把日历计数恒置 0
+  —— 三处都让测试转红，随后按 sha256 还原）。
+- **部署注意（写进结论，避免下次踩）**：本机 Docker Hub 不通（基础镜像按 digest 钉死），构建时临时把
+  `FROM` 前缀指向镜像站 `docker.1ms.run`（同 digest ⇒ 同一内容），构建后按 sha256 还原 Dockerfile；
+  上线必须 `-p stock-bot` **且** `-f docker-compose.yml`（排除 override 的卷名改写），否则会把 postgres 挂到空卷。
+- 涉及文件：`backend/app/services/{market_day_service,reconciliation_service,market_sentiment_composite_service,industry_registry}.py`、
+  `backend/app/scheduler/{jobs,runner}.py`、`backend/app/{config.py,api/v1/market_data.py,workers/market_data_worker.py,schemas/limit_up.py}`、
+  `backend/tests/{test_market_day_service,test_reconciliation_service,test_reconcile_jobs,test_derived_metrics_job,test_market_sentiment_composite_api,test_market_coverage,test_data_freshness_api,test_job_alerts}.py`、
+  `frontend/src/{features/sentiment/**,pages/sentiment/index.tsx}`、`frontend/e2e/sentiment.spec.ts`、
+  `docs/{decisions/0020-*,decisions/index.md,Changelog.md}`、`plans/2026-10-16-t0-after-close-expected-latest.md`
+
+## 2026-10-17 - **T+0 期望日判据 P1：`calendar_expected_latest_day` 纯函数 + 交易日历缓存（纯新增，零行为变更）**
+
+按 [plans/2026-10-16-t0-after-close-expected-latest.md](../plans/2026-10-16-t0-after-close-expected-latest.md) 开工"当日盘后（T+0）纳入期望集"的 **P1**（P0.5 实测已先行完成，见计划）。
+
+- **为什么先做这一步**：2026-10-16 晚用户报"16 号了页面还显示 15 号"。根因是期望集硬编码 `end = today - 1`，
+  而新鲜度锚又取自 `max(daily_quotes)`（与滞后的数据链同源 ⇒ 自指 ⇒ 永远报 `stale=false`）。
+  P1 只落地**判据本体与它的缓存**，不接线：`expected_trade_dates` / hero 的改锚分别在 P2/P5。
+- **`market_day_service.calendar_expected_latest_day(calendar, *, covered_through, now)`**：只回答"按日历与时钟现在该出到哪天"，
+  **不探库、不看行数**。刻意与 `is_day_complete` 分开的理由写在源码注释里：混在一起会造成两处死锁 ——
+  ① 对账拉取前当日必然无数据，若判据要看齐备则**当日永远进不了期望集**（鸡生蛋）；
+  ② 读面新鲜度若看齐备，"今天整天没采"时会退回昨天而报 `stale=false`（ADR 0016 时代的自指 bug 复活）。
+- **`T0_CUTOFF = 17:30`（Asia/Shanghai）**：晚于 16:50 的限价入库（`is_day_complete` 要求 `limits_present`）、
+  早于 17:45 的兜底对账 ⇒ 既有的 17:45 全量对账自动成为 T+0 收敛点，**不新开 cron**。
+- **日历缓存带 `covered_through`**（`market:day:trade_calendar`，TTL 7 天）：只存日期列表无法区分"今天休市"与
+  "缓存停在昨天"，后者若当成"今天不是交易日"会让期望日静默退回昨天 —— 又是一次"自称新鲜"。覆盖不到今天一律返回 `None`（判不出，不许猜）。
+- **序列化两侧都显式 ISO**：`CacheClient` 走 orjson，`date` 不是原生类型（stdlib `json` 会靠 `default=str` 悄悄转字符串，
+  orjson 直接抛）；"写进去是 date、读回来是 str"会让 `day <= today` 抛 `TypeError`。
+- **时区规整**：naive 输入按**上海本地**解释（容器默认 UTC，按 UTC 解释则北京时间 17:30 时 UTC 才 09:30，T+0 永不触发）。
+- **env 开关 `T0_AFTER_CLOSE_ENABLED`**（默认开）：一键退回 T-1 语义，用于灰度与回滚。
+- **测试 22 条**（边界：cutoff 前 1 分 / 正点 / 后 1 分、周末、覆盖度不足、空日历、全在未来、naive vs aware、
+  载荷往返与畸形、编排四类 reason、以及一条结构性护栏"判据不得触库"——用签名断言钉死参数集）。
+  **变异验证**：`>= T0_CUTOFF` → `>`、`covered_through < today` → `<=` 两处变异都让测试转红，随后按 sha256 校验还原。
+- **门禁**：ruff ✓ · mypy（198 文件）✓ · `pytest tests/test_market_day_service.py tests/test_reconciliation_service.py tests/test_market_sentiment_composite_api.py` **66 passed** ✓
+- 涉及文件：`backend/app/services/market_day_service.py`、`backend/app/config.py`、`backend/tests/test_market_day_service.py`、`plans/2026-10-16-t0-after-close-expected-latest.md`
+
+## 2026-10-17 - **官方一手腿 D3 落地：巨潮「股本变动」类目（5%+ 股东增减持原料）+ 分页截断响亮失败 + 读面类目过滤**
+
+按 [ADR 0019](../docs/decisions/0019-official-first-source-layer.md) 的裁定顺序开工，第一刀做 D3（成本最低、不动 TuShare）。
+
+- **新增公告类目 `equity_change`**（cninfo `category_gqbd_szsh` = 5%+ 股东 / 实控人 / 机构的**权益变动、减持计划（含届满）、增持**）：
+  类目面**清单化**为 `cninfo_client.ANNOUNCEMENT_CATEGORIES`（client 与 service 都从此迭代，禁止各写一份），
+  并有**导入期断言**：三张配置表（类目元组 / category code / 分页档位）必须覆盖同一集合、code 不得重复
+- **分页截断从「静默」改为「响亮失败」**（旧实现跑满 `max_pages` 就静默返回）：现在跑满上限时先取**探针页**区分
+  「恰好整除」与「真还有更多」，后者 `RuntimeError`。**为什么必须改**：`equity_change` 实测 ≈ **157 条/交易日**
+  （1102 条 / 7 个交易日），沿用 30×10 档会在 3 天窗口被截断；而 cninfo 分页只回最新页，被截掉的更早页**永久不回补**，
+  10 分钟轮询谁也发现不了。取数档位因此按类目分档（`equity_change` = 50×25）
+- **读面 `GET /market/announcements` 新增 `category` 过滤**：未知类目 **400**（实测 cninfo 对不存在的 code
+  **静默退化为全量 9,236 条** —— 不显式拒绝就会把全量公告当"某一类"返回，ADR 0019 硬纪律）；缓存键加类目，避免 report/equity_change 互相污染
+- **共用 ingest**：抽出 `announcement_service.ingest_announcements_window(db, se_date, categories)`，
+  轮询（近 3 日滚动窗）与回补**共用同一函数**（不写第二套）；新增回补入口
+  [backfill_announcements.py](../backend/scripts/backfill_announcements.py)（分段窗口、幂等、逐类目覆盖率对账、退出码）
+- **实机（真库）**：2026-10-16 单日单类目 → **30 行入库**；重跑 → **0 行**（幂等）。样例即目标内容：
+  「控股股东、实际控制人权益变动触及1%整数倍暨减持计划期限届满」「持股5%以上股东增持股份比例触及1%整数倍」
+- **阻塞点变更（如实记录）**：本腿交付的是**原料 + 家数读面**，**不是指标值**。`industrial_capital_net_change`
+  仍为 0 行，但原因**只剩公告正文的金额抽取**（S3.4）—— registry / metric-dictionary / capital_flows_service /
+  derived_metrics_service 四处"待接 S3.2"的文案已同步为"原料已采、金额抽取待接"
+- **spike 探针加严**：`cninfo-category` 从"只验一个 code"扩为**遍历全部已登记类目**逐个断言过滤生效
+  （report 160 / event 228 / equity_change 1102 vs 无类目 9,236，无效 code 9,236）
+- **门禁**：ruff ✓ · mypy（198 文件）✓ · **pytest 1434 passed / 46 skipped / 0 failed** ✓ · doc_gate ✓
+- **顺带定位并修掉一个门禁假阳性**（与本腿无关的既有缺陷）：`self_review --full` 第一轮出现 2 failed
+  （`test_market_activity_leverage_db`），而**同一条命令重跑 1436 passed** —— 该文件 docstring 早写明「上游不可达时 skip，不假装通过」，
+  但三处真调 TuShare/AKShare 的调用是直调、无 try/except，上游变慢（该轮 195s vs 92s）时就判红。已收敛为 `_upsert_or_skip(...)`（**只**捕上游/网络类异常，真 bug 仍照红），
+  并做破坏验证：用**无效 token** 跑 → 两个用例由「红」变「skip」。教训入 [best-practices/testing](../docs/references/best-practices/testing.md)（写下「能否机械检测：不能」的理由）
+- 涉及文件：`backend/app/{core/providers/cninfo_client.py,services/announcement_service.py,repositories/market_data_repo.py,api/v1/market_data.py,schemas/market_data.py}`、
+  `backend/app/services/{industry_registry.py,capital_flows_service.py,derived_metrics_service.py}`、
+  `backend/scripts/{backfill_announcements.py(新),spike_official_sources.py,backfill_capital_flows.py}`、
+  `backend/tests/test_announcement.py`、`docs/{Changelog.md,design/{data-source.md,metric-dictionary.md,official-data-sources-verification.md}}`
+
+## 2026-10-16 - **官方一手优先落成政策（ADR 0019）+ 附.11 出口复核收口 + §S1.7 拆 key / §S1.14 结案**
+
+owner 裁定「**官方第一手数据源优先**」。本次把该裁定**先落成契约与权威文档**（不改代码），
+使后续每条腿的实现都有可核对的判据，而不是每次接源重吵一遍。
+
+- **新增 [ADR 0019](../docs/decisions/0019-official-first-source-layer.md)**：默认主源不变（TuShare Pro 仍是行情/财务/分类/复权的默认，[ADR 0001](../docs/decisions/0001-single-primary-source-tushare.md) 的工程纪律原样保留），
+  **新增"例外门"5 条判据**——某数据集**全满足**才改以官方一手为主源：①官方是权威一手 ②出口可按**时间窗增量**（不得要求全量翻页）③带**披露时点** ④TuShare 没有/已受限/口径需一手复算 ⑤要进信号链路。
+  分层与 tier：**L1 官方一手**→`official`；**L2 主源转售**→按上游实际；**L3 第三方编制**（东财/乐咕/optbbs）→`highfreq`/`calc` 且**禁入信号链路**。
+  **硬纪律**：增量键取披露日、类目过滤必须**断言生效**、单位频率在 registry 固定、同一指标双源须对拍不得混算。**刻意不 supersede 0001**：默认主源未变，变的只是"何时可以离开默认"，属加例外判据而非推翻结论
+- **`docs/design/data-source.md` 新增 附.11（7 项出口三态 + 8 条实机记录 + 5 条未验证余项 + 5 条裁定）**：A ETF 份额（沪深官网全市场，沪 922/深 756，可回补到 2015/2020）· B 两融（2010-03-31 起 4016 交易日，**只作对拍**）· C 中证指数估值（**只有近 20 行**）· D1/D2 董监高持股变动（沪带 `FORM_DATE`、深**无披露日**）· D3 巨潮 `category_gqbd_szsh`（1102 条/7 交易日）· E 开户数（官方月度已断）· F 陆股通季报（港交所可程序化，但**只留最近几季**：2025-12-31 已 0 行）· G 搜索热度（无官方）
+- **更正 附.1③ 的一处推断**：原推测「栏目自述只含行情/会员/上市公司/公告 ⇒ 月报可能无开户字段」被实测推翻——**2021-12 期 PDF 第 69–70 页确有**「帐户新开户状况表 / 股票帐户新开户状况表」（256.05 万户、含个人/机构拆分）；但 PDF 归档**止于 2021-12**、中国结算只剩年度 ⇒ **结论不变（当期不可得），依据更精确**
+- **关闭 附.4 #1（ETF 份额取数路径）与 #2（开户数口径）**；新增 5 条未验证余项（港交所真实可用窗口、**南向每日披露的现行状态**等）
+- **修订 [spec §S1.7](../docs/specs/S1-market-sentiment.md)**：`industrial_capital_net_change` **拆成两个 key** ——
+  **`insider_net_change_daily`**（董监高及关联人，日频，交易所官网官方一手；沪用 `FORM_DATE`、深 `published_at=NULL` 且**不进回测/信号链路**）与
+  **`industrial_capital_net_change`**（5%+ 股东/实控人，事件驱动，巨潮类目）；**解除对 S3.2 的阻塞**；新增 3 条机械验收判据（披露日/单位归一为万股/**类目过滤断言生效**、spike 脚本全绿）与一条口径禁令（两种主体**不得混装**）
+- **[spec §S1.14](../docs/specs/S1-market-sentiment.md) 落 `superseded`**（无官方出口；东财股吧人气榜不是"媒体搜索热度"口径），[specs/README](../docs/specs/README.md) 两行同步
+- **[metric-dictionary](../docs/design/metric-dictionary.md)**：提案表登记 `insider_net_change_daily`（未注册，5 列）；`industrial_capital_net_change` 的"待接"注改为"官方类目已具备、采集待实现"；陆股通季报补官方出口与"只留最近几季"
+- **证据可复现**：[spike_official_sources.py](../backend/scripts/spike_official_sources.py) 7 个 probe 实跑 **exit 0**，附.11 的每个数字都可一键复跑
+- **本次只落契约与文档**（零代码改动）：实现顺序按裁定为 **D3（类目）→ A（ETF 份额官方化）→ D1/D2（insider key）→ F（季报快照）**；B/C 只做对拍
+
+## 2026-10-16 - **数据源调研：A 股官方一手出口核实（Wave 1 缺口 · 增减持 / ETF 份额 / 两融 / 开户数）**
+
+owner 问「Wave 1 还缺的数据打算从哪来，能否走官网」。逐项**实测**（web_search 定位 → 页面/接口直取）核实并写成
+[docs/design/official-data-sources-verification.md](./design/official-data-sources-verification.md)（Step-0 证据台账 +
+分层判据 + 工程评估；三态结论的权威归属仍是 `data-source.md`，裁定后回写）。
+
+- **最重要的发现：S1.7「产业资本增减持」在官网有两条现成路径，但口径不同、必须拆 key**。①**董监高及关联人**：沪 `commonQuery.do`(`COMMON_SSE_XXPL_CXJL_SSGSGFBDQK_S`) 按日期窗口取（实测 2026-10-12~16 = **69 行 / 1 页**、单日 5 行；全历史 71,512 行 / 716 页）、**带 `FORM_DATE` 披露日**；深 `ShowReport`(`1801_cxda`，全历史 124,057 行 / 6203 页，**带 `txtStart/txtEnd` 后同窗口 = 73 行 / 4 页**）、**无披露日**。②**5%+ 股东/实控人**：cninfo `category_gqbd_szsh`（股本变动）类目，实测 2026-10-08~16 共 1102 条（权益变动 8 / 减持 4 / 增持 1，其余多为回购噪音）→ 既有 cninfo 管道加一个类目即可。**故不能再把两种数据混进一个 `industrial_capital_net_change`**（附三个实测坑：沪=股 vs 深=万股；补报滞后使增量窗口必须用披露日，实测一条 2024-03-05 变动 `FORM_DATE=2026-09-20`；无效 `category` 静默退化为全量（同窗口 9,236 条））
+- **ETF 每日份额：可得且可回补（此前"深市历史未证实"被本轮实测推翻）**。沪 `ETFGM_SEARCH_L&STAT_DATE=`（2026-10-14 → **922 只**；2024-01-15 → 518；2020-01-15 → 174；2015-06-30 → 69；10-16 实测 924）、深 `CATALOGID=scsj_fund_jjgm` + `txtStart/txtEnd`（xlsx）（2026-10-14 → 756；2024-01-15 → 355；2020-01-15 → 72）→ 现有 6 只宽基篮子可补全（`ETF_BASKET_CALIBER` 自述收窄 510310/159919）并去掉 TuShare `fund_share` 的 2000 行逐代码约束；深市官网页脚自述 **T 日夜间值以 T+1 早间为准**
+- **两融：可得（2010-03-31 起 4016 个交易日），但建议只作对拍**。沪 `RZRQ_HZ_INFO` + 逐日静态 `.xls`（实测回溯到 2011-01-04，含个股明细）；深 `1837_xxpl` 一次全量返回。中证金融已不是出口（据界面新闻，2022-02-25 起官微停发两融日频）。坑：深市 JSON **行内无日期列**、沪元 vs 深亿元、沪汇总含已调出标的
+- **中证指数官方估值只有近 20 行**（000300/000905 实测各 20 行）→ 仅够附.7.4 #5 的 PE 口径对拍，不能作历史序列
+- **月度开户数：官方月度序列事实已断**。上交所《上证统计月报》**确有**开户表（实测 2021-12 期第 69–70 页，总数 256.05 万户、含个人/机构拆分）——**据此更正 `data-source.md` 附.1③ 的推断**（栏目自述未列全）；但 PDF 归档止于 2021-12，中国结算旧月度 URL 实测 404、只剩年度 → 维持 S1.12「不接入」
+- **共同坑（与主源转售的本质差异）**：官方现成封装（AKShare 的沪/深增减持）都是**全历史翻页**（深 6203 页），实测翻到第 176 页即被断连 → 必须自写**按日期窗口**的增量取数 + 限速 + 断点续采；接口无 SLA；页面均为 JS 渲染，抓 HTML 无效
+- **陆股通持仓（季度）：官方出口已实测到，但它是"当期快照"不是历史序列**。港交所披露易 CCASS 沪深港通持股查询（`www3.hkexnews.hk/sdw/search/mutualmarket.aspx?t=sh` / `?t=sz`，ASP.NET POST + `txtShareholdingDate`）实测：沪 2026-09-30 → **2039 行**、2026-06-30/03-31 → 1958/1907、深 2026-09-30 → **2269 行**；而 **2025-12-31 及更早（2025-06-30、2024-09-30）全部返回 0 行 ⇒ 历史季度不可回补**（页面自述"持股日数据保留 12 个月"，与实测不符，规则待核）→ 只能"官方取当期 + `hk_hold` 补历史"，且必须落**季度快照纪律**（错过即永久缺）；页面逐字确认 2024-08-19 起季度化、季末后第 5 个北向交易日发布
+- **判据与建议**：给出「L1 官方一手 / L2 主源转售 / L3 第三方编制」三层判据（5 条判据全满足才开 L1）与 Wave 1 排序（cninfo 类目 → ETF 份额 → 董监高 key → 两融对拍；开户数/搜索热度不做）；**待 owner 裁定 4 件**：是否立「官方一手优先」ADR、S1.7 是否拆 key、深市 PIT 缺口如何处置、陆股通是否接受"官网当期 + 主源历史"双源拼接
+- **证据可复现（Ruling 51）**：**已交付** `backend/scripts/spike_official_sources.py`（7 个 probe、带反证断言、`--probe` 可选、只读不写库），本轮实跑 **exit 0 / 全 probe 通过**，报告里的每个数字都能一键复跑核对
+
+## 2026-10-16 - **生产升级固化为脚本 `scripts/deploy_prod.sh` + 全局 skill `deploying-stock-bot`；服务器升到 v0.0.11**
+
+散文文档治不了"每次重犯"，机制能。落地两件产物：
+
+- **`scripts/deploy_prod.sh`（仓库，唯一副本）** —— fail-fast 顺序：预检（拒浮动 tag / 磁盘 / 在跑的慢 pull）→ **备份两库并 `pg_restore -l` 验读** → `ghcr.nju.edu.cn` 拉取 + **OCI label 与本地 tag 指向的 commit 对账** + 改回 `ghcr.io` 真名 → `up -d --no-build` → 收尾断言（镜像 tag / `alembic current==heads` / `/health` version+commit / 错误日志）；`--check` 为只读巡检
+- **全局 skill `~/.agents/skills/deploying-stock-bot/`（本机，不入库）** —— 三条铁律 + 7 条真实坑表 + 回滚；它里面的 `scripts/deploy_prod.sh` 是**软链回仓库副本**（单一真相源）。**为何不入库**：项目级 `.agents/skills/` 是 pi 的**信任门控资源**（`~/Developer/stock-bot` 不在 `~/.pi/agent/trust.json`）→ 实测新进程列出的 72 个 skill 里没有它，等于死文件；放全局目录才真加载，且 pi / Codex / Gemini / Copilot 都认
+- **修掉一个自证漏洞**：只卡 `version` label 等于自证（同版本号可被重建），故脚本**强制**传该 tag 指向的 commit（`git rev-parse vX.Y.Z^{commit}`），并断到 `/health` 上形成 "本地 tag → 镜像 label → 运行时" 闭环
+- **实测教训（本次现场数据）**：服务器直连 ghcr 的 blob CDN（`185.199.x`）仅 **20–35 KB/s**（900MB ≈ 8h）；镜像站那份会被 dockerd 的 **layer 下载锁**卡死（须先杀慢 pull，且**不能用 `pkill -f`** —— 自匹配会杀掉自己的 ssh 会话）；`docker exec` 没有 `-T`（那是 `compose exec` 的参数）
+- **同时上线 v0.0.11**（`32ab97d`，领先 0.0.10 共 175 个提交）：迁移 backend `b6a1f0c2d7e4` / auth `a002_invite_only` 均到 head，`/health` version+commit 与镜像 label 对账一致，经边缘取前端 asset 与镜像内文件 sha256 相同
+- 涉及文件：`scripts/deploy_prod.sh`、`docs/{Changelog.md,index.md,deployment/production.md}`
+
+## 2026-10-16 - **契约层：S2.5 用户研究假设与自动判定立项（投研闭环缺口）+ ADR 0018（写下即冻结 / 判定三态 / PIT）**
+
+owner 在 PR #18 合并后判断"当前 stock bot 还不能很好支持投研"。**代码实测的根因不是数据源、也不是页面形态**：读面已建成约 21 个实页面，但研究工作流侧只有「自选 + 标签」两件资产 —— 全库唯一的用户自由文本是 `user_watchlist_items.notes`，**假设 / 结论 / 证据链 / 导出 / 复盘全部零代码**，而主线计划 §4 认定的两条回路排在 Wave 5/6。
+
+- **新增 S2.5 契约**（[docs/specs/S2-signal-engine.md](./specs/S2-signal-engine.md)）：`research_hypotheses` + `research_hypothesis_events`（append-only 证据链）+ `user_alert_cursors` **共 3 张新表**；**写下即冻结**（`claim`/`conditions`/`deadline` 不可改，接口层无 PATCH/PUT/DELETE，撤回 = 新增事件且**计入准确率分母**）；**判定三态**（`passed`/`failed`/**`insufficient_data`**，缺数据绝不等同于不满足）；**期间只可能判成立**，`falsified` 只来自到期未达；每条条件的 `sustained_periods` **各按该指标自己的 freq 计**（混合频率下不得用"最后 N 行"）；到期遇数据迟到**最多等 10 个交易日**再强制结算并标 `data_lag`；`mock` 数据源下**不产出**结论
+- **新增 [ADR 0018](./decisions/0018-hypothesis-immutability-and-pit-verdicts.md)**：假设独立成表（不塞进系统信号流 `industry_signals`）· 写下即冻结 · 三态 + PIT
+- **执行挂载**：复用 `reconcile_market_data_job` 尾步、**必须排在 `derived_metrics_converge` 之后**（否则拿薄行当结论）、**不新开 cron**；PG advisory lock + `unique(hypothesis_id, kind, as_of)` 幂等；列表**反 N+1** 需配"断言查询次数"的测试
+- **新权限 `research:write`**：能看不等于能往团队假设墙上写（owner 裁定）
+- **机械门禁**：条件可选指标集合**逐字等于** registry 中 `pig` scope **且有真实 writer** 的指标集合（当前有 3 个"已登记但全仓无写入"的指标必须机械地进不了下拉）；三态需**前端 Playwright e2e 视觉断言**（`数据不足` 不得渲染成未满足）
+- **如实记录的偏离**：S2.5 先于 S1.7–S1.14 交付 → Wave 1.5 判据"新增表 = 3 张"改为 **6 张**；spec 总数 **57 → 58**（S2 4 → 5 条），已同步 `docs/specs/README.md`、IA 计划头部/§7/§13 与 `plans/index.md`
+- **四个待裁定项（不假装已解决）**：① `evaluate` 是否纳入 Tier 1 基准 ② `notifications` 与 S2.4 `alerts` 的泛化与迁移（**不得并存两套"已读"**）③ `research:write` 迁移与角色授予面 ④ **证伪线 = v2 第一优先项**（真实研报最常写的一句，本批刻意不做）
+- 涉及文件：docs/{specs/{S2-signal-engine,README}.md,decisions/{0018-*,index}.md,Changelog.md}、plans/{2026-10-12-investment-research-platform-ia,index}.md
+
 ## 2026-10-16 - **派生指标日更收敛（§S1.7–§S1.13）：对账后置收敛器 + 发布闸门 0.80 + 读面"只展示齐备日"**
 
 owner 报"情绪分析的综合指数一直是 10.12，现在已经是 10.15"。

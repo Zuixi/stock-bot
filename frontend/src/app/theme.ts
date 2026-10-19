@@ -37,6 +37,16 @@ export interface ThemePalette {
   /** --sent-extreme-hot 情绪分位 > 90 的极热带（同上） */
   "sent-extreme-hot": string;
   /**
+   * 市场状态机的五态色（S10 §S10.3）。**刻意不用红绿**：状态 ≠ 涨跌，
+   * 红绿会让"亢奋/退潮"被读成"涨/跌"；这里走冷暖光谱（蓝→青→灰→橙→紫）。
+   * 与 theme.css 三块逐项一致，`check-design-tokens.mjs` 会比对。
+   */
+  "regime-cold": string;
+  "regime-warming": string;
+  "regime-neutral": string;
+  "regime-hot": string;
+  "regime-cooling": string;
+  /**
    * `--mag-0..4` 量级色阶（**数量**编码走中性灰阶，不用 accent 叠 alpha）。
    * 顺序与 CSS 逐项对应：0 最浅（数量最少）→ 4 最深；每级对同级 `textPrimary` 的
    * 对比度由 `check-design-tokens.mjs` §8.1-2 算死 ≥4.5。ECharts（canvas 不认 CSS var）
@@ -66,6 +76,12 @@ export const THEME_COLORS: Record<ThemeMode, ThemePalette> = {
     hover: "rgba(41, 98, 255, 0.06)",
     "sent-extreme-cold": "#5b4bd6",
     "sent-extreme-hot": "#a35f00",
+    // 五态色（对白底 WCAG AA ≥4.5：6.45 / 5.85 / 5.16 / 5.29 / 6.04）
+    "regime-cold": "#3B5BA9",
+    "regime-warming": "#226E7C",
+    "regime-neutral": "#6A6D78",
+    "regime-hot": "#A25910",
+    "regime-cooling": "#7A4FA3",
     // 量级色阶（0 最浅 → 4 最深）：与 theme.css 的 light 块逐项一致，门禁 §8.1-1 比对
     mag: ["#eef1f6", "#e2e7f0", "#cfd7e5", "#a9b5c9", "#75859f"],
   },
@@ -84,6 +100,12 @@ export const THEME_COLORS: Record<ThemeMode, ThemePalette> = {
     hover: "rgba(41, 98, 255, 0.12)",
     "sent-extreme-cold": "#8b7cff",
     "sent-extreme-hot": "#ffb020",
+    // 五态色深色版（对深底 ≥7.8）
+    "regime-cold": "#93A9E8",
+    "regime-warming": "#5FBFCB",
+    "regime-neutral": "#A6A9B4",
+    "regime-hot": "#E39A4F",
+    "regime-cooling": "#B79BD8",
     // 量级色阶（0 最浅 → 4 最深）：与 theme.css 的 dark 块逐项一致，门禁 §8.1-1 比对
     mag: ["#1e222d", "#262c3a", "#313a4d", "#3f4a61", "#4c5872"],
   },

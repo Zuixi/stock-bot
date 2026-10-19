@@ -1,7 +1,9 @@
 import { useId, useMemo, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import type {
   SentimentCalendarPoint,
   SentimentKpis,
+  SentimentMetricKey,
   SentimentPercentileField,
   SentimentTrends,
 } from "@/shared/api/limitUp";
@@ -17,6 +19,11 @@ interface Props {
    * 未就绪/失败时为 `undefined` —— 该区块整体不渲染（**不**退回假分位），趋势线回落日历序列。
    */
   trends?: SentimentTrends | null;
+  /**
+   * 卡片的详情页链接工厂（2026-10-18）。缺省 = 不可点（盘中口径：数据不落库，
+   * 没有可回放的历史，点进去只会看到昨天的收盘序列 —— 那是**另一种口径**，不提供）。
+   */
+  metricHref?: (key: SentimentMetricKey) => string;
 }
 
 /**
@@ -117,26 +124,60 @@ function DeltaChip({ diff, unit = "" }: { diff: number | null; unit?: string }) 
   );
 }
 
+/**
+ * 卡片外壳：有 `href` 时整块是一个链接（键盘可达、鼠标手型、hover 有箭头），
+ * 没有则退化成普通 `<div>`。**不用 onClick + navigate**：那样会失去中键新开、
+ * 右键复制链接与键盘 Tab 焦点，而这些正是"可持续追踪"的入口该有的行为。
+ */
+function TileShell({
+  href,
+  className,
+  label,
+  children,
+}: {
+  href?: string;
+  className: string;
+  label: string;
+  children: ReactNode;
+}) {
+  if (!href) return <div className={className}>{children}</div>;
+  return (
+    <Link
+      className={`${className} thermo-tile--link`}
+      to={href}
+      aria-label={`${label}：查看历史追踪`}
+      title={`${label}：查看历史追踪`}
+    >
+      {children}
+      <span className="thermo-tile__go" aria-hidden="true">
+        ↗
+      </span>
+    </Link>
+  );
+}
+
 function PrimaryTile({
   label,
   count,
   prev,
   tone,
+  href,
 }: {
   label: string;
   count: number;
   prev: number | undefined;
   tone: "up" | "warn" | "down";
+  href?: string;
 }) {
   return (
-    <div className={`thermo-tile thermo-tile--${tone}`}>
+    <TileShell href={href} className={`thermo-tile thermo-tile--${tone}`} label={label}>
       <span className="thermo-tile__label">{label}</span>
       <span className="thermo-tile__row">
         <span className="thermo-tile__num num">{count}</span>
         <span className="thermo-tile__unit">家</span>
         <DeltaChip diff={prev == null ? null : count - prev} />
       </span>
-    </div>
+    </TileShell>
   );
 }
 
@@ -161,13 +202,23 @@ function StrengthBar({ zt, zb, dt }: { zt: number; zb: number; dt: number }) {
   );
 }
 
-function MetricTile({ label, note, children }: { label: string; note?: ReactNode; children: ReactNode }) {
+function MetricTile({
+  label,
+  note,
+  children,
+  href,
+}: {
+  label: string;
+  note?: ReactNode;
+  children: ReactNode;
+  href?: string;
+}) {
   return (
-    <div className="thermo-tile thermo-tile--metric">
+    <TileShell href={href} className="thermo-tile thermo-tile--metric" label={label}>
       <span className="thermo-tile__label">{label}</span>
       <div className="thermo-metric">{children}</div>
       {note ? <div className="thermo-tile__note">{note}</div> : null}
-    </div>
+    </TileShell>
   );
 }
 
@@ -230,7 +281,7 @@ function TrendSpark({
  * `kpis` 为 null（罕见：非降级但 KPI 缺失）时整板退化为 `--`，绝不 `?? 0`。
  * 环比与趋势来自 `market_sentiment_daily` 派生缓存，缺失时只藏对应元素、不造假数据。
  */
-export function SentimentThermometer({ kpis, history, asOf, trends }: Props) {
+export function SentimentThermometer({ kpis, history, asOf, trends, metricHref }: Props) {
   const sorted = useMemo(
     () => [...history].sort((a, b) => a.tradeDate.localeCompare(b.tradeDate)),
     [history],
@@ -269,18 +320,22 @@ export function SentimentThermometer({ kpis, history, asOf, trends }: Props) {
   return (
     <div className="thermo" data-testid="sentiment-thermometer">
       <div className="thermo-primary">
-        <PrimaryTile label="涨停家数" count={kpis.ztCount} prev={prev?.ztCount} tone="up" />
-        <PrimaryTile label="炸板家数" count={kpis.zbCount} prev={prev?.zbCount} tone="warn" />
-        <PrimaryTile label="跌停家数" count={kpis.dtCount} prev={prev?.dtCount} tone="down" />
+        <PrimaryTile label="涨停家数" count={kpis.ztCount} prev={prev?.ztCount} tone="up" href={metricHref?.("zt_count")} />
+        <PrimaryTile label="炸板家数" count={kpis.zbCount} prev={prev?.zbCount} tone="warn" href={metricHref?.("zb_count")} />
+        <PrimaryTile label="跌停家数" count={kpis.dtCount} prev={prev?.dtCount} tone="down" href={metricHref?.("dt_count")} />
       </div>
       <StrengthBar zt={kpis.ztCount} zb={kpis.zbCount} dt={kpis.dtCount} />
 
       <div className="thermo-grid">
-        <MetricTile label="炸板率">
+        <MetricTile label="炸板率" href={metricHref?.("broken_rate")}>
           <span className="thermo-metric__num num">{pct(kpis.brokenRate)}</span>
           <DeltaChip diff={ppDiff(kpis.brokenRate, prev?.brokenRate ?? null)} unit="%" />
         </MetricTile>
-        <MetricTile label="昨日涨停均值" note={kpis.yztN > 0 ? `n=${kpis.yztN}` : undefined}>
+        <MetricTile
+          label="昨日涨停均值"
+          note={kpis.yztN > 0 ? `n=${kpis.yztN}` : undefined}
+          href={metricHref?.("yzt_avg_pct")}
+        >
           <span
             className={`thermo-metric__num num ${
               kpis.yztAvgPct == null
@@ -295,7 +350,7 @@ export function SentimentThermometer({ kpis, history, asOf, trends }: Props) {
             {signedPct(kpis.yztAvgPct)}
           </span>
         </MetricTile>
-        <MetricTile label="今开溢价均值">
+        <MetricTile label="今开溢价均值" href={metricHref?.("yzt_avg_open_premium")}>
           <span
             className={`thermo-metric__num num ${
               kpis.yztAvgOpenPremium == null
@@ -313,6 +368,7 @@ export function SentimentThermometer({ kpis, history, asOf, trends }: Props) {
         <MetricTile
           label="1进2晋级率"
           note={kpis.promo1to2Noisy ? `n=${kpis.promo1to2N}，样本小` : `n=${kpis.promo1to2N}`}
+          href={metricHref?.("promo_1to2")}
         >
           <span className={`thermo-metric__num num${kpis.promo1to2Noisy ? " thermo-metric__num--muted" : ""}`}>
             {pct(kpis.promo1to2)}
@@ -322,13 +378,14 @@ export function SentimentThermometer({ kpis, history, asOf, trends }: Props) {
         <MetricTile
           label="2进3晋级率"
           note={kpis.promo2to3Noisy ? `n=${kpis.promo2to3N}，样本小` : `n=${kpis.promo2to3N}`}
+          href={metricHref?.("promo_2to3")}
         >
           <span className={`thermo-metric__num num${kpis.promo2to3Noisy ? " thermo-metric__num--muted" : ""}`}>
             {pct(kpis.promo2to3)}
           </span>
           <DeltaChip diff={ppDiff(kpis.promo2to3, prev?.promo2to3 ?? null)} unit="%" />
         </MetricTile>
-        <MetricTile label="最高板">
+        <MetricTile label="最高板" href={metricHref?.("max_streak")}>
           <span className="thermo-metric__num num">{kpis.maxStreak}</span>
           <span className="thermo-metric__unit">板</span>
           <DeltaChip

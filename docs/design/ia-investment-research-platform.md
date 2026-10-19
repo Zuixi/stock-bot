@@ -236,7 +236,7 @@
 > **另有 7 条保留**（语义未变，**不是 redirect、不在上面 8 条内**）：spec §S0.2 表原有的 **3 条**——`/market`、`/market/industry/:level1Code`（spec 写作 `/market/industry/:l1`）、`/market/industry/:level1Code/:level2Code`（spec 写作 `/market/industry/:l1/:l2`）——**加上 Ruling 8 补入的 2 条**：`/`（landing）与 `/login`（这两条 spec 表未列，因语义未变而补为「保留（语义未变）」）——**加上 Ruling 30 退回的 2 条**：`/market/hot-sectors/:category`、`/market/concept/:boardCode`（它们今天就有真页面，不 redirect）。
 > 合计 **3 + 2 + 2 = 7**（= §4 表 `保留` 行数 = `15 − 8`）。
 
-### S1.x 新增路由的登记（Ruling 56.1；**共 7 条**）
+### S1.x 新增路由的登记（Ruling 56.1；**共 8 条**）
 
 上面两块（15 条旧路由表 + 「新目标路由的建立归属」）是 **S0.2 冻结**的结果，**不因 Wave 1 新增页面而改**。Wave 1 起新增的**真功能页**（不是 redirect、不是占位）登记在本表，与旧表块**同级**——它们同样受「§4 是唯一登记处」约束：
 
@@ -246,13 +246,14 @@
 | `/market/industry/:level1Code/:level2Code/:level3Code` | page | 公开（免登录） | **S1.4** 申万末级成分股页（`IndustryLevel4Page`）。**不是**上面两条保留路由的改写：`:level1Code` / `:level1Code/:level2Code` 两条既有保留路由语义未变（Ruling 30），本行只是**多**一条更深的变体（ADR 0008） |
 | `/market/heatmap` | page | 公开（免登录） | **S1.5** 板块热力图（`MarketHeatmapPage`）。Ruling 30 明确它**不是任何 redirect 的目标**——上面「新目标路由的建立归属」表里没有它是对的；Task 5 先建占位、S1.5 已兑现真实现（`isPlaceholder` 已摘） |
 | `/market/data-sources` | page | 公开（免登录） | **Phase 1 §W2.1** 数据版图 / 数据来源（`MarketDataSourcesPage`）。那版钉在 `/market` 每个 Tab 底部的静态矩阵已由 `1efe65a` 移出工作台，前端设计整改 §0-E 裁定它的**新家在市场域内**（对比候选 `/about/data`）。数据取自只读巡检端点 `GET /api/v1/market/data-freshness` 的 `coverage[]`（逐域 `have_days`/`complete_days`/`trading_days`/`cover_pct`），**不是**又一张手写常量表；`/market/**` 维持免登录（ADR 0008） |
+| `/market/sentiment/:metric` | page | 公开（免登录） | **2026-10-18** 情绪指标详情（`MarketSentimentMetricPage`）：`/market` 短线情绪温度计 9 张卡各自的历史追踪（序列 / 统计 / 分布 / 连续天数）。`:metric` ∈ `SENTIMENT_METRIC_KEYS`（未知值页面渲染 404）；消费公开端点 `GET /api/v1/market/sentiment/metrics/{metric}`；`/market/**` 维持免登录（ADR 0008），与卡片所在分区同一鉴权姿态 |
 | `/market/rankings/:key` | page | 公开（免登录） | **S1.6** A股排行 7 榜（`MarketRankingsPage`，`:key` ∈ 7 个榜）。既有 `/market` 的榜单矩阵消费 5 个**单日**榜（`/api/v1/market/rankings?type=`），与 7 榜的来源/口径都不同，故**另开一条**而非改 `/market`（Ruling 30：不得删既有工作能力） |
 | `/admin/users` | page | `users:manage` | **PR #15** 邀请制开户与管理员控制台（`AdminUsersPage`）。**刻意不进顶栏 `NAV_ROOTS`**——IA §1 的顶栏是 10 个一级导航，且 `check-routes` 机械断言 `NAV_ROOTS.length === 10`（新增第 11 个会转红）；入口放在账户菜单 `UserMenu`，仅 `users:manage` 可见 |
 | `/change-password` | page | 需登录 | **PR #15** 强制首登改密页（`ChangePasswordPage`）。**只要"已登录"、不加权限**：首次登录的用户此时还没有任何业务权限，给它加权限门禁会把必须改密的人挡在门外——而这正是该页存在的意义 |
 
-> **S1.x 新增路由共 7 条**：`/market/global` · `/market/industry/:level1Code/:level2Code/:level3Code` · `/market/heatmap` · `/market/data-sources` · `/market/rankings/:key` · `/admin/users` · `/change-password`。其中 `/market/heatmap` 是 S1.5 落地时从「占位前置」兑现来的（Task 5 的 §5.2 占位范围已经给它留了位置），S1.3 / S1.4 / S1.6 三条是各自任务新开的真页面，`/market/data-sources` 是 **Phase 1（前端设计整改 §W2.1）** 为「数据版图」新开的独立页，后两条是 **PR #15（邀请制开户与管理台）** 带进来的（合并时补登记：主 checkout 那版的路由是手写 `<Route>` JSX，本仓库以 `route-manifest.ts` 为唯一真相，故必须落到本表与清单两处）。
+> **S1.x 新增路由共 8 条**：`/market/global` · `/market/industry/:level1Code/:level2Code/:level3Code` · `/market/heatmap` · `/market/data-sources` · `/market/sentiment/:metric` · `/market/rankings/:key` · `/admin/users` · `/change-password`。其中 `/market/heatmap` 是 S1.5 落地时从「占位前置」兑现来的（Task 5 的 §5.2 占位范围已经给它留了位置），S1.3 / S1.4 / S1.6 三条是各自任务新开的真页面，`/market/data-sources` 是 **Phase 1（前端设计整改 §W2.1）** 为「数据版图」新开的独立页，`/market/sentiment/:metric` 是 2026-10-18 情绪指标历史追踪页，后两条是 **PR #15（邀请制开户与管理台）** 带进来的（合并时补登记：主 checkout 那版的路由是手写 `<Route>` JSX，本仓库以 `route-manifest.ts` 为唯一真相，故必须落到本表与清单两处）。
 >
-> **这 7 条不进上面两块**：它们既不在 15 条旧路由表里（那是 S0.2 的冻结清单），也不在「新目标路由的建立归属」8 行里（那一表的定义是「服务的旧路由的 redirect 目标」，本表各条不服务任何 redirect）。因此**旧表块的净效果算术 `8 = 1+2+2+3` 与 `7 = 3+2+2` 一字不改**——Ruling 56.1 只要求「真路由在契约里可见」，不要求把新页面塞进旧路由的代数式。`frontend/scripts/check-routes.mjs` 对本表做**双向比对**（表 ↔ 清单路径集合 + 声明的条数），不再是只写在 `ALLOWED_EXTRA` 白名单里。
+> **这 8 条不进上面两块**：它们既不在 15 条旧路由表里（那是 S0.2 的冻结清单），也不在「新目标路由的建立归属」8 行里（那一表的定义是「服务的旧路由的 redirect 目标」，本表各条不服务任何 redirect）。因此**旧表块的净效果算术 `8 = 1+2+2+3` 与 `7 = 3+2+2` 一字不改**——Ruling 56.1 只要求「真路由在契约里可见」，不要求把新页面塞进旧路由的代数式。`frontend/scripts/check-routes.mjs` 对本表做**双向比对**（表 ↔ 清单路径集合 + 声明的条数），不再是只写在 `ALLOWED_EXTRA` 白名单里。
 
 ---
 

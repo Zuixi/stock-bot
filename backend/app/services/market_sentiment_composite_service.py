@@ -75,7 +75,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
 from app.models.industry_research import IndustryMetric
-from app.models.quote import DailyQuote
 from app.repositories import industry_metric_repo
 from app.schemas.limit_up import MIN_PERCENTILE_SAMPLES
 from app.services import industry_registry as registry
@@ -715,6 +714,40 @@ COMPOSITE_HISTORY_WINDOW = 1260
 #: 命中上界 = 历史长到该换 SQL 侧窗口读了，而不是继续调大这个数。
 COMPOSITE_READ_LIMIT = 8000
 
+#: `provisional` 的"仍可能被改写"窗口（交易日）：与收敛器的重算窗口同值。
+#:
+#: **刻意不 import `derived_metrics_service.CONVERGE_WINDOW_TRADING_DAYS`**：读面模块不该
+#: 反向依赖收敛器（derived_metrics 已在函数内 import 本模块，模块级互相 import 会成环）。
+#: 两者的一致性由 `test_provisional_window_matches_converge_window` 钉住。
+COMPOSITE_PROVISIONAL_WINDOW_TRADING_DAYS = 10
+
+
+def composite_is_provisional(
+    participants: Sequence[str] | None,
+    *,
+    lag_trading_days: int | None,
+    window: int = COMPOSITE_PROVISIONAL_WINDOW_TRADING_DAYS,
+) -> bool | None:
+    """当期值是否**临时值**（`True`/`False`/`None` = 判不出）.
+
+    **三态，不是布尔**：`None` 不得被归并成 `False`（那会把"不知道"说成"是终值"）。
+
+    - 该行没登记参与集（老行 `extra` 缺 `participants`）⇒ `None`：连"缺没缺腿"都不知道；
+    - 落后交易日数判不出（缺交易日历）⇒ `None`：无法判断它是否还在改写窗口内；
+    - 该行缺了**已声明的 T+1 成分**（`registry.COMPOSITE_LATE_ARRIVAL_KEYS`）**且**仍在
+      收敛窗口内 ⇒ `True`（值会被上游披露后的重算改写）；
+    - 其余 ⇒ `False`。
+
+    为什么必须看窗口：历史行一旦落到窗口外就**再也不会被重算**（ADR 0016 的窗口语义），
+    所以"缺 T+1 腿"对它们不是"临时"，而是终值。只按"缺腿"判会让六个月前的行也自称临时。
+    """
+    if participants is None:
+        return None
+    if lag_trading_days is None:
+        return None
+    missing_late = bool(registry.COMPOSITE_LATE_ARRIVAL_KEYS - set(participants))
+    return missing_late and lag_trading_days < window
+
 
 def _extra_float(extra: Mapping[str, Any], key: str) -> float | None:
     """`extra` 里的数字键 → float；缺失 / 非数字（含 bool）→ `None`（**不猜**）。"""
@@ -820,6 +853,9 @@ def composite_hero_payload(
     legs = [str(k) for k in legs_raw] if isinstance(legs_raw, list) else None
     total_legs = extra.get("n_constituents")
     as_of = None if latest is None else latest.period
+    # `provisional`：该行缺了 T+1 披露的成分、且仍在收敛器的改写窗口内 ⇒ 值会变。
+    # 判不出（缺参与集 / 缺日历）⇒ None，**不假装是终值**（与 `stale` 同一条三态纪律）。
+    provisional = composite_is_provisional(legs, lag_trading_days=lag_trading_days)
 
     return {
         "as_of": as_of,
@@ -843,22 +879,8 @@ def composite_hero_payload(
         # `None` = 无法判定（缺 expected_as_of），**不是**"新鲜"：三态必须区分，
         # 否则读面在信息缺失时会静默宣称"数据是新的"。
         "stale": None if lag_trading_days is None else lag_trading_days > 0,
+        "provisional": provisional,
     }
-
-
-async def trading_days_between(db: AsyncSession, *, after: date, upto: date) -> int:
-    """`(after, upto]` 区间内的**交易日数**（本地口径：`daily_quotes` 真有行情的日子）.
-
-    为什么用 `daily_quotes` 而不是 `trade_cal`：库内没有持久化交易日历，且真源本来就是
-    "哪些日子真有行情"（`limit_up_repo.list_recent_trade_dates` 的同一条理由）。
-    只做一次范围计数（走 `trade_date` 索引），不拉回日期列表。
-    """
-    if upto <= after:
-        return 0
-    stmt = select(func.count(func.distinct(DailyQuote.trade_date))).where(
-        DailyQuote.trade_date > after, DailyQuote.trade_date <= upto
-    )
-    return int((await db.execute(stmt)).scalar() or 0)
 
 
 async def get_composite_hero(*, cache: Any = None) -> dict[str, Any]:
@@ -869,12 +891,17 @@ async def get_composite_hero(*, cache: Any = None) -> dict[str, Any]:
     窗口是回看窗口（分位定义在它上面），读全量行是为了**从尾部取足** `window` 个有效样本 ——
     裁掉窗口前的历史不会改变结果，但少读 NULL 行会（故 `limit` 留足余量）。
 
-    新鲜度（`expected_as_of` / `lag_trading_days` / `stale`）：
-    - `expected_as_of` = **本地**判定的"现在应该有的最新完整交易日"，复用
-      `market_day_service.resolve_latest_complete_day`（`as_of_quality` 那套完整性判据，
-      可传 Redis `cache`）—— **不在 GET 里外呼 TuShare**：`expected_trade_dates` 没有缓存，
-      放进读面会把首屏绑到上游可用性上；
-    - `lag_trading_days` = 选中行到 `expected_as_of` 之间的交易日数（本地 `daily_quotes`）；
+    新鲜度（`expected_as_of` / `lag_trading_days` / `stale`）—— **2026-10-17 换锚**：
+
+    - `expected_as_of` = **按日历与时钟**判定的"现在应该出到哪天"
+      （`market_day_service.resolve_expected_day_details`，交易日 17:30 后即当日）。
+      此前它取自 `resolve_latest_complete_day`，而那个候选日就是
+      `max(daily_quotes.trade_date)` —— **与被判据的对象同源**，于是"今天整天没采"时
+      期望日跟着退回昨天、`stale` 恒为 `false`：判据永远自洽、永远不报警（本次要修的
+      正是它）。日历是外部事实，不随"我们采到了什么"变化；
+    - `lag_trading_days` = 日历上 `(as_of, expected_as_of]` 的交易日数 —— **不再**用
+      `daily_quotes` 的实际持有日计数（那会让"整天没采"数出 0 天 ⇒ `stale=false`）；
+    - 三项都只读 Redis 日历，**不在 GET 里外呼 TuShare**（读面纪律）；
     - 任一项算不出 ⇒ 三个字段留 `None`（**不假装新鲜**）。
     """
     from app.services import market_day_service  # noqa: PLC0415 — 读面按需引入，避免环
@@ -883,19 +910,19 @@ async def get_composite_hero(*, cache: Any = None) -> dict[str, Any]:
         rows = await industry_metric_repo.get_metric_history(
             db, "market", METRIC_KEY, limit=COMPOSITE_READ_LIMIT
         )
-        expected_as_of: date | None = None
-        lag_trading_days: int | None = None
-        try:
-            market = await market_day_service.resolve_latest_complete_day(db, cache=cache)
-            expected_as_of = None if market is None else market.day
-            idx = select_latest_publishable_index(rows)
-            if expected_as_of is not None and idx is not None:
-                lag_trading_days = await trading_days_between(
-                    db, after=rows[idx].period, upto=expected_as_of
-                )
-        except Exception:  # noqa: BLE001 — 新鲜度是**加法**：算不出不得反噬 hero 主数据
-            logger.warning("composite hero: freshness unavailable", exc_info=True)
-            expected_as_of, lag_trading_days = None, None
+    expected_as_of: date | None = None
+    lag_trading_days: int | None = None
+    try:
+        idx = select_latest_publishable_index(rows)
+        as_of = None if idx is None else rows[idx].period
+        (
+            expected_as_of,
+            lag_trading_days,
+            _reason,
+        ) = await market_day_service.resolve_expected_day_details(cache, as_of=as_of)
+    except Exception:  # noqa: BLE001 — 新鲜度是**加法**：算不出不得反噬 hero 主数据
+        logger.warning("composite hero: freshness unavailable", exc_info=True)
+        expected_as_of, lag_trading_days = None, None
     return composite_hero_payload(
         rows, expected_as_of=expected_as_of, lag_trading_days=lag_trading_days
     )

@@ -140,6 +140,9 @@ class SentimentCalendarPointOut(BaseModel):
     zb_count: int
     broken_rate: float | None = None
     yzt_avg_pct: float | None = None
+    # 2026-10-18 追加：今开溢价与昨日涨停样本数。老消费方忽略即可（**追加**，不改既有字段）。
+    yzt_avg_open_premium: float | None = None
+    yzt_n: int = 0
     promo_1to2: float | None = None
     promo_2to3: float | None = None
     max_streak: int = 0
@@ -189,7 +192,13 @@ class SentimentTrendPointOut(BaseModel):
     dt_count: int
     zb_count: int
     broken_rate: float | None = None
+    yzt_avg_pct: float | None = None
+    yzt_avg_open_premium: float | None = None
+    yzt_n: int = 0
     promo_1to2: float | None = None
+    promo_1to2_n: int = 0
+    promo_2to3: float | None = None
+    promo_2to3_n: int = 0
     max_streak: int = 0
 
 
@@ -297,3 +306,267 @@ class SentimentCompositeOut(BaseModel):
     expected_as_of: date | None = None
     lag_trading_days: int | None = None
     stale: bool | None = None
+    # 三态：True 值会被重算改写（缺 T+1 披露的成分且仍在收敛窗口内）/ False 终值 /
+    # None 判不出（缺参与集登记或缺交易日历）——None **不得**被读成"终值"。
+    # 2026-10-17 换锚：expected_as_of 由交易日历 + 时钟判定（交易日 17:30 后即当日），
+    # lag_trading_days 由**日历计数**（旧实现两者都来自 `max(daily_quotes)`，
+    # 与滞后的数据链同源 ⇒ "今天整天没采"时反而报 stale=false）。
+    provisional: bool | None = None
+
+
+# ── 情绪指标详情（GET /market/sentiment/metrics/{metric_key}）──────────────────────
+#
+# 读时计算、**不物化**：数据全部来自 `market_sentiment_daily`（已按交易日冻结）。
+# 与 `/sentiment/trends` 的分工：那个给"三个指标的分位 + 全量序列"；本端点给"任意一个
+# 指标自己的历史位置"（统计量 / 分布 / 连续天数 / 样本量），供点击卡片后的详情页消费。
+#
+# 三条纪律与趋势端点一致：
+# 1. **NULL 不进样本**（分母为 0 的比值日既不进样本也不计 0）；
+# 2. 有效样本 < `MIN_PERCENTILE_SAMPLES` ⇒ `percentile_rank=None` + `insufficient_history=true`；
+# 3. 不插值、不补缺日 —— `series` 里缺的日子就是没有这一天。
+
+#: 指标详情页支持的指标（与 `SentimentThermometer` 的 9 张卡 1:1）。
+#: 加指标必须同时改 `sentiment_metric_service.METRIC_DEFS` 与前端 `SentimentMetricKey`。
+SENTIMENT_METRIC_KEYS = (
+    "zt_count",
+    "zb_count",
+    "dt_count",
+    "broken_rate",
+    "yzt_avg_pct",
+    "yzt_avg_open_premium",
+    "promo_1to2",
+    "promo_2to3",
+    "max_streak",
+)
+
+#: 指标的展示量纲：计数（家）/ 板 / 比值（0–1，前端 ×100）/ 百分数（已是 %）。
+SentimentMetricUnit = Literal["count", "board", "ratio", "pct"]
+
+#: 指标所属的情绪模块（与温度计的分组文案一致）。
+SentimentMetricGroup = Literal["breadth", "money", "promotion", "space"]
+
+
+class SentimentMetricMetaOut(BaseModel):
+    """指标自描述：标签、量纲、口径与"高代表更热还是更冷"。"""
+
+    key: str
+    label: str
+    unit: SentimentMetricUnit
+    group: SentimentMetricGroup
+    #: 高值代表情绪更热（`high`）还是更冷（`low`）——决定前端配色与「越高越热」提示，
+    #: 不在前端按 key 硬编码（同一份口径只写一处）。
+    hotter_when: Literal["high", "low"]
+    #: 已裁定口径原文（删减自 docs/design/limit-up-sentiment.md §3）
+    caliber: str
+
+
+class SentimentMetricPointOut(BaseModel):
+    """一个交易日的指标值。`value=None` = 当日算不出（分母 0/缺行情），**不是 0**。"""
+
+    trade_date: date
+    value: float | None = None
+    #: 当日样本数（`yzt_n` / `promo_*_n` / 炸板率的 `zt+zb`）；非样本型指标恒 `null`。
+    n: int | None = None
+    #: 样本不足（n < `MIN_SAMPLE_N`）：值仍展示，但不进统计量/分位/分布。
+    low_sample: bool = False
+
+
+class SentimentMetricStatsOut(BaseModel):
+    """窗口内**有效样本**的统计量（`sample_count` 是有效样本数，不是窗口行数）。"""
+
+    sample_count: int
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    median: float | None = None
+    p10: float | None = None
+    p25: float | None = None
+    p75: float | None = None
+    p90: float | None = None
+    #: 总体标准差（不是样本标准差）：只用来描述窗口波动，不做统计推断。
+    std: float | None = None
+
+
+class SentimentMetricBinOut(BaseModel):
+    """直方图的一个等宽区间 `[from, to)`（最后一箱含右端点）。"""
+
+    from_: float = Field(alias="from")
+    to: float
+    count: int
+
+    model_config = {"populate_by_name": True}
+
+
+class SentimentMetricStreakOut(BaseModel):
+    """截至最新有效日的连续同向天数（以窗口中位数为界）。
+
+    `side=None` 表示最新一日**恰好等于**中位数或当日无值 —— 此时不给"连续 N 天"的断言。
+    """
+
+    side: Literal["above", "below"] | None = None
+    days: int = 0
+    median: float | None = None
+
+
+class SentimentMetricPeerOut(BaseModel):
+    """同页指标切换器的一项：标签 + 最新原始值（与当前指标的读窗口同源）。
+
+    `low_sample=true` 表示这个最新值 n<5：值照常展示，但调用方应加"样本小"标记，
+    不能拿它和"200 个样本的点估计"并排读。
+    """
+
+    key: str
+    label: str
+    unit: SentimentMetricUnit
+    latest_value: float | None = None
+    latest_date: date | None = None
+    low_sample: bool = False
+
+
+# ── 情绪脉搏（GET /market/sentiment/pulse）：small multiples + 阶段 + 指数对比 ─────
+#
+# 一次响应同时给：9 个指标的逐日序列、周期阶段区段、基准指数 5 日收益分位、
+# 情绪 vs 指数的背离段。前端「情绪脉搏」区块只渲染，不再自行统计。
+
+
+class SentimentRegimeInputOut(BaseModel):
+    key: str
+    label: str
+    value: float | None = None
+    percentile: float | None = None
+    unit: SentimentMetricUnit
+
+
+class SentimentRegimeCurrentOut(BaseModel):
+    stage: str
+    label: str
+    tone: Literal["cold", "neutral", "hot", "extreme", "muted"]
+    since: date
+    days: int
+    inputs: list[SentimentRegimeInputOut] = []
+
+
+class SentimentRegimeSegmentOut(BaseModel):
+    stage: str
+    label: str
+    tone: Literal["cold", "neutral", "hot", "extreme", "muted"]
+    from_: date = Field(alias="from")
+    to: date
+    days: int
+
+    model_config = {"populate_by_name": True}
+
+
+class SentimentRegimeOut(BaseModel):
+    version: str
+    current: SentimentRegimeCurrentOut | None = None
+    segments: list[SentimentRegimeSegmentOut] = []
+
+
+class SentimentPulseSeriesPointOut(BaseModel):
+    """情绪脉搏的逐日序列（9 个指标；与 `/sentiment/trends` 同源投影）。"""
+
+    trade_date: date
+    zt_count: int
+    dt_count: int
+    zb_count: int
+    broken_rate: float | None = None
+    yzt_avg_pct: float | None = None
+    yzt_avg_open_premium: float | None = None
+    yzt_n: int = 0
+    promo_1to2: float | None = None
+    promo_1to2_n: int = 0
+    promo_2to3: float | None = None
+    promo_2to3_n: int = 0
+    max_streak: int = 0
+
+
+class SentimentBenchmarkPointOut(BaseModel):
+    trade_date: date
+    close: float | None = None
+    #: 指数 5 个交易日收益（%）；指数自身行数不足 6 时 null
+    pct_5d: float | None = None
+
+
+class SentimentBenchmarkOut(BaseModel):
+    ts_code: str
+    name: str
+    points: list[SentimentBenchmarkPointOut] = []
+
+
+class SentimentComparisonPointOut(BaseModel):
+    """情绪与指数的**同分位轴**对比（都按展示窗口重算，`<=` 口径）。"""
+
+    trade_date: date
+    sentiment_pct: float | None = None
+    index_pct: float | None = None
+    index_pct_5d: float | None = None
+
+
+class SentimentDivergenceOut(BaseModel):
+    from_: date = Field(alias="from")
+    to: date
+    days: int
+    kind: Literal["sentiment_stronger", "index_stronger"]
+    label: str
+
+
+class SentimentPulseOut(BaseModel):
+    as_of: date | None = None
+    as_of_quality: AsOfQuality = "partial"
+    window: SentimentWindowOut
+    series: list[SentimentPulseSeriesPointOut] = []
+    regime: SentimentRegimeOut
+    benchmark: SentimentBenchmarkOut
+    comparison: list[SentimentComparisonPointOut] = []
+    divergence: list[SentimentDivergenceOut] = []
+    current_divergence: SentimentDivergenceOut | None = None
+
+
+# ── 指标详情的样本门槛 / Wilson 区间 ──────────────────────────────────────────
+#
+# 小样本纪律（2026-10-18）：样本型指标（晋级率、昨日涨停均值、炸板率的分母）
+# 有效样本 < `MIN_SAMPLE_N` 的日子**不进**统计量/分位/分布；比值类的最新值额外给
+# 95% Wilson 区间，避免把 `n=2 的 50%` 当点估计读。
+
+
+class SentimentMetricIntervalOut(BaseModel):
+    low: float
+    high: float
+    level: float = 0.95
+    n: int
+    method: Literal["wilson"] = "wilson"
+
+
+class SentimentMetricSampleGateOut(BaseModel):
+    field: str | None = None
+    min_n: int
+    excluded_days: int
+
+
+class SentimentMetricDetailOut(BaseModel):
+    """``GET /market/sentiment/metrics/{metric_key}`` 响应。"""
+
+    metric: SentimentMetricMetaOut
+    as_of: date | None = None
+    as_of_quality: AsOfQuality = "partial"
+    window: SentimentWindowOut
+    latest: SentimentMetricPointOut | None = None
+    previous: SentimentMetricPointOut | None = None
+    #: 最新有效值 − 上一行有效值（量纲同指标：比值差 = 百分点 ×100 前的原值）
+    delta: float | None = None
+    #: 最新值在窗口有效样本里的分位（0–100，`<=` 口径，四舍五入 2 位）；样本不足为 `None`
+    percentile_rank: float | None = None
+    stats: SentimentMetricStatsOut | None = None
+    distribution: list[SentimentMetricBinOut] = []
+    streak: SentimentMetricStreakOut = SentimentMetricStreakOut()
+    series: list[SentimentMetricPointOut] = []
+    #: 最新值的 95% Wilson 区间（仅比值类且有足够样本时给；否则 null）
+    latest_interval: SentimentMetricIntervalOut | None = None
+    #: 样本门槛披露：`min_n` 与因样本不足被排除的天数
+    sample_gate: SentimentMetricSampleGateOut | None = None
+    #: 指标所在的情绪周期阶段（与 pulse 同一套规则；供详情图背景带）
+    regime: SentimentRegimeOut | None = None
+    #: 切换器：9 个指标的最新有效值（同一次读窗口，不额外查库）
+    peers: list[SentimentMetricPeerOut] = []
+    insufficient_history: bool = True

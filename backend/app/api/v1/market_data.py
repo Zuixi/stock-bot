@@ -18,6 +18,8 @@ from app.schemas.limit_up import (
     SentimentCalendarPointOut,
     SentimentCompositeOut,
     SentimentIntradayPointOut,
+    SentimentMetricDetailOut,
+    SentimentPulseOut,
     SentimentTrendsOut,
     YesterdayLimitUpOut,
 )
@@ -38,9 +40,15 @@ from app.services import (
     limit_up_service,
     market_data_service,
     market_sentiment_composite_service,
+    sentiment_metric_service,
+    sentiment_pulse_service,
 )
 
 logger = logging.getLogger(__name__)
+
+#: 公告类目白名单（ADR 0019）：`report` 财报 / `event` 重大事项 / `equity_change` 股本变动。
+#: 未知值一律 400 —— 静默退化为「全部」会让调用方以为筛过了。
+ANNOUNCEMENT_CATEGORIES = frozenset({"report", "event", "equity_change"})
 
 router = APIRouter(tags=["market-data"])
 
@@ -89,10 +97,12 @@ async def get_northbound(
 async def get_dragon_tiger_endpoint(
     cache: CacheDep,
     date: str | None = Query(default=None, description="ISO 日期，缺省=表内最新交易日"),
+    symbol: str | None = Query(default=None, description="6 位股票代码，如 000488"),
     limit: int = Query(default=15, ge=1, le=100),
 ) -> list[DragonTigerOut]:
+    """龙虎榜：``symbol`` 缺省=某交易日全市场榜；给出时=该股跨交易日记录（最新在前）。"""
     try:
-        rows = await market_data_service.get_dragon_tiger(cache, date, limit)
+        rows = await market_data_service.get_dragon_tiger(cache, date, limit, symbol)
     except ValueError:
         raise HTTPException(
             status_code=400, detail="date must be ISO format, e.g. 2026-09-02"
@@ -155,10 +165,25 @@ async def get_announcements_endpoint(
     cache: CacheDep,
     symbol: str | None = Query(default=None, description="6 位股票代码，如 002762"),
     limit: int = Query(default=30, ge=1, le=100),
+    category: str | None = Query(
+        default=None,
+        description=(
+            "类目过滤：report（财报）/ event（重大事项）/ "
+            "equity_change（股本变动：5%+ 股东增减持与权益变动）"
+        ),
+    ),
 ) -> list[AnnouncementOut]:
     from app.services import announcement_service  # noqa: PLC0415
 
-    rows = await announcement_service.get_announcements(cache, symbol, limit)
+    # 类目白名单在端点层判定：**未知类目必须 400**（不得静默退化为「全部」）—— ADR 0019 硬纪律。
+    # 过滤下推到服务/仓库层：`limit` 只对目标类目生效（端点层过滤会先按 limit 切片再丢行，
+    # 单类目返回条数可能少于 limit）。
+    if category is not None and category not in ANNOUNCEMENT_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"未知公告类目：{category}（可选 {sorted(ANNOUNCEMENT_CATEGORIES)}）",
+        )
+    rows = await announcement_service.get_announcements(cache, symbol, limit, category)
     return [AnnouncementOut(**r) for r in rows]
 
 
@@ -274,6 +299,57 @@ async def get_sentiment_trends(
     return SentimentTrendsOut.model_validate(payload)
 
 
+@router.get("/sentiment/pulse", response_model=SentimentPulseOut)
+async def get_sentiment_pulse(
+    cache: CacheDep,
+    days: int = Query(default=60, ge=5, le=250, description="展示交易日数（阶段分位恒用 250 日）"),
+    benchmark: str = Query(
+        default=sentiment_pulse_service.DEFAULT_BENCHMARK,
+        description="对比基准：399006.SZ（创业板指）/ 000001.SH（上证指数）",
+    ),
+) -> SentimentPulseOut:
+    """情绪脉搏：9 指标序列 + 周期阶段 + 指数对比（读时计算，公开端点）。
+
+    - 阶段：`sentiment_regime_service` 的启发式规则（PIT 250 日分位，见其 docstring）；
+    - 对比：情绪与指数的**同分位轴**（都按展示窗口重算），连续 3 日差 ≥30 标背离；
+    - 未知 benchmark → 404；`days` 只影响展示/对比窗口，不影响阶段分位窗口。
+    """
+    try:
+        payload = await sentiment_pulse_service.get_pulse(
+            cache, days=days, benchmark_code=benchmark
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"unknown benchmark: {benchmark}") from None
+    return SentimentPulseOut.model_validate(payload)
+
+
+@router.get("/sentiment/metrics/{metric_key}", response_model=SentimentMetricDetailOut)
+async def get_sentiment_metric_detail(
+    cache: CacheDep,
+    metric_key: str,
+    days: int = Query(
+        default=250,
+        ge=5,
+        le=500,
+        description="窗口交易日数（读时计算，不物化）；上限 500",
+    ),
+) -> SentimentMetricDetailOut:
+    """单个情绪指标的历史追踪（读时计算，**不物化**；公开端点）。
+
+    与 `/sentiment/trends` 同一 auth 姿态与同一条缺失纪律：NULL 不进样本、样本 < 60
+    不给分位、不插值。`metric_key` 未知 → **404**（不是空图）。响应里的 `series` 是
+    该指标自己的逐日值（含 `n` 样本数），`stats`/`distribution`/`streak` 均由后端算，
+    前端只渲染（不在浏览器里做统计）。
+    """
+    try:
+        payload = await sentiment_metric_service.get_metric_detail(cache, metric_key, days)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"unknown sentiment metric: {metric_key}"
+        ) from None
+    return SentimentMetricDetailOut.model_validate(payload)
+
+
 @router.get("/sector-trends", response_model=SectorTrendsOut)
 async def get_sector_trends(
     cache: CacheDep,
@@ -383,7 +459,7 @@ async def get_sentiment_composite(cache: CacheDep) -> SentimentCompositeOut:
 
 
 @router.get("/data-freshness", response_model=DataFreshnessOut)
-async def get_data_freshness() -> DataFreshnessOut:
+async def get_data_freshness(cache: CacheDep) -> DataFreshnessOut:
     """数据新鲜度巡检（只读，绝不触发回补）：把"静默缺数据"变成端点可见。
 
     复用对账器的期望集/行数判据（apply=False 路径），开销为几次聚合计数查询。
@@ -393,6 +469,12 @@ async def get_data_freshness() -> DataFreshnessOut:
 
     2026-10-16 追加 `market_metrics`：派生指标（§S1.7–§S1.13）四条腿各自的落库点与
     落后交易日数。同一纪律 —— 加法失败（缺表/迁移未应用）留 `null`，不反噬本端点。
+
+    2026-10-17 传 `cache`：巡检顺带刷新**交易日历缓存**（读面判新鲜度靠它，而读面
+    不准外呼 TuShare）。`apply=False` 只表示**不写库**，写 Redis 日历是允许的。
+
+    注意本端点在 cutoff（17:30）之后、本轮对账跑完之前会如实报出当日缺口
+    （`expected_latest` 回退到上一交易日）—— 这是"缺口可见"，不是故障。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.services import (  # noqa: PLC0415
@@ -402,7 +484,10 @@ async def get_data_freshness() -> DataFreshnessOut:
     )
 
     async with async_session_factory() as db:
-        result = await reconciliation_service.reconcile_market_data(db, apply=False)
+        # 传 cache：巡检顺带刷新**交易日历缓存**（读面判新鲜度靠它，而读面不准外呼 TuShare）。
+        # `apply=False` 只表示**不写库**，写 Redis 日历是允许的。
+        # 形参 `cache` 由同一次提交的 `reconcile_market_data(..., cache=...)` 提供。
+        result = await reconciliation_service.reconcile_market_data(db, apply=False, cache=cache)
         try:
             result["coverage"] = await reconciliation_service.coverage_report(db)
         except Exception:  # noqa: BLE001 — 覆盖率是加法，失败不得反噬新鲜度巡检

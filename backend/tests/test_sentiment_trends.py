@@ -58,6 +58,8 @@ def _row(
         zb_count=zb,
         broken_rate=broken_rate,
         yzt_avg_pct=1.0,
+        yzt_avg_open_premium=0.5,
+        yzt_n=10,
         promo_1to2=promo_1to2,
         promo_1to2_n=promo_1to2_n,
         promo_2to3=None,

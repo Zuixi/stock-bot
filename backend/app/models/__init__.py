@@ -20,6 +20,7 @@ from app.models.industry_research import (
     IndustryReferencePoint,
     IndustrySignal,
 )
+from app.models.journal import DecisionJournalEntry, DecisionJournalReview
 from app.models.market_data import (  # noqa: F401
     Announcement,
     BlockTrade,
@@ -29,6 +30,10 @@ from app.models.market_data import (  # noqa: F401
     ShareFloat,
     StockRepurchase,
 )
+
+# 全景三表（market_breadth_daily / _bucket_daily / market_industry_daily）的模型定义在
+# `models/market_data.py`（并行会话的全景特性自带 ingest + 读面）；本文件不再单独维护副本，
+# 否则 SQLAlchemy 会因同名表重复定义而 ImportError。
 from app.models.quote import DailyQuote
 from app.models.securities import CbDaily, FundEtfDaily
 from app.models.sse_index_snapshot import SseIndexSnapshot
@@ -63,6 +68,8 @@ __all__ = [
     "IndustryReferencePoint",
     "IndustrySignal",
     "IndustryKnowledge",
+    "DecisionJournalEntry",
+    "DecisionJournalReview",
     "FundEtfDaily",
     "CbDaily",
     "SectorMoneyflowSnapshot",
@@ -72,6 +79,9 @@ __all__ = [
     "ShareFloat",
     "StockRepurchase",
     "Announcement",
+    "MarketBreadthDaily",
+    "MarketBreadthBucketDaily",
+    "MarketIndustryDaily",
     "FinancialRawRecord",
     "FinancialReportVersion",
     "IncomeStatementFacts",

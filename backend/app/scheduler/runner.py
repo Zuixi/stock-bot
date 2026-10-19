@@ -13,6 +13,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
 from app.scheduler.jobs import (
+    RECONCILE_RETRY_TICKS,
     announcements_poll_job,
     block_trade_daily_job,
     board_snapshot_eod_job,
@@ -27,9 +28,11 @@ from app.scheduler.jobs import (
     intraday_sentiment_poll_job,
     limit_up_stock_facts_job,
     market_moneyflow_daily_job,
+    market_panorama_daily_job,
     northbound_daily_job,
     price_limits_daily_job,
     reconcile_market_data_job,
+    reconcile_retry_job,
     repurchase_daily_job,
     sector_moneyflow_job,
     securities_refresh_job,
@@ -99,6 +102,30 @@ def create_scheduler() -> AsyncIOScheduler:
         name="Weekend catch-up reconcile",
         replace_existing=True,
     )
+    # 4) 交易日 18:30 / 20:00：cutoff 之后的**重试 tick**（2026-10-17 加，T+0）
+    #
+    # 17:45 是当天唯一一次机会，而上游披露时刻会浮动（QVIX 实测 16:53 才更新 CSV、
+    # 交易所融资融券是 T+1）。没有重试的话，上游晚到半小时，页面就要如实报"落后 1 个
+    # 交易日"一直到**次日 10:00** 的兜底对账。
+    #
+    # 为什么是"条件 tick"而不是无脑多挂两次 `reconcile_market_data_job`：收敛器的波动率
+    # 腿声明了 `always_rescan=True`（QVIX 会迟到补数）⇒ **每轮都会真外呼**。
+    # `reconcile_retry_job` 先做零外呼的判定（期望日是不是今天、今天是否已过齐备门禁），
+    # 只有真的还没齐备才跑整条链。时刻表与 job id 的单一真源在
+    # `jobs.RECONCILE_RETRY_TICKS`（那里也承担"注册 id 必须登记"的门禁）。
+    for _job_id, _hour, _minute in RECONCILE_RETRY_TICKS:
+        scheduler.add_job(
+            reconcile_retry_job,
+            CronTrigger(
+                day_of_week="mon-fri",
+                hour=_hour,
+                minute=_minute,
+                timezone="Asia/Shanghai",
+            ),
+            id=_job_id,
+            name=f"Reconcile retry {_hour:02d}:{_minute:02d}",
+            replace_existing=True,
+        )
 
     # Trading hours: every 10 minutes, Monday–Friday, 9:30–15:00
     # The job itself checks whether we're actually inside the trading window.
@@ -355,6 +382,16 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(day_of_week="mon-fri", hour=17, minute=20, timezone="Asia/Shanghai"),
         id="limit_up_stock_facts",
         name="Limit-up stock facts + EOD enrichment",
+        replace_existing=True,
+    )
+
+    # A股全景日表（B 类本地派生）：17:25 Mon-Fri，晚于 16:30 行情 / 16:50 限价。
+    # 不调外部源，纯 SQL 聚合；幂等 upsert。停摆后迟到也补跑（job_defaults 无宽限）。
+    scheduler.add_job(
+        market_panorama_daily_job,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute=25, timezone="Asia/Shanghai"),
+        id="market_panorama_daily",
+        name="Market panorama daily",
         replace_existing=True,
     )
 

@@ -22,13 +22,16 @@ from app.api.v1 import (
     concepts,
     financials,
     industries,
+    journal,
     market,
     market_data,
+    market_regime,
     metrics,
     new_stocks,
     stocks,
     tags,
     tasks,
+    watchlist_triage,
     watchlists,
 )
 
@@ -60,6 +63,9 @@ router.include_router(market.router, prefix="/market", tags=["market"])
 # Market-data face: /api/v1/market/global-indices（后续 moneyflow/龙虎榜等面片追加至此）
 router.include_router(market_data.router, prefix="/market", tags=["market-data"])
 
+# 市场状态机（spec §S10）：/api/v1/market/regime —— 离线产物投影，登录即可
+router.include_router(market_regime.router, prefix="/market", tags=["market"])
+
 # Background tasks
 router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
 
@@ -68,6 +74,9 @@ router.include_router(tags.router, prefix="/tags", tags=["tags"])
 
 # User watchlists
 router.include_router(watchlists.router, prefix="/watchlists", tags=["watchlists"])
+
+# 自选体检（spec §S8.3）：/api/v1/watchlists/triage —— 只读、读时算、零新表
+router.include_router(watchlist_triage.router, prefix="/watchlists", tags=["watchlists"])
 
 # Industry research workbench: /api/v1/industries/...
 router.include_router(industries.router, prefix="/industries", tags=["industry-research"])
@@ -80,3 +89,6 @@ router.include_router(metrics.router, prefix="/metrics", tags=["metrics"])
 
 # New-stock board: /api/v1/new-stocks（T10，东财 BK0501 成分 × 本地行情）
 router.include_router(new_stocks.router, prefix="/new-stocks", tags=["new-stocks"])
+
+# 决策日志（spec §S9）：/api/v1/journal —— 只有 POST/GET（不可篡改），登录即可
+router.include_router(journal.router, prefix="/journal", tags=["journal"])

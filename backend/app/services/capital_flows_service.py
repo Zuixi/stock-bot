@@ -14,7 +14,8 @@
 | 两融 | `margin_financing_balance` / `margin_short_balance` | **不重做**：S1.9 已落，只**引用** |
 | 南向 | `southbound_net_buy` | **落库**（`south_money` 的**一阶差分**，见下） |
 | ETF 份额变化 | `etf_share_change` | **落库**（六只宽基 ETF 的份额日变化之和） |
-| 产业资本增减持 | `industrial_capital_net_change` | **只登记、不落库**（S3.2 未完成 → 待接）|
+| 产业资本增减持 | `industrial_capital_net_change` | **只登记、不落库**（公告原料已采：
+  cninfo `equity_change` 类目；**金额抽取**待接）|
 
 另有一条**同批次的登记**（不是四件套之一）：`northbound_holding_quarterly`
 （陆股通持仓（季度））—— spec 要的是「频率标识为季度 + UI 明示滞后」，本轮**只落口径
@@ -38,7 +39,9 @@
 - **ETF 份额**：TuShare `fund_share` 可得、日频；**单次 2000 行上限且截"最近"**
   ⇒ 必须**逐 ts_code** 取（宽窗会静默缺头）；六只宽基 ETF 各自 `20230103..20261012`
   **915–916 行、非空 100%、零重复日、零 0 值**（spec 的「≥1 年」被超额满足）。
-- **产业资本增减持**：S3.2（公告采集：四类 + `content_entities` + `raw_hash`）**未落地**
+- **产业资本增减持**：公告**原料已落地**（D3：`announcements.category='equity_change'`，
+  巨潮股本变动类目），
+  但**指标值（亿元）需要从公告正文抽取**，而抽取管线（S3.4）**未落地**
   （无 `app/services/content_ingest/`、无 `content_items`；本 token 的 `anns_d` 也无权限）。
   ⇒ 本项**待接**，**一行都不落**。上游 `stk_holdertrade`（结构化增减持）实测可得
   （单日 3000 行已撞上限），但 spec 明写原料来自公告 ⇒ **换原料是控制器裁定权**，本轮不采用。
@@ -119,6 +122,7 @@ from app.services.industry_registry import (
     CAPITAL_FLOWS_CALIBER_VERSION,
     CAPITAL_FLOWS_METRIC_KEYS,
     CAPITAL_FLOWS_PENDING_KEYS,
+    ETF_SHARE_CALIBER_VERSION,
     ETF_SHARE_SOURCE,
     INDUSTRIAL_CAPITAL_SOURCE,
     NORTHBOUND_HOLDING_SOURCE,
@@ -168,7 +172,7 @@ MISSING_PREV_CONNECT_DAY = "prev_connect_day_missing"
 MISSING_PREV_VALUE = "prev_value_missing"
 #: 基金在窗口内没有前一个份额日（序列起点）—— 与"篮子今天不全"分开。
 MISSING_NO_PREV_FUND_DAY = "no_prev_fund_day"
-#: 待接（S3.2 未完成）—— 只用于登记与覆盖率对账，**不落任何行**。
+#: 待接（原料已采，**金额抽取**未落地）—— 只用于登记与覆盖率对账，**不落任何行**。
 MISSING_UPSTREAM_PENDING = "upstream_dependency_pending"
 #: 陆股通持仓（季度）：本轮只落口径，未接 ingest。
 MISSING_NOT_INGESTED = "not_ingested_page_pending"
@@ -197,11 +201,16 @@ class EtfBasketMember:
 #: 按指数名做文本匹配会把这两只族内规模最大者漏掉（探针的 `[MISS]` 行实测漏掉，
 #: 并打印原文；探针同时断言"选定者规模不低于文本命中集最大者"）。
 #:
-#: **已知口径收窄（登记为限制，不掩盖）**：沪深300 族里还有 `510310.SH` 1,211,374.4 与
-#: `159919.SZ` 685,641.7 两只大 ETF（2024 年汇金增持的品种之一）**未纳入**篮子；
-#: 本指标因此表达的是"六只代表性宽基 ETF 的合计净申购"，**不是**"全部宽基 ETF"。
+#: **v3（2026-10-17）把沪深300 族从 1 只补到 3 只**：v2 只含 `510300.SH`，而该族另有
+#: `510310.SH`（1,211,374.4 万份级）与 `159919.SZ`（685,641.7 万份级）两只大 ETF
+#: （2024 年汇金增持的品种之一）**未纳入** ⇒ 系统性低估沪深300 族的净申购，故补上。
+#: 其余五族仍「一族一只（规模最大者）」。**改篮子会改变历史值含义** ⇒ 口径版本由
+#: `s1.7-v2` 升为 `s1.7-etf-v3`，旧行必须整段重灌（ADR 0011 第 4 条：不可混用）。
 ETF_BASKET: tuple[EtfBasketMember, ...] = (
+    # 沪深300 族**三只**（v3 起）：该族是「国家队」主战场，只取一只会系统性低估净申购
     EtfBasketMember("沪深300", "510300.SH", "华泰柏瑞沪深300ETF"),
+    EtfBasketMember("沪深300", "510310.SH", "易方达沪深300ETF发起式"),
+    EtfBasketMember("沪深300", "159919.SZ", "嘉实沪深300ETF"),
     EtfBasketMember("上证50", "510050.SH", "华夏上证50ETF"),
     EtfBasketMember("中证500", "510500.SH", "南方中证500ETF"),
     EtfBasketMember("中证1000", "512100.SH", "南方中证1000ETF"),
@@ -259,9 +268,19 @@ def _assert_registry_keys_match() -> None:
     dup = {m.ts_code for m in ETF_BASKET}
     if len(dup) != len(ETF_BASKET):
         raise RuntimeError("宽基 ETF 篮子里有重复的 ts_code —— 会把同一只基金数两遍")
-    fams = {m.family for m in ETF_BASKET}
-    if len(fams) != len(ETF_BASKET):
-        raise RuntimeError("宽基 ETF 篮子里有重复的指数族 —— 一个族只应取一只")
+    fams: dict[str, int] = {}
+    for m in ETF_BASKET:
+        fams[m.family] = fams.get(m.family, 0) + 1
+    # v3 起沪深300 族**恰好三只**（该族是「国家队」主战场，只取一只会低估净申购）；
+    # 其余族仍「一族一只」。这条断言把"篮子形状"变成导入期契约，防止有人顺手加一只
+    # 行业主题 ETF 而不改口径说明。
+    if fams.get("沪深300") != 3:
+        raise RuntimeError(
+            f"沪深300 族必须恰好三只（v3：510300/510310/159919），实际 {fams.get('沪深300')} 只"
+        )
+    duplicated = {k: v for k, v in fams.items() if k != "沪深300" and v != 1}
+    if duplicated:
+        raise RuntimeError(f"除沪深300 外每个指数族只应取一只：{duplicated}")
 
 
 _assert_registry_keys_match()
@@ -540,6 +559,14 @@ def _publish_time(metric_key: str) -> dtime:
     return CONNECT_FLOW_PUBLISH
 
 
+#: 每 key 的口径版本（**默认**取 `CAPITAL_FLOWS_CALIBER_VERSION`；ETF 篮子变更新版本）。
+CALIBER_VERSIONS: dict[str, str] = {
+    "etf_share_change": ETF_SHARE_CALIBER_VERSION,
+    "southbound_net_buy": CAPITAL_FLOWS_CALIBER_VERSION,
+    "industrial_capital_net_change": CAPITAL_FLOWS_CALIBER_VERSION,
+    "northbound_holding_quarterly": CAPITAL_FLOWS_CALIBER_VERSION,
+}
+
 _TIERS: dict[str, str] = {
     "etf_share_change": "derived",
     "southbound_net_buy": "derived",
@@ -567,7 +594,7 @@ def _row(day: date, metric: MetricValue) -> dict[str, Any]:
         # （ADR 0014「有行 ≠ 有值」，必须能区分）。
         "extra": extra or None,
         "published_at": published_at_for(day, _publish_time(metric.metric_key)),
-        "caliber_version": CAPITAL_FLOWS_CALIBER_VERSION,
+        "caliber_version": CALIBER_VERSIONS.get(metric.metric_key, CAPITAL_FLOWS_CALIBER_VERSION),
     }
 
 

@@ -169,10 +169,16 @@ async def _run(job: str, params: dict[str, Any]) -> dict[str, Any]:
                 )
             }
         elif job == "reconcile":
+            from app.core.redis import CacheClient, get_redis_pool  # noqa: PLC0415
             from app.services import reconciliation_service  # noqa: PLC0415
 
-            # 手动全量对账：幂等，无缺口时零 TuShare 请求
-            result = await reconciliation_service.reconcile_market_data(db)
+            # 手动全量对账：幂等，无缺口时零 TuShare 请求。
+            # 传 cache 让手动轨道也刷新交易日历（与定时轨道同款）；拿不到缓存只降级为不写。
+            try:
+                cache = CacheClient(await get_redis_pool())
+            except Exception:  # noqa: BLE001 — 缓存是加法，不得让手动对账失败
+                cache = None
+            result = await reconciliation_service.reconcile_market_data(db, cache=cache)
         else:
             # Defensive: unreachable via process() — the type is validated there.
             return {"status": "failed", "error": f"unknown market_data type: {job}"}

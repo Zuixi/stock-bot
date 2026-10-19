@@ -22,14 +22,41 @@ async def _alert_job_failure(job_ids: str | tuple[str, ...], exc: BaseException)
     """把 job 失败登记到 `job:failures`（/market/data-freshness 的 failed_jobs）。
 
     APScheduler 不把触发本次执行的 job id 传给函数，所以同一 callable 注册在多个 id 下时
-    （reconcile 3 个触发点、SSE 交易时段 2 个 tick）逐个登记：宁可多一行同源记录，也不要把
-    失败挂到一个这次并没有触发的 id 上。job_alert_service 自身吞掉 Redis 异常——告警绝不
-    能反过来把"已处理的 job 失败"升级成"未处理的崩溃"。
+    （reconcile 3 个触发点 + 2 个重试 tick、SSE 交易时段 2 个 tick）逐个登记：宁可多一行
+    同源记录，也不要把失败挂到一个这次并没有触发的 id 上。job_alert_service 自身吞掉 Redis
+    异常——告警绝不能反过来把"已处理的 job 失败"升级成"未处理的崩溃"。
     """
     from app.services.job_alert_service import record_job_failure  # noqa: PLC0415
 
     for job_id in (job_ids,) if isinstance(job_ids, str) else job_ids:
         await record_job_failure(job_id, repr(exc))
+
+
+#: 共享 callable `reconcile_market_data_job` 的**常规**触发点 id（失败登记逐个登记）。
+RECONCILE_JOB_IDS: tuple[str, ...] = (
+    "startup_reconcile",
+    "reconcile_post_chain",
+    "reconcile_weekend_catchup",
+)
+
+#: cutoff 之后的**重试 tick**：`(job_id, hour, minute)`，注册在 `runner.create_scheduler`。
+#:
+#: 为什么要有重试：17:45 是当天唯一一次机会，而上游披露时刻会浮动（QVIX 实测 16:53 才更新
+#: CSV、交易所融资融券是 T+1）。没有重试的话，上游晚到半小时，页面就要如实报"落后 1 个
+#: 交易日"一直到**次日 10:00** 的兜底对账。
+#:
+#: 为什么是"条件 tick"：收敛器的波动率腿声明了 `always_rescan=True`（QVIX 会迟到补数）
+#: ⇒ **每轮都会真外呼**。`reconcile_retry_job` 先做零外呼的判定，只有当日真的还没齐备
+#: 才跑整条链。
+#:
+#: id 字面量登记在此：`test_every_registered_scheduler_job_is_alert_wired` 要求每个注册
+#: id 都能在 jobs.py 里找到（防止新增 job 时忘了接告警）。
+RECONCILE_RETRY_TICKS: tuple[tuple[str, int, int], ...] = (
+    ("reconcile_retry_1830", 18, 30),
+    ("reconcile_retry_2000", 20, 0),
+)
+
+RECONCILE_RETRY_JOB_IDS: tuple[str, ...] = tuple(tick[0] for tick in RECONCILE_RETRY_TICKS)
 
 
 def _is_workday() -> bool:
@@ -99,13 +126,24 @@ async def _run_reconcile(
 
     返回对账结果（失败时 `None`）—— 后置的派生指标收敛要用它算出的 `expected_latest`
     当目标日，不自己另算一份交易日历。
+
+    顺带把 `CacheClient` 传进去：对账在 `degraded=False` 时会把交易日历写进 Redis，
+    读面（hero 新鲜度）据此在不外呼 TuShare 的前提下判"现在该到哪天"。缓存拿不到
+    **不算失败**（降级为不写缓存）—— 新鲜度是加法，不该反噬对账本身。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.core.redis import CacheClient, get_redis_pool  # noqa: PLC0415
     from app.services import reconciliation_service  # noqa: PLC0415
+
+    cache: Any = None
+    try:
+        cache = CacheClient(await get_redis_pool())
+    except Exception:  # noqa: BLE001 — 拿不到缓存只影响读面新鲜度，不影响对账
+        logger.warning("Reconcile: cache unavailable; trade calendar not cached", exc_info=True)
 
     try:
         async with async_session_factory() as db:
-            result = await reconciliation_service.reconcile_market_data(db, only=only)
+            result = await reconciliation_service.reconcile_market_data(db, only=only, cache=cache)
         logger.info(
             "Reconcile done (only=%s): %s",
             sorted(only) if only else "all",
@@ -147,12 +185,15 @@ async def daily_basic_backfill_job() -> None:
     await _run_reconcile(only={"daily_basic"}, job_ids="daily_basic_backfill")
 
 
-async def reconcile_market_data_job() -> None:
-    """全量对账（四域：quotes/basic/price_limits/sentiment）**+ 派生指标收敛**。
+async def reconcile_market_data_job(*, job_ids: str | tuple[str, ...] = RECONCILE_JOB_IDS) -> None:
+    """全量对账（四域：quotes/basic/price_limits/sentiment）**+ 收敛 + 涨停事实**。
 
-    触发：scheduler 启动 +2min、每交易日 17:45 兜底、非交易日 10:00、worker 手动。
+    触发：scheduler 启动 +2min、每交易日 17:45 兜底、每日 10:00、cutoff 后重试 tick。
     **无工作日守卫**：周末/节假日启动也要能补上一个交易日的洞（宿主周五晚上
     挂起、周六开机是真实场景）。幂等：无缺口时零 TuShare 请求。
+
+    `job_ids` 只用于**失败登记**的归属（APScheduler 不把触发 id 传给函数，故默认把三个
+    常规触发点逐个登记；重试 tick 经 `reconcile_retry_job` 传自己那两个 id 进来）。
 
     ## 为什么收敛挂在这里（2026-10-16）
 
@@ -160,28 +201,163 @@ async def reconcile_market_data_job() -> None:
     没有任何定时任务碰过 —— 于是行情天天更新、页面上的"数据截至"却停在人工回补的最后
     一天。修法不是在盘后再加一个 cron（那会重新落入"任务准点跑才正确"的老坑：
     宿主睡眠、容器挂起、上游晚到都会让它算在半截数据上），而是**挂在对账之后**：
-    对账已经把 T-1 的行情/限价/温度计收敛好，收敛器接着按同一个 `expected_latest`
-    把派生指标推到同一天。三个触发点因此都成为收敛点，且**顺序由代码保证**。
+    对账已经把行情/限价/温度计收敛好，收敛器接着按同一个 `expected_latest`
+    把派生指标推到同一天。**顺序由代码保证**。
 
     对账失败（返回 `None`）时**仍然**尝试收敛：底座可能只是部分域失败（例如
     `daily_basic` 的洞不影响宽度腿），而收敛器自带前置闸门（底座没齐就跳过），
     所以这里不需要替它再判一次。
+
+    ## 2026-10-17：尾巴上又多了一环
+
+    `_refresh_limit_up_facts()` —— 个股级涨停事实（`limit_up_stock_daily` 是巡检域，
+    对账永不自愈它），必须在对账把当日行情与限价补齐之后才落得到当日。
+
+    ## 2026-10-20（S12.3）：最后一环是离线产物自愈
+
+    `_refresh_stale_artifacts()` —— regime / peer_history / triage 标定三个 JSON 产物
+    过去**只**由手工脚本更新，页面上的"同类历史/规则标定"会一直停在人工回补那天。
+    它挂在同一条链的尾巴（**不新开 cron**）：用对账算出的 `expected_latest` 当目标日，
+    判据幂等（产物 `as_of < day` 才重建，新鲜时零查询）。失败只登记
+    `artifacts_refresh:<产物名>` 告警，不反噬对账。
     """
     logger.info("Full reconcile job triggered")
-    # 同一 callable 挂在 3 个触发点（启动 +2min / 17:45 兜底 / 非交易日 10:00）上
-    result = await _run_reconcile(
-        only=None,
-        job_ids=("startup_reconcile", "reconcile_post_chain", "reconcile_weekend_catchup"),
-    )
+    result = await _run_reconcile(only=None, job_ids=job_ids)
     await _converge_derived_metrics(result)
+    await _refresh_limit_up_facts()
+    await _refresh_stale_artifacts(result)
+
+
+async def _refresh_limit_up_facts() -> None:
+    """对账尾巴上的「个股级涨停事实 + 东财 EOD 增强」（`limit_up_stock_daily`）.
+
+    **为什么串在代码里、而不是把它的 cron 挪到 17:55**：该表在 `INSPECT_DOMAINS` 里
+    （**没有** `_refetch_*`，对账永不自愈它），而它的 `as_of` 取自
+    `resolve_latest_complete_day` —— 只有在对账把当日行情与限价补齐**之后**调用它，
+    才会落到当日。靠"17:45 那轮大概跑 40 秒，17:55 总够了"这类时间差排序，在 TuShare
+    节流时（当日全量拉取可能好几分钟）必然偶发踩空；而踩空那天要等次日手工回补
+    （东财涨停池只保留约 14 个交易日）。**顺序由代码保证，不靠时间差**（ADR 0016 同款）。
+
+    17:20 的 cron **保留**：它是对账失败时的 T-1 兜底，两条轨道都幂等。
+    """
+    await limit_up_stock_facts_job()
+
+
+async def _refresh_stale_artifacts(reconcile_result: dict[str, Any] | None) -> None:
+    """对账尾巴最后一环：离线产物（regime / peer_history / triage 标定）自愈.
+
+    目标日取对账算出的 `expected_latest`（过了齐备门禁的交易日）——与收敛器同源，
+    不自己另算一份交易日历。三种情形：
+
+    - 对账**失败**（`None`）/ 窗口内没有过门禁的日子（`expected_latest` 为空）⇒ 跳过并
+      告警。不回退到"`daily_quotes` 最近一天"：那正是没过门禁的那天，在它上面重建
+      等于把半截底座写进产物（与 `_converge_derived_metrics` 同一纪律）。
+    - 正常 ⇒ `artifacts_service.refresh_stale_artifacts(db, day)`；它对**单个产物**的
+      失败内部已经 catch + 告警 + 保留旧文件（spec §S12.3），不会抛到这里。
+    - 产物全部新鲜（绝大多数轮次）⇒ **连数据库会话都不开**（`stale_artifacts` 只读文件）：
+      自愈机制不该在无事可做的日子里多占一条连接（job 层测试也因此保持密闭）。
+    - 万一抛到这里（例如 session 建不起来）⇒ **不得反噬对账**：告警挂在
+      `artifacts_refresh` 上，reconcile job 仍然算成功。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import artifacts_service  # noqa: PLC0415
+
+    raw = (reconcile_result or {}).get("expected_latest")
+    if not raw:
+        logger.warning(
+            "Artifacts refresh skipped: no gated trading day "
+            "(source=%s, calendar_expected_latest=%s)",
+            (reconcile_result or {}).get("expected_latest_source"),
+            (reconcile_result or {}).get("calendar_expected_latest"),
+        )
+        return
+    day = date.fromisoformat(str(raw))
+    if not artifacts_service.stale_artifacts(day):
+        logger.debug("Artifacts refresh skipped: all fresh (day=%s)", day)
+        return
+    try:
+        async with async_session_factory() as db:
+            payload = await artifacts_service.refresh_stale_artifacts(db, day)
+    except Exception as exc:  # noqa: BLE001 — 产物自愈失败不得反噬对账 job 的成败
+        logger.exception("Artifacts refresh failed (day=%s)", day)
+        await _alert_job_failure("artifacts_refresh", exc)
+        return
+    logger.info(
+        "Artifacts refresh done (day=%s): refreshed=%s skipped=%s failed=%s",
+        day,
+        payload["refreshed"],
+        payload["skipped"],
+        payload["failed"],
+    )
+
+
+async def reconcile_retry_job() -> None:
+    """cutoff 之后的**重试 tick**（18:30 / 20:00）：当日还没齐备时补跑整条盘后链.
+
+    为什么需要：17:45 是当天唯一一次机会，而上游披露时刻会浮动（QVIX 实测 16:53 才更新
+    CSV，融资融券是 T+1）。没有重试的话，上游晚到半小时，页面就要一直如实报"落后 1 个
+    交易日"到**次日 10:00** 的兜底对账。
+
+    为什么先判再跑：`_converge_derived_metrics` 的波动率腿声明了 `always_rescan=True`
+    （QVIX 会迟到补数），**每轮都会真外呼**。无脑多挂两个 tick 会把这个成本乘以 tick 数。
+    所以先做**零外呼**的判定：
+
+    - 日历判出"期望日 ≠ 今天"（今天不是交易日 / 还没到 cutoff）⇒ 跳过；
+    - 期望日就是今天、且今天已过齐备门禁 ⇒ 跳过（已经追平，链条无事可做）；
+    - 判不出期望日（缓存未命中）⇒ **照跑**：链条本身幂等，宁可多跑一轮，也不让
+      "Redis 抖一下"变成当天不追平。
+    """
+    if not _is_workday():
+        return
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.core.redis import CacheClient, get_redis_pool  # noqa: PLC0415
+    from app.services import market_day_service  # noqa: PLC0415
+
+    cache: Any = None
+    try:
+        cache = CacheClient(await get_redis_pool())
+    except Exception:  # noqa: BLE001 — 缓存拿不到不影响本次补跑
+        logger.warning("Reconcile retry: cache unavailable", exc_info=True)
+
+    today = datetime.now(_SH_TZ).date()
+    try:
+        expected, reason = await market_day_service.resolve_expected_day(cache)
+    except Exception:  # noqa: BLE001 — 判定失败按"未知"处理 → 照跑
+        expected, reason = None, "judge_failed"
+
+    if expected is not None and expected != today:
+        logger.debug("Reconcile retry skipped: expected=%s reason=%s", expected, reason)
+        return
+    if expected == today:
+        try:
+            async with async_session_factory() as db:
+                if await market_day_service.day_is_complete(db, expected):
+                    logger.debug("Reconcile retry skipped: %s already complete", expected)
+                    return
+        except Exception:  # noqa: BLE001 — 判不了就照跑（幂等）
+            logger.warning("Reconcile retry: completeness probe failed", exc_info=True)
+
+    logger.info("Reconcile retry: %s not complete yet — running the post-close chain", today)
+    # 失败登记挂到重试 tick 自己的 id 上（不是那三个常规触发点）
+    await reconcile_market_data_job(job_ids=RECONCILE_RETRY_JOB_IDS)
 
 
 async def _converge_derived_metrics(reconcile_result: dict[str, Any] | None) -> None:
     """对账之后：把 §S1.7–§S1.13 的派生指标收敛到 `expected_latest`。
 
-    目标日取**对账算出的** `expected_latest`（`trade_cal` 截止昨日，T-1 语义），
-    与行情域的期望集完全同源；对账没给出（失败 / 降级）时传 `None`，
-    由收敛器退回"`daily_quotes` 的最近交易日"这个本地口径。
+    目标日取**对账算出的** `expected_latest` —— 它是"上界里最新一个过三元组门禁的
+    交易日"（上界本身由日历与时钟决定：交易日 17:30 后含当日，见
+    `reconciliation_service.expected_trade_dates`），与行情域的期望集完全同源。
+
+    三种情形，语义不同：
+
+    - 对账**失败**（`reconcile_result is None`）⇒ 传 `None`，由收敛器退回
+      "`daily_quotes` 的最近交易日"这个本地口径。这是**刻意**的：底座可能只是部分域
+      失败（例如 `daily_basic` 的洞不影响宽度腿），收敛器自带前置闸门，不必替它再判一次。
+    - 对账成功但 `expected_latest` 为 `None`（窗口内一个日子都过不了门禁）⇒ **跳过**
+      本轮收敛并告警。不回退到"`daily_quotes` 最近一天"——那正是没过门禁的那天，
+      在它上面算指标等于把半截底座的值发出去。
+    - 正常 ⇒ 收敛到该日（可能已从当日逐日回退，`expected_latest_source='fallback'`）。
 
     **异常边界独立**：派生指标失败不得让"对账成功"变成"job 失败"
     （它们是两件事，告警也挂在两个不同的 id 上）。
@@ -191,8 +367,16 @@ async def _converge_derived_metrics(reconcile_result: dict[str, Any] | None) -> 
     target: date | None = None
     if reconcile_result:
         raw = reconcile_result.get("expected_latest")
-        if raw:
-            target = date.fromisoformat(str(raw))
+        if not raw:
+            source = reconcile_result.get("expected_latest_source")
+            logger.warning(
+                "Derived metrics converge skipped: no gated trading day in window "
+                "(source=%s, calendar_expected_latest=%s)",
+                source,
+                reconcile_result.get("calendar_expected_latest"),
+            )
+            return
+        target = date.fromisoformat(str(raw))
     try:
         payload = await derived_metrics_service.converge(
             target=target, alert_job_id="market_metrics_refresh"
@@ -356,6 +540,41 @@ async def board_snapshot_eod_job() -> None:
         await _alert_job_failure("board_snapshot_eod", RuntimeError("; ".join(shortfalls)))
 
 
+async def market_panorama_daily_job() -> None:
+    """A股全景三张日表写入（交易日 17:25，晚于 16:30 行情/16:50 限价）。
+
+    纯本地派生（B 类），不调外部源；幂等 upsert。`resolve_latest_complete_day` 拿
+    判据日（不拿"今天"硬查），行情尚未齐时早退/写 0 行，由次日 job 或回补脚本补。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_day_service, market_panorama_ingest_service  # noqa: PLC0415
+
+    if not _is_workday():
+        return
+    try:
+        async with async_session_factory() as db:
+            md = await market_day_service.resolve_latest_complete_day(db)
+            if md is None:
+                logger.warning("Panorama daily: no resolved market day")
+                return
+            breadth_n, industry_n = await market_panorama_ingest_service.refresh_day(db, md.day)
+            await db.commit()
+        logger.info(
+            "Panorama daily done: day=%s breadth=%s industry=%s",
+            md.day,
+            breadth_n,
+            industry_n,
+        )
+        if breadth_n == 0:
+            await _alert_job_failure(
+                "market_panorama_daily",
+                RuntimeError(f"{md.day} 没有可写的广度行（行情未齐/非交易日）"),
+            )
+    except Exception as exc:
+        logger.exception("Panorama daily job failed")
+        await _alert_job_failure("market_panorama_daily", exc)
+
+
 async def board_snapshot_rewrite_job() -> None:
     """当日**没有全量捕获**才补做收盘全量（交易日 15:35；容器重启错过 15:05 的兜底）。
 
@@ -498,9 +717,12 @@ async def price_limits_daily_job() -> None:
     补漏判据在 service 内（stock_price_limits 无该日行），所以即使某天任务没跑，
     下一次也会自动追平。
 
-    注意窗口上界：daily_quotes 的对账补齐以 trade_cal 期望集为准（截止昨日，
-    T-1 语义，见 reconciliation_service），所以本任务补到的最新交易日 =
-    上一个交易日，与情绪快照的 `as_of` 语义一致。
+    注意窗口上界（2026-10-17 起有 T+0）：期望集上界由日历与时钟决定 —— 交易日
+    **17:30 之后**才含当日（见 `reconciliation_service.expected_trade_dates` 与
+    `market_day_service.T0_CUTOFF`）。本 job 跑在 16:50，**在 cutoff 之前**，故它补到的
+    最新交易日仍是上一个交易日，与情绪快照的 `as_of` 语义一致；**当日限价由 17:45 的
+    全量对账（`_refetch_price_limits`）补**——那一步必须在齐备门禁之前完成，因为门禁的
+    第三项就是"该日有限价"。
     """
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.services import market_data_service  # noqa: PLC0415
@@ -519,6 +741,11 @@ async def price_limits_daily_job() -> None:
 
 async def sentiment_daily_job() -> None:
     """盘后情绪聚合落库（交易日 17:15，晚于 16:50 的限价补漏）。
+
+    2026-10-17（T+0）后它在链上的角色：**17:15 早于 cutoff（17:30）**，所以这一轮只落
+    上一个交易日（幂等，多半是 no-op）；**当日那一行由 17:45 的全量对账写**（`sentiment`
+    域的 `_refetch_sentiment`，且只在 quotes+限价都过门禁的日子才写）。保留本 cron 是
+    兜底：对账整体失败时，至少还有 T-1 的聚合。
 
     幂等 upsert（唯一键 trade_date）；降级日（部分行情/限价缺失/空候选）一律跳过，
     避免时序图被假低谷污染。传 cache=None 走无缓存 get_snapshot，同时规避 Redis JSON
@@ -541,6 +768,11 @@ async def sentiment_daily_job() -> None:
 
 async def limit_up_stock_facts_job() -> None:
     """个股级涨停事实落库 + 东财 EOD 增强（交易日 17:20，晚于 16:50 限价补漏）。
+
+    2026-10-17（T+0）后：**当日**那一行由 `reconcile_market_data_job` 尾步
+    （`_refresh_limit_up_facts`）驱动 —— 本表在 `INSPECT_DOMAINS` 里、对账不会自愈它，
+    而它的 `as_of` 取自"最新完整交易日"，只有在对账补齐当日行情与限价之后调用才会落到
+    当日。17:20 这一轮（早于 cutoff）只覆盖上一个交易日，保留作对账失败时的兜底。
 
     **为什么顺序是"先落库再增强"**：增强是 UPDATE-only（当天事实行必须先存在），而当日
     限价 16:50 才入库、事实行本 job 才写 —— 因此增强只能挂在落库之后（15:05 单挂一个

@@ -41,7 +41,7 @@ export function SectorFlow() {
   const usingCsrc = swQuery.isError;
   const sectorsQuery = useQuery({
     queryKey: ["market", "sectors"],
-    queryFn: fetchSectors,
+    queryFn: () => fetchSectors(),
     staleTime: STALE_TIME,
     refetchInterval,
     enabled: usingCsrc,

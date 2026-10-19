@@ -1,0 +1,87 @@
+{
+  "as_of": "2026-10-16",
+  "window_months": 12,
+  "basis": "收益 = close/pre_close 按交易日连乘（T 与 T+N 均为市场交易日，停牌无 T+N 行情则不计），winsorize ±50%；超额 = 信号组中位收益 − 当日全市场中位收益；tN_excess_med 为跨日中位数（%），t5_p05 为信号组 5 日收益 5% 分位（%）；tN 仅含已有 T+N 行情的信号日",
+  "rules": {
+    "break_ma20": {
+      "stats": {
+        "signals": 72223,
+        "days": 240,
+        "per_day": 300.93,
+        "t1_excess_med": -0.045,
+        "t5_excess_med": -0.256,
+        "t20_excess_med": -0.517,
+        "t5_p05": -11.031
+      },
+      "stats_note": null
+    },
+    "drop_sharp": {
+      "stats": {
+        "signals": 66197,
+        "days": 241,
+        "per_day": 274.68,
+        "t1_excess_med": -0.495,
+        "t5_excess_med": -1.241,
+        "t20_excess_med": -2.013,
+        "t5_p05": -17.215
+      },
+      "stats_note": null
+    },
+    "limit_up_state": {
+      "stats": {
+        "signals": 27795,
+        "days": 243,
+        "per_day": 114.38,
+        "t1_excess_med": 0.48,
+        "t5_excess_med": -0.736,
+        "t20_excess_med": -3.006,
+        "t5_p05": -17.711
+      },
+      "stats_note": null
+    },
+    "new_announcement": {
+      "stats": null,
+      "stats_note": "announcements 仅覆盖自 2026-09-01 起的 1.5 个月，不足 12 个月窗口，样本不足"
+    },
+    "dragon_tiger": {
+      "stats": null,
+      "stats_note": "dragon_tiger_entries 仅覆盖自 2026-08-25 起的 1.7 个月，不足 12 个月窗口，样本不足"
+    },
+    "volume_spike": {
+      "stats": {
+        "signals": 34595,
+        "days": 237,
+        "per_day": 145.97,
+        "t1_excess_med": -0.566,
+        "t5_excess_med": -1.554,
+        "t20_excess_med": -3.126,
+        "t5_p05": -16.667
+      },
+      "stats_note": null
+    },
+    "new_high_low": {
+      "stats": {
+        "signals": 127618,
+        "days": 243,
+        "per_day": 525.18,
+        "t1_excess_med": -0.047,
+        "t5_excess_med": -0.191,
+        "t20_excess_med": 0.105,
+        "t5_p05": -12.519
+      },
+      "stats_note": null
+    },
+    "sector_move": {
+      "stats": {
+        "signals": 31593,
+        "days": 218,
+        "per_day": 144.92,
+        "t1_excess_med": 0.002,
+        "t5_excess_med": -0.806,
+        "t20_excess_med": -0.255,
+        "t5_p05": -13.267
+      },
+      "stats_note": "板块成分用 sw_industry_members 当前快照（非 PIT），历史回放会把今天的归属套到过去"
+    }
+  }
+}

@@ -668,8 +668,12 @@ export function fetchNorthbound(days = 30): Promise<NorthboundEnvelope<Northboun
   );
 }
 
-export function fetchDragonTiger(limit = 15): Promise<DragonTigerItem[]> {
-  return apiGet<BackendDragonTigerItem[]>("/api/v1/market/dragon-tiger", { limit }).then((rows) =>
+/**
+ * 龙虎榜。`symbol` **可选**：传了就由服务端按标的过滤（该股跨交易日记录）；
+ * 不传时 query string 与改前逐字一致（全市场最新日榜单，数据面 DragonTigerTable 依赖）。
+ */
+export function fetchDragonTiger(limit = 15, symbol?: string): Promise<DragonTigerItem[]> {
+  return apiGet<BackendDragonTigerItem[]>("/api/v1/market/dragon-tiger", { limit, symbol }).then((rows) =>
     rows.map(mapDragonTiger),
   );
 }

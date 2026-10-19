@@ -37,3 +37,6 @@
 
 - 页级 Tab 的**内容**改成同屏堆叠（每个分区都挂载）后，写于"一屏只有一个面板"时期的**全局负向断言**会被邻区状态命中而假红（实测 `page.getByText("暂无数据")).toHaveCount(0)` 命中了数据面龙虎榜的 antd 默认空文案——该端点在本用例里打的是活栈）。动作：负向断言一律**收进被测分区容器**（`getByTestId("market-section-x").getByText(...)`）并仍锚在正向断言之后；这是作用域精确化，不是放宽。
 - 刚 `docker compose up -d/restart <svc>` 就起 e2e，前几个并行 worker 会拿到网关的 `404 page not found`，症状是"元素找不到"（`getByRole(...)` / toHaveCount 全部 15s 超时）而**不是**页面报错——极易被误判成本轮代码回归。判据：读 `test-results/*/error-context.md` 的 `# Page snapshot`（本次实测就是 `404 page not found`）；动作：重启后先探活（`curl -s -o /dev/null -w "%{http_code}"`）或等 healthcheck 变绿再跑，别先改断言。
+
+- **联网型 DB 测试必须把上游异常转成 `skip`，否则门禁会出现「同命令重跑即绿」的假阳性**：`tests/test_market_activity_leverage_db.py` 的 docstring 早已写明「上游不可达时对应用例 skip，不假装通过」，但三处真调 TuShare/AKShare 的 `upsert_metric_range` 是**直调**（无 try/except）——实测 2026-10-17 一轮 `self_review --full` 因此 2 failed，而**同一条命令重跑** 1436 passed（那一轮 195s vs 92s，即上游正在变慢）。动作：真联网调用统一走 `_upsert_or_skip(...)`，**只**捕获上游/网络类异常（`RuntimeError`/`ValueError`/`httpx.HTTPError`/`OSError`/`TimeoutError`），`TypeError`/`AttributeError` 这类真 bug 仍照红；破坏验证 = 用**无效 token** 跑 → 这两个用例由「红」变「skip（上游不可达/限频）」。
+  能否机械检测：**不能**（"哪些 service 调用会走网络"是动态的），故留档；但同文件内新增的直调可被评审一眼看出（helper 名即契约）。

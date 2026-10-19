@@ -21,6 +21,12 @@
 | [0015](./0015-invite-only-provisioning-and-admin-console.md) | 邀请制开户与管理员控制台（关闭自助注册） | accepted | 2026-10-14 | 安全 / 产品 |
 | [0016](./0016-derived-metrics-converge.md) | 派生指标由「对账后置收敛」日更，薄日不发布值 | accepted | 2026-10-16 | 数据口径 / 调度 |
 | [0017](./0017-no-downgrade-on-recompute.md) | 重算历史时不得把已有好值降级为 NULL | accepted | 2026-10-16 | 数据口径 |
+| [0018](./0018-hypothesis-immutability-and-pit-verdicts.md) | 研究假设写下即冻结，判定是三态且受 PIT 约束 | accepted | 2026-10-16 | 数据建模 / 数据口径 |
+| [0019](./0019-official-first-source-layer.md) | 官方一手优先的数据源分层与例外判据（修订 0001 的例外面） | accepted | 2026-10-16 | 数据采集 |
+| [0020](./0020-t0-after-close-expected-day.md) | 当日盘后（T+0）纳入期望集：期望日看日历时钟，齐备性另设门禁 | accepted | 2026-10-17 | 数据口径 / 调度 |
+| [0021](./0021-sentiment-metric-tracking.md) | 情绪指标：盘后按日冻结、盘中不落日表，历史详情读时计算 | accepted | 2026-10-18 | 数据口径 / 产品 |
+| [0022](./0022-sentiment-regime-and-sample-gate.md) | 情绪阶段是启发式描述、小样本不进统计：规则可复核，图不撒谎 | accepted | 2026-10-19 | 数据口径 / 产品 |
+| [0023](./0023-market-panorama-daily-snapshots.md) | A股全景日级快照：广度/行业可回算，资金流只认完整日 | accepted | 2026-10-19 | 数据建模 / 产品 |
 
 状态取值：`accepted`（现行）· `superseded`（被新决策取代，须填 `superseded-by` 并双向引用）· `rejected`（评审未采纳，保留以阻止重复提议）
 

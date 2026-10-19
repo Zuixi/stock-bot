@@ -294,6 +294,10 @@ class MarketSentimentDaily(Base):
     zb_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     broken_rate: Mapped[float | None] = mapped_column(Float)
     yzt_avg_pct: Mapped[float | None] = mapped_column(Float)
+    # 今开溢价均值（%）与昨日涨停样本数：2026-10-18 补列。此前这两项只在快照里算出、
+    # 未落库 ⇒「今开溢价」卡片没有历史，均值也无法与样本量一起读（n=2 的均值不是信号）。
+    yzt_avg_open_premium: Mapped[float | None] = mapped_column(Float)
+    yzt_n: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     promo_1to2: Mapped[float | None] = mapped_column(Float)
     promo_1to2_n: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     promo_2to3: Mapped[float | None] = mapped_column(Float)
@@ -373,3 +377,77 @@ class MarketSentimentIntraday(Base):
     dt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     zb_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class MarketBreadthDaily(Base):
+    """A股全景的日级广度（一天一行；B 类可回算，`source` 区分实时/回补）。
+
+    为什么落表：涨跌分布此前只在读时按"最近完整日"现算，没有历史 —— 用户无法回答
+    "上涨家数这周在扩散还是收缩"。本表冻结每日广度口径，读面只需一次索引范围扫描。
+    缺失不落 0：限价未覆盖的早期交易日 `limit_up_count/limit_down_count` 为 NULL。
+    """
+
+    __tablename__ = "market_breadth_daily"
+    __table_args__ = (UniqueConstraint("trade_date", name="uq_market_breadth_daily_date"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    up_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    down_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    flat_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    limit_up_count: Mapped[int | None] = mapped_column(Integer)
+    limit_down_count: Mapped[int | None] = mapped_column(Integer)
+    median_pct: Mapped[float | None] = mapped_column(Float)
+    mean_pct: Mapped[float | None] = mapped_column(Float)
+    # 千元（与 daily_quotes.amount 同单位）；展示层换算
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="local_calc")
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class MarketBreadthBucketDaily(Base):
+    """涨跌分布 11 桶的日级计数（一天 11 行，桶名与 `/market/distribution` 逐字一致）。"""
+
+    __tablename__ = "market_breadth_bucket_daily"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "bucket", name="uq_market_breadth_bucket_daily_date_bucket"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    bucket: Mapped[str] = mapped_column(String(16), nullable=False)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class MarketIndustryDaily(Base):
+    """申万一级行业的日级聚合（一天 31 行；B 类可回算 + C 类归属标注）。
+
+    归属用**当前**申万快照回溯（`attribution='current_sw_snapshot'`），不是当时成分；
+    UI 与文档必须标注，与 ADR 0014 的 C 类判据一致。
+    """
+
+    __tablename__ = "market_industry_daily"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "industry_code", name="uq_market_industry_daily_date_code"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    industry_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    industry_name: Mapped[str] = mapped_column(String(32), nullable=False)
+    pct_chg: Mapped[float | None] = mapped_column(Float)
+    up_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    down_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    flat_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    limit_up_count: Mapped[int | None] = mapped_column(Integer)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))
+    breadth: Mapped[float | None] = mapped_column(Float)
+    attribution: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="current_sw_snapshot"
+    )
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="local_calc")
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

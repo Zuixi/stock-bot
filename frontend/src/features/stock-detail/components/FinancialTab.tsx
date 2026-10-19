@@ -1,14 +1,13 @@
 import { Card, Row, Col, Segmented, Empty, Spin, Tooltip, Table, Typography, Alert } from "antd";
-import ReactECharts from "echarts-for-react";
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  fetchFinancialSummary,
-  fetchFinancialStatements,
-  fetchFinancialMetricsHistory,
-} from "@/shared/api/financial";
+import { fetchFinancialStatements, fetchFinancialMetricsHistory } from "@/shared/api/financial";
 import type { FinancialSummary, MetricHistory } from "@/shared/api/financial";
 import type { Exchange } from "@/shared/types";
+import { EChart } from "@/shared/ui/EChart";
+import { QualityTag } from "./QualityTag";
+import { useFinancialSummary } from "../hooks/useFinancialSummary";
+import { alignMetricSeries } from "../lib/metricSeries";
 
 interface Props {
   exchange: Exchange;
@@ -65,48 +64,6 @@ function formatYi(value: number | null | undefined): string {
   return `${(value / 1e8).toFixed(2)}亿`;
 }
 
-function QualityTag({
-  quality,
-  source,
-}: {
-  quality?: string | null;
-  source?: string | null;
-}) {
-  const preset =
-    quality === "derived"
-      ? { color: "#faad14", label: "估算" }
-      : quality === "reported"
-        ? { color: "#52c41a", label: "财报" }
-        : null;
-  return (
-    <Tooltip title={`质量: ${quality ?? "未知"}${source ? ` · 来源: ${source}` : ""}`}>
-      <span
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 4,
-          fontSize: 12,
-          color: "#999",
-        }}
-      >
-        {preset ? (
-          <span
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: "50%",
-              background: preset.color,
-              display: "inline-block",
-            }}
-          />
-        ) : null}
-        {preset?.label}
-        {source ? ` · ${source}` : ""}
-      </span>
-    </Tooltip>
-  );
-}
-
 function SummaryMetricCards({ summary }: { summary?: FinancialSummary }) {
   if (!summary) return null;
   return (
@@ -135,34 +92,37 @@ function SummaryMetricCards({ summary }: { summary?: FinancialSummary }) {
   );
 }
 
-function useSummary(exchange: Exchange, symbol: string) {
-  return useQuery({
-    queryKey: ["financial-summary", exchange, symbol],
-    queryFn: () => fetchFinancialSummary(exchange, symbol),
-    enabled: Boolean(exchange && symbol),
-  });
-}
-
+/**
+ * 六指标趋势图。
+ *
+ * 期间轴与取值一律来自 `alignMetricSeries`（**期间并集 + 按 period 贴值**）：
+ * 旧版把 `histories[0].points` 当 x 轴、各序列按**位置**取值，任一指标缺一期
+ * 就会让后续所有值整体左移一格（图看着平滑，读数全错）。
+ *
+ * 两个 "不许伪造走势" 的开关：
+ * - `smooth: false` —— 季度报告期之间插值会画出**并不存在**的平滑过渡；
+ * - `connectNulls: false` —— 缺期渲染成**断口**，不许跨过空档连成一条假线（缺失 ≠ 0）。
+ */
 function MetricsHistoryChart({ histories }: { histories: MetricHistory[] }) {
-  const periods = useMemo(() => histories[0]?.points.map((p) => p.period) ?? [], [histories]);
-  const option = useMemo(
-    () => ({
+  const option = useMemo(() => {
+    const { periods, series } = alignMetricSeries(histories);
+    return {
       tooltip: { trigger: "axis" as const },
-      legend: { data: histories.map((h) => METRIC_LABELS[h.metric_key] ?? h.metric_key) },
+      legend: { data: series.map((s) => METRIC_LABELS[s.name] ?? s.name) },
       grid: { left: 60, right: 20, top: 40, bottom: 40 },
       xAxis: { type: "category" as const, data: periods },
       yAxis: { type: "value" as const, scale: true },
-      series: histories.map((h) => ({
-        name: METRIC_LABELS[h.metric_key] ?? h.metric_key,
+      series: series.map((s) => ({
+        name: METRIC_LABELS[s.name] ?? s.name,
         type: "line" as const,
-        smooth: true,
+        smooth: false,
+        connectNulls: false,
         showSymbol: false,
-        data: h.points.map((p) => p.value),
+        data: s.values,
       })),
-    }),
-    [histories, periods]
-  );
-  return <ReactECharts option={option} style={{ height: 320 }} />;
+    };
+  }, [histories]);
+  return <EChart option={option} height={320} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +177,15 @@ function buildStatementTable(
   periods: string[],
   fields: StatementField[]
 ) {
+  /**
+   * 期间 → 行 的索引**建一次**（旧实现是「每个单元格 `rows.find()` 一遍」：
+   * 13 科目 × 20 期 × 20 行的线性查找 = O(n²)，且每次切期数都重算）。
+   * `String()` 归一 key：后端 period 一定是字符串，这里只防脏数据把 Map 的键类型搞岔。
+   * 同一 period 重复时后写覆盖（与报表"修订值替换旧值"的口径一致）。
+   */
+  const byPeriod = new Map<string, Record<string, unknown>>();
+  for (const it of rows) byPeriod.set(String(it["period"]), it);
+
   const columns = [
     { title: "科目", dataIndex: "label", key: "label", width: 180, fixed: "left" as const },
     ...periods.map((p) => ({
@@ -230,7 +199,7 @@ function buildStatementTable(
   const data = fields.map((f) => {
     const row: Record<string, string> = { key: f.label, label: f.label };
     for (const p of periods) {
-      const r = rows.find((it) => it["period"] === p);
+      const r = byPeriod.get(p);
       const raw = r?.[f.key] as number | null | undefined;
       row[p] = f.money ? formatYi(raw) : formatValue(raw);
     }
@@ -276,7 +245,7 @@ function StatementsCard({
 export function FinancialTab({ exchange, symbol }: Props) {
   const [periodCount, setPeriodCount] = useState<number>(8);
 
-  const summaryQuery = useSummary(exchange, symbol);
+  const summaryQuery = useFinancialSummary(exchange, symbol);
   const historyQuery = useQuery({
     queryKey: ["financial-metrics-history", exchange, symbol],
     queryFn: () => fetchFinancialMetricsHistory(exchange, symbol, CHART_METRIC_KEYS),

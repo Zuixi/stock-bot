@@ -6,6 +6,8 @@
 # 用法（在仓库根目录执行）：
 #   bash scripts/self_review.sh            # 快检：空白/冲突 + 改动文件 ruff(check+format) + 文档同步告警
 #                                          #       + doc_gate + **check:routes（路由迁移门禁，前端脚本，读清单与 IA 文档）**
+#                                          #       + **check:api-fields（前端字段 ⊆ 后端 schema 契约门禁）**
+#                                          #       + **check:chart-theme（echarts-for-react 只许在主题封装里）**
 #   bash scripts/self_review.sh --full     # 全量：快检 + 后端 mypy/pytest + 前端 tsc
 #
 # 退出码：0 = 通过；1 = 有硬性未过项（空白/ruff/mypy/test/tsc）。
@@ -130,6 +132,41 @@ else
     ok "check:routes 通过（$(grep -c '^PASS' /tmp/check_routes.out) 项）"
   else
     fail "路由迁移门禁未通过（npm run check:routes）"; grep '^FAIL' /tmp/check_routes.out | head -20
+  fi
+fi
+
+# 前端字段 ⊆ 后端 schema 契约硬门禁（P0-6 起）：概览页曾读 `stock.roe` / `revenueGrowth` /
+# `profitGrowth` —— 后端响应里从来没有这三个字段，TS 因字段被声明成可选而抓不到，页面把 `--`
+# 静默渲染了数月。此门禁断言 `StockRecord` 的每个字段都能在后端 `StockOut`/`StockEnrichedOut`
+# 里找到（字段映射取自 `src/shared/api/stocks.ts` 的真实 mapper）。
+# 同样只是读两个源码文件、毫秒级，故放在快检里；同样 node 缺失时**告警而非静默通过**。
+echo "  check:api-fields（前端字段 ⊆ 后端 schema 契约）..."
+if ! command -v node >/dev/null 2>&1; then
+  warn "未找到 node，字段契约门禁被跳过（npm run check:api-fields）——请在有 node 的环境复跑"
+elif [ ! -f frontend/scripts/check-api-fields.mjs ]; then
+  fail "frontend/scripts/check-api-fields.mjs 不存在（前端字段契约门禁无法执行）"
+else
+  if (cd frontend && npm run --silent check:api-fields > /tmp/check_api_fields.out 2>&1); then
+    ok "check:api-fields 通过（$(grep -c '^PASS' /tmp/check_api_fields.out) 项）"
+  else
+    fail "前端字段契约门禁未通过（npm run check:api-fields）"; grep '^FAIL' /tmp/check_api_fields.out | head -20
+  fi
+fi
+
+# 图表主题封装硬门禁（P1-4 起）：`ValuationTab` / `FinancialTab` 曾直接 `import ReactECharts
+# from "echarts-for-react"`，绕过 `shared/ui/EChart.tsx` 的 `withChartTheme` → 暗色卡片底上
+# 仍是 ECharts 默认深灰轴标签，对比度不足且**编译/运行时都不报错**。此门禁断言该 import 只
+# 出现在 `EChart.tsx` 与 `kline/KlineChart.tsx` 两个主题封装里。同样只扫源码、毫秒级。
+echo "  check:chart-theme（图表主题封装门禁）..."
+if ! command -v node >/dev/null 2>&1; then
+  warn "未找到 node，图表主题门禁被跳过（npm run check:chart-theme）——请在有 node 的环境复跑"
+elif [ ! -f frontend/scripts/check-chart-theme.mjs ]; then
+  fail "frontend/scripts/check-chart-theme.mjs 不存在（图表主题门禁无法执行）"
+else
+  if (cd frontend && npm run --silent check:chart-theme > /tmp/check_chart_theme.out 2>&1); then
+    ok "check:chart-theme 通过（$(grep -c '^PASS' /tmp/check_chart_theme.out) 项）"
+  else
+    fail "图表主题门禁未通过（npm run check:chart-theme）"; grep '^FAIL' /tmp/check_chart_theme.out | head -20
   fi
 fi
 

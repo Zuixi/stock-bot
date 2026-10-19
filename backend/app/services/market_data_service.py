@@ -894,10 +894,14 @@ async def get_sector_moneyflow(
     from app.models.market_data import SectorMoneyflowSnapshot  # noqa: PLC0415
 
     async with async_session_factory() as db:
+        # 只认 `eod_full`：本卡对外写的是"末完整日净流入 Top10"。此前取 max(任意产地)，
+        # 会在只有盘中 poll 的 10-15 返回 Top-100 子集，与"完整日"字面不符；且与
+        # 情绪脉搏的完整日资金流出现两个 as_of。缺完整日 → 空（不拿子集冒充）。
         as_of = await _latest_snapshot_day(
             db,
             SectorMoneyflowSnapshot.trade_date,
             SectorMoneyflowSnapshot.dimension == dimension,
+            SectorMoneyflowSnapshot.capture_kind == market_data_repo.EOD_FULL_CAPTURE,
         )
         key = SECTOR_MONEYFLOW_CACHE_KEY.format(
             dimension=dimension, as_of=as_of.isoformat() if as_of is not None else "none"
@@ -1903,16 +1907,33 @@ async def ingest_block_trades(db: AsyncSession, trade_date: date | None = None) 
     return {"upserted": upserted, "days": len(days)}
 
 
-DRAGON_TIGER_CACHE_KEY = "market:dragon-tiger:{date}"
+#: ``v2`` + ``scope`` + ``symbol``：旧键 ``market:dragon-tiger:{date}`` 里缓存的是**全市场**行，
+#: 复用它会把 A 股的榜当成 B 股返回（本功能唯一的静默错误风险点）→ 换键，不兼容旧键。
+#: ``scope`` 必须分段：同一标的、同一 effective 日期下，``range``（跨日）与 ``day``（逐日）
+#: 的结果集**不同** —— 共用一个键会让二者互相顶掉（同键同日期正是最容易踩到的情形）。
+DRAGON_TIGER_CACHE_KEY = "market:dragon-tiger:v2:{scope}:{symbol}:{date}"
 DRAGON_TIGER_TTL = 300
 DRAGON_TIGER_CACHE_LIMIT = 100  # 端点 limit 上限（le=100）：缓存全量再按请求切片
 
 
 async def get_dragon_tiger(
-    cache: CacheClient | None, date_iso: str | None = None, limit: int = 15
+    cache: CacheClient | None,
+    date_iso: str | None = None,
+    limit: int = 15,
+    symbol: str | None = None,
 ) -> list[dict[str, Any]]:
-    """某交易日龙虎榜明细（date 缺省取表内最新 trade_date；Redis 300s 共享缓存）。"""
+    """龙虎榜明细（Redis 300s 共享缓存）。
+
+    - ``symbol`` 缺省：某交易日**全市场**榜（``date`` 缺省取表内最新 trade_date），
+      按净买入额降序 —— 与加 symbol 参数之前逐字一致。
+    - ``symbol`` 给出且无 ``date``：该标的**跨交易日**记录，最新在前（个股上榜稀疏，
+      逐日榜对绝大多数个股为空，个股详情页要的是历史榜单）。
+    - ``symbol`` + 显式 ``date``：逐日榜内按标的过滤。
+    """
     day = datetime.fromisoformat(date_iso).date() if date_iso else None
+    # 查询形态：range=跨日（个股且无 date）/ day=逐日榜（全市场，或个股 + 显式 date）。
+    # 两种形态结果集不同 → 缓存键必须带 scope，否则同 symbol 同日期会互相串。
+    scope = "range" if symbol and day is None else "day"
 
     from app.core.database import async_session_factory  # noqa: PLC0415
 
@@ -1921,13 +1942,26 @@ async def get_dragon_tiger(
         effective = day or await market_data_repo.max_dragon_tiger_date(db)
         if effective is None:
             return []
-        key = DRAGON_TIGER_CACHE_KEY.format(date=effective.isoformat())
+        key = DRAGON_TIGER_CACHE_KEY.format(
+            scope=scope, symbol=symbol or "all", date=effective.isoformat()
+        )
         if cache is not None:
             cached = await cache.get(key)
             if cached:
                 rows_cached: list[dict[str, Any]] = cached
                 return rows_cached[:limit]
-        for t in await market_data_repo.list_dragon_tiger(db, effective, DRAGON_TIGER_CACHE_LIMIT):
+        if scope == "range":
+            # scope=="range" 的定义就是 `symbol and day is None` ⇒ 此处 symbol 必非空；
+            # 显式断言让类型收窄到 str（mypy 看不见上面那个字符串表达式的蕴含关系）。
+            assert symbol is not None
+            entries = await market_data_repo.list_dragon_tiger_by_symbol(
+                db, symbol, DRAGON_TIGER_CACHE_LIMIT
+            )
+        else:
+            entries = await market_data_repo.list_dragon_tiger(
+                db, effective, DRAGON_TIGER_CACHE_LIMIT, symbol
+            )
+        for t in entries:
             rows.append(
                 {
                     "trade_date": t.trade_date.isoformat(),
@@ -2183,11 +2217,22 @@ async def _main() -> None:
             result = await announcement_service.ingest_announcements(
                 db, days=int(args[1]) if len(args) > 1 else 3
             )
+        elif job == "insider_change":
+            from app.services import insider_change_service  # noqa: PLC0415
+
+            # 手动触发口径：insider_change [days]，与脚本共用同一 ingest（不写第二套）
+            from app.services.insider_change_service import INSIDER_LOOKBACK_DAYS  # noqa: PLC0415
+
+            days = int(args[1]) if len(args) > 1 else INSIDER_LOOKBACK_DAYS
+            day_hi = _today_sh()
+            result = await insider_change_service.ingest_insider_range(
+                db, day_hi - timedelta(days=days), day_hi
+            )
         else:
             raise SystemExit(
                 f"unknown job: {job}; available: global_index_daily, "
                 "backfill_global_index, sector_moneyflow, northbound, dragon_tiger, "
-                "block_trades, share_floats, repurchases, announcements"
+                "block_trades, share_floats, repurchases, announcements, insider_change"
             )
         await db.commit()
     print(job, "->", result)

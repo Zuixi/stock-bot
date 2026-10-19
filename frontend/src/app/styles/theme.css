@@ -26,6 +26,12 @@
   /* 情绪分位极值带（/sentiment）：避开 --up/--down（红绿已被价格方向占用） */
   --sent-extreme-cold: #5b4bd6;
   --sent-extreme-hot: #a35f00;
+  /* 市场状态机五态色（S10）——冷暖光谱，不用红绿（状态≠涨跌）；对白底 AA ≥4.5 */
+  --regime-cold: #3b5ba9;
+  --regime-warming: #226e7c;
+  --regime-neutral: #6a6d78;
+  --regime-hot: #a25910;
+  --regime-cooling: #7a4fa3;
   /* 字体族：UI 与数字分离（数字等宽是排版契约，不是各处手写声明） */
   --font-ui: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   --font-num: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -52,6 +58,12 @@
   /* 情绪分位极值带（/sentiment）：避开 --up/--down（红绿已被价格方向占用） */
   --sent-extreme-cold: #5b4bd6;
   --sent-extreme-hot: #a35f00;
+  /* 市场状态机五态色（S10）——冷暖光谱，不用红绿（状态≠涨跌）；对白底 AA ≥4.5 */
+  --regime-cold: #3b5ba9;
+  --regime-warming: #226e7c;
+  --regime-neutral: #6a6d78;
+  --regime-hot: #a25910;
+  --regime-cooling: #7a4fa3;
   /* 字体族：与兜底块逐字一致（防首帧字体跳变） */
   --font-ui: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   --font-num: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -78,6 +90,12 @@
   /* 情绪分位极值带（/sentiment）：暗色下提亮，仍与 --up/--down 区分 */
   --sent-extreme-cold: #8b7cff;
   --sent-extreme-hot: #ffb020;
+  /* 五态色深色版（对深底 ≥7.8） */
+  --regime-cold: #93a9e8;
+  --regime-warming: #5fbfcb;
+  --regime-neutral: #a6a9b4;
+  --regime-hot: #e39a4f;
+  --regime-cooling: #b79bd8;
   /* 字体族：与浅色同名同值（字体族不随主题变，写在此处只为「三块齐全」契约） */
   --font-ui: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   --font-num: ui-monospace, SFMono-Regular, Menlo, monospace;

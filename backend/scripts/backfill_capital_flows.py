@@ -29,7 +29,7 @@
 **幂等**：唯一键 + `ON CONFLICT DO UPDATE`，重跑同一区间新增行数 = 0。
 
 **不落的 key**（本脚本**不会**给它们写任何行，这是 spec 要求的）：
-`industrial_capital_net_change`（待接 S3.2）· `northbound_holding_quarterly`
+`industrial_capital_net_change`（公告原料已采，**金额抽取**待接）· `northbound_holding_quarterly`
 （陆股通持仓（季度），只登记口径与滞后说明）。
 """
 

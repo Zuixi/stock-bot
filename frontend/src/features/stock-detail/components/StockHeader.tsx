@@ -1,79 +1,14 @@
-import { Typography, Tag, Button, Space, Descriptions } from "antd";
-import { StarOutlined, StarFilled } from "@ant-design/icons";
-import { ChangeText, NumberText, formatCnDate } from "@/shared/ui";
-import { EXCHANGE_LABELS } from "@/shared/types";
-import { useWatchlist } from "@/features/watchlist/useWatchlist";
-import type { StockRecord } from "@/shared/types";
+import { QuoteBar, type QuoteBarProps } from "./QuoteBar";
 
-interface Props {
-  stock: StockRecord;
-}
+export type StockHeaderProps = QuoteBarProps;
 
-export function StockHeader({ stock }: Props) {
-  const { items, toggle, isMutating } = useWatchlist();
-  const isWatched = items.includes(stock.symbol);
-
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
-      <div>
-        <Space align="center" size={8}>
-          <Typography.Title level={3} style={{ margin: 0 }}>
-            {stock.name}
-          </Typography.Title>
-          <Typography.Text type="secondary" style={{ fontFamily: "monospace" }}>
-            {stock.symbol}
-          </Typography.Text>
-          <Tag>{EXCHANGE_LABELS[stock.exchange]}</Tag>
-          {stock.industry && <Tag color="blue">{stock.industry}</Tag>}
-        </Space>
-        <div style={{ marginTop: 8, display: "flex", alignItems: "baseline", gap: 16 }}>
-          <span style={{ fontSize: 28, fontWeight: 700 }}>
-            <NumberText value={stock.latestPrice} />
-          </span>
-          <ChangeText value={stock.change} suffix="" style={{ fontSize: 16 }} />
-          <ChangeText value={stock.changePercent} style={{ fontSize: 16 }} />
-        </div>
-        <Descriptions size="small" column={4} style={{ marginTop: 8 }}>
-          <Descriptions.Item label="今开">
-            <NumberText value={stock.open} />
-          </Descriptions.Item>
-          <Descriptions.Item label="最高">
-            <NumberText value={stock.high} />
-          </Descriptions.Item>
-          <Descriptions.Item label="最低">
-            <NumberText value={stock.low} />
-          </Descriptions.Item>
-          <Descriptions.Item label="昨收">
-            <NumberText value={stock.prevClose} />
-          </Descriptions.Item>
-          <Descriptions.Item label="成交量">
-            <NumberText value={stock.volume} unit="cap" />
-          </Descriptions.Item>
-          <Descriptions.Item label="成交额">
-            <NumberText value={stock.turnover} unit="cap" />
-          </Descriptions.Item>
-          <Descriptions.Item label="换手率">
-            {stock.turnoverRate == null ? "--" : `${stock.turnoverRate.toFixed(2)}%`}
-          </Descriptions.Item>
-          <Descriptions.Item label="总市值">
-            <NumberText value={stock.marketCap} unit="cap" />
-          </Descriptions.Item>
-        </Descriptions>
-        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-          {/* 行情口径的"数据截至"：绑最新行情 trade_date。stocks.asof 是名录 ingest
-              时间戳（另一条管道，且可能长期不刷新），不得再混用。全站同款文案统一走
-              formatCnDate（同 SectionCard/RankingMatrix/SectorFlow）。 */}
-          数据截至 {stock.latestQuoteDate ? formatCnDate(stock.latestQuoteDate) : "--"}
-        </Typography.Text>
-      </div>
-      <Button
-        type={isWatched ? "primary" : "default"}
-        icon={isWatched ? <StarFilled /> : <StarOutlined />}
-        loading={isMutating}
-        onClick={() => toggle(stock.symbol)}
-      >
-        {isWatched ? "已自选" : "加入自选"}
-      </Button>
-    </div>
-  );
+/**
+ * 兼容层：**报价条本体在 `QuoteBar.tsx`**（四行：身份 / 价格 / 八项事实 / 区间与分位）。
+ *
+ * 为什么保留这个名字：页面与既有文档/e2e 都以 `StockHeader` 指代"详情页顶部那条读数区"，
+ * 改名会带来无收益的连锁改动。实现已拆到 `QuoteBar` / `QuoteMetricRow` / `PositionStrip` /
+ * `RangeRibbon` 四个文件，本文件只做名字映射 —— 不要再把逻辑写回来。
+ */
+export function StockHeader(props: QuoteBarProps) {
+  return <QuoteBar {...props} />;
 }

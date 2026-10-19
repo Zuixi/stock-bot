@@ -1,0 +1,594 @@
+/* 自选体检（`/me?tab=triage`）：**事实清单**的排版。
+ *
+ * 一处刻意的取舍：分级色（风险/事件/关注/背景）做成**组件级变量**而不是全局令牌。
+ * 全局 `theme.css` 的令牌是「涨跌/主题」语义（`--up`/`--down`/`--bg-page`…），
+ * 现实里没有 severity 一族；硬塞进去会让设计门禁（`check-design-tokens.mjs`）的
+ * 「令牌必须有定义」变成「先加令牌再加组件」的循环。其余颜色仍只走全局令牌。
+ *
+ * 卡片左缘色条 = 分级，正文一律 `--text-primary`，避免有人只靠颜色读事实。 */
+
+.triage {
+  --triage-risk: #b3261e;
+  --triage-risk-tint: rgba(179, 38, 30, 0.1);
+  --triage-event: #a15c00;
+  --triage-event-tint: rgba(161, 92, 0, 0.12);
+  --triage-attention: #1f4ed8;
+  --triage-attention-tint: rgba(31, 78, 216, 0.1);
+  --triage-background: #566072;
+  --triage-background-tint: rgba(86, 96, 114, 0.1);
+}
+
+:root[data-theme="dark"] .triage {
+  --triage-risk: #f2757a;
+  --triage-risk-tint: rgba(242, 117, 122, 0.16);
+  --triage-event: #f0a93c;
+  --triage-event-tint: rgba(240, 169, 60, 0.16);
+  --triage-attention: #7ea6ff;
+  --triage-attention-tint: rgba(126, 166, 255, 0.16);
+  --triage-background: #98a3b3;
+  --triage-background-tint: rgba(152, 163, 179, 0.16);
+}
+
+/* ── 顶部市场状态一行（S10 §S10.3）─────────────────────────
+ *
+ * 形态刻意做成"一行字 + 可展开"，而不是一张卡：它是**背景信息**（现在市场处在哪个阶段），
+ * 不是"今天你该做什么"。故字号/颜色都比体检卡片弱一档，展开区才升到正文色。
+ * 整行是一个 `<button>`（不是 `div + onClick`）：键盘可聚焦、读屏能读到 `aria-expanded`，
+ * 这行的全部价值就是"点开能看到更多"，不可键盘触达等于没有。 */
+.triage__regime {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-panel);
+}
+
+.triage__regime-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text-primary);
+}
+
+.triage__regime-summary {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.triage__regime-cue {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-decoration: underline dotted;
+}
+
+.triage__regime-toggle:hover .triage__regime-cue,
+.triage__regime-toggle:focus-visible .triage__regime-cue {
+  color: var(--text-primary);
+}
+
+.triage__regime-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.triage__regime-detail {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.triage__regime-current {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.triage__regime-section + .triage__regime-section {
+  margin-top: 10px;
+}
+
+.triage__regime-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* 五态各一行：flex 而不是等宽网格——网格会把 `冰点` 与它的 `5.0%` 拉开 250px，
+   读者要在两个数之间"找配对"；这里让"标签 + 数值"始终贴在一起，行间只留一点间隙。 */
+.triage__regime-rows {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 30px;
+}
+
+.triage__regime-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 92px;
+  font-size: 12.5px;
+  padding: 1px 0;
+}
+
+.triage__regime-row-label {
+  color: var(--text-secondary);
+}
+
+.triage__regime-row-value {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+/* 20 日分布三格：中位 / 最差 5% / 样本 */
+.triage__regime-cells {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+}
+
+.triage__regime-cell {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.triage__regime-cell-label {
+  color: var(--text-secondary);
+}
+
+.triage__regime-cell-value {
+  margin: 0;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.triage__regime-muted {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* 口径脚注：与「历史统计不代表未来表现」同一档（最小、次要色），但**必须**在 */
+.triage__regime-foot {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* ── 顶部口径行：数据截至 · 平静只数 · 折叠条数 ─────────────── */
+.triage__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 18px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+}
+
+.triage__folded {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.triage__unavailable {
+  margin-bottom: 14px;
+}
+
+/* ── 分组 ─────────────────────────────────────────────── */
+.triage__group {
+  margin-bottom: 20px;
+}
+
+.triage__group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.triage__group-count {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.triage__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+/* ── 单条事实卡片 ─────────────────────────────────────── */
+.triage__card {
+  position: relative;
+  min-width: 0;
+  padding: 12px 14px 10px 16px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  /* 左缘色条 = 分级（不依赖颜色也能读：Tag 上有文字） */
+  box-shadow: inset 3px 0 0 0 var(--triage-accent, var(--border));
+}
+
+.triage__card:hover {
+  background: var(--hover);
+}
+
+.triage__card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 8px;
+}
+
+.triage__tag {
+  margin-inline-end: 0;
+  border: none;
+  font-size: 11.5px;
+  line-height: 18px;
+  padding-inline: 8px;
+}
+
+.triage__tag--risk {
+  color: var(--triage-risk);
+  background: var(--triage-risk-tint);
+}
+
+.triage__tag--event {
+  color: var(--triage-event);
+  background: var(--triage-event-tint);
+}
+
+.triage__tag--attention {
+  color: var(--triage-attention);
+  background: var(--triage-attention-tint);
+}
+
+.triage__tag--background {
+  color: var(--triage-background);
+  background: var(--triage-background-tint);
+}
+
+.triage__card--risk {
+  --triage-accent: var(--triage-risk);
+}
+
+.triage__card--event {
+  --triage-accent: var(--triage-event);
+}
+
+.triage__card--attention {
+  --triage-accent: var(--triage-attention);
+}
+
+.triage__card--background {
+  --triage-accent: var(--triage-background);
+}
+
+.triage__name {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.triage__symbol {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 发生了什么（含数值）：正文，不折行成噪音 */
+.triage__headline {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+
+/* ── facts：label: value+unit ────────────────────────── */
+.triage__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0 0 10px;
+}
+
+.triage__fact {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.triage__fact-label {
+  color: var(--text-secondary);
+}
+
+.triage__fact-value {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+/* ── 规则出处：卡片脚上方一行（规则 · 版本 · 数据表 + 说明入口）── */
+.triage__rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.triage__rule-text {
+  min-width: 0;
+  /* `daily_quotes` 这类长标识不撑破卡片栅格 */
+  overflow-wrap: anywhere;
+}
+
+/* AntD link Button 默认 24px 行高：卡片里只放一行字，故压掉高度与内边距 */
+.triage__rule-open {
+  height: auto;
+  padding: 0;
+  font-size: 12px;
+}
+
+/* ── 卡片脚：数据截至 + 记一笔 / 复核 ────────────────── */
+.triage__card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 两个入口并排，但**视觉权重不同**：`记一笔` 是写操作（accent + 实底描边），
+ * `复核` 是读操作（同色文字链接）。两者都是链接而不是按钮——都是导航，不是提交。 */
+.triage__actions {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.triage__journal {
+  padding: 1px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.triage__journal:hover {
+  background: var(--hover);
+}
+
+.triage__verify {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.triage__verify:hover {
+  text-decoration: underline;
+}
+
+/* ── 到期提醒一行（S12 §S12.2）────────────────────────────
+ * 形态：整行可点的一行字（不是卡片、不是按钮）——它只回答"有没有到期条目、去哪看"。
+ * 左侧 accent 竖条与体检卡片的分级色条区分开：那是"这条事实多急"，这是"该去做一件事"。 */
+.triage__due-hint {
+  display: block;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.triage__due-hint:hover {
+  background: var(--hover);
+}
+
+/* ── 空态与页脚 ───────────────────────────────────────── */
+.triage__empty {
+  margin: 32px 0 16px;
+}
+
+.triage__add {
+  margin-left: 8px;
+  font-weight: 600;
+}
+
+.triage__disclaimer {
+  margin: 18px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* ── 规则说明抽屉：五段固定次序（定义 / 阈值 / 数据来源 / 失效场景 / 统计）── */
+.triage-rules__section {
+  margin-bottom: 18px;
+}
+
+.triage-rules__section:last-child {
+  margin-bottom: 0;
+}
+
+.triage-rules__section-title {
+  margin: 0 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.triage-rules__definition {
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.triage-rules__rule-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.triage-rules__note,
+.triage-rules__basis,
+.triage-rules__stats-foot {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* 「历史统计不代表未来表现」是硬要求，但它是脚注而非正文：字号最小、不改色相 */
+.triage-rules__stats-foot {
+  font-size: 11.5px;
+}
+
+.triage-rules__failure {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+
+.triage-rules__muted {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 720px) {
+  .triage__list {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── 市场状态机的颜色编码（S10 §S10.3，owner 2026-10-19 批准）────────────────
+   色只编码**阶段**（冰点→修复→中性→亢奋→退潮），不编码涨跌：刻意不用 --up/--down，
+   否则"亢奋/退潮"会被读成"涨/跌"。色值全部来自 theme.css 的 --regime-* 令牌
+   （对白底 AA ≥4.5、深底 ≥7.8），组件里不写死色值。 */
+
+.triage__regime.regime--cold { border-left-color: var(--regime-cold); }
+.triage__regime.regime--warming { border-left-color: var(--regime-warming); }
+.triage__regime.regime--neutral { border-left-color: var(--regime-neutral); }
+.triage__regime.regime--hot { border-left-color: var(--regime-hot); }
+.triage__regime.regime--cooling { border-left-color: var(--regime-cooling); }
+.triage__regime.regime--unknown { border-left-color: var(--border); }
+
+/* 折叠行里的色点：形状是给色盲/打印的第二通道（只做 8px 方点，不做图标）。 */
+.triage__regime-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  flex: 0 0 8px;
+  align-self: center;
+}
+.triage__regime-dot.regime--cold { background: var(--regime-cold); }
+.triage__regime-dot.regime--warming { background: var(--regime-warming); }
+.triage__regime-dot.regime--neutral { background: var(--regime-neutral); }
+.triage__regime-dot.regime--hot { background: var(--regime-hot); }
+.triage__regime-dot.regime--cooling { background: var(--regime-cooling); }
+.triage__regime-dot.regime--unknown { background: var(--border); }
+
+/* 折叠行里的状态名着色（同一状态的文字色 = 色条色，AA 已由令牌保证）。 */
+.triage__regime-toggle.regime--cold .triage__regime-summary { color: var(--regime-cold); }
+.triage__regime-toggle.regime--warming .triage__regime-summary { color: var(--regime-warming); }
+.triage__regime-toggle.regime--neutral .triage__regime-summary { color: var(--text-primary); }
+.triage__regime-toggle.regime--hot .triage__regime-summary { color: var(--regime-hot); }
+.triage__regime-toggle.regime--cooling .triage__regime-summary { color: var(--regime-cooling); }
+
+/* 100% 堆叠条：五段宽度 = 下一日状态概率；段内只在 ≥8% 时写百分比。 */
+.triage__regime-bar {
+  display: flex;
+  width: 100%;
+  height: 22px;
+  margin: 4px 0 8px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--bg-page);
+}
+.triage__regime-seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #ffffff;
+  white-space: nowrap;
+}
+.triage__regime-seg.regime--cold { background: var(--regime-cold); }
+.triage__regime-seg.regime--warming { background: var(--regime-warming); }
+.triage__regime-seg.regime--neutral { background: var(--regime-neutral); }
+.triage__regime-seg.regime--hot { background: var(--regime-hot); }
+.triage__regime-seg.regime--cooling { background: var(--regime-cooling); }
+
+/* 图例里的色块：与段同色，旁边必须有状态名（不只靠颜色）。 */
+.triage__regime-legend { margin: 0; }
+.triage__regime-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+.triage__regime-swatch.regime--cold { background: var(--regime-cold); }
+.triage__regime-swatch.regime--warming { background: var(--regime-warming); }
+.triage__regime-swatch.regime--neutral { background: var(--regime-neutral); }
+.triage__regime-swatch.regime--hot { background: var(--regime-hot); }
+.triage__regime-swatch.regime--cooling { background: var(--regime-cooling); }

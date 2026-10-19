@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from "react";
-import { Navigate, useParams } from "react-router-dom";
+import { Navigate, useLocation, useParams } from "react-router-dom";
 import { Spin } from "antd";
 import { MainLayout } from "@/app/layouts/MainLayout";
 import { RequireAuth } from "@/features/auth";
@@ -35,6 +35,8 @@ const PAGES: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
   IndustryLevel4Page: lazy(() => import("@/pages/market-industry-level4")),
   // 保留路由（Ruling 30）：今天就有数据的真页面，不 redirect 到占位页
   MarketHotSectorsPage: lazy(() => import("@/pages/market-hot-sectors")),
+  // 情绪指标详情（温度计 9 张卡的历史追踪）：`/market/sentiment/:metric`
+  MarketSentimentMetricPage: lazy(() => import("@/pages/market-sentiment-metric")),
   ConceptBoardPage: lazy(() => import("@/pages/market-concept")),
   // 注：`/tags/:tagName` 是 **redirect**（→ `/me?tab=tags&name=`），故没有 `TagsDetailPage` 注册项；
   // 标签个股列表由 `TagsPanel` 渲染（`pages/tags-detail` 已按 Ruling 33 删除：无人渲染 = 死代码）
@@ -92,14 +94,40 @@ function withSuspense(node: ReactNode) {
   return <Suspense fallback={<PageLoading />}>{node}</Suspense>;
 }
 
+/**
+ * 把来源 query 合并到 redirect 目标上：**目标自带的参数优先**，来源里目标没有的键才带过去。
+ *
+ * 为什么必须做：`<Navigate to="/company/600519" />` 会把 `?tab=financial` 一起丢掉，
+ * 于是旧路径深链（`/stock/600519?tab=financial`，仍散落在收藏夹与外部链接里）静默回落概览
+ * ——URL tab（F13）在**入口处**就失效了，而页面自己再怎么改都救不回来。
+ * 目标自带 query 的 redirect 仍然自洽：`/watchlist` → `/me?tab=watchlist` 不会被
+ * 来源的 `?tab=` 覆盖（`/tags/:name` → `/me?tab=tags&name=…` 同理）。
+ */
+function mergeSearch(target: string, sourceSearch: string) {
+  if (!sourceSearch) return target;
+  const hashAt = target.indexOf("#");
+  const hash = hashAt >= 0 ? target.slice(hashAt) : "";
+  const withoutHash = hashAt >= 0 ? target.slice(0, hashAt) : target;
+  const queryAt = withoutHash.indexOf("?");
+  const path = queryAt >= 0 ? withoutHash.slice(0, queryAt) : withoutHash;
+  const merged = new URLSearchParams(queryAt >= 0 ? withoutHash.slice(queryAt + 1) : "");
+  const incoming = new URLSearchParams(sourceSearch);
+  for (const [key, value] of incoming) {
+    if (!merged.has(key)) merged.set(key, value);
+  }
+  const query = merged.toString();
+  return `${path}${query ? `?${query}` : ""}${hash}`;
+}
+
 /** 用来源参数填充 redirect 目标里的 `:param`（`redirectTo` 是契约写法，这里转成实际 URL） */
 function RedirectTo({ route }: { route: AppRoute }) {
   const params = useParams();
+  const { search } = useLocation();
   const target = (route.redirectTo ?? "").replace(/:(\w+)/g, (_, name: string) => {
     const value = params[name] ?? "";
     return name === "tagName" ? encodeURIComponent(value) : value;
   });
-  return <Navigate to={target} replace />;
+  return <Navigate to={mergeSearch(target, search)} replace />;
 }
 
 /** 把清单里的一条 `page` 路由渲染成元素（等价于改造前手写的逐条 JSX） */

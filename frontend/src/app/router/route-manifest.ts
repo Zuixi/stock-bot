@@ -207,6 +207,16 @@ export const ROUTES: AppRoute[] = [
     component: "ConceptBoardPage",
     parent: "main",
   },
+  // 情绪指标详情（2026-10-18）：`/market` 短线情绪温度计的 9 张卡各自的历史追踪页。
+  // `:metric` ∈ `SENTIMENT_METRIC_KEYS`（未知值由页面渲染 404，不静默回落）；
+  // `/market/**` 维持公开免登录（ADR 0008），与卡片所在分区同一鉴权姿态。
+  {
+    key: "market-sentiment-metric",
+    path: "/market/sentiment/:metric",
+    kind: "page",
+    component: "MarketSentimentMetricPage",
+    parent: "main",
+  },
 
   // 公司分析 `/company`（公开；吸收既有 `/stock/:symbol`）
   { key: "company", path: "/company", kind: "page", component: "CompanyPage", isPlaceholder: true, parent: "main" },

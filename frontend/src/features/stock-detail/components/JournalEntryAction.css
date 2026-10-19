@@ -1,0 +1,24 @@
+/*
+ * 「记一笔」动作区里的两种链接形态（P2-2）：
+ * 未登录 →「登录后记一笔」；刚记完 →「已记录 · 查看」。
+ *
+ * 为什么不是 `Button type="link"`：这两处是**导航**（`<Link to=...>`），不是动作 ——
+ * 用 Button 会拿到按钮语义，读屏会读成"按钮"，而它的行为是跳页。
+ * 高度钉成 24px，与旁边 `size="small"` 的按钮齐平：动作区不因文案长短而错位。
+ *
+ * 样式跟着组件走（不塞进 `QuoteBar.css`）：动作区里这一格是可选出现的，
+ * 它的排版契约（24px 行高、13px、accent）只属于本组件，混进报价条的整体规则里
+ * 会让"报价条四行 96px 预算"的读者误以为这也是四行布局的一部分。
+ *
+ * 颜色只用全局令牌（`--accent`），零新色值；字号 13 是全站已有档位。
+ */
+
+.journal-entry-action__link {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  font-size: 13px;
+  line-height: 24px;
+  color: var(--accent);
+  white-space: nowrap;
+}

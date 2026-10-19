@@ -170,6 +170,70 @@ class AkShareClient(RateLimitedSyncProvider):
     # §S1.12 投资者行为：新成立基金募集份额（月频）+ 公募基金仓位（周度观测）
     # ------------------------------------------------------------------
 
+    async def fetch_etf_share_sse(self, day: str) -> pd.DataFrame:
+        """**上交所官网 · ETF 规模（份额）**指定统计日的全市场快照（官方一手）.
+
+        已验证 2026-10-16（`scripts/spike_official_sources.py` 的 ``etf-share`` probe）：
+        底层 = ``https://query.sse.com.cn/commonQuery.do``
+        （``sqlId=COMMON_SSE_ZQPZ_ETFZL_XXPL_ETFGM_SEARCH_L`` + ``STAT_DATE=YYYYMMDD``，
+        需 ``Referer: https://www.sse.com.cn/``）。返回列 = ``序号, 基金代码, 基金简称,
+        ETF类型, 统计日期, 基金份额``（份额原生单位**万份**）。
+
+        ⚠️ **只有「按单日查询」这一种姿势**（无区间参数；``STAT_DATE`` 为空即最新一期）
+        ⇒ 日更 = 1 次请求，**历史回补 = N 次请求**（实测 2020-01-15 → 174 只、
+        2024-01-15 → 518 只、2026-10-14 → 922 只，历史时点值真实可回补）。
+        """
+        return await self.invoke_async(
+            "fund_etf_scale_sse", lambda: self._ak.fund_etf_scale_sse(date=day)
+        )
+
+    async def fetch_etf_share_szse(self, day_lo: str, day_hi: str) -> pd.DataFrame:
+        """**深交所官网 · ETF 份额**区间查询（官方一手，xlsx 下载）.
+
+        已验证 2026-10-16（同上 probe）：底层 = ``https://www.szse.cn/api/report/ShowReport``
+        （``SHOWTYPE=xlsx&CATALOGID=scsj_fund_jjgm`` + ``txtStart``/``txtEnd``，
+        ``Referer: https://www.szse.cn/market/fund/volume/etf/index.html``
+        —— **不带 Referer 会被拦**）。
+        返回列 = ``日期, 基金代码, 基金简称, 基金份额``（单位**万份**）。
+
+        ⚠️ 深交所官网页脚自述：**T 日夜间更新的 T 日规模仅供参考，以 T+1 日早间为准**
+        ⇒ 当日值须 T+1 采或回改；本方法只负责取数，不判断时效。
+        """
+        return await self.invoke_async(
+            "fund_scale_daily_szse",
+            lambda: self._ak.fund_scale_daily_szse(
+                start_date=day_lo, end_date=day_hi, symbol="ETF"
+            ),
+        )
+
+    async def fetch_sse_margin_summary(self, day_lo: str, day_hi: str) -> pd.DataFrame:
+        """**上交所官网 · 融资融券汇总**（区间；官方一手）。供 ADR 0019 的**对拍**使用。
+
+        已验证 2026-10-16（`scripts/spike_official_sources.py` 的 ``margin`` probe）：
+        底层 = ``https://query.sse.com.cn/commonSoaQuery.do``（``sqlId=RZRQ_HZ_INFO``，
+        实测 ``total=4016`` = 2010-03-31 起全历史）。返回列 = ``信用交易日期, 融资余额,
+        融资买入额, 融券余量, 融券余量金额, 融券卖出量, 融资融券余额``（金额单位**元**）。
+
+        ⚠️ TuShare ``margin`` 的同名字段单位也是**元**、同期实测逐日一致 —— 故本方法只用于
+        对拍，**不**替换主源（两融已 `tier='official'` 且三所求和）。
+        """
+        return await self.invoke_async(
+            "stock_margin_sse",
+            lambda: self._ak.stock_margin_sse(start_date=day_lo, end_date=day_hi),
+        )
+
+    async def fetch_index_valuation_csindex(self, code: str) -> pd.DataFrame:
+        """**中证指数官网 · 指数估值**（近 20 行；官方一手，供 PE 口径对拍）。
+
+        已验证 2026-10-16：返回列 = ``日期, 指数代码, 指数中文全称, 指数中文简称,
+        指数英文全称, 指数英文简称, 市盈率1, 市盈率2, 股息率1, 股息率2``（实测 20 行）。
+        ⚠️ 官方出口**只有近 20 个交易日** ⇒ 不能当历史序列，只能做近期对拍。
+        """
+        return await self.invoke_async(
+            "stock_zh_index_value_csindex",
+            lambda: self._ak.stock_zh_index_value_csindex(symbol=code),
+        )
+
     async def fetch_fund_new_found(self) -> pd.DataFrame:
         """**东财「新成立基金」**（`fund.eastmoney.com/data/xinfound.html`）全表.
 

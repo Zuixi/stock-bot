@@ -374,11 +374,14 @@ cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -c \
 | `etf_share_change` | 宽基 ETF 份额变化 | 亿份 | daily |
 | `southbound_net_buy` | 南向资金净买入 | 亿元 | daily |
 | `industrial_capital_net_change` | 产业资本净增减持 | 亿元 | event |
+| `insider_net_change_daily` | 董监高及关联人净增减持 | 万股 | daily |
 | `northbound_holding_quarterly` | 陆股通持仓（季度） | 万股 | quarterly |
 
 > **`etf_share_change` 的口径（spec：「"国家队"护盘唯一可见痕迹，完全公开」）**：
-> 值 = **六只宽基 ETF 的份额日变化之和**，单位**亿份**（上游 `fund_share.fd_share` 原生
-> 单位是**万份**，÷1e4）。篮子 = **每个宽基指数族里规模（份额 × 收盘价）最大的一只**：
+> 值 = **八只宽基 ETF 的份额日变化之和**，单位**亿份**（上游 `fund_share.fd_share` 原生
+> 单位是**万份**，÷1e4）。**v3（2026-10-17）把沪深300 族从 1 只补到 3 只**
+> （`510300` + `510310` + `159919`）：该族是「国家队」主战场，只取一只会系统性低估净申购；
+> 口径版本随之由 `s1.7-v2` 升为 **`s1.7-etf-v3`**（旧行须整段重灌，ADR 0011 第 4 条）。篮子 = **每个宽基指数族里规模（份额 × 收盘价）最大的一只**：
 > 沪深300 `510300.SH`（1069.5 亿元）/ 上证50 `510050.SH`（208.7 亿）/ 中证500
 > `510500.SH`（404.5 亿）/ 中证1000 `512100.SH`（230.3 亿）/ 科创50 `588000.SH`
 > （952.3 亿）/ 创业板指 `159915.SZ`（656.9 亿）——依据与原文证据见
@@ -418,18 +421,38 @@ cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -c \
 > 落库天 = 上游有行的日（**港股通交易日是 A 股交易日的子集**，故覆盖率对账**不**拿
 > `daily_quotes` 当分母，否则港股休市日会被算成缺数）。
 
-> **`industrial_capital_net_change` = 待接（`blocked-on-verification`），库里 0 行**：
-> 原料是上市公司**公告**（spec §S3.2，是"原料/视图分离"的直接体现），而 S3.2 未完成
-> （实测：无 `app/services/content_ingest/`、无 `content_items`/`content_entities`；
-> 本 token 的公告接口 `anns_d` 也无权限）。spec 原话：「若 S3.2 未完成，本项标记为待接，
-> **不得用假数据填充**」——故本 key **没有任何行**，读面回全 `None` 骨架（不是 404）。
-> 已登记的另一个目的：把"缺什么"写进口径字典。上游替代 `stk_holdertrade`（结构化增减持，
-> 实测单日 3000 行已撞上限、含 `in_de`/`holder_type`/`change_vol`）**本轮不采用** ——
-> 换原料会绕开公告面的 `publisher_tier` 与正文可回溯，属控制器裁定权。
+> **`industrial_capital_net_change` = 待实现（已有官方一手产地），库里 0 行**：
+> **2026-10-16 更新（[ADR 0019](../decisions/0019-official-first-source-layer.md) · [data-source 附.11](./data-source.md)）**：
+> 产地定为**巨潮公告类目 `category_gqbd_szsh`（股本变动）**——实测 2026-10-08~16 共 **1102 条**
+> （含减持计划、权益变动报告书、增持；回购噪音大，须标题过滤），`announcementTime` 即披露时点（PIT ✅）；
+> **既有 cninfo 公告管道加一个类目即可**，不再阻塞在 S3.2 的全量抽取上（金额抽取可后置，先交付事件与家数）。
+> **✅ 2026-10-17：原料已落地**（类目 `equity_change`，实机 30 行/日、幂等；见 [data-source 附.11.5](./data-source.md)）；
+> 本 key 仍 0 行的原因**只剩金额抽取**（S3.4）。
+> **口径边界**：本 key **只覆盖 5%+ 股东 / 实控人 / 机构**；**董监高及关联人**是另一个 key
+> `insider_net_change_daily`（见下方提案表），**两者不得混装**。
+> 仍不采用 TuShare `stk_holdertrade`（单日 3000 行撞上限）：官方类目 + 公告正文可回溯优先（ADR 0019 判据 1/4）。
+
+> **`insider_net_change_daily` = 董监高及关联人净增减持（官方一手，日频，单位万股）**：
+> **与 `industrial_capital_net_change` 是两种东西**（ADR 0019 硬纪律）：本 key 只覆盖**内部人**
+> （董监高及关联人），产地是沪深交易所官网结构化表（沪 `COMMON_SSE_XXPL_CXJL_SSGSGFBDQK_S`、
+> 深 `1801_cxda`），按「证券 × 披露日」聚合，值 = 增持 − 减持的**净变动股数（万股）**
+> （沪原生**股**、深原生**万股**，已归一）。**PIT 不对称**：沪用 `FORM_DATE`（填报=披露日）填
+> `published_at`；**深交所该表没有披露日** ⇒ 深市行 `published_at=NULL` +
+> `extra.disclosure_date_unavailable=true`，**不得进回测/信号链路**。
+> ⚠️ 沪市窗口过滤的是**变动日**（实测：变动日 2024-03-05、填报日 2026-09-20 的补报只在变动日
+> 窗口内可取）⇒ 长滞后补报靠回补脚本重跑长区间，日更窗口默认 30 天。
+> ⚠️ **dormant（2026-10-17 裁定）**：数据可采但**暂无消费方**（市场读面只取 `stock_id=0`，
+> 而本指标 per-stock）⇒ **不进收敛器**，不产生定时外呼；消费方出现后再挂腿（届时要先定
+> 「per-stock 还是市场聚合」的读面口径）。
 
 > **`northbound_holding_quarterly` = 陆股通持仓（季度），只落口径与滞后说明（0 行）**：
 > **⚠️ 命名禁令（Ruling 19）**：香港中央結算（HKSCC）是**名义持有人汇总账户**，
 > 持仓主体不可拆分 ⇒ 一律写「**陆股通持仓**」，**不得**称"外资"。
+> ⚠️ **dormant（2026-10-17 裁定）**：本 key 已 per-stock 落库（实测 3 个季末 11,634 行），
+> 但市场读面只取 `stock_id=0`、前端无消费位 ⇒ **不进收敛器**；消费方出现后再定聚合口径。
+> **官方出口已核实（2026-10-16，附.11.1 #F）**：港交所 `www3.hkexnews.hk/sdw/search/mutualmarket.aspx?t=sh|sz`
+> （ASP.NET POST，季度化、季末后第 5 个北向交易日发布）；实测当期季末沪 ≈2040 / 深 ≈2270 行，
+> **2025-12-31 及更早返回 0 行 ⇒ 历史不可回补**（官方只作**当期快照**，历史序列走 `hk_hold`）。
 > **滞后说明（UI 必须明示）**：2024-08-19 起沪深港通持股**改为按季度披露**
 > （北向每日净买入同期取消），故本指标落后当季最多约一个季度 + 源侧发布滞后。
 > 候选产地 `hk_hold`（`exchange ∈ {SH,SZ}` 行）实测：12 个季度末里 **10 个**给出陆股通行
@@ -635,6 +658,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --project backend python backend/scripts/check
 | `reverse_repo_7d_rate` | 7 天期逆回购操作利率（政策利率锚） | % | 日 | 与市场侧回购利率分 key（规则 5）|
 | `fr007` | 银行间 7 天回购定盘利率 | % | 日 | 市场侧成交口径 |
 | `fdr007` | 银银间 7 天回购定盘利率 | % | 日 | 市场侧成交口径 |
+| _（无）_ | 2026-10-17 起本表为空：`insider_net_change_daily` 已注册（见上方 S1.7 已注册表）| — | — | 反查由 `scripts/check_metric_dictionary.py` 机械保证 |
 
 > **已从本表移出（2026-10-13，spec §S1.7 落地）**：`etf_share_change` · `southbound_net_buy` ·
 > `industrial_capital_net_change` 与陆股通持仓（季度）现在**有代码可核**，已移入上方
@@ -796,9 +820,30 @@ drop_and_renormalise`）。**绝不**静默用 0、**绝不**插值或前向填�
 - 上面「参与区间」表里的 `2026-10-12 ｜ 3 条腿 ｜ 0.23` 一行因此是**历史现象**：该日已被
   收敛器重算覆盖为齐备值；若某日始终只有 < 7 条腿，它现在是 `value=NULL`（不再是薄值）。
 - **已发布的值不会被后续重算降级**（2026-10-16 加固，[ADR 0017](../decisions/0017-no-downgrade-on-recompute.md)）：
-  收敛器重算窗口时会先做非 NULL 快照，凡"本轮源侧缺数本会把已有值改写成 NULL"的行会被恢复回
+  收敛器重算窗口时会先做非 NULL 快照，凡"本轮源侧缺数本会把已有值改成 NULL"的行会被恢复回
   旧值并告警（`value_downgrade_blocked`）。方向性是**值 → NULL 拒绝、NULL → 值 放行**，
   故"某天补数后由 NULL 变成有值"（含由薄转齐备）照常生效。
+
+#### 当日盘后（T+0）与 `provisional`（2026-10-17 增补，[ADR 0020](../decisions/0020-t0-after-close-expected-day.md)）
+
+2026-10-17 起，期望集的上界由**交易日历 + 时钟**决定：交易日 **17:30（CST）之后**含当日
+（此前硬编码"截止昨日"，导致页面"数据截至"天天不动）。于是 hero 会出现一种**新形态的行**：
+`as_of` = 当日、且值**必然**缺交易所融资融券的两条成分（合计权重 0.16，T+1 披露）。
+
+- 实测（2026-10-17 00:2x，距周五收盘 9.4 小时）：`daily` / `daily_basic` / `stk_limit` /
+  `fut_daily` / `index_daily` / QVIX CSV **都含当日**，只有 `margin` 是 0 行
+  ⇒ 当日 **9/11 条腿、生效权重 0.84**，仍在 0.80 闸门之上 ⇒ **照常发布**（闸门与口径不变）。
+- `provisional` = **三态**读面字段，由 registry 的 `CompositeConstituent.late_arrival` 声明推导，
+  **不写库**（历史行缺该键会被 `default False` 读成"是终值"，那是又一次"缺键就撒谎"）：
+  - `true` = 该行缺**已声明的 T+1 成分**且仍在收敛改写窗口（10 交易日）内 ⇒ **这个数字以后会被
+    重算改写**（[ADR 0017](../decisions/0017-no-downgrade-on-recompute.md) 允许"值→值"的修订）；
+  - `false` = 终值（腿齐，或已落到改写窗口之外 —— 窗口外的行收敛器再也不会碰）；
+  - `null` = 判不出（缺 `extra.participants` 登记，或缺交易日历）——**不得**归并成 `false`。
+- **披露口径**：文案写"待上游披露后重算"，**不写"次日"** —— 实测 10-15 的两融到 10-16 21:32
+  仍未披露（超过一天），承诺具体时点会直接失实。
+- `expected_as_of` / `lag_trading_days` 的锚也一并换成**外部日历**（此前取自
+  `max(daily_quotes)`，与被判据的对象同源 ⇒ "今天整天没采"时反而报 `stale=false`）；
+  落后天数由**日历计数**得出。
 
 #### PIT（由成分的可得性决定；**不回退 `period`**）
 

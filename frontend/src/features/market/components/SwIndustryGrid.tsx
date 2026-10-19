@@ -5,6 +5,7 @@ import {
   fetchSwIndustryTree,
   type SwIndustryLevel1,
 } from "@/shared/api/swIndustry";
+import type { PanoramaIndustry } from "@/shared/api/panorama";
 import { useMarketPolling } from "../hooks/useMarketPolling";
 import "./SwIndustryGrid.css";
 
@@ -39,7 +40,15 @@ function magLevelOf(count: number, thresholds: number[]): number {
 
 const SKELETON_COUNT = 18;
 
-function IndustryCell({ industry, magLevel }: { industry: SwIndustryLevel1; magLevel: number }) {
+function IndustryCell({
+  industry,
+  magLevel,
+  pano,
+}: {
+  industry: SwIndustryLevel1;
+  magLevel: number;
+  pano?: PanoramaIndustry;
+}) {
   /** 用户自定义标签**带标注**呈现，绝不加进官方数（见 swIndustry.ts 的 customTagSuffix） */
   const suffix = customTagSuffix(industry);
 
@@ -56,10 +65,18 @@ function IndustryCell({ industry, magLevel }: { industry: SwIndustryLevel1; magL
       to={`/market/industry/${industry.code}`}
       className={`sw-cell sw-cell--mag-${magLevel}`}
       title={`${industry.officialCount ?? industry.stockCount} 只个股 · ${industry.children.length} 个二级行业${
+        pano?.pctChg != null ? ` · 今日 ${pano.pctChg > 0 ? "+" : ""}${pano.pctChg.toFixed(2)}%` : ""
+      }${pano?.rankDelta != null ? ` · 排名 ${pano.rankDelta > 0 ? "+" : ""}${pano.rankDelta}` : ""}${
         suffix ? ` · ${suffix}` : ""
       }`}
     >
       <span className="sw-name">{industry.name}</span>
+      {pano?.pctChg != null ? (
+        <span className={`sw-pct num ${pano.pctChg >= 0 ? "up" : "down"}`}>
+          {pano.pctChg > 0 ? "+" : ""}
+          {pano.pctChg.toFixed(1)}%
+        </span>
+      ) : null}
       {/* 只留两个数据点（官方成分数 · 二级行业数），**不放自定义标注**：瓦片宽度只有
           128–190px，三样信息会把「自定义」挤到第二行，逐格换行、视觉参差（Phase 1 视觉
           复核实测）。自定义标注仍在 `title`（悬停可见）与下钻页（完整口径），信息没丢。 */}
@@ -83,6 +100,8 @@ function IndustrySkeletons() {
 interface Props {
   /** 数据不可用时的降级文案：landing 带营销口吻，工作台传中性提示 */
   fallback?: string;
+  /** 全景日表的最新行业涨跌（可选；缺省时瓦片保持纯成分数视图） */
+  industries?: PanoramaIndustry[];
 }
 
 /**
@@ -90,7 +109,7 @@ interface Props {
  * Stage C 自 landing/sections/IndustryGrid 提取为共享组件，宣传页与市场页共用。
  * 颜色编码数量的口径见文件头 `QUANTILES` 注释（Phase 2 §4.2/§3.6 起不再用 accent 叠 alpha）。
  */
-export function SwIndustryGrid({ fallback = "暂无申万行业数据" }: Props) {
+export function SwIndustryGrid({ fallback = "暂无申万行业数据", industries: panoIndustries }: Props) {
   const { refetchInterval } = useMarketPolling();
   const { data, isLoading } = useQuery({
     queryKey: ["market", "sw-industry-tree"],
@@ -101,6 +120,7 @@ export function SwIndustryGrid({ fallback = "暂无申万行业数据" }: Props)
   const industries = data ?? [];
   // 分档按**官方成分数**（与格子上的数字同一口径；若按 stockCount 分档，深浅会与格子上的数对不上）
   const thresholds = magThresholds(industries.map((i) => i.officialCount));
+  const panoByCode = new Map((panoIndustries ?? []).map((p) => [p.code, p]));
 
   if (isLoading) return <IndustrySkeletons />;
   if (industries.length === 0) return <div className="sw-fallback">{fallback}</div>;
@@ -109,6 +129,7 @@ export function SwIndustryGrid({ fallback = "暂无申万行业数据" }: Props)
       {industries.map((ind) => (
         <IndustryCell
           key={ind.code}
+          pano={panoByCode.get(ind.code)}
           industry={ind}
           magLevel={magLevelOf(ind.officialCount, thresholds)}
         />

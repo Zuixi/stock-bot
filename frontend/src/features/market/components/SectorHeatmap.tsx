@@ -1,4 +1,5 @@
-import { Card, Spin } from "antd";
+import { useState } from "react";
+import { Card, Segmented, Spin } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { fetchSectors } from "@/shared/api/market";
@@ -17,15 +18,23 @@ function heatColor(pct: number, c: ThemePalette): string {
   return pct >= 0 ? hexLerp(c.border, c.up, t) : hexLerp(c.border, c.down, t);
 }
 
-export function SectorHeatmap() {
+export interface SectorHeatmapProps {
+  /** 上一交易日（来自 `/market/panorama`）；有值才给"昨日"切换，缺失不假装可回看。 */
+  previousDate?: string | null;
+}
+
+export function SectorHeatmap({ previousDate }: SectorHeatmapProps) {
   const navigate = useNavigate();
   const { colors } = useTheme();
   const { refetchInterval } = useMarketPolling();
+  const [mode, setMode] = useState<"today" | "prev">("today");
+  const date = mode === "prev" ? previousDate ?? undefined : undefined;
   const { data: sectors, isLoading } = useQuery({
-    queryKey: ["market", "sectors"],
-    queryFn: fetchSectors,
+    queryKey: ["market", "sectors", date ?? "latest"],
+    queryFn: () => fetchSectors(date),
     staleTime: STALE_TIME,
-    refetchInterval,
+    refetchInterval: date ? false : refetchInterval,
+    enabled: mode === "today" || Boolean(previousDate),
   });
   const data = sectors?.items ?? [];
 
@@ -93,11 +102,24 @@ export function SectorHeatmap() {
       title="板块热力图"
       size="small"
       extra={
-        <span
-          onClick={() => navigate("/market/hot-sectors/industry")}
-          style={{ fontSize: 12, color: colors.accent, cursor: "pointer" }}
-        >
-          查看全部 ›
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          {previousDate ? (
+            <Segmented<"today" | "prev">
+              size="small"
+              value={mode}
+              onChange={(v) => setMode(v)}
+              options={[
+                { label: "今日", value: "today" },
+                { label: "昨日", value: "prev" },
+              ]}
+            />
+          ) : null}
+          <span
+            onClick={() => navigate("/market/hot-sectors/industry")}
+            style={{ fontSize: 12, color: colors.accent, cursor: "pointer" }}
+          >
+            查看全部 ›
+          </span>
         </span>
       }
     >

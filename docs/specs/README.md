@@ -30,6 +30,11 @@
 | S5 | _(待建)_ | Wave 4 价值网图谱 | catalog-only |
 | S6 | _(待建)_ | Wave 5 策略引擎 | catalog-only |
 | S7 | _(待建)_ | Wave 6 交易执行 + 风险管理 | catalog-only |
+| S8 | [S8-watchlist-triage.md](./S8-watchlist-triage.md) | 散户工具型「自选体检」（8 个事实型探测器 + 噪声控制 + 站内角标）| detailed |
+| S9 | [S9-decision-journal.md](./S9-decision-journal.md) | 决策日志与归因（3 行必填 + 自动快照 + 五类归因 + 个人「最常犯的错」统计）| detailed |
+| S10 | [S10-market-regime.md](./S10-market-regime.md) | 市场状态机（五态 + 迟滞 + 转移矩阵 + 同态后续分布；零新表零新源）| detailed |
+| S11 | [S11-unlock-calendar.md](./S11-unlock-calendar.md) | 解禁日历（补 `share_floats` 写入方 + triage 探测器 + 日志窗口标记；零新表）| detailed |
+| S12 | [S12-closed-loop.md](./S12-closed-loop.md) | 闭环三件（一键记一笔 / 到期站内提醒 / 离线产物自愈；零新表零新 cron）| detailed |
 
 > **渐进明细**：只有 S0–S3 写详细契约——S4 起的 spec 在**启动前一周**才细化。理由：Wave 1 的数据事实底座没落地前，Wave 5 的因子契约一定会返工，提前细化是浪费。
 
@@ -89,18 +94,18 @@
 | S1.4 | 市场/行业分类钻取 | 申万 31 → 二级 → 三级 → 个股 + 7 行情字段（含**补成交额**）| S1.2 | M |
 | S1.5 | 市场/个股与板块热力图 | treemap（面积=市值/成交额，色=涨跌幅）；**对标 iFinD 的信息密度** | S1.2 | M |
 | S1.6 | 市场/A股排行 7 榜 | 市值/半年利润/年利润/月涨幅/月跌幅/ROE/股息率 各百强 | S1.2 | S |
-| S1.7 | 资金流四件套 + 外资画像重构 | ETF 份额变化 · 两融 · 产业资本增减持 · 南向；陆股通持仓降级为季度并具名 | S1.2 | M |
+| S1.7 | 资金流四件套 + 外资画像重构 | ETF 份额变化 · 两融 · **董监高及关联人（官方一手，日频）** · **5%+ 股东（公告类目，事件）** · 南向；陆股通持仓降级为季度并具名。**产业资本拆两个 key**（2026-10-16，[ADR 0019](../decisions/0019-official-first-source-layer.md)，实测见 [data-source 附.11](../design/data-source.md)）| S1.2 | M |
 | S1.8 | 情绪/市场宽度与动量 | 涨跌家数比 · 涨跌停家数比 · 突破 20 日线占比 · 炸板率 · **补连板高度 / 首板晋级率** | S1.2 | M |
 | S1.9 | 情绪/交易活跃度与杠杆资金 | 全市场成交额 · 分指数换手率 · 融资余额 · 融资买入额占比 · 融券余额 | S1.2 | M |
 | S1.10 | 情绪/波动率与衍生品 | 期权波动率 · 股指期货升贴水（**含 IC/IM 贴水率作为对冲成本代理**）| S1.2 | M |
 | S1.11 | 情绪/估值与风险溢价 | 股债收益差（ERP = 1/PE − 10Y 国债）| S1.2 | S |
 | S1.12 | 情绪/投资者行为 | 新成立基金份额 · ETF 份额变化 · 偏股基金发行占比（**替代低频/受限口径**）| S1.2 | M |
 | S1.13 | 情绪/综合情绪指数 | **自建 composite**（加权 + 分位标准化）；第三方指数仅作对照，**不进信号链路** | S1.8–S1.12 | M |
-| S1.14 | 情绪/散户舆情（可选） | 媒体平台搜索热度；无稳定源，**排在末位、不做承诺** | — | S |
+| S1.14 | 情绪/散户舆情（可选） | 媒体平台搜索热度；无稳定源，**排在末位、不做承诺**。**2026-10-16 落 `superseded`**：官方出口不存在（百度指数需登录态被反爬 / 微信指数无公开入口），东财股吧人气榜不是同一口径 | — | S |
 
 ### S2 信号 · 因子 · 回测 · 提醒（Wave 1.5 · **复用既有基建**）
 
-> **只有骨架，没有引擎。** 规则 = 纯函数（同 `cycle_engine.py`）、阈值 = `industry_registry`、信号 = `industry_signals`、因子 = `stock_features` 物化模式。**新增表仅 3 张。**
+> **只有骨架，没有引擎。** 规则 = 纯函数（同 `cycle_engine.py`）、阈值 = `industry_registry`、信号 = `industry_signals`、因子 = `stock_features` 物化模式。**新增表仅 6 张**（S2.3 1 + S2.4 2 + S2.5 3）。
 
 | ID | 名称 | 交付物与契约要点 | 依赖 | 尺寸 |
 |---|---|---|---|---|
@@ -108,6 +113,7 @@
 | S2.2 | 规则与信号（**复用 `industry_signals`**）| 规则为纯函数；`industry_signals` **加 4 列**（`rule_key`/`rule_version`/`confidence`/`severity`）；`basis` 即证据链；**PIT 护栏** | S2.1 | M |
 | S2.3 | 事件研究回测（最小版）| `backtest_runs` 一表（**无 `backtest_events`**，读时算）；PIT 强制 + 样本切分强制；**PIT 对照实验** | S2.2 | M |
 | S2.4 | 提醒订阅与触达 | `alert_subscriptions` + `alerts`；站内必做；订阅管理 UI 推迟 | S2.2 | S |
+| S2.5 | 用户研究假设与自动判定 | `research_hypotheses` + `research_hypothesis_events`（append-only 证据链）+ `user_alert_cursors`；**写下即冻结**（无 PATCH/PUT/DELETE）；判定**三态**（缺数据 ≠ 不满足）+ PIT；`research:write` 权限；**证伪线推迟到 v2** | S1.2, S2.4 | L |
 
 ### S3 资讯地基（Wave 2）
 
@@ -168,6 +174,36 @@
 | S7.5 | 组合风控 | 最大回撤控制线 · VaR/CVaR · 行业暴露 · Beta 暴露（**依赖 S7.2 持仓**）| S7.2 |
 | S7.6 | 系统性风险与预案 | 大盘风险信号（← S1.13）· 流动性危机（← S4.8+S1.9）· 黑天鹅（← S3.6）· 极端行情 playbook | S1.13, S4.8, S3.6 |
 | S7.7 | 风控规则引擎与审计 | 自动止损触发 · 仓位调整 · 风险预算定义 · **日志 append-only 不可篡改**（含"应触发未触发"）。**动作 = 通知 + 待办**（ADR-D 不下单），与 `alerts` 同路径 | S7.4, S2.4 |
+
+### S8 自选体检（散户工具型 · 事实清单）
+
+> 计划：[plans/2026-10-17-watchlist-triage.md](../../plans/2026-10-17-watchlist-triage.md)。
+> **定位**：工具型（只陈述已发生的事实，不构成投资建议）；**不做**预测/社区/跟单；**不动** `/market` 的 tab 与 6 个一级导航。
+> **为什么不是信号清单**：2026-10-17 规则标定证伪（放量新高 −0.92%、首板 −0.28%、PE 低位 +0.12%，见
+> [signal-rule-calibration](../../docs/design/signal-rule-calibration.md)）⇒ 砍掉预测型产品。
+> **v1 零新表、零新 cron**：`GET /api/v1/watchlists/triage` 读时算（5 条固定查询，反 N+1）。
+
+| ID | 名称 | 交付物与契约要点 | 依赖 | 尺寸 |
+|---|---|---|---|---|
+| S8.1 | 入口与页面 | `/today`（**登录后默认落地**，三区：有事的票 / 平静的票 / 页脚免责）；每条只有"发生了什么 + 数据截至 + 复核"；`/me` 加"今日状态" | S8.2, S8.3 | M |
+| S8.2 | 探测器（8 个，事实型） | 纯函数 + registry `TRIAGE_DETECTORS`；`severity ∈ {risk,event,attention,background}`；`required_fields` 导入期核对；**口径禁令**（禁 `turnover_rate_f`、禁 `market_limit_up_stock_daily`、禁个股融资余额、禁 `adj_factor` 判除权） | S1.2 | L |
+| S8.3 | 读面与数据（零新表） | `GET /api/v1/watchlists/triage`；**5 条固定查询**，查询次数不随自选数增长；自选 >50 返回 422（不静默截断） | S8.2 | M |
+| S8.4 | 噪声控制 | 单股合并 1 条（「另有 N 项」）· 每页 ≤8 · `risk > event > attention > background` · 缺数据进 `unavailable` 不静默 | S8.3 | S |
+| S8.5 | 合规 | 固定免责 + 禁用词门禁（≥20 词，清单在代码）+ 分级只四枚举 | S8.2 | S |
+
+### S9 决策日志与归因
+
+> 计划：[plans/2026-10-18-decision-journal.md](../../plans/2026-10-18-decision-journal.md)。
+> **定位**：记录用户**自己的判断**并自动归因；不构成投资建议，不评测"该不该买"。
+> **新增表仅 2 张**、0 新 cron、无新外部数据源。入口 `/me?tab=journal`（不新增路由）。
+
+| ID | 名称 | 契约要点 | 依赖 | 尺寸 |
+|---|---|---|---|---|
+| S9.1 | 入口与页面 | 3 必填（thesis ≤200 / invalidation / horizon ∈ {7,30,90}）；创建后不可改；`open/due/reviewed` 三态 | S9.2, S9.3 | M |
+| S9.2 | 数据模型 | `decision_journal_entries`（snapshot jsonb、due_on 固化）+ `decision_journal_reviews`（append-only、`unique(entry_id)`） | — | S |
+| S9.3 | 自动快照 | 价格/MA20 距离/情绪分位/板块状态/当日事件/估值分位；缺数 `null + missing_reason`；≤5 查询 | S8 | M |
+| S9.4 | 结果与归因 | 到期自动算 `outcome/bench/excess/invalidation_hit`；归因五枚举必选；`stats` 自洽；`reviewed_n<5` 不显示占比 | S9.3 | M |
+| S9.5 | 合规 | 固定免责；产品文案禁用词沿用 S8 词表；无排行/无对比 | — | S |
 
 ---
 

@@ -1,4 +1,5 @@
 import { ApiError, apiGet } from "./client";
+import { exchangeOrder } from "@/shared/config/exchange";
 import type { AdjustMode, KLinePoint, KlineResult } from "@/shared/types";
 
 interface BackendDailyQuote {
@@ -20,8 +21,6 @@ interface BackendKlineResponse {
   adjust_available?: boolean;
 }
 
-const QUOTE_EXCHANGES = ["Shanghai_Stocks", "Shenzen_Stocks", "Beijing_Stocks"] as const;
-
 export async function fetchKlineBySymbol(
   symbol: string,
   days: number,
@@ -33,7 +32,8 @@ export async function fetchKlineBySymbol(
   const startDate = start.toISOString().slice(0, 10);
   const endDate = end.toISOString().slice(0, 10);
 
-  for (const exchange of QUOTE_EXCHANGES) {
+  // 按代码前缀直连最可能的交易所，候选落空再按原顺序兜底（P0-4 / R9）
+  for (const exchange of exchangeOrder(symbol)) {
     try {
       const response = await apiGet<BackendKlineResponse>(
         `/api/v1/exchanges/${exchange}/stocks/${symbol}/quotes/daily`,

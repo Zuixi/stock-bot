@@ -1,4 +1,5 @@
 import { ApiError, apiGet } from "./client";
+import { exchangeOrder } from "@/shared/config/exchange";
 import type { Exchange, StockRecord, SwChainNode } from "@/shared/types";
 
 interface BackendPagedResponse<T> {
@@ -21,6 +22,8 @@ export interface BackendStock {
   full_name?: string | null;
   category: string;
   list_date?: string | null;
+  area?: string | null;
+  act_name?: string | null;
   csrc_code?: string | null;
   csrc_desc?: string | null;
   province?: string | null;
@@ -29,8 +32,6 @@ export interface BackendStock {
   asof: string;
 }
 
-const EXCHANGES: Exchange[] = ["Shanghai_Stocks", "Shenzen_Stocks", "Beijing_Stocks"];
-
 export function mapBackendStock(item: BackendStock): StockRecord {
   return {
     exchange: item.exchange,
@@ -38,6 +39,12 @@ export function mapBackendStock(item: BackendStock): StockRecord {
     name: item.name,
     category: item.category,
     industry: item.csrc_desc ?? undefined,
+    // 「公司概况」四个字段（F17）：后端一直有，`null` 原样落成 `undefined`，
+    // 由组件决定整项不渲染（缺失 ≠ 0，不在这里编默认值）。
+    fullName: item.full_name ?? undefined,
+    listDate: item.list_date ?? undefined,
+    area: item.area ?? undefined,
+    actName: item.act_name ?? undefined,
     asof: item.asof,
     // Backend M0 currently does not provide quote/fundamental fields yet.
     latestPrice: undefined,
@@ -49,9 +56,6 @@ export function mapBackendStock(item: BackendStock): StockRecord {
     circulatingCap: undefined,
     pe: undefined,
     pb: undefined,
-    roe: undefined,
-    revenueGrowth: undefined,
-    profitGrowth: undefined,
     detail: item.detail ?? undefined,
   };
 }
@@ -182,7 +186,8 @@ export async function fetchStocksMergedEnriched(params: {
 }
 
 export async function fetchStockBySymbol(symbol: string): Promise<StockRecord | null> {
-  for (const exchange of EXCHANGES) {
+  // 按代码前缀直连最可能的交易所，候选落空再按原顺序兜底（P0-4 / R9）
+  for (const exchange of exchangeOrder(symbol)) {
     try {
       const item = await apiGet<BackendStock>(`/api/v1/exchanges/${exchange}/stocks/${symbol}`);
       return mapBackendStock(item);
@@ -197,7 +202,7 @@ export async function fetchStockBySymbol(symbol: string): Promise<StockRecord | 
 }
 
 export async function fetchStockEnrichedBySymbol(symbol: string): Promise<StockRecord | null> {
-  for (const exchange of EXCHANGES) {
+  for (const exchange of exchangeOrder(symbol)) {
     try {
       const item = await apiGet<BackendStockEnriched>(
         `/api/v1/exchanges/${exchange}/stocks/${symbol}/enriched`

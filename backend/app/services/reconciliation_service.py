@@ -1,9 +1,14 @@
 """对账收敛器：数据面完整性由对账保证，不依赖"任务准点跑"（level-triggered）。
 
-期望集 = trade_cal 最近 N 个交易日（截止昨日，T-1 语义）；完整判据 = 行数量级
-（≥ 0.8×全市场数，防 partial 行挡住补齐的死锁）。cron 只负责 timeliness，
-任何停摆（宿主睡眠/容器挂起/任务异常）在下一个对账触发点自动收敛。
-设计与事故时间线见 plans/2026-09-17-data-sync-self-healing.md。
+期望集 = `trade_cal` 最近 N 个交易日，上界**由日历与时钟决定**（2026-10-17 起：
+交易日 17:30 之后含当日，即 T+0；否则上一个交易日）。**"该到哪天"与"真到没到"
+是两个判据**：上界看时钟（`expected_trade_dates`），齐备性看上界里最新一个过
+`market_day_service.day_is_complete` 三元组门禁的日子（`result["expected_latest"]`，
+不达标逐日回退）。行数量级门槛（≥ 0.8×全市场数）仍用于"要不要重拉"，但它**不再是**
+齐备判据 —— 两套标准并存会让 0.8~0.9 之间的日子"无需重拉却永远过不了门禁"，卡死。
+cron 只负责 timeliness，任何停摆（宿主睡眠/容器挂起/任务异常）在下一个对账触发点
+自动收敛。设计与事故时间线见 plans/2026-09-17-data-sync-self-healing.md；
+T+0 期望集见 plans/2026-10-16-t0-after-close-expected-latest.md。
 
 两套域，语义不同，**不得混淆**（E1：把只读域塞进补漏循环 = 假绿）：
 
@@ -24,7 +29,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, NamedTuple
 
 from sqlalchemy import func, select
@@ -44,7 +49,8 @@ from app.models.market_data import (
 )
 from app.models.quote import DailyQuote
 from app.models.stock import Stock
-from app.services.market_data_service import _d, _get_tushare, _today_sh
+from app.services import market_day_service
+from app.services.market_data_service import _d, _get_tushare
 
 logger = logging.getLogger(__name__)
 
@@ -124,33 +130,74 @@ _SQLSTATE_UNDEFINED_TABLE = "42P01"
 _SQLSTATE_UNDEFINED_COLUMN = "42703"
 
 
-async def expected_trade_dates(
-    client: Any, *, window_days: int = DEFAULT_WINDOW_DAYS, today: date | None = None
-) -> tuple[list[date], bool]:
-    """最近 window_days 个交易日（截止**昨日**，升序）。
+async def _fetch_calendar(client: Any, *, start: date, end: date) -> tuple[list[date], bool]:
+    """`trade_cal` 取 `[start, end]` 的交易日（升序）；不可用 → 工作日启发式 + degraded.
 
-    当日 TuShare 数据未出全，拉了会写 partial（9/16 事故）——当日不属于期望集。
-    trade_cal 不可用时降级为工作日启发式并返回 degraded=True（节假日会多试几个
-    空日，ingest 空结果无害）。
+    降级结果**不得进缓存**（见 :func:`expected_trade_dates`）：工作日启发式在节假日会
+    多出几个空日，那是可接受的临时降级，固化 7 天就变成"把节假日误判写进日历"。
     """
-    today = today or _today_sh()
-    end = today - timedelta(days=1)
-    start = end - timedelta(days=window_days * 2 + 5)  # 覆盖节假日的日历跨度
     try:
         df = await client.fetch_trade_cal(
             start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d"), is_open="1"
         )
         days = sorted({_d(rec["cal_date"]) for rec in df.to_dict("records") if rec.get("cal_date")})
-        degraded = False
+        return days, False
     except Exception:
         logger.warning("trade_cal unavailable — degrading to weekday heuristic", exc_info=True)
-        days = [
-            start + timedelta(days=i)
-            for i in range((end - start).days + 1)
-            if (start + timedelta(days=i)).weekday() < 5
-        ]
-        degraded = True
-    return days[-window_days:], degraded
+        return (
+            [
+                start + timedelta(days=i)
+                for i in range((end - start).days + 1)
+                if (start + timedelta(days=i)).weekday() < 5
+            ],
+            True,
+        )
+
+
+async def expected_trade_dates(
+    client: Any,
+    *,
+    window_days: int = DEFAULT_WINDOW_DAYS,
+    now: datetime | None = None,
+    cache: Any = None,
+) -> tuple[list[date], bool]:
+    """最近 window_days 个交易日（升序）——**上界由日历与时钟决定**（含当日盘后）。
+
+    上界语义（2026-10-17 改；见 plans/2026-10-16-t0-after-close-expected-latest.md）：
+
+    - 今天是交易日且已过 `market_day_service.T0_CUTOFF`（17:30 CST）⇒ **当日进期望集**；
+    - 否则 ⇒ 上一个交易日。
+
+    **为什么不能再写死"截止昨日"**：那样当日行情永远不会被拉（期望集里从来没有今天），
+    下游派生指标的收敛目标也就永远停在 T-1 —— 页面上的"数据截至"于是天天不动，而底层
+    一切正常。2026-10-16 晚的事故实况就是这个：`daily_quotes` 里连一行当日行情都没有。
+
+    **为什么当日只从 17:30 起才进**：当日上游数据未出全时拉了会写 partial（9/16 事故）。
+    闸门取 17:30 是为了同时满足两件事：晚于 16:50 的限价入库（`is_day_complete` 要求
+    `limits_present`）、早于 17:45 的兜底对账 —— 于是既有的 17:45 全量对账自动成为
+    T+0 收敛点，不必新开 cron。
+
+    **本函数只管"该到哪天"，不管"到没到"**：齐备性由 `reconcile_market_data` 的
+    `expected_latest` 守门（`market_day_service.day_is_complete`）。
+
+    副作用：非降级时把交易日历写进 Redis（key 见 `market_day_service.CALENDAR_CACHE_KEY`），
+    供**读面**在不外呼 TuShare 的前提下判新鲜度（见 `market_day_service.resolve_expected_day`）。
+
+    `trade_cal` 不可用时降级为工作日启发式并返回 degraded=True（节假日会多试几个空日，
+    ingest 空结果无害）。
+    """
+    now_dt = market_day_service.now_sh(now)
+    today = now_dt.date()
+    start = today - timedelta(days=window_days * 2 + 5)  # 覆盖节假日的日历跨度
+    calendar, degraded = await _fetch_calendar(client, start=start, end=today)
+    if not degraded:
+        await market_day_service.write_calendar_cache(cache, days=calendar, covered_through=today)
+    end = market_day_service.calendar_expected_latest_day(
+        calendar, covered_through=today, now=now_dt
+    )
+    if end is None:  # 日历为空 / 覆盖不到今天（判不出就如实空集，不退回昨天）
+        return [], degraded
+    return [day for day in calendar if day <= end][-window_days:], degraded
 
 
 async def _stock_universe_count(db: Any) -> int:
@@ -277,24 +324,41 @@ async def reconcile_market_data(
     apply: bool = True,
     only: set[str] | None = None,
     client: Any = None,
-    today: date | None = None,
+    now: datetime | None = None,
+    cache: Any = None,
 ) -> dict[str, Any]:
     """对账并（默认）补齐窗口内缺口；apply=False 为只读巡检（freshness 端点复用）。
 
     幂等可重放：所有回补走既有 upsert/DO-NOTHING ingest，任意重跑收敛到同一结果。
+
+    - `now`：注入时钟（默认真实时钟）。期望集的上界由它 + `T0_CUTOFF` 决定；
+    - `cache`：日历缓存（`CacheClient` 形状）。非 None 时由 `expected_trade_dates`
+      写入交易日历，供读面判新鲜度；不传则只是不写缓存，行为不受影响。
+
+    返回里的两个"最新日"**语义不同，不得混用**：
+
+    - `expected_latest`：**过齐备门禁**（`day_is_complete`）的最新交易日 —— 收敛器与
+      "该重算到哪天"用它；不达标逐日回退，`expected_latest_source` 记录回退事实。
+    - `domains[*].latest_in_db`：各域**实际持有**的最新日（可能是个半截日）。
     """
     scope = set(only) if only is not None else set(DOMAINS)
     unknown = scope - set(DOMAINS)
     if unknown:
         raise ValueError(f"unknown reconcile domains: {sorted(unknown)}")
     client = client or _get_tushare()
-    expected, degraded = await expected_trade_dates(client, window_days=window_days, today=today)
+    now_dt = market_day_service.now_sh(now)
+    expected, degraded = await expected_trade_dates(
+        client, window_days=window_days, now=now_dt, cache=cache
+    )
     universe = await _stock_universe_count(db)
     threshold = int(universe * COMPLETENESS_RATIO)
 
     result: dict[str, Any] = {
-        "as_of": (today or _today_sh()).isoformat(),
-        "expected_latest": expected[-1].isoformat() if expected else None,
+        "as_of": now_dt.date().isoformat(),
+        # 先给日历口径的期望上界（"该到哪天"）；齐备守门在底座补漏之后覆盖它（"真到没到"）
+        "calendar_expected_latest": expected[-1].isoformat() if expected else None,
+        "expected_latest": None,
+        "expected_latest_source": "pending",
         "expected_days": len(expected),
         "universe": universe,
         "quotes_symbols_latest": None,  # 下方按 daily_quotes 实际行数回填
@@ -312,6 +376,19 @@ async def reconcile_market_data(
         counts = await _row_counts(db, domain, expected)
         status = await _domain_status(counts, expected, threshold)
         todo = sorted(status["missing_days"] + status["partial_days"])
+        if domain == "daily_quotes":
+            # **关掉"0.8 行数够但过不了 0.9 门禁"的死锁**：这类日子会被
+            # `_domain_status` 判为"已 OK、无需重拉"，却永远过不了齐备门禁 ⇒
+            # 期望上界永远回退到它之前 ⇒ 当天卡在 T-1 且不自愈（2026-10-17 发现）。
+            # 判据刻意用 `quotes_day_complete`（不含"限价存在"）：限价是
+            # price_limits 域的职责，带上它会让"限价缺一天"变成"行情天天重拉"。
+            for day in expected:
+                if day in todo:
+                    continue
+                rows, ratio = await market_day_service.quote_day_stats(db, day)
+                if not market_day_service.quotes_day_complete(rows, universe, ratio):
+                    todo.append(day)
+            todo = sorted(set(todo))
         refetched: list[date] = []
         if apply and todo and domain in scope:
             for day in todo:
@@ -342,14 +419,16 @@ async def reconcile_market_data(
     if apply and quotes_refetched:
         result["adj_factor_repaired"] = await _repair_adj_factors(db, quotes_refetched)
 
-    # ── 派生域（sentiment）：仅 quotes + price_limits 完备的期望日才补 ──
+    # ── 派生域（sentiment）：仅**过三元组门禁**的期望日才补 ──
     if expected:
         quotes_counts = await _row_counts(db, "daily_quotes", expected)
-        limits_counts = await _row_counts(db, "price_limits", expected)
+        # 判据与读面同源（`day_is_complete`，即"更严的那个"）：此前这里用 0.8 行数门槛，
+        # 与读面的 0.9 + 列级 + 限价并存 ⇒ 两数之间的日子会被写进派生表却永远读不出来
+        # （BP「同一事实不得有两套判据」）。统一到门禁后，sentiment 只会落在真齐备的日子上。
         base_complete = {
             d
             for d in expected
-            if quotes_counts.get(d, 0) >= threshold and limits_counts.get(d, 0) >= threshold
+            if await market_day_service.day_is_complete(db, d, universe=universe)
         }
         # 名录 vs 行情活跃数：上面的 threshold 用 stocks 表行数当分母，而该表可能长期
         # 冻结（实测停在 5 月，65 只次新股的行被日线采集静默丢弃却始终过阈值）。两个数
@@ -378,8 +457,34 @@ async def reconcile_market_data(
         "status": _status_word(apply, bool(sent_refetched), bool(sent_status["missing_days"])),
     }
 
+    # ── 齐备守门：`expected_latest` 只认"真的能用"的日子 ──
+    #
+    # 放在所有底座域（含 price_limits）之后：门禁的第三项就是"该日有限价"，
+    # 早于 price_limits 判会把一个刚刚补好的日子误判成不齐备。
+    # 不达标**逐日回退**（而不是把 NULL 或半截值往下游传）——收敛器据此只在好日子上
+    # 算指标，读面则据 `expected_as_of` 与 `as_of` 的差如实报滞后。
+    if expected:
+        gated = await _gated_expected_latest(db, expected, universe=universe)
+        result["expected_latest"] = gated.isoformat() if gated else None
+        result["expected_latest_source"] = (
+            "none" if gated is None else ("gated" if gated == expected[-1] else "fallback")
+        )
+    else:
+        result["expected_latest_source"] = "none"
+
     _log_summary(result)
     return result
+
+
+async def _gated_expected_latest(db: Any, expected: list[date], *, universe: int) -> date | None:
+    """`expected` 里**最新一个过三元组门禁**的交易日；一个都不过 ⇒ `None`.
+
+    只回退不猜测：`None` 是"没有可用日"，不是"用最早那个凑"。
+    """
+    for day in reversed(expected):
+        if await market_day_service.day_is_complete(db, day, universe=universe):
+            return day
+    return None
 
 
 def _status_word(apply: bool, refetched: bool, has_gaps: bool) -> str:

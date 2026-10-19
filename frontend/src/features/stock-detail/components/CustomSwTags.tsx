@@ -8,21 +8,38 @@ import type { Exchange } from "@/shared/types";
 interface Props {
   exchange: Exchange;
   symbol: string;
+  /**
+   * 渲染形态：
+   * - `full`（默认）：标签前缀 + chips + 编辑入口，自成一块（历史行为，其他调用方不受影响）；
+   * - `controls`：**只出「编辑」按钮 + 弹窗**。chips 由 `StockTagRow` 与其它两组标签合并到
+   *   同一行统一渲染（F14：三块不再各占一行）。此形态仍用同一个 query key
+   *   `["stock-sw-tags", exchange, symbol]`，与 `StockTagRow` 共享缓存，**不新增请求**。
+   */
+  variant?: "full" | "controls";
 }
 
 const TAG_COLORS: Record<number, string> = { 2: "blue", 3: "purple" };
 const STALE_TIME = 5 * 60 * 1000;
 
-export function CustomSwTags({ exchange, symbol }: Props) {
+export function CustomSwTags({ exchange, symbol, variant = "full" }: Props) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
 
-  const { data: tags = [], isLoading } = useQuery({
+  const { data: tags = [], isLoading, isError } = useQuery({
     queryKey: ["stock-sw-tags", exchange, symbol],
     queryFn: () => fetchStockSwTags(exchange, symbol),
     staleTime: STALE_TIME,
   });
+
+  /**
+   * 当前选中项是否可信（= 后端真的回了一份"现有标签"）。
+   *
+   * 加载中与**失败**都不可信：两者的 `tags` 都是默认值 `[]`，拿它当弹窗初始值再提交，
+   * PUT 出去的 `industry_codes: []` 会把用户已有的申万分类清空（全量覆盖语义）。
+   * 失败态不是"额外发挥"：它和加载中是同一条数据销毁路径，只堵一半等于没堵。
+   */
+  const tagsReady = !isLoading && !isError;
 
   const { data: l2Options = [] } = useQuery({
     queryKey: ["sw-options", 2],
@@ -56,7 +73,17 @@ export function CustomSwTags({ exchange, symbol }: Props) {
     },
   });
 
+  /**
+   * ⚠️ 选中项不可信时**不得**开弹窗（否则会清空用户标签）。
+   *
+   * 弹窗的初始选中项来自 `tags` 的快照。查询还没落地（或已失败）时 `tags` 是默认值 `[]`，
+   * 于是弹窗以"一个都没选"打开，用户点确定就 PUT `industry_codes: []`
+   * （`updateStockSwTags` 是全量覆盖）—— 一次误点就把这个人手动挂的申万分类抹掉。
+   * 旧的全量形态靠 `if (isLoading) return <Spin/>` 把这条路径挡住；`controls` 形态只剩按钮，
+   * 没有那层兜底，所以这里显式早退，按钮侧同时置 `disabled`（双保险：键盘/程序化触发也进不来）。
+   */
   const handleOpen = () => {
+    if (!tagsReady) return;
     setSelectedCodes(tags.map((t) => t.industryCode));
     setOpen(true);
   };
@@ -94,28 +121,47 @@ export function CustomSwTags({ exchange, symbol }: Props) {
     setSelectedCodes([...l2Values, ...codes]);
   };
 
-  if (isLoading) return <Spin size="small" />;
+  // `controls` 形态下加载中不需要骨架：chips 由 StockTagRow 渲染，这里只关心按钮。
+  // 但按钮必须**禁用**（见 handleOpen 的注释：选中项不可信时开弹窗会以空选中覆盖用户标签）。
+  if (isLoading && variant === "full") return <Spin size="small" />;
+
+  const editButton = (
+    <Button
+      type="link"
+      size="small"
+      icon={<EditOutlined />}
+      disabled={!tagsReady}
+      // `tagsReady === false`（加载中或**失败**）时按钮不可点，必须说明原因：
+      // 置灰而无解释会被读成"这个功能坏了"，而真实原因只是标签还没就绪。
+      title={tagsReady ? undefined : "标签未就绪，稍后重试"}
+      onClick={handleOpen}
+    >
+      编辑
+    </Button>
+  );
 
   return (
     <>
-      <Space size={4} wrap>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          自定义分类：
-        </Typography.Text>
-        {tags.length === 0 && (
+      {variant === "controls" ? (
+        editButton
+      ) : (
+        <Space size={4} wrap>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            暂无
+            自定义分类：
           </Typography.Text>
-        )}
-        {tags.map((t) => (
-          <Tag key={t.industryCode} color={TAG_COLORS[t.level] ?? "default"}>
-            {t.industryName}
-          </Tag>
-        ))}
-        <Button type="link" size="small" icon={<EditOutlined />} onClick={handleOpen}>
-          编辑
-        </Button>
-      </Space>
+          {tags.length === 0 && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              暂无
+            </Typography.Text>
+          )}
+          {tags.map((t) => (
+            <Tag key={t.industryCode} color={TAG_COLORS[t.level] ?? "default"}>
+              {t.industryName}
+            </Tag>
+          ))}
+          {editButton}
+        </Space>
+      )}
 
       <Modal
         title="编辑自定义申万分类"

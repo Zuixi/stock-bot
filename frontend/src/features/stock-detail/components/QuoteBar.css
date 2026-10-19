@@ -1,0 +1,220 @@
+/*
+ * 报价条（P1-3）：四行读数区 —— 身份 / 价格 / 八项事实 / 区间与分位。
+ *
+ * 设计稿：.superpowers/sdd/2026-10-19-stock-detail-overhaul/design-P1-3.md §2。
+ * 约束：**零新色值**（一律 var(--bg-*/--text-*/--border/--accent/--up/--down)）、
+ * 零新字号（11/12/13/16/20/28）、零新圆角/阴影。数字的等宽排版走全局 `.num`，此处不重复声明。
+ */
+
+/* 四行：行距 2px，整条在 1440 下 ≤ 96px（e2e `stockDetailLayout.spec.ts` 钉住） */
+.quote-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* 读数区不可拖选（设计稿 §4）；代码格例外，见 .quote-bar__symbol */
+  user-select: none;
+}
+
+/* 行 1：名称 + 代码 + 交易所/行业 + 右侧动作 */
+.quote-bar__identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 24px;
+}
+
+.quote-bar__name {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 24px;
+  color: var(--text-primary);
+}
+
+.quote-bar__symbol {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-secondary);
+  /* 代码要能选中复制（设计稿 §4 的唯一例外） */
+  user-select: text;
+}
+
+.quote-bar__tag {
+  font-size: 11px;
+  line-height: 16px;
+  margin-inline-end: 0;
+}
+
+.quote-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* 行 2：现价 + 涨跌幅 + 涨跌额，三者 baseline 对齐 */
+.quote-bar__price {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.quote-bar__last {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 28px;
+}
+
+/* 行 3：八个事实，同一组列上对齐（设计稿：用 grid 而不是 flex-wrap） */
+.quote-bar__metrics {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 4px 8px;
+}
+
+/* 中屏（768–1199）：两行 —— 设计稿 §2「中屏」 */
+@media (max-width: 1199px) {
+  .quote-bar__metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/*
+ * 窄屏 <480：4 列 → 3 列（**对设计稿 §2「窄屏 repeat(4)」的最小偏离**）。
+ *
+ * 实测 390px：可用 342px、四列每格 80px，而最宽的一格「总市值 1.66万亿」在 11px 下需要
+ * 约 99px（`1.66万亿` 是 8 个字符）。四列只能靠 `text-overflow` 截断成「总市值 1.66…」，
+ * 那是把读数说半句 —— 比多一行严重。三列每格 108px，八项全部完整可读，且仍然是 3 行
+ * 以内（480–767 维持四列两行）。
+ */
+@media (max-width: 479px) {
+  .quote-bar__metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.quote-bar__metric {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.quote-bar__metric-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.quote-bar__metric-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 行 4：区间条 + 估值分位 + 数据截至（右对齐） */
+.quote-bar__strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-secondary);
+}
+
+.quote-bar__strip-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* 读数（数值）比标签更深一档，但仍低于行 2 的现价 */
+.quote-bar__strip-value {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+/*
+ * `--` = 缺失/加载中 → 次级色（设计稿 §3：只有真数字才用主文本色）。
+ * 与上面分成两条规则而不是内联：颜色是主题变量，`--text-primary` / `--text-secondary`
+ * 都要随 data-theme 走，内联写死会丢主题。
+ */
+.quote-bar__strip-value--empty {
+  color: var(--text-secondary);
+}
+
+.quote-bar__strip-tail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* 数据截至：11px，与全站同款文案（formatCnDate） */
+.quote-bar__asof {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/*
+ * 失败态的唯一形态（设计稿 §3）：行末一枚 12px「加载失败 · 重试」。
+ * **不得**退化成"无数据"形态 —— 缺失渲染 `--`，失败渲染这枚按钮，两者不同。
+ */
+.quote-bar__retry {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--down);
+  cursor: pointer;
+}
+
+/* 52 周区间条：轨道 1px、游标 3×8、25/50/75 三枚刻线（设计稿 §1） */
+.range-ribbon {
+  position: relative;
+  flex: 0 0 auto;
+  width: 120px;
+  height: 8px;
+}
+
+/* 窄屏不渲染区间条（设计稿 §2「行 4：隐藏区间条」） */
+@media (max-width: 767px) {
+  .range-ribbon {
+    display: none;
+  }
+}
+
+.range-ribbon__track {
+  position: absolute;
+  top: 3px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--border);
+}
+
+.range-ribbon__tick {
+  position: absolute;
+  top: 3px;
+  width: 1px;
+  height: 2px;
+  background: var(--border);
+}
+
+.range-ribbon__cursor {
+  position: absolute;
+  top: 0;
+  width: 3px;
+  height: 8px;
+  background: var(--accent);
+}
