@@ -89,7 +89,7 @@ _STUB_MARKET_METRICS: dict[str, Any] = {
 async def test_data_freshness_is_dry_run(_env: dict[str, Any]) -> None:
     out = await api.get_data_freshness(cache=None)
     # 端点的 `cache` 依赖由调用方注入（此处 None）；服务层不带 cache 形参。
-    assert _env["calls"] == [{"apply": False}]
+    assert _env["calls"] == [{"apply": False, "cache": None}]
     assert out.apply is False
     assert out.domains["daily_quotes"].status == "ok"
     assert out.domains["daily_quotes"].latest_in_db == "2026-09-16"

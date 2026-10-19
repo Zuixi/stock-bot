@@ -2,7 +2,7 @@
  * `/sentiment` 的取数口：三个受保护读面各一次请求。
  *
  *  1. `GET /api/v1/market/sentiment/composite`（S1.13 新增，契约已冻结）—— hero 的
- *     综合指数值 / 分位 / 参与腿数 / 生效权重；
+ *     综合指数值 / 分位 / 参与成分指标数 / 生效权重；
  *  2. `GET /api/v1/metrics/latest?scope_keys=market`（S1.2 通用读面）—— 9 个模块面板的全部数值；
  *  3. `GET /api/v1/market/sentiment/trends`（S1.8/Task7）—— 后端已算好的三个历史分位。
  *
@@ -30,6 +30,7 @@ interface BackendSentimentComposite {
   expected_as_of?: string | null;
   lag_trading_days?: number | null;
   stale?: boolean | null;
+  provisional?: boolean | null;
 }
 
 export interface SentimentComposite {
@@ -50,11 +51,11 @@ export interface SentimentComposite {
    * 是另一种谎。故这里逐字保留后端布尔值，不在这里做归并。
    */
   insufficientHistory: boolean;
-  /** 当日实际参与合成的腿（metric_key） */
+  /** 当日实际参与合成的成分指标（metric_key；契约字段名仍为 `legs`） */
   legs: string[];
   legCount: number | null;
   totalLegs: number | null;
-  /** 参与腿配置权重之和（= 生效权重之和；分母被重新归一化过） */
+  /** 参与成分指标配置权重之和（= 生效权重之和；分母被重新归一化过） */
   effectiveWeight: number | null;
   /** 低于该值即落 NULL（insufficient_effective_weight） */
   minEffectiveWeight: number | null;
@@ -79,6 +80,19 @@ export interface SentimentComposite {
    * 显示成"新鲜"就是在数据可能过期时撒谎。
    */
   stale: boolean | null;
+  /**
+   * 本期读数是否**临时值**（会被上游披露重算改写）：`true` / `false` / `null`。
+   *
+   * - `true` = 该行的值**缺了 T+1 披露的成分指标**（交易所融资融券两条），且仍落在收敛器的
+   *   10 交易日改写窗口内 ⇒ **这个数字以后会被重算改写**；
+   * - `false` = 终值（不会再改）；
+   * - `null` = **判不出**（缺参与集登记或缺交易日历）。
+   *
+   * ⚠️ 三态，不是布尔：`null` **不得**被当作 `false` —— 那等于把"不知道"说成"是终值"，
+   * 会让读者放心引用一个可能被改写的数字。故这里逐字保留后端三态，**不**做 `Boolean(...)`
+   * 或 `?? false` 归并（同 `stale` / `lagTradingDays` 的纪律）。
+   */
+  provisional: boolean | null;
 }
 
 function mapComposite(b: BackendSentimentComposite): SentimentComposite {
@@ -102,6 +116,8 @@ function mapComposite(b: BackendSentimentComposite): SentimentComposite {
     lagTradingDays: b.lag_trading_days ?? null,
     // 三态逐字搬运：`?? null` 只处理"字段缺失"，**不**把 null 塌成 false
     stale: b.stale ?? null,
+    // 同上：字段缺失（老后端不下发）与后端明说"判不出"都落 `null`，都不声称是终值
+    provisional: b.provisional ?? null,
   };
 }
 

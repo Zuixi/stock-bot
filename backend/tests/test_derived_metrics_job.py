@@ -22,6 +22,21 @@ import pytest
 from app.scheduler import jobs
 
 
+@pytest.fixture(autouse=True)
+def _stub_facts_tail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """把对账尾巴上的「涨停事实」（2026-10-17 T+0 加）在本文件打桩.
+
+    它自带 `_is_workday()` 守卫并会触 PG / 东财；而这些用例只关心"收敛是否被
+    按顺序调用"。不打桩时，一旦某用例把 `_is_workday` 打成 True，尾巴就会真连库
+    （实测抛 `'object' object has no attribute 'execute'` 与 6379 连接失败）。
+    """
+
+    async def _noop() -> None:
+        return None
+
+    monkeypatch.setattr(jobs, "_refresh_limit_up_facts", _noop)
+
+
 def _patch_reconcile(
     monkeypatch: pytest.MonkeyPatch, *, result: dict[str, Any] | None
 ) -> dict[str, Any]:
@@ -81,17 +96,31 @@ async def test_reconcile_job_falls_back_to_local_target_when_reconcile_failed(
     assert calls["converge"]["target"] is None
 
 
-async def test_reconcile_job_handles_missing_expected_latest(
+async def test_reconcile_job_skips_converge_when_no_gated_day(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """对账结果里没有 `expected_latest`（降级/空日历）⇒ 目标日 `None`，不得瞎猜日期."""
-    _patch_reconcile(monkeypatch, result={"domains": {}})
+    """对账成功但窗口里**一个日子都过不了门禁** ⇒ **跳过**本轮收敛，不得瞎猜日期.
+
+    与上面"对账失败"那条刻意区分（失败时仍传 `None`，让收敛器用本地口径 + 自带前置
+    闸门）：这里有对账结果，只是 `expected_latest` 为空。此时若仍传 `None`，收敛器会
+    退回"`daily_quotes` 最近一天"—— 而那正是**没过门禁**的那天，等于把半截底座算出来
+    的指标当当日值发出去。所以宁可这一轮不收敛（下一轮对账补上后自然追平）。
+    """
+    _patch_reconcile(
+        monkeypatch,
+        result={
+            "domains": {},
+            "expected_latest": None,
+            "expected_latest_source": "none",
+            "calendar_expected_latest": "2026-10-16",
+        },
+    )
     calls: dict[str, Any] = {}
     _patch_converge(monkeypatch, calls)
 
     await jobs.reconcile_market_data_job()
 
-    assert calls["converge"]["target"] is None
+    assert "converge" not in calls
 
 
 async def test_partial_quote_backfill_does_not_converge(

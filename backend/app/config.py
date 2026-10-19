@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     # TuShare
     tushare_token: str = ""
 
+    # 数据面：当日盘后（T+0）把「当日」纳入对账期望集与新鲜度判据的时间闸门
+    # （`market_day_service.T0_CUTOFF`）。关掉即退回改动前的 T-1 语义，用于灰度与回滚
+    # —— 注意它不是"恢复自指锚"（那个锚正是本次要拆掉的）。
+    # 见 plans/2026-10-16-t0-after-close-expected-latest.md。
+    t0_after_close_enabled: bool = True
+
     # Industry research workbench data source: "mock" (default) | "akshare"
     # AKShare 接口名尚未实机验证（见 docs/design/data-source.md），默认 mock。
     industry_data_source: str = "mock"

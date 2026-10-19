@@ -766,7 +766,7 @@ async def test_endpoint_returns_coverage_and_stays_read_only(
 
     out = await api.get_data_freshness(cache=None)
 
-    assert calls[0] == {"apply": False}  # 对账仍是只读
+    assert calls[0] == {"apply": False, "cache": None}  # 对账仍是只读
     assert out.apply is False
     assert len(out.coverage) == 1 and out.coverage[0].domain == "sentiment_intraday"
     assert out.coverage[0].cover_pct == 54.55

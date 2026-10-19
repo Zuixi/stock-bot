@@ -135,15 +135,15 @@ const NOTE_MISSING: SentimentCaliberNote = {
   id: "missing-none",
   source: "S0.4 / ADR 0014 · metric-dictionary §4.2",
   text:
-    "缺数不静默为 0：缺失一律 value = NULL + extra.missing_reason + 覆盖率对账，绝不落 0（0 是「市场毫无波动 / 没有净申购」这类事实断言，与「没有数据」相反）。参与腿配置权重之和 < 0.20（insufficient_effective_weight）同样落 NULL。",
+    "缺数不静默为 0：缺失一律 value = NULL + extra.missing_reason + 覆盖率对账，绝不落 0（0 是「市场毫无波动 / 没有净申购」这类事实断言，与「没有数据」相反）。参与成分指标配置权重之和 < 0.20（insufficient_effective_weight）同样落 NULL。",
 };
 
-/** S1.13 · 综合指数的权重/方法与「N/11 条腿」披露 */
+/** S1.13 · 综合指数的权重/方法与「N/11 个成分指标」披露（契约字段名仍为 `legs` / `leg_count` / `total_legs`） */
 export const NOTE_COMPOSITE: SentimentCaliberNote = {
   id: "composite-weights",
   source: "S1.13 · metric-dictionary §4.2（Ruling 65/66）",
   text:
-    "综合指数口径：11 条日频情绪腿各自做滚动分位标准化（窗口 252 行、最小有效样本 126；反向腿先取相反数），再按公开权重表加权求和 × 100：value = 100 × Σ w'_i × p_i，w'_i = w_i / Σ_(当日参与集) w_j。权重表与方法公开可查（唯一事实源 industry_registry.COMPOSITE_*，转录见 docs/design/metric-dictionary.md §4.2）；换权重 / 换窗口 / 换缺失规则 = bump caliber_version。各腿最新日不同 ⇒ 最新交易日的参与腿数会显著变少（实测 2026-10-12 仅 3/11 条腿、生效权重 0.23），不得把 3 条腿合成的值读成与 10 条腿等权。",
+    "综合指数口径：11 个日频情绪成分指标各自做滚动分位标准化（窗口 252 行、最小有效样本 126；反向的成分指标先取相反数），再按公开权重表加权求和 × 100：value = 100 × Σ w'_i × p_i，w'_i = w_i / Σ_(当日参与集) w_j。权重表与方法公开可查（唯一事实源 industry_registry.COMPOSITE_*，转录见 docs/design/metric-dictionary.md §4.2）；换权重 / 换窗口 / 换缺失规则 = bump caliber_version。各成分指标最新日不同 ⇒ 最新交易日的参与成分指标数会显著变少（实测 2026-10-12 仅 3/11 个成分指标、生效权重 0.23），不得把 3 个成分指标合成的值读成与 10 个等权。",
 };
 
 // ── 模块 ──────────────────────────────────────────────────────────────────
@@ -265,7 +265,7 @@ const VOLATILITY_MODULE: SentimentModule = {
 const CAPITAL_FLOW_MODULE: SentimentModule = {
   key: "capital-flow",
   title: "资金流向",
-  question: "增量资金从哪条腿进来？哪几条腿今天根本没有数字？",
+  question: "增量资金从哪个成分指标进来？哪几个成分指标今天根本没有数字？",
   rows: [
     { kind: "metric", metricKey: "etf_share_change", label: "宽基 ETF 份额变化" },
     { kind: "metric", metricKey: "southbound_net_buy", label: "南向资金净买入" },

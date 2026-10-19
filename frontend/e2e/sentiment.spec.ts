@@ -4,7 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
  * `/sentiment` 情绪分析真页面 E2E（S1.8–S1.13）。
  *
  * 覆盖批准稿里**会被静默做错**的四件事：
- *  1. hero 的合成值 + 「本日由 N/11 条腿合成 · 生效权重 w」必须上屏（Ruling 66：最新值的"薄"要可见）；
+ *  1. hero 的合成值 + 「本日由 N/11 个成分指标合成 · 生效权重 w」必须上屏（Ruling 66：最新值的"薄"要可见）；
  *  2. `insufficient_history` ⇒ 显示「样本不足」，**不给分位数字、也不画标记**（绝不 0、绝不假位置）；
  *  3. 两个未落地模块（S1.14 散户舆情 / S2.2 情绪预警）就地给结论，而不是空白或假图；
  *  4. 6–8 条口径注真的在页面上（按 metric 就近放置），且分位只出现在后端给了分位的行上。
@@ -47,9 +47,23 @@ const COMPOSITE = {
   expected_as_of: "2026-10-12",
   lag_trading_days: 0,
   stale: false,
+  // 临时值三态：false = 终值 ⇒ 不显示任何"待重算"提示
+  provisional: false,
 };
 
-/** 落后的读数（后端退回上一个「各腿齐备」的交易日）—— 必须明写滞后几个交易日。 */
+/** 临时值（缺融资融券 T+1 披露）：必须明写"待上游披露后重算、可能变化"，且**不**承诺时点。 */
+const COMPOSITE_PROVISIONAL = {
+  ...COMPOSITE,
+  provisional: true,
+};
+
+/** 判不出临时值（缺参与集登记或缺交易日历）：**不得**沉默，更不得塌成"终值"。 */
+const COMPOSITE_PROVISIONAL_UNKNOWN = {
+  ...COMPOSITE,
+  provisional: null,
+};
+
+/** 落后的读数（后端退回上一个「各成分指标齐备」的交易日）—— 必须明写滞后几个交易日。 */
 const COMPOSITE_STALE = {
   ...COMPOSITE,
   as_of: "2026-10-09",
@@ -289,7 +303,7 @@ async function mockStack(
   );
 }
 
-test("hero：合成值 + 分位轨 + 「N/11 条腿 · 生效权重」必须上屏", async ({ page }) => {
+test("hero：合成值 + 分位轨 + 「N/11 个成分指标 · 生效权重」必须上屏", async ({ page }) => {
   await mockStack(page);
   await page.goto("/sentiment");
 
@@ -301,14 +315,14 @@ test("hero：合成值 + 分位轨 + 「N/11 条腿 · 生效权重」必须上�
   await expect(page.getByTestId("sentiment-composite-marker")).toBeVisible();
   // Ruling 66 的硬要求：最新值的"薄"必须可见
   await expect(page.getByTestId("sentiment-composite-legs-line")).toContainText(
-    "本日由 3/11 条腿合成 · 生效权重 0.23",
+    "本日由 3/11 个成分指标合成 · 生效权重 0.23",
   );
   await expect(page.getByTestId("sentiment-composite-legs-line")).toContainText("（下限 0.20）");
   // window / sample_count 来自 API
   await expect(page.getByTestId("sentiment-hero")).toContainText("分位窗口 1260 个交易日");
   await expect(page.getByTestId("sentiment-hero")).toContainText("有效样本 1260");
   // 页头一句话状态（不是 · 拼接清单）
-  await expect(page.getByTestId("sentiment-state")).toContainText("当日由 3/11 条腿合成");
+  await expect(page.getByTestId("sentiment-state")).toContainText("当日由 3/11 个成分指标合成");
 });
 
 test("新鲜度：stale=true 必须明写滞后几个交易日与「已有齐备数据到哪天」", async ({ page }) => {
@@ -324,12 +338,12 @@ test("新鲜度：stale=true 必须明写滞后几个交易日与「已有齐备
   await expect(staleLine).toContainText("10月14日");
   await expect(staleLine).toContainText("10月9日");
   await expect(staleLine).not.toContainText("2026-10-");
-  // 落后的日子照常披露参与腿数（10/11 · 0.88），不得因为"滞后"就把数值藏起来
+  // 落后的日子照常披露参与成分指标数（10/11 · 0.88），不得因为"滞后"就把数值藏起来
   await expect(page.getByTestId("sentiment-composite-value")).toHaveText("44.51");
   // 页头一句话也要带上落后信息（否则会被读成"最新交易日"）
   await expect(page.getByTestId("sentiment-state")).toContainText("落后 3 个交易日");
   await expect(page.getByTestId("sentiment-composite-legs-line")).toContainText(
-    "本日由 10/11 条腿合成",
+    "本日由 10/11 个成分指标合成",
   );
 });
 
@@ -354,6 +368,44 @@ test("新鲜度：stale=false（追平）不加任何提示 —— 正常态不�
   await expect(page.getByTestId("sentiment-composite-value")).toHaveText("32.82");
   await expect(page.getByTestId("sentiment-composite-stale")).toHaveCount(0);
   await expect(page.getByTestId("sentiment-composite-freshness-unknown")).toHaveCount(0);
+  // 临时值同一条纪律：provisional=false（终值）不制造噪声
+  await expect(page.getByTestId("sentiment-composite-provisional")).toHaveCount(0);
+  await expect(page.getByTestId("sentiment-composite-provisional-unknown")).toHaveCount(0);
+});
+
+test("临时值：provisional=true 必须明写「待上游披露后重算、届时可能变化」且不承诺时点", async ({
+  page,
+}) => {
+  await mockStack(page, { composite: COMPOSITE_PROVISIONAL });
+  await page.goto("/sentiment");
+
+  const line = page.getByTestId("sentiment-composite-provisional");
+  await expect(line).toBeVisible();
+  await expect(line).toContainText("缺融资融券");
+  await expect(line).toContainText("T+1");
+  await expect(line).toContainText("重算");
+  await expect(line).toContainText("可能变化");
+  // 上游披露可能超过一天 ⇒ 不得承诺"次日"/"明天"这类具体时点
+  await expect(line).not.toContainText("次日");
+  await expect(line).not.toContainText("明日");
+  // 页头一句话同档（true ⇒ 临时值；**不**写成"无法判定"）
+  await expect(page.getByTestId("sentiment-state")).toContainText("本期为临时值");
+  await expect(page.getByTestId("sentiment-state")).not.toContainText("无法判定本期是否为临时值");
+  // 两档互斥：判不出那档不得同时上屏
+  await expect(page.getByTestId("sentiment-composite-provisional-unknown")).toHaveCount(0);
+});
+
+test("临时值：provisional=null（判不出）不得沉默，更不得塌成「终值」", async ({ page }) => {
+  await mockStack(page, { composite: COMPOSITE_PROVISIONAL_UNKNOWN });
+  await page.goto("/sentiment");
+
+  await expect(page.getByTestId("sentiment-composite-provisional-unknown")).toContainText(
+    "无法判定本期是否为临时值",
+  );
+  // null ≠ true：不显示"会被重算"那档
+  await expect(page.getByTestId("sentiment-composite-provisional")).toHaveCount(0);
+  // 主数据照常上屏
+  await expect(page.getByTestId("sentiment-composite-value")).toHaveText("32.82");
 });
 
 test("样本不足：显示「样本不足」，不给分位数字、不画标记", async ({ page }) => {
@@ -383,15 +435,19 @@ test("当期 value 为 NULL（样本够）：说「没有可定位的今日值�
   await expect(page.getByTestId("sentiment-composite-marker")).toHaveCount(0);
 });
 
-test("旧口径行缺 participants / n_constituents：不印「0/0 条腿」，明说未登记", async ({ page }) => {
+test("旧口径行缺 participants / n_constituents：不印「0/0 个成分指标」，明说未登记", async ({
+  page,
+}) => {
   await mockStack(page, {
     composite: { ...COMPOSITE, legs: null, leg_count: 0, total_legs: 0, effective_weight: null },
   });
   await page.goto("/sentiment");
 
-  await expect(page.getByTestId("sentiment-composite-legs-unregistered")).toContainText("未登记参与腿");
+  await expect(page.getByTestId("sentiment-composite-legs-unregistered")).toContainText(
+    "未登记参与成分指标",
+  );
   await expect(page.getByTestId("sentiment-composite-legs-line")).toHaveCount(0);
-  await expect(page.getByTestId("sentiment-hero")).not.toContainText("0/0 条腿");
+  await expect(page.getByTestId("sentiment-hero")).not.toContainText("0/0 个成分指标");
 });
 
 test("端点未就绪（404）：hero 如实说暂不可得，不显示占位数字", async ({ page }) => {  await page.route("**/auth/session", (route) =>

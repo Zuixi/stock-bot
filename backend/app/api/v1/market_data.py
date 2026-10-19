@@ -484,9 +484,10 @@ async def get_data_freshness(cache: CacheDep) -> DataFreshnessOut:
     )
 
     async with async_session_factory() as db:
-        # 本分支合入的 reconcile 实现不接受 `cache` 形参（它在并行会话的未提交工作里），
-        # 传了就是 TypeError；这里只传已合入的形参。
-        result = await reconciliation_service.reconcile_market_data(db, apply=False)
+        # 传 cache：巡检顺带刷新**交易日历缓存**（读面判新鲜度靠它，而读面不准外呼 TuShare）。
+        # `apply=False` 只表示**不写库**，写 Redis 日历是允许的。
+        # 形参 `cache` 由同一次提交的 `reconcile_market_data(..., cache=...)` 提供。
+        result = await reconciliation_service.reconcile_market_data(db, apply=False, cache=cache)
         try:
             result["coverage"] = await reconciliation_service.coverage_report(db)
         except Exception:  # noqa: BLE001 — 覆盖率是加法，失败不得反噬新鲜度巡检
