@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Alert, Button, Card, Col, Row, Segmented } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { DegradedNotice, ErrorBoundary, SectionCard } from "@/shared/ui";
@@ -26,12 +27,14 @@ import {
   SwIndustryGrid,
   SentimentThermometer,
   SentimentPulse,
+  MarketPanoramaPulse,
   SentimentIntradayChart,
   LimitUpLadder,
   SwL3LimitUpBoard,
   YesterdayLimitUp,
 } from "@/features/market/components";
 import { useMarketPolling } from "@/features/market/hooks/useMarketPolling";
+import { useMarketPanorama } from "@/features/market/hooks/useMarketPanorama";
 import { NewStockBoard } from "@/features/concept";
 
 /**
@@ -112,7 +115,19 @@ export function OverviewSection() {
  * `SectorMoneyflowCard` 用 `variant="compact"`：1440 下它原本 656px（同排另两块 352/382px），
  * 多出的高度全是「板块连续性」区；compact 把它收进默认收起的折叠开关，展开后内容一字不删。
  */
+const PANO_RANGES = [20, 60, 120, 250] as const;
+
 export function PanoramaSection() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawPano = Number(searchParams.get("pano"));
+  const panoDays: number = (PANO_RANGES as readonly number[]).includes(rawPano) ? rawPano : 60;
+  const setPanoDays = (next: number) => {
+    const params = new URLSearchParams(searchParams);
+    params.set("pano", String(next));
+    setSearchParams(params, { replace: true });
+  };
+  const { data: panorama, isLoading: panoramaLoading, isError: panoramaError } = useMarketPanorama(panoDays);
+
   return (
     <MarketSection
       title="A股全景（广度 · 结构 · 资金）"
@@ -121,22 +136,29 @@ export function PanoramaSection() {
       dimensionStrip={
         <>
           <span>① 涨跌分布 · 全市场 11 桶</span>
-          <span>② 板块热力图 · 申万一级（市值加权）</span>
+          <span>② 板块热力图 · 行业板块（市值加权）</span>
           <span>③ 板块主力资金流 · 末完整日净流入 Top10</span>
           <span>④ 申万行业网格 · 31 个一级行业（点整格下钻）</span>
           <span>⑤ A股热门板块 · 行业/概念榜（点条目看成分股）</span>
         </>
       }
     >
+      <MarketPanoramaPulse
+        data={panorama}
+        isLoading={panoramaLoading}
+        isError={panoramaError}
+        days={panoDays}
+        onDaysChange={setPanoDays}
+      />
       <Row gutter={[16, 16]}>
         {/* 三面板并排：宽屏 3-up（xl≥1200 → 8/24）、中屏 2-up（md≥768 → 12/24）、窄屏 1-up。
             每块自带 as_of（DistributionChart / SectorHeatmap / SectorMoneyflowCard 各自
             渲染 `FreshnessNote`），分区层不再重复口径。 */}
         <Col xs={24} md={12} xl={8}>
-          <DistributionChart />
+          <DistributionChart panorama={panorama} />
         </Col>
         <Col xs={24} md={12} xl={8}>
-          <SectorHeatmap />
+          <SectorHeatmap previousDate={panorama?.breadth.previous?.tradeDate ?? null} />
         </Col>
         <Col xs={24} md={12} xl={8}>
           <SectorMoneyflowCard variant="compact" />
@@ -150,7 +172,7 @@ export function PanoramaSection() {
                 每卡还带 7 项行情聚合（`IndustryMetricStrip`），删后 `/market` 不再有
                 行业级 7 项行情的 at-a-glance 视图——它仍在行业下钻页（一次点击之外），
                 而 7 项行情条本身在二/三/末级下钻页照常渲染。 */}
-            <SwIndustryGrid />
+            <SwIndustryGrid industries={panorama?.industries} />
           </Card>
         </Col>
         <Col span={24}>
