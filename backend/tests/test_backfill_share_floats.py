@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 import asyncpg
@@ -25,6 +25,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.models.market_data import ShareFloat
+from app.models.stock import Stock
 from scripts import backfill_share_floats as bf
 
 _DEFAULT_ASYNC = "postgresql+asyncpg://stock_user:stock_pass@localhost:5433/stock_bot_test"
@@ -266,11 +267,27 @@ def test_coverage_counts_stocks_rows_and_upcoming_window() -> None:
                 },
             ],
         )
+        # `universe` 必须来自 `stocks` 表：CI 的库是空库（只跑迁移，不铺名录），
+        # 断言 `> 0` 在空库上无从成立。这里铺两只票，把 `universe` 钉成确定值 ——
+        # 这样断言的正是「读表」而不是「非空」：硬编码 5000 或读错表都会红。
+        await session.execute(
+            Stock.__table__.insert(),
+            [
+                {
+                    "exchange": "Shanghai_Stocks",
+                    "symbol": symbol,
+                    "name": f"测试{symbol}",
+                    "category": "A股",
+                    "asof": datetime(2026, 10, 16, 18, 0),
+                }
+                for symbol in ("600519", "600036")
+            ],
+        )
         return await bf.coverage(session)
 
     cov = asyncio.run(_with_rollback(_go))
     assert cov.stocks_with_unlock == 2
     assert cov.rows == 3
-    assert cov.universe > 0, "全市场股票数必须来自 stocks 表（不是硬编码）"
+    assert cov.universe == 2, "全市场股票数必须来自 stocks 表（本例铺了 2 只；硬编码/读错表都会红）"
     assert 0.0 < cov.share_pct <= 100.0
     assert cov.float_date_to == date(2099, 3, 5)

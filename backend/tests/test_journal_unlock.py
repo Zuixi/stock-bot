@@ -123,6 +123,26 @@ async def _count_queries(conn: Any, coro_factory: Any) -> tuple[Any, int, list[s
 
 
 async def _stock_id(session: AsyncSession, symbol: str) -> int:
+    """取股票 id；**库里没有就建一条**（CI 是空库，只跑 `alembic upgrade head`）。
+
+    过去这里直接 `scalar_one()`，等于依赖「作者本地名录里恰好有这只票」——分支一推 CI
+    就 36 连红（`NoResultFound`）。建行与用例同处一个被回滚的事务，不污染其它用例；
+    已有行时行为与原来完全一致。
+    """
+    found = (
+        await session.execute(select(Stock.id).where(Stock.symbol == symbol))
+    ).scalar_one_or_none()
+    if found is not None:
+        return int(found)
+    await session.execute(
+        insert(Stock).values(
+            exchange="Shanghai_Stocks",
+            symbol=symbol,
+            name=f"测试{symbol}",
+            category="A股",
+            asof=datetime(2026, 10, 16, 18, 0),
+        )
+    )
     return int((await session.execute(select(Stock.id).where(Stock.symbol == symbol))).scalar_one())
 
 
