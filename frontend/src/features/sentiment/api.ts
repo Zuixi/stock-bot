@@ -31,6 +31,24 @@ interface BackendSentimentComposite {
   lag_trading_days?: number | null;
   stale?: boolean | null;
   provisional?: boolean | null;
+  latest_withheld?: BackendSentimentWithheld | null;
+}
+
+interface BackendSentimentWithheldLeg {
+  key?: string;
+  weight?: number;
+  late_arrival?: boolean;
+  reason?: string | null;
+}
+
+interface BackendSentimentWithheld {
+  as_of?: string;
+  leg_count?: number;
+  total_legs?: number;
+  effective_weight?: number | null;
+  min_effective_weight?: number;
+  missing?: BackendSentimentWithheldLeg[] | null;
+  missing_reason?: string | null;
 }
 
 export interface SentimentComposite {
@@ -93,6 +111,59 @@ export interface SentimentComposite {
    * 或 `?? false` 归并（同 `stale` / `lagTradingDays` 的纪律）。
    */
   provisional: boolean | null;
+  /**
+   * 最新一个**没上屏**的交易日（当日有行但没过发布闸门）—— `null` = 没有更晚的被拦行。
+   *
+   * 2026-10-19 事故的读面修复：hero 只回选中的齐备行，没有这个字段时前端只能拿
+   * `expectedAsOf`（**日历期望日**）编文案，把"期望日"说成"已齐备日"。有它之后
+   * 页面可以说真话："当日只有 8/11 条腿、权重 0.72，未达 0.80 发布阈值，缺 3 条
+   * （2 条 T+1 披露、1 条源侧滞后）"。
+   */
+  latestWithheld: SentimentCompositeWithheld | null;
+}
+
+export interface SentimentCompositeWithheldLeg {
+  key: string;
+  weight: number;
+  /** 该腿是 T+1 披露 / 已知系统性迟到（来自 registry，不靠权重猜） */
+  lateArrival: boolean;
+  /** 写面给的缺数原因（`source_not_updated` / `source_empty` / …）；老行缺 ⇒ null */
+  reason: string | null;
+}
+
+export interface SentimentCompositeWithheld {
+  asOf: string;
+  legCount: number;
+  totalLegs: number;
+  effectiveWeight: number | null;
+  minEffectiveWeight: number;
+  missing: SentimentCompositeWithheldLeg[] | null;
+  missingReason: string | null;
+}
+
+function mapWithheld(
+  b: BackendSentimentWithheld | null | undefined,
+): SentimentCompositeWithheld | null {
+  if (!b || !b.as_of) return null;
+  const missing = Array.isArray(b.missing)
+    ? b.missing
+        .filter((m): m is BackendSentimentWithheldLeg => typeof m?.key === "string")
+        .map((m) => ({
+          key: m.key as string,
+          weight: typeof m.weight === "number" ? m.weight : 0,
+          lateArrival: Boolean(m.late_arrival),
+          reason: typeof m.reason === "string" ? m.reason : null,
+        }))
+    : null;
+  return {
+    asOf: b.as_of,
+    legCount: typeof b.leg_count === "number" ? b.leg_count : 0,
+    totalLegs: typeof b.total_legs === "number" ? b.total_legs : 0,
+    effectiveWeight: b.effective_weight ?? null,
+    minEffectiveWeight: typeof b.min_effective_weight === "number" ? b.min_effective_weight : 0.8,
+    missing,
+    missingReason: typeof b.missing_reason === "string" ? b.missing_reason : null,
+  };
 }
 
 function mapComposite(b: BackendSentimentComposite): SentimentComposite {
@@ -118,6 +189,7 @@ function mapComposite(b: BackendSentimentComposite): SentimentComposite {
     stale: b.stale ?? null,
     // 同上：字段缺失（老后端不下发）与后端明说"判不出"都落 `null`，都不声称是终值
     provisional: b.provisional ?? null,
+    latestWithheld: mapWithheld(b.latest_withheld),
   };
 }
 

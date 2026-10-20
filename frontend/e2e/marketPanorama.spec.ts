@@ -88,15 +88,38 @@ test.describe("A股全景 · 市场结构脉搏", () => {
     const prev = card.locator(".ant-segmented-item-label", { hasText: "昨日" });
     await expect(prev).toBeVisible({ timeout: 10_000 });
 
+    // ⚠️ 日期**不得写死**（2026-10-19 修）：本用例原来断言「10月15日 / 10月16日」，一旦真实
+    // 数据推进到下一个交易日就假红。改为从两个读面取**当天真实**的日期：
+    //   今日 = `/market/sectors` 的 `as_of`；昨日 = `/market/panorama` 的 `breadth.previous.trade_date`。
+    const { today, prevDay } = await page.evaluate(async () => {
+      const [sectorsRes, panoRes] = await Promise.all([
+        fetch("/api/v1/market/sectors", { credentials: "include" }),
+        fetch("/api/v1/market/panorama?days=20", { credentials: "include" }),
+      ]);
+      const sectors = sectorsRes.ok ? await sectorsRes.json() : null;
+      const pano = panoRes.ok ? await panoRes.json() : null;
+      return {
+        today: sectors?.as_of ?? null,
+        prevDay: pano?.breadth?.previous?.trade_date ?? null,
+      };
+    });
+    expect(today, "热力图需要一个真实的最新交易日（/market/sectors 的 as_of）").toBeTruthy();
+    expect(prevDay, "「昨日」必须有可回看的上一交易日（panorama.breadth.previous）").toBeTruthy();
+
+    const cn = (iso: string) => {
+      const [, m, d] = iso.split("-");
+      return `${Number(m)}月${Number(d)}日`;
+    };
+
     const response = page.waitForResponse(
-      (r) => r.url().includes("/api/v1/market/sectors") && r.url().includes("date=2026-10-15")
+      (r) => r.url().includes("/api/v1/market/sectors") && r.url().includes(`date=${prevDay}`)
     );
     await prev.click();
     await response;
-    await expect(card.getByText(/10月15日/).first()).toBeVisible();
+    await expect(card.getByText(new RegExp(cn(prevDay as string))).first()).toBeVisible();
 
     await card.locator(".ant-segmented-item-label", { hasText: "今日" }).click();
-    await expect(card.getByText(/10月16日/).first()).toBeVisible();
+    await expect(card.getByText(new RegExp(cn(today as string))).first()).toBeVisible();
   });
 
   test("390：罗盘与 4 个 KPI 可读，无横向溢出", async ({ page }) => {

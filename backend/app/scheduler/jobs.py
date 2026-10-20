@@ -311,7 +311,7 @@ async def reconcile_retry_job() -> None:
         return
     from app.core.database import async_session_factory  # noqa: PLC0415
     from app.core.redis import CacheClient, get_redis_pool  # noqa: PLC0415
-    from app.services import market_day_service  # noqa: PLC0415
+    from app.services import market_day_service, market_sentiment_composite_service  # noqa: PLC0415
 
     cache: Any = None
     try:
@@ -332,8 +332,22 @@ async def reconcile_retry_job() -> None:
         try:
             async with async_session_factory() as db:
                 if await market_day_service.day_is_complete(db, expected):
-                    logger.debug("Reconcile retry skipped: %s already complete", expected)
-                    return
+                    # ⚠️ 行情齐备 ≠ 综合指数已发布（2026-10-19 事故）：两条腿是 T+1 / 源滞后
+                    # （两融、QVIX），17:45 那轮常算出 8/11=0.72 被发布闸门拦下，而 QVIX
+                    # 的 CSV 实测 19:00 后才更新。旧守卫只看"行情齐备" ⇒ 18:30/20:00 两个
+                    # tick 全部跳过 ⇒ 当日值一直拖到**次日 10:00** 的兜底对账才发布。
+                    # 这里补问一句"今天发布了没"：没发布就照跑（收敛幂等；波动率腿会外呼
+                    # 一次，最多多两次/天，远小于"页面停旧 16 小时"）。
+                    if await market_sentiment_composite_service.is_composite_published(
+                        db, expected
+                    ):
+                        logger.debug("Reconcile retry skipped: %s already complete", expected)
+                        return
+                    logger.info(
+                        "Reconcile retry: %s market data complete but composite unpublished"
+                        " — re-running post-close chain",
+                        expected,
+                    )
         except Exception:  # noqa: BLE001 — 判不了就照跑（幂等）
             logger.warning("Reconcile retry: completeness probe failed", exc_info=True)
 

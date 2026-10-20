@@ -44,14 +44,14 @@
 
 ---
 
-## S8.2 探测器（8 个，事实型）
+## S8.2 探测器（10 个，事实型）
 
 **范围**：做完之后，系统能对任意自选集合，按当日数据判定"发生了什么事"，且每条都能被数据复核。
 
 **交付物**
 - `backend/app/services/triage_detectors.py`（**纯函数**：输入 `TriageContext`，输出 `TriageItem | None`）
 - registry 常量 `TRIAGE_DETECTORS: tuple[DetectorSpec, ...]`（阈值即配置；`severity` 固定枚举）
-- 导入期断言 `_assert_triage_detectors()`：8 个 · key 唯一 · `severity ∈ {risk,event,attention,background}` · **`required_fields` 在库内真实存在**
+- 导入期断言 `_assert_detectors()`：10 个 · key 唯一 · `severity ∈ {risk,event,attention,background}` · **`required_fields` 在库内真实存在**
 
 **不做什么**：不做打分/排序模型（排序只用 `severity` 枚举 + 固定次序）· 不做预测 · 不做 ML · 不做用户自定义探测器
 
@@ -86,6 +86,8 @@ class DetectorSpec:
 | 6 | `dragon_tiger` | 上了龙虎榜 | 近 3 个交易日上榜，展示净买卖额 | event | `dragon_tiger_entries` |
 | 7 | `sector_move` | 所属板块在动 | 所属申万一级当日涨幅或主力净流入进全市场前 10% | background | `industry_metrics` / `sector_moneyflow_snapshots` |
 | 8 | `new_high_low` | 创 60 日新高/新低 | 收盘 = 60 日最高/最低（**排除上市 <60 交易日**，否则次新恒真） | attention | `daily_quotes` |
+| 9 | `unlock_soon` | 30 天内解禁 | 未来 30 个自然日有解禁且当日合计占总股本 ≥1%（≥3% 升 risk） | attention / risk | `share_floats`（无行 = 没有数据，不判） |
+| 10 | `regulatory_anomaly` | 监管异动 | 连续 3 个交易日收盘价涨跌幅偏离值累计 ≥ 板块阈值（主板 20% / 主板 ST 12% / 创业板·科创板 30% / 北交所 40%）→ 已达线 risk；≥80% 阈值 → 临近 attention；或 3 日均换手 ≥ 前 5 日的 30 倍且 3 日累计 ≥ 20% → 仅换手率达标 attention。**今日停牌不判**（旧价不得冒充今日）；明日可行涨幅用交易所限价 | risk / attention | `daily_quotes` + `index_dailies` + `daily_basic_indicators.turnover_rate`（基准：上证综指/深证成指/创业板指/科创50/北证50；换手率窗口缺行不判） |
 
 **口径禁令（写死，均由 2026-10-17 实机标定得出）**
 - 换手率只能用 `turnover_rate`（**`turnover_rate_f` 实测全列 NULL**：133,308 行 0 非空）；
@@ -112,7 +114,7 @@ class DetectorSpec:
 **交付物**
 - `backend/app/api/v1/watchlist_triage.py`：`GET /api/v1/watchlists/triage`
 - `backend/app/schemas/triage.py`
-- 批量取数层（**5 条固定查询**：行情窗口 / 涨停价 / 公告 / 龙虎榜 / 板块），反 N+1
+- 批量取数层（**9 条固定查询**：代码解析 / 行情窗口 / 涨停价 / 公告 / 龙虎榜 / 板块 / 解禁 / 基准指数 / 换手率），反 N+1
 
 **不做什么**：**不建表**（不建 `daily_signal_items` / `alerts`）· 不落历史（复盘推迟到 v2，届时单独立项）· 不新开 cron（读时算）· 不改 `industry_signals`
 
@@ -130,17 +132,17 @@ GET /api/v1/watchlists/triage?group=&limit=
 }
 ```
 - 自选 > 50 只 → **422** 并提示分组（**不静默截断**）
-- 查询次数 **与自选数量无关**（测试断言查询计数 ≤ 6）
+- 查询次数 **与自选数量无关**（测试断言查询计数 ≤ 9）
 
 **依赖**：S8.2 · `watchlists`（既有）
 **验收判据**
 - 数据契约：本 spec **无迁移文件**（`grep create_table` = 0）
 - 行为：`GET` 只算自选内标的（不扫全市场）；只读 `daily_quotes` 最近 60 交易日窗口
-- 行为：反 N+1——查询次数 ≤ 6 且不随自选数增长（断言计数）
+- 行为：反 N+1——查询次数 ≤ 9 且不随自选数增长（断言计数）
 - 行为：`as_of` = 最近完整日，不返回半日数据
 - 门禁：`bash scripts/self_review.sh --full` + `doc_gate`
 
-**风险**：读时算延迟 → 自选 ≤50、窗口 ≤60 交易日、5 条固定查询；超过 50 只直接拒绝（不降级）。
+**风险**：读时算延迟 → 自选 ≤50、窗口 ≤60 交易日、9 条固定查询；超过 50 只直接拒绝（不降级）。
 
 ---
 
@@ -238,7 +240,7 @@ GET /api/v1/watchlists/triage?group=&limit=
 
 - 数据契约：**零新表**（本 spec 相关迁移 `create_table` = 0）· 无新 cron
 - 行为：一次请求返回 ≤8 条 + `quiet_count`；用户能看到当天真实事件与**规则出处**
-- 行为：查询次数 ≤6 且不随自选数增长；自选 >50 返回 422
+- 行为：查询次数 ≤9 且不随自选数增长；自选 >50 返回 422
 - 行为：`/today` 三种状态（有命中 / 全静默 / 无自选）都有明确文案
 - 门禁：`self_review --full` · `doc_gate` · Playwright（条目与响应一致、免责可见、`/market` 5 tab 未回归、0 禁用词）
 

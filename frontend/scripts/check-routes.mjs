@@ -98,6 +98,7 @@ const NEW_S1_ROUTES = [
   "/market/data-sources", // Phase 1 §W2.1 数据版图独立页（前端设计整改 §0-E 裁定：市场域内）
   "/market/sentiment/:metric", // 情绪指标详情（温度计 9 张卡的历史追踪，2026-10-18）
   "/market/rankings/:key", // S1.6 A股排行 7 榜
+  "/market/regulatory", // 2026-10-20 监管异动雷达（交易所「异常波动」价格口径）
   "/admin/users", // PR #15 管理员控制台（入口在账户菜单，不在顶栏 NAV_ROOTS）
   "/change-password", // PR #15 强制首登改密页（只要"已登录"、不加权限）
 ];

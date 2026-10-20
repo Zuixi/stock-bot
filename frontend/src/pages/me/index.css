@@ -26,3 +26,16 @@
   text-align: center;
   vertical-align: baseline;
 }
+
+/* 自选行里“行情未取到”的提示（2026-10-19）：行仍在、可删，只提示数据缺口。 */
+.watchlist__unresolved-hint {
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.inst-cell__unresolved {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

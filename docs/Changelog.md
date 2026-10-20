@@ -1,3 +1,331 @@
+## 2026-10-21 - **自选体检纳入换手率旁路 + 雷达页筛选/深链/排序（体验拉齐）**
+
+**1）自选体检也能提醒「仅换手率达标」**
+
+- `TriageContext` 新增 `turnover` 面（第 9 条固定查询：`daily_basic_indicators.turnover_rate`
+  最近 12 行）；查询数与自选数无关，仍守住反 N+1。
+- `regulatory_anomaly` 探测器升 **r2**：价格已达线/临近照旧；价格未达线但
+  3 日均换手 ≥ 前 5 日 30 倍且 3 日累计 ≥ 20% → `attention`「换手率异动」；
+  两者都命中只出一张价格卡，事实行补「换手率口径 达标（N 倍）」。
+- 严格最近 8 个**连续**交易日（3+5），缺行不判；`daily_basic` 未更新时该条件不成立，
+  规则来源字段已披露。
+- 测试：探测器 +2 例（仅换手率 / 价格+换手率），查询预算 9；`test_triage_detectors` 57 例。
+
+**2）雷达页体验：URL 状态 / 搜索 / 状态与板块筛选 / 排序 / 深链**
+
+- `tab / status / board / q / ladder / symbol` 全部写进 URL（`replace`），可分享、可回退；
+  搜索按代码/名称即时收窄，状态「全部/已达线/临近」的计数以当前板块+搜索范围为分母。
+- 顶部日期选择器：默认最新交易日，可选 **250 个交易日**内的历史日（`?date=`，历史模式不轮询）；
+  选 2026-09-03 可直接看到换手率旁路（海鸥住工 32×），「回到最新」一键清除。
+- 表格支持收盘/涨跌/3 日偏离/10 日异动/板数/明日触发的客户端排序；表头 sticky；
+  「刷新」「复制链接」在工具栏；「只看涨停/梯队」开关；空结果给「清除筛选」。
+- 深链 `?symbol=<code>`（自选卡片新增「异动雷达」入口）高亮并滚动到对应行；
+  仅换手率达标的票回退到旁路 chip。
+- e2e +1 例（深链高亮 / 搜索写 URL / 状态筛选），共 **10/10**。
+
+**测试**：后端 **1973 passed**；`tsc --noEmit`、`npm run build`、`check:routes`、`check:api-fields`、
+`doc_gate` 通过；`self_review.sh --full` 通过。
+
+- 涉及文件：`backend/app/services/{triage_detectors,triage_service}.py`、`backend/tests/{test_triage_detectors,test_triage_service}.py`、
+  `frontend/src/pages/market-regulatory/*`、`frontend/src/features/triage/components/TriagePanel.tsx`、
+  `frontend/e2e/marketRegulatory.spec.ts`、`docs/{Changelog.md,features.md,design/regulatory-anomaly.md,specs/S8-watchlist-triage.md}`
+
+## 2026-10-21 - **监管异动雷达补三项：`?date=` 限 250 交易日 · 指数 35 日覆盖校验 · 换手率旁路**
+
+**1）`?date=` 只允许最近 250 个交易日（公开接口键空间收敛）**
+
+- 新增 `regulatory_repo.oldest_recent_trade_day`（`daily_quotes` 倒序第 250 个不同日期）
+  + `regulatory_anomaly_service.ensure_within_window`；API 越界直接 **400**，不是空表。
+- 未来日期仍直接拒绝（不构建、不缓存）；边界值缓存 1h（`market:regulatory:min-date:v1`）。
+- 键空间上界 250 × `history_days`；页面不传 `date`，不影响使用。
+
+**2）指数启动自愈加「最近 35 个交易日」覆盖校验**
+
+- 新增 `index_repo.list_recent_quote_days` / `trade_dates_by_code`；启动时按 `daily_quotes`
+  的最近 35 个交易日比对每个目标指数，缺任何一天 → 只补「缺口起点 − 7 天 … asof」，
+  不退回全年。
+- 覆盖 `max(trade_date)` 已到 asof 但内部缺天的情形；纯函数 `_recent_coverage_window` /
+  `_merge_windows` + 接线用例。当前 6 个目标指数最近 35 天 **35/35 齐全**，实测 0 次请求。
+
+**3）换手率口径旁路 `turnover_only[]`（补已知漏报）**
+
+- 新增 `regulatory_repo.load_turnover_only_hits`（纯 SQL 窗口，只回命中）：
+  最近 3 日日均换手 ≥ 前 5 日的 30 倍 **且** 3 日累计 ≥ 20%；严格 `n3=3 / n5=5`，
+  停牌缺行不判；只用 `turnover_rate`（`turnover_rate_f` 全列 NULL）。
+- payload 加 `turnover_only[]`（价格未达线、仅换手率达标的票，已剔除 `items` 重复）、
+  `turnover_available` / `turnover_as_of`；页面在梯队表下方用一行 chips 展示，
+  **不塞进 items、不做第二张卡**。`daily_basic` 未更新时显式显示「本段暂不判定」。
+- 实测：2026-07-10 唯一命中「恒尚节能」已被价格口径收进 items，故当天旁路为空（去重正确）；
+  2026-10-20 旁路 0 只、`turnover_available=true`；冷构 0.87s（+0.15s）。
+
+**测试**：后端新增 7 例（窗口 250 拒绝/边界、指数覆盖 35 日 4 例、换手率映射/去重/未更新 2 例），
+`test_data_init_index_incremental.py` 14 例、`test_regulatory_anomaly_service.py` 14 例；
+`frontend/e2e/marketRegulatory.spec.ts` **9/9**（新增旁路渲染 + 数据未更新两例）；
+`tsc --noEmit` / `check:routes` / `doc_gate` 通过。
+
+- 涉及文件：`backend/app/{repositories/{regulatory_repo,index_repo},services/{regulatory_anomaly_service,data_init},schemas/regulatory,api/v1/regulatory}.py`、
+  `backend/tests/{test_regulatory_anomaly_service,test_data_init_index_incremental}.py`、
+  `frontend/src/{shared/api/regulatory.ts,pages/market-regulatory/*}`、`frontend/e2e/marketRegulatory.spec.ts`、
+  `docs/{features.md,Changelog.md,design/regulatory-anomaly.md}`
+
+## 2026-10-21 - **监管异动雷达复核：单飞锁引用计数 · 今日停牌排除 · ST 触发价用真实限幅**
+
+**背景**：上一轮已做流式扫描/单飞/信号量与 `stale_days`/`benchmark_missing`。本轮按「并发、
+停牌、口径一致性」三条线复核，修了 3 个会误导用户的缺陷 + 1 个并发缺陷：
+
+1. **单飞锁提前回收（并发）**：旧 `finally: _BUILD_LOCKS.pop(key)` 在 A 算完时弹键，
+   而 B 还握着同一把锁在等；此时 C 的 `setdefault` 会新建一把锁 ⇒ B 与 C 同时冷构。
+   改为 `_BuildLock` **引用计数**，最后一个使用者退出才回收。`cache=None` / Redis 不可用时
+   这条是唯一防线，补了确定性回归用例（A 退出后键必须仍在）。
+2. **今日停牌股冒充今日**（读面）：`market_limit_up_stock_daily` 仍会返回停牌股，旧实现让它
+   凭「梯队补位」进候选，`close` 是停牌前最后一笔 → `day_pct`、`is_lu`、明日触发价全错。
+   现在 `as_of` 当天没有行情行的票不进 `items`（历史仍可记过去）。补 5 号假数据用例。
+3. **今日停牌旧价上报**（自选提醒）：探测器同样先校验 `rows[-1].trade_date == as_of`；
+   否则一张「已达监管异动线」的卡片会把几天前的价格当成今天。补用例。
+4. **ST 名称股的「明日可行涨幅」用错限幅**：探测器原来用板块固定值（ST 5%），
+   实测 145 只主板 ST 名称股的真实限幅是 10%，会把「明日涨 5.4% 触发」误判成
+   「涨停也难触发」；改用 `stock_price_limits` 的实际限价（与页面 `_limit_pct` 同源）。补用例。
+5. 其余：未来日期直接拒绝（不构建、不缓存，`?date=` 的最小闸门）；历史触发日筛选
+   同样用今日 ST 阈值这一已知偏差写进 `caveats` 与设计文档。
+6. **顺带修一个时间炸弹**：`test_journal_s97_b2` 的未复盘条目默认 `due_on=2026-10-21`，
+   当天真实日期一到，状态从 `open` 变 `due`，导出用例必红；该条目改用远期 `due_on`
+   （与本轮监管异动无关，但会让全量门禁在当天假红）。
+
+**仍残留（已知、未改）**：① `?date=` 的**过去**键空间仍无上界（产品/部署决定，可选限窗或网关限流）；
+② 指数启动自愈只看 `max(trade_date)`，库内**内部**缺口依赖每日 14 天回看修复，>14 天的断档不会在启动时
+被补（当前 5 个基准指数近一年 243/243 天齐全）；③ 换手率口径漏报（每 8~9 个交易日 1 只，已量化）；
+④ 历史阈值无 PIT。
+
+**测试**：`test_regulatory_anomaly_service.py` 11 例（新增 2 个用例 + 原候选用例加「今日停牌排除」断言：
+锁引用计数、未来日期不构建）、
+`test_triage_detectors.py` 55 例（新增 2：今日停牌、ST 真实限幅）、`frontend/e2e/marketRegulatory.spec.ts` 7 例全绿；
+`tsc --noEmit` / `check:routes` / `doc_gate` 通过。
+
+- 涉及文件：`backend/app/services/{regulatory_anomaly_service,triage_detectors}.py`、
+  `backend/tests/{test_regulatory_anomaly_service,test_triage_detectors}.py`、
+  `docs/{Changelog.md,design/regulatory-anomaly.md,specs/S8-watchlist-triage.md}`
+
+## 2026-10-21 - **启动自愈不再全量重拉：指数日线 0 次调用、停牌股缺口 13,543 行 → 0 行**
+
+**症状**：每当 api 容器重启，日志稳定出现 `Index daily ingest done: ts_code=399001.SZ
+fetched=242 upserted=242` × 6 个指数，外加 `backfill batch 1/1 done (stocks=21, upserted=13543)`。
+即「增量请求」的设计在两处漏了。
+
+**根因（两处同一形态：把"期望窗口"当"缺口"）**：
+
+1. `_ensure_trailing_one_year_index_daily` **无条件** `start=asof-365d … asof` 全量 fetch + upsert，
+   从不查库内已有到哪天。对比：个股行情走 `list_stocks_missing_daily_coverage`、基本面走
+   `existing_dates` 差集 —— 只有指数这一支是漏网的。
+2. `list_stocks_missing_daily_coverage` 返回的 `expected_start` 是**三年窗口起点**，而
+   `_run_one` 直接拿它当 fetch 起点 ⇒ 那 21 只被标 gap 的股票（实测几乎全是 ST 停牌股，
+   `max(trade_date)` 落在 4~9 月）每次重启都被**重拉三年、upsert 644 行、数值一模一样**。
+
+**修复**：
+
+- 新增 `index_repo.max_trade_date_by_code` + 纯函数 `_index_fetch_window(existing, asof)`：
+  已有到 asof → **不发请求**；落后 → 从 `max+1`（回退 7 天重叠吸收源侧修正）拉；
+  一行都没有 → 才拉一年。
+- 新增纯函数 `_quote_backfill_start(item)`：尾部缺口从 `current_max + 1` 开始；
+  无数据或**头部**也缺（次新股，实测 920856 上市日 11 天后才有首条行情）才用整窗口。
+
+**实测（同一库，重启两次）**：
+
+| 项 | 修前 | 修后 |
+|---|---|---|
+| 指数日线 | 6 次调用 × 242 行 | **0 次调用**（`6 indices already cover through 2026-10-19 — 0 API calls`） |
+| 停牌股缺口回填 | 21 只 × upsert **13,543 行** | `upserted=0` |
+
+**残留（明确记录）**：那 21 只停牌股仍会各发 **1 次**请求/重启——我们**没有停牌日历**，
+分不清「停牌」与「源侧断流」，而后者真的会补数据。要彻底消除需 `suspend_d` 之类的停牌数据
+（或一个"本轮已试过且无新数据"的 Redis 标记，按 `asof` 失效）。请求体已从 13,543 行降到 0，
+成本可接受，故本次不做。
+
+**测试**：`backend/tests/test_data_init_index_incremental.py` 10 例（窗口纯函数 4 + 个股起点纯函数 3
++ 两个接线断言「全覆盖必须零次 ingest 调用」「尾部缺口只拉缺口」）。**变异验证**：
+① 指数窗口退回「无条件拉一年」→ 2 例红；② 个股起点退回 `expected_start` → 接线断言红
+（纯函数测试仍绿 —— 这正是补接线断言的原因）。
+
+- 涉及文件：`backend/app/services/data_init.py`、`backend/app/repositories/index_repo.py`、
+  `backend/tests/test_data_init_index_incremental.py`、`docs/Changelog.md`
+
+## 2026-10-20 - **监管异动雷达：按交易所「异常波动」价格口径算 3 日偏离 / 明日触发价 + 自选提醒**
+
+**需求**：stockbot 没有「监管异动」的监控与提醒。A 股交易所对「股票交易异常波动」有量化标准
+（连续 3 个交易日收盘价涨跌幅偏离值累计达到板块阈值；严重异常还有 10 日 3 次 / 10 日 ±100% /
+30 日 ±200%），触发后公司须发异动公告，严重者停牌核查。
+
+**新增**（**零新表**，读时计算）：
+
+- **纯计算** `backend/app/services/regulatory_anomaly.py`：阈值按板块/ST 分档（主板 20% / 主板 ST 12% /
+  创业板·科创板 30% / 北交所 40%），基准 = 上证综指/深证成指/创业板指/科创50/北证50；偏离值累计是
+  **逐日求和**（不是复利）；异动事件按**不重叠窗口**计数（6 连板 = 2 次，不是 4 次）；明日触发价 =
+  最近两日偏离 + 明日所需涨幅（超过限幅 → 不可达）；已达线不再给触发价（持平也触发）。
+- **读面** `GET /api/v1/market/regulatory-anomalies`：今日涨停/跌停 ∪ 连板梯队 ∪ 3 日偏离 ≥80% 阈值；
+  返回 `dev3/dev10/dev30`、`events_10d`、严重异常命中、明日触发价、近 10 日「首次越过阈值日」历史、
+  板块阈值表与失效场景；Redis 120s 缓存。候选集**必须带梯队**：停牌复牌股（如 600825）3 日窗口缺行
+  算不出偏离，但明日再涨 7.85% 就触发。
+- **页面** `/market/regulatory`（市场域、公开）：KPI 带 + 涨/跌向梯队表 + 明日触发预告 + 近 10 日触发日
+  + 口径/失效场景；阈值与基准由 payload 下发，前端不复制常量表。入口在 `/market` 页头。
+- **自选提醒**：体检第 10 个探测器 `regulatory_anomaly`（已达线 risk / 临近 attention），
+  这是当前唯一的提醒通道（系统无推送基础设施）。
+
+**明确不做 / 已知漏报**：只算**价格口径**，换手率口径（3 日日均换手率 ≥ 前 5 日 30 倍且累计 ≥20%）
+未纳入；ST 取名称快照；公告源实测没有「异常波动」类标题，故页面不展示「已公告」状态。
+口径与来源见 [docs/design/regulatory-anomaly.md](./design/regulatory-anomaly.md)。
+
+**补的四件事（本轮，含一次真实 SQL 量化）**：① **`benchmark_missing` 降级**：`daily_deviation` 遇基准指数缺日返回 None，与「个股停牌」同形，
+原读面会显成「每行？停牌 + KPI 全 0」而无任何告警——探测器侧早就有
+`unavailable.add("regulatory_anomaly")`，两个读面口径不一。现按「个股 3 日行情齐备但偏离算不出」
+判定是基准缺日，整包升降级并优先于 `price_limits_missing`；tooltip 改成「停牌 / 次新 / 基准缺日」。
+② **`history[]` 删掉 `threshold_pct`**：阈值取的是**今日** ST 快照，拿来标历史触发日就是拿今天的口径
+读过去（摘帽/戴帽 12% vs 20%）；没有 PIT 名称表就不印这个数。
+③ **换手率口径漏报量级实测**（本地全量库，2026-02-01→10-20）：既满足「3 日均换手 ≥ 前5日30倍」
+又满足「3 日累计 ≥ 20%」的只有 **36 stock-day（每交易日 0.21 只）**，其中 **19 只任何价格阈值都不达标**
+（`|dev3| < 12%`，离开 20% 很远）且 **0 只能通过涨停/梯队进现有候选集** ⇒ 完全不进页面。
+画像：33/36 是 ST（长期停牌/极低换手「复牌爆量」）。**结论：暂不建第二张卡**，已知它是真漏报；
+若补，正确形态是 payload 加 `turnover_only[]` 旁路数组 + 梯队表下方一行提示，不新增表、不新增页。
+④ 真实读面冒烟（本地库跑 `get_radar`）：`as_of=2026-10-20`、`stale_days=0`、`degraded=None`
+（说明新加的基准缺日判定在健康数据上**不误报**）、137 只、KPI 11/32/9/11，`history[0]` 已无阈值字段。
+⑤ **读面内存/并发实测优化（OOM）**：`_build` 原本把全市场近 13 日行情（≈7 万行）整包物化成
+`list[dict]` 再分组 —— 实测 **Python 峰值 84.2MB / RSS 63→232MB**；生产 api 上限 `docker-compose.prod.yml`
+的 `mem_limit: 512m`（同文件实测常驻 anon 171MB）⇒ 旧实现单次冷构就到 ~341MB，两个并发越线
+（exit 137，与 `backfill_market_activity.py` 记的同域教训同一形态）。改为 `stream_quotes`（服务端游标、
+按 `stock_id` 流式、「换股即结算」）后 **12.2MB / RSS 63→87MB**，输出逐字段一致（137 只 / KPI
+11/32/9/11 / `history[0]` 全同），代价是冷构 +16%（2.19s→2.54s，其中 1.5s 是共享的
+`resolve_latest_complete_day`，生产走 Redis 缓存）。另加**单飞锁**：缓存 TTL 到期瞬间 N 个并发只允许
+算一次（等锁后双重检查缓存），否则 N 倍内存 + N 次扫库。顺带纠正文档里「读时算 0.6s」的旧估数，
+实测分段：流式扫全市场 565ms / `list_market_days`（`DISTINCT trade_date`）250ms / 候选明细 90ms
+⇒ 冷构 ≈0.9s（不含日历解析）。
+⑥b **容器实测抓到的一处文案 bug**：hero 日期行写死 `收盘`、旁边又挂口径徽标 → complete 时
+渲染成「10月20日 收盘收盘」。徽标统一措辞后（`收盘 / 未完整 / 按最近完整日`）这个重复才显形，
+已删掉日期行的字面量（日期 + 徽标各说一件事），e2e 补 `not.toContainText("收盘收盘")`。
+此条只有在**真实容器 + 真实数据**里看得见——mock 断言只签了徽标本身。
+⑥ **多用户并发**（公开接口，ADR 0008 免登录）：修了一个真 bug —— `async with async_session_factory()`
+原先把 session 开在**锁外**，N 个等锁请求各握一条连接（pool_size 10 / overflow 20），超过 30 并发
+就会排队到 `pool_timeout` 报错；现在判据日解析用短命 session、构建期 session 只在拿到信号量后才开
+（8 并发实测只开 1 个 session，优化前 8 个）。另加**全局构建信号量**（并发 ≤ 2）：单飞锁只按
+`(as_of, history_days)` 收敛，而 `?date=` 能把键无限拉开 —— 内存上界现在由信号量兜住。
+实测：20 并发同一日（无缓存）20/20 成功、`rss_peak 80MB`；8 个不同日期并发 8/8 成功、
+`rss_peak 82MB`、wall 2.9s（2 个一批）。**未收敛风险已记录**：`?date=` 键空间无上界，串行爬虫仍可
+把每个日期各算一次（内存已稳，成本是 CPU/DB）；可选修法是 `date` 限窗或网关限流，属接口语义/部署
+决策，未擅自改。
+
+**测试**：纯计算 37 例 + 编排层 9 例（停牌梯队补位 / 已达线不给价 / 缺限价降级 / 非交易日显式空 /
+缓存命中重算陈旧度 / 基准指数缺日降级 / 并发冷构单飞 / 等锁不占连接 / 全局信号量）+ 探测器 4 例；`tsc --noEmit`、`check:routes`（IA §4 新增 1 行、ARCHITECTURE §6 同步）通过。
+
+**e2e（`frontend/e2e/marketRegulatory.spec.ts` 7 例，全 mock 后端 snake_case 线格式）**：只测别层测不到的四类——
+① 映射契约（字段改名/拼错在单测里全绿，页面上只表现为 `--`）；② 反误导纪律（`dev3_pct=null`
+必须是「窗口缺行」不得 `?? 0`、`triggered` 不得给触发价、持平即触发/限幅不可达各有独立文案）；
+③ 阈值与失效场景**原样来自 payload**（喂不存在的「测试主板 ±55%」证明前端没第二份常量表）；
+④ 降级不静默。另加三条**投资误读风险**断言：ST 降档标记（丢了就把 12% 的异动读成 20% 口径）、
+跌向偏离必须有负号（符号丢了就是「涨了 22%」）、明日触发预告必须按「还需涨幅」升序（排序是这张卡的
+唯一语义）、KPI「已达线」与高亮行数一致。契约数学不在此重复（37 例单测已覆盖）。
+**变异验证均变红**：映射层 `?? 0` → 用例 2；阈值表写死 ±20 → 用例 1；删 ST 标记 → 用例 1；
+删升序 → 用例 5。
+
+**补的两个读面/口径洞（本轮）**：① 该读面原本**没有 `stale_days`**，与全站「数据陈旧要显式标注」契约
+（`FreshnessNote` + ARCHITECTURE §50）不一致——现补上，且按**当下重算**（缓存命中不沿用写入时刻的
+旧值），落后 12 天时卡片徽标会显「12 天前」；② 同一 `as_of_quality` 原本在 hero 标签（`QUALITY_TEXT`：
+收盘口径 / 按最近完整交易日）与卡片徽标（`FreshnessNote.qualityBadgeText`：收盘 / 按最近完整日）
+各写一份措辞，而后者自声明为全站单一渲染点 —— 现改成真同源，只保留本页特有的 `requested`（指定日期）。
+两者各有一例机制守：`test_cache_hit_recomputes_stale_days`（变异：删掉重算行 → 红）与 e2e「回落口径」例。
+
+- 涉及文件：`backend/app/services/{regulatory_anomaly,regulatory_anomaly_service,triage_detectors,triage_service}.py`、
+  `backend/app/repositories/regulatory_repo.py`、`backend/app/schemas/regulatory.py`、`backend/app/api/v1/{regulatory,__init__}.py`、
+  `backend/tests/{test_regulatory_anomaly,test_regulatory_anomaly_service,test_triage_detectors,test_triage_service}.py`、
+  `frontend/src/pages/market-regulatory/*`、`frontend/src/shared/api/regulatory.ts`、`frontend/src/app/router/{route-manifest.ts,route-elements.tsx}`、
+  `frontend/scripts/check-routes.mjs`、`frontend/e2e/marketRegulatory.spec.ts`、
+  `frontend/src/pages/market/{index.tsx,market.css}`、
+  `docs/{features.md,Changelog.md,design/regulatory-anomaly.md,design/ia-investment-research-platform.md,architecture/frontend/ARCHITECTURE.md,specs/S8-watchlist-triage.md}`
+
+## 2026-10-19 - **自选"加了不显示 / 不能删"修复：登录后合并本地自选 · 取不到的标的留行可删 · 删除入口有名字 · 缓存失效挪到 commit 之后**
+
+**症状（用户反馈）**：加入自选后 `/me` 有时不出现，反复刷新也不出现；且 `/me` 里这些自选"不支持删除"。
+
+**四处根因（全部实测复现，不是推断）**：
+
+1. **登录态"未知"被当成"未登录"**（最大头）。`useWatchlist` 只看 `isAuthenticated`：会话探测尚未完成（或探测失败/429）时它是 `false` ⇒ 点击写进 `localStorage`。之后登录态恢复，`items` 只取服务端 ⇒ 那只票**永远不会上传**，`/me` 里也永远没有。实测：未登录在 `/company/000876` 点「加入自选」→ `API_CALLS: 0`、`localStorage: {"items":["000876"]}`；登录后 `/me` 显示「我的自选（0）」，本地那条一直躺着。
+2. **本地自选从不合并**。旧实现登录后直接忽略本地列表（且在 logout/401 时 `clear()`），"本地加过、账户没有"没有任何收敛路径。
+3. **取不到的标的被静默删行**。`WatchlistTable` 用 `Promise.all(...).filter(Boolean)`：只要有一只票的 `/enriched` 取不到（例如还没入库/退市/代码不认识），整行被丢弃 —— 标题写「我的自选（2）」、表里只有 1 行，而删除按钮**长在行里**，于是用户看到"这些自选不能删"。
+4. **缓存失效在事务内**。`add/remove/reorder` 在 service 里（commit 之前）`cache.delete`：并发读会在这条缝里把**旧列表**写回 Redis（TTL 300s）⇒ "刚加的不显示 / 刚删的还在，再点删除变 404"。
+
+**修复**：
+
+- **`useWatchlist` 三态门控 + 合并**：写操作只在 `isAuthReady` 之后允许（未知态给提示，不写错地方）；登录后把本地自选**幂等 POST 合并**到账户，成功清本地、失败保留重试，同步窗口内 `items = 服务端 ∪ 待同步`（不会闪消失）。合并用**模块级 in-flight map** 去重（一个页面有 `WatchlistPanel` + `WatchlistTable` + 个股动作区多个实例，旧写法会各发一遍）。
+- **`WatchlistTable` 逐行降级**：`Promise.allSettled` 生成每一只票的行；取不到的行显示 `行情未取到` + `--`，**删除入口仍在**；顶部一句"有 N 只行情未取到（行仍在，可直接移除）+ 重试"。
+- **删除入口有名字**：行内按钮补 `aria-label="移除自选 {symbol}"`；今日体检（`/me` 默认 tab）的卡片也加「从自选移除」（Popconfirm 防误触），删完同时失效 watchlists 与 triage。
+- **缓存时序**：service 不再碰缓存；路由在 `db.commit()` **之后** `cache.delete(watchlist_service.watchlists_cache_key(uid))`。
+
+**机械门禁（新）**：`backend/tests/test_watchlist_cache_order.py` 两个源码级断言 —— ① 每个含 `cache.delete(` 的写路由里，`db.commit()` 必须出现在它前面；② service 的写函数不得再出现 `cache.delete/set`。删一行、挪一行都会红（这类错误只靠评审守不住）。
+
+**测试**：后端 11 passed（含新增 cache-order 2 例；`test_user_isolation` 的调用下标随签名收窄同步修正）；前端新增 `e2e/watchlistSync.spec.ts` 3 例（本地→登录合并、取不到仍留行可删、正常行删除）+ 体检卡片移除 1 例；Playwright 全量 **362 passed / 14 skipped**；`tsc --noEmit` 绿。
+
+**过程中撞到并修掉的一个新 bug（记下来，别再犯）**：合并 effect 里写了 `data: watchlists = []` 的解构默认值 —— 每次渲染都生成**新数组**，于是依赖它的 `useMemo`/`useEffect` 每帧重跑，匿名用户在个股页触发 **setState 循环**（页面卡死，stockDetail 4 条 e2e 20s 超时）。修法：模块级稳定空数组 `EMPTY_WATCHLISTS` + `setSyncingSymbols(prev => prev.length === 0 ? prev : [])`（同引用不触发重渲染）。这条只有 e2e 能抓到，单元测试看不见。
+
+- 涉及文件：`backend/app/services/watchlist_service.py`、`backend/app/api/v1/watchlists.py`、`backend/tests/{test_watchlist_cache_order,test_user_isolation}.py`、`frontend/src/features/watchlist/{useWatchlist.ts,components/WatchlistTable.tsx}`、`frontend/src/features/triage/components/{TriagePanel.tsx,TriagePanel.css}`、`frontend/src/pages/me/index.css`、`frontend/e2e/watchlistSync.spec.ts`、`docs/{features.md,Changelog.md}`
+
+## 2026-10-19 - **情绪指数"收盘后不自动刷新"修复：重试守卫补问「今天发布了没」+ 读面 `latest_withheld` + 文案不再把日历期望日说成齐备日**
+
+**事故**：19 号（周一）23:00，`/sentiment` 仍显示 10-16 的值，且文案写"各成分指标齐备的数据已到 10月19日"。
+
+**根因（证据链，非推测）**：
+
+- 17:48 收敛**确实**算了 10-19：`legs=8 weight=0.72 withheld_thin=1`，`alerts=['composite_below_publish_weight:0.72']` —— 缺 `margin_financing_balance` / `margin_financing_buy_ratio`（**T+1 披露**，10-16 的两融行实测 10-17 10:01 才入库）+ `qvix_50etf`（**源侧滞后**：当天 17:48 CSV 里还没有 10-19，实测 23:16 才有）。
+- 0.72 < `COMPOSITE_PUBLISH_MIN_WEIGHT` 0.80 ⇒ 按设计**不发布**（`below_publish_weight`，value NULL），hero 退到最后一个过闸门日 = 10-16。
+- **真正的缺陷**：18:30 / 20:00 两个"迟到吸收"重试 tick 的跳过条件是 `market_day_service.day_is_complete`（**行情域**齐备），而行情 17:46 就齐备了 ⇒ 两个 tick 直接 return，**QVIX 19:00 到位后没有任何重算**，当日值一直等到**次日 10:00** 的兜底对账。前端其实每 5 分钟轮询（`stale=true` 时），是后端从未改变。
+- 次生问题：hero 只回选中行，读面拿不到"被拦日"的事实，前端只能把 `expected_as_of`（**日历期望日**）写成"已齐备日"——文案失实是本次投诉的直接触点。
+
+**修复**：
+
+1. **重试守卫（根因）**：`reconcile_retry_job` 在"行情齐备"之后**再问一句** `market_sentiment_composite_service.is_composite_published(db, today)`；未发布 ⇒ 照跑整条盘后链（收敛幂等；波动率腿会外呼一次，最多多两次/天，换掉"页面停旧 16 小时"）。判不出 ⇒ 照跑（fail-open，与既有纪律一致）。
+2. **读面 `latest_withheld`**：hero 响应新增"最新一个没上屏的行"——`as_of` / `leg_count` / `total_legs` / `effective_weight` / `min_effective_weight` / `missing[{key, weight, late_arrival, reason}]` / `missing_reason`。`late_arrival` 来自 registry（不靠权重猜），`reason` 取自写面 `extra.constituents[*].reason`（`source_not_updated` / `source_empty`）。
+3. **文案改真话**：页头一句话与 hero 滞后行都由"已有齐备数据到 X"改为"**日历期望日 X**；当日仅 8/11 条腿、生效权重 0.72，未达 0.80 发布阈值（缺 3 条：2 条 T+1 披露、1 条源侧滞后），故本卡不上屏"。无 `latest_withheld`（老后端）时**不编造**原因。
+4. **文档纠偏**：S1 spec Ruling 69 + metric-dictionary §4.2 明写"QVIX 当晚到位不是稳定事实"，并把"当日 9/11=0.84 照常发布"标注为有条件成立。
+
+**测试**：后端 44 passed（新增 `latest_withheld` 两例 + 重试"行情齐备但未发布必须照跑"一例，均为事故形态回归）；`tsc --noEmit` 绿；Playwright 全量 **358 passed / 14 skipped**（`/sentiment` 17 条 + 新增"被拦当日必须交代 8/11 · 0.72 · 缺腿类型"）。
+
+**顺带修掉两条假红/脆测**（都在全量门禁里真实撞到）：
+
+- `marketPanorama.spec.ts` 热力图用例把日期写死成「10月15日 / 10月16日」，数据一推进到下一交易日就假红 ⇒ 改为从 `/market/sectors.as_of` 与 `panorama.breadth.previous.trade_date` **取当天真实日期**再断言（仍验证"昨日带 date= 参数、今日不带"）。
+- `test_sw_member_scd2.py` 用**列表**比较 `information_schema` 的列 ⇒ 列顺序取决于库是"全新建表"还是"早期建库后被 ALTER 追加"（本机 dev 库是后者），与契约无关 ⇒ 改为**集合**比较（要钉的是"列一个不多一个不少"）。
+
+**线上现状**：手动重跑 `converge(target=2026-10-19)` 后，10-19 已发布（`value=35.7684`、9/11、0.84、`provisional=true`），API 已回落 `as_of=2026-10-19, lag=0, stale=false`。
+
+- 涉及文件：`backend/app/scheduler/jobs.py`、`backend/app/services/market_sentiment_composite_service.py`、`backend/app/schemas/limit_up.py`、`backend/tests/{test_reconcile_jobs,test_market_sentiment_composite_api}.py`、`frontend/src/features/sentiment/{api.ts,components/CompositeHero.tsx}`、`frontend/src/pages/sentiment/index.tsx`、`frontend/e2e/sentiment.spec.ts`、`docs/{specs/S1-market-sentiment.md,design/metric-dictionary.md,Changelog.md}`
+
+## 2026-10-19 - **生产情绪指数补链：`pct_chg` → 派生指标 → 综合指数（hero 由空转 32.79 / 分位 10.34）**
+
+**症状**：生产 `/market/sentiment/composite` 全空（`as_of=null`、`leg_count=0`、`total_legs=0`）；库里 `market_sentiment_composite` 10 行进（09-28…10-16）全部 `value=NULL` + `insufficient_participants`。
+
+**根因链（逐层实测，不是猜）**：① 综合指数每条腿要 ≥126 个有效样本才能算 252 窗滚动分位（`COMPOSITE_PERCENTILE_MIN_SAMPLES`）⇒ 生产每腿只有 **10~11 天**，0 条腿参与；② market 域派生指标恰从 **2026-09-24** 才有行；③ 再往下，`daily_quotes.pct_chg` 在 **2026-09-24 之前 100% 为 NULL**（库里只落了 `close`；2026-09 月覆盖率 71.8%、10 月 100%，逐月可查），而 breadth 类腿的覆盖率闸门是 0.95 ⇒ 派生指标算不出；④ 生产自建库以来**从未跑过派生指标历史回补**（脚本都在 `backend/scripts/`，是运维入口）—— 本地库有 2010 起的历史，所以"本地有值、服务器没有"。
+
+**回补（全部幂等，失败可重跑）**：
+
+- `backfill_pct_chg.py`：2025-10-19 → 2026-10-16 逐日按 TuShare `daily` 回填，2025-11 起每月覆盖率 **100%**（250+ 个交易日、约 130 万行）；中途 2026-07-27 一次 `ConnectionDoesNotExistError`，单日重跑即过（按日期幂等）
+- `backfill_market_history.py --domain sentiment`：`market_sentiment_daily` **26 → 244 天**（2025-10-15 起，实时行按 Ruling 18 守卫保留）
+- `backfill_market_sentiment.py --from 2025-10-19`：8 个情绪/宽度指标各 **241 天**（`advance_decline_ratio`/`above_ma20_ratio`/`limit_up_break_ratio`/`max_consecutive_limit_up` 等，覆盖率 `covered=241 / null=0`）
+- `backfill_volatility_derivatives.py`：11 个波动率/基差指标全历史（`qvix_50etf` 2837 行 2015-02 起、`if_basis` 4006 行 2010-04 起、`ic/ih_basis` 2795、`im_basis` 1025），PIT 审计 11/11 通过
+- `backfill_market_activity.py` **按月分块**：换手率/两融/PE/ERP 各 **241 天**（2025-10-20 起）
+- `backfill_market_sentiment_composite.py`：全量重算 **4006 行**，PIT 审计通过（无缺列、无前视、`published_at` 恰为当天最晚成分）
+
+**结果（生产实测）**：`GET /api/v1/market/sentiment/composite` → `as_of=2026-10-16`、`value=32.7876`、`percentile=10.34`（样本 116）、`leg_count=11/11`、`effective_weight=1.0`、`lag_trading_days=0`、`stale=false`、`insufficient_history=false`。
+
+**新增两条机械纪律（写进脚本 docstring）**：① **大区间不能一条语句写完** —— `backfill_market_sentiment` 每个交易日 8 指标 × 12 绑定参数 = **96 参数/天**，而 asyncpg 单语句上限 32767、PG 65535 ⇒ 安全上限约 **341 天**（829 天 = 7.96 万参数，实测直接被打回）；按 ≤300 天分块。② **`backfill_market_activity` 默认 1900 天在 512MB 的 api 容器会被 OOM kill**（`docker exec` 退出码 137、日志为空；240 天块同样被 kill），须按 ~20 个交易日/块跑。
+
+**回补带来的一个真实读面回归（已修）**：hero 端点从 10 行变 4007 行后，`get_metric_history` 经 ORM 载入（含 `extra` JSONB 解码）实测 **0.33–0.48s/次**（同一查询裸 SQL 仅 19ms，差距全在 ORM 层），而它是首屏 GET。处置 = **整包 Redis 缓存**（`COMPOSITE_HERO_CACHE_KEY`，TTL 120s，与 `/market/panorama` 同一时效纪律；Redis 不可由 `CacheClient` 自行降级为 miss，写面不变、最坏多 120s 旧值）。配套两条测试：命中缓存后不再读库（数调用次数，不比耗时）+ 缓存载荷能被 `SentimentCompositeOut` 反序列化（防"命中即 500"）。**未**改 SQL/窗口/分位口径 —— 缓存是纯读优化。
+
+- 涉及文件：`backend/scripts/backfill_market_activity.py`（docstring：内存硬约束与分块跑法）、`backend/app/services/market_sentiment_composite_service.py`（hero 整包缓存 + 常量）、`backend/tests/test_market_sentiment_composite_api.py`（+2 用例）、`docs/Changelog.md`；数据库侧改动均为**幂等回补**，无迁移、无新表
+
+## 2026-10-19 - **服务器升到 v0.0.12（`25fc086`，领先 0.0.11 共 79 个提交）+ 全景三表回补**
+
+- 发版：`v0.0.12` tag 打在 `origin/main`（`25fc086`，含 S12 闭环 / 标的详情整改 / A股全景日表 / T+0 期望集）；CD 4 镜像 success 后按 `scripts/deploy_prod.sh` 走镜像站拉取，label 对账 `revision=25fc086`（4/4 一致）
+- 断言：6 容器镜像 tag 全为 `0.0.12`；backend `alembic current==heads`（`e3f1a7c9d2b4`，新 5 个迁移一次到 head）、auth（`a002_invite_only`）；`/health` `version=v0.0.12 commit=25fc086`；经边缘取的 `assets/index-CdAF0Ui5.js` 与镜像内文件 sha256 相同；6 个应用容器 restart 后日志无 error/traceback
+- 备份：`~/backup/stock_bot-20261019-0952.dump`（535M）+ `stock_bot_auth-…`（28K），`pg_restore -l` 验读通过
+- 回补：容器内 `PYTHONPATH=/app` 跑 `backfill_market_panorama.py` → **244 天 / 2,684 桶 / 4,082 行业行**（13s）；`/market/panorama?days=20` 由 404 转 200（17KB），10-16 广度 2,106 涨 / 1,333 平 / 2,128 跌、结构四态判为「结构」，与生产库实测一致（与本地快照 2,105/1,333/2,125 的 ±4 家差异来自上市家数变动）
+- 口径核对：10-19 上午（<17:30）`expected_as_of` 仍为 **10-16**，T+0 闸门未提前放行；`t0_after_close_enabled=True` 生效
+- 本轮**未改** `docker-compose*.yml` 与 env 模板（相对 0.0.11 无 diff），故服务器侧只换镜像、无配置同步动作
+- 坑（已写进 [design/market-panorama.md](./design/market-panorama.md) 回补一节）：镜像里直接 `python scripts/*.py` 会 `ModuleNotFoundError: No module named 'app'` —— 脚本目录成了 `sys.path[0]`，须 `-e PYTHONPATH=/app`
+
 ## 2026-10-19 - A股全景：市场结构脉搏（日表 + 罗盘 + 卡片变化层）
 
 把 `/market`「A股全景」从五张今日快照升级为可回看、能解释变化的结构面板：

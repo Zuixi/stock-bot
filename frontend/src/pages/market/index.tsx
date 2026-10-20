@@ -90,6 +90,10 @@ export default function MarketPage() {
         <Link className="market-page-head__sources" to="/market/data-sources">
           数据覆盖 8 个域 · 查看来源 →
         </Link>
+        {/* 2026-10-20 监管异动雷达入口：独立页（`/market` 的 5 个 Tab 不动） */}
+        <Link className="market-page-head__link" to="/market/regulatory">
+          监管异动雷达 →
+        </Link>
       </div>
 
       {/* 分区导航：`Tabs` 只留标签条（items 无 children ⇒ 不渲染任何面板），

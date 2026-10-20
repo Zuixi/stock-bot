@@ -26,6 +26,18 @@
   color: var(--accent);
 }
 
+/* 同行的第二个入口（监管异动雷达）：不再抢 auto 边距，紧跟「数据来源」之后。 */
+.market-page-head__link {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.market-page-head__link:hover {
+  color: var(--accent);
+}
+
 /* 顶部分类 Tab（TV 风）：大字号 + 底部分隔线。
    P1-1 第二轮后它不再是"面板开关"，而是**分区导航**（内容已全部堆叠在下方）：标签条吸附在
    顶部，长页里随时可切分区。三条硬约束（实测得来，不是审美）：

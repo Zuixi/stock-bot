@@ -690,7 +690,9 @@ async def test_export_csv_has_bom_and_fixed_column_order() -> None:
             invalidation={"kind": "price_below", "value": 96.5},
         )
         await _review(session, reviewed, excess=3.0, verdict="discipline_break")
-        session.add(_entry(user_id=owner, thesis="还没到期的一条"))
+        # 未复盘条目必须**始终**是 open：默认 due_on=DUE_ON 会随真实日期变成 due
+        # （2026-10-21 当天实测 "due" != "open"），这条断言就变成时间炸弹。
+        session.add(_entry(user_id=owner, thesis="还没到期的一条", due_on=date(2099, 1, 1)))
         await session.flush()
         return svc.export_csv(await svc.export_rows(session, owner))
 

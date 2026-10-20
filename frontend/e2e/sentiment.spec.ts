@@ -76,6 +76,35 @@ const COMPOSITE_STALE = {
   stale: true,
 };
 
+/**
+ * 当日被发布闸门拦下（2026-10-19 生产同形）：8/11 条腿、生效权重 0.72 < 0.80。
+ * 缺：两融 ×2（T+1 披露）+ QVIX（源侧滞后）。
+ */
+const WITHHELD_1019 = {
+  as_of: "2026-10-19",
+  leg_count: 8,
+  total_legs: 11,
+  effective_weight: 0.72,
+  min_effective_weight: 0.8,
+  missing: [
+    { key: "qvix_50etf", weight: 0.12, late_arrival: false, reason: "source_not_updated" },
+    { key: "margin_financing_balance", weight: 0.08, late_arrival: true, reason: "source_empty" },
+    { key: "margin_financing_buy_ratio", weight: 0.08, late_arrival: true, reason: "source_empty" },
+  ],
+  missing_reason: "below_publish_weight",
+};
+
+/** 落后**且有被拦当日**：页面必须说清"当日 8/11、0.72、未达阈值"，而不是拿期望日冒充齐备日。 */
+const COMPOSITE_STALE_WITH_HELD = {
+  ...COMPOSITE_STALE,
+  // 与生产 2026-10-19 23:00 同形：上屏 10-16，日历期望日 10-19，滞后 1 个交易日
+  as_of: "2026-10-16",
+  value: 32.7876,
+  expected_as_of: "2026-10-19",
+  lag_trading_days: 1,
+  latest_withheld: WITHHELD_1019,
+};
+
 /** 判不出新鲜度：三字段全 null —— 页面**不得**沉默（沉默会被读成"新鲜"）。 */
 const COMPOSITE_FRESHNESS_UNKNOWN = {
   ...COMPOSITE,
@@ -325,7 +354,9 @@ test("hero：合成值 + 分位轨 + 「N/11 个成分指标 · 生效权重」�
   await expect(page.getByTestId("sentiment-state")).toContainText("当日由 3/11 个成分指标合成");
 });
 
-test("新鲜度：stale=true 必须明写滞后几个交易日与「已有齐备数据到哪天」", async ({ page }) => {
+test("新鲜度：stale=true 必须明写滞后几天 + 日历期望日（不得把期望日说成「已齐备」）", async ({
+  page,
+}) => {
   await mockStack(page, { composite: COMPOSITE_STALE });
   await page.goto("/sentiment");
 
@@ -333,7 +364,9 @@ test("新鲜度：stale=true 必须明写滞后几个交易日与「已有齐备
   const staleLine = page.getByTestId("sentiment-composite-stale");
   await expect(staleLine).toBeVisible();
   await expect(staleLine).toContainText("数据滞后 3 个交易日");
-  await expect(staleLine).toContainText("已有齐备数据到");
+  // 2026-10-19 修文案：这里原来写「已有齐备数据到」——那是日历期望日，不是齐备日
+  await expect(staleLine).toContainText("日历期望日");
+  await expect(staleLine).not.toContainText("已有齐备数据到");
   // 日期必须走 formatCnDate（「10月14日」），**不得**出现原始 ISO（见 noRawIso.spec.ts）
   await expect(staleLine).toContainText("10月14日");
   await expect(staleLine).toContainText("10月9日");
@@ -345,6 +378,27 @@ test("新鲜度：stale=true 必须明写滞后几个交易日与「已有齐备
   await expect(page.getByTestId("sentiment-composite-legs-line")).toContainText(
     "本日由 10/11 个成分指标合成",
   );
+  // 没有 latest_withheld（老后端）⇒ 不编造"当日为什么没上屏"
+  await expect(page.getByTestId("sentiment-composite-withheld")).toHaveCount(0);
+});
+
+test("新鲜度：当日被闸门拦下时必须交代 8/11 · 0.72 · 未达阈值与缺腿类型", async ({ page }) => {
+  await mockStack(page, { composite: COMPOSITE_STALE_WITH_HELD });
+  await page.goto("/sentiment");
+
+  const withheld = page.getByTestId("sentiment-composite-withheld");
+  await expect(withheld).toBeVisible();
+  await expect(withheld).toContainText("10月19日");
+  await expect(withheld).toContainText("8/11 条腿");
+  await expect(withheld).toContainText("0.72");
+  await expect(withheld).toContainText("未达 0.80 发布阈值");
+  await expect(withheld).toContainText("缺 3 条：2 条 T+1 披露、1 条源侧滞后");
+  await expect(withheld).not.toContainText("2026-10-");
+  // 页头一句话同样要带真实原因（而不是"已齐备到 10-19"）
+  const state = page.getByTestId("sentiment-state");
+  await expect(state).toContainText("日历期望日 10月19日");
+  await expect(state).toContainText("当日仅 8/11 条腿");
+  await expect(state).toContainText("未达 0.80 发布阈值");
 });
 
 test("新鲜度：stale=null（判不出）不得沉默 —— 沉默会被读成「新鲜」", async ({ page }) => {

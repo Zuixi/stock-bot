@@ -163,9 +163,9 @@ def _retry(monkeypatch: pytest.MonkeyPatch, _env: dict[str, Any]) -> dict[str, A
     `_env` 已经把 `async_session_factory`、`get_redis_pool`、`reconcile_market_data_job`
     与收敛都打桩，这里只补两个判定输入。
     """
-    from app.services import market_day_service
+    from app.services import market_day_service, market_sentiment_composite_service
 
-    state: dict[str, Any] = {"expected": _RETRY_TODAY, "complete": False}
+    state: dict[str, Any] = {"expected": _RETRY_TODAY, "complete": False, "published": True}
     # jobs 内取的是 `datetime.now(_SH_TZ).date()`，用同一时区对齐
     monkeypatch.setattr(
         jobs,
@@ -183,8 +183,12 @@ def _retry(monkeypatch: pytest.MonkeyPatch, _env: dict[str, Any]) -> dict[str, A
     async def _complete(db: Any, day: Any, *, universe: Any = None) -> bool:
         return bool(state["complete"])
 
+    async def _published(db: Any, day: Any) -> bool:
+        return bool(state["published"])
+
     monkeypatch.setattr(market_day_service, "resolve_expected_day", _resolve)
     monkeypatch.setattr(market_day_service, "day_is_complete", _complete)
+    monkeypatch.setattr(market_sentiment_composite_service, "is_composite_published", _published)
     return state
 
 
@@ -209,6 +213,26 @@ async def test_retry_skips_when_today_already_complete(
     await jobs.reconcile_retry_job()
 
     assert _env["calls"] == []
+
+
+async def test_retry_runs_chain_when_market_complete_but_composite_unpublished(
+    _retry: dict[str, Any], _env: dict[str, Any]
+) -> None:
+    """**2026-10-19 旗舰回归**：行情齐备 ≠ 综合指数已发布。
+
+    事故形态：17:45 收敛算出 8/11=0.72 被发布闸门拦下（两融 T+1、QVIX 源滞后），
+    QVIX 的 CSV 19:00 才更新；旧守卫只看 `day_is_complete` ⇒ 18:30/20:00 两个 tick
+    全部跳过 ⇒ 当日值拖到**次日 10:00** 的兜底对账才发布（页面停旧 16 小时）。
+
+    修法：重试 tick 额外问一句"今天发布了没"，没发布就照跑（收敛幂等）。
+    """
+    _retry["complete"] = True
+    _retry["published"] = False
+
+    await jobs.reconcile_retry_job()
+
+    assert [c["only"] for c in _env["calls"]] == [None], "未发布时必须重跑整条盘后链"
+    assert len(_env["converge"]) == 1
 
 
 async def test_retry_runs_chain_when_today_incomplete(
