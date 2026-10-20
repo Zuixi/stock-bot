@@ -33,6 +33,25 @@ from app.schemas.limit_up import MIN_PERCENTILE_SAMPLES
 from app.services import market_day_service as mds
 from app.services import market_sentiment_composite_service as mscs
 
+
+@pytest.fixture(autouse=True)
+def _disable_composite_hero_cache():
+    """CI 有真 Redis、本机默认没有：hero 的 120s 整包缓存会跨用例串数据.
+
+    这些用例全部打桩读路径、**断言本次打桩的结果**；缓存命中会直接返回上一条用例的
+    payload（CI 实测：第二个用例拿到第一个的 `expected_as_of`，`stale` 从 None 变 False）。
+    把 `get_cache` 依赖覆盖成 None，既隔离用例，也避免真 Redis 客户端跨事件循环复用
+    （CI 的 `RuntimeError: Event loop is closed` 同一来源）。
+    """
+    from app.api.deps import get_cache
+
+    app.dependency_overrides[get_cache] = lambda: None
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_cache, None)
+
+
 # 契约冻结的窗口（交易日）
 CONTRACT_WINDOW = 1260
 CONTRACT_KEYS = {
