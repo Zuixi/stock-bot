@@ -68,7 +68,7 @@ import logging
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -714,6 +714,15 @@ COMPOSITE_HISTORY_WINDOW = 1260
 #: 命中上界 = 历史长到该换 SQL 侧窗口读了，而不是继续调大这个数。
 COMPOSITE_READ_LIMIT = 8000
 
+#: hero 的**整包缓存**。为什么必须有（2026-10-19 生产实测）：
+#: 全量历史 4007 行经 ORM 载入（含 `extra` JSONB 解码）耗时 **0.33–0.48s**，
+#: 裸 SQL 只有 19ms —— 差距全在 ORM/JSONB 这一层，且 hero 是页面首屏的一次 GET。
+#: 缓存命中后 ≈ 5ms；TTL 与 `/market/panorama` 同为 120s（同一份日级数据，同一时效纪律）。
+#: 写面（收敛器）在 17:15–17:45 之间改写当日行，120s 的滞后对"日级 + provisional 窗口"
+#: 无影响；真出现跨 cutoff 的竞态也只多给 2 分钟的旧 `expected_as_of`。
+COMPOSITE_HERO_CACHE_KEY = "market:sentiment:composite:hero:v1"
+COMPOSITE_HERO_TTL = 120
+
 #: `provisional` 的"仍可能被改写"窗口（交易日）：与收敛器的重算窗口同值。
 #:
 #: **刻意不 import `derived_metrics_service.CONVERGE_WINDOW_TRADING_DAYS`**：读面模块不该
@@ -810,6 +819,59 @@ def select_latest_publishable_index(
     return None
 
 
+def _withheld_payload(row: Any, *, min_weight: float) -> dict[str, Any]:
+    """被发布闸门拦下的那一行 → 可解释的结构（`latest_withheld`）。
+
+    为什么要它（2026-10-19 事故）：hero 只回**选中的齐备行**，于是"当日为什么没上屏"
+    在读面不可见 —— 前端只能拿 `expected_as_of`（日历期望日）编文案，把"期望日"
+    说成了"已齐备日"。这里把被拦行的**参与集/生效权重/缺哪几条腿/缺数原因**原样交出，
+    让读面说真话（并区分 T+1 披露与源侧滞后，不靠猜）。
+
+    只回库里已有的键：缺 `participants` ⇒ `missing=None`（**不按配置权重现算**）。
+    """
+    extra: Mapping[str, Any] = dict(getattr(row, "extra", None) or {})
+    raw_parts = extra.get("participants")
+    participants = [str(k) for k in raw_parts] if isinstance(raw_parts, list) else None
+    raw_cons = extra.get("constituents")
+    constituents = raw_cons if isinstance(raw_cons, dict) else {}
+    missing: list[dict[str, Any]] | None = None
+    if participants is not None:
+        joined = set(participants)
+        missing = [
+            {
+                "key": c.metric_key,
+                "weight": c.weight,
+                "late_arrival": bool(c.late_arrival),
+                # 逐腿原因来自写面（`source_not_updated` / `source_empty` / …）；
+                # 缺这一段的老行给 None —— **不猜**。
+                "reason": (
+                    constituents.get(c.metric_key, {}).get("reason")
+                    if isinstance(constituents.get(c.metric_key), dict)
+                    and isinstance(constituents.get(c.metric_key, {}).get("reason"), str)
+                    else None
+                ),
+            }
+            for c in registry.COMPOSITE_CONSTITUENTS
+            if c.metric_key not in joined
+        ]
+    raw_total = extra.get("n_constituents")
+    return {
+        "as_of": row.period,
+        "leg_count": 0 if participants is None else len(participants),
+        "total_legs": (
+            int(raw_total)
+            if isinstance(raw_total, int) and not isinstance(raw_total, bool)
+            else len(registry.COMPOSITE_CONSTITUENTS)
+        ),
+        "effective_weight": _extra_float(extra, "effective_weight_sum"),
+        "min_effective_weight": min_weight,
+        "missing": missing,
+        "missing_reason": (
+            extra.get("missing_reason") if isinstance(extra.get("missing_reason"), str) else None
+        ),
+    }
+
+
 def composite_hero_payload(
     rows: Sequence[Any],
     *,
@@ -880,16 +942,27 @@ def composite_hero_payload(
         # 否则读面在信息缺失时会静默宣称"数据是新的"。
         "stale": None if lag_trading_days is None else lag_trading_days > 0,
         "provisional": provisional,
+        # 最新一个**没上屏**的行（有行但没过发布闸门）：读面据此解释"当日为什么不是它"。
+        "latest_withheld": (
+            _withheld_payload(rows[-1], min_weight=min_weight)
+            if rows and (idx is None or idx < len(rows) - 1)
+            else None
+        ),
     }
 
 
 async def get_composite_hero(*, cache: Any = None) -> dict[str, Any]:
     """`GET /api/v1/market/sentiment/composite` 的编排：索引读 + 纯函数组装 + 新鲜度判定。
 
-    **不新增表、不加新缓存**：复用 `industry_metric_repo.get_metric_history`
+    **不新增表**：复用 `industry_metric_repo.get_metric_history`
     （`idx_industry_metrics_lookup` 覆盖 `(industry_key, metric_key, period)`）。
     窗口是回看窗口（分位定义在它上面），读全量行是为了**从尾部取足** `window` 个有效样本 ——
     裁掉窗口前的历史不会改变结果，但少读 NULL 行会（故 `limit` 留足余量）。
+
+    **读面有一层整包缓存**（`COMPOSITE_HERO_CACHE_KEY`，TTL 120s，2026-10-19 加）：
+    全量历史经 ORM 载入要 0.3–0.5s（裸 SQL 19ms，差距在 JSONB 解码与模型实例化），
+    而这是首屏 GET。缓存是纯读优化：Redis 不可用时 `CacheClient` 自己降级为 miss，
+    本函数不感知；写面照旧直接落库，最坏只多 120s 的旧值。
 
     新鲜度（`expected_as_of` / `lag_trading_days` / `stale`）—— **2026-10-17 换锚**：
 
@@ -905,6 +978,11 @@ async def get_composite_hero(*, cache: Any = None) -> dict[str, Any]:
     - 任一项算不出 ⇒ 三个字段留 `None`（**不假装新鲜**）。
     """
     from app.services import market_day_service  # noqa: PLC0415 — 读面按需引入，避免环
+
+    if cache is not None:
+        cached = await cache.get(COMPOSITE_HERO_CACHE_KEY)
+        if isinstance(cached, dict):
+            return cast("dict[str, Any]", cached)
 
     async with async_session_factory() as db:
         rows = await industry_metric_repo.get_metric_history(
@@ -923,9 +1001,12 @@ async def get_composite_hero(*, cache: Any = None) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 — 新鲜度是**加法**：算不出不得反噬 hero 主数据
         logger.warning("composite hero: freshness unavailable", exc_info=True)
         expected_as_of, lag_trading_days = None, None
-    return composite_hero_payload(
+    payload = composite_hero_payload(
         rows, expected_as_of=expected_as_of, lag_trading_days=lag_trading_days
     )
+    if cache is not None:
+        await cache.set(COMPOSITE_HERO_CACHE_KEY, payload, ttl=COMPOSITE_HERO_TTL)
+    return payload
 
 
 async def get_metric_row_at(db: AsyncSession, day: date) -> IndustryMetric | None:
@@ -951,3 +1032,19 @@ async def get_metric_row_at(db: AsyncSession, day: date) -> IndustryMetric | Non
         .execution_options(populate_existing=True)
     )
     return (await db.execute(stmt)).scalars().first()
+
+
+async def is_composite_published(db: AsyncSession, day: date) -> bool:
+    """该交易日的综合指数**是否已发布**（行存在 且 `value` 非 NULL）。
+
+    为什么单独成函数（2026-10-19 事故的直接修复点）：`reconcile_retry_job` 的跳过条件
+    原来只有"行情域是否齐备"（`market_day_service.day_is_complete`）。而综合指数还受
+    **两条 T+1/源滞后腿**约束（两融、QVIX）：17:45 那轮算出 8/11=0.72 被闸门拦下，
+    QVIX 19:00 才更新 CSV —— 行情域始终是齐备的，于是 18:30/20:00 的重试 tick 全部跳过，
+    当日值一直等到**次日 10:00** 的兜底对账才发布。本函数让重试 tick 能问出
+    "今天发布了没"，把"迟到数据到达后的再触发"补上。
+
+    `value IS NULL`（含 `below_publish_weight` 薄行）⇒ 未发布 ⇒ 重试**值得再跑**。
+    """
+    row = await get_metric_row_at(db, day)
+    return row is not None and row.value is not None

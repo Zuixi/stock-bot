@@ -385,7 +385,9 @@ async def test_watchlist_item_delete_cross_user_forbidden(
             )
             assert resp.status_code == status.HTTP_404_NOT_FOUND
             mock_remove.assert_called_once()
-            assert str(mock_remove.call_args[0][2]) == user_b_id
+            # 服务签名是 (db, user_id, symbol, *, watchlist_id)（2026-10-19 去掉事务内的
+            # cache 参数后下标从 2 变成 1）：这里钉的是"用户 id 来自会话，不是请求参数"。
+            assert str(mock_remove.call_args[0][1]) == user_b_id
 
 
 @pytest.mark.asyncio

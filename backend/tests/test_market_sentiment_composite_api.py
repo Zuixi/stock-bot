@@ -33,6 +33,25 @@ from app.schemas.limit_up import MIN_PERCENTILE_SAMPLES
 from app.services import market_day_service as mds
 from app.services import market_sentiment_composite_service as mscs
 
+
+@pytest.fixture(autouse=True)
+def _disable_composite_hero_cache():
+    """CI 有真 Redis、本机默认没有：hero 的 120s 整包缓存会跨用例串数据.
+
+    这些用例全部打桩读路径、**断言本次打桩的结果**；缓存命中会直接返回上一条用例的
+    payload（CI 实测：第二个用例拿到第一个的 `expected_as_of`，`stale` 从 None 变 False）。
+    把 `get_cache` 依赖覆盖成 None，既隔离用例，也避免真 Redis 客户端跨事件循环复用
+    （CI 的 `RuntimeError: Event loop is closed` 同一来源）。
+    """
+    from app.api.deps import get_cache
+
+    app.dependency_overrides[get_cache] = lambda: None
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_cache, None)
+
+
 # 契约冻结的窗口（交易日）
 CONTRACT_WINDOW = 1260
 CONTRACT_KEYS = {
@@ -52,6 +71,8 @@ CONTRACT_KEYS = {
     "lag_trading_days",
     "stale",
     "provisional",
+    # 2026-10-19：被发布闸门拦下的当日行（解释"为什么 hero 不是它"）
+    "latest_withheld",
 }
 
 #: 11 条腿的 key（`_healthy_row` 的默认参与集，形状与齐备日一致）。
@@ -70,6 +91,13 @@ ALL_LEGS = [
 ]
 
 D_START = date(2025, 10, 15)
+
+#: 2026-10-19 当晚实际缺席的三条腿（两融 T+1 ×2 + QVIX 源滞后）—— 与生产日志逐字对齐。
+_MISSING_1019 = {
+    "qvix_50etf",
+    "margin_financing_balance",
+    "margin_financing_buy_ratio",
+}
 
 
 def _days(n: int) -> list[date]:
@@ -677,3 +705,94 @@ async def test_hero_reports_stale_when_today_was_never_ingested(
     assert payload["expected_as_of"] == date(2026, 10, 16)
     assert payload["lag_trading_days"] == 1
     assert payload["stale"] is True
+
+
+def test_hero_latest_withheld_explains_the_blocked_day() -> None:
+    """**2026-10-19 事故回归**：当日有行但没过发布闸门 ⇒ 读面必须能说清"为什么不是它"。
+
+    事故形态：17:45 收敛算出 8/11 条腿、生效权重 0.72（缺两融 T+1 ×2 + QVIX 源滞后），
+    被 0.80 闸门拦下；而 hero 只回选中的 10-16，前端拿不到被拦原因，只好把
+    `expected_as_of`（日历期望日 10-19）写成"各成分指标齐备的数据已到 10-19"。
+    """
+    thin = _row(
+        date(2026, 10, 19),
+        None,
+        participants=[k for k in ALL_LEGS if k not in _MISSING_1019],
+        n_constituents=11,
+        effective_weight_sum=0.72,
+        min_effective_weight=0.2,
+    )
+    thin.extra["missing_reason"] = "below_publish_weight"
+    thin.extra["constituents"] = {
+        "qvix_50etf": {"reason": "source_not_updated", "participated": False},
+        "margin_financing_balance": {"reason": "source_empty", "participated": False},
+        "margin_financing_buy_ratio": {"reason": "source_empty", "participated": False},
+    }
+
+    payload = mscs.composite_hero_payload(
+        [_full_row(date(2026, 10, 16)), thin],
+        expected_as_of=date(2026, 10, 19),
+        lag_trading_days=1,
+    )
+
+    assert payload["as_of"] == date(2026, 10, 16)
+    assert payload["stale"] is True
+    withheld = payload["latest_withheld"]
+    assert withheld is not None, "有更新的被拦行却没交代 —— 页面只能编文案"
+    assert withheld["as_of"] == date(2026, 10, 19)
+    assert withheld["leg_count"] == 8
+    assert withheld["total_legs"] == 11
+    assert withheld["effective_weight"] == pytest.approx(0.72)
+    assert withheld["min_effective_weight"] == pytest.approx(mscs.PUBLISH_MIN_WEIGHT)
+    assert withheld["missing_reason"] == "below_publish_weight"
+    by_key = {m["key"]: m for m in withheld["missing"] or []}
+    assert set(by_key) == set(_MISSING_1019)
+    # 迟到属性来自 registry（两融=T+1），不是按权重猜的
+    assert by_key["margin_financing_balance"]["late_arrival"] is True
+    assert by_key["qvix_50etf"]["late_arrival"] is False
+    assert by_key["qvix_50etf"]["reason"] == "source_not_updated"
+
+
+def test_hero_latest_withheld_is_none_when_newest_row_published() -> None:
+    """最新一行就是上屏行 ⇒ `latest_withheld=None`（正常态不制造噪声）。"""
+    payload = mscs.composite_hero_payload(
+        [_full_row(date(2026, 10, 16)), _full_row(date(2026, 10, 19))],
+        expected_as_of=date(2026, 10, 19),
+        lag_trading_days=0,
+    )
+
+    assert payload["as_of"] == date(2026, 10, 19)
+    assert payload["latest_withheld"] is None
+
+
+async def test_hero_second_call_is_served_from_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """hero 有整包缓存：第二次 GET 不得再读库。
+
+    为什么必须有：全量历史 4007 行经 ORM 载入要 0.3–0.5s（2026-10-19 生产实测，
+    裸 SQL 19ms —— 差距在 `extra` JSONB 解码与 4000 个模型实例），而这是首屏 GET。
+    断言方式 = 数 `get_metric_history` 的调用次数（**不关心耗时**，耗时在 CI 里不稳）。
+    缓存键/载荷形状由 `CacheClient`（orjson）决定，真 Redis 下日期会变 ISO 字符串 ——
+    故这里同时断言缓存值能被响应模型解析，避免"缓存命中即 500"。
+    """
+    from app.schemas.limit_up import SentimentCompositeOut
+
+    cal = [date(2026, 10, 13), date(2026, 10, 14), date(2026, 10, 15), date(2026, 10, 16)]
+    cache = _CalendarCache(cal, covered_through=date(2026, 10, 16))
+    rows = [_full_row(date(2026, 10, 15)), _full_row(date(2026, 10, 16))]
+    calls = {"n": 0}
+
+    async def _fake_history(db: Any, industry_key: str, metric_key: str, limit: int = 240):
+        calls["n"] += 1
+        return list(rows)
+
+    monkeypatch.setattr(mscs, "async_session_factory", lambda: _FakeSessionFactory(object()))
+    monkeypatch.setattr(industry_metric_repo, "get_metric_history", _fake_history)
+
+    first = await mscs.get_composite_hero(cache=cache)
+    second = await mscs.get_composite_hero(cache=cache)
+
+    assert calls["n"] == 1, "第二次调用不应再读库（缓存未命中说明 TTL/键写漏了）"
+    assert second == first
+    assert mscs.COMPOSITE_HERO_CACHE_KEY in cache.store
+    # 缓存载荷必须能被响应模型解析（真 Redis 下 as_of 是 ISO 字符串）
+    SentimentCompositeOut.model_validate(second)

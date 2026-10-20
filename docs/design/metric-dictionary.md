@@ -833,6 +833,15 @@ drop_and_renormalise`）。**绝不**静默用 0、**绝不**插值或前向填�
 - 实测（2026-10-17 00:2x，距周五收盘 9.4 小时）：`daily` / `daily_basic` / `stk_limit` /
   `fut_daily` / `index_daily` / QVIX CSV **都含当日**，只有 `margin` 是 0 行
   ⇒ 当日 **9/11 条腿、生效权重 0.84**，仍在 0.80 闸门之上 ⇒ **照常发布**（闸门与口径不变）。
+- ⚠️ **2026-10-19 实测修正（Ruling 69）**：QVIX 的当晚到位**不是稳定事实**。当晚 17:48 的收敛为
+  **8/11 条腿、生效权重 0.72**（缺 `margin` ×2 = 0.16 **与** `qvix_50etf` = 0.12；QVIX 的 CSV
+  19:00 后才更新）⇒ `below_publish_weight` ⇒ 当日值**不发布**，hero 退回上一齐备日（10-16）。
+  结论：**"当日盘后可见当日值"只在 QVIX 也当晚到位时成立**；否则当晚可见的必然是 T-1。
+  两条配套修正：① 18:30/20:00 重试 tick 的跳过条件从"行情齐备"改为"行情齐备 **且** 当日
+  composite 已发布"（`market_sentiment_composite_service.is_composite_published`）——
+  否则 QVIX 迟到时当日值要拖到**次日 10:00** 的兜底对账；② 读面新增 `latest_withheld`
+  （被拦日的腿数/生效权重/缺腿及逐腿原因），文案**不得**再把 `expected_as_of`（日历期望日）
+  写成"各成分指标齐备的数据已到 X"——期望日不是齐备日。
 - `provisional` = **三态**读面字段，由 registry 的 `CompositeConstituent.late_arrival` 声明推导，
   **不写库**（历史行缺该键会被 `default False` 读成"是终值"，那是又一次"缺键就撒谎"）：
   - `true` = 该行缺**已声明的 T+1 成分**且仍在收敛改写窗口（10 交易日）内 ⇒ **这个数字以后会被

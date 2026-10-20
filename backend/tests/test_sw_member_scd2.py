@@ -165,14 +165,20 @@ def test_migration_scd2_nullability_and_existing_table_untouched() -> None:
     assert state["is_current"] == "NO"
     assert state["source"] == "NO"
     # Ruling 30 / 硬性约束 1：既有行不得被硬塞 NOT NULL，故既有表一列未加
-    assert member_cols == [
+    #
+    # ⚠️ 用**集合**比较，不比顺序（2026-10-19 修）：本用例读的是**运行环境里那张表**的
+    # `information_schema.columns`。列顺序取决于该库是怎么长出来的 —— 全新建库走
+    # `b4c5d6e7f8a9` 的 CREATE TABLE 是一种顺序，早期建库再被 ALTER 追加 `stock_name`
+    # 是另一种（本机 dev 库即后者，会假红）。列顺序不是任何契约的一部分，
+    # 这里要钉的是"列一个不多一个不少"。
+    assert set(member_cols) == {
         "id",
         "industry_code",
         "stock_code",
         "symbol",
         "stock_name",
         "updated_at",
-    ]
+    }, f"既有表列集合变了：{member_cols}"
     assert "uq_sw_member_period_code_stock_from_to" in indexes
     assert "idx_sw_member_period_industry_from" in indexes
     assert "idx_sw_member_period_open" in indexes

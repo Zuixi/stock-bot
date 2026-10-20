@@ -1,5 +1,5 @@
 import { formatCnDate } from "@/shared/ui";
-import type { SentimentComposite } from "../api";
+import type { SentimentComposite, SentimentCompositeWithheld } from "../api";
 import { NOTE_COMPOSITE } from "../moduleTable";
 
 /**
@@ -34,6 +34,27 @@ import { NOTE_COMPOSITE } from "../moduleTable";
 
 function fmtWeight(v: number | null): string {
   return v == null ? "--" : v.toFixed(2);
+}
+
+/**
+ * "当日为什么没上屏"的一句话（2026-10-19 事故的文案修复）。
+ *
+ * 旧文案写「已有齐备数据到 {expectedAsOf}」—— 那是**日历期望日**，不是"齐备日"：
+ * 当晚 10-19 只有 8/11 条腿（两融 T+1 ×2 + QVIX 源滞后），被 0.80 闸门拦下。
+ * 现在只用后端交出的**事实**（腿数 / 生效权重 / 缺哪几条 / 是否 T+1）说话。
+ */
+function withheldSentence(w: SentimentCompositeWithheld): string {
+  const missing = w.missing ?? [];
+  const late = missing.filter((m) => m.lateArrival).length;
+  const lagged = missing.length - late;
+  const kinds: string[] = [];
+  if (late > 0) kinds.push(`${late} 条 T+1 披露`);
+  if (lagged > 0) kinds.push(`${lagged} 条源侧滞后`);
+  const missingText =
+    missing.length > 0 ? `（缺 ${missing.length} 条：${kinds.join("、") || "原因未登记"}）` : "";
+  return `${formatCnDate(w.asOf)} 当日只有 ${w.legCount}/${w.totalLegs} 条腿、生效权重 ${fmtWeight(
+    w.effectiveWeight,
+  )}，未达 ${fmtWeight(w.minEffectiveWeight)} 发布阈值${missingText}，故本卡不上屏。`;
 }
 
 export interface CompositeHeroProps {
@@ -89,13 +110,24 @@ export function CompositeHero({ data, isLoading, isError }: CompositeHeroProps) 
           {/* 新鲜度先说：读者在读到那个大数字**之前**就该知道它是哪一天的值 */}
           {stale === true ? (
             <p className="sent-hero__freshness sent-flag num" data-testid="sentiment-composite-stale">
-              数据滞后 {lagDays ?? "--"} 个交易日：已有齐备数据到{" "}
-              {data.expectedAsOf ? formatCnDate(data.expectedAsOf) : "--"}，本卡展示的是{" "}
-              {data.asOf ? formatCnDate(data.asOf) : "--"} 的值（各成分指标齐备到最后一天才发布）。
+              数据滞后 {lagDays ?? "--"} 个交易日（日历期望日{" "}
+              {data.expectedAsOf ? formatCnDate(data.expectedAsOf) : "--"}）：本卡展示的是{" "}
+              {data.asOf ? formatCnDate(data.asOf) : "--"} 的值 —— 指数只发布"各成分指标齐备"的
+              交易日。
             </p>
           ) : stale === null ? (
             <p className="sent-hero__freshness num" data-testid="sentiment-composite-freshness-unknown">
               无法判定新鲜度（本地判不出最新完整交易日）：本卡**不**声称数据是新的。
+            </p>
+          ) : null}
+
+          {/* 被拦的当日：说明"为什么不是它"（腿数/权重/缺哪几条），把"期望日"与"齐备日"分开 */}
+          {stale === true && data.latestWithheld ? (
+            <p
+              className="sent-hero__freshness num"
+              data-testid="sentiment-composite-withheld"
+            >
+              {withheldSentence(data.latestWithheld)}
             </p>
           ) : null}
 

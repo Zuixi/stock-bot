@@ -18,6 +18,14 @@
     # 只落 ERP 的 PE 底座（沪深300 整体法 PE），不算 ERP
     .venv/bin/python scripts/backfill_market_activity.py --pe-only --from ... --to ...
 
+⚠️ **内存是硬约束**：`upsert_metric_range` 一次性把整个区间的行情/成分/两融拉进内存，
+默认 1900 天在 **512MB 的 api 容器**里会被 OOM kill（`docker exec` 退出码 137、日志为空；
+实测 2026-10-19：240 天块也被 kill，**20 个交易日/块**才稳定通过，峰值未单独测量）。
+小内存机器按**月分块**跑，块失败可原样重跑（幂等）::
+
+    docker exec -e PYTHONPATH=/app backend_api python scripts/backfill_market_activity.py \
+        --from 2026-03-01 --to 2026-03-31
+
 退出码：0 = 成功且 PIT 审计通过；1 = 参数非法 / **整个区间一行都没落库** /
 覆盖率对账发现真缺口 / **`industry_key='market'` 有行缺 `published_at` 或
 `caliber_version`**（Ruling 59 的 PIT 审计 —— 这两列可空，漏带会静默落 NULL）。

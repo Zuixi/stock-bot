@@ -45,9 +45,12 @@ async def add_watchlist_item(
     assert user.user_id is not None
     try:
         item = await watchlist_service.add_watchlist_item(
-            db, cache, user.user_id, item_in, watchlist_id=watchlist_id
+            db, user.user_id, item_in, watchlist_id=watchlist_id
         )
         await db.commit()
+        # **commit 之后**才失效：事务内失效会被并发读把旧列表写回缓存（TTL 300s），
+        # 表现为"刚加的自选时有时无 / 刚删的还在"（2026-10-19）。
+        await cache.delete(watchlist_service.watchlists_cache_key(user.user_id))
         return item
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -69,7 +72,7 @@ async def remove_watchlist_item(
     """Remove a stock symbol from the user's watchlist(s)."""
     assert user.user_id is not None
     deleted = await watchlist_service.remove_watchlist_item(
-        db, cache, user.user_id, symbol, watchlist_id=watchlist_id
+        db, user.user_id, symbol, watchlist_id=watchlist_id
     )
     if not deleted:
         raise HTTPException(
@@ -77,6 +80,7 @@ async def remove_watchlist_item(
             detail=f"Stock {symbol} not found in watchlist",
         )
     await db.commit()
+    await cache.delete(watchlist_service.watchlists_cache_key(user.user_id))
     return {"deleted": True, "symbol": symbol}
 
 
@@ -96,7 +100,8 @@ async def reorder_watchlist_items(
     """Update sort order for symbols in the user's watchlist."""
     assert user.user_id is not None
     await watchlist_service.reorder_watchlist_items(
-        db, cache, user.user_id, reorder_in, watchlist_id=watchlist_id
+        db, user.user_id, reorder_in, watchlist_id=watchlist_id
     )
     await db.commit()
+    await cache.delete(watchlist_service.watchlists_cache_key(user.user_id))
     return {"success": True}

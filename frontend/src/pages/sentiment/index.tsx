@@ -34,6 +34,10 @@ import "@/features/sentiment/sentiment.css";
  *  - composite 的 `asOf` 一变就让 metrics / trends 一起重取，否则会出现"hero 是今天、下方模块是昨天"。
  */
 
+function fmtWeight(v: number | null): string {
+  return v == null ? "--" : v.toFixed(2);
+}
+
 /** 页头的一句话状态（批准稿：一句话，不是 `·` 拼接的清单）。 */
 function stateSentence(
   composite: SentimentComposite | undefined,
@@ -48,11 +52,22 @@ function stateSentence(
   // 新鲜度先说（2026-10-16）：hero 只展示「各成分指标齐备」的交易日，所以"读到哪天"必须
   // 带上落后信息 —— 否则读者会把"各成分指标齐备的最后一天"直接当成"最新交易日"。
   // 三态：true 落后 / false 追平（不加字）/ null 判不出（**不得**沉默，沉默读成新鲜）。
+  //
+  // 2026-10-19 修文案：括号里原来写「各成分指标齐备的数据已到 X」，但 X 是**日历期望日**
+  // （`expectedAsOf`），不是"齐备日"——当晚 10-19 只有 8/11 条腿（两融 T+1 + QVIX 源滞后），
+  // 被 0.80 闸门拦下。现在改成"日历期望日 X；当日仅 N/11 条腿、权重 w，未达阈值"，
+  // 数据来自后端的 `latestWithheld`，不再拿期望日冒充齐备日。
+  const withheld = composite.latestWithheld;
+  const withheldNote = withheld
+    ? `；当日仅 ${withheld.legCount}/${withheld.totalLegs} 条腿、生效权重 ${fmtWeight(
+        withheld.effectiveWeight,
+      )}，未达 ${fmtWeight(withheld.minEffectiveWeight)} 发布阈值`
+    : "";
   const freshness =
     composite.stale === true
-      ? `，落后 ${composite.lagTradingDays ?? "--"} 个交易日（各成分指标齐备的数据已到 ${
+      ? `，落后 ${composite.lagTradingDays ?? "--"} 个交易日（日历期望日 ${
           composite.expectedAsOf ? formatCnDate(composite.expectedAsOf) : "未知"
-        }）`
+        }${withheldNote}）`
       : composite.stale == null
         ? "（新鲜度无法判定）"
         : "";

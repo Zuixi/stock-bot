@@ -21,6 +21,7 @@ import pytest
 from sqlalchemy import delete, event, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from app.models.index_daily import IndexDaily
 from app.models.market_data import Announcement, DragonTigerEntry, ShareFloat, StockPriceLimit
 from app.models.quote import DailyQuote
 from app.models.stock import Stock
@@ -321,6 +322,22 @@ async def _seed(session: AsyncSession) -> None:
             )
     await session.execute(insert(DailyQuote), quote_rows)
 
+    # 基准指数：监管异动探测器需要「连续 3 个交易日」的指数日涨跌幅（本用例只改个股，
+    # 指数取平盘 → 个股 -8% 的 3 日偏离仍是 -8%，不会额外命中 20% 阈值）。
+    index_days = [AS_OF - timedelta(days=offset - 1) for offset in range(_QUOTE_DAYS, 0, -1)]
+    await session.execute(
+        delete(IndexDaily).where(
+            IndexDaily.ts_code == "000001.SH", IndexDaily.trade_date.in_(index_days)
+        )
+    )
+    await session.execute(
+        insert(IndexDaily),
+        [
+            {"ts_code": "000001.SH", "trade_date": day, "close": 3000.0, "pre_close": 3000.0}
+            for day in index_days
+        ],
+    )
+
     await session.execute(
         insert(StockPriceLimit),
         [
@@ -452,10 +469,12 @@ async def _seed(session: AsyncSession) -> None:
 
 @requires_pg
 def test_load_context_query_count_is_constant() -> None:
-    """**反 N+1 门禁**：查询数 ≤7 且不随自选数增长（1 / 5 / 20 只都一样）。
+    """**反 N+1 门禁**：查询数 ≤9 且不随自选数增长（1 / 5 / 20 只都一样）。
 
     预算从 6 变 7 是 S11 加的第 6 个数据面（``share_floats``：没有 ``stock_id`` 外键，
-    只能按 ``ts_code`` 另起一条批量查询）；"与自选数无关"这条**没有**变。
+    只能按 ``ts_code`` 另起一条批量查询）；变 8 是 2026-10-20 加的监管异动面
+    （``index_dailies`` 五个基准一次批量取）；变 9 是 2026-10-21 换手率旁路
+    （``daily_basic_indicators``）；"与自选数无关"这条**没有**变。
     """
 
     async def _go(session: AsyncSession, conn: Any) -> tuple[int, int, int]:
@@ -478,7 +497,7 @@ def test_load_context_query_count_is_constant() -> None:
         return counts[0], counts[1], counts[2]
 
     one, five, twenty = asyncio.run(_with_rollback(_go))
-    assert twenty <= 7, f"一次请求的查询数必须 ≤7，实际 {twenty}"
+    assert twenty <= 9, f"一次请求的查询数必须 ≤9，实际 {twenty}"
     assert one == five == twenty, "查询数不得随自选数增长（N+1 回归）"
 
 

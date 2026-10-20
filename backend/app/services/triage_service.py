@@ -25,10 +25,13 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.daily_basic import DailyBasicIndicator
 from app.models.market_data import Announcement, DragonTigerEntry, StockPriceLimit
 from app.models.quote import DailyQuote
 from app.models.stock import Stock
 from app.models.watchlist import UserWatchlist, UserWatchlistItem
+from app.repositories import regulatory_repo
+from app.services import regulatory_anomaly as ra
 from app.services import triage_detectors as td
 from app.services.market_day_service import resolve_latest_complete_day
 
@@ -175,24 +178,32 @@ def _recent_trade_days(quotes: dict[str, list[td.QuoteRow]], limit: int) -> list
 async def load_context(db: AsyncSession, symbols: list[str], as_of: date) -> td.TriageContext:
     """批量装载探测器输入 —— **固定查询数**（与自选数无关）。
 
-    七条查询：① 代码 → id/名称 ② 行情窗口 ③ 涨停价+当日高低 ④ 公告 ⑤ 龙虎榜 ⑥ 板块
-    ⑦ 解禁。①是为把 symbol 映射成 ``stock_id`` 的一行解析查询；②–⑦ 是六个**数据面**。
-    spec §S8.3 的"≤6"是 5 个数据面的预算，S11 加了解禁面（``share_floats`` 没有
-    ``stock_id`` 外键，只能按 ``ts_code`` 另起一条），预算随之 7 —— 仍然**与自选数无关**。
+    九条查询：① 代码 → id/名称/板块 ② 行情窗口 ③ 涨停价+当日高低 ④ 公告 ⑤ 龙虎榜 ⑥ 板块
+    ⑦ 解禁 ⑧ 基准指数涨跌幅 ⑨ 换手率。①是为把 symbol 映射成 ``stock_id`` 的一行解析查询；
+    ②–⑨ 是八个**数据面**。spec §S8.3 的"≤6"是 5 个数据面的预算，S11 加了解禁面
+    （``share_floats`` 没有 ``stock_id`` 外键，只能按 ``ts_code`` 另起一条），2026-10-20 加
+    监管异动面（``index_dailies``），2026-10-21 加换手率面（``daily_basic_indicators``），
+    预算随之 9 —— 仍然**与自选数无关**。
     """
     codes = list(dict.fromkeys(symbols))
     ctx = td.TriageContext(as_of=as_of, names={}, symbols_order=list(codes))
     if not codes:
         return ctx
 
-    # ① 代码 → stock_id / 名称
+    # ① 代码 → stock_id / 名称 / 板块 / 交易所（板块决定监管异动阈值与基准指数）
     stock_rows = (
-        await db.execute(select(Stock.id, Stock.symbol, Stock.name).where(Stock.symbol.in_(codes)))
+        await db.execute(
+            select(Stock.id, Stock.symbol, Stock.name, Stock.market, Stock.exchange).where(
+                Stock.symbol.in_(codes)
+            )
+        )
     ).all()
     id_of: dict[str, int] = {}
-    for stock_id, symbol, name in stock_rows:
+    for stock_id, symbol, name, market, exchange in stock_rows:
         id_of.setdefault(str(symbol), int(stock_id))
         ctx.names[str(symbol)] = str(name)
+        ctx.boards[str(symbol)] = str(market or "")
+        ctx.exchanges[str(symbol)] = str(exchange or "")
     ids = list(id_of.values())
     if not ids:
         # 自选代码在 stocks 里一个都查不到：**不静默当作"今天没事"**，全部探测器标缺数据
@@ -366,6 +377,43 @@ async def load_context(db: AsyncSession, symbols: list[str], as_of: date) -> td.
         # 整表一行都没有 = 回填没跑（覆盖率 0）→ 必须留痕（spec §S11.4）；
         # "这只股票没有计划"**不**进 unavailable（那是常态，不是缺数据）。
         ctx.unavailable.add("unlock_soon")
+
+    # ⑧ 基准指数日涨跌幅（监管异动价格口径；5 个板块基准一次批量取）
+    # 与行情用同一自然日窗口；`load_index_pct` 内部按 `lag(close)` 现算 pct
+    # （index_dailies.pre_close 实测大量 NULL，不可用）。
+    index_codes = sorted({code for code, _ in ra.BENCHMARKS.values()})
+    ctx.index_pct = await regulatory_repo.load_index_pct(db, index_codes, window_start, as_of)
+    if not ctx.index_pct:
+        # 指数日线没入库：明示不可用，不静默当作"没有异动"
+        ctx.unavailable.add("regulatory_anomaly")
+
+    # ⑨ 换手率（监管异动的旁路口径）：只取最近 12 行，够 3+5 的窗口 + 缺口披露。
+    # 没有行 = 该股无换手率数据（不判），**不**把它标成"没有异动"。
+    turnover_rows = (
+        await db.execute(
+            select(
+                DailyBasicIndicator.stock_id,
+                DailyBasicIndicator.trade_date,
+                DailyBasicIndicator.turnover_rate,
+            )
+            .where(
+                DailyBasicIndicator.stock_id.in_(ids),
+                DailyBasicIndicator.trade_date <= as_of,
+                DailyBasicIndicator.trade_date >= window_start,
+                DailyBasicIndicator.turnover_rate.is_not(None),
+            )
+            .order_by(DailyBasicIndicator.stock_id, DailyBasicIndicator.trade_date)
+        )
+    ).all()
+    for stock_id, trade_date, turnover_rate in turnover_rows:
+        symbol = symbol_of.get(int(stock_id))
+        if symbol is None or turnover_rate is None:
+            continue
+        ctx.turnover.setdefault(symbol, []).append(
+            td.TurnoverRow(trade_date=trade_date, turnover_rate=float(turnover_rate))
+        )
+    for symbol, turnover_values in ctx.turnover.items():
+        ctx.turnover[symbol] = turnover_values[-12:]
 
     return ctx
 

@@ -132,8 +132,19 @@ class _FrozenDate(date):
         return FROZEN_TODAY
 
 
+class _EmptyResult:
+    """`db.execute(...)` 的空结果：`.all()` → []。"""
+
+    def all(self) -> list[object]:
+        return []
+
+
 class _FakeSession:
-    """最小 async-session 替身 —— 只提供 ``async with`` 与 ``commit``。"""
+    """最小 async-session 替身 —— 只提供 ``async with`` / ``commit`` / ``execute``.
+
+    ``execute`` 是给 `index_repo.max_trade_date_by_code` 用的：返回空集 = 库内一无所有
+    （于是指数回填取「整一年」窗口，这正是本文件要钉的边界）。
+    """
 
     async def __aenter__(self) -> _FakeSession:
         return self
@@ -143,6 +154,9 @@ class _FakeSession:
 
     async def commit(self) -> None:
         return None
+
+    async def execute(self, *args: object, **kwargs: object) -> _EmptyResult:
+        return _EmptyResult()
 
 
 def _fake_session_factory() -> _FakeSession:

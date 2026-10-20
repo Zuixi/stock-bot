@@ -28,6 +28,7 @@ from app.api.v1 import (
     market_regime,
     metrics,
     new_stocks,
+    regulatory,
     stocks,
     tags,
     tasks,
@@ -65,6 +66,9 @@ router.include_router(market_data.router, prefix="/market", tags=["market-data"]
 
 # 市场状态机（spec §S10）：/api/v1/market/regime —— 离线产物投影，登录即可
 router.include_router(market_regime.router, prefix="/market", tags=["market"])
+
+# 监管异动雷达：/api/v1/market/regulatory-anomalies —— 读时计算（零新表）、公开
+router.include_router(regulatory.router, prefix="/market", tags=["market"])
 
 # Background tasks
 router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])

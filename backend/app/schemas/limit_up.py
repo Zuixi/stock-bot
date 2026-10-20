@@ -267,6 +267,38 @@ class SentimentTrendsOut(BaseModel):
 # 分位**必须由后端算**（Ruling 4 / `MIN_PERCENTILE_SAMPLES`）：前端只渲染，不做统计。
 
 
+class SentimentWithheldLegOut(BaseModel):
+    """被拦行**缺**的一条成分腿（`latest_withheld.missing` 的元素）。
+
+    `late_arrival` 来自 registry 的 `CompositeConstituent.late_arrival`（T+1 披露或已知
+    系统性迟到的腿）—— 读面据此区分"次日会补上"与"源侧偶发滞后"，**不靠猜**。
+    """
+
+    key: str
+    weight: float
+    late_arrival: bool
+    # 该腿缺数原因（写面 `constituents[key].reason`：`source_not_updated` /
+    # `source_empty` / …）；老行没有这段 ⇒ None，**不猜**。
+    reason: str | None = None
+
+
+class SentimentWithheldOut(BaseModel):
+    """最新一个**没上屏**的交易日（有行但没过发布闸门）—— 解释"hero 为什么不是它"。
+
+    2026-10-19 事故：hero 只回选中的齐备行，读面看不到被拦原因，前端于是把
+    `expected_as_of`（日历期望日）写成了"各成分指标齐备的数据已到 X"。本结构把
+    "当日只有 8/11 条腿、生效权重 0.72、缺的是哪几条、为什么缺"原样交出。
+    """
+
+    as_of: date
+    leg_count: int
+    total_legs: int
+    effective_weight: float | None = None
+    min_effective_weight: float
+    missing: list[SentimentWithheldLegOut] | None = None
+    missing_reason: str | None = None
+
+
 class SentimentCompositeOut(BaseModel):
     """``GET /market/sentiment/composite`` 响应（S1.13 市场情绪综合指数的读面 hero）。
 
@@ -312,6 +344,8 @@ class SentimentCompositeOut(BaseModel):
     # lag_trading_days 由**日历计数**（旧实现两者都来自 `max(daily_quotes)`，
     # 与滞后的数据链同源 ⇒ "今天整天没采"时反而报 stale=false）。
     provisional: bool | None = None
+    # 最新一个**没上屏**的行（当日有行但没过发布闸门）：`None` = 没有更晚的被拦行。
+    latest_withheld: SentimentWithheldOut | None = None
 
 
 # ── 情绪指标详情（GET /market/sentiment/metrics/{metric_key}）──────────────────────

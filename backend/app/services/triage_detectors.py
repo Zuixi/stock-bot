@@ -1,4 +1,4 @@
-"""自选体检的 9 个**事实型**探测器（纯函数，无 IO）.
+"""自选体检的 10 个**事实型**探测器（纯函数，无 IO）.
 
 为什么是"事实"而不是"信号"：2026-10-17 的规则标定把预测型规则证伪（放量新高 −0.92%、
 首板 −0.28%），见 ``docs/design/signal-rule-calibration.md``。本模块只陈述**已发生的事**，
@@ -28,11 +28,21 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from app.services import regulatory_anomaly as ra
+
 SEVERITIES: tuple[str, ...] = ("risk", "event", "attention", "background")
 SEVERITY_RANK: dict[str, int] = {s: i for i, s in enumerate(SEVERITIES)}
 
 #: 上市不足这么多交易日不参与 ``new_high_low``（次新恒创新高，属假事实）
 MIN_HISTORY_DAYS = 60
+
+
+@dataclass(frozen=True)
+class TurnoverRow:
+    """``daily_basic_indicators`` 的一行换手率（%）；``None`` 已在装载层过滤。"""
+
+    trade_date: date
+    turnover_rate: float
 
 
 @dataclass(frozen=True)
@@ -166,6 +176,14 @@ class TriageContext:
     sector_of: dict[str, str] = field(default_factory=dict)
     #: 申万一级代码 → 人话名称
     sector_name: dict[str, str] = field(default_factory=dict)
+    #: 自选代码 → 板块（`stocks.market`：主板/创业板/科创板/北交所）
+    boards: dict[str, str] = field(default_factory=dict)
+    #: 自选代码 → 交易所（`stocks.exchange`：Shanghai_Stocks / ...）
+    exchanges: dict[str, str] = field(default_factory=dict)
+    #: 自选代码 → 最近若干交易日的换手率（%，按日期升序；缺行 = 该日没有数据）
+    turnover: dict[str, list[TurnoverRow]] = field(default_factory=dict)
+    #: 基准指数代码 → 交易日 → 日涨跌幅（%）；用于「连续 3 日偏离值累计」
+    index_pct: dict[str, dict[date, float]] = field(default_factory=dict)
     #: 本日**缺数据**而未执行的探测器 key（spec §S8.4：不得静默当作无事件）
     unavailable: set[str] = field(default_factory=set)
 
@@ -420,6 +438,45 @@ SPEC_UNLOCK_SOON = DetectorSpec(
     ),
 )
 
+SPEC_REGULATORY_ANOMALY = DetectorSpec(
+    key="regulatory_anomaly",
+    label="监管异动",
+    # 上限：已达线 = risk；临近 = attention（按事实降级）
+    severity="risk",
+    thresholds={"window_days": 3, "near_ratio": 0.8},
+    required_fields=(
+        "daily_quotes.close",
+        "daily_quotes.pre_close",
+        "index_dailies.close",
+        "daily_basic_indicators.turnover_rate",
+    ),
+    verify="kline",
+    version="r2",
+    rule_text=(
+        "连续 3 个交易日收盘价涨跌幅偏离值累计 ≥ 板块阈值（主板 20% / 主板 ST 12% / "
+        "创业板·科创板 30% / 北交所 40%）；或连续 3 日日均换手率 ≥ 前 5 日的 30 倍"
+        "且 3 日累计换手率 ≥ 20%"
+    ),
+    definition="按交易所「异常波动」的**价格口径**与**换手率口径**，陈述自选股是否已达线/"
+    "临近/仅换手率达标；价格阈值按板块/风险警示状态取，基准指数随板块"
+    "（上证综指/深证成指/创业板指/科创50/北证50）。",
+    source_tables=("daily_quotes", "index_dailies", "daily_basic_indicators"),
+    update_note="盘后个股日线与基准指数日线入库后计算（需最近 3 个连续交易日）",
+    failure_modes=(
+        "ST 判定取当前名称快照：当日或历史摘帽/戴帽时阈值（12% vs 20%）会用错",
+        "今日停牌：最后一行是停牌前旧价，探测器先校验 rows[-1].trade_date == as_of，不判",
+        "停牌：3 日窗口缺行时不报「已达线」，只用最近 2 个连续交易日给「明日触发价」；"
+        "不要把那个价格当成已完成 3 日累计的结果",
+        "只算价格口径：交易所还有「3 日日均换手率 ≥ 前 5 日 30 倍且累计 ≥ 20%」"
+        "的独立触发条件，未纳入",
+        "基准指数取上证综指/深证成指/创业板指/科创50/北证50，与交易所「对应分类指数」在边界日可能有细微差异",
+        "次新：上市不足 3 个交易日没有 3 日窗口，静默不判",
+        "换手率口径要求最近 3 天 + 前 5 天都有行；停牌缺行不判，且 daily_basic 未更新时"
+        "该条件静默不成立（不是「没有换手率异动」）",
+        "已达线只说明「按价格/换手率测算会触发」，不等于交易所一定发异动公告（还有认定裁量）",
+    ),
+)
+
 TRIAGE_DETECTORS: tuple[DetectorSpec, ...] = (
     SPEC_BREAK_MA20,
     SPEC_DROP_SHARP,
@@ -430,6 +487,7 @@ TRIAGE_DETECTORS: tuple[DetectorSpec, ...] = (
     SPEC_NEW_HIGH_LOW,
     SPEC_SECTOR_MOVE,
     SPEC_UNLOCK_SOON,
+    SPEC_REGULATORY_ANOMALY,
 )
 
 #: ``required_fields`` 的静态校验表：ORM 元数据（**不连库**，只读 ``Table.columns``）。
@@ -441,6 +499,8 @@ _FIELD_TABLES: dict[str, Any] = {}
 def _field_tables() -> dict[str, Any]:
     global _FIELD_TABLES
     if not _FIELD_TABLES:
+        from app.models.daily_basic import DailyBasicIndicator  # noqa: PLC0415
+        from app.models.index_daily import IndexDaily  # noqa: PLC0415
         from app.models.market_data import (  # noqa: PLC0415
             Announcement,
             DragonTigerEntry,
@@ -457,17 +517,19 @@ def _field_tables() -> dict[str, Any]:
             "dragon_tiger_entries": DragonTigerEntry,
             "sw_industry_members": SwIndustryMember,
             "share_floats": ShareFloat,
+            "index_dailies": IndexDaily,
+            "daily_basic_indicators": DailyBasicIndicator,
         }
     return _FIELD_TABLES
 
 
 def _assert_detectors() -> None:
-    """导入期断言：9 个 · key 唯一 · severity 合法 · 来源字段齐全 · required_fields 真实存在。
+    """导入期断言：10 个 · key 唯一 · severity 合法 · 来源字段齐全 · required_fields 真实存在。
 
     故意做成 raise（不是 assert）：``python -O`` 会删掉 assert，登记表就静默失去护栏。
     """
-    if len(TRIAGE_DETECTORS) != 9:
-        raise RuntimeError(f"探测器必须是 9 个，实际 {len(TRIAGE_DETECTORS)}")
+    if len(TRIAGE_DETECTORS) != 10:
+        raise RuntimeError(f"探测器必须是 10 个，实际 {len(TRIAGE_DETECTORS)}")
     keys = [s.key for s in TRIAGE_DETECTORS]
     if len(set(keys)) != len(keys):
         raise RuntimeError(f"探测器 key 重复：{keys}")
@@ -517,7 +579,7 @@ SPEC_BY_KEY: dict[str, DetectorSpec] = {spec.key: spec for spec in TRIAGE_DETECT
 def with_provenance(item: TriageItem) -> TriageItem:
     """把规则来源三字段补进卡片（``triage_service`` 在组合/排序**之前**调用）。
 
-    为什么不在 9 个探测器里各写一遍：同一份 ``rule_text`` 写 9 次必然漂移；这里从
+    为什么不在 10 个探测器里各写一遍：同一份 ``rule_text`` 写 10 次必然漂移；这里从
     ``SPEC_BY_KEY`` 单向取值，探测器只负责判定，来源只有一个真相。
     """
     spec = SPEC_BY_KEY[item.detector]
@@ -525,7 +587,9 @@ def with_provenance(item: TriageItem) -> TriageItem:
         item,
         rule_text=spec.rule_text,
         rule_version=spec.version,
-        source_table=spec.source_tables[0],
+        # 探测器可以**自报**主来源（例如仅换手率卡的主表是 daily_basic_indicators）；
+        # 没自报才回落到 registry 的第一张表（价格卡 = daily_quotes）。
+        source_table=item.source_table or spec.source_tables[0],
     )
 
 
@@ -553,6 +617,7 @@ def make_context_for_test(
     announcements: dict[str, list[AnnRow]] | None = None,
     dragon_tiger: dict[str, list[tuple[date, float]]] | None = None,
     unlocks: dict[str, list[tuple[date, float | None, float | None]]] | None = None,
+    turnover: dict[str, list[tuple[date, float]]] | None = None,
     sector_pct: dict[str, float] | None = None,
     sector_rank: dict[str, float] | None = None,
     sector_of: dict[str, str] | None = None,
@@ -586,6 +651,9 @@ def make_context_for_test(
     }
     ctx.unlocks = {
         symbol: [UnlockRow(*row) for row in rows] for symbol, rows in (unlocks or {}).items()
+    }
+    ctx.turnover = {
+        symbol: [TurnoverRow(*row) for row in rows] for symbol, rows in (turnover or {}).items()
     }
     if symbols_order is not None:
         ctx.symbols_order = list(symbols_order)
@@ -910,6 +978,252 @@ def _detect_unlock_soon(spec: DetectorSpec, ctx: TriageContext, symbol: str) -> 
     )
 
 
+def _turnover_hit(
+    ctx: TriageContext, symbol: str, rule: ra.ResolvedRule
+) -> tuple[float, float, float, float] | None:
+    """换手率口径：返回 ``(3日均, 前5日均, 倍数, 3日累计)``；不达标/缺行 → None.
+
+    严格用最近 8 个**连续**交易日（3 日窗口 + 前 5 日）：缺任何一天都不判，
+    不拿更早的换手率顶替。基准指数的交易日序列用来校验「连续」，
+    与价格口径共用同一份日历。
+    """
+    rows = ctx.turnover.get(symbol) or []
+    if len(rows) < 8:
+        return None
+    recent = rows[-8:]
+    idx = ctx.index_pct.get(rule.benchmark_code) or {}
+    if not idx:
+        return None
+    pos = {d: i for i, d in enumerate(sorted(idx))}
+    if any(row.trade_date not in pos for row in recent):
+        return None
+    if pos[recent[-1].trade_date] - pos[recent[0].trade_date] != 7:
+        return None
+    sum3 = sum(row.turnover_rate for row in recent[-3:])
+    sum5 = sum(row.turnover_rate for row in recent[:5])
+    avg3 = sum3 / 3.0
+    avg5 = sum5 / 5.0
+    if avg5 <= 0 or avg3 < 30.0 * avg5 or sum3 < 20.0:
+        return None
+    return avg3, avg5, avg3 / avg5, sum3
+
+
+def _turnover_item(
+    spec: DetectorSpec,
+    ctx: TriageContext,
+    symbol: str,
+    rule: ra.ResolvedRule,
+    hit: tuple[float, float, float, float],
+) -> TriageItem:
+    """仅换手率达标（价格未达线）时的卡片；与价格口径分开陈述，不合并成一个数字."""
+    avg3, avg5, ratio, sum3 = hit
+    rows = ctx.quotes.get(symbol) or []
+    day_pct = round(_pct(rows[-1].close, rows[-1].pre_close), 2) if rows else None
+    return TriageItem(
+        symbol=symbol,
+        name=_name(ctx, symbol),
+        detector=spec.key,
+        severity="attention",
+        headline=(
+            f"换手率异动：3日均换手 {avg3:.2f}%（前5日均 {avg5:.2f}% 的 {ratio:.1f} 倍），"
+            f"3日累计 {sum3:.2f}%"
+        ),
+        facts=(
+            Fact("3日累计换手", round(sum3, 2), "%"),
+            Fact("3日均换手", round(avg3, 2), "%"),
+            Fact("前5日均", round(avg5, 2), "%"),
+            Fact("倍数", round(ratio, 1), "倍"),
+            Fact("基准", rule.benchmark_name, ""),
+        ),
+        as_of=ctx.as_of,
+        source="daily_basic_indicators",
+        verify=spec.verify,
+        # `with_provenance` 会保留这个自报主表，卡片不会把换手率卡写成「数据 daily_quotes」
+        source_table="daily_basic_indicators",
+        day_pct=day_pct,
+    )
+
+
+def _detect_regulatory_anomaly(
+    spec: DetectorSpec, ctx: TriageContext, symbol: str
+) -> TriageItem | None:
+    """交易所「异常波动」价格口径 + 换手率口径（已达线 / 临近 / 仅换手率达标）。
+
+    价格口径：3 日累计偏离 ≥ 板块阈值（已达线）或 ≥ 80%（临近）；
+    换手率口径：3 日均换手 ≥ 前 5 日均 30 倍且 3 日累计 ≥ 20%（独立旁路）。
+
+    四个「不判」：
+    - 今天没有行情（停牌）→ 最后一笔是停牌前的旧价格，报成「今天已达线」是假的；
+    - 行情窗口不足 3 行 → 次新/长期停牌，没有 3 日窗口；
+    - 3 行在交易日序列里不连续 → 中间停牌，官方窗口不成立；
+    - 该板块的基准指数当日缺涨跌幅 → 偏离值算不出来。
+
+    换手率口径严格用最近 8 个连续交易日（3+5）；daily_basic 未更新或缺行时该条件不成立，
+    由规则来源字段披露。
+    """
+    rows = ctx.quotes.get(symbol) or []
+    if len(rows) < spec.thresholds["window_days"]:
+        return None
+    # 今天停牌：最后一行是停牌前旧价，`as_of` 却是今天 —— 不许把它报成今天的事件。
+    if rows[-1].trade_date != ctx.as_of:
+        return None
+    rule = ra.resolve_rule(ctx.exchanges.get(symbol), ctx.boards.get(symbol), _name(ctx, symbol))
+    idx = ctx.index_pct.get(rule.benchmark_code) or {}
+    if not idx:
+        return None
+    # 明日「涨」的可行上限用**交易所限价**（与页面 `_limit_pct` 同源）：ST 名称股的真实限幅
+    # 未必是 5%（实测 145 只主板 ST 名称股是 10% 限幅），拿板块固定值会把可达的触发价误判成
+    # 「涨停也难触发」。跌向没有 down_limit 字段，退回板块值。
+    trigger_limit_pct = rule.price_limit_pct
+    lim = ctx.limits.get(symbol)
+    if lim is not None and lim.pre_close > 0 and lim.up_limit > 0:
+        trigger_limit_pct = (lim.up_limit / lim.pre_close - 1.0) * 100.0
+    turnover_hit = _turnover_hit(ctx, symbol, rule)
+    devs: list[float | None] = []
+    for row in rows:
+        index_pct = idx.get(row.trade_date)
+        stock_pct = _pct(row.close, row.pre_close)
+        devs.append(None if index_pct is None else stock_pct - index_pct)
+    # 3 行必须落在**连续**交易日上：停牌复牌股的最后 3 行可能跨了一个缺口，
+    # 直接求和会把「停牌前后」拼成一个 3 日窗口（官方口径不成立）。
+    bench_days = sorted(idx)
+    pos = {d: i for i, d in enumerate(bench_days)}
+    consecutive3 = True
+    last3 = rows[-3:]
+    if any(r.trade_date not in pos for r in last3):
+        consecutive3 = False
+    elif pos[last3[-1].trade_date] - pos[last3[0].trade_date] != 2:
+        consecutive3 = False
+    dev3 = ra.window_sum(devs, 3) if consecutive3 else None
+    if dev3 is None:
+        if turnover_hit is not None:
+            return _turnover_item(spec, ctx, symbol, rule, turnover_hit)
+        # 3 日窗口缺行（停牌/指数缺日）：**不报「已达线」**（没有完成 3 日累计），
+        # 但仍可用最近 2 个连续交易日给「明日触发价」——高位停牌复牌股（如 600825
+        # 新华传媒）3 日窗口算不出、明日再涨 7.85% 却会触发，正是需要提醒的对象。
+        last2 = rows[-2:]
+        if any(r.trade_date not in pos for r in last2):
+            return None
+        if pos[last2[-1].trade_date] - pos[last2[0].trade_date] != 1:
+            return None
+        tail = devs[-2:]
+        if len(tail) < 2 or any(v is None for v in tail):
+            return None
+        partial = float(sum(v for v in tail if v is not None))
+        direction = "up" if partial >= 0 else "down"
+        trigger = ra.next_day_trigger(
+            rows[-1].close, devs, rule.threshold_pct, trigger_limit_pct, direction=direction
+        )
+        if trigger is None:
+            return None
+        if direction == "up":
+            if not 0 < trigger.needed_pct <= trigger.limit_pct:
+                return None
+            headline = (
+                f"明日涨 {trigger.needed_pct:.2f}% 触发监管异动线"
+                "（3 日窗口含停牌，按最近 2 日测算）"
+            )
+            move_label, move = "还需涨", trigger.needed_pct
+        else:
+            if not -trigger.limit_pct <= trigger.needed_pct < 0:
+                return None
+            headline = (
+                f"明日跌 {abs(trigger.needed_pct):.2f}% 触发监管异动线"
+                "（3 日窗口含停牌，按最近 2 日测算）"
+            )
+            move_label, move = "还需跌", abs(trigger.needed_pct)
+        return TriageItem(
+            symbol=symbol,
+            name=_name(ctx, symbol),
+            detector=spec.key,
+            severity="attention",
+            headline=headline,
+            facts=(
+                Fact("3日偏离", "窗口缺行", ""),
+                Fact("阈值", rule.threshold_pct, "%"),
+                Fact("基准", rule.benchmark_name, ""),
+                Fact("明日触发价", trigger.price, "元"),
+                Fact(move_label, move, "%"),
+            ),
+            as_of=ctx.as_of,
+            source="daily_quotes+index_dailies",
+            verify=spec.verify,
+            day_pct=round(_pct(rows[-1].close, rows[-1].pre_close), 2),
+        )
+    direction = "up" if dev3 >= 0 else "down"
+    status = ra.status_of(dev3, rule.threshold_pct, direction=direction)
+    if status == "watch":
+        if turnover_hit is not None:
+            return _turnover_item(spec, ctx, symbol, rule, turnover_hit)
+        return None
+    events = ra.find_events(devs, rule.threshold_pct, direction=direction)
+    events_10d = ra.count_events(events, len(devs), ra.SEVERE_COUNT_DAYS)
+    flags = ra.severe_flags(devs, events, direction=direction)
+    trigger = ra.next_day_trigger(
+        rows[-1].close, devs, rule.threshold_pct, trigger_limit_pct, direction=direction
+    )
+    signed = f"{dev3:+.2f}"
+    facts = [
+        Fact("3日偏离", round(dev3, 2), "%"),
+        Fact("阈值", rule.threshold_pct, "%"),
+        Fact("基准", rule.benchmark_name, ""),
+        Fact("10日异动", events_10d, "次"),
+    ]
+    if status == "triggered":
+        headline = (
+            f"已达监管异动线：3 日偏离 {signed}%（{rule.board}阈值 {rule.threshold_pct:.0f}%）"
+        )
+        severity = "risk"
+    else:
+        severity = "attention"
+        if (
+            direction == "up"
+            and trigger is not None
+            and 0 < trigger.needed_pct <= trigger.limit_pct
+        ):
+            headline = (
+                f"临近监管异动线：明日涨 {trigger.needed_pct:.2f}% 触发（≥{trigger.price:.2f} 元）"
+            )
+            facts.append(Fact("明日触发价", trigger.price, "元"))
+            facts.append(Fact("还需涨", trigger.needed_pct, "%"))
+        elif (
+            direction == "down"
+            and trigger is not None
+            and -trigger.limit_pct <= trigger.needed_pct < 0
+        ):
+            headline = (
+                f"临近监管异动线：明日跌 {abs(trigger.needed_pct):.2f}% 触发"
+                f"（≤{trigger.price:.2f} 元）"
+            )
+            facts.append(Fact("明日触发价", trigger.price, "元"))
+            facts.append(Fact("还需跌", abs(trigger.needed_pct), "%"))
+        else:
+            headline = (
+                f"临近监管异动线：3 日偏离 {signed}%（{rule.board}阈值 {rule.threshold_pct:.0f}%）"
+            )
+            if trigger is not None and (
+                (direction == "up" and trigger.needed_pct <= 0)
+                or (direction == "down" and trigger.needed_pct >= 0)
+            ):
+                facts.append(Fact("明日触发", "持平即触发", ""))
+    if turnover_hit is not None:
+        facts.append(Fact("换手率口径", f"达标（{turnover_hit[2]:.1f} 倍）", ""))
+    if flags:
+        facts.append(Fact("严重异常", " · ".join(flags), ""))
+    return TriageItem(
+        symbol=symbol,
+        name=_name(ctx, symbol),
+        detector=spec.key,
+        severity=severity,
+        headline=headline,
+        facts=tuple(facts),
+        as_of=ctx.as_of,
+        source="daily_quotes+index_dailies",
+        verify=spec.verify,
+        day_pct=round(_pct(rows[-1].close, rows[-1].pre_close), 2),
+    )
+
+
 _RUNNERS: dict[str, Callable[[DetectorSpec, TriageContext, str], TriageItem | None]] = {
     "break_ma20": _detect_break_ma20,
     "drop_sharp": _detect_drop_sharp,
@@ -920,6 +1234,7 @@ _RUNNERS: dict[str, Callable[[DetectorSpec, TriageContext, str], TriageItem | No
     "new_high_low": _detect_new_high_low,
     "sector_move": _detect_sector_move,
     "unlock_soon": _detect_unlock_soon,
+    "regulatory_anomaly": _detect_regulatory_anomaly,
 }
 if set(_RUNNERS) != {s.key for s in TRIAGE_DETECTORS}:  # 纯防御：加 spec 必须加实现
     raise RuntimeError("TRIAGE_DETECTORS 与探测器实现不一致")

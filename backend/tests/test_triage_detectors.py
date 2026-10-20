@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -47,9 +47,9 @@ def _days(n: int):
 
 
 def test_detector_specs_are_locked() -> None:
-    assert len(td.TRIAGE_DETECTORS) == 9
+    assert len(td.TRIAGE_DETECTORS) == 10
     keys = [spec.key for spec in td.TRIAGE_DETECTORS]
-    assert len(set(keys)) == 9
+    assert len(set(keys)) == 10
     assert {spec.severity for spec in td.TRIAGE_DETECTORS} <= set(td.SEVERITIES)
 
 
@@ -60,15 +60,16 @@ def test_severity_order_is_fixed() -> None:
 
 
 def test_every_spec_carries_full_provenance() -> None:
-    """8 条 spec 的来源字段必须齐全（provenance 契约；空值/短列表都算回归）。
+    """10 条 spec 的来源字段必须齐全（provenance 契约；空值/短列表都算回归）。
 
     为什么这条不能只靠导入期断言：字段齐全 ≠ 内容有意义——这里额外钉住"4 条以上
     失效场景"与"来源表是库内真实表"，并把 ``with_provenance`` 的**单向映射**拿住
-    （卡片三字段只能从 spec 取，不能在 9 个探测器里各写一份）。
+    （卡片三字段只能从 spec 取，不能在 10 个探测器里各写一份）。
     """
     tables = td._field_tables()
     for spec in td.TRIAGE_DETECTORS:
-        assert spec.version == "r1", f"{spec.key} 的版本号必须显式登记"
+        expected_version = {"regulatory_anomaly": "r2"}.get(spec.key, "r1")
+        assert spec.version == expected_version, f"{spec.key} 的版本号必须显式登记"
         assert spec.rule_text.strip(), f"{spec.key} 缺 rule_text（人话阈值）"
         assert spec.definition.strip(), f"{spec.key} 缺 definition"
         assert spec.update_note.strip(), f"{spec.key} 缺 update_note"
@@ -588,3 +589,156 @@ def test_every_detector_has_both_positive_and_negative_case() -> None:
     src = Path(__file__).resolve().read_text(encoding="utf-8")
     for spec in td.TRIAGE_DETECTORS:
         assert f"SPEC_{spec.key.upper()}" in src, f"{spec.key} 没有专属用例"
+
+
+# 10) regulatory_anomaly（2026-10-20 监管异动价格口径）
+
+
+def _reg_ctx(closes: list[float], *, names: dict[str, str] | None = None):
+    rows = _rows(closes)
+    ctx = td.make_context_for_test(
+        as_of=rows[-1][0], quotes={"600000": rows}, names=names or {"600000": "测试股份"}
+    )
+    ctx.index_pct = {"000001.SH": {row[0]: 0.0 for row in rows}}
+    return ctx
+
+
+def test_regulatory_anomaly_triggered_is_risk() -> None:
+    # 最后 3 天各 +10% → 3 日偏离 30%，主板阈值 20%
+    ctx = _reg_ctx([10.0, 10.0, 11.0, 12.1, 13.31])
+    item = td.detect(td.SPEC_REGULATORY_ANOMALY, ctx, "600000")
+    assert item is not None
+    assert item.severity == "risk"
+    assert "已达监管异动线" in item.headline
+    assert any(f.label == "3日偏离" and f.value == 30.0 for f in item.facts)
+
+
+def test_regulatory_anomaly_near_is_attention() -> None:
+    # 最后 3 天各 +6% → 18%（≥16 的 80%，<20）：临近，且给出明日触发价
+    ctx = _reg_ctx([10.0, 10.0, 10.6, 11.236, 11.91016])
+    item = td.detect(td.SPEC_REGULATORY_ANOMALY, ctx, "600000")
+    assert item is not None
+    assert item.severity == "attention"
+    assert "临近监管异动线" in item.headline
+    assert any(f.label == "明日触发价" for f in item.facts)
+
+
+def test_regulatory_anomaly_suspended_window_unreachable_is_none() -> None:
+    """停牌缺行且明日涨停也够不到阈值 → 不报（不拿「3 日窗口」硬拼）。"""
+    dates = [date(2026, 9, 1) + timedelta(days=i) for i in range(4)]
+    rows = [
+        (dates[0], 10.0, 10.0, 1000.0),
+        (dates[2], 10.1, 10.0, 1000.0),
+        (dates[3], 10.201, 10.1, 1000.0),
+    ]
+    ctx = td.make_context_for_test(as_of=dates[3], quotes={"600000": rows})
+    ctx.index_pct = {"000001.SH": {d: 0.0 for d in dates}}
+    assert td.detect(td.SPEC_REGULATORY_ANOMALY, ctx, "600000") is None
+
+
+def test_regulatory_anomaly_without_index_does_not_judge() -> None:
+    ctx = _reg_ctx([10.0, 11.0, 12.1])
+    ctx.index_pct = {}
+    assert td.detect(td.SPEC_REGULATORY_ANOMALY, ctx, "600000") is None
+
+
+def test_regulatory_anomaly_down_side_is_risk() -> None:
+    # 最后 3 天各 -10% → 3 日偏离 -30%，主板阈值 20%
+    ctx = _reg_ctx([10.0, 10.0, 9.0, 8.1, 7.29])
+    item = td.detect(td.SPEC_REGULATORY_ANOMALY, ctx, "600000")
+    assert item is not None
+    assert item.severity == "risk"
+    assert "-30.00" in item.headline
+
+
+def test_regulatory_anomaly_suspended_window_alerts_with_2day_partial() -> None:
+    """3 日窗口跨停牌缺口：不报「已达线」，但要用最近 2 个连续交易日给明日触发价。
+
+    这正是 600825 新华传媒的场景：10 天 6 板、今天只涨 2.77%，3 日窗口因停牌缺行，
+    但明日再涨 7.85% 就会触发——漏掉它就等于把最该提醒的票漏了。
+    """
+    dates = [date(2026, 9, 1) + timedelta(days=i) for i in range(6)]
+    rows = [
+        (dates[0], 10.0, 10.0, 1000.0),
+        (dates[4], 10.6, 10.0, 1000.0),
+        (dates[5], 11.236, 10.6, 1000.0),
+    ]
+    ctx = td.make_context_for_test(as_of=dates[5], quotes={"600000": rows})
+    ctx.index_pct = {"000001.SH": {d: 0.0 for d in dates}}
+    item = td.detect(td.SPEC_REGULATORY_ANOMALY, ctx, "600000")
+    assert item is not None
+    assert item.severity == "attention"
+    assert "停牌" in item.headline
+    assert any(f.label == "明日触发价" for f in item.facts)
+
+
+def test_regulatory_anomaly_skips_suspended_today() -> None:
+    """今天停牌：最后一行是停牌前旧价，不得报成「今天已达线」."""
+    dates = [date(2026, 9, 1) + timedelta(days=i) for i in range(4)]
+    rows = [
+        (dates[0], 10.0, 10.0, 1000.0),
+        (dates[1], 10.5, 10.0, 1000.0),
+        (dates[2], 11.0, 10.5, 1000.0),
+    ]
+    ctx = td.make_context_for_test(as_of=dates[3], quotes={"600000": rows})
+    ctx.index_pct = {"000001.SH": {d: 0.0 for d in dates}}
+    assert td.detect(td.SPEC_REGULATORY_ANOMALY, ctx, "600000") is None
+
+
+def test_regulatory_anomaly_uses_actual_limit_for_st_names() -> None:
+    """ST 名称股的明日可行涨幅要用**交易所限价**，不是板块固定 5%.
+
+    实测 145 只主板 ST 名称股的真实限幅是 10%；若按 5% 判「可达性」，
+    会把「明日涨 5.4% 触发」误判成「涨停也难触发」，提醒直接漏掉。
+    """
+    ctx = _reg_ctx([10.0, 10.0, 10.33, 10.67089, 11.023], names={"600000": "ST测试"})
+    # 今日 pre_close=10.67089，交易所 10% 限幅 → up_limit=11.74（rule 里的 ST 固定值会算 5%）
+    ctx.limits["600000"] = td.LimitRow(up_limit=11.74, high=11.0, close=11.023, pre_close=10.67089)
+    item = td.detect(td.SPEC_REGULATORY_ANOMALY, ctx, "600000")
+    assert item is not None
+    assert item.severity == "attention"
+    assert "明日涨" in item.headline
+    assert any(f.label == "明日触发价" for f in item.facts)
+
+
+def test_regulatory_anomaly_turnover_only_is_attention() -> None:
+    """价格没到线、但换手率口径单独达标 → attention 卡片（不再静默漏报）."""
+    dates = [date(2026, 9, 1) + timedelta(days=i) for i in range(8)]
+    quotes = [(day, 10.0, 10.0, 1000.0) for day in dates]
+    turnover = [(day, 0.3 if i < 5 else 18.0) for i, day in enumerate(dates)]
+    ctx = td.make_context_for_test(
+        as_of=dates[-1],
+        quotes={"600000": quotes},
+        names={"600000": "测试股份"},
+        turnover={"600000": turnover},
+    )
+    ctx.index_pct = {"000001.SH": {day: 0.0 for day in dates}}
+
+    item = td.detect(td.SPEC_REGULATORY_ANOMALY, ctx, "600000")
+    assert item is not None
+    assert item.severity == "attention"
+    assert "换手率异动" in item.headline
+    assert any(f.label == "倍数" and f.value == 60.0 for f in item.facts)
+
+
+def test_regulatory_anomaly_price_plus_turnover_adds_fact() -> None:
+    """价格已达线 + 换手率也达标：只出一张价格卡，事实行补「换手率口径」."""
+    dates = [date(2026, 9, 1) + timedelta(days=i) for i in range(8)]
+    closes = [10.0] * 5 + [11.0, 12.1, 13.31]
+    quotes, prev = [], 10.0
+    for day, close in zip(dates, closes, strict=True):
+        quotes.append((day, close, prev, 1000.0))
+        prev = close
+    turnover = [(day, 0.3 if i < 5 else 18.0) for i, day in enumerate(dates)]
+    ctx = td.make_context_for_test(
+        as_of=dates[-1],
+        quotes={"600000": quotes},
+        names={"600000": "测试股份"},
+        turnover={"600000": turnover},
+    )
+    ctx.index_pct = {"000001.SH": {day: 0.0 for day in dates}}
+
+    item = td.detect(td.SPEC_REGULATORY_ANOMALY, ctx, "600000")
+    assert item is not None
+    assert item.severity == "risk"
+    assert any(f.label == "换手率口径" for f in item.facts)

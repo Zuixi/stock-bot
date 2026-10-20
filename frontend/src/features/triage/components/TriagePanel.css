@@ -592,3 +592,10 @@
 .triage__regime-swatch.regime--neutral { background: var(--regime-neutral); }
 .triage__regime-swatch.regime--hot { background: var(--regime-hot); }
 .triage__regime-swatch.regime--cooling { background: var(--regime-cooling); }
+
+/* 卡片右上的「移除自选」（2026-10-19）：贴右、不参与 baseline 阅读流，
+   点开有 Popconfirm，避免在体检清单里误删。 */
+.triage__card-head .triage__remove {
+  margin-left: auto;
+  align-self: center;
+}

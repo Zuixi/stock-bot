@@ -21,7 +21,9 @@
 - 广度口径：上涨 `pct_chg >= 1%`、平/微涨 `0 <= pct_chg < 1%`、下跌 `<0`（与 11 桶卡一致）。
 - 行业归属：`attribution='current_sw_snapshot'`；UI 固定提示"按当前申万快照回溯"。
 - 回补：`backend/scripts/backfill_market_panorama.py`；默认 2025-10-15（限价安全窗口）起，
-  幂等、支持 `--dry-run`。
+  幂等、支持 `--dry-run`。**容器内须带 `PYTHONPATH`**：
+  `docker exec -e PYTHONPATH=/app backend_api python scripts/backfill_market_panorama.py` ——
+  直接跑会 `ModuleNotFoundError: No module named 'app'`（`sys.path[0]` 是脚本目录 `scripts/`，不是 `/app`）。
 - 续写：`market_panorama_daily` job（Mon-Fri 17:25，晚于 16:30 行情 / 16:50 限价）
   调同一 `market_panorama_ingest_service.refresh_day`；纯本地、幂等，停摆后迟到也补跑。
 

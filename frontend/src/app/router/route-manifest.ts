@@ -191,6 +191,18 @@ export const ROUTES: AppRoute[] = [
     component: "MarketRankingsPage",
     parent: "main",
   },
+  // 2026-10-20 新增：监管异动雷达（交易所「异常波动/严重异常波动」口径）。
+  // 为什么独立成页而不是塞进 `/market` 的 5 个 Tab：它回答的是「今天谁会被交易所
+  // 认定异动、明日再涨多少触发」，与概览/全景/资金/数据面/情绪是不同问题；
+  // 塞进情绪分区会让页长再涨一屏，且 `e2e/marketLayout.spec.ts` 按 5 个 Tab 断言。
+  // 权限：`/market/**` 公开免登录（ADR 0008）——本行**不加** requiresAuth / permission。
+  {
+    key: "market-regulatory",
+    path: "/market/regulatory",
+    kind: "page",
+    component: "MarketRegulatoryPage",
+    parent: "main",
+  },
   { key: "market-index", path: "/market/index/:tsCode", kind: "page", component: "MarketIndexPage", parent: "main" },
   // 以下两条是**保留**路由：热点板块 / 概念板块今天就是有数据的真页面（Ruling 30）
   {

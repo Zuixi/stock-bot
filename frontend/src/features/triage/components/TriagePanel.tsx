@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Alert, Button, Descriptions, Drawer, Empty, Skeleton, Tag } from "antd";
+import { Alert, Button, Descriptions, Drawer, Empty, Popconfirm, Skeleton, Tag } from "antd";
+import { DeleteOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -13,6 +14,7 @@ import {
 } from "@/shared/api/triage";
 import { fetchJournalSummary, summaryCount } from "@/shared/api/journal";
 import { formatAsOfDate } from "@/shared/ui/date";
+import { useWatchlist } from "@/features/watchlist/useWatchlist";
 import { RegimeLine } from "./RegimeLine";
 import "./TriagePanel.css";
 
@@ -89,7 +91,15 @@ function journalHref(item: TriageItem): string {
   return `/me?${params.toString()}`;
 }
 
-function TriageCard({ item, onOpenRule }: { item: TriageItem; onOpenRule: () => void }) {
+function TriageCard({
+  item,
+  onOpenRule,
+  onRemove,
+}: {
+  item: TriageItem;
+  onOpenRule: () => void;
+  onRemove: (symbol: string) => void;
+}) {
   return (
     <li className={`triage__card triage__card--${item.severity}`} data-testid="triage-item">
       <div className="triage__card-head">
@@ -98,6 +108,24 @@ function TriageCard({ item, onOpenRule }: { item: TriageItem; onOpenRule: () => 
         </Tag>
         <span className="triage__name">{item.name}</span>
         <span className="triage__symbol num">{item.symbol}</span>
+        {/* 自选管理动作：体检页是 /me 的默认 tab，用户在这里看到自选却没法移除，
+            只能再切到「自选」tab 找行内图标（2026-10-19 反馈）。删除是动作、不是结论，
+            不违反"只陈述事实"；Popconfirm 防误触。 */}
+        <Popconfirm
+          title={`从自选移除 ${item.symbol}？`}
+          okText="移除"
+          cancelText="取消"
+          onConfirm={() => onRemove(item.symbol)}
+        >
+          <Button
+            className="triage__remove"
+            type="text"
+            size="small"
+            danger
+            aria-label={`从自选移除 ${item.symbol}`}
+            icon={<DeleteOutlined />}
+          />
+        </Popconfirm>
       </div>
 
       <p className="triage__headline">{item.headline}</p>
@@ -137,6 +165,15 @@ function TriageCard({ item, onOpenRule }: { item: TriageItem; onOpenRule: () => 
           <Link className="triage__journal" data-testid="triage-journal" to={journalHref(item)}>
             记一笔
           </Link>
+          {item.detector === "regulatory_anomaly" ? (
+            <Link
+              className="triage__verify"
+              data-testid="triage-regulatory"
+              to={`/market/regulatory?symbol=${encodeURIComponent(item.symbol)}`}
+            >
+              异动雷达
+            </Link>
+          ) : null}
           <Link className="triage__verify" to={verifyHref(item)}>
             复核
           </Link>
@@ -324,6 +361,7 @@ function TriageEmpty({ data }: { data: TriageResponse }) {
 }
 
 function TriageView({ data }: { data: TriageResponse }) {
+  const { remove } = useWatchlist();
   const hasItems = data.items.length > 0;
   // 「数据截至」只在真的取到数据时才显示：no_data 的 as_of 是服务端当天兜底值，
   // 拿它当"数据日"会暗示"今天的行情已经算过了"。
@@ -376,6 +414,7 @@ function TriageView({ data }: { data: TriageResponse }) {
                     item={item}
                     key={`${item.symbol}-${item.detector}`}
                     onOpenRule={() => setRuleItem(item)}
+                    onRemove={remove}
                   />
                 ))}
               </ul>

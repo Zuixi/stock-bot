@@ -198,6 +198,9 @@ async function mockAuthedTriage(page: Page, payload: unknown) {
   await page.route("**/api/v1/watchlists/triage*", (route) =>
     route.fulfill({ status: 200, json: payload })
   );
+  // 体检卡片现在带「从自选移除」（2026-10-19），页面会读一次自选清单；
+  // 不 mock 就会打到 dev proxy（本机 :80 有网关，返回 401）→ 全局清态 → 跳登录页。
+  await page.route("**/api/v1/watchlists", (route) => route.fulfill({ status: 200, json: [] }));
   // 规则说明是**懒取**的（抽屉打开才请求）：卡片测试不点抽屉就不会打到这里，
   // 但一旦打开就必须有确定响应，否则会掉进真接口 401 → 全局清态的连锁（见文件头）。
   await page.route("**/api/v1/watchlists/triage/rules", (route) =>
@@ -621,6 +624,54 @@ test.describe("今日体检（/me?tab=triage）", () => {
     // 没有样本 ≠ 样本是 0
     await expect(page.getByTestId("regime-forward-missing")).toBeVisible();
     await expect(page.getByTestId("regime-detail")).not.toContainText("0.0%");
+  });
+
+  test("卡片可「从自选移除」：/me 默认 tab 也能删（不必再切到自选 tab）", async ({ page }) => {
+    await mockAuthedTriage(page, FIXTURE);
+    const deletes: string[] = [];
+    // 后注册先命中（LIFO）：items/* 必须比上面的 watchlists 更具体、注册更晚
+    await page.route("**/api/v1/watchlists", (route) =>
+      route.fulfill({
+        status: 200,
+        json: [
+          {
+            id: "wl-1",
+            user_id: USER.id,
+            name: "默认自选",
+            is_default: true,
+            created_at: "2026-10-01T00:00:00Z",
+            updated_at: "2026-10-01T00:00:00Z",
+            items: [
+              {
+                id: "i-1",
+                watchlist_id: "wl-1",
+                symbol: "600519",
+                exchange: "Shanghai_Stocks",
+                sort_order: 0,
+                notes: null,
+                created_at: "2026-10-01T00:00:00Z",
+                updated_at: "2026-10-01T00:00:00Z",
+              },
+            ],
+          },
+        ],
+      })
+    );
+    await page.route("**/api/v1/watchlists/items/*", (route) => {
+      const symbol = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop() ?? "");
+      deletes.push(symbol);
+      return route.fulfill({ status: 200, json: { deleted: true, symbol } });
+    });
+
+    await page.goto("/me?tab=triage");
+    const removeBtn = page.getByRole("button", { name: "从自选移除 600519" }).first();
+    await expect(removeBtn).toBeVisible();
+    await removeBtn.click();
+    // antd 会在两个汉字之间插空格（autoInsertSpace）⇒ 可访问名是「移 除」
+    await page.locator(".ant-popover").getByRole("button", { name: /移\s*除/ }).click();
+
+    await expect.poll(() => deletes).toEqual(["600519"]);
+    await expect(page.getByText("已从自选移除 600519")).toBeVisible();
   });
 
   test("防回归：/me?tab=watchlist 仍是自选清单", async ({ page }) => {
