@@ -225,3 +225,23 @@ test("正常行也能删：删除按钮不再是无名图标", async ({ page }) 
   await expect.poll(() => handle.deletes).toEqual(["600519"]);
   await expect(page.locator(".ant-table-tbody tr.ant-table-row")).toHaveCount(0);
 });
+
+test("排序一次只出现在一列上：列 key 必须唯一（不是六列共用 dataIndex）", async ({ page }) => {
+  // 回归：把行类型改成 `{symbol, stock}` 后，所有列都写 `dataIndex: "symbol"`，
+  // antd 用 `key ?? dataIndex` 当列标识 ⇒ 六列共用一个列 key，`useSorter` 的排序状态
+  // 也共用：点「最新价」会让最新价/涨跌额/涨跌幅/总市值四列同时出现升序箭头。
+  await mockWatchlistStack(page, { items: ["600519", "000001"] });
+  await page.goto("/me?tab=watchlist");
+  await expect(page.locator(".ant-table-tbody tr.ant-table-row")).toHaveCount(2);
+
+  const sortedHeaders = async () =>
+    page
+      .locator(".ant-table-thead th[aria-sort]")
+      .evaluateAll((els) => els.map((el) => `${el.innerText.trim()}=${el.getAttribute("aria-sort")}`));
+
+  await page.getByRole("columnheader", { name: /最新价/ }).click();
+  expect(await sortedHeaders()).toEqual(["最新价=ascending"]);
+
+  await page.getByRole("columnheader", { name: /涨跌幅/ }).click();
+  expect(await sortedHeaders()).toEqual(["涨跌幅=ascending"]);
+});
