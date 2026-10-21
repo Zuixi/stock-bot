@@ -104,9 +104,15 @@ export function WatchlistTable() {
     {
       // 余量列：**不声明 width**（见 MIN_TABLE_WIDTH 的注释）。给这一列加 width 会让
       // 宽屏下的余量按比例摊派、三元组列宽随之漂移 —— e2e 钉住了 72/62/66。
+      //
+      // ⚠️ **每列必须有唯一 `key`**（2026-10-19 修）：antd 的列标识是 `key ?? dataIndex`。
+      // 本轮把行类型改成 `{symbol, stock}` 后，所有列都写成 `dataIndex: "symbol"` ⇒ 六列
+      // 共用同一个列 key，`useSorter` 的排序状态也共用一个 key：点「最新价」会让
+      // 最新价/涨跌额/涨跌幅/总市值**四列同时出现升序箭头**，且再点别的列只是在同一个 key
+      // 上切换。排序函数本身是对的，坏的是列的**身份**。
+      key: "name",
       className: "inst-cell--identity",
       title: "名称",
-      dataIndex: "symbol",
       render: (_: string, row: WatchlistRow) =>
         row.stock ? (
           <InstrumentIdentity
@@ -125,9 +131,9 @@ export function WatchlistTable() {
         ),
     },
     {
+      key: "price",
       className: "inst-cell--triplet",
       title: TRIPLET_LABEL.price,
-      dataIndex: "symbol",
       width: TRIPLET_WIDTH.price,
       sorter: (a: WatchlistRow, b: WatchlistRow) =>
         (a.stock?.latestPrice ?? 0) - (b.stock?.latestPrice ?? 0),
@@ -135,9 +141,9 @@ export function WatchlistTable() {
       render: (_: string, row: WatchlistRow) => <NumberText value={row.stock?.latestPrice} />,
     },
     {
+      key: "change",
       className: "inst-cell--triplet",
       title: TRIPLET_LABEL.change,
-      dataIndex: "symbol",
       width: TRIPLET_WIDTH.change,
       sorter: (a: WatchlistRow, b: WatchlistRow) =>
         (a.stock?.change ?? 0) - (b.stock?.change ?? 0),
@@ -145,9 +151,9 @@ export function WatchlistTable() {
       render: (_: string, row: WatchlistRow) => <DeltaAbsText value={row.stock?.change} />,
     },
     {
+      key: "pct",
       className: "inst-cell--triplet",
       title: TRIPLET_LABEL.pct,
-      dataIndex: "symbol",
       width: TRIPLET_WIDTH.pct,
       sorter: (a: WatchlistRow, b: WatchlistRow) =>
         (a.stock?.changePercent ?? 0) - (b.stock?.changePercent ?? 0),
@@ -155,8 +161,8 @@ export function WatchlistTable() {
       render: (_: string, row: WatchlistRow) => <ChangeText value={row.stock?.changePercent} />,
     },
     {
+      key: "exchange",
       title: "交易所",
-      dataIndex: "symbol",
       width: EXCHANGE_WIDTH,
       render: (_: string, row: WatchlistRow) =>
         row.stock
@@ -165,8 +171,8 @@ export function WatchlistTable() {
           : "--",
     },
     {
+      key: "market-cap",
       title: "总市值",
-      dataIndex: "symbol",
       width: INSTRUMENT_COL_WIDTH.extra,
       sorter: (a: WatchlistRow, b: WatchlistRow) =>
         (a.stock?.marketCap ?? 0) - (b.stock?.marketCap ?? 0),

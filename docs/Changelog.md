@@ -272,6 +272,8 @@ fetched=242 upserted=242` × 6 个指数，外加 `backfill batch 1/1 done (stoc
 
 **过程中撞到并修掉的一个新 bug（记下来，别再犯）**：合并 effect 里写了 `data: watchlists = []` 的解构默认值 —— 每次渲染都生成**新数组**，于是依赖它的 `useMemo`/`useEffect` 每帧重跑，匿名用户在个股页触发 **setState 循环**（页面卡死，stockDetail 4 条 e2e 20s 超时）。修法：模块级稳定空数组 `EMPTY_WATCHLISTS` + `setSyncingSymbols(prev => prev.length === 0 ? prev : [])`（同引用不触发重渲染）。这条只有 e2e 能抓到，单元测试看不见。
 
+**复审补丁（同日，独立分支 `fix/watchlist-column-keys`）**：把 `WatchlistTable` 行类型改成 `{symbol, stock}` 时，六列都写了 `dataIndex: "symbol"`。antd 的列标识是 `key ?? dataIndex`，于是六列**共用一个列 key**，`useSorter` 的排序状态也共用 —— 实测点「最新价」会让**最新价 / 涨跌额 / 涨跌幅 / 总市值四列同时出现升序箭头**，再点别的列只是在同一个 key 上切换（排序函数是对的，坏的是列的**身份**）。修法 = 每列显式唯一 `key`（`name/price/change/pct/exchange/market-cap/action`），并加回归用例「排序一次只亮一列」（浏览器里点两次表头、读 `aria-sort`）。
+
 - 涉及文件：`backend/app/services/watchlist_service.py`、`backend/app/api/v1/watchlists.py`、`backend/tests/{test_watchlist_cache_order,test_user_isolation}.py`、`frontend/src/features/watchlist/{useWatchlist.ts,components/WatchlistTable.tsx}`、`frontend/src/features/triage/components/{TriagePanel.tsx,TriagePanel.css}`、`frontend/src/pages/me/index.css`、`frontend/e2e/watchlistSync.spec.ts`、`docs/{features.md,Changelog.md}`
 
 ## 2026-10-19 - **情绪指数"收盘后不自动刷新"修复：重试守卫补问「今天发布了没」+ 读面 `latest_withheld` + 文案不再把日历期望日说成齐备日**
