@@ -655,3 +655,31 @@ test("筛选/搜索/深链都写进 URL，可分享可回退", async ({ page }) 
   await expect(page).toHaveURL(/status=triggered/);
   await expect(ladder(page)).not.toContainText("宁德时代");
 });
+
+test("切日期不塌页：加载中保留上一帧，表格仍在", async ({ page }) => {
+  await mockRadar(page, radar({ items: [item({ symbol: "600519", name: "贵州茅台" })] }));
+  await page.goto("/market/regulatory", { waitUntil: "domcontentloaded" });
+  await expect(row(page, "600519")).toBeVisible({ timeout: 15_000 });
+
+  // 首次只延迟「切日期」这一次请求；初始渲染不受影响
+  let delayed = false;
+  await page.route("**/api/v1/market/regulatory-anomalies*", async (route) => {
+    if (!delayed) {
+      delayed = true;
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+    }
+    await route.continue();
+  });
+
+  const picker = page.locator(".reg-asof .ant-picker-input input");
+  await picker.click();
+  const now = new Date();
+  const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  await page.locator(`.ant-picker-dropdown td[title="${day}"]`).click();
+
+  // 请求还没回来：上一帧必须还在（不能出现整页骨架/高度塌陷）
+  await page.waitForTimeout(250);
+  await expect(row(page, "600519")).toBeVisible();
+  await expect(page.locator(".reg-kpi__value")).toHaveCount(6);
+  await expect(page).toHaveURL(/date=/);
+});

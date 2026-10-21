@@ -1,3 +1,13 @@
+## 2026-10-21 - fix(market): 切日期不再让整页「抖动刷新」
+
+- 原因不是 URL 导航本身：日期写进 `?date=` 后，`queryKey` 变化 ⇒ 新 key 无缓存 ⇒
+  `data=undefined` ⇒ `StateWrapper` 用整页 spinner 替换内容；请求回来再重建，
+  页面高度先塌后弹，滚动条跟着跳。用户看到的就是「点日历整个 web 抖一下」。
+- 修：`placeholderData: keepPreviousData` 保留上一帧；表格改用 `loading` overlay；
+  日期旁固定 16px 的 `Spin` 槽位；不再让加载态触发布局塌陷。
+- e2e +1：延迟下一次 API 请求后切日期，断言上一帧表格仍在、KPI 仍有 6 格、URL 已更新；
+  `marketRegulatory.spec.ts` 11/11。
+
 ## 2026-10-21 - **自选体检纳入换手率旁路 + 雷达页筛选/深链/排序（体验拉齐）**
 
 **1）自选体检也能提醒「仅换手率达标」**

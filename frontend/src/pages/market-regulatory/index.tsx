@@ -11,15 +11,16 @@ import {
   Segmented,
   Select,
   Space,
+  Spin,
   Table,
   Tag,
   Tooltip,
   Typography,
 } from "antd";
 import { CopyOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import type { ColumnsType } from "antd/es/table";
-import { useQuery } from "@tanstack/react-query";
 import { ChangeText, NumberText, SectionCard, StateWrapper, formatAsOfDate, formatCnDate, qualityBadgeText } from "@/shared/ui";
 import {
   fetchRegulatoryRadar,
@@ -389,9 +390,13 @@ export default function MarketRegulatoryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [copied, setCopied] = useState(false);
   const dateParam = searchParams.get("date");
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, isFetching, isPlaceholderData, error, refetch } = useQuery({
     queryKey: ["market", "regulatory-anomalies", dateParam ?? "latest"],
     queryFn: () => fetchRegulatoryRadar({ date: dateParam ?? undefined, historyDays: 10 }),
+    // **切日期不能把整页打回骨架屏**：新 queryKey 没有缓存时保留上一帧，
+    // 否则 data=undefined → StateWrapper 全页 spinner → 高度塌陷、滚动条跳动，
+    // 用户看到的就是「点日历整个 web 抖一下」。加载态交给表格 overlay + 日历旁小 spinner。
+    placeholderData: keepPreviousData,
     // 最新日与后端 Redis 缓存 TTL（120s）对齐；历史日不再轮询（EOD 结果不会变）。
     staleTime: dateParam ? Number.POSITIVE_INFINITY : 120_000,
     refetchInterval: dateParam ? false : 120_000,
@@ -487,6 +492,9 @@ export default function MarketRegulatoryPage() {
     scrolledFor.current = focusSymbol;
   }, [focusSymbol, items]);
 
+  // 只有「切日期时还在用上一帧」才显示表格 overlay/小 spinner；120s 后台轮询不闪。
+  const switchingDate = isFetching && isPlaceholderData;
+
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(window.location.href);
@@ -550,6 +558,9 @@ export default function MarketRegulatoryPage() {
                 回到最新
               </Button>
             ) : null}
+            <span className="reg-fetching" aria-live="polite">
+              {switchingDate ? <Spin size="small" /> : null}
+            </span>
             <span className="reg-muted">
               {dateParam ? "历史日期 · 不轮询" : "每 120 秒按缓存刷新"} · 价格口径 + 换手率旁路
             </span>
@@ -676,6 +687,9 @@ export default function MarketRegulatoryPage() {
                 sticky={{ offsetHeader: 64 }}
                 columns={columns}
                 dataSource={items}
+                // 有上一帧时用表格 overlay 表示加载，**不要**让整页回到 StateWrapper 的骨架。
+                // 只在切日期（placeholder 生效）时闪；后台轮询不闪。
+                loading={switchingDate}
                 pagination={{ pageSize: 20, hideOnSinglePage: true, showSizeChanger: false }}
                 scroll={{ x: 1180 }}
                 rowClassName={(item) =>

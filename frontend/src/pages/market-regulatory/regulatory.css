@@ -330,3 +330,12 @@
     width: 100%;
   }
 }
+
+/* 切日期的加载态：固定 16px 槽位，出现/消失都不推动「回到最新」与说明文字。 */
+.reg-fetching {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
