@@ -390,7 +390,7 @@ export default function MarketRegulatoryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [copied, setCopied] = useState(false);
   const dateParam = searchParams.get("date");
-  const { data, isLoading, isFetching, error, refetch } = useQuery({
+  const { data, isLoading, isFetching, isPlaceholderData, error, refetch } = useQuery({
     queryKey: ["market", "regulatory-anomalies", dateParam ?? "latest"],
     queryFn: () => fetchRegulatoryRadar({ date: dateParam ?? undefined, historyDays: 10 }),
     // **切日期不能把整页打回骨架屏**：新 queryKey 没有缓存时保留上一帧，
@@ -492,6 +492,9 @@ export default function MarketRegulatoryPage() {
     scrolledFor.current = focusSymbol;
   }, [focusSymbol, items]);
 
+  // 只有「切日期时还在用上一帧」才显示表格 overlay/小 spinner；120s 后台轮询不闪。
+  const switchingDate = isFetching && isPlaceholderData;
+
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(window.location.href);
@@ -556,7 +559,7 @@ export default function MarketRegulatoryPage() {
               </Button>
             ) : null}
             <span className="reg-fetching" aria-live="polite">
-              {isFetching ? <Spin size="small" /> : null}
+              {switchingDate ? <Spin size="small" /> : null}
             </span>
             <span className="reg-muted">
               {dateParam ? "历史日期 · 不轮询" : "每 120 秒按缓存刷新"} · 价格口径 + 换手率旁路
@@ -685,7 +688,8 @@ export default function MarketRegulatoryPage() {
                 columns={columns}
                 dataSource={items}
                 // 有上一帧时用表格 overlay 表示加载，**不要**让整页回到 StateWrapper 的骨架。
-                loading={isFetching && !isLoading}
+                // 只在切日期（placeholder 生效）时闪；后台轮询不闪。
+                loading={switchingDate}
                 pagination={{ pageSize: 20, hideOnSinglePage: true, showSizeChanger: false }}
                 scroll={{ x: 1180 }}
                 rowClassName={(item) =>
