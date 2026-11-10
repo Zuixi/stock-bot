@@ -54,7 +54,7 @@ SELECT ci.id AS id,
        ce.entity_id AS sec_code,
        ci.extracted->>'sec_name' AS sec_name,
        ci.title AS title,
-       ci.published_at AS announce_time,
+       CAST(ci.published_at AT TIME ZONE 'Asia/Shanghai' AS timestamp) AS announce_time,
        ci.extracted->>'subtype' AS category,
        ci.url AS pdf_url,
        ci.created_at AS created_at

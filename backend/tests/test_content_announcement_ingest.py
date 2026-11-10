@@ -65,7 +65,9 @@ requires_pg = pytest.mark.skipif(
 
 pytestmark = requires_pg
 
-PUBLISHED = datetime(2026, 10, 30, 16, 0, tzinfo=UTC)
+# cninfo 生产映射给的是**上海墙上时间**（naive）；内容层必须存成同一 instant。
+PUBLISHED = datetime(2026, 10, 31, 0, 0)
+EXPECTED_PUBLISHED = datetime(2026, 10, 30, 16, 0, tzinfo=UTC)
 
 
 @pytest.fixture(autouse=True)
@@ -156,7 +158,7 @@ async def test_ingest_writes_content_layer_only(monkeypatch: pytest.MonkeyPatch)
             assert item.publisher == SEC_NAME
             assert item.url == PDF_URL
             assert item.url.endswith(".PDF")
-            assert item.published_at == PUBLISHED
+            assert item.published_at == EXPECTED_PUBLISHED
             assert item.extracted == {
                 "source_item_id": ANNOUNCEMENT_ID,
                 "subtype": "report",

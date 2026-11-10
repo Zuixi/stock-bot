@@ -11,6 +11,7 @@ import hashlib
 import logging
 from datetime import timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,13 +38,18 @@ def _raw_hash(announcement_id: str) -> str:
 
 def _content_row(r: dict[str, Any]) -> dict[str, Any]:
     """cninfo 原始行 → ``content_items`` 行（只存链接，无正文/PDF）。"""
+    # cninfo 映射给的是**上海墙上时间**（naive）；``published_at`` 是 timestamptz，
+    # 直接塞 naive 会被 asyncpg 当 UTC，晚间的公告会整体偏 8 小时、PIT 日期跟着错。
+    published_at = r["announce_time"]
+    if published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
     return {
         "content_type": CONTENT_TYPE,
         "source_name": SOURCE_NAME,
         "publisher_tier": PUBLISHER_TIER,
         "publisher": r.get("sec_name"),
         "title": r["title"],
-        "published_at": r["announce_time"],
+        "published_at": published_at,
         "url": r["pdf_url"],
         "raw_hash": _raw_hash(r["announcement_id"]),
         "extracted": {

@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 from datetime import date
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -163,7 +164,9 @@ async def upsert_financial_metrics_for_content(db: AsyncSession, content_id: int
         return 0
 
     # ★ PIT：只认公告发布时点之前（含当天）已公布的报告版本。
-    published_on: date = content.published_at.date()
+    # ``published_at`` 是 timestamptz；asyncpg 取回来通常是 UTC，必须折回上海日历日，
+    # 否则 00:00–08:00 发布的公告会被算成前一天（偏保守但会漏掉当天已发布的版本）。
+    published_on: date = content.published_at.astimezone(ZoneInfo("Asia/Shanghai")).date()
     version = (
         await db.execute(
             select(FinancialReportVersion)
