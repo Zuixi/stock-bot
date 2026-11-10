@@ -4,7 +4,7 @@ status: active
 scope: 落地 S3.1 四表、cninfo 公告迁移到内容层、定期报告财务数字的结构化 join、`/news` 公告 Tab；不接快讯/研报/政策，不上 LLM
 touches: backend/app/{models,repositories,services,api/v1,migrations}, backend/tests, frontend/src/{shared/api,features,pages,app/router}, docs/specs, docs/features.md, docs/architecture/, plans/index.md
 updated: 2026-11-11
-next-action: Task 1（四表迁移 + 模型 + schema 不变量测试）
+next-action: Task 1–7 已完成（公告切片）；下一步 Plan 2 研报
 
 > 契约：[docs/specs/S3-content.md](../docs/specs/S3-content.md)（含 2026-11-11 三处 owner 裁定）。
 > 本计划只实现 S3.1 / S3.2 / S3.4 的**定期报告分支** / S3.6 的**公告 Tab**。

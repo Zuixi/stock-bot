@@ -1,3 +1,28 @@
+## 2026-11-11 - feat(content): 内容事实层 + 公告切片（Wave 2 Plan 1）
+
+- **三处 owner 裁定**（[S3-content.md](./specs/S3-content.md)，优先于下文冲突处）：
+  1. **原文只存链接**：`content_items` 不保存正文/PDF；`body_ref` 列删除，`url` 是唯一原文入口；
+     抽取可在内存态读取原文但不得持久化，`source_span.quote` ≤500 字符。
+  2. **定期报告数字走结构化 join**：`revenue`/`net_profit` 不再从 PDF 抽，改为
+     `financial_report_versions`（按 `stock_id + end_date` 取 `f_ann_date <= published_at` 的最新版本）
+     + `income_statement_facts`，`source_span.kind='structured'` 带 `table/key/ann_date`。
+  3. **`source_span` 两种形态**：`pdf`（page/char/quote）与 `structured`（table/key/ann_date/quote）；
+     数值型抽取仍必须非空。
+- **四表**（迁移 `a1b2c3d4e5f6`）：`content_items`（**唯一写入口**，幂等键
+  `uq_content_items_source_hash`，无用户状态列/无正文列，`review_status` 状态机）·
+  `content_entities`（`(content_id, entity_type, entity_id)` 复合主键）· `content_metrics`
+  （`period` + 必填 `source_span`，另加 `period IS NULL` 的部分唯一索引兜 PG 的 NULL 不等性）·
+  `user_content_state`（按 `(user_id, content_id)`，用户状态与事实层分离）。
+- **公告切片**：cninfo 采集改为写内容层（`announcement_service.ingest_announcements_window`，
+  `raw_hash=sha256("cninfo:{announcement_id}")`、`publisher_tier='legal'`、公告自带 `sec_code`
+  优先于标题解析）；定期报告标题 → 报告期 → 结构化 join 写 `content_metrics`，取不到版本只写
+  `missing_reason` 不写 0；新增 `/api/v1/content` 读面（列表/详情公开，`PATCH /{id}/state` 需登录）
+  与 `/news` 公告 Tab（四类 Tab，本期只有公告有数据，其余显式空态）。
+- **单一真相**（迁移 `c1d2e3f4a5b6`）：旧 `announcements` 存量回填 `content_items` 后 `DROP TABLE`，
+  改为**同名只读视图**（9 列与原表一致），`INSERT` 被 PG 直接拒绝；同时删掉
+  `market_data_repo.upsert_announcements`，仓库层只剩 `list_announcements` 读视图
+  （`journal_service` 零改动），全仓无第二条公告写路径。
+
 ## 2026-10-21 - fix(market): 切日期不再让整页「抖动刷新」
 
 - 原因不是 URL 导航本身：日期写进 `?date=` 后，`queryKey` 变化 ⇒ 新 key 无缓存 ⇒

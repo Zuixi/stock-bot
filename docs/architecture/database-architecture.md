@@ -135,6 +135,21 @@ backend（`backend/app/models/market_data.py`）在行情底表之上新增/扩�
 | `market_limit_up_stock_daily` | 个股级涨停事实（`is_lu`/`touched`/`is_zb`/`prev_is_lu`/`streak`/`days_span`/`boards_in_window`/`missing_days`）+ 东财 EOD 独有的封板明细（`seal_time`/`seal_fund`/`break_count`，历史回补恒 NULL） | `(trade_date, stock_id)` | `fact_source`（`local_calc` \| `backfill`）、`enrich_source`（`eastmoney_eod` \| NULL）、`observed_at`（TIMESTAMPTZ，区分"当天看到的"与"事后回补的"） |
 | `sector_moneyflow_snapshots`（**已存在，本计划扩 3 列**） | 东财板块资金流/热门板块榜快照；新增 `amount`（`Numeric(20,4)`）、`flat_count`（`Integer`，均允许 NULL，上游缺值即为 NULL）与 `capture_kind`（`poll` \| `eod_full`，非空默认 `poll`） | `(trade_date, dimension, board_code)` | `capture_kind='eod_full'` = 收盘分页全量捕获；**只有 `eod_full` 的日子是完整日**，`poll` 行只是盘中资金流 Top-100 子集（有行 ≠ 完整），覆盖率/趋势读取一律只认完整日 |
 
+#### 2.1.2.2 内容事实层（S3.1，首批只落「公告」）
+
+内容（公告/政策/研报/快讯）的**唯一事实层**是 `content_items`；`backend/app/models/content.py` 只描述事实与关联，**不出现任何用户状态列**（2026-11-11 owner 裁定「只存链接」也在此固化：不落正文/PDF）。
+
+| 表 | 用途 | 主键/唯一键 | 关键约束 |
+|---|---|---|---|
+| `content_items` | 一条内容 = 一次发布事件：`content_type`（`announcement\|report\|policy\|news\|...`）、`source_name`、`publisher_tier`（`legal\|official\|sellside\|media`）、`title`、`published_at`（发布时点）、`ingested_at`（入库时点，差值即新鲜度）、`url`（**原文唯一入口**）、`raw_hash`、`extracted`（JSONB）、`review_status` | `id BIGSERIAL`；`uq_content_items_source_hash (source_name, raw_hash)` | `chk_content_items_review_status IN ('auto','pending','confirmed','rejected')`；索引 `(content_type, published_at)` / `published_at` / `review_status` |
+| `content_entities` | 内容 ↔ 实体（`stock\|industry\|policy_tag\|concept`），复合主键即去重键；公告自带 `sec_code` 优先于标题解析 | `(content_id, entity_type, entity_id)` | `content_id → content_items.id ON DELETE CASCADE`；索引 `(entity_type, entity_id)` |
+| `content_metrics` | 从内容抽取的规范化指标（`revenue`/`net_profit`/`core_view`…），带 `period`（如 `2026H1`）、`unit` 与**必填** `source_span`（`{"kind":"pdf",...}` 或 `{"kind":"structured",...}`） | `uq_content_metrics_key (content_id, entity_id, metric_key, period)` + 部分唯一索引 `uq_content_metrics_key_nullperiod`（PG 里 `period IS NULL` 互不相等，需单独兜） | 数值型指标 `source_span` 非空率 100%；缺数不写 0，记 `content_items.extracted.missing_reason` |
+| `user_content_state` | 用户 × 内容状态机：`new\|read\|processed\|ignored\|archived` + `note` | `(user_id, content_id)` | `content_id → content_items.id ON DELETE CASCADE`；`chk_user_content_state_status` |
+
+**`announcements` 视图（迁移 `c1d2e3f4a5b6`）**：旧表 `announcements` 的存量先按公告切片映射回填进 `content_items`（`ON CONFLICT (source_name, raw_hash) DO NOTHING`，`raw_hash = sha256("cninfo:{announcement_id}")`），然后 `DROP TABLE` 并建**同名只读视图**，列与原表一致：`id, announcement_id, sec_code, sec_name, title, announce_time, category, pdf_url, created_at`（`content_items` LEFT JOIN LATERAL 一个 `stock` 实体）。视图带表达式列与 `LEFT JOIN LATERAL`，PG 不会自动更新它，`INSERT` 直接抛 `cannot insert into view`（SQLSTATE 55000）——**物理上堵住「再往旧表写公告」的回头路**。
+
+写入路径只有一条，没有双写：`cninfo_client` → `announcement_service.ingest_announcements_window()` → `content_repo.upsert_content_items()` + `insert_content_entities()` →（定期报告）`extraction.financial_join`。读面两条都只读：`/api/v1/content`（内容层）与 `market_data_repo.list_announcements()`（读视图）。
+
 #### 2.1.3 特征工程数据
 
 ```sql

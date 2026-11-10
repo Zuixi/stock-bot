@@ -844,25 +844,14 @@ async def list_repurchases(
     return rows
 
 
-async def upsert_announcements(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
-    """公告入库（uq_announcements_cninfo_id 冲突 DO NOTHING——按 announcement_id 判重）。"""
-    if not rows:
-        return 0
-    stmt = (
-        pg_insert(Announcement)
-        .values(rows)
-        .on_conflict_do_nothing(constraint="uq_announcements_cninfo_id")
-    )
-    # Core INSERT 的 execute 运行时返回 CursorResult（带 rowcount）；Result 存根无该属性
-    result = cast("CursorResult[Any]", await db.execute(stmt))
-    await db.flush()
-    return int(result.rowcount)
-
-
 async def list_announcements(
     db: AsyncSession, symbol: str | None, limit: int, category: str | None = None
 ) -> list[Announcement]:
-    """公告按披露时间倒序（symbol 6 位代码 / category 类目，均可选过滤）。"""
+    """公告按披露时间倒序（symbol 6 位代码 / category 类目，均可选过滤）。
+
+    ``announcements`` 自迁移 ``c1d2e3f4a5b6`` 起是 ``content_items`` + ``content_entities``
+    的只读投影视图；这里只读不写（写入只走内容层，见 ``content_repo``）。
+    """
     stmt = select(Announcement)
     if symbol:
         stmt = stmt.where(Announcement.sec_code == symbol)
