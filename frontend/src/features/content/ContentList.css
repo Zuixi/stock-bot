@@ -1,0 +1,141 @@
+/* 内容列表（`/news` 公告 Tab 等）。
+ *
+ * 口径：
+ * - 颜色只走全局令牌（`--text-primary` / `--text-secondary` / `--border` /
+ *   `--bg-panel` / `--hover`），不写 hex —— `scripts/check-design-tokens.mjs`
+ *   会拦死未定义的 `var(--x)`，也会拦"看起来该存在"的别名；
+ * - 行是横向 flex，窄屏换行（标题与按钮各自独占一行），不做横向滚动；
+ * - 数字走全局 `.num`（等宽 + tabular-nums），不在组件里重复声明字体。 */
+
+.content-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.content-list__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 16px;
+  padding: 12px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.content-list__row:first-child {
+  border-top: none;
+}
+
+.content-list__row:hover {
+  background: var(--hover);
+}
+
+.content-list__main {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.content-list__title {
+  display: inline-block;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.content-list__title:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.content-list__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.content-list__publisher {
+  color: var(--text-secondary);
+}
+
+.content-list__time {
+  color: var(--text-secondary);
+}
+
+.content-list__tag {
+  margin-inline-end: 0;
+  font-size: 12px;
+}
+
+/* 指标缺失原因：诊断信息，允许机器语言，弱化到次要色 */
+.content-list__missing {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.content-list__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 6px 0 0;
+}
+
+.content-list__metric {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.content-list__metric-label {
+  color: var(--text-secondary);
+}
+
+.content-list__metric-value {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.content-list__metric-period {
+  color: var(--text-secondary);
+}
+
+.content-list__metric-num {
+  color: var(--text-primary);
+}
+
+.content-list__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .content-list__row {
+    flex-direction: column;
+  }
+
+  .content-list__main {
+    flex-basis: auto;
+    width: 100%;
+  }
+
+  .content-list__actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}

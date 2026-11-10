@@ -5,8 +5,8 @@
 1. **事实层不带用户状态**：``user_state`` 是**当前登录用户**在
    ``user_content_state`` 里的那一行；匿名请求一律 ``null``（不是 ``"new"``——
    前端要能区分"没登录/没标记"和"标记为未读"）。
-2. **列表不带指标**：``metrics`` 在列表响应里**恒为空列表**，只有详情填充。
-   列表页一次 30 条 × N 个指标会把响应撑大数倍，而列表根本不展示指标。
+2. **列表带指标**：S3.4 要求列表展示定期报告的核心信息（收入/利润），故列表按整页
+   批量填充 ``metrics``（后端一次查询，不是 N+1）；无指标的内容给空列表，前端渲染 `—`。
 3. **``ContentStateIn.status`` 与库 CHECK 约束逐字一致**（除 ``new`` 外）：
    用户能把状态改成的只有四值；``new`` 是入库默认值，不作为入参（"改回未读"没有
    语义，见 ``docs/specs/S3-content.md``）。
@@ -65,7 +65,7 @@ class ContentItemOut(BaseModel):
     #: 当前用户的状态；匿名或未标记 → ``None``
     user_state: str | None = None
     entities: list[ContentEntityOut] = Field(default_factory=list)
-    #: 列表响应恒为空，详情才填充
+    #: 列表与详情都下发；无指标时为空列表（前端渲染 `—`，不补 0）
     metrics: list[ContentMetricOut] = Field(default_factory=list)
 
 

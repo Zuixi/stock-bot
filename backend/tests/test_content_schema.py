@@ -28,6 +28,7 @@ from typing import Any
 import asyncpg
 import pytest
 from sqlalchemy import inspect
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.database import engine
 
@@ -103,8 +104,14 @@ def schema() -> dict[str, Any]:
     """对已迁移的库反射一次：``inspect(engine.sync_engine)`` 的等价安全版本。"""
 
     async def _load() -> dict[str, Any]:
-        async with engine.connect() as conn:
-            return await conn.run_sync(_reflect)
+        # 独立 engine：全局 engine 的连接池可能绑在别的测试已关闭的事件循环上，
+        # 直接复用会在全量跑时抛 `Event loop is closed`（实测过）。
+        eng = create_async_engine(engine.url.render_as_string(hide_password=False))
+        try:
+            async with eng.connect() as conn:
+                return await conn.run_sync(_reflect)
+        finally:
+            await eng.dispose()
 
     return asyncio.run(_load())
 

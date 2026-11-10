@@ -5,8 +5,8 @@
 1. **``/news`` 级公开**：匿名 ``GET /api/v1/content?content_type=announcement`` → 200，
    且 ``user_state`` 是 **``null``**（不是 ``"new"``）——前端据此区分"没登录"与
    "标记为未读"；
-2. **详情才有指标**：列表 ``metrics`` 恒为空列表、详情非空（列表不展示指标，30 条 × N
-   指标会把响应撑大数倍）；详情 ``entities`` 非空；
+2. **列表与详情都带指标**：S3.4 要求列表展示定期报告的核心信息（收入/利润），
+   故列表 ``metrics`` 必须非空（且不是 N+1）；详情 ``entities`` 非空；
 3. **用户状态是私有的**：A 标"已读"之后，**B 仍是 ``null``**，A 是 ``"read"``
    （事实层没有用户状态列，写在 ``user_content_state``）；
 4. **成对实体过滤**：只给 ``entity_type`` → **422**（单独按类型查会扫全表）；
@@ -302,7 +302,8 @@ async def test_list_is_public_and_user_state_is_null_for_anonymous(
         assert item["content_type"] == "announcement"
         assert item["source_name"] == TEST_SOURCE
         assert item["user_state"] is None, "匿名读到的 user_state 必须是 null（不是 'new'）"
-        assert item["metrics"] == [], "列表响应不下发指标（详情才填充）"
+        assert item["metrics"], "列表必须下发定期报告核心指标（S3.4 列表契约）"
+        assert item["metrics"][0]["metric_key"] == "net_profit"
         assert [e["entity_id"] for e in item["entities"]] == ["600000"]
         assert all(row["user_state"] is None for row in body)
         # 类型过滤生效：news 行不出现

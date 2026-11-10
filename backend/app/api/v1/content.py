@@ -15,7 +15,8 @@
    有 600000 相关内容"）会跨实体类型误配（``stock:600000`` vs ``concept:600000``），
    两种都不是读面需要的查询。
 
-``metrics`` 只在详情填充：列表一次 30 条 × N 指标会把响应撑大数倍，而列表不展示指标。
+``metrics`` 在列表与详情都下发：S3.4 要求列表展示定期报告的核心信息（收入/利润）。
+故列表按整页批量查询，不做 N+1；无指标的内容给空列表，前端渲染 `—`。
 """
 
 from __future__ import annotations
@@ -95,29 +96,51 @@ async def _entity_map(
     return out
 
 
-async def _metric_list(db: AsyncSession, content_id: int) -> list[ContentMetricOut]:
+def _metric_out(row: ContentMetric) -> ContentMetricOut:
+    return ContentMetricOut(
+        metric_key=row.metric_key,
+        period=row.period,
+        value=None if row.value is None else float(row.value),
+        value_text=row.value_text,
+        unit=row.unit,
+        source_span=row.source_span or {},
+    )
+
+
+async def _metric_map(
+    db: AsyncSession, content_ids: list[int]
+) -> dict[int, list[ContentMetricOut]]:
+    """一次查询取回整页的抽取指标（避免 N+1）。
+
+    列表必须带指标：S3.4 的列表契约就是「定期报告仅显示核心信息（收入/利润）」。
+    对没有指标的内容返回空列表，前端渲染 `—`，**不补 0**。
+    """
+    if not content_ids:
+        return {}
     rows = (
         (
             await db.execute(
                 select(ContentMetric)
-                .where(ContentMetric.content_id == content_id)
-                .order_by(ContentMetric.metric_key, ContentMetric.period, ContentMetric.id)
+                .where(ContentMetric.content_id.in_(content_ids))
+                .order_by(
+                    ContentMetric.content_id,
+                    ContentMetric.metric_key,
+                    ContentMetric.period,
+                    ContentMetric.id,
+                )
             )
         )
         .scalars()
         .all()
     )
-    return [
-        ContentMetricOut(
-            metric_key=row.metric_key,
-            period=row.period,
-            value=None if row.value is None else float(row.value),
-            value_text=row.value_text,
-            unit=row.unit,
-            source_span=row.source_span or {},
-        )
-        for row in rows
-    ]
+    out: dict[int, list[ContentMetricOut]] = defaultdict(list)
+    for row in rows:
+        out[int(row.content_id)].append(_metric_out(row))
+    return out
+
+
+async def _metric_list(db: AsyncSession, content_id: int) -> list[ContentMetricOut]:
+    return (await _metric_map(db, [content_id])).get(content_id, [])
 
 
 def _user_id(user: Any) -> UUID | None:
@@ -190,9 +213,16 @@ async def list_content(
     )
     rows = (await db.execute(stmt)).all()
     items = [item for item, _ in rows]
-    entities = await _entity_map(db, [int(item.id) for item in items])
+    ids = [int(item.id) for item in items]
+    entities = await _entity_map(db, ids)
+    metrics = await _metric_map(db, ids)
     return [
-        _item_out(item, user_state=state, entities=entities.get(int(item.id), []))
+        _item_out(
+            item,
+            user_state=state,
+            entities=entities.get(int(item.id), []),
+            metrics=metrics.get(int(item.id), []),
+        )
         for item, state in rows
     ]
 

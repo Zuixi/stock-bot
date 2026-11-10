@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock
 import asyncpg
 import pytest
 from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.database import async_session_factory, engine
 from app.models.content import ContentEntity, ContentItem
@@ -120,8 +121,10 @@ async def test_ingest_writes_content_layer_only(monkeypatch: pytest.MonkeyPatch)
     # 本用例只验内容/实体入库；定期报告财务 join 由 test_content_financial_join 覆盖。
     monkeypatch.setattr(anns, "upsert_financial_metrics_for_content", AsyncMock(return_value=0))
 
-    async with async_session_factory() as db:
-        try:
+    # 独立 engine：全局 factory 的连接池可能绑在别的测试已关闭的事件循环上（全量跑实测）。
+    eng = create_async_engine(engine.url.render_as_string(hide_password=False))
+    try:
+        async with AsyncSession(eng) as db:
             await _purge(db, (raw_hash,))
             window, cats = "2026-10-30~2026-10-30", ("report",)
             first = await anns.ingest_announcements_window(db, window, cats)
@@ -173,8 +176,9 @@ async def test_ingest_writes_content_layer_only(monkeypatch: pytest.MonkeyPatch)
                 )
             ).all()
             assert entities == [("stock", SEC_CODE)]
-        finally:
             await _purge(db, (raw_hash,))
+    finally:
+        await eng.dispose()
 
 
 async def test_ingest_skips_rows_without_pdf_url(monkeypatch: pytest.MonkeyPatch) -> None:
