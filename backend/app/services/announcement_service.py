@@ -1,7 +1,13 @@
-"""公告快讯：巨潮采集（准实时积累）+ 读取。"""
+"""公告快讯：巨潮采集（准实时积累）+ 读取。
+
+采集**只写内容事实层**（``content_items`` / ``content_entities``）：旧 ``announcements``
+表已不再是写入路径（单写路径纪律）。owner 裁定只存链接：``url`` 即原文入口，
+**不落正文/PDF**（``content_items`` 上也没有 ``body`` / ``body_ref`` 列）。
+"""
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import timedelta
 from typing import Any
@@ -13,9 +19,55 @@ from app.core.providers.cninfo_client import (
     CninfoClient,
     get_announcement_client,
 )
-from app.repositories import market_data_repo
+from app.repositories import content_repo, market_data_repo
+from app.services.content_ingest.entity_resolver import resolve_stock_entities
+from app.services.extraction.financial_join import upsert_financial_metrics_for_content
 
 logger = logging.getLogger(__name__)
+
+CONTENT_TYPE = "announcement"
+SOURCE_NAME = "cninfo"
+PUBLISHER_TIER = "legal"  # 公告是法定披露，不是卖方/媒体
+
+
+def _raw_hash(announcement_id: str) -> str:
+    """去重键：公告唯一 id 的稳定哈希（正文不入库，哈希即身份）。"""
+    return hashlib.sha256(f"cninfo:{announcement_id}".encode()).hexdigest()
+
+
+def _content_row(r: dict[str, Any]) -> dict[str, Any]:
+    """cninfo 原始行 → ``content_items`` 行（只存链接，无正文/PDF）。"""
+    return {
+        "content_type": CONTENT_TYPE,
+        "source_name": SOURCE_NAME,
+        "publisher_tier": PUBLISHER_TIER,
+        "publisher": r.get("sec_name"),
+        "title": r["title"],
+        "published_at": r["announce_time"],
+        "url": r["pdf_url"],
+        "raw_hash": _raw_hash(r["announcement_id"]),
+        "extracted": {
+            "source_item_id": r["announcement_id"],
+            "subtype": r["category"],
+            "sec_code": r["sec_code"],
+            "sec_name": r["sec_name"],
+        },
+    }
+
+
+def _entities(row: dict[str, Any]) -> list[tuple[str, str]]:
+    """该公告关联的实体：自身 ``sec_code`` 一定入，标题里的其它 A 股代码/名称再补。
+
+    按文本顺序去重（``insert_content_entities`` 的复合主键本身幂等，这里只是不制造
+    同一批的重复行）。
+    """
+    extracted = row["extracted"]
+    sec_code: str | None = extracted.get("sec_code")
+    sec_name: str | None = extracted.get("sec_name")
+    found: list[tuple[str, str]] = [("stock", sec_code)] if sec_code else []
+    if sec_code and sec_name:
+        found.extend(resolve_stock_entities(row["title"], {sec_name: sec_code}))
+    return list(dict.fromkeys(found))
 
 
 def normalize_category(category: str | None) -> str | None:
@@ -46,10 +98,16 @@ async def ingest_announcements_window(
     se_date: str,
     categories: tuple[str, ...] | None = None,
 ) -> dict[str, int]:
-    """按**显式窗口**（``YYYY-MM-DD~YYYY-MM-DD``）拉取并入库，返回逐类目入库行数。
+    """按**显式窗口**（``YYYY-MM-DD~YYYY-MM-DD``）拉取并写**内容事实层**，返回逐类目新增行数。
 
     轮询（近 3 日滚动窗）与回补脚本**共用本函数**（仓库纪律：同一 ingest 不得两套实现）；
-    `announcement_id` 内存去重后 `DO NOTHING`，故重复跑同一窗口是幂等的。
+    幂等由 ``content_items`` 的 ``(source_name, raw_hash)`` 唯一键 + ``DO NOTHING`` 兜住，
+    故重复跑同一窗口第二次返回 0。
+
+    ``pdf_url`` 缺失的行**不入库**（只存链接 = 没有链接就没有原文入口/无法溯源）。
+
+    Returns:
+        逐类目的**新增**行数（重放已入库的窗口 → 0），保持旧的 ``dict[str, int]`` 契约。
     """
     client: CninfoClient = get_announcement_client()
     result: dict[str, int] = {}
@@ -61,8 +119,38 @@ async def ingest_announcements_window(
             if r["announcement_id"] not in seen:
                 seen.add(r["announcement_id"])
                 unique.append(r)
-        result[category_key] = await market_data_repo.upsert_announcements(db, unique)
-        logger.info("ingest_announcements %s %s -> %s", category_key, se_date, result[category_key])
+        with_url: list[dict[str, Any]] = []
+        for r in unique:
+            if not r.get("pdf_url"):
+                # 没有原文入口的公告无法溯源（owner 裁定只存链接）→ 不入库
+                logger.warning(
+                    "skip announcement without pdf_url: %s %s %s",
+                    r.get("announcement_id"),
+                    r.get("sec_code"),
+                    r.get("title"),
+                )
+                continue
+            with_url.append(r)
+
+        content_rows = [_content_row(r) for r in with_url]
+        inserted = 0
+        for batch in market_data_repo.chunk_rows(content_rows):
+            inserted += await content_repo.upsert_content_items(db, batch)
+
+        ids_by_hash = await content_repo.get_content_ids_by_hashes(
+            db, [row["raw_hash"] for row in content_rows], SOURCE_NAME
+        )
+        for row in content_rows:
+            content_id = ids_by_hash.get(row["raw_hash"])
+            if content_id is None:  # 已在库里但被裁掉/不存在 → 跳过，不抛错
+                continue
+            await content_repo.insert_content_entities(db, content_id, _entities(row))
+            if row["extracted"].get("subtype") == "report":
+                # 定期报告核心数字走结构化 PIT join（不解析 PDF）；非报告公告无此步。
+                await upsert_financial_metrics_for_content(db, content_id)
+
+        result[category_key] = inserted
+        logger.info("ingest_announcements %s %s -> %s", category_key, se_date, inserted)
     return result
 
 
