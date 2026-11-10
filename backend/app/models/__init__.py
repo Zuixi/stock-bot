@@ -2,6 +2,7 @@
 
 from app.models.cluster import ClusterExplanation, ClusteringMember, ClusteringRun
 from app.models.concept import ConceptBoard, ConceptMember, ConceptMemberChange
+from app.models.content import ContentEntity, ContentItem, ContentMetric, UserContentState
 from app.models.daily_basic import DailyBasicIndicator
 from app.models.feature import StockFeature
 from app.models.financial import (
@@ -59,6 +60,10 @@ __all__ = [
     "ConceptBoard",
     "ConceptMember",
     "ConceptMemberChange",
+    "ContentItem",
+    "ContentEntity",
+    "ContentMetric",
+    "UserContentState",
     "SwIndustryClass",
     "SwIndustryMember",
     "StockCustomSwTag",
