@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Tag, message } from "antd";
-import { StateWrapper } from "@/shared/ui";
+import { NumberText, StateWrapper } from "@/shared/ui";
 import { useAuth } from "@/features/auth/context";
 import {
   fetchContent,
@@ -62,15 +62,6 @@ function formatPublishedAt(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(
     d.getMinutes()
   )}`;
-}
-
-/**
- * 元 → 亿元。`null` 保持 `null`（渲染成 `—`），**不**回落成 `0`。
- * 展示单位因此固定为「亿元」，与源 `unit`（可能是"元"）无关。
- */
-function toYi(value: number | null | undefined): string | null {
-  if (value === null || value === undefined || Number.isNaN(value)) return null;
-  return (value / 1e8).toFixed(2);
 }
 
 function metricsOf(item: ContentItem): { label: string; metric: ContentMetric }[] {
@@ -159,7 +150,6 @@ export function ContentList({ contentType, emptyText }: Props) {
                 {metrics.length > 0 ? (
                   <dl className="content-list__metrics">
                     {metrics.map(({ label, metric }) => {
-                      const yi = toYi(metric.value);
                       return (
                         <div className="content-list__metric" key={metric.metric_key}>
                           <dt className="content-list__metric-label">{label}</dt>
@@ -167,11 +157,11 @@ export function ContentList({ contentType, emptyText }: Props) {
                             <span className="content-list__metric-period">
                               {metric.period ?? "—"}
                             </span>
-                            {yi === null ? (
+                            {metric.value === null || metric.value === undefined ? (
                               <span className="content-list__metric-num">—</span>
                             ) : (
-                              <span className="content-list__metric-num num">
-                                {yi} 亿元
+                              <span className="content-list__metric-num">
+                                <NumberText value={metric.value} unit="cap" /> 元
                               </span>
                             )}
                           </dd>
