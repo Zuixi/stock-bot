@@ -16,6 +16,18 @@
 - 券商研报「**仅显示核心观点**」
 → 列表里展示的是**抽取后的结构化字段**，原文是后备。**本模块的成败取决于抽取管线，不是采集管线。**
 
+### 2026-11-11 owner 裁定（三处实现约束，优先于下文冲突处）
+
+1. **原文只存链接**：`content_items` **不保存正文/PDF**。`body_ref` 列删除；`url` 是唯一原文入口。
+   抽取可在内存中临时读取原文，但**不得持久化**；`source_span.quote` 仅存短引用（≤500 字符）。
+2. **定期报告数字走结构化 join**：`revenue` / `net_profit` 不再从 PDF 抽取，改为
+   `financial_report_versions`（按 `stock_id + end_date`，取 `f_ann_date <= published_at` 的最新版本）
+   + `income_statement_facts`。`source_span.kind='structured'`，带 `table/key/ann_date`。
+3. **`source_span` 允许两种形态**：
+   - `{"kind":"pdf","url":...,"page":...,"char_start":...,"char_end":...,"quote":...}`
+   - `{"kind":"structured","table":...,"key":...,"ann_date":...,"quote":...}`
+   数值型抽取仍必须非空；`quote` 对 structured 为源记录的可复核摘要。
+
 ---
 
 ## S3.1 内容事实层四表
@@ -40,8 +52,7 @@ content_items(
   published_at   timestamptz not null,  -- ★ 发布时点
   ingested_at    timestamptz not null default now(),  -- ★ 入库时点（两者不同！）
   url            text not null,
-  raw_hash       text not null,   -- 去重键
-  body_ref       text,            -- 原文存储引用（对象存储/文件路径），不塞 DB
+  raw_hash       text not null,   -- 去重键（正文哈希；正文只在内存态，不落库）
   extracted      jsonb not null default '{}',
   extract_version int,
   extract_confidence numeric(4,3),
@@ -159,16 +170,16 @@ user_content_state(
 
 | `content_type` | 抽取目标 | `metric_key` |
 |---|---|---|
-| 定期报告 | 主营业务收入 · 利润 | `revenue` · `net_profit` |
+| 定期报告 | 主营业务收入 · 利润（**2026-11-11 裁定：走 `financial_report_versions` 结构化 join，不解析 PDF**） | `revenue` · `net_profit` |
 | 券商研报 | 核心观点（文本） | `core_view`（`value_text`）|
 | 临时公告 | 事件类型 + 关键要素（增减持数量/金额、分红比例）| `event_*` |
 | 政策 | 政策类型 + 影响面（行业/板块）| `policy_*` |
 
 **硬性约束**
-1. **每条抽取必须带 `source_span`**（页码 + 字符区间 + 原文 quote）——UI 可点开验原
+1. **每条抽取必须带 `source_span`**（`pdf` 的页码+字符区间+quote，或 `structured` 的表+主键+`ann_date`+quote）——UI 可点开验原
 2. **必须产出 `extract_confidence`**；低于阈值的自动置 `review_status='pending'` 进人工队列
 3. **`extract_version` 必填**，支持上游 prompt/模型变更后的重抽与对比
-4. **抽取结果不得覆盖原文**：`extracted` 与 `body_ref` 并存
+4. **抽取结果不得覆盖原文**：`extracted` 与 `url` 并存；正文仅内存态，不落库（2026-11-11 裁定）
 
 **不做什么**：不做开放式摘要（LLM 自由发挥）；只抽约定字段。**"核心观点"是唯一允许的自由文本字段**，且必须有 quote 支撑。
 
