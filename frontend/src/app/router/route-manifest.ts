@@ -292,7 +292,8 @@ export const ROUTES: AppRoute[] = [
   },
 
   // 待定权限的一级导航（后端尚不存在 → 登录可见、无门禁）
-  { key: "news", path: "/news", kind: "page", component: "NewsPage", isPlaceholder: true, parent: "main" },
+  // `/news` 已兑现真页面（公告 Tab 接 `ContentList`，其余三类显式空态）：不再登记为占位路由。
+  { key: "news", path: "/news", kind: "page", component: "NewsPage", parent: "main" },
   { key: "macro", path: "/macro", kind: "page", component: "MacroPage", isPlaceholder: true, parent: "main" },
   {
     key: "valuegraph",

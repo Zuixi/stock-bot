@@ -31,9 +31,9 @@ def test_dedupe_code_and_name():
 
 
 def test_longest_name_first_blocks_substring():
-    assert resolve_stock_entities(
-        "平安银行", {"平安": "000001", "平安银行": "000001"}
-    ) == [("stock", "000001")]
+    assert resolve_stock_entities("平安银行", {"平安": "000001", "平安银行": "000001"}) == [
+        ("stock", "000001")
+    ]
 
 
 def test_empty_text():

@@ -83,9 +83,7 @@ class ContentItem(Base):
     )
     extract_version: Mapped[int | None] = mapped_column(Integer)
     extract_confidence: Mapped[float | None] = mapped_column(Numeric(4, 3))
-    review_status: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default="auto"
-    )
+    review_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="auto")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

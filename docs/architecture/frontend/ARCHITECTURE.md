@@ -86,7 +86,7 @@ frontend/src/
 | `/company/:symbol` | page | `pages/stock-detail`（`StockDetailPage`） | 公开 | 个股详情（`/stock/:symbol` 的 redirect 目标） |
 | `/industry` | page | `pages/industry`（`IndustryPage`） | `research:read` | 行业分析看板（`/research` 的 redirect 目标） |
 | `/industry/:industryKey` | page | `pages/industry/workbench`（`IndustryWorkbenchPage`） | `research:read` | 行业投研工作台（`/research/:industryKey` 的 redirect 目标） |
-| `/news` | page（占位） | `pages/news`（`NewsPage`） | 待定（当前无门禁） | 资讯；占位，权限口径待模块落地 |
+| `/news` | page | `pages/news`（`NewsPage`） | 公开（免登录） | 资讯；Wave 2 Plan 1 已接入公告 Tab（`/api/v1/content`），研报/快讯/政策待 Plan 2–4 |
 | `/macro` | page（占位） | `pages/macro`（`MacroPage`） | 待定（当前无门禁） | 宏观分析；占位 |
 | `/sentiment` | page | `pages/sentiment`（`SentimentPage`） | `research:read` | 情绪分析的深度读出台（S1.8–S1.13）：综合指数 hero（读新端点 `/api/v1/market/sentiment/composite`，明示「N/11 条腿 + 生效权重」）+ 9 个模块面板（唯一模块表 `features/sentiment/moduleTable.ts` + 唯一渲染器 `SentimentModulePanel`）；⑧ 散户舆情与 ⑩ 情绪预警与预判按 spec 就地说明未落地。**权限**：IA §1 原列「待定」，该表「分区」列本就写「研究（只读）」，且本页消费受保护的 `/api/v1/metrics/*`（**实测匿名 401、普通交易员 403**）⇒ 取与同为研究层的 `/industry` **同一** `research:read`。曾试过只标 `requiresAuth`，结果是普通登录用户能进页面却读不到任何模块数据（只剩一张"读面未取到"的空表），故改为此值 |
 | `/valuegraph` | page（占位） | `pages/valuegraph`（`ValueGraphPage`） | 待定（当前无门禁） | 价值网图谱；占位 |

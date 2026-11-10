@@ -34,9 +34,7 @@ def _iter_occurrences(text: str, name: str) -> Iterator[Span]:
         start = text.find(name, start + 1)
 
 
-def resolve_stock_entities(
-    text: str, name_to_symbol: Mapping[str, str]
-) -> list[tuple[str, str]]:
+def resolve_stock_entities(text: str, name_to_symbol: Mapping[str, str]) -> list[tuple[str, str]]:
     """Return deduplicated [("stock", symbol)] for A-share codes/names in text.
 
     ``text`` 为空或没有命中时返回 ``[]``。代码命中排在名称命中之前。

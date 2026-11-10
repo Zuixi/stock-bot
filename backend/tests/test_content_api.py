@@ -370,10 +370,10 @@ async def test_user_state_is_per_user(
         # 列表也带同样的状态；status 过滤只命中 A 的那条
         a_list = (await _get(app, "/api/v1/content", token=user_a)).json()
         assert next(row for row in a_list if row["id"] == first)["user_state"] == "read"
-        a_filtered = (await _get(app, "/api/v1/content", token=user_a, params={"status": "read"}))
+        a_filtered = await _get(app, "/api/v1/content", token=user_a, params={"status": "read"})
         assert a_filtered.status_code == 200, a_filtered.text
         assert first in [row["id"] for row in a_filtered.json()]
-        b_filtered = (await _get(app, "/api/v1/content", token=user_b, params={"status": "read"}))
+        b_filtered = await _get(app, "/api/v1/content", token=user_b, params={"status": "read"})
         assert b_filtered.status_code == 200
         assert first not in [row["id"] for row in b_filtered.json()]
 

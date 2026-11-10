@@ -187,8 +187,7 @@ async def list_content(
     # 用户状态左侧外连接：一条语句取回"内容 + 我的状态"，避免 N+1。
     stmt = select(ContentItem, UserContentState.status).outerjoin(
         UserContentState,
-        (UserContentState.content_id == ContentItem.id)
-        & (UserContentState.user_id == user_uuid),
+        (UserContentState.content_id == ContentItem.id) & (UserContentState.user_id == user_uuid),
     )
     if content_type is not None:
         stmt = stmt.where(ContentItem.content_type == content_type)

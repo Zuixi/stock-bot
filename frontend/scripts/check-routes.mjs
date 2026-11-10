@@ -261,7 +261,8 @@ const PLACEHOLDER_CONTRACT = [
   // `/sentiment` 已随 S1.8–S1.13 兑现真页面（综合指数 hero + 9 个模块面板）摘除占位，
   // 并在清单里改为 `requiresAuth`（消费受保护的 /api/v1/metrics/*）——同样只许前进不许退回。
   "/company",
-  "/news",
+  // `/news` 已随 Wave 2 Plan 1 兑现真页面（公告 Tab，消费 /api/v1/content）摘除占位；
+  // 同样只许前进不许退回，见下方定点断言。
   "/macro",
   "/valuegraph",
   "/strategy",
@@ -289,6 +290,11 @@ if (!placeholderPaths.includes("/market/heatmap")) {
   pass("`/market/heatmap` 已摘占位标志（S1.5 真热力图已落地，不得退回占位冒充「规划中」）");
 } else {
   fail("`/market/heatmap` 仍是占位路由 —— S1.5 已兑现真实现，退回占位 = 功能性回退");
+}
+if (!placeholderPaths.includes("/news")) {
+  pass("`/news` 已摘占位标志（Wave 2 Plan 1 公告 Tab 已落地，不得退回占位）");
+} else {
+  fail("`/news` 仍是占位路由 —— Wave 2 Plan 1 已交付公告 Tab，退回占位 = 功能性回退");
 }
 
 const placeholderTargets = [...routeRedirects.entries()].filter(([, to]) =>
