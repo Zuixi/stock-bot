@@ -20,6 +20,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     clusters,
     concepts,
+    content,
     financials,
     industries,
     journal,
@@ -96,3 +97,6 @@ router.include_router(new_stocks.router, prefix="/new-stocks", tags=["new-stocks
 
 # 决策日志（spec §S9）：/api/v1/journal —— 只有 POST/GET（不可篡改），登录即可
 router.include_router(journal.router, prefix="/journal", tags=["journal"])
+
+# 内容读面（S3.x）：/api/v1/content —— 列表/详情公开，用户状态需登录
+router.include_router(content.router, prefix="/content", tags=["content"])
