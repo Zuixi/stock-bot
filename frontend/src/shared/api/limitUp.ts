@@ -127,6 +127,42 @@ interface BackendSentimentCalendarPoint {
   max_streak: number;
 }
 
+/**
+ * 短线热度股追踪 payload（`GET /market/limit-up/stock-history`）。
+ *
+ * `dates` 只含**实际有事实**的交易日；缺的日子在 `missing_dates` 里且
+ * `degraded_reason="facts_gap"`（前端画警告，**不插空列**）。
+ * `streak` 只在 `status="limit_up"` 时有值：`null` 是"不是当日收盘涨停"，不是 0 板。
+ */
+interface BackendHeatStockCell {
+  status: "limit_up" | "broken" | "dropped" | "none";
+  streak: number | null;
+}
+
+interface BackendHeatStockRow {
+  symbol: string;
+  name: string;
+  current_status: "limit_up" | "broken" | "dropped" | "none";
+  current_streak: number;
+  max_streak: number;
+  boards: number;
+  broken_days: number;
+  last_limit_up: string | null;
+  cells: BackendHeatStockCell[];
+}
+
+interface BackendHeatStockHistory {
+  as_of: string | null;
+  window: { days: number; start: string | null; end: string | null; samples: number };
+  dates: string[];
+  min_streak: number;
+  total: number;
+  truncated: boolean;
+  degraded_reason: "no_fact_rows" | "facts_gap" | null;
+  missing_dates: string[];
+  rows: BackendHeatStockRow[];
+}
+
 interface BackendSentimentTrendPoint {
   trade_date: string;
   zt_count: number;
@@ -307,6 +343,44 @@ export interface YesterdayLimitUp {
   items: YesterdayLimitUpItem[];
   /** 见 `LimitUpLadder.asOfLabel`（三张卡同源同字段）。 */
   asOfLabel: string | null;
+}
+
+// ---- 热度股追踪（行=股票，列=交易日） ----
+//
+// 四种单元格状态是**事实**，不是视觉修辞：`limit_up` 收盘涨停 / `broken` 炸板 /
+// `dropped` 昨日涨停今日断板 / `none` 未上榜（≠ 停牌 ≠ 未涨停：事实表行集是候选窗口）。
+
+export type HeatStockCellStatus = "limit_up" | "broken" | "dropped" | "none";
+
+export interface HeatStockCell {
+  status: HeatStockCellStatus;
+  /** 仅 `limit_up` 有值；`null` = 非当日涨停（缺失 ≠ 0）。 */
+  streak: number | null;
+}
+
+export interface HeatStockRow {
+  symbol: string;
+  name: string;
+  currentStatus: HeatStockCellStatus;
+  currentStreak: number;
+  maxStreak: number;
+  boards: number;
+  brokenDays: number;
+  lastLimitUp: string | null;
+  cells: HeatStockCell[];
+}
+
+export interface HeatStockHistory {
+  asOf: string | null;
+  /** `window.days` 是请求天数，`window.samples` 是实际有事实的天数（不插值）。 */
+  window: { days: number; start: string | null; end: string | null; samples: number };
+  dates: string[];
+  minStreak: number;
+  total: number;
+  truncated: boolean;
+  degradedReason: "no_fact_rows" | "facts_gap" | null;
+  missingDates: string[];
+  rows: HeatStockRow[];
 }
 
 export interface SentimentCalendarPoint {
@@ -609,6 +683,46 @@ export function fetchYesterdayLimitUp(
     items: b.items.map(mapYesterdayItem),
     asOfLabel: b.as_of_label ?? null,
   }));
+}
+
+/**
+ * 短线热度股追踪（`GET /market/limit-up/stock-history`）。
+ *
+ * 日频事实读面：`days` 是**请求**的交易日数，后端可能只回更少（历史不足/有缺口），
+ * 由 `window.samples` 与 `missingDates` 自描述——前端不补列、不插值。
+ */
+export function fetchLimitUpStockHistory(
+  days = 20,
+  minStreak = 2,
+): Promise<HeatStockHistory> {
+  return apiGet<BackendHeatStockHistory>("/api/v1/market/limit-up/stock-history", {
+    days,
+    min_streak: minStreak,
+  }).then(mapHeatStockHistory);
+}
+
+function mapHeatStockHistory(b: BackendHeatStockHistory): HeatStockHistory {
+  return {
+    asOf: b.as_of,
+    window: b.window,
+    dates: b.dates,
+    minStreak: b.min_streak,
+    total: b.total,
+    truncated: b.truncated,
+    degradedReason: b.degraded_reason,
+    missingDates: b.missing_dates,
+    rows: b.rows.map((row) => ({
+      symbol: row.symbol,
+      name: row.name,
+      currentStatus: row.current_status,
+      currentStreak: row.current_streak,
+      maxStreak: row.max_streak,
+      boards: row.boards,
+      brokenDays: row.broken_days,
+      lastLimitUp: row.last_limit_up,
+      cells: row.cells.map((cell) => ({ status: cell.status, streak: cell.streak })),
+    })),
+  };
 }
 
 export function fetchSentimentCalendar(days = 30): Promise<SentimentCalendarPoint[]> {
