@@ -171,4 +171,4 @@ REPORT_RULES = {
 - [x] API 默认过滤无效研报；`include_ineffective=true` 可见且带原因。
 - [x] `/news` 研报 Tab 可用；`core_view` 未抽取明确显示，不伪造。
 - [x] `npx tsc --noEmit` + `npm run build` + Playwright 研报 e2e 通过。
-- [x] 后端内容相关测试全绿；`self_review` 门禁（本项目文件）全绿。
+- [x] 后端内容相关测试 64 passed；`doc_gate` / `tsc --noEmit` / Playwright 研报 e2e 全绿。`self_review --full` 未跑：工作区另有未提交改动，全量门禁交由合入时跑。
