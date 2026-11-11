@@ -10,6 +10,10 @@
 3. **``ContentStateIn.status`` 与库 CHECK 约束逐字一致**（除 ``new`` 外）：
    用户能把状态改成的只有四值；``new`` 是入库默认值，不作为入参（"改回未读"没有
    语义，见 ``docs/specs/S3-content.md``）。
+4. **研报有效性在契约里显式**：``effective`` / ``ineffective_reasons`` 只对
+   ``content_type='report'`` 有语义（非研报一律 ``None`` / ``[]``）；它们由
+   ``app.services.research_report_service.evaluate_report`` 计算并原样下发——
+   人工终态 ``confirmed`` / ``rejected`` 压倒自动判据。
 
 ``entities`` / ``metrics`` 用独立小模型而非裸 ``dict``：字段少但每个都是前端契约
 （``entity_type`` 决定跳转路由，``metric_key`` 决定对比表列），裸 dict 会让拼错
@@ -67,6 +71,10 @@ class ContentItemOut(BaseModel):
     entities: list[ContentEntityOut] = Field(default_factory=list)
     #: 列表与详情都下发；无指标时为空列表（前端渲染 `—`，不补 0）
     metrics: list[ContentMetricOut] = Field(default_factory=list)
+    #: 研报是否有效（S3.7 三条判据 + 人工终态）；非研报 → ``None``（无判定语义）
+    effective: bool | None = None
+    #: 无效原因码（有序去重，见 ``research_report_service.REASON_*``）；有效/非研报 → ``[]``
+    ineffective_reasons: list[str] = Field(default_factory=list)
 
 
 class ContentStateIn(BaseModel):

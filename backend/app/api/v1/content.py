@@ -17,6 +17,16 @@
 
 ``metrics`` 在列表与详情都下发：S3.4 要求列表展示定期报告的核心信息（收入/利润）。
 故列表按整页批量查询，不做 N+1；无指标的内容给空列表，前端渲染 `—`。
+
+研报有效性（S3.7）也在读面算：
+
+- ``effective`` / ``ineffective_reasons`` 由纯函数
+  ``research_report_service.evaluate_report`` 逐条计算，输入是本页**已经批量取回**的
+  metrics/entities（不逐条查库，仍是 O(1) 查询）；
+- 默认**隐藏自动判定无效的研报**；``include_ineffective=true`` 才返回（对应前端
+  "显示被过滤"开关），被过滤行带 ``ineffective_reasons`` 供展示原因；
+- 人工终态压倒数自动判据：``review_status='confirmed'`` 即使没有量化字段/行业也默认可见；
+- 非 ``report`` 内容不参与判定（``effective=None``、reasons 空），也**不会被过滤**。
 """
 
 from __future__ import annotations
@@ -39,11 +49,33 @@ from app.schemas.content import (
     ContentMetricOut,
     ContentStateIn,
 )
+from app.services.research_report_service import ReportEvaluation, evaluate_report
 
 router = APIRouter()
 
 #: ``status`` 过滤的取值 = 库 CHECK 约束全集（含``new``：用户可能显式筛"未读"）。
 StatusFilter = Literal["new", "read", "processed", "ignored", "archived"]
+
+
+def _report_evaluation(
+    item: ContentItem,
+    *,
+    entities: list[ContentEntityOut],
+    metrics: list[ContentMetricOut],
+) -> ReportEvaluation | None:
+    """研报 → 判定结果；其他内容 → ``None``（无判定语义，不下发真假值）。
+
+    输入是**已装配好的**实体/指标（本页批量查回来的），判据本身不碰库。
+    """
+    if item.content_type != "report":
+        return None
+    return evaluate_report(
+        review_status=item.review_status,
+        extracted=item.extracted or {},
+        title=item.title,
+        metrics=metrics,
+        entities=entities,
+    )
 
 
 def _item_out(
@@ -52,6 +84,7 @@ def _item_out(
     user_state: str | None,
     entities: list[ContentEntityOut],
     metrics: list[ContentMetricOut] | None = None,
+    evaluation: ReportEvaluation | None = None,
 ) -> ContentItemOut:
     return ContentItemOut(
         id=int(item.id),
@@ -68,6 +101,8 @@ def _item_out(
         user_state=user_state,
         entities=entities,
         metrics=metrics or [],
+        effective=None if evaluation is None else evaluation.effective,
+        ineffective_reasons=[] if evaluation is None else list(evaluation.reasons),
     )
 
 
@@ -163,6 +198,7 @@ async def list_content(
     entity_type: Annotated[str | None, Query(max_length=24)] = None,
     entity_id: Annotated[str | None, Query(max_length=64)] = None,
     content_status: Annotated[StatusFilter | None, Query(alias="status")] = None,
+    include_ineffective: bool = False,
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[ContentItemOut]:
@@ -170,6 +206,11 @@ async def list_content(
 
     返回**裸数组**（不套 ``{items: …}``）：前端直接把它当列表用，加了信封会多一层
     ``.items`` 的隐式约定，而这里没有分页元数据要下发。
+
+    研报有效性：默认**隐藏自动判定无效的研报**（自动判据 = 去重/量化字段/行业相关）；
+    ``include_ineffective=true`` 供"显示被过滤"视图使用，被过滤行同时下发
+    ``ineffective_reasons``。人工终态 ``confirmed`` 压倒数自动判据。
+    过滤发生在判定**之后**（先算再筛，不是 SQL 过滤），因此返回条数可能小于 ``limit``。
     """
     if (entity_type is None) != (entity_id is None):
         raise HTTPException(
@@ -215,20 +256,35 @@ async def list_content(
     ids = [int(item.id) for item in items]
     entities = await _entity_map(db, ids)
     metrics = await _metric_map(db, ids)
-    return [
-        _item_out(
-            item,
-            user_state=state,
-            entities=entities.get(int(item.id), []),
-            metrics=metrics.get(int(item.id), []),
+
+    out: list[ContentItemOut] = []
+    for item, state in rows:
+        content_id = int(item.id)
+        row_entities = entities.get(content_id, [])
+        row_metrics = metrics.get(content_id, [])
+        evaluation = _report_evaluation(item, entities=row_entities, metrics=row_metrics)
+        # 先判定再过滤：被隐藏的行也要算过，才能保证 "显示被过滤" 时原因齐全。
+        if evaluation is not None and not evaluation.effective and not include_ineffective:
+            continue
+        out.append(
+            _item_out(
+                item,
+                user_state=state,
+                entities=row_entities,
+                metrics=row_metrics,
+                evaluation=evaluation,
+            )
         )
-        for item, state in rows
-    ]
+    return out
 
 
 @router.get("/{content_id}", response_model=ContentItemOut)
 async def get_content(content_id: int, db: DbDep, user: OptionalUserDep) -> ContentItemOut:
-    """单条内容（含实体与抽取指标）。不存在 → 404。"""
+    """单条内容（含实体与抽取指标）。不存在 → 404。
+
+    研报同样计算有效性（``effective`` / ``ineffective_reasons``）：详情**不过滤**，
+    被过滤的研报也能按 id 打开（否则前端拿不到原因）。
+    """
     item = (
         await db.execute(select(ContentItem).where(ContentItem.id == content_id))
     ).scalar_one_or_none()
@@ -244,11 +300,13 @@ async def get_content(content_id: int, db: DbDep, user: OptionalUserDep) -> Cont
         state = None if row is None else row.status
 
     entities = (await _entity_map(db, [content_id])).get(content_id, [])
+    metrics = await _metric_list(db, content_id)
     return _item_out(
         item,
         user_state=state,
         entities=entities,
-        metrics=await _metric_list(db, content_id),
+        metrics=metrics,
+        evaluation=_report_evaluation(item, entities=entities, metrics=metrics),
     )
 
 

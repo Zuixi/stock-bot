@@ -246,6 +246,86 @@ async def _seed(session: AsyncSession) -> tuple[int, int]:
     return first, second
 
 
+async def _seed_reports(session: AsyncSession) -> dict[str, int]:
+    """三条研报（有效 / 被判重无效 / 人工 confirmed 无数据）→ id 映射。
+
+    三条都用**未来**发布时点，保证排在本页最前（真实内容挤不掉）；``confirmed`` 那条
+    刻意既无量化指标又无行业关联，用来钉住"人工终态压倒数自动判据"。
+    """
+    tag = uuid.uuid4().hex[:8]
+    spec: dict[str, dict[str, Any]] = {
+        "effective": {
+            "title": f"测试研报·有效 {tag}",
+            "published_at": PUBLISHED.replace(day=5),
+            "extracted": {"source_item_id": f"{tag}e", "industry": "养殖业"},
+            "review_status": "auto",
+        },
+        "superseded": {
+            "title": f"测试研报·被判重 {tag}",
+            "published_at": PUBLISHED.replace(day=4),
+            "extracted": {
+                "source_item_id": f"{tag}s",
+                "industry": "养殖业",
+                "superseded_by": f"{tag}e",
+            },
+            "review_status": "auto",
+        },
+        "confirmed": {
+            "title": f"测试研报·人工确认 {tag}",
+            "published_at": PUBLISHED.replace(day=3),
+            "extracted": {},
+            "review_status": "confirmed",
+        },
+    }
+    rows = [
+        {
+            "content_type": "report",
+            "source_name": TEST_SOURCE,
+            "publisher_tier": "sellside",
+            "publisher": "测试券商",
+            "url": f"https://example.test/report/{tag}/{key}",
+            "raw_hash": f"{tag}{key}"[:64],
+            **payload,
+        }
+        for key, payload in spec.items()
+    ]
+    await session.execute(insert(ContentItem), rows)
+
+    found = (
+        await session.execute(
+            select(ContentItem.id, ContentItem.raw_hash).where(
+                ContentItem.raw_hash.in_([r["raw_hash"] for r in rows])
+            )
+        )
+    ).all()
+    by_hash = {raw_hash: int(cid) for cid, raw_hash in found}
+    ids = {key: by_hash[f"{tag}{key}"[:64]] for key in spec}
+
+    # 有效与"被判重"两条都给行业实体 + 量化指标：让它们的无效原因只剩 ``superseded``
+    # （否则断言 "reasons 非空" 会被 no_quantitative / industry_mismatch 一并满足，白测）。
+    for key in ("effective", "superseded"):
+        await session.execute(
+            insert(ContentEntity),
+            [{"content_id": ids[key], "entity_type": "industry", "entity_id": "养殖业"}],
+        )
+        await session.execute(
+            insert(ContentMetric),
+            [
+                {
+                    "content_id": ids[key],
+                    "entity_type": "industry",
+                    "entity_id": "养殖业",
+                    "metric_key": "rating",
+                    "period": None,
+                    "value_text": "买入",
+                    "source_span": {"kind": "structured", "field": "emRatingName"},
+                }
+            ],
+        )
+    await session.flush()
+    return ids
+
+
 async def _cleanup(session: AsyncSession, content_ids: list[int]) -> None:
     """显式删除测试行（子表靠 ``ON DELETE CASCADE``）；失败路径也不留脏行。
 
@@ -404,6 +484,102 @@ async def test_entity_filter_requires_both_params(
         )
         assert ok.status_code == 200, ok.text
         assert first in [row["id"] for row in ok.json()]
+    finally:
+        await _cleanup(session, content_ids)
+
+
+@requires_pg
+async def test_report_default_hides_ineffective(
+    content_app: tuple[FastAPI, AsyncSession],
+) -> None:
+    """默认隐藏自动判定无效的研报；``include_ineffective=true`` 才给"显示被过滤"。"""
+    app, session = content_app
+    content_ids: list[int] = []
+    try:
+        ids = await _seed_reports(session)
+        content_ids = list(ids.values())
+
+        resp = await _get(app, "/api/v1/content", params={"content_type": "report"})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        returned = [row["id"] for row in body]
+        assert ids["effective"] in returned, "有效研报必须出现"
+        assert ids["superseded"] not in returned, "默认必须隐藏自动判定无效的研报"
+
+        effective_row = next(row for row in body if row["id"] == ids["effective"])
+        assert effective_row["effective"] is True
+        assert effective_row["ineffective_reasons"] == []
+
+        # 显式要求时两条都在，且被过滤行带原因（前端据此上徽章）
+        shown = await _get(
+            app,
+            "/api/v1/content",
+            params={"content_type": "report", "include_ineffective": True},
+        )
+        assert shown.status_code == 200, shown.text
+        shown_body = shown.json()
+        shown_ids = [row["id"] for row in shown_body]
+        assert ids["effective"] in shown_ids and ids["superseded"] in shown_ids
+        bad_row = next(row for row in shown_body if row["id"] == ids["superseded"])
+        assert bad_row["effective"] is False
+        assert "superseded" in bad_row["ineffective_reasons"]
+
+        # 详情不过滤：被隐藏的研报仍能按 id 打开，且同样给原因
+        detail = await _get(app, f"/api/v1/content/{ids['superseded']}")
+        assert detail.status_code == 200, detail.text
+        detail_body = detail.json()
+        assert detail_body["effective"] is False
+        assert detail_body["ineffective_reasons"]
+    finally:
+        await _cleanup(session, content_ids)
+
+
+@requires_pg
+async def test_report_confirmed_wins_over_auto_rules(
+    content_app: tuple[FastAPI, AsyncSession],
+) -> None:
+    """人工 ``confirmed`` 压倒数自动判据：无量化字段、无行业也默认可见。"""
+    app, session = content_app
+    content_ids: list[int] = []
+    try:
+        ids = await _seed_reports(session)
+        content_ids = list(ids.values())
+
+        resp = await _get(app, "/api/v1/content", params={"content_type": "report"})
+        assert resp.status_code == 200, resp.text
+        row = next((r for r in resp.json() if r["id"] == ids["confirmed"]), None)
+        assert row is not None, "人工确认的研报即使没有量化/行业也必须默认返回"
+        assert row["effective"] is True
+        assert row["ineffective_reasons"] == []
+        assert row["metrics"] == [] and row["entities"] == []
+    finally:
+        await _cleanup(session, content_ids)
+
+
+@requires_pg
+async def test_non_report_content_has_no_effective_flag(
+    content_app: tuple[FastAPI, AsyncSession],
+) -> None:
+    """非研报不参与判定：``effective is None``、reasons 空，且永不被过滤。"""
+    app, session = content_app
+    content_ids: list[int] = []
+    try:
+        first, second = await _seed(session)
+        content_ids = [first, second]
+
+        resp = await _get(app, "/api/v1/content", params={"content_type": "announcement"})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        returned = [row["id"] for row in body]
+        # 两条公告都没有量化/行业，若误用研报判据就会被过滤——正是这条用例要钉住的
+        assert first in returned and second in returned
+        for row in body:
+            assert row["effective"] is None
+            assert row["ineffective_reasons"] == []
+
+        detail = (await _get(app, f"/api/v1/content/{second}")).json()
+        assert detail["effective"] is None
+        assert detail["ineffective_reasons"] == []
     finally:
         await _cleanup(session, content_ids)
 
