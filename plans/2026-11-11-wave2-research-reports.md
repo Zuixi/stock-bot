@@ -1,10 +1,10 @@
 # Wave 2 Plan 2：券商研报结构化切片
 
-status: active
+status: completed
 scope: 东财研报元数据 → `content_items/content_entities/content_metrics`；评级/EPS/PE/目标价/行业结构化入库；「有效研报」三条判据；`/news` 研报 Tab；不接 LLM `core_view`（明确显示未抽取）
 touches: backend/app/{core/providers,services,api/v1,schemas,scheduler}, backend/tests, backend/scripts, frontend/src/{features/content,pages/news,shared/api,app/router}, docs/specs, docs/features.md, docs/Changelog.md, plans/index.md
 updated: 2026-11-11
-next-action: Task 1（东财研报 client + fixture 解析测试）
+next-action: 无（Plan 2 收口；下一步 Wave 2 Plan 3 快讯）
 
 > 契约：[docs/specs/S3-content.md](../docs/specs/S3-content.md) §S3.4 / §S3.7。
 > 本计划**复用** Plan 1 的四表，不新建表、不新建迁移。
@@ -164,11 +164,11 @@ REPORT_RULES = {
 
 ## 5. 验收判据
 
-- [ ] 东财 fixture 解析：`publishDate` 上海时区、`pdf_url`、分页截断反例全过。
-- [ ] 同一批重跑：`content_items` 新增 0、指标覆盖、实体不重复。
-- [ ] 去重：新报告使旧报告 `superseded_by` 生效；乱序回补不产生双有效。
-- [ ] 有效研报三条判据可逐条解释；`confirmed` 人工翻案生效。
-- [ ] API 默认过滤无效研报；`include_ineffective=true` 可见且带原因。
-- [ ] `/news` 研报 Tab 可用；`core_view` 未抽取明确显示，不伪造。
-- [ ] `npx tsc --noEmit` + `npm run build` + Playwright 研报 e2e 通过。
-- [ ] 后端内容相关测试全绿；`self_review` 门禁（本项目文件）全绿。
+- [x] 东财 fixture 解析：`publishDate` 上海时区、`pdf_url`、分页截断反例全过。
+- [x] 同一批重跑：`content_items` 新增 0、指标覆盖、实体不重复。
+- [x] 去重：新报告使旧报告 `superseded_by` 生效；乱序回补不产生双有效。
+- [x] 有效研报三条判据可逐条解释；`confirmed` 人工翻案生效。
+- [x] API 默认过滤无效研报；`include_ineffective=true` 可见且带原因。
+- [x] `/news` 研报 Tab 可用；`core_view` 未抽取明确显示，不伪造。
+- [x] `npx tsc --noEmit` + `npm run build` + Playwright 研报 e2e 通过。
+- [x] 后端内容相关测试全绿；`self_review` 门禁（本项目文件）全绿。

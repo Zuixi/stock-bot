@@ -175,6 +175,13 @@ user_content_state(
 | 临时公告 | 事件类型 + 关键要素（增减持数量/金额、分红比例）| `event_*` |
 | 政策 | 政策类型 + 影响面（行业/板块）| `policy_*` |
 
+> **2026-11-11 Plan 2 落地口径（研报切片）**：卖方研报先落结构化元数据
+> （`rating` / `rating_change` / `target_price` / `eps_forecast` / `pe_forecast` + 行业实体），
+> `content_type='report'`、`publisher_tier='sellside'`、`source_name='eastmoney_report'`。
+> **`core_view` 在未接入 LLM 前不抽取**：列表必须显示 `core_view_status='not_extracted'`
+> （或 `missing_reason`），不得伪造核心观点；`source_span.kind='structured'` 指向列表接口字段。
+> 有效性按 S3.7 三条判据在读取面计算；默认隐藏自动判定无效项，`include_ineffective=true` 可查。
+
 **硬性约束**
 1. **每条抽取必须带 `source_span`**（`pdf` 的页码+字符区间+quote，或 `structured` 的表+主键+`ann_date`+quote）——UI 可点开验原
 2. **必须产出 `extract_confidence`**；低于阈值的自动置 `review_status='pending'` 进人工队列
@@ -232,7 +239,7 @@ user_content_state(
 - 每条显示：标题 · 发布主体 · `published_at` · `publisher_tier` 徽章 · 抽取出的核心字段 · **原文链接**
 - 状态操作：未读 / 已读 / 已处理 / 忽略（写 `user_content_state`）
 - 筛选项：类型 · 时间 · 实体（股票/行业）· 状态 · 来源
-- **研报类必须显示 `core_view` 与原文 quote**
+- **研报类在 `core_view` 已抽取时必须显示它 + 原文 quote**；未接入 LLM 时显式显示"未抽取"（Plan 2 口径），不得伪造
 
 **依赖**：S3.4
 **验收判据**

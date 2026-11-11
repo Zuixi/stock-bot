@@ -1,3 +1,27 @@
+## 2026-11-11 - feat(research): 券商研报结构化切片（Wave 2 Plan 2）
+
+- **数据源**：东财研报列表（`reportapi.eastmoney.com/report/list`，固定参数 + UA/Referer、
+  3 次重试、分页撞上限响亮失败）；`publishDate` 按上海时区落 aware `published_at`，
+  `pdf_url` 由 `encodeUrl` 构造，构造不出即不入库。
+- **写入**：复用 Plan 1 四表，`content_type='report'` / `source_name='eastmoney_report'` /
+  `publisher_tier='sellside'`；`extracted` 写 `source_item_id` / `stock_code` / `industry` /
+  `rating_change`，`core_view_status='not_extracted'`（**不接 LLM、不伪造观点**）。
+  指标：`rating`（文本）、`rating_change`、`target_price`（CNY）、`eps_forecast` /
+  `pe_forecast`（`YYYYE`，CNY / x），全部带 `source_span.kind='structured'`；缺字段写
+  `missing_reason`，不写 0。
+- **有效研报**（S3.7）：配置驱动三条判据（去重 / 有量化字段 / 行业相关）+ 人工终态
+  `confirmed`/`rejected` 优先；去重不删行，旧条目 `extracted.superseded_by` 指向新条目
+  （乱序回补也正确）。
+- **读面**：`/api/v1/content` 新增 `effective` / `ineffective_reasons`；`content_type=report`
+  默认隐藏自动无效项，`include_ineffective=true` 返回并带原因；非研报 `effective=null`、
+  不被过滤。
+- **任务**：每日 18:40 `research_reports_daily`（近 3 日滚动、幂等、失败告警）；
+  手动任务类型 `research_reports`；回补脚本 `backend/scripts/backfill_research_reports.py`
+  （`--from/--start --to/--end`，分段窗口，撞分页上限失败）。
+- **前端**：`/news` 研报 Tab 接 `ContentList contentType="report"`，行显示评级 / 评级变动 /
+  目标价 / EPS·PE 预测 / 行业；顶部开关「显示被过滤的研报」；`core_view` 未抽取显式提示。
+  e2e：`newsResearch.spec.ts`（有效 + 被过滤两条，断言默认过滤与开关）。
+
 ## 2026-11-11 - feat(content): 内容事实层 + 公告切片（Wave 2 Plan 1）
 
 - **三处 owner 裁定**（[S3-content.md](./specs/S3-content.md)，优先于下文冲突处）：
