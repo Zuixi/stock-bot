@@ -15,8 +15,9 @@ import { expect, test } from "@playwright/test";
  * - 公告 Tab 必须渲染出 `content-row`（真组件，不是空壳）；
  * - 每行的标题就是**原文入口**：`href` 必须是 `https://`（后端只存 URL、不落正文，
  *   "可溯源"这件事在 UI 上就只有这一个出口）；
- * - 另外三类（政策 / 研报 / 快讯）**尚未接入**：必须给显式空态，且**不出现**
- *   `规划中` 这类整模块占位文案——否则用户会以为资讯模块整体没做完。
+ * - 政策 / 快讯**尚未接入**：必须给显式空态，且**不出现** `规划中` 这类整模块
+ *   占位文案——否则用户会以为资讯模块整体没做完。研报 Tab 已在 Plan 2 接入
+ *   （独立用例见 `newsResearch.spec.ts`），不再属于"未接入"集合。
  */
 
 const ITEM = {
@@ -77,15 +78,14 @@ test.describe("/news 资讯", () => {
     await expect(page.getByText("规划中")).toHaveCount(0);
   });
 
-  test("其余三类显式空态，且不伪造数据", async ({ page }) => {
+  test("政策 / 快讯显式空态，且不伪造数据", async ({ page }) => {
     for (const [tab, label] of [
       ["policy", "政策"],
-      ["research", "研报"],
       ["flash", "快讯"],
     ] as const) {
       await page.goto(`/news?tab=${tab}`, { waitUntil: "domcontentloaded" });
       await expect(page.getByRole("tab", { name: label })).toHaveAttribute("aria-selected", "true");
-      await expect(page.getByText("该类别尚未接入（Wave 2 Plan 2–4）")).toBeVisible();
+      await expect(page.getByText("该类别尚未接入（Wave 2 Plan 3–4）")).toBeVisible();
       // 没接入 ≠ 没有内容：不许渲染列表行
       await expect(page.getByTestId("content-row")).toHaveCount(0);
       await expect(page.getByText("规划中")).toHaveCount(0);
