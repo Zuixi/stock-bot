@@ -2217,6 +2217,14 @@ async def _main() -> None:
             result = await announcement_service.ingest_announcements(
                 db, days=int(args[1]) if len(args) > 1 else 3
             )
+        elif job == "research_reports":
+            from app.services.content_ingest.research_report import (  # noqa: PLC0415
+                ingest_research_reports,
+            )
+
+            days = int(args[1]) if len(args) > 1 else 3
+            end = _today_sh()
+            result = await ingest_research_reports(db, end - timedelta(days=days), end)
         elif job == "insider_change":
             from app.services import insider_change_service  # noqa: PLC0415
 
@@ -2232,7 +2240,8 @@ async def _main() -> None:
             raise SystemExit(
                 f"unknown job: {job}; available: global_index_daily, "
                 "backfill_global_index, sector_moneyflow, northbound, dragon_tiger, "
-                "block_trades, share_floats, repurchases, announcements, insider_change"
+                "block_trades, share_floats, repurchases, announcements, "
+                "research_reports, insider_change"
             )
         await db.commit()
     print(job, "->", result)

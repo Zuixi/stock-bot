@@ -107,7 +107,9 @@ class _FakeClient:
         self.rows = rows
         self.calls: list[tuple[date, date]] = []
 
-    async def fetch_reports(self, begin_date: date, end_date: date) -> list[dict[str, Any]]:
+    async def fetch_reports(
+        self, begin_date: date, end_date: date, **_: Any
+    ) -> list[dict[str, Any]]:
         self.calls.append((begin_date, end_date))
         return list(self.rows)
 

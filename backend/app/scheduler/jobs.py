@@ -890,6 +890,31 @@ async def announcements_poll_job() -> None:
         await _alert_job_failure("announcements_poll", exc)
 
 
+async def research_reports_daily_job() -> None:
+    """东财卖方研报每日增量（18:40，近 3 日滚动窗口，幂等）。
+
+    研报在工作日盘后集中发布，但也可能周末/节假日出现；不设工作日守卫，
+    靠 ``content_items`` 的 ``(source_name, raw_hash)`` 唯一键去重。
+    窗口取 3 日是为了覆盖上游晚到/前一日漏跑；重跑同一窗口新增行数 = 0。
+    """
+    from datetime import timedelta  # noqa: PLC0415
+
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services.content_ingest.research_report import (  # noqa: PLC0415
+        ingest_research_reports,
+    )
+
+    try:
+        end = datetime.now(_SH_TZ).date()
+        async with async_session_factory() as db:
+            result = await ingest_research_reports(db, end - timedelta(days=3), end)
+            await db.commit()
+        logger.info("Research reports daily done: %s", result)
+    except Exception as exc:
+        logger.exception("Research reports daily failed")
+        await _alert_job_failure("research_reports_daily", exc)
+
+
 # ------------------------------------------------------------------
 # Concept board members (daily full snapshot + diff)
 # ------------------------------------------------------------------

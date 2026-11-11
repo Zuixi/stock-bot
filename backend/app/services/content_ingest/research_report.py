@@ -269,7 +269,13 @@ async def _mark_superseded(db: AsyncSession, content_id: int, row: dict[str, Any
 
 
 async def ingest_research_reports(
-    db: AsyncSession, begin_date: date, end_date: date, *, client: Any | None = None
+    db: AsyncSession,
+    begin_date: date,
+    end_date: date,
+    *,
+    client: Any | None = None,
+    page_size: int = 100,
+    max_pages: int = 50,
 ) -> dict[str, int]:
     """按日期区间抓取东财研报并写内容事实层，返回 ``fetched/inserted/skipped``。
 
@@ -278,7 +284,9 @@ async def ingest_research_reports(
     不入库（没有原文入口或无法定序的内容不可溯源），计入 ``skipped``。
     """
     report_client = client or EastmoneyReportClient()
-    rows = await report_client.fetch_reports(begin_date, end_date)
+    rows = await report_client.fetch_reports(
+        begin_date, end_date, page_size=page_size, max_pages=max_pages
+    )
 
     content_rows: list[dict[str, Any]] = []
     payloads: list[dict[str, Any]] = []

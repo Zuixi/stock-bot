@@ -34,6 +34,7 @@ from app.scheduler.jobs import (
     reconcile_market_data_job,
     reconcile_retry_job,
     repurchase_daily_job,
+    research_reports_daily_job,
     sector_moneyflow_job,
     securities_refresh_job,
     sentiment_daily_job,
@@ -402,6 +403,17 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(hour="8-22", minute="*/10", timezone="Asia/Shanghai"),
         id="announcements_poll",
         name="Cninfo announcements poll",
+        misfire_grace_time=INTRADAY_GRACE_SEC,
+        replace_existing=True,
+    )
+
+    # Eastmoney sell-side research reports: daily 18:40, 3-day rolling window.
+    # 研报含非交易日发布 → 不设工作日守卫；唯一键去重，重跑幂等。
+    scheduler.add_job(
+        research_reports_daily_job,
+        CronTrigger(hour=18, minute=40, timezone="Asia/Shanghai"),
+        id="research_reports_daily",
+        name="Eastmoney research reports daily",
         misfire_grace_time=INTRADAY_GRACE_SEC,
         replace_existing=True,
     )
