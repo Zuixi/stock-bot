@@ -51,11 +51,27 @@ sequenceDiagram
     participant TS as TuShare API
     participant DB as PostgreSQL
     API->>MQ: publish task (queue_key)
-    W->>TS: fetch
+    W->>TS: fetch（失败先回放本地 JSONL）
     TS-->>W: raw data
-    W->>DB: upsert
+    W->>W: validate（缺列/越界/重复 → quarantine）
+    W->>DB: upsert accepted + 写 ingest_batches 终态
+    W->>DB: 期望断言（data_quality_runs）
     W->>API: task status 更新
 ```
+
+### 3.1 摄取管道（P5，`services/ingest_pipeline.py`）
+
+单分区（domain × business_date × source × capture_kind）的执行顺序固定：
+
+1. `pg_try_advisory_lock` 去重（拿不到锁 = 已有进程在做，直接 skip）；
+2. 查封存账本：`status in (accepted, replayed)` 且 DB 行数一致 ⇒ **零外呼**；
+3. 外呼失败 → 回放当天 JSONL（`DataSaver.load_dataframe`）→ 仍失败则负缓存 + 失败账本；
+4. 行级校验；缺列判整批 `schema.missing_column`（上游契约变了，不把 NULL 灌进 core）；
+5. 单事务写 accepted + quarantine；提交后再写批次终态（commit-before-seal）；
+6. 期望断言全部 `block` 通过才封存；否则下一轮对账重拉。
+
+账本三表：`ingest_batches`（终态/封存）、`ingest_quarantine`（拒绝行 + reason_code）、
+`data_quality_runs`（断言历史）。
 
 读路径是标准 read-through：命中 Redis 直接返回；未命中查库并回填。**Redis 不可用会静默降级为 cache miss**（不报错）——本地/性能类排查务必先确认 `REDIS_URL` 指对（本机映射 6380）。
 
@@ -99,6 +115,8 @@ sequenceDiagram
 | `/api/v1/tags` | `tags.py` | 自定义标签与分组 |
 | `/api/v1/watchlists` | `watchlists.py` | 自选股 |
 | `/api/v1/tasks` | `tasks.py` | 异步任务状态与手动触发 |
+| `/api/v1/ops` | `ops.py` | **只读运维面**：数据质量断言、存储健康（表大小/死元组/分区）、跨页一致性。生产需 `OPS_API_TOKEN`（未配置 fail-closed 503） |
+| `/api/v1/provenance` | `provenance.py` | 指标溯源：值 → 口径版本 → 来源表行数 → 批次 → 原始 JSONL → 质量/新鲜度（6 个跨页共用指标） |
 
 > `/market` 前缀由两个模块共用（`market.py` 与 `market_data.py`），改动时注意两端点的命名不要撞车。
 
@@ -113,6 +131,7 @@ sequenceDiagram
 | 分类 | `sw_industry_classes` / `sw_industry_members`（申万）、概念板块与成分表（业务键为 `symbol`，见 [ADR 0003](../../decisions/0003-concept-membership-symbol-as-key.md)） |
 | 投研 | `industry_metrics`（行业级 `stock_id` 为 NULL、公司级带 `stock_id`，单表共用一个读取面）、`industry_reference_points`、`industry_signals` |
 | 任务 | `tasks`（任务状态跟踪） |
+| 数据质量 | `ingest_batches`（采集终态/封存）· `ingest_quarantine`（拒绝行 + reason_code）· `data_quality_runs`（期望断言历史） |
 | 派生 | 由基础表计算并按 upsert 写回的指标行 |
 
 更完整的库表与约束见 [`database-architecture.md`](../database-architecture.md)。

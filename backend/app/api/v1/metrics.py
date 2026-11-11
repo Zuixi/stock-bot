@@ -17,6 +17,9 @@ scope 用 `industry_key`（语义已泛化为通用 scope 键）区分。本路�
 
 from __future__ import annotations
 
+from datetime import date
+from typing import Annotated
+
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import CacheDep, DbDep, require_permissions
@@ -30,14 +33,17 @@ router = APIRouter(dependencies=[require_permissions("research:read")])
 SERIES_CACHE_KEY = "metrics:series:{scope}:{metric}:{range}"
 
 
-def _series_cache_key(scope_key: str, metric_key: str, range_text: str) -> str:
+def _series_cache_key(
+    scope_key: str, metric_key: str, range_text: str, as_of: date | None = None
+) -> str:
     """缓存键用**规范化后的 range 文本**（`1Y` → `1y`）。
 
     键里放 range 本身而不是行数上界：range 现在是时间窗，窗口不同则结果不同，
     不能靠 limit 折叠（`1y` 与 `366d` 的 limit 相同但窗口相同、文本不同 —— 会被
     规范化成同一把键，这是有意的等价合并，而不是把两个不同窗口混为一谈）。
     """
-    return SERIES_CACHE_KEY.format(scope=scope_key, metric=metric_key, range=range_text)
+    key = SERIES_CACHE_KEY.format(scope=scope_key, metric=metric_key, range=range_text)
+    return f"{key}:asof={as_of.isoformat()}" if as_of is not None else key
 
 
 def _unprocessable(detail: str) -> HTTPException:
@@ -60,6 +66,9 @@ async def get_latest_metrics(
     metric_keys: list[str] | None = Query(
         None, description="metric_key 白名单；省略=已登记 scope 的全部指标。未登记即 404"
     ),
+    as_of: Annotated[
+        date | None, Query(description="PIT 截止日：只返回该日之前已发布（published_at）的值")
+    ] = None,
 ) -> list[MetricLatestOut]:
     """每指标最新值 + `source/as_of/freq/caliber_version` 四徽章（registry 驱动）。
 
@@ -94,6 +103,9 @@ async def get_series(
     range: str = Query(
         default=service.SERIES_DEFAULT_RANGE, description="真实时间窗：30d / 6w / 3m / 1y / all"
     ),
+    as_of: Annotated[
+        date | None, Query(description="PIT 截止日：只返回该日之前已发布（published_at）的点")
+    ] = None,
 ) -> MetricSeriesOut:
     """**窗口内**升序序列（单一源 + 四徽章），Redis 缓存。
 
@@ -104,12 +116,12 @@ async def get_series(
     parsed = service.parse_series_range(range)
     if parsed is None:
         raise _unprocessable(f"非法 range: {range!r}；应形如 30d / 6w / 3m / 1y 或 all")
-    key = _series_cache_key(scope_key, metric_key, parsed.text)
+    key = _series_cache_key(scope_key, metric_key, parsed.text, as_of)
     try:
         cached = await cache.get(key)
         if cached is not None:
             return MetricSeriesOut(**cached)
-        out = await service.get_series(db, scope_key, metric_key, parsed.text)
+        out = await service.get_series(db, scope_key, metric_key, parsed.text, as_of=as_of)
     except service.UnknownIndustryError as exc:
         raise not_found_response("Scope", scope_key) from exc
     except service.UnknownMetricError as exc:

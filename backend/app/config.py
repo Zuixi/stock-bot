@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     database_pool_size: int = 10
     database_max_overflow: int = 20
 
+    # Ops 只读端点（/api/v1/ops/*）的内部令牌。为空时本地开发不校验；
+    # 生产（APP_ENV=production）为空则 fail-closed 返 503，避免表大小/血缘对外裸奔。
+    ops_api_token: str = ""
+
     # Redis
     redis_url: str = "redis://localhost:6379/0"
     redis_default_ttl: int = 300  # seconds

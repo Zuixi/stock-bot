@@ -78,6 +78,9 @@ class LimitUpLadderOut(BaseModel):
     # 收盘路径不设、默认 None（序列化时随 Pydantic 默认 include None 出现 null）；
     # 盘中路径填 "盘中 HH:MM"；回落填 "盘中不可用，已回落收盘"。
     as_of_label: str | None = None
+    #: 盘中口径回落标记：True = 东财池不可用，响应体是**最近完整交易日**的收盘口径。
+    #: 前端据此把"今日盘中"的措辞改成"回落"，而不是让用户以为看到的是今天的数据。
+    intraday_fallback: bool = False
 
 
 class SectorLimitUpItemOut(BaseModel):
@@ -105,6 +108,7 @@ class SectorLimitUpOut(BaseModel):
     unclassified_count: int = 0
     items: list[SectorLimitUpItemOut] = []
     as_of_label: str | None = None
+    intraday_fallback: bool = False
 
 
 class YesterdayLimitUpItemOut(BaseModel):
@@ -131,6 +135,58 @@ class YesterdayLimitUpOut(BaseModel):
     kpis: dict[str, Any] = {}
     items: list[YesterdayLimitUpItemOut] = []
     as_of_label: str | None = None
+    intraday_fallback: bool = False
+
+
+# ── 短线热度股追踪（GET /market/limit-up/stock-history）────────────────────────────
+#
+# 行 = 股票，列 = 交易日；事实来自 `market_limit_up_stock_daily`（不重算、不插值）。
+# `dates` 只含**实际有事实**的交易日；缺的那天进 `missing_dates`，由前端画警告，
+# 不插全 `none` 的空列（空列 = "那天没人涨停" 这个假断言）。
+#
+# `streak` 只在 `limit_up` 格有值：`None` 是"不是当日收盘涨停"，不是 0 板。
+
+#: 单元格状态：收盘涨停 / 炸板 / 昨日涨停今日断板 / 未上榜。
+#: 「未上榜」≠ 停牌 ≠ 未涨停（事实表行集是候选窗口，不是全市场）。
+HeatCellStatus = Literal["limit_up", "broken", "dropped", "none"]
+
+
+class HeatStockCellOut(BaseModel):
+    status: HeatCellStatus
+    streak: int | None = None
+
+
+class HeatStockRowOut(BaseModel):
+    symbol: str
+    name: str
+    current_status: HeatCellStatus
+    current_streak: int
+    max_streak: int
+    boards: int
+    broken_days: int
+    last_limit_up: date | None = None
+    cells: list[HeatStockCellOut] = []
+
+
+class HeatStockWindowOut(BaseModel):
+    """窗口自描述：`days` 是**请求**的交易日数；`samples` 是实际有事实的天数。"""
+
+    days: int
+    start: date | None = None
+    end: date | None = None
+    samples: int = 0
+
+
+class HeatStockHistoryOut(BaseModel):
+    as_of: date | None = None
+    window: HeatStockWindowOut
+    dates: list[date] = []
+    min_streak: int = 2
+    total: int = 0
+    truncated: bool = False
+    degraded_reason: Literal["no_fact_rows", "facts_gap"] | None = None
+    missing_dates: list[date] = []
+    rows: list[HeatStockRowOut] = []
 
 
 class SentimentCalendarPointOut(BaseModel):

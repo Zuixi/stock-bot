@@ -4,12 +4,14 @@ from app.models.cluster import ClusterExplanation, ClusteringMember, ClusteringR
 from app.models.concept import ConceptBoard, ConceptMember, ConceptMemberChange
 from app.models.content import ContentEntity, ContentItem, ContentMetric, UserContentState
 from app.models.daily_basic import DailyBasicIndicator
+from app.models.data_quality import DataQualityRun, IngestBatch, IngestQuarantine
 from app.models.feature import StockFeature
 from app.models.financial import (
     BalanceSheetFacts,
     CashFlowStatementFacts,
     FinancialMetric,
     FinancialRawRecord,
+    FinancialReportRevision,
     FinancialReportVersion,
     IncomeStatementFacts,
 )
@@ -36,6 +38,7 @@ from app.models.market_data import (  # noqa: F401
 # `models/market_data.py`（并行会话的全景特性自带 ingest + 读面）；本文件不再单独维护副本，
 # 否则 SQLAlchemy 会因同名表重复定义而 ImportError。
 from app.models.quote import DailyQuote
+from app.models.research_backtest import BacktestRun
 from app.models.securities import CbDaily, FundEtfDaily
 from app.models.sse_index_snapshot import SseIndexSnapshot
 from app.models.stock import Stock, StockHistory, StockUserTag
@@ -51,6 +54,9 @@ __all__ = [
     "UserWatchlistItem",
     "DailyQuote",
     "DailyBasicIndicator",
+    "IngestBatch",
+    "IngestQuarantine",
+    "DataQualityRun",
     "IndexDaily",
     "SseIndexSnapshot",
     "StockFeature",
@@ -88,9 +94,11 @@ __all__ = [
     "MarketBreadthBucketDaily",
     "MarketIndustryDaily",
     "FinancialRawRecord",
+    "FinancialReportRevision",
     "FinancialReportVersion",
     "IncomeStatementFacts",
     "BalanceSheetFacts",
     "CashFlowStatementFacts",
     "FinancialMetric",
+    "BacktestRun",
 ]

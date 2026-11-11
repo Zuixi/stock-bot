@@ -48,6 +48,15 @@ def _patch_reconcile(
         return result
 
     monkeypatch.setattr(jobs, "_run_reconcile", _fake)
+
+    # 2026-11-11（P5/P7）：对账尾巴新增两步（全景刷新 + 质量断言）。本文件只验证
+    # "收敛/告警边界"，两步各自的行为由 test_panorama_job / test_data_expectations 覆盖；
+    # 不在这里打桩会让 job 测试连真库（违反 test_job_layer_never_touches_the_real_engine）。
+    async def _noop(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(jobs, "_refresh_panorama", _noop)
+    monkeypatch.setattr(jobs, "_run_data_quality", _noop)
     return calls
 
 

@@ -98,6 +98,12 @@
   color: var(--text-secondary);
 }
 
+/* 回落态必须比普通说明更显眼：数字来自上一交易日，用户不能误读成"今天的盘中"。 */
+.sentiment-mode-switch__hint[data-fallback="true"] {
+  color: var(--color-warning, #d97706);
+  font-weight: 500;
+}
+
 /* ---- Task 16：可点击条目的语义化后的版式 ---- */
 
 /* 热门板块行内容骨架（原内联样式，因行本体现在包了一层 <button> 而抽出） */

@@ -383,6 +383,20 @@
   padding: 12px 0;
 }
 
+/* ── 数据溯源（P7）────────────────────────────────────── */
+.thermo-provenance {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-secondary, #8b93a1);
+}
+
+.thermo-provenance > span {
+  margin-right: 2px;
+}
+
 /* ── 响应式 ───────────────────────────────────────────── */
 @media (max-width: 992px) {
   .thermo-grid {

@@ -288,10 +288,10 @@ def _report_db(**kw: Any) -> _FakeCoverageDB:
 
 
 async def test_coverage_report_covers_every_inspect_domain() -> None:
-    """巡检域一个都不能少：少一个就是"洞当天不告警"复发。"""
+    """覆盖率口径域一个都不能少：少一个就是"洞当天不告警"复发。"""
     report = await rc.coverage_report(_report_db())
-    assert [r["domain"] for r in report] == list(rc.INSPECT_DOMAINS)
-    assert set(rc.INSPECT_DOMAINS) == set(INSPECT_SOURCES)
+    assert [r["domain"] for r in report] == list(rc.COVERAGE_DOMAINS)
+    assert set(rc.COVERAGE_DOMAINS) == set(INSPECT_SOURCES)
 
 
 async def test_coverage_report_source_of_truth_matches_query_table() -> None:
@@ -385,21 +385,36 @@ async def test_coverage_report_is_read_only() -> None:
         assert not any(kw in sql for kw in ("insert", "update", "delete", "alter", "truncate")), sql
 
 
-async def test_coverage_report_limit_up_stock_daily_not_in_repairable_domains() -> None:
-    """`limit_up_stock_daily` 在巡检列表里但**不可自愈**（无 `_refetch_*`）。
+async def test_coverage_report_limit_up_stock_daily_is_now_repairable() -> None:
+    """`limit_up_stock_daily` 自 2026-11-11 起**可自愈**（R2）。
 
-    它一旦出现在 refetched/apply 路径就是假绿 —— 这条断言把两套域的边界钉死。
+    它仍在覆盖率报告里（`COVERAGE_DOMAINS`），但已从"只读巡检"转入 `DOMAINS`：
+    缺 10-14/15 这类洞不再只能人工补。边界靠两条断言钉死：在 `DOMAINS`、
+    有 `_refetch_`；且不再出现在"不可补域"清单里。
     """
-    assert "limit_up_stock_daily" in rc.INSPECT_DOMAINS
-    assert "limit_up_stock_daily" not in rc.DOMAINS
-    assert not hasattr(rc, "_refetch_limit_up_stock_daily")
+    assert "limit_up_stock_daily" in rc.DOMAINS
+    assert "limit_up_stock_daily" not in rc.INSPECT_DOMAINS
+    assert callable(getattr(rc, "_refetch_limit_up_stock_daily", None))
 
 
 async def test_coverage_report_inspect_domains_never_repairable() -> None:
-    """所有巡检域都没有回补器；`DOMAINS`（可自愈域）恒等于有 `_refetch_*` 的域。"""
+    """只读巡检域（真正不可补的）没有回补器；`DOMAINS` 每个域都有 `_refetch_*`。"""
     for domain in rc.INSPECT_DOMAINS:
         assert not hasattr(rc, f"_refetch_{domain}"), domain
-    assert set(rc.DOMAINS) == {"daily_quotes", "daily_basic", "price_limits", "sentiment"}
+    assert set(rc.DOMAINS) == {
+        "daily_quotes",
+        "daily_basic",
+        "price_limits",
+        "sentiment",
+        "limit_up_stock_daily",
+        "dragon_tiger",
+        "block_trade",
+        "share_float",
+        "repurchase",
+        "northbound",
+        "market_moneyflow",
+        "global_index",
+    }
 
 
 async def test_coverage_report_never_touches_refetch_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -420,8 +435,11 @@ async def test_coverage_report_never_touches_refetch_path(monkeypatch: pytest.Mo
 
 
 async def test_reconcile_domains_unchanged_by_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
-    """补漏路径的域集不得被巡检域污染（E1 的回归守卫）。"""
-    assert rc.DOMAINS == ("daily_quotes", "daily_basic", "price_limits", "sentiment")
+    """补漏路径的域集不得被**覆盖率口径**污染（E1 的回归守卫）。"""
+    before = tuple(rc.DOMAINS)
+    assert "sector_moneyflow" not in rc.DOMAINS  # A 类不可补
+    await rc.coverage_report(_report_db())
+    assert tuple(rc.DOMAINS) == before
 
 
 async def test_coverage_report_sector_moneyflow_complete_days_use_eod_full() -> None:

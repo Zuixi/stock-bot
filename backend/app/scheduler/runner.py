@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from app.scheduler.jobs import (
     RECONCILE_RETRY_TICKS,
@@ -21,20 +22,26 @@ from app.scheduler.jobs import (
     concept_members_refresh_job,
     daily_basic_backfill_job,
     daily_quotes_backfill_job,
+    data_retention_job,
     dragon_tiger_daily_job,
     financial_backfill_job,
     global_index_daily_job,
+    independent_verify_job,
     industry_metrics_refresh_job,
     intraday_sentiment_poll_job,
     limit_up_stock_facts_job,
     market_moneyflow_daily_job,
     market_panorama_daily_job,
     northbound_daily_job,
+    partition_maintenance_job,
     price_limits_daily_job,
     reconcile_market_data_job,
     reconcile_retry_job,
+    reconcile_weekly_deep_job,
     repurchase_daily_job,
     research_reports_daily_job,
+    retry_dispatch_job,
+    sector_moneyflow_capture_job,
     sector_moneyflow_job,
     securities_refresh_job,
     sentiment_daily_job,
@@ -431,6 +438,59 @@ def create_scheduler() -> AsyncIOScheduler:
         ),
         id="financial_backfill",
         name="Financial statements backfill",
+        replace_existing=True,
+    )
+
+    # 失败重试调度：每 60 秒（R1）。只跑 RETRYABLE_JOBS 里的幂等任务。
+    scheduler.add_job(
+        retry_dispatch_job,
+        IntervalTrigger(seconds=60, timezone="Asia/Shanghai"),
+        id="retry_dispatcher",
+        name="Retry dispatcher",
+        replace_existing=True,
+    )
+    # A 类"抓到为止"：15:15–16:25 每 10 分钟（15:05/15:35 的两次机会之外）
+    scheduler.add_job(
+        sector_moneyflow_capture_job,
+        CronTrigger(
+            day_of_week="mon-fri", hour="15-16", minute="15,25,45,55", timezone="Asia/Shanghai"
+        ),
+        id="sector_moneyflow_capture",
+        name="Sector moneyflow capture (until complete)",
+        replace_existing=True,
+    )
+    # 周末深扫 90 个交易日：日环只看 30 天，更早的沉没洞靠周环
+    scheduler.add_job(
+        reconcile_weekly_deep_job,
+        CronTrigger(day_of_week="sat", hour=4, minute=0, timezone="Asia/Shanghai"),
+        id="reconcile_weekly_deep",
+        name="Weekly deep reconcile (90d)",
+        replace_existing=True,
+    )
+
+    # 跨源抽样校验：每周六 04:30（深扫之后，库已补齐；抽 12 只比对东财）
+    scheduler.add_job(
+        independent_verify_job,
+        CronTrigger(day_of_week="sat", hour=4, minute=30, timezone="Asia/Shanghai"),
+        id="independent_verify",
+        name="Independent cross-source verification (weekly)",
+        replace_existing=True,
+    )
+
+    # 保留策略：每周六 03:30（账本 90/180/365 天、盘中 poll 90 天）
+    scheduler.add_job(
+        data_retention_job,
+        CronTrigger(day_of_week="sat", hour=3, minute=30, timezone="Asia/Shanghai"),
+        id="data_retention_weekly",
+        name="Data retention (weekly)",
+        replace_existing=True,
+    )
+    # 分区维护：每月 1 日 03:00（补未来两个月分区；非分区表直接返回）
+    scheduler.add_job(
+        partition_maintenance_job,
+        CronTrigger(day=1, hour=3, minute=0, timezone="Asia/Shanghai"),
+        id="partition_maintenance",
+        name="Partition maintenance (monthly)",
         replace_existing=True,
     )
 

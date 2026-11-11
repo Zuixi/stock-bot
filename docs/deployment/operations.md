@@ -56,6 +56,7 @@ alembic downgrade -1
 | 容器里读不到 `data/` 种子文件 | `backend/.dockerignore` 是否放了 `data/*` 豁免 | 漏豁免会让加载器**静默返回 0**（本地有、生产没有） |
 | 前端某控件永久不可用 | 该控件 disabled 的判据是否有真实回补路径 | 曾有文案写"后台拉取中"而根本没有对应任务 |
 | 卡片永久空白 | 读路径是否按"今天有数据吗"过滤 | 应改为"最近可用快照 + `stale_days` + `source_status`" |
+| 同一指标两个页面数字不一致 | `GET /api/v1/ops/consistency?date=` | 用两条独立路径定位哪条口径坏了；**不要**自动修，先确认权威口径 |
 | 本地缓存/性能测量失真 | `REDIS_URL` 是否指向 **6380** | 未设时 `CacheClient` 静默降级为 cache miss，测量全部失真 |
 | 两个容器抢同一端口 | `docker compose.prod.yml` 的 `gateway.ports: !override []` | 见 [`production.md`](./production.md#边缘层caddy-自动-https--traefik-路由两跳不是三跳) |
 | 证书重新签发/被限流 | `stock-bot_caddy_data` 卷是否被 `down -v` 删掉 | Let's Encrypt 同域名每周重复签发有限额 |
@@ -73,6 +74,67 @@ curl -s localhost/api/v1/health | head -c 200                  # version / commi
 ```
 
 对账式自愈的设计目标：宿主睡眠、Docker Desktop Resource Saver、容器重启、任务异常之后，系统**在恢复点自动收敛到完整状态**，不依赖"定时任务准点跑"。因此排查数据缺口的第一步不是找那条失败日志，而是看新鲜度端点报了哪些缺口。
+
+## 数据质量与跨页一致性
+
+对账保证"该到的到了"，期望断言保证"到了的数不是坏的"，一致性检查保证"同一个事实只有一套数"。
+
+```bash
+# 跨源抽样校验最近一次结果（只读；未跑过 → 404，不伪造 pass）
+curl -s $BASE/api/v1/ops/verification | jq
+
+# 11 条声明式期望（只读；生产需 X-Internal-Token）
+curl -s localhost/api/v1/ops/data-quality | head -c 400
+curl -s localhost/api/v1/ops/data-quality?date=2026-11-10 | python3 -m json.tool
+
+# 同一事实的两条独立路径（派生表 vs 底座重算）：up/down/成交额
+curl -s localhost/api/v1/ops/consistency?date=2026-11-10 | python3 -m json.tool
+
+# 指标溯源（值 → 口径 → 来源行数 → 批次 → 原始 JSONL）
+curl -s 'localhost/api/v1/provenance/zt_count?date=2026-11-10' | python3 -m json.tool
+
+# 失败重试队列（排队中 + DLQ；只读，不触发重试）
+curl -s localhost/api/v1/ops/retries | python3 -m json.tool
+```
+
+重试策略：只对 `RETRYABLE_JOBS` 里的幂等任务生效（20 个），退避 1/5/15/60/180 分钟，
+5 次后进 `job:retry:dead`（30 天 TTL）；高频轮询不进队列（下一 tick 就是重试）。
+补充域每轮最多补 5 个缺失日（`limit_up_stock_daily` 本地纯计算，上限 30），避免首次
+接入账本时一次打几十次外呼。
+
+失败归因：
+
+| 现象 | 先查 | 处置 |
+|---|---|---|
+| 期望 `fail`（block） | `ingest_quarantine` 的 `reason_code` 分布 | 修校验规则或上游契约；下一轮对账自动重拉 |
+| 期望 `warn` 长期不消失 | 是否停牌日/ST/上游迟到（合法偏差） | 调阈值前先看 30 天分布，别用阈值掩盖缺数 |
+| `consistency.mismatched` 非空 | 两条 SQL 的口径是否一致 | 先确认哪条是权威口径，再改另一条；**不要**用自动修复掩盖 |
+| 溯源 `quality` 为空 | 该日是否跑过对账尾巴的断言 | 手动跑一次 `reconcile_market_data_job` 或等 17:45 |
+
+## 存储治理
+
+```bash
+bash scripts/db_health.sh                 # 表大小 / 死元组 / 分区状态 / 膨胀告警
+bash scripts/backup_db.sh                 # 业务库 + 认证库，pg_dump -Fc + sha256，保留 14 天
+bash scripts/restore_drill.sh             # 恢复到临时库跑冒烟 SQL，输出 RTO（每月至少一次）
+```
+
+- **分区**：`daily_quotes` 按月分区，切换/回滚只跑
+  `cd backend && uv run python scripts/partition_daily_quotes.py --dry-run|--apply|--rollback|--cleanup`。
+  `--apply` 有约 30 秒维护窗口；脚本自带行数校验与 7 天回滚窗口。
+- **保留策略**（每周六 03:30）：quarantine 90 天、quality runs 180 天、batches 365 天、
+  盘中 `poll` 快照 90 天、财务原始响应 365 天。常量在
+  `backend/app/services/storage_maintenance_service.py::RETENTION_DAYS`。
+- **财务原始归档**：`cd backend && uv run python scripts/archive_financial_raw.py [--apply]`。
+- **autovacuum**：`daily_quotes` / `daily_basic_indicators` / `stock_price_limits` /
+  `sector_moneyflow_snapshots` 已按 2% 死元组阈值调参（迁移 `c3d4e5f6a7b8`）。
+- **恢复演练记录**：每次演练在下方表格补一行（日期 / 备份文件 / RTO / 结果）。
+
+### 恢复演练记录
+
+| 日期 | 备份文件 | RTO | 结果 | 执行人 |
+|---|---|---|---|---|
+| 2026-11-11 | 本地开发栈 `stock_bot_20261111_010348.dump`（725MB） | 126s | ✅ 4,550,432 行 / `max(trade_date)=2026-11-10` / alembic 1 行 | agent |
 
 ## 内存与 OOM 排障
 

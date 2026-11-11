@@ -619,3 +619,51 @@ def test_get_metric_window_filters_by_period_and_stays_ascending() -> None:
     assert "industry_metrics.period >=" in sql, sql
     assert "DESC" in sql and "ORDER BY" in sql  # 取最新 N 行再反转 → 升序
     assert [r.value for r in out] == [2.0, 3.0], "窗口过滤或升序不生效"
+
+
+@requires_pg
+def test_series_and_latest_respect_published_at_as_of() -> None:
+    """PIT 读面：``as_of`` 之前的修订不可见，之后的修订可见（不是按 period 猜）。
+
+    两行同一 metric 的不同报告期：8 月值 9/5 发布、9 月值 10/30 发布。
+    ``as_of=10/1`` 只能看到 8 月值；``as_of=11/1`` 才能看到 9 月值。
+    这条直接锁住"用 published_at 而不是 period 判断当时可得"。
+    """
+    first = datetime(2026, 9, 5, 16, 0, tzinfo=UTC)
+    second = datetime(2026, 10, 30, 16, 0, tzinfo=UTC)
+
+    async def _scenario(db: Any) -> tuple[Any, Any, Any]:
+        await service.batch_upsert_metrics(
+            db,
+            "pig",
+            [
+                {
+                    "metric_key": _PIT_KEY,
+                    "period": date(2026, 8, 31),
+                    "value": 10.0,
+                    "source": "manual",
+                    "published_at": first,
+                    "caliber_version": "M1-2026",
+                },
+                {
+                    "metric_key": _PIT_KEY,
+                    "period": date(2026, 9, 30),
+                    "value": 12.0,
+                    "source": "manual",
+                    "published_at": second,
+                    "caliber_version": "M2-2026",
+                },
+            ],
+        )
+        await db.commit()
+        early = await service.get_series(db, "pig", _PIT_KEY, "all", as_of=date(2026, 10, 1))
+        late = await service.get_series(db, "pig", _PIT_KEY, "all", as_of=date(2026, 11, 1))
+        latest_early = await service.get_latest_metrics_across_scopes(
+            db, ["pig"], [_PIT_KEY], as_of=date(2026, 10, 1)
+        )
+        return early, late, latest_early
+
+    early, late, latest_early = asyncio.run(_with_rollback(_scenario))
+    assert [p.value for p in early.points] == [10.0]
+    assert [p.value for p in late.points] == [10.0, 12.0]
+    assert latest_early[0].value == 10.0

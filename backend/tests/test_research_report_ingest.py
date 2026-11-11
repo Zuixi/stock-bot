@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -22,8 +23,9 @@ from zoneinfo import ZoneInfo
 import asyncpg
 import pytest
 from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from app.core.database import async_session_factory, engine
+from app.core.database import engine
 from app.models.content import ContentEntity, ContentItem, ContentMetric
 from app.services.content_ingest import research_report as rr
 
@@ -66,11 +68,16 @@ requires_pg = pytest.mark.skipif(
 pytestmark = requires_pg
 
 
-@pytest.fixture(autouse=True)
-async def _dispose_engine_after_test() -> Any:
-    """每个用例一个事件循环：不 dispose 会把上个循环的连接留给下个用例。"""
-    yield
-    await engine.dispose()
+@asynccontextmanager
+async def _session() -> Any:
+    """每个用例独立 engine：全局 pool 的连接可能绑在别的（已关闭的）事件循环上，
+    全量跑时会在第一个 `execute` 抛 `attached to a different loop`（实测）。"""
+    eng = create_async_engine(engine.url.render_as_string(hide_password=False))
+    try:
+        async with AsyncSession(eng, expire_on_commit=False) as session:
+            yield session
+    finally:
+        await eng.dispose()
 
 
 def _row(source_item_id: str, **overrides: Any) -> dict[str, Any]:
@@ -161,7 +168,7 @@ async def test_ingest_is_idempotent_and_writes_structured_metrics() -> None:
     ]
     client = _FakeClient(rows)
 
-    async with async_session_factory() as db:
+    async with _session() as db:
         try:
             await _purge(db, raw_hashes)
 
@@ -276,7 +283,7 @@ async def test_dedup_marks_older_report_superseded() -> None:
         _row(older_id, published_at=datetime(2026, 11, 3, tzinfo=SHANGHAI)),
     ]
 
-    async with async_session_factory() as db:
+    async with _session() as db:
         try:
             await _purge(db, raw_hashes)
             result = await rr.ingest_research_reports(db, BEGIN, END, client=_FakeClient(rows))
@@ -298,7 +305,7 @@ async def test_dedup_handles_reverse_ingest_order() -> None:
     newer_row = _row(newer_id, published_at=datetime(2026, 11, 11, tzinfo=SHANGHAI))
     older_row = _row(older_id, published_at=datetime(2026, 11, 4, tzinfo=SHANGHAI))
 
-    async with async_session_factory() as db:
+    async with _session() as db:
         try:
             await _purge(db, raw_hashes)
             await rr.ingest_research_reports(db, BEGIN, END, client=_FakeClient([newer_row]))
@@ -327,7 +334,7 @@ async def test_ingest_skips_rows_without_stock_code_or_pdf_url() -> None:
         _row(no_pdf_id, pdf_url=None),
     ]
 
-    async with async_session_factory() as db:
+    async with _session() as db:
         try:
             await _purge(db, raw_hashes)
             result = await rr.ingest_research_reports(db, BEGIN, END, client=_FakeClient(rows))
@@ -364,7 +371,7 @@ async def test_skips_row_with_empty_title() -> None:
     rows = [_row("EMPTY-TITLE-1", title="   ")]
     fake = _FakeClient(rows)
     raw_hashes = _raw_hashes("EMPTY-TITLE-1")
-    async with async_session_factory() as db:
+    async with _session() as db:
         try:
             await _purge(db, raw_hashes)
             result = await rr.ingest_research_reports(db, BEGIN, END, client=fake)

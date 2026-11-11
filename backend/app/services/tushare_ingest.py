@@ -295,7 +295,7 @@ class TuShareIngestService:
             logger.info("No daily data for trade_date=%s", trade_date)
             return {"saved": 0, "upserted": 0, "trade_date": trade_date}
 
-        await self.saver.save_dataframe(
+        raw_path = await self.saver.save_dataframe(
             "daily",
             df,
             {"trade_date": trade_date},
@@ -318,17 +318,32 @@ class TuShareIngestService:
         # 这些行的行情会被静默丢弃，必须留痕——否则"少 65 只"只体现为一个 skipped 数字。
         unknown_ts_codes: list[str] = []
 
+        rejected_rows: list[dict[str, Any]] = []
         for row in df.to_dict("records"):
             ts_code = str(row.get("ts_code", "")).strip()
             stock_id = stock_id_map.get(ts_code)
             if stock_id is None:
                 skipped += 1
                 unknown_ts_codes.append(ts_code)
+                rejected_rows.append(
+                    {
+                        "reason_code": "mapping.unknown_key",
+                        "row_key": ts_code,
+                        "payload": {str(k): _to_builtin(v) for k, v in row.items()},
+                    }
+                )
                 continue
 
             close_val = _to_builtin(row.get("close"))
             if close_val is None:
                 skipped += 1
+                rejected_rows.append(
+                    {
+                        "reason_code": "value.required_null",
+                        "row_key": ts_code,
+                        "payload": {str(k): _to_builtin(v) for k, v in row.items()},
+                    }
+                )
                 continue
 
             quotes.append(
@@ -355,6 +370,46 @@ class TuShareIngestService:
             upserted += await quote_repo.upsert_quotes(db, batch)
             await db.commit()
 
+        from app.services.ingest_pipeline import record_batch, record_quarantine  # noqa: PLC0415
+
+        # "成功"必须是**数据层**的成功：行数达标 + pct_chg 非空率达标才封存。
+        # `mapping.unknown_key` 是名录滞后（刷新 universe 修），不是当日数据坏了；
+        # 其余拒绝（close 为空等）会让批次停在 partial，下一轮对账重拉。
+        blocking = [r for r in rejected_rows if r["reason_code"] != "mapping.unknown_key"]
+        row_ratio = upserted / max(len(stock_id_map), 1)
+        pct_ratio = (
+            float(df["pct_chg"].notna().mean()) if "pct_chg" in df.columns and len(df) else 0.0
+        )
+        batch_status = (
+            "accepted" if not blocking and row_ratio >= 0.9 and pct_ratio >= 0.99 else "partial"
+        )
+        batch_id = None
+        try:
+            async with db.begin_nested():
+                batch_id = await record_batch(
+                    db,
+                    domain="daily_quotes",
+                    business_date=parsed_date,
+                    source="tushare",
+                    capture_kind="eod_full",
+                    params={"trade_date": trade_date},
+                    rows_fetched=len(df),
+                    rows_accepted=upserted,
+                    rows_quarantined=len(rejected_rows),
+                    status=batch_status,
+                    raw_path=str(raw_path),
+                )
+                await record_quarantine(
+                    db,
+                    batch_id=batch_id,
+                    domain="daily_quotes",
+                    business_date=parsed_date,
+                    rejected=rejected_rows,
+                )
+            await db.commit()
+        except Exception:  # noqa: BLE001 — 账本失败不得反噬已提交的行情
+            logger.warning("daily quotes batch ledger write failed", exc_info=True)
+
         logger.info(
             "Daily ingest done: trade_date=%s fetched=%d upserted=%d skipped=%d",
             trade_date,
@@ -376,6 +431,8 @@ class TuShareIngestService:
             "skipped": skipped,
             "unknown_ts_codes": len(unknown_ts_codes),
             "trade_date": trade_date,
+            "batch_id": batch_id,
+            "quarantined": len(rejected_rows),
         }
 
     async def list_stocks_missing_daily_coverage(
@@ -617,7 +674,7 @@ class TuShareIngestService:
             logger.info("No daily_basic data for trade_date=%s", trade_date)
             return {"saved": 0, "upserted": 0, "trade_date": trade_date}
 
-        await self.saver.save_dataframe(
+        raw_path = await self.saver.save_dataframe(
             "daily_basic",
             df,
             {"trade_date": trade_date},
@@ -638,12 +695,20 @@ class TuShareIngestService:
         parsed_date = _dt.strptime(trade_date, "%Y%m%d").date()
         records: list[DailyBasicIndicator] = []
         skipped = 0
+        rejected_rows: list[dict[str, Any]] = []
 
         for row in df.to_dict("records"):
             ts_code = str(row.get("ts_code", "")).strip()
             stock_id = stock_id_map.get(ts_code)
             if stock_id is None:
                 skipped += 1
+                rejected_rows.append(
+                    {
+                        "reason_code": "mapping.unknown_key",
+                        "row_key": ts_code,
+                        "payload": {str(k): _to_builtin(v) for k, v in row.items()},
+                    }
+                )
                 continue
 
             close_val = _to_builtin(row.get("close"))
@@ -678,6 +743,38 @@ class TuShareIngestService:
             upserted += await daily_basic_repo.upsert_daily_basics(db, batch)
             await db.commit()
 
+        from app.services.ingest_pipeline import record_batch, record_quarantine  # noqa: PLC0415
+
+        blocking = [r for r in rejected_rows if r["reason_code"] != "mapping.unknown_key"]
+        row_ratio = upserted / max(len(stock_id_map), 1)
+        batch_status = "accepted" if not blocking and row_ratio >= 0.9 else "partial"
+        batch_id = None
+        try:
+            async with db.begin_nested():
+                batch_id = await record_batch(
+                    db,
+                    domain="daily_basic",
+                    business_date=parsed_date,
+                    source="tushare",
+                    capture_kind="eod_full",
+                    params={"trade_date": trade_date},
+                    rows_fetched=len(df),
+                    rows_accepted=upserted,
+                    rows_quarantined=len(rejected_rows),
+                    status=batch_status,
+                    raw_path=str(raw_path),
+                )
+                await record_quarantine(
+                    db,
+                    batch_id=batch_id,
+                    domain="daily_basic",
+                    business_date=parsed_date,
+                    rejected=rejected_rows,
+                )
+            await db.commit()
+        except Exception:  # noqa: BLE001 — 账本失败不得反噬已提交的指标
+            logger.warning("daily basic batch ledger write failed", exc_info=True)
+
         logger.info(
             "Daily basic ingest done: trade_date=%s fetched=%d upserted=%d skipped=%d",
             trade_date,
@@ -697,6 +794,8 @@ class TuShareIngestService:
             "upserted": upserted,
             "skipped": skipped,
             "trade_date": trade_date,
+            "batch_id": batch_id,
+            "quarantined": len(rejected_rows),
         }
 
     async def ingest_daily_basic_for_stock(

@@ -165,7 +165,7 @@ async def test_ingest_announcements_dedupes(monkeypatch):
                     "title": "t1",
                     "announce_time": datetime(2026, 9, 2, 8, 0),
                     "category": "report",
-                    "pdf_url": None,
+                    "pdf_url": "https://example.com/a1.pdf",
                 },
                 {
                     "announcement_id": "A1",
@@ -174,7 +174,7 @@ async def test_ingest_announcements_dedupes(monkeypatch):
                     "title": "t1",
                     "announce_time": datetime(2026, 9, 2, 8, 0),
                     "category": "report",
-                    "pdf_url": None,
+                    "pdf_url": "https://example.com/a1.pdf",
                 },
             ]
         return []
@@ -185,8 +185,17 @@ async def test_ingest_announcements_dedupes(monkeypatch):
         inserted.extend(rows)
         return len(rows)
 
+    async def fake_ids(_db, hashes, _source):
+        return {h: 1 for h in hashes}
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
     monkeypatch.setattr(anns.CninfoClient, "fetch_announcements", fake_fetch)
-    monkeypatch.setattr(anns.market_data_repo, "upsert_announcements", fake_upsert)
+    monkeypatch.setattr(anns.content_repo, "upsert_content_items", fake_upsert)
+    monkeypatch.setattr(anns.content_repo, "get_content_ids_by_hashes", fake_ids)
+    monkeypatch.setattr(anns.content_repo, "insert_content_entities", _noop)
+    monkeypatch.setattr(anns, "upsert_financial_metrics_for_content", _noop)
 
     result = await anns.ingest_announcements(db=None, days=3)
     assert result == {"report": 1, "event": 0, "equity_change": 0}

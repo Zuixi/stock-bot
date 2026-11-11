@@ -47,6 +47,110 @@
   `market_data_repo.upsert_announcements`，仓库层只剩 `list_announcements` 读视图
   （`journal_service` 零改动），全仓无第二条公告写路径。
 
+## 2026-11-11 - feat(data): R1 重试队列 + R2 自愈扩域 + R3 A 类当日必达
+
+- **R1**：新增 `retry_queue_service`（Redis ZSET，1/5/15/60/180 分钟退避，5 次进 DLQ）与
+  `retry_dispatcher`（60s）；失败 job 自动入队，仅限 `RETRYABLE_JOBS` 的 20 个幂等任务
+  （SSE/公告/板块轮询等高频任务排除）；新增 `/api/v1/ops/retries`。实测手动入队
+  `global_index_daily` → 下一 tick 自动成功、队列清空。
+- **R2**：`DOMAINS` 从 4 扩到 12（新增涨停事实/龙虎榜/大宗/解禁/回购/北向/市场资金流/
+  全球指数）；`DOMAIN_COMPLETENESS` 区分行数与批次（空数据可能是合法事实）；窗口
+  10→30 交易日；新增周六 90 天深扫 `reconcile_weekly_deep`；结构门禁
+  `test_domain_registry.py` 防止「纳入但无补漏器」。已回填 `limit_up_stock_daily`
+  2026-10-14/15/16。
+- **R3**：新增 `sector_moneyflow_capture`（15:15–16:25 每 10 分钟，直到 `eod_full`
+  达标），避免 A 类数据当天丢失即永久缺失。
+- **修**：`build_triage_rule_stats.DATE_COLUMN` 补 `index_dailies`，消除
+  `artifacts_refresh:triage_rule_stats KeyError('index_dailies')`；`_log_summary` 只报
+  「本轮后仍缺」的日子（不再把已补的算成缺口）；`limit_up_stock_daily` 批次记行集大小
+  而非 rowcount（Ruling 18 守卫拒绝覆写时 rowcount=0 不代表无事实）。
+- **限流保护**：窗口型补充域（全球指数/解禁/回购/北向/市场资金流）每轮只补 1 天
+  （一次请求覆盖多日，避免撞 TuShare `index_global` 10 次/分钟）；本地纯计算的涨停事实
+  上限 30。实测启动对账 ~60s 完成，缺口逐轮递减。
+- **修「盘中」整片空白**（2026-11-11 用户反馈）：`mode=intraday` 在东财涨停池不可用时
+  原先回落到 **今天** 的收盘口径，而交易时段内今天既无收盘行情也无当日涨跌停价 →
+  close 路径判 `price_limits_missing` 返回空快照（三张卡全空、梯队 0）。现改为回落到
+  **最近完整交易日**（实测 2026-11-10：涨停 95 / 4 个梯队 / 53 个板块 / 昨日涨停 58 只），
+  响应新增 `intraday_fallback` 并把回落日期写进 `as_of_label`；前端维度条显示橙色
+  「盘中池不可用 · 已回落到 2026-11-10 收盘口径」，回落态不再渲染当日分时曲线。
+  读路径不再落库（盘中写库会把不完整的一天固化进 `market_sentiment_daily`）。
+  另修：缓存命中的快照里 `as_of` 是 JSON 字符串，直接 `.isoformat()` 会让**第二次刷新
+  必 500**（实测），已归一化并加回归用例。
+- **R4 跨源校验**：`verification_service` 抽样 12 只用东财 push2his 比对收盘价/
+  涨跌幅（≥95% pass / ≥85% warn / 否则 fail；源不可用 = error）；`/ops/verification`
+  只读最近结果；`independent_verify` 周六 04:30 执行，进 `RETRYABLE_JOBS`。
+  新增离线恒等式断言 `dq.daily_quotes.price_identity`（block 级，11/11 实测通过）。
+  部署实测修一处：`(:day IS NULL OR business_date = :day)` 在 asyncpg 下抛
+  `AmbiguousParameterError`（裸 NULL 参数无类型）→ 两侧显式 `CAST(:day AS date)`。
+- **Q1 截断等价**：新增 `tests/test_truncation_equivalence.py`——同一查询日在
+  "含未来行 / 删未来行"两态下逐字段相等，并有反证用例防止假绿。
+- **Q1 PIT 读面**：`/metrics/latest`、`/metrics/series` 新增 `as_of`，仓储层按
+  `coalesce(date(published_at), period) <= as_of` 过滤，缓存键含截止日；真库测试
+  锁定“8 月值 9/5 发布、9 月值 10/30 发布 → as_of=10/1 只见 8 月值”。
+- **Q2 重述留痕**：新增 `financial_report_revisions`（迁移 `f7a8b9c0d1e2`，与回测
+  head 用 `a8b9c0d1e2f3` 合并）；覆盖前快照旧公告日/修订标记/`as_of`；
+  `GET .../financial-reports/{end_date}/revisions` 可查；真库测试锁定两次修订留 1 条快照。
+- **U1 溯源扩面**：所有已登记指标都可 `/provenance/{metric_key}` 查询；未接批次
+  账本的返回 `definition_only` + 实际读取行，不伪造 batch/quality。
+- **Q3 退市/归因**：回测篮子按 SCD2 成分取数、不过滤 `list_status/delist_date`，
+  有行情的退市股计入，降低幸存者偏差。
+- **测试环境修复**：重建 `stock_bot_test` 并迁移到 `a8b9c0d1e2f3`；修复 content
+  schema 反射复用全局 engine 导致的 `Event loop is closed`（独立 engine + dispose）。
+- **S2.3 回测**：新增 `backtest_runs`（迁移 `d5e6f7a8b9c0`）与
+  `POST/GET /api/v1/backtests`。事件研究用信号日 SCD2 成分股等权中位数 vs 指数，
+  `split` 必填、PIT 迟到信号拒绝落库、n<30 标记 `insufficient_sample`。
+  实测 pig/关注 27 个事件：1/5/20 日 n=26/22/9，均不足 30（如实标记）；
+  2026-11-10 六条一致性检查全 ok。口径字典核对接入 self_review 与 CI。
+- 门禁：`pytest 2136 passed`、mypy 262、ruff 改动文件全绿；本地已重建镜像并部署。
+
+## 2026-11-11 - plan(data): 可靠性闭环与研究质量（Phase 2）
+
+- 新增 [plans/2026-11-11-reliability-and-research-quality.md](../plans/2026-11-11-reliability-and-research-quality.md) 并登记 `plans/index.md`：
+  数据面 6 条 SLO（覆盖率 ≥99.5%、静默缺口 0、自动收敛 ≥95%、DLQ <5/日、膨胀 <20%、月度恢复演练）
+  + 投研 5 条质量判据（PIT 强制、口径可追溯、归因可解释、样本纪律、可复现）。
+  路线：Sprint 1 重试队列 + `limit_up_stock_daily` 等域自愈 + A 类多窗口；Sprint 2 契约/校验源 + 窗口 30 天；
+  Sprint 3 PIT 护栏 + 重述版本 + 回测（按 S2.3）；Sprint 4 溯源全覆盖与周复盘/混沌演练。本次仅落文档，未改代码。
+
+## 2026-11-11 - feat(data): P5–P7 数据平台加固（清洗分层 · 存储治理 · 指标溯源）
+
+**P5 清洗分层**：新增 `ingest_batches` / `ingest_quarantine` / `data_quality_runs`（迁移
+`a7b8c9d0e1f2`）与 `services/ingest_pipeline.py`——advisory lock 去重、封存命中零外呼、
+外呼失败回放当天 JSONL、行级校验拒绝进 quarantine（6 类 reason_code，不再静默 skip）、
+commit 后写终态。接入 daily_quotes/daily_basic（unknown ts_code 与 close 空值留档）、
+price_limits（逐日）、sentiment。对账层新增 `should_skip`：封存行数达标且与 DB 行数一致才跳过。
+10 条声明式期望（行数/非空率/OHLC/炸板率区间/限价覆盖/申万一级 31/广度不变量）挂在
+对账尾巴并落库；新增只读端点 `GET /api/v1/ops/data-quality`。
+
+**P6 存储治理**：迁移 `c3d4e5f6a7b8` 给 4 张 upsert 热表调 autovacuum（2%）+ fillfactor 90；
+`scripts/partition_daily_quotes.py` 支持 dry-run/apply/rollback/cleanup（月分区、行数校验、
+索引与约束改名）；`storage_maintenance_service` 提供未来分区补齐与 90/180/365 天保留策略，
+新增周六保留 job 与每月分区 job；`scripts/db_health.sh` / `backup_db.sh` / `restore_drill.sh`
+与 `archive_financial_raw.py`；新增 `GET /api/v1/ops/db-health`。
+
+**P7 溯源显示**：`lineage_registry` 登记 6 个跨页共用指标；`GET /api/v1/provenance/{metric_key}`
+返回"值 → 口径版本 → 来源表行数 → 批次 → 原始 JSONL → 质量/新鲜度"（60s 缓存）；
+`GET /api/v1/ops/consistency` 用两条独立路径交叉校验 up/down/成交额（实测发现上涨口径应为
+`pct_chg >= 1` 而非 `> 0`）。前端新增 `features/provenance`（Drawer/Link/DataPoint），接入
+情绪温度计、A股全景与情绪指标详情页；新增 `check:data-display` 棘轮门禁（54 文件基线）。
+
+**本地部署实测（2026-11-11 晚）**：发现并修复三处只有"真跑起来"才会暴露的问题：①
+`api`/`scheduler` 没有挂 `./data:/app/data`（只有 worker 挂了），导致 scheduler 写的 JSONL
+随容器重建丢失、api 永远回放 miss —— compose 已补齐共享挂载；② `record_batch` 之前只看
+"有没有被拒的行"，行数/pct_chg 未达标也会标 `accepted`，封存后可能跳过该重拉的日子 ——
+现在 daily_quotes 要求行数 ≥90% 且 pct_chg 非空率 ≥99%，daily_basic 要求行数 ≥90%，
+才写 `accepted`；③ `/ops/db-health` 的 `relkind` 对 asyncpg 返回的 `bytes` 未解码，
+分区表被报成非分区 —— 已归一化。实测：重构镜像后启动对账 2 秒收敛、全景刷新
+`day=2026-11-10 breadth=1 industry=31`、10/10 期望通过、一致性 3/3 ok、
+`should_skip(accepted, 5572行)=True`、JSONL 写入宿主 `data/` 并可回放。
+
+**并行修复**：A股全景 17:25 job 跑在 T0 cutoff 之前，导致广度/行业表永远停在 T-1
+（实测 quotes=11-10、breadth=11-09）。改为挂在对账尾巴 `_refresh_panorama`，由
+`expected_latest` 驱动，顺序由代码保证。
+
+## 2026-11-11 - plan(data): P5–P7 数据平台加固方案
+
+- 新增 [plans/2026-11-11-data-platform-hardening-p5-p7.md](../plans/2026-11-11-data-platform-hardening-p5-p7.md) 并登记 `plans/index.md`：P5 清洗分层（`ingest_batches` / `ingest_quarantine` / `data_quality_runs` + 10 条期望断言 + JSONL 回放）、P6 存储治理（`daily_quotes` 按月分区 / autovacuum / JSONB 去重与保留 / 备份恢复演练）、P7 溯源显示（`/api/v1/provenance` + `DataPoint`/`ProvenanceDrawer` + 跨页一致性契约），横切含失败矩阵、灰度回滚与 8 条可机械验收判据；本次仅落文档，未改代码。
+
 ## 2026-10-21 - fix(market): 切日期不再让整页「抖动刷新」
 
 - 原因不是 URL 导航本身：日期写进 `?date=` 后，`queryKey` 变化 ⇒ 新 key 无缓存 ⇒

@@ -310,6 +310,9 @@ export function SentimentSection() {
   const sectorsDegraded = Boolean(sectors.data?.degradedReason);
   const yesterdayDegraded = Boolean(yesterday.data?.degradedReason);
   const newStocksDegraded = Boolean(newStocks.data?.degraded_reason);
+  // 盘中池不可用 → 后端回落到最近完整交易日；此时**不能**画"今日分时"，
+  // 否则左边是昨天的梯队、右边是今天的空曲线，看上去像两套数据。
+  const intradayFallback = Boolean(ladder.data?.intradayFallback);
   return (
     <MarketSection
       title="短线情绪（温度计 · 连板梯队 · 昨日涨停 · 次新股）"
@@ -327,9 +330,15 @@ export function SentimentSection() {
               { label: "盘中", value: "intraday" },
             ]}
           />
-          <span className="sentiment-mode-switch__hint">
+          <span
+            className="sentiment-mode-switch__hint"
+            data-testid="sentiment-mode-hint"
+            data-fallback={isIntraday && intradayFallback ? "true" : "false"}
+          >
             {isIntraday
-              ? "盘中口径（今日涨停池 · 30 秒刷新 · 不落库）"
+              ? intradayFallback
+                ? `盘中池不可用 · 已回落到 ${ladder.data?.asOf ?? "最近完整交易日"} 收盘口径`
+                : "盘中口径（今日涨停池 · 30 秒刷新 · 不落库）"
               : "收盘口径（本地自算 · 可回放 · 点任一指标看历史）"}
           </span>
         </div>
@@ -368,7 +377,7 @@ export function SentimentSection() {
         <Col span={24}>
           <SectionCard title="连板梯队" asof={ladder.data?.asOf} quality={ladder.data?.asOfQuality}>
             {/* 盘中口径才画分时曲线：收盘口径没有「分时」这一维度 */}
-            {isIntraday ? (
+            {isIntraday && !intradayFallback ? (
               <ErrorBoundary fallback={cardFallback("盘中分时")}>
                 <SentimentIntradayChart points={intraday.data ?? []} />
               </ErrorBoundary>

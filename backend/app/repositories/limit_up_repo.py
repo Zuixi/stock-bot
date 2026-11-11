@@ -19,10 +19,22 @@ from app.models.market_data import (
     StockPriceLimit,
 )
 from app.models.quote import DailyQuote
+from app.models.stock import Stock
 
 
 async def latest_quote_date(db: AsyncSession) -> date | None:
     return (await db.execute(select(func.max(DailyQuote.trade_date)))).scalar_one_or_none()
+
+
+async def latest_limit_up_stock_date(db: AsyncSession) -> date | None:
+    """`market_limit_up_stock_daily` 的最近交易日（个股事实窗口的 `as_of`，不是"今天"）。
+
+    与 `latest_sentiment_day` 同一个理由：事实表是回补过的历史，最新有事实的那天才是
+    本表能回答的边界；用"今天"会把窗口尾部全部落空。
+    """
+    return (
+        await db.execute(select(func.max(MarketLimitUpStockDaily.trade_date)))
+    ).scalar_one_or_none()
 
 
 async def list_recent_trade_dates(db: AsyncSession, as_of: date, limit: int) -> list[date]:
@@ -340,6 +352,44 @@ async def list_limit_up_stock_daily(db: AsyncSession, as_of: date) -> list[Marke
         )
     )
     return list((await db.execute(stmt)).scalars().all())
+
+
+async def list_limit_up_stock_facts_in_range(
+    db: AsyncSession, start: date, end: date
+) -> list[dict[str, Any]]:
+    """`[start, end]` 闭区间内的个股涨停事实（逐日 × 逐股，**升序**）。
+
+    读面专用的**窄投影**：只回多日矩阵需要的 7 列，不整行 materialize（261 天全量约
+    4.4 万行，读面窗口最多 60 天）。
+
+    `name` 用 `COALESCE(stocks.name, symbol)` 且 `stocks` 走 **LEFT** JOIN：事实表是
+    唯一真源（`stocks` 缺行只丢名字、不丢事实行）；`trade_date` 升序 + `symbol` 升序
+    让服务层聚合有确定性输入。
+
+    索引：现有 `uq_limit_up_stock_daily_date_stock` 已服务 `trade_date` 范围扫描，实测
+    20 日窗口 2,776 行 / ~9ms（Hash Join + Sort）；不加新索引。
+    """
+    if start > end:
+        return []
+    stmt = (
+        select(
+            MarketLimitUpStockDaily.trade_date,
+            MarketLimitUpStockDaily.symbol,
+            func.coalesce(Stock.name, MarketLimitUpStockDaily.symbol).label("name"),
+            MarketLimitUpStockDaily.is_lu,
+            MarketLimitUpStockDaily.is_zb,
+            MarketLimitUpStockDaily.prev_is_lu,
+            MarketLimitUpStockDaily.streak,
+        )
+        .outerjoin(Stock, Stock.id == MarketLimitUpStockDaily.stock_id)
+        .where(
+            MarketLimitUpStockDaily.trade_date >= start,
+            MarketLimitUpStockDaily.trade_date <= end,
+        )
+        .order_by(MarketLimitUpStockDaily.trade_date, MarketLimitUpStockDaily.symbol)
+    )
+    rows = (await db.execute(stmt)).mappings().all()
+    return [dict(r) for r in rows]
 
 
 async def limit_up_stock_daily_missing_dates(db: AsyncSession, dates: list[date]) -> list[date]:

@@ -83,6 +83,10 @@ DATE_COLUMN: dict[str, str] = {
     "dragon_tiger_entries": "trade_date",
     "sw_industry_members": "",
     "share_floats": "float_date",
+    # 2026-11-11：`regulatory_anomaly` 用指数日线做基准（3 日偏离），source_tables 含
+    # `index_dailies`。漏登记会让 build() 直接 KeyError（reconcile 尾步自愈时表现为
+    # `artifacts_refresh:triage_rule_stats KeyError('index_dailies')`）。
+    "index_dailies": "trade_date",
 }
 
 #: 尚未纳入 ``_sql()`` 的探测器 → 必须写进产物的**原因**（``stats=null`` 的语义）。

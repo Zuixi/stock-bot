@@ -10,9 +10,10 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.api.deps import CacheDep
+from app.api.deps import CacheDep, DbDep
 from app.repositories import market_data_repo
 from app.schemas.limit_up import (
+    HeatStockHistoryOut,
     LimitUpLadderOut,
     SectorLimitUpOut,
     SentimentCalendarPointOut,
@@ -38,6 +39,7 @@ from app.schemas.market_data import (
 )
 from app.services import (
     limit_up_service,
+    limit_up_stock_history_service,
     market_data_service,
     market_sentiment_composite_service,
     sentiment_metric_service,
@@ -209,8 +211,9 @@ async def get_limit_up_ladder(
     """连板梯队 + 情绪温度计（本地 K 线自算为主，见 docs/design/limit-up-sentiment.md）。
 
     `mode=intraday` 仅接受今日（无 as_of 或 as_of=今天）；历史日期会 400。
-    盘中口径**不写** market_sentiment_daily；东财池失败时回落收盘口径并把
-    `as_of_label` 标为 "盘中不可用，已回落收盘"。
+    盘中口径**不写** market_sentiment_daily；东财池失败时回落到**最近完整交易日**
+    的收盘口径（不是今天——交易时段内今天没有收盘价与涨跌停价），`as_of_label`
+    带回落日期、`intraday_fallback=true`。
     """
     try:
         snap = await limit_up_service.get_snapshot(cache, _iso(date_), lookback, mode=mode)
@@ -232,6 +235,7 @@ async def get_limit_up_ladder(
         kpis=snap["kpis"] or None,
         echelons=snap["echelons"],
         as_of_label=snap.get("as_of_label"),
+        intraday_fallback=bool(snap.get("intraday_fallback", False)),
     )
 
 
@@ -267,6 +271,27 @@ async def get_yesterday_limit_up(
             detail=str(exc) or "date must be ISO format, e.g. 2026-09-08",
         ) from None
     return YesterdayLimitUpOut(**limit_up_service.yesterday_payload(snap))
+
+
+@router.get("/limit-up/stock-history", response_model=HeatStockHistoryOut)
+async def get_limit_up_stock_history(
+    db: DbDep,
+    days: int = Query(default=20, ge=5, le=60),
+    min_streak: int = Query(default=2, ge=0, le=10),
+    limit: int = Query(default=300, ge=1, le=1000),
+) -> HeatStockHistoryOut:
+    """短线热度股追踪：最近 `days` 个交易日的个股涨停事实矩阵（行=股票，列=交易日）。
+
+    日频事实读面，**不**随 `mode=close|intraday` 切换：事实表只冻结收盘判定。
+
+    无事实时回 **200 + `degraded_reason`**（`no_fact_rows` / `facts_gap`），不 404/500
+    —— 「回补还没跑」是数据状态而不是请求错误，前端要靠这个字段画警告。参数越界由
+    FastAPI 回 422。
+    """
+    payload = await limit_up_stock_history_service.get_stock_history(
+        db, days=days, min_streak=min_streak, limit=limit
+    )
+    return HeatStockHistoryOut.model_validate(payload)
 
 
 @router.get("/sentiment/calendar", response_model=list[SentimentCalendarPointOut])

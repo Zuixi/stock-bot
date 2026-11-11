@@ -283,25 +283,41 @@ async def _get_intraday_snapshot(cache: CacheClient | None) -> dict[str, Any]:
         pool_rows = await intraday_sentiment_service.fetch_intraday_pool(today.strftime("%Y%m%d"))
     except Exception:  # noqa: BLE001 —— IO 失败可观测：回落 close，as_of_label 标不可用
         logger.warning(
-            "intraday: eastmoney pool fetch failed; falling back to close path",
+            "intraday: eastmoney pool fetch failed; falling back to last complete close day",
             exc_info=True,
         )
-        # 回落 close 路径——**走标准 close 路径**；as_of_label 后置覆盖。
-        # 落库也走：brief 要求 fallback 调用 persist_snapshot（intraday 自身**不**
-        # 落库，但 fallback 走 close 路径就按 close 口径处理——当天的 close 数据
-        # 提前被用户拉到，可顺便写盘）。
-        snap = await get_snapshot(cache, as_of=today, mode="close")
-        snap["as_of_label"] = "盘中不可用，已回落收盘"
-        # close 路径的 as_of_prev/yesterday/echelons 是收盘口径，保留。
-        # 落库：复用 close 路径的 persist_snapshot——它本身又会调 get_snapshot，
-        # 拿到同样的 snap，跳过自身已跳过的所有降级判据，最终走 upsert_sentiment_daily。
-        try:
-            await persist_snapshot(db=None, cache=cache, as_of=today)
-        except Exception:  # noqa: BLE001 —— 落库失败也不应挡住回落响应
-            logger.warning(
-                "intraday fallback: persist_snapshot failed; serving close snap only",
-                exc_info=True,
-            )
+        # 回落到**最近完整交易日**，不是"今天"。
+        #
+        # 为什么不能回落到 today：交易时段内今天既没有收盘行情、也没有当日涨跌停价，
+        # close 路径会判 `price_limits_missing` 返回空快照 —— 用户看到的就是"点了盘中
+        # 一片空白"，而账面上还写着"已回落收盘"（实测 2026-11-11 10:00 就是这样）。
+        # 回落到最近完整日，页面至少有上一交易日收盘口径的真实数字 + 明确的回落标注。
+        # as_of=None 让 close 路径自己走完整性判据：显式传日期会把 quality 固定成
+        # "partial"（"你点名要这一天，我无法担保它完整"），而这里恰恰要的是
+        # "最近一个**完整**交易日"，徽标必须是 complete，不能自相矛盾。
+        snap = await get_snapshot(cache, as_of=None, mode="close")
+        raw_day = snap.get("as_of")
+        # 缓存命中时 `as_of` 是 JSON 反序列化后的 **str**，未命中才是 date——
+        # 直接 `.isoformat()` 会在"第二次请求"（缓存已热）时炸成 500（实测）。
+        fallback_day = (
+            raw_day
+            if isinstance(raw_day, str)
+            else (raw_day.isoformat() if raw_day is not None else None)
+        )
+        if fallback_day is None:
+            snap["as_of_label"] = "盘中不可用，且没有可回落的完整交易日"
+            snap["intraday_fallback"] = True
+            if cache is not None:
+                await cache.set(intra_key, snap, ttl=INTRADAY_TTL)
+            return snap
+        snap["as_of_label"] = f"盘中不可用，已回落到 {fallback_day} 收盘口径"
+        # 只读：写库是盘后 job 的职责（单写者）。读路径在盘中写库会把不完整的一天
+        # 落进 market_sentiment_daily，事后无法与真正的收盘值区分。
+        snap["intraday_fallback"] = True
+        # 失败态也缓存 60s：否则前端 30s 轮询会每轮重打已知失败的上游，
+        # 把偶发网络故障放大成请求风暴。缓存里保留 fallback 标记，用户仍明确可见。
+        if cache is not None:
+            await cache.set(intra_key, snap, ttl=INTRADAY_TTL)
         return snap
 
     # 3) 正常盘中路径——build_intraday_snapshot 是纯函数，无 IO、无落库。
@@ -373,6 +389,7 @@ def sector_payload(snap: dict[str, Any], sw_l1: str | None = None) -> dict[str, 
         "items": items,
         # 收盘路径不设、默认 None（api 端点构造时不传），intraday 路径 build 已带
         "as_of_label": snap.get("as_of_label"),
+        "intraday_fallback": bool(snap.get("intraday_fallback", False)),
     }
 
 
@@ -392,6 +409,7 @@ def yesterday_payload(snap: dict[str, Any]) -> dict[str, Any]:
         "kpis": yest.get("kpis", {}),
         "items": yest.get("items", []),
         "as_of_label": snap.get("as_of_label"),
+        "intraday_fallback": bool(snap.get("intraday_fallback", False)),
     }
 
 
@@ -411,6 +429,29 @@ async def _invalidate_calendar_cache() -> int:
     deleted += await cache.delete_pattern(_METRIC_CACHE_PATTERN)
     deleted += await cache.delete_pattern(_PULSE_CACHE_PATTERN)
     return deleted
+
+
+async def _record_sentiment_batch(
+    db: AsyncSession, *, trade_date: date, upserted: int, backfill_only: bool
+) -> None:
+    """情绪日表的批次账本（失败只告警，不反噬落库）。"""
+    try:
+        from app.services.ingest_pipeline import record_batch  # noqa: PLC0415
+
+        async with db.begin_nested():
+            await record_batch(
+                db,
+                domain="sentiment",
+                business_date=trade_date,
+                source="local_calc" if not backfill_only else limit_up_repo.BACKFILL_SOURCE,
+                capture_kind="eod_full",
+                params={"as_of": trade_date.isoformat()},
+                rows_fetched=1,
+                rows_accepted=1 if upserted else 0,
+                status="accepted" if upserted else "partial",
+            )
+    except Exception:  # noqa: BLE001 — 账本失败不得反噬情绪落库
+        logger.warning("sentiment batch ledger write failed", exc_info=True)
 
 
 async def persist_snapshot(
@@ -475,8 +516,14 @@ async def persist_snapshot(
                 session, row, backfill_only=backfill_only
             )
             await session.commit()
+            await _record_sentiment_batch(
+                session, trade_date=trade_date, upserted=upserted, backfill_only=backfill_only
+            )
     else:
         upserted = await limit_up_repo.upsert_sentiment_daily(db, row, backfill_only=backfill_only)
+        await _record_sentiment_batch(
+            db, trade_date=trade_date, upserted=upserted, backfill_only=backfill_only
+        )
     await _invalidate_calendar_cache()
     return {
         "status": "ok",
@@ -628,6 +675,27 @@ async def persist_stock_facts(
     upserted = await limit_up_repo.upsert_limit_up_stock_daily(
         db, rows, backfill_only=fact_source == limit_up_repo.BACKFILL_SOURCE
     )
+    # R2：涨停事实纳入自愈域（`DOMAIN_COMPLETENESS='batch'`）。空行集也可能是合法事实
+    # （当日无涨停/无炸板），所以完整性认"成功批次"而不是行数。
+    try:
+        from app.services.ingest_pipeline import record_batch  # noqa: PLC0415
+
+        async with db.begin_nested():
+            await record_batch(
+                db,
+                domain="limit_up_stock_daily",
+                business_date=as_of,
+                source=fact_source,
+                capture_kind="eod_full",
+                params={"as_of": as_of.isoformat()},
+                rows_fetched=len(rows),
+                # 这里记**当日事实行集大小**，不是 PG rowcount：rowcount=0 可能只是
+                # Ruling 18 守卫拒绝了覆写实时行，不代表"这天没有事实"。
+                rows_accepted=len(rows),
+                status="accepted",
+            )
+    except Exception:  # noqa: BLE001 — 账本失败不得反噬事实落库
+        logger.warning("limit_up_stock_daily batch ledger write failed", exc_info=True)
     return {
         "rows": len(rows),
         "upserted": upserted,

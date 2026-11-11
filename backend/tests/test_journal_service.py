@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -32,11 +32,12 @@ import pytest
 from sqlalchemy import event, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from app.models.content import ContentEntity, ContentItem
 from app.models.daily_basic import DailyBasicIndicator
 from app.models.index_daily import IndexDaily
 from app.models.industry_research import IndustryMetric
 from app.models.journal import DecisionJournalEntry, DecisionJournalReview
-from app.models.market_data import Announcement, DragonTigerEntry, StockPriceLimit
+from app.models.market_data import DragonTigerEntry, StockPriceLimit
 from app.models.quote import DailyQuote
 from app.models.stock import Stock
 from app.models.sw_industry import SwIndustryClass, SwIndustryMember
@@ -260,18 +261,30 @@ async def _seed(session: AsyncSession) -> dict[str, int]:
             for i, day in enumerate(MAIN_DAYS)
         ],
     )
+    # announcements 已是 content_items 的兼容视图（只读）：种子必须写事实层。
+    content_id = (
+        await session.execute(
+            insert(ContentItem)
+            .values(
+                content_type="announcement",
+                source_name="cninfo",
+                publisher_tier="official",
+                publisher="测试",
+                title="关于产能去化的进展公告",
+                published_at=datetime(2026, 10, 15, 9, 0, tzinfo=UTC),
+                url="https://example.com/t9-ann.pdf",
+                raw_hash=uuid.uuid4().hex,
+                extracted={
+                    "source_item_id": f"T9-ANN-{uuid.uuid4().hex[:8]}",
+                    "sec_name": f"测试{MAIN}",
+                    "subtype": "event",
+                },
+            )
+            .returning(ContentItem.id)
+        )
+    ).scalar_one()
     await session.execute(
-        insert(Announcement),
-        [
-            {
-                "announcement_id": f"T9-ANN-{uuid.uuid4().hex[:8]}",
-                "sec_code": MAIN,
-                "sec_name": f"测试{MAIN}",
-                "title": "关于产能去化的进展公告",
-                "announce_time": datetime(2026, 10, 15, 9, 0),
-                "category": "event",
-            }
-        ],
+        insert(ContentEntity).values(content_id=content_id, entity_type="stock", entity_id=MAIN)
     )
     await session.execute(
         insert(DragonTigerEntry),

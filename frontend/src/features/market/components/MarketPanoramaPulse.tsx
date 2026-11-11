@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import "./MarketPanoramaPulse.css";
 import { Segmented, Skeleton } from "antd";
+import { ProvenanceLink } from "@/features/provenance/ProvenanceLink";
 import { EChart } from "@/shared/ui/EChart";
 import { Sparkline } from "@/shared/ui/Sparkline";
 import { useTheme } from "@/app/theme-context";
@@ -141,6 +142,8 @@ function Kpi({
   delta,
   spark,
   color,
+  metricKey,
+  asOf,
 }: {
   label: string;
   value: string;
@@ -149,10 +152,17 @@ function Kpi({
   delta?: React.ReactNode;
   spark?: Array<number | null>;
   color: string;
+  metricKey?: string;
+  asOf?: string | null;
 }) {
   return (
     <div className="pano-kpi">
-      <div className="pano-kpi__label">{label}</div>
+      <div className="pano-kpi__label">
+        {label}
+        {metricKey ? (
+          <ProvenanceLink metricKey={metricKey} asOf={asOf} label={`查看${label}的数据溯源`} />
+        ) : null}
+      </div>
       <div className="pano-kpi__row">
         <span className="pano-kpi__num">
           <span className="pano-kpi__value num" style={{ color }}>
@@ -272,6 +282,8 @@ export function MarketPanoramaPulse({ data, isLoading, isError, days, onDaysChan
           <div className="pano__kpis">
             <Kpi
               label="上涨 / 下跌"
+              metricKey="up_count"
+              asOf={data?.asOf ?? null}
               value={latest ? `${latest.upCount} / ${latest.downCount}` : "—"}
               unit="只"
               color={latest && latest.upCount >= latest.downCount ? colors.up : colors.down}
@@ -294,6 +306,8 @@ export function MarketPanoramaPulse({ data, isLoading, isError, days, onDaysChan
             />
             <Kpi
               label="成交额"
+              metricKey="total_amount"
+              asOf={data?.asOf ?? null}
               value={formatAmountQianToYi(latest?.amount ?? null)}
               color={colors.textPrimary}
               spark={amountSpark}

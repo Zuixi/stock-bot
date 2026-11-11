@@ -99,6 +99,93 @@ class DataSaver:
         )
         return target
 
+    # ------------------------------------------------------------------
+    # 读取侧：P5 的"已付费请求不重复付"（失败时回放，而不是再外呼一次）
+    # ------------------------------------------------------------------
+
+    async def load_dataframe(
+        self,
+        api_name: str,
+        params: dict[str, Any] | None = None,
+        *,
+        day: str | None = None,
+    ) -> pd.DataFrame | None:
+        """从本地 JSONL 回放一次响应；找不到/损坏一律 ``None``（调用方据此走外呼）。
+
+        只读 ``day``（默认今天，UTC）目录：跨天不回放，避免"用旧快照冒充新日"。
+        ``params`` 是**子集匹配**（元数据里的 params 全部是字符串）。
+        """
+        return await asyncio.to_thread(self._load_sync, api_name, params, day)
+
+    async def latest_raw_path(
+        self,
+        api_name: str,
+        *,
+        day: str | None = None,
+    ) -> Path | None:
+        """当天该 api 最新的 JSONL 路径（不解析内容），供账本记录/排障。"""
+        directory = self._day_dir(api_name, day)
+        if not directory.is_dir():
+            return None
+        files = sorted(directory.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        return files[0] if files else None
+
+    def _day_dir(self, api_name: str, day: str | None) -> Path:
+        date_str = day or datetime.now(UTC).strftime("%Y-%m-%d")
+        return self.base_dir / api_name / date_str
+
+    def _load_sync(
+        self,
+        api_name: str,
+        params: dict[str, Any] | None,
+        day: str | None,
+    ) -> pd.DataFrame | None:
+        directory = self._day_dir(api_name, day)
+        if not directory.is_dir():
+            return None
+
+        wanted = {k: str(v) for k, v in (params or {}).items()}
+        files = sorted(directory.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for path in files:
+            try:
+                meta, rows = _read_jsonl(path)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning("Unusable raw JSONL %s: %s", path, exc)
+                continue
+            if meta.get("api") not in (None, api_name):
+                continue
+            file_params = {str(k): str(v) for k, v in (meta.get("params") or {}).items()}
+            if any(file_params.get(k) != v for k, v in wanted.items()):
+                continue
+            return pd.DataFrame(rows)
+        return None
+
+    def latest_raw_path_sync(self, api_name: str, *, day: str | None = None) -> Path | None:
+        """同步版（供已在 to_thread 内的调用方复用）。"""
+        directory = self._day_dir(api_name, day)
+        if not directory.is_dir():
+            return None
+        files = sorted(directory.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        return files[0] if files else None
+
+
+def _read_jsonl(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """读取 ``save_dataframe`` 写出的 JSONL：首行 ``__meta__``，其余为数据行。"""
+    meta: dict[str, Any] = {}
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as fh:
+        for lineno, line in enumerate(fh):
+            line = line.strip()
+            if not line:
+                continue
+            payload = json.loads(line)
+            if lineno == 0 and isinstance(payload, dict) and payload.get("__meta__"):
+                meta = payload
+                continue
+            if isinstance(payload, dict):
+                rows.append(payload)
+    return meta, rows
+
 
 def _serialize_row(row: dict[str, Any]) -> dict[str, Any]:
     """Ensure every value is JSON-serializable (handle numpy/pandas types)."""

@@ -21,7 +21,7 @@
 frontend/src/
 ├── app/            # 应用装配：router / layouts / theme（theme.ts + theme-context.tsx）
 ├── pages/<路由>/    # 路由级页面，只做编排（组合 features + shared），不含业务逻辑
-├── features/<域>/   # 业务域：auth · concept · industry-research · market · nav · search · stock-detail · watchlist
+├── features/<域>/   # 业务域：auth · concept · industry-research · journal · market · nav · provenance · search · sentiment · stock-detail · triage · watchlist
 ├── shared/
 │   ├── api/        # 每个域一个 api 模块（market.ts / marketData.ts / limitUp.ts / industryResearch.ts …）
 │   ├── ui/         # UI 原语：EChart · StateWrapper · DegradedNotice · FreshnessNote · NumberText · ChangeText · DataRow · SectionCard
@@ -46,6 +46,8 @@ frontend/src/
 ## 4. 展示与单位
 
 - 数值展示统一走 `shared/ui/NumberText.tsx` / `ChangeText.tsx` / `DeltaText.tsx`，不要在页面里手写 `toFixed`
+- 新增页面/组件手写 `toFixed(` 会被 `npm run check:data-display` 拦住（存量 54 个文件登记在
+  `frontend/scripts/data-display-baseline.json`，基线只允许减少）
 - 涨跌色与主题令牌集中在 `app/theme.ts` 与 `theme.css`，两者必须一致（`check:design` 机械校验，含 `bg-page`/`bg-panel` 上的对比度 ≥ 4.5）
 - 数据陈旧要**显式标注**：`FreshnessNote.tsx` + 后端返回的 `stale_days` / `source_status`；`as_of` 必须描述返回数据本身，不能借用元数据表的 ingest 时间戳
 
@@ -56,6 +58,9 @@ frontend/src/
 | `StateWrapper.tsx` | 统一的 loading / empty / error 三态 |
 | `DegradedNotice.tsx` | 上游降级或部分数据缺失时的显式提示（**不要静默空白**） |
 | `ErrorBoundary.tsx` | 渲染异常兜底 |
+| `features/provenance/ProvenanceDrawer.tsx` | 数字溯源抽屉（P7）：值 → 口径版本 → 来源表/行数 → 批次 → 原始 JSONL → 质量/新鲜度；只在打开时请求 |
+| `features/provenance/ProvenanceLink.tsx` | 溯源入口（独立小按钮，避免与数字上的跳转/十字光标抢事件） |
+| `features/provenance/DataPoint.tsx` | `NumberText` + 溯源入口的组合（适用于数字是主角的位置） |
 
 ## 6. 路由一览
 

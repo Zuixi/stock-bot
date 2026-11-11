@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import statistics
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -313,3 +314,24 @@ def _percentile_rank(current: float | None, values: list[float]) -> float | None
         return None
     below = sum(1 for v in values if v <= current)
     return round(below / len(values) * 100.0, 1)
+
+
+async def get_report_revisions(
+    db: AsyncSession, exchange: str, symbol: str, end_date: date
+) -> list[dict[str, Any]]:
+    """Superseded snapshots for one report (Q2): 旧值不再被覆盖丢失."""
+    stock = await _resolve_stock(db, exchange, symbol)
+    rows = await financial_repo.list_report_revisions(db, stock.id, end_date)
+    return [
+        {
+            "report_version_id": r.report_version_id,
+            "end_date": r.end_date.isoformat(),
+            "ann_date": r.ann_date.isoformat() if r.ann_date else None,
+            "f_ann_date": r.f_ann_date.isoformat() if r.f_ann_date else None,
+            "update_flag": r.update_flag,
+            "quality_status": r.quality_status,
+            "as_of": r.as_of.isoformat(),
+            "superseded_at": r.superseded_at.isoformat(),
+        }
+        for r in rows
+    ]

@@ -158,7 +158,7 @@ def _seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         # 三元组门禁的第二项（pct_chg 非空率）。默认 1.0；设成 <0.99 可模拟
         # "行数够但列全 NULL"（09-14/15 的真实形态）。
         "pct_chg_ratio": 1.0,
-        "refetch": {"daily_quotes": [], "daily_basic": [], "price_limits": [], "sentiment": []},
+        "refetch": {domain: [] for domain in rc.DOMAINS},
         "commits": 0,
         # 因子补洞接缝：记录 (start, end) 调用；null_gaps = 该日仍为 NULL 的缺口行数；
         # repair_error 非空时模拟补洞整体失败（外呼/DB 故障）。
@@ -195,6 +195,13 @@ def _seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             mds.MIN_ROW_RATIO * UNIVERSE
         )
         return mds.is_day_complete(rows, universe or UNIVERSE, ratio, limits_present)
+
+    async def _sealed(db: Any, domain: str, days: list[date]) -> set[date]:
+        # 补充域（batch 完整性）默认"全部已封存"：本文件验证的是底座语义；
+        # 批次域的缺口补漏由 `test_reconcile_batch_domain_gap` 单独锁定。
+        return set(days)
+
+    monkeypatch.setattr(rc, "_sealed_days", _sealed)
 
     async def _commit(db: Any) -> None:
         state["commits"] += 1
@@ -492,3 +499,113 @@ async def test_reconcile_survives_adj_repair_failure(_seams: dict[str, Any]) -> 
     assert result["adj_factor_repaired"]["rows"] == 0
     assert result["domains"]["daily_quotes"]["status"] == "refetched"  # 对账本身仍算成功
     assert _seams["refetch"]["sentiment"] == [D15]  # 补洞失败后 sentiment 域照常补
+
+
+async def test_reconcile_batch_domain_gap_refetches_and_reports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """补充域（batch 完整性）：无封存批次 ⇒ 逐日补漏；补后状态 refetched。"""
+    expected = [D14, D15, D16]
+    calls: list[date] = []
+    monkeypatch.setattr(rc, "_get_tushare", lambda: object())
+
+    async def _expected(client: Any, **kw: Any) -> tuple[list[date], bool]:
+        return expected, False
+
+    async def _universe(db: Any) -> int:
+        return UNIVERSE
+
+    async def _counts(db: Any, domain: str, dates: list[date]) -> dict[date, int]:
+        return {d: (UNIVERSE if domain == "daily_quotes" else 0) for d in dates}
+
+    async def _not_complete(db: Any, day: date, *, universe: int | None = None) -> bool:
+        return False
+
+    async def _no_seal(db: Any, domain: str, days: list[date]) -> set[date]:
+        return set()
+
+    async def _refetch(db: Any, day: date) -> dict[str, Any]:
+        calls.append(day)
+        return {"upserted": 1}
+
+    async def _commit(db: Any) -> None:
+        return None
+
+    monkeypatch.setattr(rc, "expected_trade_dates", _expected)
+    monkeypatch.setattr(rc, "_stock_universe_count", _universe)
+    monkeypatch.setattr(rc, "_row_counts", _counts)
+
+    async def _quote_stats(db: Any, day: date) -> tuple[int, float]:
+        return 0, 0.0
+
+    monkeypatch.setattr(rc.market_day_service, "day_is_complete", _not_complete)
+    monkeypatch.setattr(rc.market_day_service, "quote_day_stats", _quote_stats)
+    monkeypatch.setattr(rc, "_sealed_days", _no_seal)
+    monkeypatch.setattr(rc, "_refetch_dragon_tiger", _refetch)
+    monkeypatch.setattr(rc, "_commit", _commit)
+
+    result = await rc.reconcile_market_data(db=object(), only={"dragon_tiger"})
+
+    assert calls == expected
+    dom = result["domains"]["dragon_tiger"]
+    assert dom["status"] == "refetched"
+    assert dom["refetched"] == [d.isoformat() for d in expected]
+    # only 域外不补
+    assert result["domains"]["block_trade"]["refetched"] == []
+
+
+async def test_refetch_failure_does_not_abort_other_days(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """单日失败不得终止补充域循环：失败日留 missing，成功日照常 refetched。"""
+    expected = [D14, D15]
+    calls: list[date] = []
+    monkeypatch.setattr(rc, "_get_tushare", lambda: object())
+
+    async def _expected(client: Any, **kw: Any) -> tuple[list[date], bool]:
+        return expected, False
+
+    async def _universe(db: Any) -> int:
+        return UNIVERSE
+
+    async def _counts(db: Any, domain: str, dates: list[date]) -> dict[date, int]:
+        return {d: 0 for d in dates}
+
+    async def _not_complete(db: Any, day: date, *, universe: int | None = None) -> bool:
+        return False
+
+    async def _no_seal(db: Any, domain: str, days: list[date]) -> set[date]:
+        return set()
+
+    async def _flaky(db: Any, day: date) -> dict[str, Any]:
+        calls.append(day)
+        if day == D14:
+            raise RuntimeError("upstream down")
+        return {"upserted": 1}
+
+    async def _rollback() -> None:
+        return None
+
+    async def _commit(db: Any) -> None:
+        return None
+
+    class _Db:
+        async def rollback(self) -> None:
+            await _rollback()
+
+    monkeypatch.setattr(rc, "expected_trade_dates", _expected)
+    monkeypatch.setattr(rc, "_stock_universe_count", _universe)
+    monkeypatch.setattr(rc, "_row_counts", _counts)
+
+    async def _quote_stats(db: Any, day: date) -> tuple[int, float]:
+        return 0, 0.0
+
+    monkeypatch.setattr(rc.market_day_service, "day_is_complete", _not_complete)
+    monkeypatch.setattr(rc.market_day_service, "quote_day_stats", _quote_stats)
+    monkeypatch.setattr(rc, "_sealed_days", _no_seal)
+    monkeypatch.setattr(rc, "_refetch_dragon_tiger", _flaky)
+    monkeypatch.setattr(rc, "_commit", _commit)
+
+    result = await rc.reconcile_market_data(db=_Db(), only={"dragon_tiger"})
+    assert calls == expected
+    assert result["domains"]["dragon_tiger"]["refetched"] == [D15.isoformat()]

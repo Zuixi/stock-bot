@@ -214,6 +214,8 @@ jobs:
       # 图表主题封装硬门禁（P1-4）：`echarts-for-react` 只许出现在 shared/ui 的主题封装里，
       #   防组件绕过 withChartTheme（暗色底上仍是默认深灰轴标签，编译/运行时都不报错）。
       - run: npm run check:chart-theme
+      # 数字展示棘轮（P7）：新增的页面/组件手写 `toFixed(` 会失败；存量基线只许减少。
+      - run: npm run check:data-display
       - run: npx tsc --noEmit
 
   frontend-build:

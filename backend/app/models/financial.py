@@ -112,6 +112,41 @@ class FinancialReportVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class FinancialReportRevision(Base):
+    """Append-only snapshot of a superseded report version (Q2 重述留痕).
+
+    主表按 (stock_id, end_date, report_type, comp_type, source) 唯一，修订会**覆盖**
+    旧值；本表在覆盖前把旧值原样快照下来，保证"当时看到的数"可回查。
+    只存发生变化的字段（ann_date/f_ann_date/update_flag/quality_status/as_of/
+    raw_record_id），不复制三大报表事实——事实表的行 id 仍指向主表。
+    """
+
+    __tablename__ = "financial_report_revisions"
+    __table_args__ = (
+        Index("idx_fin_revision_version", "report_version_id", "superseded_at"),
+        Index("idx_fin_revision_stock_date", "stock_id", "end_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    report_version_id: Mapped[int] = mapped_column(
+        ForeignKey("financial_report_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    stock_id: Mapped[int] = mapped_column(nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    report_type: Mapped[str] = mapped_column(String(4), nullable=False)
+    comp_type: Mapped[str] = mapped_column(String(8), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    ann_date: Mapped[date | None] = mapped_column(Date)
+    f_ann_date: Mapped[date | None] = mapped_column(Date)
+    update_flag: Mapped[str | None] = mapped_column(String(8))
+    quality_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    raw_record_id: Mapped[int | None] = mapped_column(nullable=True)
+    superseded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class _StatementFactsBase(Base):
     """Shared columns for the three standardized statement-fact tables."""
 

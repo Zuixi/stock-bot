@@ -7,6 +7,7 @@ import type {
   SentimentPercentileField,
   SentimentTrends,
 } from "@/shared/api/limitUp";
+import { ProvenanceLink } from "@/features/provenance/ProvenanceLink";
 import "./SentimentThermometer.css";
 
 interface Props {
@@ -403,6 +404,13 @@ export function SentimentThermometer({ kpis, history, asOf, trends, metricHref }
           趋势线需 ≥2 个交易日（每日盘后写入情绪周期缓存后自动出现）
         </div>
       )}
+
+      <div className="thermo-provenance" data-testid="thermo-provenance">
+        <span>数据溯源</span>
+        <ProvenanceLink metricKey="zt_count" asOf={asOf} label="查看涨停家数的数据溯源" />
+        <ProvenanceLink metricKey="broken_rate" asOf={asOf} label="查看炸板率的数据溯源" />
+        <ProvenanceLink metricKey="promo_1to2" asOf={asOf} label="查看 1进2 晋级率的数据溯源" />
+      </div>
     </div>
   );
 }

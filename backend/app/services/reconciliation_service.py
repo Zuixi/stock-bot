@@ -55,11 +55,57 @@ from app.services.market_data_service import _d, _get_tushare
 logger = logging.getLogger(__name__)
 
 COMPLETENESS_RATIO = 0.8
-DEFAULT_WINDOW_DAYS = 10
+#: 日环窗口。30 个交易日 = 6 周，覆盖"停摆一个长假"的常见情形；更早的洞靠周环 90 天。
+DEFAULT_WINDOW_DAYS = 30
 DEFAULT_COVERAGE_WINDOW_DAYS = 30
+#: 每次对账最多补几个**补充域**的缺失日。首次接入账本时历史日没有批次记录，
+#: 不设上限会在启动对账里一次打 8 域 × 30 天（几十次外呼、触发 TuShare 限流）。
+BATCH_MAX_REFETCH_PER_RUN = 5
+#: 每轮补漏上限。窗口型采集一次请求覆盖多日（且上游有 10 次/分钟限频），
+#: 重复按日调用会把窗口重复拉 N 遍并撞限流 ⇒ 每轮只跑 1 次，逐轮收敛。
+#: 本地纯计算域（涨停事实）不调外部源，可一次补满窗口。
+BATCH_REFETCH_LIMIT: dict[str, int] = {
+    "limit_up_stock_daily": 30,
+    "global_index": 1,
+    "share_float": 1,
+    "repurchase": 1,
+    "northbound": 1,
+    "market_moneyflow": 1,
+}
 
-# 对账域（顺序即依赖序：sentiment 依赖 quotes + price_limits 完备）
-DOMAINS: tuple[str, ...] = ("daily_quotes", "daily_basic", "price_limits", "sentiment")
+# 对账域（顺序即依赖序：sentiment/涨停事实依赖 quotes + price_limits 完备）
+DOMAINS: tuple[str, ...] = (
+    "daily_quotes",
+    "daily_basic",
+    "price_limits",
+    "sentiment",
+    "limit_up_stock_daily",
+    "dragon_tiger",
+    "block_trade",
+    "share_float",
+    "repurchase",
+    "northbound",
+    "market_moneyflow",
+    "global_index",
+)
+
+#: 完整判据：``rows`` = 行数达阈值；``batch`` = 只要该日有**成功的批次账本**
+#: （空数据也可能是合法事实：龙虎榜偶尔无榜、解禁当日无计划）。用行数判 ``batch`` 域
+#: 会把"合法的空日"永久标成缺口，反而制造假失败。
+DOMAIN_COMPLETENESS: dict[str, str] = {
+    "daily_quotes": "rows",
+    "daily_basic": "rows",
+    "price_limits": "rows",
+    "sentiment": "rows",
+    "limit_up_stock_daily": "batch",
+    "dragon_tiger": "batch",
+    "block_trade": "batch",
+    "share_float": "batch",
+    "repurchase": "batch",
+    "northbound": "batch",
+    "market_moneyflow": "batch",
+    "global_index": "batch",
+}
 
 _ROW_MODEL: dict[str, type[Any]] = {
     "daily_quotes": DailyQuote,
@@ -110,17 +156,17 @@ _COVERAGE_SOURCES: dict[str, _CoverageSource] = {
     "repurchase": _CoverageSource("stock_repurchases", "ann_date"),
 }
 
-# 只读巡检域（顺序即报告顺序）。**永不**参与 apply 补漏——没有 `_refetch_*`，
-# 塞进 `DOMAINS` 只会得到"看着被纳入、永不补漏"的假绿（E1）。
+# 覆盖率报告的口径域（含已接入自愈的域：自愈与否不改变"最近覆盖多少"这个事实）
+COVERAGE_DOMAINS: tuple[str, ...] = tuple(_COVERAGE_SOURCES)
+
+# 只读巡检域：**没有**补漏通道、也不该被塞进 `DOMAINS` 的域。
+# - `sector_moneyflow`：A 类，上游无历史接口，只能"当日必达"（15:15–16:25 多窗口）
+# - `sentiment_intraday`：盘中快照，跨日不可重建
+# - `sentiment_daily`：与自愈域 `sentiment` 同表不同名（覆盖率口径），不算独立可补域
 INSPECT_DOMAINS: tuple[str, ...] = (
     "sector_moneyflow",
     "sentiment_daily",
     "sentiment_intraday",
-    "limit_up_stock_daily",
-    "dragon_tiger",
-    "block_trade",
-    "share_float",
-    "repurchase",
 )
 
 assert not set(INSPECT_DOMAINS) & set(DOMAINS), "巡检域与可自愈域不得重名（边界守卫）"
@@ -241,6 +287,117 @@ async def _refetch_sentiment(db: Any, day: date) -> dict[str, Any]:
     from app.services import limit_up_service  # noqa: PLC0415
 
     return await limit_up_service.persist_snapshot(db, None, as_of=day)
+
+
+async def _seal_batch(db: Any, domain: str, day: date, rows: int) -> None:
+    """把一次成功的窗口采集记为"该日已封存"（空数据也合法，见 DOMAIN_COMPLETENESS）。"""
+    from app.services.ingest_pipeline import record_batch  # noqa: PLC0415
+
+    await record_batch(
+        db,
+        domain=domain,
+        business_date=day,
+        source="reconcile",
+        capture_kind="eod_full",
+        params={"trade_date": day.isoformat()},
+        rows_fetched=rows,
+        rows_accepted=rows,
+        status="accepted",
+    )
+
+
+def _lookback_days(day: date) -> int:
+    """窗口型采集要覆盖到 ``day`` 所需的自然日跨度（至少 7 天，避免上游空窗口）。"""
+    today = market_day_service.now_sh(None).date()
+    return max(7, (today - day).days + 3)
+
+
+async def _refetch_limit_up_stock_daily(db: Any, day: date) -> dict[str, Any]:
+    from app.repositories import limit_up_repo  # noqa: PLC0415
+    from app.services import limit_up_service  # noqa: PLC0415
+
+    # 历史日回补走 backfill 守卫：只插入缺失行，不覆写当天实时行的东财增强列。
+    return await limit_up_service.persist_stock_facts(
+        db, day, fact_source=limit_up_repo.BACKFILL_SOURCE
+    )
+
+
+async def _refetch_dragon_tiger(db: Any, day: date) -> dict[str, Any]:
+    from app.services import market_data_service  # noqa: PLC0415
+
+    out = await market_data_service.ingest_dragon_tiger(db, trade_date=day)
+    await _seal_batch(db, "dragon_tiger", day, int(out.get("upserted", 0)))
+    return out
+
+
+async def _refetch_block_trade(db: Any, day: date) -> dict[str, Any]:
+    from app.services import market_data_service  # noqa: PLC0415
+
+    out = await market_data_service.ingest_block_trades(db, trade_date=day)
+    await _seal_batch(db, "block_trade", day, int(out.get("upserted", 0)))
+    return out
+
+
+async def _refetch_share_float(db: Any, day: date) -> dict[str, Any]:
+    from app.services import market_data_service  # noqa: PLC0415
+
+    out = await market_data_service.ingest_share_floats(db, days=_lookback_days(day))
+    await _seal_batch(db, "share_float", day, int(out.get("upserted", 0)))
+    return out
+
+
+async def _refetch_repurchase(db: Any, day: date) -> dict[str, Any]:
+    from app.services import market_data_service  # noqa: PLC0415
+
+    out = await market_data_service.ingest_repurchases(db, days=_lookback_days(day))
+    await _seal_batch(db, "repurchase", day, int(out.get("upserted", 0)))
+    return out
+
+
+async def _refetch_northbound(db: Any, day: date) -> dict[str, Any]:
+    from app.services import market_data_service  # noqa: PLC0415
+
+    out = await market_data_service.ingest_northbound(db, days=_lookback_days(day))
+    await _seal_batch(db, "northbound", day, int(out.get("upserted", 0)))
+    return out
+
+
+async def _refetch_market_moneyflow(db: Any, day: date) -> dict[str, Any]:
+    from app.services import market_data_service  # noqa: PLC0415
+
+    out = await market_data_service.ingest_market_moneyflow_daily(db, days=_lookback_days(day))
+    await _seal_batch(db, "market_moneyflow", day, int(out.get("upserted", 0)))
+    return out
+
+
+async def _refetch_global_index(db: Any, day: date) -> dict[str, Any]:
+    from app.services import market_data_service  # noqa: PLC0415
+
+    out = await market_data_service.ingest_global_index_daily(db, lookback_days=_lookback_days(day))
+    await _seal_batch(db, "global_index", day, int(out.get("upserted", 0)))
+    return out
+
+
+async def _sealed_days(db: Any, domain: str, days: list[date]) -> set[date]:
+    """该域在窗口内**已封存**的交易日（只认 accepted/replayed）。"""
+    if not days:
+        return set()
+    from app.models.data_quality import IngestBatch  # noqa: PLC0415
+
+    stmt = select(IngestBatch.business_date).where(
+        IngestBatch.domain == domain,
+        IngestBatch.business_date.in_(days),
+        IngestBatch.status.in_(("accepted", "replayed")),
+    )
+    try:
+        return set((await db.execute(stmt)).scalars())
+    except Exception:  # noqa: BLE001 — 账本读不到 ⇒ 视为"未封存"（宁可多拉，不可漏补）
+        logger.warning("sealed-day lookup unavailable (domain=%s)", domain, exc_info=True)
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001,S110 — 会话清理失败只能记日志
+            pass
+        return set()
 
 
 async def _commit(db: Any) -> None:
@@ -391,7 +548,24 @@ async def reconcile_market_data(
             todo = sorted(set(todo))
         refetched: list[date] = []
         if apply and todo and domain in scope:
+            # P5：先查封存账本。封存行数达标且与 DB 行数一致 ⇒ 零外呼。
+            # 少一次外呼事小，"重试风暴把配额打满"事大（18:30/20:00/次日 10:00 都跑）。
+            from app.services.ingest_pipeline import should_skip  # noqa: PLC0415
+
+            min_rows = (
+                int(universe * market_day_service.MIN_ROW_RATIO)
+                if domain == "daily_quotes"
+                else threshold
+            )
             for day in todo:
+                if await should_skip(
+                    db,
+                    domain=domain,
+                    business_date=day,
+                    db_rows=counts.get(day, 0),
+                    min_rows=min_rows,
+                ):
+                    continue
                 await globals()[f"_refetch_{domain}"](db, day)
                 refetched.append(day)
             refetched_any = True
@@ -442,7 +616,16 @@ async def reconcile_market_data(
     sent_todo = [d for d in sent_status["missing_days"] if d in base_complete]
     sent_refetched: list[date] = []
     if apply and sent_todo and "sentiment" in scope:
+        from app.services.ingest_pipeline import should_skip  # noqa: PLC0415
+
         for day in sent_todo:
+            if await should_skip(
+                db,
+                domain="sentiment",
+                business_date=day,
+                db_rows=sent_counts.get(day, 0),
+            ):
+                continue
             await _refetch_sentiment(db, day)
             sent_refetched.append(day)
         if sent_refetched:
@@ -456,6 +639,40 @@ async def reconcile_market_data(
         "refetched": [d.isoformat() for d in sent_refetched],
         "status": _status_word(apply, bool(sent_refetched), bool(sent_status["missing_days"])),
     }
+
+    # ── 补充域（batch 完整性）：龙虎榜/大宗/解禁/回购/北向/资金流/全球指数/涨停事实 ──
+    # 这些域的空数据可能是合法事实（某日无榜/无解禁），所以完整性 = "有成功批次"，
+    # 而不是"行数 > 0"；否则每个空日都会被永久标成缺口、并无限重拉。
+    for domain in DOMAINS:
+        if DOMAIN_COMPLETENESS.get(domain) != "batch":
+            continue
+        sealed = await _sealed_days(db, domain, expected)
+        missing = [d for d in expected if d not in sealed]
+        batch_refetched: list[date] = []
+        if apply and missing and domain in scope:
+            # 旧洞优先（`missing` 升序）：停摆最久的日子先补，避免永远只补最近几天。
+            limit = BATCH_REFETCH_LIMIT.get(domain, BATCH_MAX_REFETCH_PER_RUN)
+            for day in missing[:limit]:
+                try:
+                    await globals()[f"_refetch_{domain}"](db, day)
+                    await _commit(db)  # 逐日提交：单日失败不拖累已补好的日子
+                    batch_refetched.append(day)
+                except Exception as exc:  # noqa: BLE001 — 单域/单日失败不得反噬对账
+                    logger.warning(
+                        "RECONCILE refetch failed domain=%s day=%s: %s",
+                        domain,
+                        day,
+                        f"{type(exc).__name__}: {exc}",
+                    )
+                    await db.rollback()
+        covered = sealed | set(batch_refetched)
+        result["domains"][domain] = {
+            "latest_in_db": max(covered).isoformat() if covered else None,
+            "missing_days": [d.isoformat() for d in missing],
+            "partial_days": [],
+            "refetched": [d.isoformat() for d in batch_refetched],
+            "status": _status_word(apply, bool(batch_refetched), bool(missing)),
+        }
 
     # ── 齐备守门：`expected_latest` 只认"真的能用"的日子 ──
     #
@@ -496,11 +713,17 @@ def _status_word(apply: bool, refetched: bool, has_gaps: bool) -> str:
 
 
 def _log_summary(result: dict[str, Any]) -> None:
-    gaps = {
-        dom: v["missing_days"] + v["partial_days"]
-        for dom, v in result["domains"].items()
-        if v["missing_days"] or v["partial_days"]
-    }
+    # "gaps" 只报**本轮之后仍缺**的日子：把已 refetched 的减掉，否则日志会把
+    # "补了 5 天" 读成 "30 天全缺"（batch 域单轮有上限时尤其误导）。
+    gaps: dict[str, list[str]] = {}
+    for dom, value in result["domains"].items():
+        remaining = [
+            d
+            for d in value["missing_days"] + value["partial_days"]
+            if d not in set(value.get("refetched", []))
+        ]
+        if remaining:
+            gaps[dom] = remaining
     if gaps:
         logger.warning(
             "RECONCILE gaps=%s apply=%s degraded_calendar=%s",
@@ -815,7 +1038,7 @@ async def coverage_report(
     calendar, calendar_degraded = await _trading_calendar(db, window_days=window_days, since=since)
 
     out: list[dict[str, Any]] = []
-    for domain in INSPECT_DOMAINS:
+    for domain in COVERAGE_DOMAINS:
         src = _COVERAGE_SOURCES[domain]
         try:
             async with db.begin_nested():

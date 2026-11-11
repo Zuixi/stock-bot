@@ -6,8 +6,9 @@
    响应 `source="eastmoney_intraday"`；`as_of_label` 形如 `"盘中 HH:MM"`；l3/l1 字段
    全部 None；`yesterday=None`；`stock_id=None`。**断言 `persist_snapshot` 未被调用**
    （盘中不写 market_sentiment_daily）。
-2. **东财池失败** → 回落收盘口径；`as_of_label` 被替换为 ``"盘中不可用，已回落收盘"``；
-   回落**仍写** `market_sentiment_daily`（persist_snapshot 被调用）。
+2. **东财池失败** → 回落到**最近完整交易日**（不是今天）收盘口径；`as_of_label`
+   带上回落日期；`intraday_fallback=True`；**不写** `market_sentiment_daily`
+   （读路径不落库，写盘是盘后 job 的单写者职责）。
 3. **mode=intraday + 历史日期** → 400（盘中无意义）。
 4. **mode=close** (default) → 行为与今天一致；原 `test_limit_up_service.py` /
    `test_persist_snapshot_cache.py` 全绿。
@@ -33,6 +34,7 @@ from app.services import limit_up_service as svc
 
 D5 = date(2026, 9, 10)  # 任意历史交易日，close 路径用
 D_TODAY = date(2026, 9, 17)  # 盘中分支用的"今日"（测试桩控时钟）
+D_LAST_COMPLETE = date(2026, 9, 16)  # 回落目标：最近完整交易日（≠ 今天）
 D_TODAY_STR = D_TODAY.isoformat()
 D_TODAY_EM = D_TODAY.strftime("%Y%m%d")
 
@@ -271,7 +273,12 @@ async def test_intraday_eastmoney_failure_falls_back_to_close(
     _close_path: dict[str, Any],
     _clock_today: None,
 ) -> None:
-    """东财池 fetch 抛错 → 回落 close 路径，as_of_label 替换成 '盘中不可用，已回落收盘'。"""
+    """东财池 fetch 抛错 → 回落到最近完整交易日（不是今天），并明确标注。
+
+    回归背景（2026-11-11 实测）：旧实现回落到 `as_of=today`，而交易时段内今天既无
+    收盘行情也无当日涨跌停价 → close 路径判 `price_limits_missing` 返回空快照，
+    用户切"盘中"看到整片空白。回落目标必须是**已有完整数据的那一天**。
+    """
 
     async def _fake_pool_raises(trade_date: str) -> list[dict[str, Any]]:
         raise RuntimeError("东财炸了")
@@ -282,13 +289,12 @@ async def test_intraday_eastmoney_failure_falls_back_to_close(
         persist_called["n"] += 1
         return {"status": "ok", "trade_date": D_TODAY, "zt_count": 75}
 
-    # 回落路径：get_snapshot(cache, as_of=D_TODAY) 走 close 路径
-    # close 路径内部会 resolve_latest_complete_day + 调 repo。
-    # _close_path 已替了 repo，但要替掉 resolve_latest_complete_day
+    # 回落路径：get_snapshot(cache, as_of=None) 走 close 路径的完整日判据。
+    # _close_path 已替了 repo；同时替掉完整日解析器，锁定回落到前一完整日。
     from types import SimpleNamespace
 
     async def _fake_resolve(_db: Any, cache: Any = None) -> Any:
-        return SimpleNamespace(day=D_TODAY, quality="complete")
+        return SimpleNamespace(day=D_LAST_COMPLETE, quality="complete")
 
     _patch_pool(monkeypatch, _fake_pool_raises)
     monkeypatch.setattr(svc, "persist_snapshot", _fake_persist)
@@ -296,23 +302,80 @@ async def test_intraday_eastmoney_failure_falls_back_to_close(
     snap = await svc.get_snapshot(cache=None, as_of=None, lookback=10, mode="intraday")
 
     # 回落 close 路径的 source 维持 close 路径的口径；as_of_quality 由 close
-    # 路径给出（as_of=today 显式传入 → close 不调 resolve_latest_complete_day，
-    # 默认 "partial"）。**关键**：此处**不**由 intraday 分支手工覆盖——
-    # 这是 brief 的硬要求（"fallback's as_of_quality should be whatever
-    # the close path produced"）。
+    # 路径给出。**关键**：此处**不**由 intraday 分支手工覆盖。
     assert snap["source"] == "local_calc"
-    assert snap["as_of_quality"] in {"complete", "partial", "fallback"}
-    # 进一步：与独立调用 close 路径的 quality 完全一致（不能被 intraday 分支改动）
-    snap_close = await svc.get_snapshot(cache=None, as_of=D_TODAY, lookback=10, mode="close")
+    assert snap["as_of_quality"] == "complete"
+    # 进一步：与独立调用 close 路径（同一回落日）的 quality 完全一致
+    snap_close = await svc.get_snapshot(cache=None, as_of=None, lookback=10, mode="close")
     assert snap["as_of_quality"] == snap_close["as_of_quality"]
-    # as_of_label 被替换成不可用标注
-    assert snap["as_of_label"] == "盘中不可用，已回落收盘"
+    # 回落到最近完整交易日，而不是今天
+    assert snap["as_of"] == D_LAST_COMPLETE
+    assert snap["intraday_fallback"] is True
+    assert D_LAST_COMPLETE.isoformat() in snap["as_of_label"]
+    assert "回落" in snap["as_of_label"]
     # 其余字段跟 close 路径一致
-    assert snap["as_of"] == D_TODAY
     assert snap["kpis"]["zt_count"] == 75
-    # 回落路径**仍**走 persist（与盘中不调相反，护栏：close 路径不能因为
-    # "intraday fallback" 标签就静默跳过落库）
-    assert persist_called["n"] == 1
+    # 读路径不落库：写盘是盘后 job 的单写者职责（盘中写会把不完整的一天固化）
+    assert persist_called["n"] == 0
+
+
+# ---------- 缓存已热时的回落（回归：as_of 是 str）--------------------------------
+
+
+async def test_intraday_fallback_tolerates_cached_string_as_of(
+    monkeypatch: pytest.MonkeyPatch, _clock_today: None
+) -> None:
+    """缓存命中的 close 快照里 ``as_of`` 是 JSON 字符串；回落拼接标签不能因此 500。
+
+    线上实测（2026-11-11）：第一次请求（缓存冷）正常回落；一分钟内第二次请求命中
+    Redis 后 `raw_day.isoformat()` 抛 AttributeError → 用户刷新就白屏。
+    """
+
+    async def _fake_pool_raises(trade_date: str) -> list[dict[str, Any]]:
+        raise RuntimeError("东财炸了")
+
+    cached = {
+        "as_of": D_LAST_COMPLETE.isoformat(),
+        "as_of_prev": "2026-09-15",
+        "as_of_quality": "complete",
+        "source": "local_calc",
+        "limits_present": True,
+        "is_partial": False,
+        "sw_coverage": None,
+        "lookback": 10,
+        "degraded_reason": None,
+        "kpis": {"zt_count": 75},
+        "echelons": [],
+        "sectors": {"items": [], "unclassified_count": 0},
+        "yesterday": {"kpis": {}, "items": []},
+    }
+
+    class _CloseCachedOnly:
+        """盘中 key 恒 miss、close key 命中——复现"第二次刷新"的真实缓存状态。"""
+
+        def __init__(self) -> None:
+            self.set_calls: list[tuple[str, Any, int | None]] = []
+
+        async def get(self, key: str) -> Any | None:
+            return cached if key.startswith("market:limit-up:snapshot:") else None
+
+        async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
+            self.set_calls.append((key, value, ttl))
+
+    _patch_pool(monkeypatch, _fake_pool_raises)
+    cache = _CloseCachedOnly()
+    snap = await svc.get_snapshot(cache=cache, as_of=None, lookback=10, mode="intraday")
+    assert snap["intraday_fallback"] is True
+    assert D_LAST_COMPLETE.isoformat() in snap["as_of_label"]
+    intra_sets = [
+        call
+        for call in cache.set_calls
+        if call[0] == f"market:limit-up:intra:{D_TODAY.isoformat()}"
+    ]
+    assert len(intra_sets) == 1
+    _key, payload, ttl = intra_sets[0]
+    assert payload["intraday_fallback"] is True
+    assert ttl == svc.INTRADAY_TTL
 
 
 # ---------- mode=intraday + 历史日期 → 400 ---------------------------------------

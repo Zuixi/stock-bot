@@ -261,7 +261,10 @@ async def test_latest_endpoint_returns_four_badges(
     from app.api.v1 import metrics as api
 
     async def _fake(
-        _db: Any, scope_keys: list[str] | None = None, metric_keys: list[str] | None = None
+        _db: Any,
+        scope_keys: list[str] | None = None,
+        metric_keys: list[str] | None = None,
+        as_of: Any = None,
     ) -> list[Any]:
         assert scope_keys == ["pig"]
         assert metric_keys == ["hog_price"]
@@ -332,7 +335,10 @@ async def test_latest_endpoint_normalises_blank_keys(
     seen: dict[str, Any] = {}
 
     async def _fake(
-        _db: Any, scope_keys: list[str] | None = None, metric_keys: list[str] | None = None
+        _db: Any,
+        scope_keys: list[str] | None = None,
+        metric_keys: list[str] | None = None,
+        as_of: Any = None,
     ) -> list[Any]:
         seen["metric_keys"] = metric_keys
         return []
@@ -394,7 +400,9 @@ async def test_series_endpoint_caches_with_canonical_range_key(
     """
     from app.api.v1 import metrics as api
 
-    async def _fake(_db: Any, scope_key: str, metric_key: str, range_key: str) -> MetricSeriesOut:
+    async def _fake(
+        _db: Any, scope_key: str, metric_key: str, range_key: str, as_of: Any = None
+    ) -> MetricSeriesOut:
         return MetricSeriesOut(
             scope_key=scope_key,
             metric_key=metric_key,

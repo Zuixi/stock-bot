@@ -1031,6 +1031,7 @@ async def get_latest_metrics_across_scopes(
     db: AsyncSession,
     scope_keys: list[str] | None = None,
     metric_keys: list[str] | None = None,
+    as_of: date | None = None,
 ) -> list[MetricLatestOut]:
     """跨 scope 的每指标最新值 + 四徽章（未登记 metric_key 一律拒绝）。
 
@@ -1063,7 +1064,7 @@ async def get_latest_metrics_across_scopes(
         )
         defs = [(cfg.key, m) for cfg in scopes for m in cfg.metrics]
 
-    grouped = await repo.latest_rows_by_metric(db, scope_keys)
+    grouped = await repo.latest_rows_by_metric(db, scope_keys, as_of=as_of)
     outs: list[MetricLatestOut] = []
     for _owner_scope, m in defs:
         rows = grouped.get(m.key, [])
@@ -1079,6 +1080,7 @@ async def get_series(
     scope_key: str,
     metric_key: str,
     range_key: str = SERIES_DEFAULT_RANGE,
+    as_of: date | None = None,
 ) -> MetricSeriesOut:
     """一个 scope 一个指标的升序序列（**真实时间窗**内 + 单一源）。
 
@@ -1107,6 +1109,7 @@ async def get_series(
         period_from=period_from,
         limit=parsed.limit,
         freq=m.freq,
+        as_of=as_of,
     )
     # 截断判定必须在源过滤之前：命中 DB 上界 = 窗内还有更早的点没取回来
     truncated = len(fetched) >= parsed.limit

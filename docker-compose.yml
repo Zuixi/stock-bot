@@ -254,6 +254,9 @@ services:
       migrate:
         condition: service_completed_successfully
     volumes:
+      # 与 worker/scheduler 共享 JSONL 原始留档（P5 replay 的数据源）。
+      # 不加这条时 api 看不到 ingest 写的 data/，回放永远 miss。
+      - ./data:/app/data
       - ./docs/references/sw/SwClass:/app/data/sw:ro
     labels:
       - "traefik.enable=true"
@@ -325,6 +328,9 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    volumes:
+      # 与 worker 共享 JSONL 原始留档；否则 scheduler 写的回放文件随容器重建丢失。
+      - ./data:/app/data
     command: ["python", "-m", "app.scheduler.runner"]
 
   # ---- frontend ----

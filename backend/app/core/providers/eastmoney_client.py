@@ -572,6 +572,43 @@ class EastmoneyClient:
         pool = ((data.get("data") or {}) or {}).get("pool") or []
         return [self._map_zt_pool_row(d) for d in pool]
 
+    async def fetch_stock_daily_kline(self, secid: str, beg: str, end: str) -> list[dict[str, Any]]:
+        """单只 A 股的日线（push2his stock kline，**独立于 TuShare 的校验源**）。
+
+        ``secid`` 形如 ``1.600519``（1=沪 / 0=深）。只取校验需要的字段：
+        ``trade_date`` / ``close`` / ``pct_chg``。字段缺失或日期不可解析的行直接跳过
+        （校验宁可少比几行，也不能拿猜出来的值当"独立证据"）。
+        """
+        data = await self._get_json(
+            _HIS_BASE,
+            "/api/qt/stock/kline/get",
+            {
+                "secid": secid,
+                "klt": 101,
+                "fqt": 0,  # 不复权：与 daily_quotes 的原始 close 同口径
+                "beg": beg,
+                "end": end,
+                "ut": _HIS_UT,
+                "fields1": "f1,f2,f3,f4,f5,f6",
+                "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            },
+        )
+        klines = (data.get("data") or {}).get("klines") or []
+        rows: list[dict[str, Any]] = []
+        for line in klines:
+            p = line.split(",")
+            if len(p) < 9:
+                continue
+            try:
+                day = datetime.strptime(p[0], "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            close, pct_chg = _kf(p[2]), _kf(p[8])
+            if close is None:
+                continue
+            rows.append({"trade_date": day, "close": close, "pct_chg": pct_chg})
+        return rows
+
 
 _client: EastmoneyClient | None = None
 

@@ -122,6 +122,15 @@ fi
 # 路由迁移硬门禁（Task 5 起）：读 `frontend/src/app/router/route-manifest.ts` + IA 文档，
 # 毫秒级、无需前端依赖，故**放在快检里**（不受"是否有前端改动"限制——它同样会被 IA 文档改动打破）。
 # node 缺失时**告警而非静默通过**（评审 Defect 5）。
+# 口径字典硬门禁（Q6）：docs/design/metric-dictionary.md §4.2 的样例表必须与
+# industry_registry 逐字一致；手抄漂移会让"同一个 metric_key 两种单位"重新长出来。
+echo "  check_metric_dictionary（口径字典↔registry）..."
+if (cd backend && uv run python scripts/check_metric_dictionary.py > /tmp/metric_dict.out 2>&1); then
+  ok "metric dictionary 与 registry 一致"
+else
+  fail "metric dictionary 与 registry 漂移"; tail -10 /tmp/metric_dict.out
+fi
+
 echo "  check:routes（路由迁移门禁）..."
 if ! command -v node >/dev/null 2>&1; then
   warn "未找到 node，路由迁移门禁被跳过（npm run check:routes）——请在有 node 的环境复跑"
@@ -167,6 +176,20 @@ else
     ok "check:chart-theme 通过（$(grep -c '^PASS' /tmp/check_chart_theme.out) 项）"
   else
     fail "图表主题门禁未通过（npm run check:chart-theme）"; grep '^FAIL' /tmp/check_chart_theme.out | head -20
+  fi
+fi
+
+# 数据展示棘轮门禁（P7/T7.5）：页面/组件的 `toFixed(` 存量已登记基线，只允许减少。
+echo "  check:data-display（页面手写数字格式化棘轮）..."
+if ! command -v node >/dev/null 2>&1; then
+  warn "未找到 node，数字展示门禁被跳过（npm run check:data-display）"
+elif [ ! -f frontend/scripts/check-data-display.mjs ]; then
+  fail "frontend/scripts/check-data-display.mjs 不存在（数字展示门禁无法执行）"
+else
+  if (cd frontend && npm run --silent check:data-display > /tmp/check_data_display.out 2>&1); then
+    ok "check:data-display 通过"
+  else
+    fail "数字展示门禁未通过（npm run check:data-display）"; cat /tmp/check_data_display.out | head -20
   fi
 fi
 

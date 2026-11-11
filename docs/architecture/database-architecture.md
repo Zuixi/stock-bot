@@ -307,9 +307,15 @@ COMMENT ON TABLE tasks IS '异步任务状态，对接 RabbitMQ Worker';
 
 ### 2.3 分区策略
 
-- **daily_quotes**：按 `trade_date` 年分区，便于历史数据归档与查询裁剪
-- **stock_features**：按 `asof_date` 年分区，与行情分区对齐
-- 分区创建脚本可自动化，根据当前年份动态创建下一年分区
+- **daily_quotes**：按 `trade_date` **月分区**（RANGE），由
+  [`backend/scripts/partition_daily_quotes.py`](../../backend/scripts/partition_daily_quotes.py)
+  执行切换（`--dry-run / --apply / --rollback / --cleanup`），**不是 Alembic 迁移**：
+  需要 RENAME 旧表、保留 7 天回滚窗口。分区表主键为 `(id, trade_date)`，业务唯一键仍是
+  `uq_daily_quotes_stock_date (stock_id, trade_date)`（PostgreSQL 要求唯一约束含分区键）。
+- 未来分区由 `storage_maintenance_service.ensure_daily_quotes_partitions` 每月 1 日补齐；
+  **缺分区 = 写入失败**（比静默丢行好）。
+- `stock_features` / `daily_basic_indicators` 当前**不分区**：行数与查询模式尚未达到收益点，
+  先靠 autovacuum 调参 + 保留策略治理膨胀（见 `c3d4e5f6a7b8` 迁移）。
 
 ### 2.4 版本控制策略（聚类）
 
@@ -731,3 +737,18 @@ backend/
 - API 密钥、数据库凭据使用环境变量
 - 敏感配置不提交仓库
 - 输出含免责声明，符合 product.md 要求
+
+
+### 回测账本
+
+`backtest_runs`（S2.3）：一次事件研究一行，存 `rule_key/rule_version/scope/window/horizons/benchmark/split/pit_enforced/stats`。
+只存**结果**，不存逐笔持仓；`pit_enforced=false` 的记录不会产生（服务端拒绝落库），
+因此读面看到的每一条回测都通过 PIT 对照。
+
+
+### 财报重述快照
+
+`financial_report_revisions`（Q2）：`financial_report_versions` 按
+`(stock_id, end_date, report_type, comp_type, source)` 唯一，修订会覆盖旧值；
+覆盖前把旧公告日/修订标记/口径/`as_of` 快照到本表（append-only），
+保证“当时看到的数”可回查。报表事实行仍指向主表，修订表只存元数据。

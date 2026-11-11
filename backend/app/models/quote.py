@@ -1,4 +1,7 @@
-"""DailyQuote ORM model — partitioned by trade_date."""
+"""DailyQuote ORM model — partitioned by trade_date (按月 RANGE)。
+
+分区切换脚本：``backend/scripts/partition_daily_quotes.py``；迁移不负责数据搬迁。
+"""
 
 from datetime import date, datetime
 
@@ -35,9 +38,12 @@ class DailyQuote(Base):
         # "unique constraint on partitioned table must include all partitioning columns"
     )
 
+    # 分区表的主键必须包含分区键 `trade_date`（PostgreSQL 硬约束）。
+    # `id` 保留为代理键（脚本迁移时用 identity 生成），业务唯一键仍是
+    # `uq_daily_quotes_stock_date (stock_id, trade_date)`。
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     stock_id: Mapped[int] = mapped_column(nullable=False)
-    trade_date: Mapped[date] = mapped_column(nullable=False)
+    trade_date: Mapped[date] = mapped_column(primary_key=True, nullable=False)
     open: Mapped[float | None] = mapped_column(Numeric(12, 4))
     high: Mapped[float | None] = mapped_column(Numeric(12, 4))
     low: Mapped[float | None] = mapped_column(Numeric(12, 4))

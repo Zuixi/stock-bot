@@ -12,7 +12,8 @@
     "check:design": "node scripts/check-design-tokens.mjs && node scripts/check-no-raw-iso.mjs && node scripts/check-signal-diff.mjs",
     "check:routes": "node scripts/check-routes.mjs",
     "check:api-fields": "node scripts/check-api-fields.mjs",
-    "check:chart-theme": "node scripts/check-chart-theme.mjs"
+    "check:chart-theme": "node scripts/check-chart-theme.mjs",
+    "check:data-display": "node scripts/check-data-display.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",

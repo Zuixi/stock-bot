@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from collections.abc import Awaitable, Callable
 from datetime import date, datetime
+from datetime import time as dt_time
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -26,10 +28,18 @@ async def _alert_job_failure(job_ids: str | tuple[str, ...], exc: BaseException)
     同源记录，也不要把失败挂到一个这次并没有触发的 id 上。job_alert_service 自身吞掉 Redis
     异常——告警绝不能反过来把"已处理的 job 失败"升级成"未处理的崩溃"。
     """
+    from app.services import retry_queue_service  # noqa: PLC0415
     from app.services.job_alert_service import record_job_failure  # noqa: PLC0415
 
     for job_id in (job_ids,) if isinstance(job_ids, str) else job_ids:
         await record_job_failure(job_id, repr(exc))
+        # R1：只把**幂等** job 放进重试队列（高频轮询/SSE 不进，下一 tick 自然会跑）。
+        # 重试中的 job 自己 catch 后再告警时，用 retry_or_dead 累计次数；否则首次入队。
+        if job_id in RETRYABLE_JOBS:
+            if retry_queue_service.IN_RETRY.get():
+                await retry_queue_service.retry_or_dead(job_id, repr(exc))
+            else:
+                await retry_queue_service.enqueue(job_id)
 
 
 #: 共享 callable `reconcile_market_data_job` 的**常规**触发点 id（失败登记逐个登记）。
@@ -120,7 +130,10 @@ async def sse_post_close_job() -> None:
 
 
 async def _run_reconcile(
-    only: set[str] | None, job_ids: str | tuple[str, ...]
+    only: set[str] | None,
+    job_ids: str | tuple[str, ...],
+    *,
+    window_days: int | None = None,
 ) -> dict[str, Any] | None:
     """对账薄封装：会话生命周期 + 异常边界统一在这里（job_ids = 注册它的 scheduler id）。
 
@@ -143,7 +156,10 @@ async def _run_reconcile(
 
     try:
         async with async_session_factory() as db:
-            result = await reconciliation_service.reconcile_market_data(db, only=only, cache=cache)
+            kwargs: dict[str, Any] = {"only": only, "cache": cache}
+            if window_days is not None:
+                kwargs["window_days"] = window_days
+            result = await reconciliation_service.reconcile_market_data(db, **kwargs)
         logger.info(
             "Reconcile done (only=%s): %s",
             sorted(only) if only else "all",
@@ -223,9 +239,78 @@ async def reconcile_market_data_job(*, job_ids: str | tuple[str, ...] = RECONCIL
     """
     logger.info("Full reconcile job triggered")
     result = await _run_reconcile(only=None, job_ids=job_ids)
+    await _refresh_panorama(result)
     await _converge_derived_metrics(result)
     await _refresh_limit_up_facts()
     await _refresh_stale_artifacts(result)
+    await _run_data_quality(result)
+
+
+async def _refresh_panorama(reconcile_result: dict[str, Any] | None) -> None:
+    """对账尾巴上的 A 股全景三表（``market_panorama_daily``）。
+
+    为什么必须挂在这里：17:25 的独立 job 跑在 ``T0_CUTOFF``（17:30）之前，
+    ``resolve_latest_complete_day`` 只能给出 T-1 ⇒ 当日行情到了、广度表却永远停在
+    前一天（2026-11-10 实测：quotes/sentiment=11-10，breadth/industry=11-09）。
+    顺序由代码保证：先对账把底座拉到 ``expected_latest``，再算派生。
+    """
+    if not reconcile_result:
+        return
+    raw = reconcile_result.get("expected_latest")
+    if not raw:
+        return
+    from datetime import date as _date  # noqa: PLC0415
+
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_panorama_ingest_service  # noqa: PLC0415
+
+    try:
+        async with async_session_factory() as db:
+            breadth_n, industry_n = await market_panorama_ingest_service.refresh_day(
+                db, _date.fromisoformat(str(raw))
+            )
+            await db.commit()
+        logger.info(
+            "Panorama refresh done: day=%s breadth=%s industry=%s", raw, breadth_n, industry_n
+        )
+        if breadth_n == 0:
+            await _alert_job_failure(
+                "market_panorama_daily",
+                RuntimeError(f"{raw} 没有可写的广度行（行情未齐/非交易日）"),
+            )
+    except Exception as exc:  # noqa: BLE001 — 全景失败不得反噬对账
+        logger.exception("Panorama refresh failed")
+        await _alert_job_failure("market_panorama_daily", exc)
+
+
+async def _run_data_quality(reconcile_result: dict[str, Any] | None) -> None:
+    """对账尾巴上的期望断言（``data_quality``）。
+
+    目标日取对账算出的 ``expected_latest``（已过齐备门禁），**不新开 cron**：
+    断言必须跑在"当天数据已经收敛"之后，否则每天都会有一半断言失败在时间差上。
+    失败只登记 ``data_quality`` 告警并落库，不反噬对账本身。
+    """
+    if not reconcile_result:
+        return
+    raw = reconcile_result.get("expected_latest")
+    if not raw:
+        return
+    from datetime import date as _date  # noqa: PLC0415
+
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import data_expectations  # noqa: PLC0415
+
+    try:
+        async with async_session_factory() as db:
+            results = await data_expectations.run_for_day(db, day=_date.fromisoformat(str(raw)))
+        blocking = [
+            item.key for item in results if item.severity == "block" and item.status == "fail"
+        ]
+        if blocking:
+            await _alert_job_failure("data_quality", RuntimeError("; ".join(blocking)))
+    except Exception as exc:  # noqa: BLE001 — 质量断言失败不得反噬对账
+        logger.exception("Data quality job failed")
+        await _alert_job_failure("data_quality", exc)
 
 
 async def _refresh_limit_up_facts() -> None:
@@ -965,6 +1050,147 @@ async def concept_members_refresh_job() -> dict[str, int] | None:
 # ------------------------------------------------------------------
 
 
+async def data_retention_job() -> None:
+    """每周保留策略清理（``data_retention_weekly``，周六 03:30）.
+
+    只删有明确保留期的账本/盘中快照；行情、限售、财务原始行不动（归档脚本单列）。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import storage_maintenance_service  # noqa: PLC0415
+
+    try:
+        async with async_session_factory() as db:
+            result = await storage_maintenance_service.run_retention(db)
+            await db.commit()
+        logger.info("Data retention done: %s", result)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Data retention failed")
+        await _alert_job_failure("data_retention_weekly", exc)
+
+
+async def partition_maintenance_job() -> None:
+    """每月补 ``daily_quotes`` 未来分区（``partition_maintenance``，1 日 03:00）.
+
+    缺分区会让写入**直接失败**（这是刻意的：静默丢行更难查）。非分区表是合法状态
+    （尚未执行 ``scripts/partition_daily_quotes.py``），job 直接返回。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import storage_maintenance_service  # noqa: PLC0415
+
+    try:
+        async with async_session_factory() as db:
+            created = await storage_maintenance_service.ensure_daily_quotes_partitions(db)
+            await db.commit()
+        logger.info("Partition maintenance done: created=%s", created)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Partition maintenance failed")
+        await _alert_job_failure("partition_maintenance", exc)
+
+
+async def retry_dispatch_job() -> None:
+    """重试调度（"retry_dispatcher"，每 60 秒）.
+
+    - 只跑 ``RETRYABLE_JOBS`` 里的幂等任务；
+    - 执行成功且 job 没有在内部再次入队 → 清空重试状态；
+    - 抛错 → 退避重排；超过 5 次进 dead letter。
+    """
+    from app.services import retry_queue_service  # noqa: PLC0415
+
+    for job_id in await retry_queue_service.due_jobs():
+        job = RETRYABLE_JOBS.get(job_id)
+        if job is None:
+            await retry_queue_service.retry_or_dead(job_id, "job not in RETRYABLE_JOBS")
+            continue
+        token = retry_queue_service.IN_RETRY.set(True)
+        try:
+            await job()
+            # job 内部 catch 并调 `_alert_job_failure` 时已经重新入队；此时不能清状态。
+            if not await retry_queue_service.is_queued(job_id):
+                await retry_queue_service.clear(job_id)
+        except Exception as exc:  # noqa: BLE001 — 重试失败必须再排队/进 DLQ，不能冒泡
+            logger.exception("Retry dispatch failed: %s", job_id)
+            await retry_queue_service.retry_or_dead(job_id, repr(exc))
+        finally:
+            retry_queue_service.IN_RETRY.reset(token)
+
+
+async def sector_moneyflow_capture_job() -> None:
+    """A 类板块资金流"抓到为止"（"sector_moneyflow_capture"，15:15–16:25 每 10 分钟）.
+
+    15:05 的 EOD 只跑一次，15:35 的 rewrite 也只跑一次；两次都失败（断网/容器重启）
+    当天 `eod_full` 就永久缺失（实测完整日只有 31.82%）。本 job 在收盘后持续重试，
+    直到 `sector_moneyflow_day_has_capture` 为真；已捕获的日子直接 skip（零写入）。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_data_service  # noqa: PLC0415
+
+    now = datetime.now(_SH_TZ)
+    if now.time() > dt_time(16, 30):
+        return
+    try:
+        async with async_session_factory() as db:
+            result = await market_data_service.ingest_sector_moneyflow_if_missing(db)
+            await db.commit()
+        logger.info("Sector moneyflow capture: %s", result)
+        shortfalls = market_data_service.eod_alert_reasons(result)
+        if shortfalls:
+            await _alert_job_failure(
+                "sector_moneyflow_capture", RuntimeError("; ".join(shortfalls))
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Sector moneyflow capture failed")
+        await _alert_job_failure("sector_moneyflow_capture", exc)
+
+
+async def reconcile_weekly_deep_job() -> None:
+    """周末深扫（"reconcile_weekly_deep"，周六 04:00，窗口 90 个交易日）.
+
+    日环只看 30 天；停摆超过一个月的洞只能靠周环发现。零外呼（数据齐备时）+ 幂等。
+    """
+    logger.info("Weekly deep reconcile triggered")
+    await _run_reconcile(only=None, job_ids="reconcile_weekly_deep", window_days=90)
+
+
+async def independent_verify_job() -> None:
+    """跨源抽样校验（"independent_verify"，周六 04:30）.
+
+    数据齐备与"数据正确"是两件事：本地期望断言只能证明"行数/非空率/区间"达标，
+    发现不了上游把收盘价写错。本 job 用**无血缘**的东财 push2his 抽样比对
+    当日收盘价/涨跌幅，结果写 ``data_quality_runs``（severity=warn，不阻断发布）。
+
+    失败语义：源不可用 → 状态 error（不是 pass）；单只查不到 → 记 partial，
+    全部查不到才算 error。绝不自动改数据（自动覆盖会把错误固化）。
+    """
+    from app.core.database import async_session_factory  # noqa: PLC0415
+    from app.services import market_day_service, verification_service  # noqa: PLC0415
+
+    async with async_session_factory() as db:
+        latest = await market_day_service.resolve_latest_complete_day(db)
+        if latest is None:
+            logger.warning("Independent verify skipped: no complete trading day")
+            return
+        day = latest.day
+        result = await verification_service.verify_day(db, day=day)
+        await verification_service.persist(db, result)
+    logger.info(
+        "Independent verify %s: status=%s matched=%s/%s ratio=%.3f",
+        day,
+        result.status,
+        result.matched,
+        result.checked,
+        result.ratio,
+    )
+    if result.status in ("fail", "error"):
+        # 复用既有告警通道（job:failures + 重试队列），不新造一套通知。
+        from app.services.job_alert_service import record_job_failure  # noqa: PLC0415
+
+        await record_job_failure(
+            "independent_verify",
+            f"cross-source verification {result.status}: "
+            f"{result.matched}/{result.checked} ratio={result.ratio:.3f}",
+        )
+
+
 async def universe_refresh_job() -> None:
     """Refresh stock universe metadata (09:00 Sat, weekly).
 
@@ -1005,3 +1231,32 @@ async def universe_refresh_job() -> None:
         logger.exception("Universe refresh cache invalidation failed (non-fatal)")
         # 降级但要可见：缓存未失效会让新名录在 TTL 内不可见
         await _alert_job_failure("universe_refresh", exc)
+
+
+#: 可重试 job（R1）：只收幂等、非高频的采集/派生任务。
+#: 高频轮询（SSE / 板块 poll / 公告）**不在此列**：它们的下一 tick 就是重试，
+#: 放进队列只会制造风暴。
+RETRYABLE_JOBS: dict[str, Callable[[], Awaitable[Any]]] = {
+    "universe_refresh": universe_refresh_job,
+    "financial_backfill": financial_backfill_job,
+    "industry_metrics_refresh": industry_metrics_refresh_job,
+    "securities_refresh": securities_refresh_job,
+    "daily_quotes_backfill": daily_quotes_backfill_job,
+    "daily_basic_backfill": daily_basic_backfill_job,
+    "price_limits_daily": price_limits_daily_job,
+    "sentiment_daily": sentiment_daily_job,
+    "limit_up_stock_facts": limit_up_stock_facts_job,
+    "market_panorama_daily": market_panorama_daily_job,
+    "global_index_daily": global_index_daily_job,
+    "market_moneyflow_daily": market_moneyflow_daily_job,
+    "northbound_daily": northbound_daily_job,
+    "block_trade_daily": block_trade_daily_job,
+    "share_float_daily": share_float_daily_job,
+    "repurchase_daily": repurchase_daily_job,
+    "research_reports_daily": research_reports_daily_job,
+    "dragon_tiger_daily": dragon_tiger_daily_job,
+    "concept_members_refresh": concept_members_refresh_job,
+    "data_retention_weekly": data_retention_job,
+    "partition_maintenance": partition_maintenance_job,
+    "independent_verify": independent_verify_job,
+}

@@ -1018,3 +1018,46 @@ def test_truncated_ties_is_detected(monkeypatch: pytest.MonkeyPatch) -> None:
     assert out.returned_rows == 2
     assert out.truncated_ties is True
     assert any("并列" in n for n in out.notes)
+
+
+@requires_pg
+def test_restatement_snapshot_is_kept() -> None:
+    """Q2：同一报告被修订覆盖前，旧值必须进 revisions，不能静默丢失。"""
+    end_date = date(2025, 12, 31)
+
+    async def _scenario(db: AsyncSession) -> tuple[int, int, date | None]:
+        stock_id = await _seed_stock(db, f"{PREFIX}R1", "重述测试", date(2020, 1, 1))
+        common = {
+            "stock_id": stock_id,
+            "ts_code": f"{PREFIX}R1.SH",
+            "end_date": end_date,
+            "report_type": "A",
+            "comp_type": "1",
+            "source": "test",
+            "source_record_key": f"{PREFIX}R1",
+            "update_flag": "1",
+            "currency": "CNY",
+            "quality_status": "reported",
+            "raw_record_id": None,
+        }
+        version = await financial_repo.upsert_report_version(
+            db,
+            ann_date=date(2026, 3, 1),
+            f_ann_date=date(2026, 3, 1),
+            as_of=datetime(2026, 3, 1, tzinfo=UTC),
+            **common,
+        )
+        await financial_repo.upsert_report_version(
+            db,
+            ann_date=date(2026, 4, 1),
+            f_ann_date=date(2026, 4, 1),
+            as_of=datetime(2026, 4, 1, tzinfo=UTC),
+            **common,
+        )
+        revisions = await financial_repo.list_report_revisions(db, stock_id, end_date)
+        return version.id, len(revisions), revisions[0].f_ann_date if revisions else None
+
+    version_id, count, old_ann = asyncio.run(_with_rollback(_scenario))
+    assert version_id > 0
+    assert count == 1, "一次修订应留一条旧值快照"
+    assert old_ann == date(2026, 3, 1)

@@ -14,6 +14,7 @@ from app.models.financial import (
     CashFlowStatementFacts,
     FinancialMetric,
     FinancialRawRecord,
+    FinancialReportRevision,
     FinancialReportVersion,
     IncomeStatementFacts,
 )
@@ -96,6 +97,44 @@ async def upsert_report_version(
     as_of: datetime,
     raw_record_id: int | None,
 ) -> FinancialReportVersion:
+    existing = (
+        await db.execute(
+            select(FinancialReportVersion).where(
+                FinancialReportVersion.stock_id == stock_id,
+                FinancialReportVersion.end_date == end_date,
+                FinancialReportVersion.report_type == report_type,
+                FinancialReportVersion.comp_type == comp_type,
+                FinancialReportVersion.source == source,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None and (
+        existing.ann_date != ann_date
+        or existing.f_ann_date != f_ann_date
+        or existing.update_flag != update_flag
+        or existing.quality_status != quality_status
+        or existing.as_of != as_of
+        or existing.raw_record_id != raw_record_id
+    ):
+        # 先快照旧值再覆盖：主表唯一键不含公告日，修订会覆盖同一行（Q2）。
+        db.add(
+            FinancialReportRevision(
+                report_version_id=existing.id,
+                stock_id=existing.stock_id,
+                end_date=existing.end_date,
+                report_type=existing.report_type,
+                comp_type=existing.comp_type,
+                source=existing.source,
+                ann_date=existing.ann_date,
+                f_ann_date=existing.f_ann_date,
+                update_flag=existing.update_flag,
+                quality_status=existing.quality_status,
+                as_of=existing.as_of,
+                raw_record_id=existing.raw_record_id,
+            )
+        )
+        await db.flush()
+
     values = {
         "stock_id": stock_id,
         "ts_code": ts_code,
@@ -363,3 +402,18 @@ async def list_metrics_series(
         stmt = stmt.where(FinancialMetric.metric_key.in_(metric_keys))
     result = await db.execute(stmt)
     return [(metric, end_date) for metric, end_date in result.all()]
+
+
+async def list_report_revisions(
+    db: AsyncSession, stock_id: int, end_date: date
+) -> list[FinancialReportRevision]:
+    """Superseded snapshots for one report, newest first (Q2 重述留痕)."""
+    stmt = (
+        select(FinancialReportRevision)
+        .where(
+            FinancialReportRevision.stock_id == stock_id,
+            FinancialReportRevision.end_date == end_date,
+        )
+        .order_by(FinancialReportRevision.superseded_at.desc())
+    )
+    return list((await db.execute(stmt)).scalars().all())

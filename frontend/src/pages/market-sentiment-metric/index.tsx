@@ -4,6 +4,7 @@ import { Breadcrumb, Button, Collapse, Empty, Result, Segmented, Skeleton, Table
 import type { ColumnsType } from "antd/es/table";
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { ProvenanceLink } from "@/features/provenance/ProvenanceLink";
 import { EChart } from "@/shared/ui/EChart";
 import { qualityBadgeText, useIsNarrowViewport } from "@/shared/ui";
 import { useTheme } from "@/app/theme-context";
@@ -147,6 +148,13 @@ export default function SentimentMetricPage() {
         <div className="smd-head__main">
           <Typography.Title level={4} className="smd-head__title">
             {data?.metric.label ?? "情绪指标"} <span className="smd-head__tail">历史追踪</span>
+            {data?.metric.key ? (
+              <ProvenanceLink
+                metricKey={data.metric.key}
+                asOf={data.asOf ?? null}
+                label="查看该指标的数据溯源"
+              />
+            ) : null}
           </Typography.Title>
           <div className="smd-meta">
             {data ? (

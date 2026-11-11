@@ -54,8 +54,10 @@ interface BackendLadder {
   degraded_reason: string | null;
   kpis: BackendKpis | null;
   echelons: Array<{ streak: number; label: string; stocks: BackendLadderStock[] }>;
-  /** 盘中口径标注：`盘中 HH:MM`；东财回落时 `盘中不可用，已回落收盘`；收盘恒 null。 */
+  /** 盘中口径标注：`盘中 HH:MM`；东财回落时带回落日期；收盘恒 null。 */
   as_of_label?: string | null;
+  /** 盘中池不可用 → 响应体是**最近完整交易日**的收盘口径（不是今天）。 */
+  intraday_fallback?: boolean;
 }
 
 interface BackendSectorLimitUpItem {
@@ -247,6 +249,8 @@ export interface LimitUpLadder {
   echelons: Array<{ streak: number; label: string; stocks: LadderStock[] }>;
   /** 盘中口径标注（收盘为 null）；原样透传后端串，前端不美化、不隐藏回落事实。 */
   asOfLabel: string | null;
+  /** 盘中池不可用 → 当前展示的是最近完整交易日收盘口径（默认 false）。 */
+  intradayFallback: boolean;
 }
 
 export interface SectorLimitUpItem {
@@ -564,6 +568,7 @@ export function fetchLimitUpLadder(
     kpis: b.kpis ? mapKpis(b.kpis) : null,
     echelons: b.echelons.map((e) => ({ streak: e.streak, label: e.label, stocks: e.stocks.map(mapStock) })),
     asOfLabel: b.as_of_label ?? null,
+    intradayFallback: Boolean(b.intraday_fallback),
   }));
 }
 

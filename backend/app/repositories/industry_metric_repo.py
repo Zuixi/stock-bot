@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Any
 
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -50,8 +51,13 @@ async def upsert_metrics(db: AsyncSession, rows: list[dict]) -> int:
     return result.rowcount or 0  # type: ignore[attr-defined]
 
 
+def _pit_visible(as_of: date) -> Any:
+    """PIT 可见性：有 published_at 用它，没有才回退 period（与读面判别式一致）。"""
+    return func.coalesce(func.date(IndustryMetric.published_at), IndustryMetric.period) <= as_of
+
+
 async def latest_rows_by_metric(
-    db: AsyncSession, scope_keys: list[str] | None = None
+    db: AsyncSession, scope_keys: list[str] | None = None, as_of: date | None = None
 ) -> dict[str, list[IndustryMetric]]:
     """Latest row per (scope, metric_key, source, freq) — DISTINCT ON over a small keyed table.
 
@@ -62,6 +68,8 @@ async def latest_rows_by_metric(
     stmt = select(IndustryMetric).where(IndustryMetric.stock_id == 0)
     if scope_keys is not None:
         stmt = stmt.where(IndustryMetric.industry_key.in_(scope_keys))
+    if as_of is not None:
+        stmt = stmt.where(_pit_visible(as_of))
     stmt = stmt.distinct(
         IndustryMetric.industry_key,
         IndustryMetric.metric_key,
@@ -88,6 +96,7 @@ async def get_metric_history(
     limit: int = 240,
     freq: str | None = None,
     source: str | None = None,
+    as_of: date | None = None,
 ) -> list[IndustryMetric]:
     """Ascending series for one metric (optionally filtered by freq/source)."""
     stmt = (
@@ -104,6 +113,8 @@ async def get_metric_history(
         stmt = stmt.where(IndustryMetric.freq == freq)
     if source:
         stmt = stmt.where(IndustryMetric.source == source)
+    if as_of is not None:
+        stmt = stmt.where(_pit_visible(as_of))
     result = await db.execute(stmt)
     return list(reversed(result.scalars().all()))
 
@@ -118,6 +129,7 @@ async def get_metric_window(
     limit: int = 5000,
     freq: str | None = None,
     source: str | None = None,
+    as_of: date | None = None,
 ) -> list[IndustryMetric]:
     """Ascending series **within a period window**（``period_from`` 含、``period_to`` 含）。
 
@@ -144,6 +156,8 @@ async def get_metric_window(
         stmt = stmt.where(IndustryMetric.freq == freq)
     if source:
         stmt = stmt.where(IndustryMetric.source == source)
+    if as_of is not None:
+        stmt = stmt.where(_pit_visible(as_of))
     result = await db.execute(stmt)
     return list(reversed(result.scalars().all()))
 

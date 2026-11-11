@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -21,8 +21,9 @@ import pytest
 from sqlalchemy import delete, event, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from app.models.content import ContentEntity, ContentItem
 from app.models.index_daily import IndexDaily
-from app.models.market_data import Announcement, DragonTigerEntry, ShareFloat, StockPriceLimit
+from app.models.market_data import DragonTigerEntry, ShareFloat, StockPriceLimit
 from app.models.quote import DailyQuote
 from app.models.stock import Stock
 from app.models.sw_industry import SwIndustryClass, SwIndustryMember
@@ -351,18 +352,29 @@ async def _seed(session: AsyncSession) -> None:
             }
         ],
     )
+    content_id = (
+        await session.execute(
+            insert(ContentItem)
+            .values(
+                content_type="announcement",
+                source_name="cninfo",
+                publisher_tier="official",
+                publisher="测试",
+                title="关于股东权益变动的提示性公告",
+                published_at=datetime(2026, 10, 15, 9, 30, tzinfo=UTC),
+                url="https://example.com/triage-test.pdf",
+                raw_hash="triage-test-1",
+                extracted={
+                    "source_item_id": "TRIAGE-TEST-1",
+                    "sec_name": "测试T90001",
+                    "subtype": "equity_change",
+                },
+            )
+            .returning(ContentItem.id)
+        )
+    ).scalar_one()
     await session.execute(
-        insert(Announcement),
-        [
-            {
-                "announcement_id": "TRIAGE-TEST-1",
-                "sec_code": "T90001",
-                "sec_name": "测试T90001",
-                "title": "关于股东权益变动的提示性公告",
-                "announce_time": datetime(2026, 10, 15, 9, 30),
-                "category": "equity_change",
-            }
-        ],
+        insert(ContentEntity).values(content_id=content_id, entity_type="stock", entity_id="T90001")
     )
     await session.execute(
         insert(DragonTigerEntry),

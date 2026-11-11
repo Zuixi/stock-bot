@@ -4,6 +4,7 @@ Mounted at ``/api/v1/exchanges/{exchange}/stocks/{symbol}`` (see config in
 ``api/v1/__init__.py``).
 """
 
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
@@ -78,3 +79,12 @@ async def get_valuation_history(
         raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+@router.get("/{symbol}/financial-reports/{end_date}/revisions")
+async def get_report_revisions(exchange: str, symbol: str, end_date: date, db: DbDep) -> list[dict]:
+    """重述历史（Q2）：该报告被覆盖前的旧值快照，按替代时间倒序."""
+    try:
+        return await financial_service.get_report_revisions(db, exchange, symbol, end_date)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e

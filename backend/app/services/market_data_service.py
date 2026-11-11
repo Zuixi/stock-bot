@@ -2173,7 +2173,25 @@ async def ingest_stock_price_limits(
         df = await client.fetch_stk_limit(trade_date=d.strftime("%Y%m%d"))
         rows = _map_stk_limit_rows(df, d, stock_id_map)
         fetched += len(rows)
-        upserted += await limit_up_repo.upsert_price_limits(db, rows)
+        day_upserted = await limit_up_repo.upsert_price_limits(db, rows)
+        upserted += day_upserted
+        try:
+            from app.services.ingest_pipeline import record_batch  # noqa: PLC0415
+
+            async with db.begin_nested():
+                await record_batch(
+                    db,
+                    domain="price_limits",
+                    business_date=d,
+                    source="tushare",
+                    capture_kind="eod_full",
+                    params={"trade_date": d.strftime("%Y%m%d")},
+                    rows_fetched=len(rows),
+                    rows_accepted=day_upserted,
+                    status="accepted" if day_upserted else "partial",
+                )
+        except Exception:  # noqa: BLE001 — 账本失败不得反噬限价落库
+            logger.warning("price_limits batch ledger write failed day=%s", d, exc_info=True)
     return {
         "status": "ok",
         "as_of": as_of.isoformat(),
