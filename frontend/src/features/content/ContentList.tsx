@@ -1,6 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Tag, message } from "antd";
+import { Button, Switch, Tag, message } from "antd";
 import { NumberText, StateWrapper } from "@/shared/ui";
 import { useAuth } from "@/features/auth/context";
 import {
@@ -11,6 +11,7 @@ import {
   type ContentMetric,
   type ContentStateStatus,
 } from "@/shared/api/content";
+import { ResearchReportDetails } from "./ResearchReportDetails";
 import "./ContentList.css";
 
 /**
@@ -76,11 +77,18 @@ function metricsOf(item: ContentItem): { label: string; metric: ContentMetric }[
 export function ContentList({ contentType, emptyText }: Props) {
   const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
+  const isReport = contentType === "report";
+  // 研报默认只显示自动判定有效的；打开开关才把被过滤的也拉回来（后端同参数）。
+  const [includeIneffective, setIncludeIneffective] = useState(false);
 
   // 引用稳定：filters 进 queryKey，每次渲染新建对象会让缓存键失效、列表反复重取。
   const filters = useMemo<ContentFilters>(
-    () => ({ content_type: contentType, limit: DEFAULT_LIMIT }),
-    [contentType]
+    () => ({
+      content_type: contentType,
+      limit: DEFAULT_LIMIT,
+      include_ineffective: isReport && includeIneffective ? true : undefined,
+    }),
+    [contentType, isReport, includeIneffective]
   );
 
   const { data, isLoading, error, refetch } = useQuery({
@@ -108,9 +116,28 @@ export function ContentList({ contentType, emptyText }: Props) {
       loading={isLoading}
       error={error ?? null}
       empty={items.length === 0}
-      emptyText={emptyText}
+      emptyText={
+        emptyText ??
+        (isReport && !includeIneffective
+          ? "暂无有效研报；可打开「显示被过滤的研报」查看被自动判据过滤的条目"
+          : undefined)
+      }
       onRetry={() => void refetch()}
     >
+      {isReport ? (
+        <div className="content-list__toolbar">
+          <Switch
+            size="small"
+            checked={includeIneffective}
+            onChange={setIncludeIneffective}
+            data-testid="research-include-ineffective"
+          />
+          <span>显示被过滤的研报</span>
+          <span className="content-list__toolbar-hint">
+            默认隐藏重复 / 无量化字段 / 行业不相关的条目
+          </span>
+        </div>
+      ) : null}
       <ul className="content-list">
         {items.map((item) => {
           const subtype = subtypeOf(item);
@@ -119,7 +146,15 @@ export function ContentList({ contentType, emptyText }: Props) {
           const publisher = item.publisher ?? item.source_name;
 
           return (
-            <li className="content-list__row" data-testid="content-row" key={item.id}>
+            <li
+              className={
+                item.effective === false
+                  ? "content-list__row content-list__row--ineffective"
+                  : "content-list__row"
+              }
+              data-testid="content-row"
+              key={item.id}
+            >
               <div className="content-list__main">
                 <a
                   className="content-list__title"
@@ -143,33 +178,39 @@ export function ContentList({ contentType, emptyText }: Props) {
                   ) : null}
                 </div>
 
-                {missingReason ? (
-                  <p className="content-list__missing">{missingReason}</p>
-                ) : null}
+                {isReport ? (
+                  <ResearchReportDetails item={item} />
+                ) : (
+                  <>
+                    {missingReason ? (
+                      <p className="content-list__missing">{missingReason}</p>
+                    ) : null}
 
-                {metrics.length > 0 ? (
-                  <dl className="content-list__metrics">
-                    {metrics.map(({ label, metric }) => {
-                      return (
-                        <div className="content-list__metric" key={metric.metric_key}>
-                          <dt className="content-list__metric-label">{label}</dt>
-                          <dd className="content-list__metric-value">
-                            <span className="content-list__metric-period">
-                              {metric.period ?? "—"}
-                            </span>
-                            {metric.value === null || metric.value === undefined ? (
-                              <span className="content-list__metric-num">—</span>
-                            ) : (
-                              <span className="content-list__metric-num">
-                                <NumberText value={metric.value} unit="cap" /> 元
-                              </span>
-                            )}
-                          </dd>
-                        </div>
-                      );
-                    })}
-                  </dl>
-                ) : null}
+                    {metrics.length > 0 ? (
+                      <dl className="content-list__metrics">
+                        {metrics.map(({ label, metric }) => {
+                          return (
+                            <div className="content-list__metric" key={metric.metric_key}>
+                              <dt className="content-list__metric-label">{label}</dt>
+                              <dd className="content-list__metric-value">
+                                <span className="content-list__metric-period">
+                                  {metric.period ?? "—"}
+                                </span>
+                                {metric.value === null || metric.value === undefined ? (
+                                  <span className="content-list__metric-num">—</span>
+                                ) : (
+                                  <span className="content-list__metric-num">
+                                    <NumberText value={metric.value} unit="cap" /> 元
+                                  </span>
+                                )}
+                              </dd>
+                            </div>
+                          );
+                        })}
+                      </dl>
+                    ) : null}
+                  </>
+                )}
               </div>
 
               {isAuthenticated ? (

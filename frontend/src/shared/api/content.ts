@@ -56,6 +56,10 @@ export interface ContentItem {
   entities: ContentEntity[];
   /** 列表响应恒为空，详情才填充（后端契约）。 */
   metrics: ContentMetric[];
+  /** 研报有效性（S3.7）：非研报为 `null`（没有判定语义）。 */
+  effective: boolean | null;
+  /** 无效原因码；有效或非研报为空数组。 */
+  ineffective_reasons: string[];
 }
 
 /** 列表筛选条件：与后端 query 参数同名（snake_case），不在这里做命名映射。 */
@@ -66,6 +70,8 @@ export interface ContentFilters {
   entity_id?: string;
   /** 按当前用户状态过滤；匿名请求带它会 401（后端契约）。 */
   status?: string;
+  /** 研报专用：`true` 时连自动判定无效的研报一起返回（默认隐藏）。 */
+  include_ineffective?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -81,6 +87,7 @@ export function fetchContent(filters: ContentFilters = {}): Promise<ContentItem[
     entity_type: filters.entity_type,
     entity_id: filters.entity_id,
     status: filters.status,
+    include_ineffective: filters.include_ineffective,
     limit: filters.limit,
     offset: filters.offset,
   });

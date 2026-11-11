@@ -139,3 +139,53 @@
     justify-content: flex-end;
   }
 }
+
+/* 研报 Tab：默认隐藏自动判定无效的条目，开关在列表上方（不抢标题）。 */
+.content-list__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 4px 8px 8px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.content-list__toolbar-hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.content-list__row--ineffective {
+  opacity: 0.88;
+}
+
+.content-list__report-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.content-list__metrics--report {
+  gap: 4px 24px;
+}
+
+/* EPS/PE 三年预测：同一指标内按 period 横排，窄屏自然换行。 */
+.content-list__forecast {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  margin-inline-end: 10px;
+}
+
+.content-list__core-view {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}

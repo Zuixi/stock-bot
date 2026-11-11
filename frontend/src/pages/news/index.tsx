@@ -7,10 +7,8 @@ import { ContentList } from "@/features/content/ContentList";
  *
  * **单一真相 = URL**：tab 高亮完全由 `?tab=` 决定，点击只改 URL，不另存 state
  * （与 `/me`、`/market` 同一口径；深链可分享、可刷新、可后退）。
- * 默认 tab 是 `announcements`（公告）：它是今天**唯一接上真实数据管道**的那一类。
- *
- * **只有公告是真数据，其余三类显式空态**：政策 / 研报 / 快讯的数据源分别在
- * Wave 2 的后续计划里落地。这里**不造假数据、也不写成"规划中"占位**——
+ * 默认 tab 是 `announcements`（公告）。公告与研报（Plan 2）已接真实数据管道；
+ * 政策 / 快讯仍在 Wave 2 的后续计划里落地。这里**不造假数据、也不写成"规划中"占位**——
  * 造数据会让用户以为今天没有政策，而真相是这个读面还不存在；
  * 占位页文案（`PlaceholderNotice`）又会被读成"整个资讯模块没做完"，
  * 故逐 tab 给出「该类别尚未接入」，并指明是哪一批计划补上。
@@ -23,7 +21,7 @@ const TAB_KEYS: NewsTab[] = ["announcements", "policy", "research", "flash"];
 const DEFAULT_TAB: NewsTab = "announcements";
 
 /** 未接入 tab 的统一空态文案（与 Wave 2 计划批次对应，别在这里含糊成"敬请期待"）。 */
-const UNWIRED_TEXT = "该类别尚未接入（Wave 2 Plan 2–4）";
+const UNWIRED_TEXT = "该类别尚未接入（Wave 2 Plan 3–4）";
 
 export default function NewsPage() {
   const [searchParams] = useSearchParams();
@@ -67,7 +65,7 @@ export default function NewsPage() {
           {
             key: "research",
             label: "研报",
-            children: <Empty description={UNWIRED_TEXT} />,
+            children: <ContentList contentType="report" />,
           },
           {
             key: "flash",
